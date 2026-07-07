@@ -29,7 +29,7 @@ struct ContentView: View {
     @Binding var deepLinkState: WorkspaceDeepLinkState
     @Binding var lastSurfaceRawValue: String
     @ObservedObject var appCommandState: AppCommandState
-    @ObservedObject var hostTerminalState: HostTerminalStateStore
+    @ObservedObject var tileTreeStore: TileTreeStore
     @ObservedObject var workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     @ObservedObject var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
     @ObservedObject var desktopUISmokeAutomation: DesktopUISmokeAutomationController
@@ -101,7 +101,7 @@ struct ContentView: View {
     }
 
     private var sessionPresentation: HostTerminalSessionPresentation {
-        hostTerminalState.sessionPresentation
+        tileTreeStore.sessionPresentation
     }
 
     private var terminalMultiplexingMode: TerminalMultiplexingMode {
@@ -110,8 +110,8 @@ struct ContentView: View {
 
     private var activeHostSession: HostTerminalSession? {
         presentationController.activeHostSession(
-            activeSessionID: hostTerminalState.activeSessionID,
-            sessions: hostTerminalState.sessions
+            activeSessionID: tileTreeStore.activeSessionID,
+            sessions: tileTreeStore.sessions
         )
     }
 
@@ -132,13 +132,13 @@ struct ContentView: View {
         )
     {
         let excludedScopeKeys = archivedWorkspaceTerminalScopeKeys
-        let sessions = hostTerminalState.sessions.filter { !excludedScopeKeys.contains($0.key) }
+        let sessions = tileTreeStore.sessions.filter { !excludedScopeKeys.contains($0.key) }
         let validSessionIDs = Set(sessions.map(\.id))
         let activeSessionID =
-            hostTerminalState.activeSessionID.flatMap {
+            tileTreeStore.activeSessionID.flatMap {
                 validSessionIDs.contains($0) ? $0 : sessions.last?.id
             } ?? sessions.last?.id
-        let activeSessionIDByScopeKey = hostTerminalState.activeSessionIDByScopeKey.filter {
+        let activeSessionIDByScopeKey = tileTreeStore.activeSessionIDByScopeKey.filter {
             !excludedScopeKeys.contains($0.key) && validSessionIDs.contains($0.value)
         }
 
@@ -255,9 +255,9 @@ struct ContentView: View {
 
     private var paneCountBySessionKeyForSidebar: [HostTerminalSessionKey: Int] {
         presentationController.paneCountBySessionKey(
-            sessions: hostTerminalState.sessions,
+            sessions: tileTreeStore.sessions,
             paneCount: { sessionID in
-                hostTerminalState.paneCount(forPrimarySessionID: sessionID)
+                tileTreeStore.paneCount(forPrimarySessionID: sessionID)
             }
         )
     }
@@ -265,8 +265,8 @@ struct ContentView: View {
     private var activeSessionKeyForSidebar: HostTerminalSessionKey? {
         presentationController.activeSessionKeyForSidebar(
             selectedWebSource: currentSelectedWebSource,
-            activeSessionID: hostTerminalState.activeSessionID,
-            sessions: hostTerminalState.sessions
+            activeSessionID: tileTreeStore.activeSessionID,
+            sessions: tileTreeStore.sessions
         )
     }
 
@@ -284,7 +284,7 @@ struct ContentView: View {
                     for: key,
                     paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                     activeSessionKey: activeSessionKeyForSidebar,
-                    sessions: hostTerminalState.sessions,
+                    sessions: tileTreeStore.sessions,
                     agentStatusBySessionID: agentSessionRegistry.statuses
                 )
                 return (workspace.id, activity)
@@ -301,7 +301,7 @@ struct ContentView: View {
                     for: key,
                     paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                     activeSessionKey: activeSessionKeyForSidebar,
-                    sessions: hostTerminalState.sessions,
+                    sessions: tileTreeStore.sessions,
                     agentStatusBySessionID: agentSessionRegistry.statuses
                 )
                 let bubbled =
@@ -331,8 +331,8 @@ struct ContentView: View {
         SessionSwitcherSnapshot.make(
             repos: repos,
             webSources: webSources,
-            sessions: hostTerminalState.sessions,
-            activeSessionID: hostTerminalState.activeSessionID,
+            sessions: tileTreeStore.sessions,
+            activeSessionID: tileTreeStore.activeSessionID,
             agentStatuses: agentSessionRegistry.statuses,
             paneCountBySessionKey: paneCountBySessionKeyForSidebar,
             workspaceSessionKeys: sessionSwitcherWorkspaceSessionKeys,
@@ -465,10 +465,10 @@ struct ContentView: View {
             canToggleSidebar: true,
             canToggleInspector: true,
             canToggleTerminalPanel: true,
-            canCreateTerminalTab: hostTerminalState.hasSessions,
-            canCloseTerminalTab: hostTerminalState.hasSessions,
-            canSelectNextTerminalTab: hostTerminalState.scopedSessions.count > 1,
-            canSelectPreviousTerminalTab: hostTerminalState.scopedSessions.count > 1,
+            canCreateTerminalTab: tileTreeStore.hasSessions,
+            canCloseTerminalTab: tileTreeStore.hasSessions,
+            canSelectNextTerminalTab: tileTreeStore.scopedSessions.count > 1,
+            canSelectPreviousTerminalTab: tileTreeStore.scopedSessions.count > 1,
             canOpenInEditor: openInEditorFocusedAction != nil,
             canOpenInBrowser: openInBrowserFocusedAction != nil,
             canReloadWebSource: reloadWebSourceFocusedAction != nil,
@@ -512,19 +512,19 @@ struct ContentView: View {
             selectedWorkspace: selectedWorkspaceForToolbar,
             selectedRepo: selectedRepoForToolbar ?? selectedRepoForInspector,
             activeHostSession: activeHostSession,
-            hostTerminalSessions: hostTerminalState.sessions,
-            visibleHostTerminalSessions: hostTerminalState.scopedSessions,
-            activeHostTerminalSessionID: hostTerminalState.activeSessionID,
-            activeTabTree: hostTerminalState.tileTree(forPrimarySessionID: hostTerminalState.activeSessionID),
-            resolveTileSession: { hostTerminalState.session(forTile: $0) },
-            resolveTileID: { hostTerminalState.renderTileID(forSession: $0) },
-            hostSurfaceStore: hostTerminalState.surfaceStore,
-            tabTitleOverrides: hostTerminalState.tabTitleOverridesBySessionID,
+            hostTerminalSessions: tileTreeStore.sessions,
+            visibleHostTerminalSessions: tileTreeStore.scopedSessions,
+            activeHostTerminalSessionID: tileTreeStore.activeSessionID,
+            activeTabTree: tileTreeStore.tileTree(forPrimarySessionID: tileTreeStore.activeSessionID),
+            resolveTileSession: { tileTreeStore.session(forTile: $0) },
+            resolveTileID: { tileTreeStore.renderTileID(forSession: $0) },
+            hostSurfaceStore: tileTreeStore.surfaceStore,
+            tabTitleOverrides: tileTreeStore.tabTitleOverridesBySessionID,
             agentStatuses: Array(agentSessionRegistry.statuses.values),
             terminalContextMenuProvider: terminalContextMenu(for:),
             onSetSplitRatio: { splitID, ratio in
-                guard let activeSessionID = hostTerminalState.activeSessionID else { return }
-                _ = hostTerminalState.updateSplitRatio(
+                guard let activeSessionID = tileTreeStore.activeSessionID else { return }
+                _ = tileTreeStore.updateSplitRatio(
                     ratio,
                     splitID: splitID,
                     forPrimarySessionID: activeSessionID
@@ -608,11 +608,11 @@ struct ContentView: View {
                 selectedWebSource: selectedWebSourceBinding,
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
-                hostSessions: hostTerminalState.sessions,
+                hostSessions: tileTreeStore.sessions,
                 agentStatusBySessionID: agentSessionRegistry.statuses,
                 titleForSession: { session in
-                    hostTerminalState.tabTitleOverride(for: session.id)
-                        ?? hostTerminalState.surfaceStore.displayTitle(for: session)
+                    tileTreeStore.tabTitleOverride(for: session.id)
+                        ?? tileTreeStore.surfaceStore.displayTitle(for: session)
                 },
                 connectingWorkspaceID: viewState.connectingWorkspaceID,
                 onRepoSelected: handleRepoSelection,
@@ -757,7 +757,7 @@ struct ContentView: View {
                 }
                 notificationCoordinator.loadStoredAuth()
                 Task { @MainActor in
-                    terminalFocusCoordinator.attach(surfaceStore: hostTerminalState.surfaceStore)
+                    terminalFocusCoordinator.attach(surfaceStore: tileTreeStore.surfaceStore)
                     _ = await seedLandingWorkspaceEnvironmentStateIfNeeded()
                 }
             }
@@ -765,12 +765,12 @@ struct ContentView: View {
                 refreshWorkspaceStatusAggregator()
                 refreshSessionSwitcherSnapshotIfPresented()
             }
-            .onChange(of: hostTerminalState.sessions) { _, _ in
+            .onChange(of: tileTreeStore.sessions) { _, _ in
                 refreshWorkspaceStatusAggregator()
                 refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
-            .onChange(of: hostTerminalState.activeSessionID) { _, _ in
+            .onChange(of: tileTreeStore.activeSessionID) { _, _ in
                 refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
@@ -793,7 +793,7 @@ struct ContentView: View {
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
                 applySessionSwitcherFixtureIfNeeded()
-                hostTerminalState.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
+                tileTreeStore.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
                 refreshWorkspaceStatusAggregator()
                 refreshSessionSwitcherSnapshotIfPresented()
             }
@@ -818,11 +818,11 @@ struct ContentView: View {
                     splitRoutingController.handle(
                         notification: notification,
                         terminalMultiplexingMode: terminalMultiplexingMode,
-                        hostTerminalState: hostTerminalState,
+                        tileTreeStore: tileTreeStore,
                         focusTerminal: { sessionID in
                             terminalFocusCoordinator.focusTerminal(
                                 sessionID: sessionID,
-                                surfaceStore: hostTerminalState.surfaceStore
+                                surfaceStore: tileTreeStore.surfaceStore
                             )
                         }
                     )
@@ -833,11 +833,11 @@ struct ContentView: View {
                 Task { @MainActor in
                     tabRoutingController.handle(
                         notification: notification,
-                        hostTerminalState: hostTerminalState,
+                        tileTreeStore: tileTreeStore,
                         focusTerminal: { sessionID in
                             terminalFocusCoordinator.focusTerminal(
                                 sessionID: sessionID,
-                                surfaceStore: hostTerminalState.surfaceStore
+                                surfaceStore: tileTreeStore.surfaceStore
                             )
                         },
                         requestCloseTabs: { sessionIDs in
@@ -845,7 +845,7 @@ struct ContentView: View {
                         }
                     )
                     syncSidebarSelectionToActiveSessionFromActiveHostSession()
-                    if let activeSessionID = hostTerminalState.activeSessionID {
+                    if let activeSessionID = tileTreeStore.activeSessionID {
                         acknowledgeVisitedAgentSession(activeSessionID)
                     }
                 }
@@ -1487,8 +1487,8 @@ struct ContentView: View {
         )
         terminalFocusCoordinator.requestMainTerminalFocus(
             targetSessionID: session.id,
-            surfaceStore: hostTerminalState.surfaceStore,
-            activeSessionID: hostTerminalState.activeSessionID,
+            surfaceStore: tileTreeStore.surfaceStore,
+            activeSessionID: tileTreeStore.activeSessionID,
             onTargetFocused: {
                 terminalFocusCoordinator.completeRepoClickMeasurement(
                     sessionID: session.id,
@@ -1576,8 +1576,8 @@ struct ContentView: View {
             )
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
-                surfaceStore: hostTerminalState.surfaceStore,
-                activeSessionID: hostTerminalState.activeSessionID,
+                surfaceStore: tileTreeStore.surfaceStore,
+                activeSessionID: tileTreeStore.activeSessionID,
                 onTargetFocused: {
                     terminalFocusCoordinator.completeWorkspaceClickMeasurement(
                         sessionID: session.id,
@@ -1601,18 +1601,18 @@ struct ContentView: View {
         let providerTarget = WorkspaceProviderTarget(workspace)
         let sessionKey = provider.sessionKey(for: providerTarget)
         if workspace.status == .active,
-            let existing = hostTerminalState.activeSession(inScope: sessionKey)
+            let existing = tileTreeStore.activeSession(inScope: sessionKey)
         {
             abandonPendingRemoteConnection(reason: "remote_workspace_reused_existing_session")
             markAccessed(workspace: workspace)
             acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
             applyNavigationDestination(.workspaceTerminal(workspace))
-            hostTerminalState.activateExistingSession(sessionID: existing.id)
+            tileTreeStore.activateExistingSession(sessionID: existing.id)
             acknowledgeVisitedAgentSession(existing.id)
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: existing.id,
-                surfaceStore: hostTerminalState.surfaceStore,
-                activeSessionID: hostTerminalState.activeSessionID
+                surfaceStore: tileTreeStore.surfaceStore,
+                activeSessionID: tileTreeStore.activeSessionID
             )
             return
         }
@@ -1654,8 +1654,8 @@ struct ContentView: View {
             acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
             terminalFocusCoordinator.requestMainTerminalFocus(
                 targetSessionID: session.id,
-                surfaceStore: hostTerminalState.surfaceStore,
-                activeSessionID: hostTerminalState.activeSessionID
+                surfaceStore: tileTreeStore.surfaceStore,
+                activeSessionID: tileTreeStore.activeSessionID
             )
             NSLog(
                 "[WorkspaceProvider] Session created for %@ workspace %@",
@@ -1879,7 +1879,7 @@ struct ContentView: View {
         guard
             let result = terminalSessionController.handleProcessExit(
                 sessionID: sessionID,
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
                 repos: repos,
                 normalizePath: normalizePath
@@ -1890,12 +1890,12 @@ struct ContentView: View {
 
     @MainActor
     private func retireTerminalSessions(inScope scopeKey: HostTerminalSessionKey) async throws {
-        let sessionIDs = hostTerminalState.terminalSessionIDs(inScope: scopeKey)
+        let sessionIDs = tileTreeStore.terminalSessionIDs(inScope: scopeKey)
         for sessionID in sessionIDs {
-            try await hostTerminalState.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+            try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
         }
 
-        let retiredSessionIDs = hostTerminalState.retireSessions(inScope: scopeKey)
+        let retiredSessionIDs = tileTreeStore.retireSessions(inScope: scopeKey)
         guard !retiredSessionIDs.isEmpty else { return }
 
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_lifecycle_retired_sessions")
@@ -1939,7 +1939,7 @@ struct ContentView: View {
     private func createTerminalTabFromCurrentContext() {
         guard
             let result = terminalSessionController.createTabFromCurrentContext(
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
                 repos: repos,
                 normalizePath: normalizePath,
@@ -1956,7 +1956,7 @@ struct ContentView: View {
         guard
             let result = terminalSessionController.selectTab(
                 sessionID: sessionID,
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 repos: repos,
                 normalizePath: normalizePath
             )
@@ -1969,7 +1969,7 @@ struct ContentView: View {
         guard
             let result = terminalSessionController.selectAdjacentTab(
                 offset: offset,
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 repos: repos,
                 normalizePath: normalizePath
             )
@@ -1981,7 +1981,7 @@ struct ContentView: View {
     private func closeActiveTerminalTab() {
         guard
             let result = terminalSessionController.closeActiveTab(
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
                 repos: repos,
                 normalizePath: normalizePath,
@@ -1998,14 +1998,14 @@ struct ContentView: View {
 
     @MainActor
     private func renameTerminalTab(sessionID: UUID, title: String?) {
-        _ = hostTerminalState.setTabTitle(title, for: sessionID)
+        _ = tileTreeStore.setTabTitle(title, for: sessionID)
     }
 
     @MainActor
     private func requestCloseTerminalTabs(_ sessionIDs: [UUID]) {
         let results = terminalSessionController.closeTabs(
             sessionIDs,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             defaultHomeDirectory: resolvedDefaultHostDirectory,
             repos: repos,
             normalizePath: normalizePath,
@@ -2020,7 +2020,7 @@ struct ContentView: View {
     private func requestCloseConfirmationForTerminalTab(sessionID: UUID) {
         viewState.terminalCloseConfirmation = terminalSessionController.closeConfirmation(
             sessionID: sessionID,
-            hostTerminalState: hostTerminalState
+            tileTreeStore: tileTreeStore
         )
     }
 
@@ -2029,7 +2029,7 @@ struct ContentView: View {
         guard
             let result = terminalSessionController.forceCloseTab(
                 sessionID: sessionID,
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
                 repos: repos,
                 normalizePath: normalizePath
@@ -2040,7 +2040,7 @@ struct ContentView: View {
 
     @MainActor
     private func requestTerminalClose(sessionID: UUID) -> Bool {
-        guard let terminal = hostTerminalState.surfaceStore.terminal(for: sessionID) else {
+        guard let terminal = tileTreeStore.surfaceStore.terminal(for: sessionID) else {
             return false
         }
         terminal.requestClose()
@@ -2050,7 +2050,7 @@ struct ContentView: View {
     @MainActor
     private func configureAutomationIntegration() async {
         await AutomationIntegrationLifecycle.shared.configure(
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             focusTerminal: { sessionID in
                 focusTerminalTab(sessionID)
             },
@@ -2065,8 +2065,8 @@ struct ContentView: View {
         terminalFocusCoordinator.requestMainTerminalFocus(
             targetSessionID: sessionID,
             activateApp: false,
-            surfaceStore: hostTerminalState.surfaceStore,
-            activeSessionID: hostTerminalState.activeSessionID
+            surfaceStore: tileTreeStore.surfaceStore,
+            activeSessionID: tileTreeStore.activeSessionID
         )
     }
 
@@ -2432,11 +2432,11 @@ struct ContentView: View {
         // still seeds one shell so the window isn't empty pre-restore, and
         // executeRestore retires that shell if the plan claims its key.
         if !restoreSessionsOnLaunchEnabled,
-            !hostTerminalState.hasSessions,
+            !tileTreeStore.hasSessions,
             let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
                 .hostSessionSnapshot(excludingScopeKeys: archivedWorkspaceTerminalScopeKeys)
         {
-            hostTerminalState.restoreSessions(
+            tileTreeStore.restoreSessions(
                 snapshot.sessions,
                 activeSessionID: snapshot.activeSessionID,
                 activeSessionIDByScopeKey: snapshot.activeSessionIDByScopeKey
@@ -2445,7 +2445,7 @@ struct ContentView: View {
         }
 
         terminalSessionController.ensureInitialHostSession(
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             defaultHomeDirectory: resolvedDefaultHostDirectory,
             activateHostSession: { key, directory, customCommand in
                 activateHostSession(key: key, directory: directory, customCommand: customCommand)
@@ -2598,7 +2598,7 @@ struct ContentView: View {
 
     @MainActor
     private func activateSessionSwitcherHostSession(_ sessionID: UUID) {
-        guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return }
+        guard tileTreeStore.activateExistingSession(sessionID: sessionID) else { return }
         acknowledgeVisitedAgentSession(sessionID)
         if let activeHostSession,
             let destination = terminalSessionController.terminalNavigationDestination(
@@ -2819,7 +2819,7 @@ struct ContentView: View {
     private func activateHostSession(
         key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil, initialCommand: String? = nil
     ) -> HostTerminalSession {
-        let result = hostTerminalState.activateSession(
+        let result = tileTreeStore.activateSession(
             key: key,
             directory: directory,
             customCommand: customCommand,
@@ -2831,7 +2831,7 @@ struct ContentView: View {
                 result.session.id.uuidString,
                 key.debugDescription,
                 result.session.directoryPath,
-                hostTerminalState.sessions.count
+                tileTreeStore.sessions.count
             )
         } else {
             NSLog(
@@ -2917,7 +2917,7 @@ struct ContentView: View {
         // resume/reattach surface is created fresh and the coordinator's key-reuse
         // path can't drop its initial command.
         for key in Set(plan.surfaces.map(\.key)) {
-            _ = hostTerminalState.retireSessions(inScope: key)
+            _ = tileTreeStore.retireSessions(inScope: key)
         }
 
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
@@ -2946,7 +2946,7 @@ struct ContentView: View {
     private func refreshWorkspaceStatusAggregator() {
         let presentation = SidebarWorkspacePresentationController()
         let statuses = agentSessionRegistry.statuses
-        let sessions = hostTerminalState.sessions
+        let sessions = tileTreeStore.sessions
         let normalize: (URL) -> String = { url in normalizePath(url.path) }
 
         let workspaceInputs: [WorkspaceStatusAggregator.WorkspaceInput] =
@@ -3029,7 +3029,7 @@ struct ContentView: View {
                 key: .hostPath(directory.path),
                 directory: directory
             )
-            let terminal = hostTerminalState.terminalSurfaceView(for: session)
+            let terminal = tileTreeStore.terminalSurfaceView(for: session)
             if terminal.surface != nil {
                 initializedSurfaceCount += 1
             }
@@ -3374,7 +3374,7 @@ private struct ContentViewPreviewHost: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @State private var lastSurfaceRawValue = ""
     @StateObject private var appCommandState = AppCommandState()
-    @StateObject private var hostTerminalState = HostTerminalStateStore()
+    @StateObject private var tileTreeStore = TileTreeStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation = HostLumeSmokeAutomationController(
         environment: [:]
@@ -3388,7 +3388,7 @@ private struct ContentViewPreviewHost: View {
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
             appCommandState: appCommandState,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
             hostLumeSmokeAutomation: hostLumeSmokeAutomation,
             desktopUISmokeAutomation: desktopUISmokeAutomation

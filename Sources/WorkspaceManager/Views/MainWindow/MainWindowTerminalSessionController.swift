@@ -10,31 +10,31 @@ struct MainWindowTerminalSessionController {
 
     @discardableResult
     func ensureInitialHostSession(
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
     ) -> HostTerminalSession? {
-        guard !hostTerminalState.hasSessions else { return nil }
+        guard !tileTreeStore.hasSessions else { return nil }
         return activateHostSession(.defaultHome, defaultHomeDirectory, nil)
     }
 
     func createTabFromCurrentContext(
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         repos: [Repo],
         normalizePath: (String) -> String,
         activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
     ) -> SessionFocusResult? {
         ensureInitialHostSession(
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             defaultHomeDirectory: defaultHomeDirectory,
             activateHostSession: activateHostSession
         )
 
-        guard let session = hostTerminalState.createTab() else { return nil }
+        guard let session = tileTreeStore.createTab() else { return nil }
         return focusResult(
             sessionID: session.id,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             repos: repos,
             normalizePath: normalizePath
         )
@@ -42,14 +42,14 @@ struct MainWindowTerminalSessionController {
 
     func selectTab(
         sessionID: UUID,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         repos: [Repo],
         normalizePath: (String) -> String
     ) -> SessionFocusResult? {
-        guard hostTerminalState.activateExistingSession(sessionID: sessionID) else { return nil }
+        guard tileTreeStore.activateExistingSession(sessionID: sessionID) else { return nil }
         return focusResult(
             sessionID: sessionID,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             repos: repos,
             normalizePath: normalizePath
         )
@@ -57,30 +57,30 @@ struct MainWindowTerminalSessionController {
 
     func selectAdjacentTab(
         offset: Int,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         repos: [Repo],
         normalizePath: (String) -> String
     ) -> SessionFocusResult? {
-        guard let session = hostTerminalState.activateAdjacentTab(offset: offset) else { return nil }
+        guard let session = tileTreeStore.activateAdjacentTab(offset: offset) else { return nil }
         return focusResult(
             sessionID: session.id,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             repos: repos,
             normalizePath: normalizePath
         )
     }
 
     func closeActiveTab(
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         repos: [Repo],
         normalizePath: (String) -> String,
         requestClose: (UUID) -> Bool
     ) -> SessionFocusResult? {
-        guard let activeSessionID = hostTerminalState.activeSessionID else { return nil }
+        guard let activeSessionID = tileTreeStore.activeSessionID else { return nil }
         return closeTabs(
             [activeSessionID],
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             defaultHomeDirectory: defaultHomeDirectory,
             repos: repos,
             normalizePath: normalizePath,
@@ -90,7 +90,7 @@ struct MainWindowTerminalSessionController {
 
     func closeTabs(
         _ sessionIDs: [UUID],
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         repos: [Repo],
         normalizePath: (String) -> String,
@@ -102,7 +102,7 @@ struct MainWindowTerminalSessionController {
             }
             return forceCloseTab(
                 sessionID: sessionID,
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: defaultHomeDirectory,
                 repos: repos,
                 normalizePath: normalizePath
@@ -112,13 +112,13 @@ struct MainWindowTerminalSessionController {
 
     func closeConfirmation(
         sessionID: UUID,
-        hostTerminalState: HostTerminalStateStore
+        tileTreeStore: TileTreeStore
     ) -> TerminalCloseConfirmation {
         let title =
-            hostTerminalState.sessions.first(where: { $0.id == sessionID })
+            tileTreeStore.sessions.first(where: { $0.id == sessionID })
             .map {
-                hostTerminalState.tabTitleOverride(for: $0.id)
-                    ?? hostTerminalState.surfaceStore.displayTitle(for: $0)
+                tileTreeStore.tabTitleOverride(for: $0.id)
+                    ?? tileTreeStore.surfaceStore.displayTitle(for: $0)
             }
             ?? "Terminal"
 
@@ -127,14 +127,14 @@ struct MainWindowTerminalSessionController {
 
     func handleProcessExit(
         sessionID: UUID,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         repos: [Repo],
         normalizePath: (String) -> String
     ) -> SessionFocusResult? {
         NSLog("[HostSession] Process exit detected for session %@", sessionID.uuidString)
         guard
-            let focusSessionID = hostTerminalState.handleProcessExitAndResolveFocusTarget(
+            let focusSessionID = tileTreeStore.handleProcessExitAndResolveFocusTarget(
                 for: sessionID,
                 defaultHomeDirectory: defaultHomeDirectory
             )
@@ -144,7 +144,7 @@ struct MainWindowTerminalSessionController {
 
         return focusResult(
             sessionID: focusSessionID,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             repos: repos,
             normalizePath: normalizePath
         )
@@ -152,13 +152,13 @@ struct MainWindowTerminalSessionController {
 
     func forceCloseTab(
         sessionID: UUID,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
         repos: [Repo],
         normalizePath: (String) -> String
     ) -> SessionFocusResult? {
         guard
-            let focusSessionID = hostTerminalState.handleProcessExitAndResolveFocusTarget(
+            let focusSessionID = tileTreeStore.handleProcessExitAndResolveFocusTarget(
                 for: sessionID,
                 defaultHomeDirectory: defaultHomeDirectory
             )
@@ -168,7 +168,7 @@ struct MainWindowTerminalSessionController {
 
         return focusResult(
             sessionID: focusSessionID,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             repos: repos,
             normalizePath: normalizePath
         )
@@ -209,25 +209,25 @@ struct MainWindowTerminalSessionController {
 
     private func focusResult(
         sessionID: UUID,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         repos: [Repo],
         normalizePath: (String) -> String
     ) -> SessionFocusResult {
         SessionFocusResult(
             focusSessionID: sessionID,
             syncedWorkspace: syncedWorkspaceSelection(
-                activeHostSession: activeHostSession(in: hostTerminalState),
+                activeHostSession: activeHostSession(in: tileTreeStore),
                 repos: repos,
                 normalizePath: normalizePath
             )
         )
     }
 
-    private func activeHostSession(in hostTerminalState: HostTerminalStateStore) -> HostTerminalSession? {
-        guard let activeSessionID = hostTerminalState.activeSessionID else {
-            return hostTerminalState.sessions.last
+    private func activeHostSession(in tileTreeStore: TileTreeStore) -> HostTerminalSession? {
+        guard let activeSessionID = tileTreeStore.activeSessionID else {
+            return tileTreeStore.sessions.last
         }
-        return hostTerminalState.sessions.first(where: { $0.id == activeSessionID })
-            ?? hostTerminalState.sessions.last
+        return tileTreeStore.sessions.first(where: { $0.id == activeSessionID })
+            ?? tileTreeStore.sessions.last
     }
 }

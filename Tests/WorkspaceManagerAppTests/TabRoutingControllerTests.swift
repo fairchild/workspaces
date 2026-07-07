@@ -16,7 +16,7 @@ struct TabRoutingControllerTests {
 
         TabRoutingController().handle(
             notification: tabActionNotification(kind: .newTab, source: source),
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { focusedSessionIDs.append($0) },
             requestCloseTabs: { _ in }
         )
@@ -37,7 +37,7 @@ struct TabRoutingControllerTests {
 
         TabRoutingController().handle(
             notification: tabActionNotification(kind: .closeTab, closeModeRawValue: 2, source: source),
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in },
             requestCloseTabs: { closeRequests.append($0) }
         )
@@ -54,7 +54,7 @@ struct TabRoutingControllerTests {
 
         TabRoutingController().handle(
             notification: tabActionNotification(kind: .setTabTitle, title: "Build", source: source),
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in },
             requestCloseTabs: { _ in }
         )
@@ -76,7 +76,7 @@ struct TabRoutingControllerTests {
                     GhosttyAppManager.tabActionGotoUserInfoKey: -2
                 ]
             ),
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { focusedSessionIDs.append($0) },
             requestCloseTabs: { closeRequests.append($0) }
         )
@@ -86,8 +86,8 @@ struct TabRoutingControllerTests {
         #expect(closeRequests.isEmpty)
     }
 
-    private func makeStore() -> HostTerminalStateStore {
-        let store = HostTerminalStateStore()
+    private func makeStore() -> TileTreeStore {
+        let store = TileTreeStore()
         _ = store.activateSession(
             key: .repoPath("/Users/test/repo"),
             directory: URL(fileURLWithPath: "/Users/test/repo")

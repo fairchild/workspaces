@@ -166,7 +166,7 @@ public struct TileTreeState: Equatable, Codable, Sendable {
 
 // MARK: - Layout constants
 
-/// Shared split-ratio constants. Mirrors the legacy `HostTerminalStateStore` fractions so the
+/// Shared split-ratio constants. Mirrors the legacy `TileTreeStore` fractions so the
 /// depth-1 two-pane case clamps and steps identically.
 public enum TileTreeLayout {
     /// Smallest fraction a child may occupy. The complementary child is bounded by `maximumRatio`.

@@ -31,38 +31,38 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     }
 
     func configure(
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void
     ) async {
         guard isEnabled else {
-            hostTerminalState.configureAutomation(handleRegistry: nil, socketPath: nil)
+            tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             return
         }
 
         do {
             let socketPath = try await startIfNeeded(
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal
             )
-            hostTerminalState.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
+            tileTreeStore.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
         } catch {
-            hostTerminalState.configureAutomation(handleRegistry: nil, socketPath: nil)
+            tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             handleRegistry.removeAll()
             NSLog("[AutomationIntegration] listener unavailable: %@", "\(error)")
         }
     }
 
     func startIfNeeded(
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void
     ) async throws -> String {
         if let startTask {
             let socketPath = try await startTask.value
             controller?.update(
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal
             )
@@ -71,7 +71,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
         guard !didStart else {
             controller?.update(
-                hostTerminalState: hostTerminalState,
+                tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal
             )
@@ -83,7 +83,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
         let controller = AutomationController(
             handleRegistry: handleRegistry,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             focusTerminal: focusTerminal,
             requestCloseTerminal: requestCloseTerminal
         )

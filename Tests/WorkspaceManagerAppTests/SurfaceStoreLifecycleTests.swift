@@ -21,14 +21,14 @@ import Testing
 struct SurfaceStoreLifecycleTests {
     /// A store wired with the same registries the app attaches, so teardown parity is observable.
     private struct Harness {
-        let store: HostTerminalStateStore
+        let store: TileTreeStore
         let agentRegistry: AgentSessionRegistry
         let commandStatusRegistry: LastCommandStatusRegistry
         let automationRegistry: AutomationHandleRegistry
     }
 
     private func makeHarness() -> Harness {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let agentRegistry = AgentSessionRegistry()
         let commandStatusRegistry = LastCommandStatusRegistry()
         let automationRegistry = AutomationHandleRegistry()

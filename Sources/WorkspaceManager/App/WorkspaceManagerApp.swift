@@ -337,7 +337,7 @@ private struct MainWindowRootView: View {
     @ObservedObject private var appCommandState: AppCommandState
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @AppStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
-    @StateObject private var hostTerminalState = HostTerminalStateStore()
+    @StateObject private var tileTreeStore = TileTreeStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
     @StateObject private var desktopUISmokeAutomation: DesktopUISmokeAutomationController
@@ -361,7 +361,7 @@ private struct MainWindowRootView: View {
             deepLinkState: $deepLinkState,
             lastSurfaceRawValue: $lastSurfaceRawValue,
             appCommandState: appCommandState,
-            hostTerminalState: hostTerminalState,
+            tileTreeStore: tileTreeStore,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
             hostLumeSmokeAutomation: hostLumeSmokeAutomation,
             desktopUISmokeAutomation: desktopUISmokeAutomation
@@ -373,7 +373,7 @@ private struct MainWindowRootView: View {
                 NSLog("[DeepLink] Ignored unsupported URL: %@", url.absoluteString)
             }
         }
-        .modifier(AgentSessionRegistryAttacher(hostTerminalState: hostTerminalState))
+        .modifier(AgentSessionRegistryAttacher(tileTreeStore: tileTreeStore))
     }
 }
 
@@ -386,11 +386,11 @@ private struct AgentSessionRegistryAttacher: ViewModifier {
     @EnvironmentObject private var commandStatusRegistry: LastCommandStatusRegistry
     @Environment(\.localStateStore) private var localStateStore
     @Environment(\.modelContext) private var modelContext
-    let hostTerminalState: HostTerminalStateStore
+    let tileTreeStore: TileTreeStore
 
     func body(content: Content) -> some View {
         content.onAppear {
-            hostTerminalState.attach(
+            tileTreeStore.attach(
                 agentSessionRegistry: registry,
                 localStateStore: localStateStore,
                 hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath,
@@ -401,13 +401,13 @@ private struct AgentSessionRegistryAttacher: ViewModifier {
                     from: ProcessInfo.processInfo.environment,
                     in: modelContext,
                     registry: registry,
-                    hostTerminalState: hostTerminalState
+                    tileTreeStore: tileTreeStore
                 )
                 UIFixtureSeeder.seedCommandStatusesIfNeeded(
                     from: ProcessInfo.processInfo.environment,
                     in: modelContext,
                     commandStatusRegistry: commandStatusRegistry,
-                    hostTerminalState: hostTerminalState
+                    tileTreeStore: tileTreeStore
                 )
             }
         }

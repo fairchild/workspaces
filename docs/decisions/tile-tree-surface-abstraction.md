@@ -119,7 +119,7 @@ distinction matters so this ADR does not itself drift.
   path and makes `sync(activeLeafIDs:)` the single eviction authority, replacing the
   scattered session-keyed `invalidate` calls.
 - **Remaining:** **P6** — route the web main-content path through the seam; **P7** — finalize renames
-  (`HostTerminalStateStore` → `TileTreeStore`). Tracked in #627.
+  (`HostTerminalStateStore` → `TileTreeStore`) — landed with the P7 sweep (#627).
 
 ## Deferred (explicitly out of scope)
 

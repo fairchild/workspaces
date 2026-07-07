@@ -34,7 +34,7 @@ The foundation landed in PR #483 and shipped in WorkSpaces v0.15.0:
 2. Record richer Surface and terminal layout snapshots.
    - Write `terminal_layout_snapshots` when the selected Surface changes and when split state changes.
    - Include selected Surface kind/id using domain terms: repo overview, repository terminal, workspace terminal, or web source.
-   - Include split pane rows from `HostTerminalStateStore`.
+   - Include split pane rows from `TileTreeStore`.
    - Tests: selecting Surfaces produces expected snapshot rows and split rows without requiring UI automation.
 
 3. Add startup read models for continuity.

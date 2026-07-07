@@ -104,7 +104,7 @@ struct HostTerminalPaneView: View {
 
 extension SplitAxis {
     /// Bridges the Core arrangement axis to the view-layer geometry axis.
-    var paneAxis: HostTerminalStateStore.SplitPaneLayout.Axis {
+    var paneAxis: TileTreeStore.SplitPaneLayout.Axis {
         switch self {
         case .leadingTrailing: return .leadingTrailing
         case .topBottom: return .topBottom
@@ -118,7 +118,7 @@ extension SplitAxis {
 struct HostTerminalTwoPaneSplitView<Leading: View, Trailing: View>: View {
     private static var dividerThickness: CGFloat { 10 }
 
-    let axis: HostTerminalStateStore.SplitPaneLayout.Axis
+    let axis: TileTreeStore.SplitPaneLayout.Axis
     let fraction: CGFloat
     let onFractionChanged: ((CGFloat) -> Void)?
     let leading: Leading
@@ -127,7 +127,7 @@ struct HostTerminalTwoPaneSplitView<Leading: View, Trailing: View>: View {
     @State private var dragStartFraction: CGFloat?
 
     init(
-        axis: HostTerminalStateStore.SplitPaneLayout.Axis,
+        axis: TileTreeStore.SplitPaneLayout.Axis,
         fraction: CGFloat,
         onFractionChanged: ((CGFloat) -> Void)?,
         @ViewBuilder leading: () -> Leading,
@@ -145,7 +145,7 @@ struct HostTerminalTwoPaneSplitView<Leading: View, Trailing: View>: View {
             let totalLength = axis == .leadingTrailing ? geometry.size.width : geometry.size.height
             let availableLength = max(totalLength - Self.dividerThickness, 0)
             let actualFraction = constrainedFraction(
-                HostTerminalStateStore.clampedSplitFraction(fraction),
+                TileTreeStore.clampedSplitFraction(fraction),
                 availableLength: availableLength
             )
             let leadingLength = availableLength * actualFraction
@@ -219,14 +219,14 @@ struct HostTerminalTwoPaneSplitView<Leading: View, Trailing: View>: View {
 
     private func constrainedFraction(_ proposed: CGFloat, availableLength: CGFloat) -> CGFloat {
         guard availableLength > 0 else {
-            return HostTerminalStateStore.defaultSplitFraction
+            return TileTreeStore.defaultSplitFraction
         }
 
         let minimumPaneLength: CGFloat = axis == .leadingTrailing ? 240 : 160
         let effectiveMinimumPaneLength = min(minimumPaneLength, availableLength / 2)
         let minimumFraction = effectiveMinimumPaneLength / availableLength
         let maximumFraction = 1 - minimumFraction
-        let clampedFraction = HostTerminalStateStore.clampedSplitFraction(proposed)
+        let clampedFraction = TileTreeStore.clampedSplitFraction(proposed)
 
         return min(max(clampedFraction, minimumFraction), maximumFraction)
     }

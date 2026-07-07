@@ -3,7 +3,7 @@
 //  WorkspaceManagerAppTests
 //
 //  Verifies the terminal tab rename commit rules before SwiftUI dispatches
-//  title changes into HostTerminalStateStore.
+//  title changes into TileTreeStore.
 //
 
 import Testing

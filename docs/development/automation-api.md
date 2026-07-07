@@ -169,7 +169,7 @@ workspaces input write 'echo hi' --submit
 | CLI formatting | `Sources/WorkspaceManagerCore/Services/Automation/AutomationCLIFormatting.swift` |
 | App-side controller | `Sources/WorkspaceManager/Views/MainWindow/AutomationController.swift` |
 | Feature lifecycle and injection | `Sources/WorkspaceManager/App/AutomationIntegrationLifecycle.swift` |
-| Terminal environment provider | `Sources/WorkspaceManager/Views/MainWindow/HostTerminalStateStore.swift` |
+| Terminal environment provider | `Sources/WorkspaceManager/Views/MainWindow/TileTreeStore.swift` |
 | Terminal config injection | `Sources/WorkspaceManager/Terminal/GhosttyTerminalConfig.swift` |
 | CLI command router | `Sources/WorkspaceManagerCLI/main.swift` |
 

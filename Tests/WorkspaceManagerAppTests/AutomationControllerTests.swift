@@ -131,7 +131,7 @@ struct AutomationControllerTests {
 
     @Test("Limited handles cannot use capabilities they were not granted")
     func limitedHandleCapabilitiesAreEnforced() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let primary =
             store.activateSession(
                 key: .repoPath("/Users/test/repo"),
@@ -148,7 +148,7 @@ struct AutomationControllerTests {
         )
         let controller = AutomationController(
             handleRegistry: registry,
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in },
             requestCloseTerminal: { _ in }
         )
@@ -164,7 +164,7 @@ struct AutomationControllerTests {
 
     @Test("Web surface handles are rejected as unsupported")
     func webSurfaceHandleIsRejected() throws {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let primary =
             store.activateSession(
                 key: .repoPath("/Users/test/repo"),
@@ -183,7 +183,7 @@ struct AutomationControllerTests {
         )
         let controller = AutomationController(
             handleRegistry: registry,
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in },
             requestCloseTerminal: { _ in }
         )
@@ -249,7 +249,7 @@ struct AutomationControllerTests {
 
     @MainActor
     private final class Fixture {
-        let store: HostTerminalStateStore
+        let store: TileTreeStore
         let controller: AutomationController
         let primary: HostTerminalSession
         let primaryHandle: String
@@ -257,7 +257,7 @@ struct AutomationControllerTests {
         var closedSessionIDs: [UUID] = []
 
         init() {
-            store = HostTerminalStateStore()
+            store = TileTreeStore()
             let handleRegistry = AutomationHandleRegistry()
             store.configureAutomation(
                 handleRegistry: handleRegistry,
@@ -271,12 +271,12 @@ struct AutomationControllerTests {
             primaryHandle = store.automationEnvironment(for: primary)?.handle ?? ""
             controller = AutomationController(
                 handleRegistry: handleRegistry,
-                hostTerminalState: store,
+                tileTreeStore: store,
                 focusTerminal: { _ in },
                 requestCloseTerminal: { _ in }
             )
             controller.update(
-                hostTerminalState: store,
+                tileTreeStore: store,
                 focusTerminal: { [weak self] sessionID in
                     self?.focusedSessionIDs.append(sessionID)
                 },
@@ -292,14 +292,14 @@ struct AutomationControllerTests {
     }
 
     private struct InputWriteHarness {
-        let store: HostTerminalStateStore
+        let store: TileTreeStore
         let controller: AutomationController
     }
 
     /// Builds a controller whose "granted" handle carries `input.write`, with the experiment
     /// gate injected so tests exercise both sides without touching global defaults.
     private func makeInputWriteHarness(isInputWriteEnabled: Bool) -> InputWriteHarness {
-        let store = HostTerminalStateStore()
+        let store = TileTreeStore()
         let primary =
             store.activateSession(
                 key: .repoPath("/Users/test/repo"),
@@ -316,7 +316,7 @@ struct AutomationControllerTests {
         )
         let controller = AutomationController(
             handleRegistry: registry,
-            hostTerminalState: store,
+            tileTreeStore: store,
             focusTerminal: { _ in },
             requestCloseTerminal: { _ in },
             isInputWriteEnabled: { isInputWriteEnabled }

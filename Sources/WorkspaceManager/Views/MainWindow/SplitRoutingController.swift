@@ -7,7 +7,7 @@ struct SplitRoutingController {
     func handle(
         notification: Notification,
         terminalMultiplexingMode: TerminalMultiplexingMode,
-        hostTerminalState: HostTerminalStateStore,
+        tileTreeStore: TileTreeStore,
         focusTerminal: @escaping (UUID) -> Void
     ) {
         guard let request = GhosttyAppManager.splitActionRequest(from: notification) else {
@@ -17,13 +17,13 @@ struct SplitRoutingController {
 
         let sourceSessionID =
             (notification.object as? GhosttySurfaceView)
-            .flatMap { hostTerminalState.surfaceStore.sessionID(for: $0) }
+            .flatMap { tileTreeStore.surfaceStore.sessionID(for: $0) }
 
         let effects = router.route(
             .split(GhosttySplitIntent(request: request)),
             sourceSessionID: sourceSessionID,
             terminalMultiplexingMode: terminalMultiplexingMode,
-            hostTerminalState: hostTerminalState
+            tileTreeStore: tileTreeStore
         )
         apply(effects: effects, focusTerminal: focusTerminal)
     }

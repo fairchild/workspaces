@@ -104,7 +104,7 @@ WORKSPACES_UI_FIXTURE_AGENT_STATES env var
        per workspace, for each entry:
                   │
                   ▼
-  hostTerminalState.activateSession(.hostPath(path), …)
+  tileTreeStore.activateSession(.hostPath(path), …)
        └─▶ HostTerminalSession created in coordinator.sessions
        └─▶ syncRegistry() → AgentSessionRegistry.register(hostSessionID:…)
                   │
@@ -130,7 +130,7 @@ WORKSPACES_UI_FIXTURE_COMMAND_STATUSES env var
        per workspace, for each entry:
                   │
                   ▼
-  hostTerminalState.activateSession(.hostPath(path), …)
+  tileTreeStore.activateSession(.hostPath(path), …)
        └─▶ HostTerminalSession created in coordinator.sessions
                   │
                   ▼
@@ -150,7 +150,7 @@ Why we route through `HostTerminalSession` instead of injecting statuses straigh
 | `WorkspaceManagerApp.init()` | `Sources/WorkspaceManager/App/WorkspaceManagerApp.swift` | Calls `UIFixtureSeeder.seedDataIfNeeded(in:)` — populates SwiftData with the repos/workspaces above. |
 | `MainWindowRootView.body` ▸ `AgentSessionRegistryAttacher.onAppear` | same file | Calls `UIFixtureSeeder.seedAgentStatesIfNeeded(…)` and `seedCommandStatusesIfNeeded(…)` — reads fixture env vars, drives sessions, and applies synthetic status. Runs after the registry/host store wiring; idempotent via module-static latches. |
 
-The split is structural: the SwiftData seeder runs at app-init time because that's where the model container is created; the agent-state seeder runs at view-attach time because that's where the `HostTerminalStateStore` first becomes reachable. The latch makes the agent-state seeder safe against repeat `onAppear` events.
+The split is structural: the SwiftData seeder runs at app-init time because that's where the model container is created; the agent-state seeder runs at view-attach time because that's where the `TileTreeStore` first becomes reachable. The latch makes the agent-state seeder safe against repeat `onAppear` events.
 
 ## Adding fixtures
 
