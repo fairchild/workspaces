@@ -7,6 +7,7 @@ import WorkspaceManagerCore
 @Suite("MainWindowSurfaceResolutionController")
 struct MainWindowSurfaceResolutionControllerTests {
     private let controller = MainWindowSurfaceResolutionController()
+    private let bootstrapController = MainWindowBootstrapController()
 
     @Test("Deep link resolution takes precedence over perf auto-select and restore")
     func deepLinkTakesPrecedence() {
@@ -33,7 +34,8 @@ struct MainWindowSurfaceResolutionControllerTests {
                 webConfiguration: nil,
                 repos: [repo],
                 webSources: []
-            )
+            ),
+            bootstrapController: bootstrapController
         )
 
         switch action {
@@ -66,7 +68,8 @@ struct MainWindowSurfaceResolutionControllerTests {
                 webConfiguration: nil,
                 repos: [repo],
                 webSources: []
-            )
+            ),
+            bootstrapController: bootstrapController
         )
 
         switch action {
@@ -98,7 +101,8 @@ struct MainWindowSurfaceResolutionControllerTests {
                 webConfiguration: nil,
                 repos: [],
                 webSources: []
-            )
+            ),
+            bootstrapController: bootstrapController
         )
 
         switch action {
@@ -128,7 +132,8 @@ struct MainWindowSurfaceResolutionControllerTests {
                 webConfiguration: nil,
                 repos: [repo],
                 webSources: []
-            )
+            ),
+            bootstrapController: bootstrapController
         )
 
         switch action {
@@ -157,7 +162,8 @@ struct MainWindowSurfaceResolutionControllerTests {
                 webConfiguration: nil,
                 repos: [repo],
                 webSources: []
-            )
+            ),
+            bootstrapController: bootstrapController
         )
 
         switch action {
@@ -195,7 +201,8 @@ struct MainWindowSurfaceResolutionControllerTests {
                 webConfiguration: nil,
                 repos: [repo],
                 webSources: []
-            )
+            ),
+            bootstrapController: bootstrapController
         )
 
         switch action {
@@ -205,6 +212,48 @@ struct MainWindowSurfaceResolutionControllerTests {
             #expect(selection.relativePath == "README.md")
         default:
             Issue.record("Expected preview bootstrap to run before restore")
+        }
+    }
+
+    @Test("Resolution routes through the injected bootstrap controller and settles in one pass")
+    func resolutionRoutesThroughInjectedBootstrapControllerOncePerLifecycle() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let savedSurface = MainWindowLastSurface(kind: .repoOverview, id: repo.id)
+
+        func action(didResolveInitialSurface: Bool) -> MainWindowSurfaceResolutionAction {
+            controller.nextAction(
+                context: MainWindowSurfaceResolutionContext(
+                    environment: [:],
+                    didRunPerfAutoSelection: false,
+                    didApplyFixturePreviewBootstrap: false,
+                    didApplyFixtureWebBootstrap: false,
+                    didResolveInitialSurface: didResolveInitialSurface,
+                    pendingRequest: nil,
+                    lastSurfaceRawValue: savedSurface.rawValue,
+                    previewConfiguration: nil,
+                    webConfiguration: nil,
+                    repos: [repo],
+                    webSources: []
+                ),
+                bootstrapController: bootstrapController
+            )
+        }
+
+        // First pass: the injected bootstrap controller restores the saved surface.
+        switch action(didResolveInitialSurface: false) {
+        case .restore(.repoOverview(let restoredRepo)):
+            #expect(restoredRepo.id == repo.id)
+        default:
+            Issue.record("Expected the injected bootstrap controller to restore the saved surface")
+        }
+
+        // After the initial surface resolves, the same injected controller performs no
+        // further bootstrap work — one bootstrap pass per launch / window restore.
+        switch action(didResolveInitialSurface: true) {
+        case .none:
+            break
+        default:
+            Issue.record("Expected no further bootstrap action once the initial surface is resolved")
         }
     }
 

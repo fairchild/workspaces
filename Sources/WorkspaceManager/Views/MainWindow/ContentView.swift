@@ -53,6 +53,7 @@ struct ContentView: View {
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
+    @State private var errorPresenter = MainWindowErrorPresenter()
     @State private var repoForNewWorkspaceFromLanding: Repo?
     @State private var isPreparingLandingNewWorkspaceSheet = false
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
@@ -494,12 +495,12 @@ struct ContentView: View {
         workspaceEnvironmentSheetState.lumeRuntimeSnapshot
     }
 
-    private var isShowingOpenInEditorError: Binding<Bool> {
+    private var isPresentingError: Binding<Bool> {
         Binding(
-            get: { viewState.openInEditorErrorMessage != nil },
+            get: { errorPresenter.isPresented },
             set: { isPresented in
                 if !isPresented {
-                    viewState.openInEditorErrorMessage = nil
+                    errorPresenter.dismiss()
                 }
             }
         )
@@ -863,14 +864,15 @@ struct ContentView: View {
     private var splitViewWithFocusAndAlerts: some View {
         splitViewWithLifecycleHandlers
             .alert(
-                "Could Not Open Editor",
-                isPresented: isShowingOpenInEditorError
-            ) {
+                errorPresenter.current?.title ?? "Error",
+                isPresented: isPresentingError,
+                presenting: errorPresenter.current
+            ) { _ in
                 Button("OK", role: .cancel) {
-                    viewState.openInEditorErrorMessage = nil
+                    errorPresenter.dismiss()
                 }
-            } message: {
-                Text(viewState.openInEditorErrorMessage ?? "Unknown error.")
+            } message: { error in
+                Text(error.message)
             }
             .alert(
                 "Could Not Open Workspace",
@@ -1241,7 +1243,8 @@ struct ContentView: View {
                     webConfiguration: fixtureWebBootstrapConfiguration,
                     repos: repos,
                     webSources: webSources
-                )
+                ),
+                bootstrapController: bootstrapController
             )
 
             guard applySurfaceResolutionAction(action) else { break }
@@ -2814,12 +2817,13 @@ struct ContentView: View {
 
     @MainActor
     private func presentOpenInEditorError(_ error: Error) {
+        let message: String
         if let externalEditorError = error as? ExternalEditorError {
-            viewState.openInEditorErrorMessage =
-                externalEditorError.errorDescription ?? "Could not open the selected file."
+            message = externalEditorError.errorDescription ?? "Could not open the selected file."
         } else {
-            viewState.openInEditorErrorMessage = error.localizedDescription
+            message = error.localizedDescription
         }
+        errorPresenter.present(title: "Could Not Open Editor", message: message)
     }
 
     @MainActor
