@@ -29,6 +29,23 @@ function parseTestsPassed(output: string): number | undefined {
 }
 
 /**
+ * The turn's failure text, or undefined if it hasn't failed. An `error`
+ * chunk (a live provider fault, or the synthesized message
+ * `closeAbandonedTurn`/turn-ingest's catch write for an interrupted run) wins
+ * outright; a `done` chunk carrying `metadata.aborted` with no explicit error
+ * chunk (defensive — the two are always paired in practice) falls back to a
+ * generic message. Undefined for a normal, still-open, or cleanly completed
+ * turn (see `folioTurnMetadata`, which this feeds).
+ */
+export function deriveTurnError(chunks: readonly StreamChunk[]): string | undefined {
+	const errorChunk = chunks.find((chunk) => chunk.type === "error");
+	if (errorChunk) return errorChunk.content.length > 0 ? errorChunk.content : "The turn failed.";
+	const doneChunk = chunks.find((chunk) => chunk.type === "done");
+	if (doneChunk?.metadata?.aborted === true) return "Turn interrupted before completion.";
+	return undefined;
+}
+
+/**
  * Stats for a completed turn, or undefined while the turn is still open
  * (no `done` chunk yet) — an unfinished turn gets no receipt.
  *
@@ -90,11 +107,15 @@ export function deriveTurnStats(
 
 /**
  * The assistant-message metadata for a turn: author immediately (fed to the
- * adapter's `start`), turn stats once the turn completed (fed to `finish`).
+ * adapter's `start`), then either the turn's failure or its stats once the
+ * turn completed (fed to `finish`) — a failed turn gets `error` instead of a
+ * `turnStats` receipt, never both.
  */
 export function folioTurnMetadata(
 	chunks: readonly StreamChunk[],
 ): FolioMetadata {
+	const error = deriveTurnError(chunks);
+	if (error) return { author: AGENT_AUTHOR, error };
 	const turnStats = deriveTurnStats(chunks);
 	return turnStats ? { author: AGENT_AUTHOR, turnStats } : { author: AGENT_AUTHOR };
 }

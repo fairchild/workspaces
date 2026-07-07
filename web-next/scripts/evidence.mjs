@@ -2,10 +2,11 @@
  * Evidence capture, light + dark: the sessions home (empty and populated),
  * an empty session reached through the real new-session flow, a real mock
  * turn streamed into that session (mid-stream, final, and reloaded from the
- * event log), the durable disconnect→resume story (tab closed mid-turn, a
- * fresh tab catching up, then completed), the Folio session demo, and the
- * refine-folio prototype beside it for pixel comparison. Runs against a
- * production build in auth-bypass
+ * event log), the terminal drawer (#752), a failing turn's inline failure
+ * card + retry-to-success (#808), the durable disconnect→resume story (tab
+ * closed mid-turn, a fresh tab catching up, then completed), the Folio
+ * session demo, and the refine-folio prototype beside it for pixel
+ * comparison. Runs against a production build in auth-bypass
  * mode over a throwaway database. Output goes to output/evidence/
  * (gitignored); CI uploads it as an artifact — the sanctioned publish path
  * per docs/development/remote-sessions.md.
@@ -158,6 +159,38 @@ async function captureTerminalDrawer(page, file) {
 }
 
 /**
+ * A failing turn (#808): sends a message carrying mock-provider.ts's
+ * MOCK_TURN_ERROR_TRIGGER, captures the inline failure card + retry action,
+ * then clicks Retry (the mock spends its one guaranteed failure per session,
+ * so this succeeds) and captures the completed retry turn beneath it — proof
+ * the failed turn's own record survives, it isn't erased.
+ */
+async function captureFailedTurn(page, shot) {
+	await page.goto("/", { waitUntil: "networkidle" });
+	await page.getByRole("button", { name: "+ new session" }).click();
+	await page
+		.getByTestId("new-session-picker")
+		.getByRole("button", { name: "fairchild/workspaces" })
+		.click();
+	await page.waitForURL(/\/sessions\//, { timeout: TURN_TIMEOUT_MS });
+
+	await page
+		.getByRole("textbox", { name: "Reply to Claude" })
+		.fill("Fix the bug __mock_turn_error__");
+	await page.keyboard.press("Enter");
+
+	await page.getByTestId("turn-failure").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("session-turn-failed") });
+
+	await page.getByRole("button", { name: "Retry" }).click();
+	await page.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("session-turn-failed-retried") });
+}
+
+/**
  * The durable-turn story: start a turn, close the tab mid-stream, reopen the
  * session in a fresh tab and watch it catch up and complete. Manages its own
  * pages (the starter tab is closed on purpose) so the caller's page is left
@@ -286,6 +319,7 @@ async function main() {
 			await captureNewSessionFlow(page, shot("session-empty"));
 			await captureSessionTurn(page, shot);
 			await captureTerminalDrawer(page, shot("session-terminal-drawer"));
+			await captureFailedTurn(page, shot);
 			await captureDisconnectResume(context, shot);
 			await seedPopulatedHome(db);
 			await captureSettled(page, "/", shot("home-populated"));
@@ -294,7 +328,7 @@ async function main() {
 			await capturePrototype(page, colorScheme, shot("prototype-folio"));
 			await context.close();
 			console.log(
-				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
+				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + terminal drawer + failed turn (failure, retried) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
 			);
 		}
 	} finally {

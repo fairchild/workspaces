@@ -13,7 +13,7 @@
 import { type UIMessage, readUIMessageStream } from "ai";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 import { toUIMessageChunkStream } from "./chunk-adapter";
-import { folioTurnMetadata } from "./turn-stats";
+import { deriveTurnError, folioTurnMetadata } from "./turn-stats";
 
 export type SessionEventRole = "user" | "assistant";
 
@@ -39,8 +39,12 @@ export interface ProjectedEvent {
  * - Assistant runs replay through the adapter + `readUIMessageStream`; transient
  *   `status` chunks and stream `error`s never break projection (they are
  *   dropped / surfaced out-of-band, matching the adapter contract).
- * - An assistant run that yields no renderable parts (e.g. only status/error) is
- *   omitted rather than emitting an empty bubble.
+ * - An assistant run that yields no renderable parts is omitted rather than
+ *   emitting an empty bubble — UNLESS it failed (an `error` chunk, or a `done`
+ *   chunk with `metadata.aborted`; see turn-stats.ts's `deriveTurnError`), in
+ *   which case it still projects (with `metadata.error` set and possibly zero
+ *   parts) so an interrupted turn renders as a visible failure instead of
+ *   vanishing (#808) — whatever content streamed before the failure is kept.
  */
 export async function projectSessionEvents(
 	sessionId: string,
@@ -92,8 +96,9 @@ function buildUserMessage(id: string, chunks: StreamChunk[]): UIMessage {
  * Replays assistant events through the shared adapter and reduces the resulting
  * UIMessageChunk stream to a single message. Part ids are seeded from the
  * message id so the projection is byte-for-byte reproducible. Metadata (author
- * + turn stats) is derived by the same folioTurnMetadata the live stream uses,
- * so a completed turn projects with its receipt and an unfinished one without.
+ * + turn stats, or author + error) is derived by the same folioTurnMetadata the
+ * live stream uses, so a completed turn projects with its receipt, a failed one
+ * with its failure, and an unfinished one with neither.
  */
 async function buildAssistantMessage(
 	id: string,
@@ -112,6 +117,10 @@ async function buildAssistantMessage(
 	for await (const message of readUIMessageStream({ stream, onError: () => {} })) {
 		last = message;
 	}
-	if (!last || last.parts.length === 0) return undefined;
+	if (!last) return undefined;
+	// A run that failed always projects — even with zero parts (the common
+	// case: the failure lands before any content streams) — so the turn
+	// renders as a visible failure card instead of disappearing (#808).
+	if (last.parts.length === 0 && deriveTurnError(chunks) === undefined) return undefined;
 	return last;
 }

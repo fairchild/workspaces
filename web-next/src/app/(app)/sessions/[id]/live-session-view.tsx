@@ -23,6 +23,16 @@
  * reload always agrees because both sides compute the same function over the
  * same text; a user edit (or the eventual server write) replaces the preview
  * with the real persisted string.
+ *
+ * A turn that errors (#808) surfaces the same way live and after a reload:
+ * `status === "error"` here tags the trailing assistant message with
+ * `metadata.error` (see live-turn-error.ts — the SDK's error throw cuts the
+ * stream before the adapter's `finish` chunk, which would normally carry that
+ * tag, ever arrives), and project-events.ts tags it server-side from the
+ * persisted `error`/aborted-`done` chunks on reload. Either way the message
+ * flows into `visibleMessages` and renders through Message's failure card;
+ * its Retry button (session-view.tsx) re-sends the turn's original text,
+ * which `send` already exists to do.
  */
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
@@ -36,6 +46,7 @@ import {
 import type { FolioDataParts, FolioMessage } from "@/components/folio/types";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
+import { isVisibleMessage, withLiveTurnError } from "@/lib/transcript/live-turn-error";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
@@ -181,7 +192,7 @@ export function LiveSessionView({
 		[sessionId],
 	);
 
-	const { messages, sendMessage, status } = useChat<FolioMessage>({
+	const { messages, sendMessage, status, error } = useChat<FolioMessage>({
 		id: sessionId,
 		transport,
 		messages: initialMessages,
@@ -207,16 +218,25 @@ export function LiveSessionView({
 		);
 	};
 
+	// A live failure (#808): the trailing assistant message useChat pushed at
+	// the turn's `start` never gets `metadata.error` from the stream itself
+	// (see live-turn-error.ts), so tag it here from the hook's own error
+	// state — idempotent, so this is safe to recompute every render.
+	const displayMessages =
+		status === "error" && error
+			? withLiveTurnError(messages, error.message, session.masthead.agentName)
+			: messages;
+
 	// The reply message exists (empty) as soon as the stream starts; keep it
-	// out of the transcript until it has content — the activity article
-	// stands in for it.
-	const visibleMessages = messages.filter((message) => message.parts.length > 0);
+	// out of the transcript until it has content or has failed — the activity
+	// article stands in for an in-progress, contentless reply.
+	const visibleMessages = displayMessages.filter(isVisibleMessage);
 
 	// The standalone activity article covers the gap before the streamed
 	// reply renders content (provisioning statuses); once parts land, the
 	// growing message itself — running ledger rows, prose — is the live
 	// indicator, and a second "Claude" article would just double the label.
-	const last = messages.at(-1);
+	const last = displayMessages.at(-1);
 	const replyStarted = last?.role === "assistant" && last.parts.length > 0;
 	const activeTurn: ActiveTurnData | undefined =
 		busy && !replyStarted

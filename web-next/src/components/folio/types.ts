@@ -43,6 +43,13 @@ export interface FolioMetadata {
 	recede?: boolean;
 	/** Present on completed agent turns only. */
 	turnStats?: TurnStatsData;
+	/**
+	 * Present when the turn ended in a stream error or was interrupted before
+	 * completion (see lib/transcript/turn-stats.ts's `deriveTurnError`) —
+	 * mutually exclusive with `turnStats`. The message this renders holds
+	 * whatever content streamed before the failure (possibly none).
+	 */
+	error?: string;
 }
 
 export interface DiffLine {

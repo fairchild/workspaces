@@ -1,7 +1,12 @@
 import { describe, expect, test } from "vitest";
 import type { FolioMessage } from "@/components/folio/types";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
-import { deriveContextLabel, deriveTurnStats, folioTurnMetadata } from "./turn-stats";
+import {
+	deriveContextLabel,
+	deriveTurnError,
+	deriveTurnStats,
+	folioTurnMetadata,
+} from "./turn-stats";
 
 const done = (metadata?: Record<string, unknown>): StreamChunk => ({
 	type: "done",
@@ -120,5 +125,50 @@ describe("folioTurnMetadata", () => {
 			author: "Claude",
 			turnStats: { toolCount: 0, durationMs: 10 },
 		});
+	});
+
+	test("carries the failure instead of a receipt on a failed turn (#808)", () => {
+		expect(
+			folioTurnMetadata([
+				{ type: "error", content: "sandbox died" },
+				done({ aborted: true }),
+			]),
+		).toEqual({ author: "Claude", error: "sandbox died" });
+	});
+});
+
+describe("deriveTurnError (#808)", () => {
+	test("undefined for a normal, still-open turn", () => {
+		expect(deriveTurnError([{ type: "text", content: "working…" }])).toBeUndefined();
+	});
+
+	test("undefined for a cleanly completed turn", () => {
+		expect(deriveTurnError([done({ durationMs: 10 })])).toBeUndefined();
+	});
+
+	test("the error chunk's text, when one is present", () => {
+		expect(
+			deriveTurnError([
+				{ type: "text", content: "partial answer" },
+				{ type: "error", content: "sandbox died" },
+				done({ aborted: true }),
+			]),
+		).toBe("sandbox died");
+	});
+
+	test("a generic message for an aborted done with no explicit error chunk", () => {
+		expect(deriveTurnError([done({ aborted: true })])).toBe(
+			"Turn interrupted before completion.",
+		);
+	});
+
+	test("a generic message when the error chunk carries no content", () => {
+		expect(
+			deriveTurnError([{ type: "error", content: "" }, done({ aborted: true })]),
+		).toBe("The turn failed.");
+	});
+
+	test("a done chunk without aborted metadata is not a failure", () => {
+		expect(deriveTurnError([done()])).toBeUndefined();
 	});
 });

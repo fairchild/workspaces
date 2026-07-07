@@ -19,6 +19,7 @@ import {
 import { Reasoning, ReasoningContent, ReasoningTrigger } from "./reasoning";
 import { TestOutputPanel } from "./test-output-panel";
 import { ToolLedgerRow } from "./tool-ledger-row";
+import { TurnFailure } from "./turn-failure";
 import { TurnStatsReceipt } from "./turn-stats";
 import type { FolioMessage } from "./types";
 
@@ -175,12 +176,18 @@ export interface MessageProps {
 	/** Tool calls whose ledger rows start expanded (e.g. the landed test run). */
 	openToolCallIds?: string[];
 	animationDelay?: number;
+	/** Re-sends this turn's original text (present on failed turns only). */
+	onRetry?: () => void;
+	/** Holds retry while another turn on this session is already running. */
+	retryDisabled?: boolean;
 }
 
 export function Message({
 	message,
 	openToolCallIds,
 	animationDelay,
+	onRetry,
+	retryDisabled,
 }: MessageProps) {
 	const isUser = message.role === "user";
 	const meta = message.metadata;
@@ -244,6 +251,9 @@ export function Message({
 					</p>
 				));
 			})}
+			{meta?.error && (
+				<TurnFailure message={meta.error} onRetry={onRetry} retryDisabled={retryDisabled} />
+			)}
 			{meta?.turnStats && <TurnStatsReceipt stats={meta.turnStats} />}
 		</MessageArticle>
 	);

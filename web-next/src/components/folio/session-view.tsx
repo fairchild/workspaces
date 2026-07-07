@@ -58,6 +58,16 @@ function groupIntoTurns(messages: FolioMessage[]): Turn[] {
 	return turns;
 }
 
+/** The turn's original user text — what a failed reply's Retry re-sends. */
+function turnUserText(turn: Turn): string {
+	return turn.messages
+		.filter((message) => message.role === "user")
+		.flatMap((message) => message.parts)
+		.filter((part) => part.type === "text")
+		.map((part) => part.text)
+		.join("");
+}
+
 /**
  * The frame draws the turn's presence, so the per-message focal tick and the
  * older-context fade are cleared — otherwise a turn would signal focus twice.
@@ -125,6 +135,7 @@ export function SessionView({
 						const frame = recent
 							? "border-line-strong bg-raised shadow-card"
 							: "border-line";
+						const retryText = turnUserText(turn);
 						return (
 							<section
 								key={turn.key}
@@ -137,6 +148,12 @@ export function SessionView({
 										message={withoutMessagePresence(message)}
 										openToolCallIds={session.openToolCallIds}
 										animationDelay={riseDelay(orderIndex.get(message.id) ?? 0)}
+										onRetry={
+											message.metadata?.error && onSend && retryText
+												? () => onSend(retryText)
+												: undefined
+										}
+										retryDisabled={composeDisabled}
 									/>
 								))}
 								{recent && session.activeTurn && (
