@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
 	canonicalToolName,
+	createHarness,
 	errorText,
 	mapFullStream,
 	parseGitDiff,
@@ -33,7 +34,11 @@ describe("mapFullStream", () => {
 				input: { command: "ls" },
 			},
 			{ type: "tool-result", toolCallId: "c1", toolName: "bash", output: "a\nb" },
-			{ type: "finish", finishReason: "stop", totalUsage: { outputTokens: 42 } },
+			{
+				type: "finish",
+				finishReason: "stop",
+				totalUsage: { outputTokens: { total: 42 }, inputTokens: { total: 100 } },
+			},
 		]);
 
 		expect(chunks.map((c) => c.type)).toEqual([
@@ -76,12 +81,32 @@ describe("mapFullStream", () => {
 	test("carries finish outputTokens into the terminal done chunk", async () => {
 		const chunks = await collect([
 			{ type: "text-delta", id: "t1", text: "hi" },
-			{ type: "finish", finishReason: "stop", totalUsage: { outputTokens: 7 } },
+			{
+				type: "finish",
+				finishReason: "stop",
+				totalUsage: { outputTokens: { total: 7 } },
+			},
 		]);
 		const done = chunks.at(-1);
 		expect(done?.type).toBe("done");
 		expect(done?.metadata).toMatchObject({ tokenCount: 7 });
 		expect(typeof done?.metadata?.durationMs).toBe("number");
+	});
+
+	test("carries finish inputTokens into the terminal done chunk as contextTokens (#824)", async () => {
+		const chunks = await collect([
+			{ type: "text-delta", id: "t1", text: "hi" },
+			{
+				type: "finish",
+				finishReason: "stop",
+				totalUsage: {
+					outputTokens: { total: 7 },
+					inputTokens: { total: 1234 },
+				},
+			},
+		]);
+		const done = chunks.at(-1);
+		expect(done?.metadata).toMatchObject({ tokenCount: 7, contextTokens: 1234 });
 	});
 
 	test("tool-error maps to an errored tool_result", async () => {
@@ -110,6 +135,31 @@ describe("mapFullStream", () => {
 		expect(dones).toHaveLength(1);
 		expect(chunks.at(-1)?.type).toBe("done");
 		expect(dones[0]?.metadata?.tokenCount).toBeUndefined();
+	});
+});
+
+describe("createHarness", () => {
+	test("forwards the session's model override into createClaudeCode settings (#824)", () => {
+		const calls: unknown[] = [];
+		const fakeCreateClaudeCode = ((settings: unknown) => {
+			calls.push(settings);
+			return {};
+			// biome-ignore-like cast: only the settings arg matters to this test.
+		}) as unknown as Parameters<typeof createHarness>[0];
+
+		createHarness(fakeCreateClaudeCode, undefined, "claude-opus-4-8");
+		expect(calls[0]).toMatchObject({ thinking: "on", model: "claude-opus-4-8" });
+	});
+
+	test("omits model entirely when none is given, deferring to the CLI default", () => {
+		const calls: unknown[] = [];
+		const fakeCreateClaudeCode = ((settings: unknown) => {
+			calls.push(settings);
+			return {};
+		}) as unknown as Parameters<typeof createHarness>[0];
+
+		createHarness(fakeCreateClaudeCode, undefined);
+		expect(calls[0]).not.toHaveProperty("model");
 	});
 });
 

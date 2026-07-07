@@ -12,12 +12,14 @@
  * full-replay against an SSR'd prefix would duplicate it.
  */
 import { notFound } from "next/navigation";
+import { MODEL_OPTIONS, modelLabel } from "@/lib/agent-runtime/models";
 import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
 import type { FolioMessage } from "@/components/folio/types";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
 import { getRepo } from "@/lib/db/repos";
 import { getSession, readTranscript } from "@/lib/db/sessions";
+import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 import { LiveSessionView } from "./live-session-view";
 
 export default async function SessionPage({
@@ -68,7 +70,12 @@ export default async function SessionPage({
 					agentName: "Claude",
 					stateLabel: "idle",
 				},
-				statusLine: { model: "opus-4.8", contextLabel: "0 ctx" },
+				statusLine: {
+					model: session.model,
+					modelLabel: modelLabel(session.model),
+					models: MODEL_OPTIONS,
+					contextLabel: deriveContextLabel(transcript),
+				},
 				empty: {
 					title: "No turns yet.",
 					hint: `Ask below — this session runs on ${repoName}.`,

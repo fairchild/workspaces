@@ -11,6 +11,7 @@
  * cleanly and two cold starts can overlap.
  */
 import { type Kysely, sql } from "kysely";
+import { DEFAULT_MODEL } from "../agent-runtime/models";
 import type { Database } from "./client";
 
 /** One tracked migration: a stable `id` and an idempotent `up`. */
@@ -166,8 +167,33 @@ const sessionResumeState: Migration = {
 	},
 };
 
+/**
+ * Adds `sessions.model` — the Claude model this session's turns run on
+ * (#824). Defaults existing and new rows to `DEFAULT_MODEL` (the current best
+ * model per `agent-runtime/models.ts`) via a SQL constant default, so the
+ * backfill for pre-existing sessions and the default for new ones are the
+ * same value without a second write. Idempotent via the same column-probe
+ * pattern as `0003_session_resume_state`.
+ */
+const sessionModel: Migration = {
+	id: "0004_session_model",
+	async up(db) {
+		const info = await sql<{
+			name: string;
+		}>`PRAGMA table_info(sessions)`.execute(db);
+		const hasColumn = info.rows.some((row) => row.name === "model");
+		if (!hasColumn) {
+			await db.schema
+				.alterTable("sessions")
+				.addColumn("model", "text", (col) => col.notNull().defaultTo(DEFAULT_MODEL))
+				.execute();
+		}
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
 	sessionResumeState,
+	sessionModel,
 ];

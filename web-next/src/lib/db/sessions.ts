@@ -9,6 +9,7 @@
  * the raw log as the source of truth lets projection improve across adapter
  * versions and keeps #749's ingest a dumb append.
  */
+import { DEFAULT_MODEL } from "../agent-runtime/models";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 import type {
 	ProjectedEvent,
@@ -25,6 +26,8 @@ export interface NewSession {
 	provider: string;
 	status?: string;
 	claudeSessionId?: string | null;
+	/** Claude model id to stamp; defaults to `DEFAULT_MODEL` when omitted. */
+	model?: string;
 }
 
 export interface Session {
@@ -36,6 +39,8 @@ export interface Session {
 	claudeSessionId: string | null;
 	/** JSON harness resume payload from the last turn's detach(), or null. */
 	resumeState: string | null;
+	/** Claude model id this session's turns run on (#824). */
+	model: string;
 	createdAt: string;
 	lastActivityAt: string;
 }
@@ -55,6 +60,7 @@ function rowToSession(row: SessionsTable): Session {
 		status: row.status,
 		claudeSessionId: row.claude_session_id,
 		resumeState: row.resume_state,
+		model: row.model,
 		createdAt: row.created_at,
 		lastActivityAt: row.last_activity_at,
 	};
@@ -74,6 +80,7 @@ export async function createSession(
 		status: session.status ?? "active",
 		claude_session_id: session.claudeSessionId ?? null,
 		resume_state: null,
+		model: session.model ?? DEFAULT_MODEL,
 		created_at: now,
 		last_activity_at: now,
 	};
@@ -82,19 +89,24 @@ export async function createSession(
 }
 
 /**
- * Persists the harness handle a turn parked with `detach()`: the claude session
- * id and the JSON resume payload the next turn reconnects from. `resumeState`
- * of `null` clears it (the parked sandbox expired or the turn didn't detach).
+ * Persists the harness handle a turn parked with `detach()` (claude session id
+ * + JSON resume payload; `resumeState` of `null` clears a stale handle) and/or
+ * the session's selected model (#824's picker).
  */
 export async function updateSession(
 	handle: DatabaseHandle,
 	id: string,
-	fields: { claudeSessionId?: string | null; resumeState?: string | null },
+	fields: {
+		claudeSessionId?: string | null;
+		resumeState?: string | null;
+		model?: string;
+	},
 ): Promise<void> {
 	await ensureSchema(handle);
 	const set: Partial<SessionsTable> = {};
 	if ("claudeSessionId" in fields) set.claude_session_id = fields.claudeSessionId ?? null;
 	if ("resumeState" in fields) set.resume_state = fields.resumeState ?? null;
+	if ("model" in fields && fields.model) set.model = fields.model;
 	if (Object.keys(set).length === 0) return;
 	await handle.db.updateTable("sessions").set(set).where("id", "=", id).execute();
 }

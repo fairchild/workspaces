@@ -25,6 +25,12 @@ export interface TurnRequest {
 	userMessage: string;
 	/** Prior parked session to resume, or null/undefined for a fresh turn. */
 	resume?: SessionResumeHandle | null;
+	/**
+	 * The session's selected Claude model id (see `./models.ts`). Providers
+	 * that drive a real model (vercel) thread it into the harness; providers
+	 * that don't (mock) record it for testability but otherwise ignore it.
+	 */
+	model?: string;
 }
 
 export interface ComputeProvider {

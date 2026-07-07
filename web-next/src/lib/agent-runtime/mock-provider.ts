@@ -4,7 +4,11 @@
  * diff → done with usage figures) that exercises the whole Folio apparatus —
  * including the thinking block and the error tool path — without a sandbox.
  * Paced with small delays so streaming behavior is observable and measurable.
+ * The requested model is recorded (not used — there's no real model call
+ * here) on the terminal `done` chunk, so #824's routing is unit-testable
+ * against this provider without a sandbox.
  */
+import { DEFAULT_MODEL } from "./models";
 import type { ComputeProvider, TurnRequest } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -58,6 +62,7 @@ const TEST_RUN_OUTPUT = [
 export async function* mockCodingTurn(
 	userMessage: string,
 	sleep: Sleep = defaultSleep,
+	model: string = DEFAULT_MODEL,
 ): AsyncGenerator<StreamChunk> {
 	const startedAt = Date.now();
 	let proseChars = 0;
@@ -182,11 +187,17 @@ export async function* mockCodingTurn(
 			durationMs: Date.now() - startedAt,
 			// A plausible usage figure for the receipt: ~4 chars per token.
 			tokenCount: Math.ceil(proseChars / 4),
+			// A plausible context-window figure (conversation so far, ~3.2
+			// chars/token) — deterministic so the status line's real-figure wiring
+			// is testable without a sandbox call.
+			contextTokens: Math.ceil((userMessage.length + proseChars) / 3.2),
+			model,
 		},
 	};
 }
 
 export const mockProvider: ComputeProvider = {
 	id: "mock",
-	runTurn: (request: TurnRequest) => mockCodingTurn(request.userMessage),
+	runTurn: (request: TurnRequest) =>
+		mockCodingTurn(request.userMessage, undefined, request.model),
 };

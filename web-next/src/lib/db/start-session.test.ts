@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { DEFAULT_MODEL } from "../agent-runtime/models";
 import { type DatabaseHandle, openDatabase } from "./client";
 import { ensureRepo, listRepos } from "./repos";
 import { listSessions } from "./sessions";
@@ -54,6 +55,7 @@ describe("startSession", () => {
 			title: "",
 			provider: "mock",
 			status: "active",
+			model: DEFAULT_MODEL,
 		});
 		expect(session.id).toBeTruthy();
 		expect((await listRepos(handle)).map((r) => r.fullName)).toEqual([

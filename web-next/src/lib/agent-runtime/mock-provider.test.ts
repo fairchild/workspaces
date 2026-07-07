@@ -1,12 +1,17 @@
 import { describe, expect, test } from "vitest";
 import { deriveTurnStats } from "../transcript/turn-stats";
 import { mockCodingTurn, mockProvider } from "./mock-provider";
+import { DEFAULT_MODEL } from "./models";
 import type { StreamChunk } from "./stream-chunk";
 
 /** The whole scripted turn, without waiting out the streaming pace. */
-async function fullTurn(userMessage: string): Promise<StreamChunk[]> {
+async function fullTurn(userMessage: string, model?: string): Promise<StreamChunk[]> {
 	const chunks: StreamChunk[] = [];
-	for await (const chunk of mockCodingTurn(userMessage, () => Promise.resolve())) {
+	for await (const chunk of mockCodingTurn(
+		userMessage,
+		() => Promise.resolve(),
+		model,
+	)) {
 		chunks.push(chunk);
 	}
 	return chunks;
@@ -95,5 +100,23 @@ describe("mockCodingTurn", () => {
 		const first = await iterator.next();
 		expect(first.value).toEqual({ type: "status", content: "Starting sandbox" });
 		await iterator.return?.(undefined);
+	});
+
+	test("records the default model on the terminal done chunk when none is requested (#824)", async () => {
+		const chunks = await fullTurn("go");
+		const done = chunks.find((chunk) => chunk.type === "done");
+		expect(done?.metadata?.model).toBe(DEFAULT_MODEL);
+	});
+
+	test("records an explicit model override on the terminal done chunk (#824)", async () => {
+		const chunks = await fullTurn("go", "claude-haiku-4-5");
+		const done = chunks.find((chunk) => chunk.type === "done");
+		expect(done?.metadata?.model).toBe("claude-haiku-4-5");
+	});
+
+	test("also records a plausible contextTokens figure alongside tokenCount", async () => {
+		const chunks = await fullTurn("go");
+		const done = chunks.find((chunk) => chunk.type === "done");
+		expect(done?.metadata?.contextTokens).toBeGreaterThan(0);
 	});
 });

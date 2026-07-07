@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
+import { DEFAULT_MODEL } from "../agent-runtime/models";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 import { type DatabaseHandle, openDatabase } from "./client";
 import {
@@ -50,6 +51,7 @@ describe("session store", () => {
 			"0001_baseline",
 			"0002_auth_tables",
 			"0003_session_resume_state",
+			"0004_session_model",
 		]);
 	});
 
@@ -71,6 +73,27 @@ describe("session store", () => {
 		expect(created.resumeState).toBeNull();
 		expect(await getSession(handle, "s1")).toEqual(created);
 		expect(await getSession(handle, "missing")).toBeUndefined();
+	});
+
+	test("stamps the current-best model by default, and honors an explicit override (#824)", async () => {
+		const handle = freshDb();
+		const defaulted = await createSession(handle, { id: "s1", provider: "mock" });
+		expect(defaulted.model).toBe(DEFAULT_MODEL);
+
+		const overridden = await createSession(handle, {
+			id: "s2",
+			provider: "mock",
+			model: "claude-haiku-4-5",
+		});
+		expect(overridden.model).toBe("claude-haiku-4-5");
+		expect((await getSession(handle, "s2"))?.model).toBe("claude-haiku-4-5");
+	});
+
+	test("updateSession persists a model change (#824's picker)", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "mock" });
+		await updateSession(handle, "s1", { model: "claude-opus-4-8" });
+		expect((await getSession(handle, "s1"))?.model).toBe("claude-opus-4-8");
 	});
 
 	test("updateSession persists and clears the harness resume handle", async () => {
