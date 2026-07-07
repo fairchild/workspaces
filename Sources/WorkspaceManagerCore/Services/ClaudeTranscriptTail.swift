@@ -51,10 +51,13 @@ public enum ClaudeTranscriptTail {
         inTailChunk chunk: String,
         maxLength: Int = SessionActivitySnippet.defaultMaxLength
     ) -> String? {
-        let lines = chunk.split(separator: "\n", omittingEmptySubsequences: true)
+        let lines = chunk.split(whereSeparator: \.isNewline)
         for line in lines.reversed() {
+            // Trim so a stray CR (CRLF transcripts) or surrounding whitespace doesn't defeat the
+            // JSON parse; a partial leading line from the tail boundary simply fails to parse.
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             guard
-                let data = String(line).data(using: .utf8),
+                let data = trimmed.data(using: .utf8),
                 let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 object["type"] as? String == "assistant",
                 let message = object["message"] as? [String: Any],
