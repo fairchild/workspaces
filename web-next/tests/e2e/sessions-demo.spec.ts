@@ -4,13 +4,24 @@
  * compose, ledger row disclosure (including a landed edit's diff, which
  * lives inside its own Edit row — #790), status line dismiss-to-dot, and
  * the focus cue / receipt furniture.
+ *
+ * Every test here is tagged `@deployed-safe` (#817): /sessions/demo renders
+ * entirely from fixture data (see page.tsx — "no backend"), so the whole
+ * file is read-mostly and safe to replay against a real deployment through
+ * `pnpm validate`'s e2e stage — no session is created, no DB row is
+ * written, and no real agent-runtime turn is ever triggered. Contrast
+ * sessions.spec.ts and terminal.spec.ts, which drive real session creation,
+ * a scripted mock turn, and a live shell, and are deliberately left
+ * untagged: against a deployed target the mock provider is gone and those
+ * flows would run a real, costly Claude Code sandbox — out of scope until
+ * #818's spend-gated real-agentic-turn stage.
  */
 import { expect, test } from "@playwright/test";
 
 const theme = (page: import("@playwright/test").Page) =>
 	page.locator("html").getAttribute("data-theme");
 
-test("theme: system preference by default, toggle overrides and persists", async ({
+test("theme: system preference by default, toggle overrides and persists @deployed-safe", async ({
 	page,
 }) => {
 	await page.emulateMedia({ colorScheme: "dark" });
@@ -26,7 +37,7 @@ test("theme: system preference by default, toggle overrides and persists", async
 	expect(await theme(page)).toBe("light");
 });
 
-test("theme: #light/#dark hash forces the theme like the prototype", async ({
+test("theme: #light/#dark hash forces the theme like the prototype @deployed-safe", async ({
 	page,
 }) => {
 	await page.emulateMedia({ colorScheme: "light" });
@@ -45,7 +56,7 @@ test("theme: #light/#dark hash forces the theme like the prototype", async ({
 	expect(await theme(page)).toBe("light");
 });
 
-test("compose autofocuses with no placeholder or hint chips", async ({
+test("compose autofocuses with no placeholder or hint chips @deployed-safe", async ({
 	page,
 }) => {
 	await page.goto("/sessions/demo");
@@ -58,7 +69,7 @@ test("compose autofocuses with no placeholder or hint chips", async ({
 	).toBeLessThanOrEqual(2);
 });
 
-test("tool ledger rows disclose and collapse their bodies", async ({
+test("tool ledger rows disclose and collapse their bodies @deployed-safe", async ({
 	page,
 }) => {
 	await page.goto("/sessions/demo");
@@ -82,7 +93,7 @@ test("tool ledger rows disclose and collapse their bodies", async ({
 	await expect(readBody).toBeHidden();
 });
 
-test("expanding the Edit row reveals its diff — no separate floating diff card", async ({
+test("expanding the Edit row reveals its diff — no separate floating diff card @deployed-safe", async ({
 	page,
 }) => {
 	await page.goto("/sessions/demo");
@@ -109,7 +120,7 @@ test("expanding the Edit row reveals its diff — no separate floating diff card
 	await expect(body).toBeHidden();
 });
 
-test("status line dismisses to a dot and comes back", async ({ page }) => {
+test("status line dismisses to a dot and comes back @deployed-safe", async ({ page }) => {
 	await page.goto("/sessions/demo");
 	const statusLine = page.getByTestId("status-line");
 	await expect(statusLine).toContainText("opus-4.8");
@@ -123,7 +134,7 @@ test("status line dismisses to a dot and comes back", async ({ page }) => {
 	await expect(page.getByTestId("status-line")).toContainText("2.1k ctx");
 });
 
-test("turn frame focus cue and end-of-turn receipt are present", async ({
+test("turn frame focus cue and end-of-turn receipt are present @deployed-safe", async ({
 	page,
 }) => {
 	await page.goto("/sessions/demo");
@@ -141,7 +152,7 @@ test("turn frame focus cue and end-of-turn receipt are present", async ({
 	).toContainText("Editing");
 });
 
-test("seeded transcript renders the requested message count", async ({
+test("seeded transcript renders the requested message count @deployed-safe", async ({
 	page,
 }) => {
 	await page.goto("/sessions/demo?seed=20");
