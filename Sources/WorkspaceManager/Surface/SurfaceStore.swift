@@ -180,6 +180,17 @@ final class SurfaceStore {
         webSourceUseOrder.append(sourceID)
 
         let boundSourceIDs = Set(surfaces.values.compactMap { ($0 as? WebSurface)?.source.id })
+
+        // Housekeeping: an unbound store whose deferred release already fired holds no page —
+        // drop its registry/order entries so slow drift across many sources leaves no metadata.
+        let expired = webStoresBySourceID.filter { id, store in
+            !boundSourceIDs.contains(id) && !store.hasActiveSurface
+        }.keys
+        for id in expired {
+            webStoresBySourceID.removeValue(forKey: id)
+            webSourceUseOrder.removeAll { $0 == id }
+        }
+
         var lingering = webSourceUseOrder.filter { id in
             !boundSourceIDs.contains(id) && webStoresBySourceID[id]?.hasActiveSurface == true
         }
