@@ -11,6 +11,7 @@
  */
 import { isSelectableModel } from "@/lib/agent-runtime/models";
 import { releaseParkedSandbox } from "@/lib/agent-runtime/sandbox-release";
+import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
 import {
@@ -91,6 +92,19 @@ export async function DELETE(
 	const session = await getSession(handle, id);
 	if (!session) {
 		return Response.json({ error: "unknown session" }, { status: 404 });
+	}
+
+	// A running turn's detached ingest keeps appending to this session;
+	// deleting now would orphan those writes and lose the resume handle the
+	// turn is about to park (a sandbox leak until its lifetime cap). Refuse
+	// until it settles — a *stale* turn (dead runner) has no live writer and
+	// deletes fine.
+	const turn = await resolveTurn(handle, id);
+	if (turn.status === "running") {
+		return Response.json(
+			{ error: "a turn is still running on this session — retry once it completes" },
+			{ status: 409 },
+		);
 	}
 
 	const release = await releaseParkedSandbox(session);

@@ -239,12 +239,26 @@ describe("DELETE /api/sessions/[id]", () => {
 		const id = await freshSession();
 		await appendEvents(getDatabase(), id, [
 			{ role: "user", chunk: { type: "text", content: "hi" } },
+			{ role: "assistant", chunk: { type: "done", content: "" } },
 		]);
 		const res = await del(id);
 		expect(res.status).toBe(200);
 		expect(await res.json()).toEqual({ deleted: true, sandbox: "none" });
 		expect(await getSession(getDatabase(), id)).toBeUndefined();
 		expect((await get(id)).status).toBe(404);
+	});
+
+	test("refuses (409) while a turn is still running — no orphaned ingest writes", async () => {
+		const id = await freshSession();
+		// A fresh user event with no terminal done classifies as a running turn
+		// (resolveTurn's cross-instance log-freshness rule).
+		await appendEvents(getDatabase(), id, [
+			{ role: "user", chunk: { type: "text", content: "do the thing" } },
+		]);
+		const res = await del(id);
+		expect(res.status).toBe(409);
+		expect((await res.json()).error).toMatch(/still running/);
+		expect(await getSession(getDatabase(), id)).toBeDefined();
 	});
 
 	test("stops a live parked sandbox before deleting", async () => {
