@@ -73,7 +73,17 @@ public enum AutomationOperatorProvisioner {
             handle: entry.handle,
             capabilities: entry.capabilities
         )
-        try? AutomationOperatorCredentialStore.write(credential, to: credentialURL)
+        do {
+            try AutomationOperatorCredentialStore.write(credential, to: credentialURL)
+        } catch {
+            // Keep state consistent: if the credential can't be written, roll back the handle
+            // registration and report failure rather than leaving a handle nobody can reach a
+            // credential for. Returning nil lets the caller log an honest "not minted".
+            registry.remove(hostSessionID: entry.hostSessionID)
+            AutomationOperatorCredentialStore.remove(at: credentialURL)
+            NSLog("[AutomationOperator] credential write failed, minting aborted: %@", "\(error)")
+            return nil
+        }
         return credential
     }
 }

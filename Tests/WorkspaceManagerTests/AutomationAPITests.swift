@@ -826,6 +826,34 @@ struct AutomationAPITests {
         #expect(AutomationOperatorCredentialStore.load(from: url) == nil)
     }
 
+    @Test("Provisioner rolls back the handle when the credential write fails")
+    @MainActor
+    func operatorProvisionerRollsBackOnWriteFailure() throws {
+        // Force a write failure by making the credential's parent path a regular file, so
+        // createDirectory (and the write) throw. The provisioner must then leave no dangling handle.
+        let parentFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-op-blocker-\(UUID().uuidString.prefix(8))")
+        try Data("not a directory".utf8).write(to: parentFile)
+        defer { try? FileManager.default.removeItem(at: parentFile) }
+        let unwritableURL = parentFile.appendingPathComponent("automation-operator.json")
+
+        // Deterministic handle so the rollback is observable: registerOperator mints "op-fixed",
+        // and a successful rollback must leave it unresolvable.
+        let registry = AutomationHandleRegistry(makeHandle: { "op-fixed" })
+        let result = AutomationOperatorProvisioner.provision(
+            optedIn: true,
+            registry: registry,
+            socketPath: "/tmp/automation.sock",
+            appScopeID: "workspaces.local",
+            credentialURL: unwritableURL
+        )
+
+        #expect(result == nil)
+        #expect(AutomationOperatorCredentialStore.load(from: unwritableURL) == nil)
+        // The handle registered during the aborted mint must have been rolled back.
+        #expect(registry.resolve("op-fixed") == nil)
+    }
+
     @Test("Audit log records the operator flag so operator calls are distinguishable")
     func auditLogTagsOperatorCalls() async throws {
         let auditURL = FileManager.default.temporaryDirectory
