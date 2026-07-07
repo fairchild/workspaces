@@ -79,6 +79,14 @@ enum AutomationHTTPRouter {
             try rejectCallerSuppliedTargetIDs(in: request.body, allowEmptyBody: true)
             return try await controller.automationCloseTile(for: handle)
 
+        case ("POST", "/v1/input/write"):
+            let write = try decodeInputWrite(from: request.body)
+            return try await controller.automationWriteInput(
+                for: handle,
+                text: write.text,
+                submit: write.submit ?? false
+            )
+
         case (_, "/v1/context"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/context.")
         case (_, "/v1/surfaces"):
@@ -89,6 +97,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/split.")
         case (_, "/v1/tile/close"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/close.")
+        case (_, "/v1/input/write"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/input/write.")
         default:
             throw AutomationServiceError(.routeNotFound, "Unsupported automation route: \(method) \(request.path)")
         }
@@ -127,6 +137,29 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.invalidRequest, "Unsupported direction: \(rawDirection).")
         }
         return direction
+    }
+
+    private static func decodeInputWrite(from body: Data) throws -> AutomationInputWriteRequest {
+        try rejectCallerSuppliedTargetIDs(in: body, allowEmptyBody: false)
+        let request: AutomationInputWriteRequest
+        do {
+            request = try AutomationJSON.decoder.decode(AutomationInputWriteRequest.self, from: body)
+        } catch {
+            throw AutomationServiceError(
+                .invalidRequest,
+                "Request body must be JSON with a string 'text' and optional boolean 'submit'."
+            )
+        }
+        guard !request.text.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request 'text' must be a non-empty string.")
+        }
+        guard request.text.utf8.count <= AutomationAPI.inputWriteMaxUTF8Bytes else {
+            throw AutomationServiceError(
+                .invalidRequest,
+                "Request 'text' exceeds the \(AutomationAPI.inputWriteMaxUTF8Bytes)-byte limit."
+            )
+        }
+        return request
     }
 
     private static func rejectCallerSuppliedTargetIDs(in body: Data, allowEmptyBody: Bool) throws {
@@ -221,6 +254,7 @@ extension AutomationHealthResult: CodableSendableEquatable {}
 extension AutomationContextResult: CodableSendableEquatable {}
 extension AutomationSurfacesResult: CodableSendableEquatable {}
 extension AutomationMutationResult: CodableSendableEquatable {}
+extension AutomationInputWriteResult: CodableSendableEquatable {}
 extension AutomationEmptyResult: CodableSendableEquatable {}
 
 enum AutomationJSON {

@@ -39,6 +39,7 @@ private final class CLIApp {
         "automation",
         "surface",
         "tile",
+        "input",
     ]
 
     private let stateStore = CLIStateStore()
@@ -83,6 +84,8 @@ private final class CLIApp {
             return try runSurface(arguments: tail)
         case "tile":
             return try runTile(arguments: tail)
+        case "input":
+            return try runInput(arguments: tail)
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -616,6 +619,43 @@ private final class CLIApp {
         }
     }
 
+    private func runInput(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces input write <text> [--submit]"
+        guard arguments.first == "write" else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        var text: String?
+        var submit = false
+        for argument in arguments.dropFirst() {
+            switch argument {
+            case "--submit":
+                submit = true
+            default:
+                guard text == nil else {
+                    throw CLIError("Usage: \(usage)")
+                }
+                text = argument
+            }
+        }
+        guard let text, !text.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let body = try JSONSerialization.data(
+            withJSONObject: ["text": text, "submit": submit] as [String: Any],
+            options: [.sortedKeys]
+        )
+        _ = try performAutomationRequest(
+            AutomationInputWriteResult.self,
+            method: "POST",
+            path: "/v1/input/write",
+            requiresHandle: true,
+            body: body
+        )
+        return 0
+    }
+
     private func performAutomationRequest<Result>(
         _ type: Result.Type = Result.self,
         method: String,
@@ -1133,6 +1173,7 @@ private func printHelp() {
           workspaces tile focus --left|--right|--up|--down|--next|--previous
           workspaces tile split --left|--right|--up|--down
           workspaces tile close
+          workspaces input write <text> [--submit]
           workspaces help
 
         Launch behavior:

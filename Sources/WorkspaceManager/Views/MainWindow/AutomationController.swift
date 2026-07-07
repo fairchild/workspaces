@@ -7,17 +7,22 @@ final class AutomationController: AutomationControlling {
     private weak var hostTerminalState: HostTerminalStateStore?
     private var focusTerminal: @MainActor (UUID) -> Void
     private var requestCloseTerminal: @MainActor (UUID) -> Void
+    private let isInputWriteEnabled: @MainActor () -> Bool
 
     init(
         handleRegistry: AutomationHandleRegistry,
         hostTerminalState: HostTerminalStateStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
-        requestCloseTerminal: @escaping @MainActor (UUID) -> Void
+        requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
+        isInputWriteEnabled: @escaping @MainActor () -> Bool = {
+            ExperimentalFeatures.isEnabled(.automationInputWrite)
+        }
     ) {
         self.handleRegistry = handleRegistry
         self.hostTerminalState = hostTerminalState
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
+        self.isInputWriteEnabled = isInputWriteEnabled
     }
 
     func update(
@@ -110,6 +115,45 @@ final class AutomationController: AutomationControlling {
         return AutomationMutationResult(
             changed: true,
             closedSurfaceID: resolved.entry.hostSessionID.uuidString
+        )
+    }
+
+    func automationWriteInput(
+        for handle: String,
+        text: String,
+        submit: Bool
+    ) throws -> AutomationInputWriteResult {
+        let resolved = try resolve(handle, requiring: .inputWrite)
+        // Handles outlive settings changes, so the grant-time gate is re-checked per request.
+        guard isInputWriteEnabled() else {
+            throw AutomationServiceError(
+                .capabilityDenied,
+                "The Automation Input Write experiment is disabled."
+            )
+        }
+        guard
+            let terminal = resolved.hostTerminalState.surfaceStore.terminal(
+                for: resolved.entry.hostSessionID
+            )
+        else {
+            throw AutomationServiceError(
+                .staleHandle,
+                "The automation handle no longer maps to a live terminal surface."
+            )
+        }
+        guard GhosttySurfaceTextInputBridge.writeAutomationText(into: terminal, text: text) else {
+            throw AutomationServiceError(.staleHandle, "The terminal surface is not ready to receive input.")
+        }
+        // Submit goes through the key-event path, not an appended "\r": the text path is a paste,
+        // and bracketed paste turns an embedded CR into a literal newline instead of accept-line.
+        if submit, !GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal) {
+            throw AutomationServiceError(.staleHandle, "The terminal surface dropped before the submit key.")
+        }
+        return AutomationInputWriteResult(
+            accepted: true,
+            byteCount: text.utf8.count,
+            surfaceID: resolved.entry.hostSessionID.uuidString,
+            system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
         )
     }
 

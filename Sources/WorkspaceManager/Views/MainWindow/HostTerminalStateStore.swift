@@ -827,9 +827,18 @@ final class HostTerminalStateStore: ObservableObject {
                 tileID: automationTileID(for: session.id),
                 surfaceKind: .terminal,
                 windowScopeID: automationWindowScopeID,
-                appScopeID: automationAppScopeID
+                appScopeID: automationAppScopeID,
+                capabilities: automationGrantedCapabilities
             )
         }
+    }
+
+    /// Grant list for automation handles. `input.write` joins only while its experiment is on;
+    /// `AutomationController` re-checks the flag per request because handles outlive settings changes.
+    private var automationGrantedCapabilities: [AutomationCapability] {
+        ExperimentalFeatures.isEnabled(.automationInputWrite)
+            ? AutomationAPI.inputWriteCapabilities
+            : AutomationAPI.v1Capabilities
     }
 
     /// Drops a single-pane primary's memoized tile binding when its session leaves. Split leaf bindings
@@ -959,7 +968,8 @@ final class HostTerminalStateStore: ObservableObject {
             tileID: automationTileID(for: session.id),
             surfaceKind: .terminal,
             windowScopeID: automationWindowScopeID,
-            appScopeID: automationAppScopeID
+            appScopeID: automationAppScopeID,
+            capabilities: automationGrantedCapabilities
         )
         return AutomationTerminalEnvironment(socketPath: automationSocketPath, handle: entry.handle)
     }
