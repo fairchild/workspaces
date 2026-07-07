@@ -66,6 +66,8 @@ struct ContentView: View {
     @State private var pendingWorkspaceOrphanCleanup: WorkspaceOrphanItem?
     @State private var pendingRestorePlan: RestorePlan?
     @State private var restoreBannerDismissed = false
+    @AppStorage(TerminalRestoreBannerStorage.handledRunIDKey)
+    private var restoreHandledRunID = ""
     @State private var isShowingFeedbackSheet = false
     @State private var accessRecorder = MainWindowAccessRecorder()
     @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
@@ -708,11 +710,11 @@ struct ContentView: View {
                 RestoreSessionsBanner(
                     sessionCount: plan.surfaces.count,
                     onRestore: {
-                        executeRestore(plan)
-                        restoreBannerDismissed = true
+                        markRestorePlanHandled(plan)
+                        Task { @MainActor in await executeRestore(plan) }
                     },
                     onDismiss: {
-                        restoreBannerDismissed = true
+                        markRestorePlanHandled(plan)
                     }
                 )
             }
@@ -2902,25 +2904,71 @@ struct ContentView: View {
         ).makePlan(index: index)
         if plan.surfaces.isEmpty {
             NSLog("[Restore] no restorable surfaces from previous run")
+        } else if plan.wasHandled(handledRunID: restoreHandledRunID.isEmpty ? nil : restoreHandledRunID) {
+            NSLog(
+                "[Restore] suppressed banner: previous run %@ already handled",
+                plan.previousRunID ?? "?")
+        } else if !plan.offersMoreThanLaunchSeed(seedKey: .defaultHome) {
+            NSLog("[Restore] suppressed banner: plan only duplicates the launch seed")
         } else {
             NSLog("[Restore] planned %ld restorable surface(s)", plan.surfaces.count)
             pendingRestorePlan = plan
+            autorunRestoreIfRequested(plan)
         }
+    }
+
+    /// Dev-only drive hook for headless restore verification: with
+    /// `WORKSPACES_RESTORE_AUTORUN=1`, a planned restore executes immediately as
+    /// if the user clicked Restore, so smoke scripts can exercise the real
+    /// resume path without desktop input. No effect outside that environment.
+    private func autorunRestoreIfRequested(_ plan: RestorePlan) {
+        guard ProcessInfo.processInfo.environment["WORKSPACES_RESTORE_AUTORUN"] == "1" else { return }
+        NSLog("[Restore] autorun: executing planned restore after settle delay")
+        Task { @MainActor in
+            // Approximate a real banner click: let launch layout settle first.
+            try? await Task.sleep(for: .seconds(3))
+            await executeRestore(plan)
+            markRestorePlanHandled(plan)
+        }
+    }
+
+    /// Record that the user acted on this plan's prior run (restored or
+    /// dismissed), then hide the banner for the rest of this launch. Later
+    /// launches that select the same prior run won't re-offer it.
+    private func markRestorePlanHandled(_ plan: RestorePlan) {
+        if let previousRunID = plan.previousRunID {
+            restoreHandledRunID = previousRunID
+        }
+        restoreBannerDismissed = true
     }
 
     /// Launch each surface in a restore plan. Reattach/fresh surfaces are a plain
     /// directory-backed launch (the deterministic tmux name reattaches a surviving
-    /// session automatically); resume surfaces run `claude --resume` as their
-    /// initial command through the login-shell path (correct PATH + hook env).
+    /// session automatically); resume surfaces get `claude --resume` typed into
+    /// their login shell as initial input (correct PATH + hook env — see
+    /// `GhosttyTerminalConfig.initialInput`).
     /// Then honor the plan's advisory focus by re-activating the selected surface.
     @MainActor
-    private func executeRestore(_ plan: RestorePlan) {
+    private func executeRestore(_ plan: RestorePlan) async {
         // #3: the restore plan owns every key it restores. Retire any session a
         // pre-restore seed (the default-home fallback) left on those keys, so a
         // resume/reattach surface is created fresh and the coordinator's key-reuse
         // path can't drop its initial command.
         for key in Set(plan.surfaces.map(\.key)) {
             _ = tileTreeStore.retireSessions(inScope: key)
+        }
+
+        // Same ownership, tmux layer: the planner only chose resume because the
+        // prior tmux session is gone, so a live session on the resume surface's
+        // deterministic name can only be this launch's seed artifact. Kill it so
+        // the resume surface starts a fresh session instead of `-A`-attaching to
+        // the retired seed's leftover shell.
+        let tmuxProbe = TmuxSessionProbe()
+        for surface in plan.surfaces {
+            if case .resumeClaude = surface.action {
+                await tmuxProbe.killSession(
+                    GhosttyTerminalConfig.tmuxSessionName(for: surface.directory))
+            }
         }
 
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]

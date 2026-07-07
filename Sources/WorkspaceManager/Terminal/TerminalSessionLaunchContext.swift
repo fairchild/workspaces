@@ -40,12 +40,6 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
     let hostSessionID: UUID?
     let hooksSocketPath: String?
     let automationEnvironment: AutomationTerminalEnvironment?
-    /// Agent command to run as this directory-backed surface's initial process
-    /// (e.g. `claude --resume <id>` for cold-start restore). It is wrapped by the
-    /// login-shell/tmux launch path, so it resolves on the user's PATH and reattaches
-    /// like any other surface. `nil` for a plain shell and for remote `customCommand`
-    /// sessions.
-    let initialCommand: String?
 
     static func hostSession(
         _ session: HostTerminalSession,
@@ -58,8 +52,7 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
                 commandMode: .customCommand(customCommand),
                 hostSessionID: session.id,
                 hooksSocketPath: hooksSocketPath,
-                automationEnvironment: nil,
-                initialCommand: nil
+                automationEnvironment: nil
             )
         }
 
@@ -67,8 +60,7 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
             workingDirectory: session.directoryURL,
             hostSessionID: session.id,
             hooksSocketPath: hooksSocketPath,
-            automationEnvironment: automationEnvironment,
-            initialCommand: session.initialCommand
+            automationEnvironment: automationEnvironment
         )
     }
 
@@ -76,16 +68,14 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
         workingDirectory: URL,
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
-        automationEnvironment: AutomationTerminalEnvironment? = nil,
-        initialCommand: String? = nil
+        automationEnvironment: AutomationTerminalEnvironment? = nil
     ) -> TerminalSessionLaunchContext {
         TerminalSessionLaunchContext(
             workingDirectory: workingDirectory,
             commandMode: .directoryShell,
             hostSessionID: hostSessionID,
             hooksSocketPath: hooksSocketPath,
-            automationEnvironment: automationEnvironment,
-            initialCommand: initialCommand
+            automationEnvironment: automationEnvironment
         )
     }
 
@@ -102,8 +92,7 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
             commandMode: .customCommand(command),
             hostSessionID: hostSessionID,
             hooksSocketPath: hooksSocketPath,
-            automationEnvironment: nil,
-            initialCommand: nil
+            automationEnvironment: nil
         )
     }
 

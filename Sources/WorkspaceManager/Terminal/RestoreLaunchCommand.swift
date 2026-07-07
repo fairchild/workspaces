@@ -2,12 +2,11 @@
 //  RestoreLaunchCommand.swift
 //  WorkspaceManager
 //
-//  The agent command a restored surface runs as its initial process during
-//  cold-start restore. It is intentionally bare: the directory-backed launch
-//  path (GhosttyTerminalConfig) wraps it in the user's login shell — and, in
-//  tmux mode, in a deterministic `-L workspaces` `new-session -A` — so `claude`
-//  resolves on the login PATH and the session reattaches like any other surface
-//  on a later restore.
+//  The agent command a restored surface runs during cold-start restore. It is
+//  intentionally bare: GhosttyTerminalConfig delivers it as typed initial input
+//  to the surface's normal login shell (see `GhosttyTerminalConfig.initialInput`
+//  for why it is not embedded in the launch command), so `claude` resolves on
+//  the login PATH and, in tmux mode, runs inside the deterministic session.
 //
 
 import Foundation

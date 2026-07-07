@@ -109,7 +109,53 @@ final class SurfaceStore {
         surfaces[tileID] = created
         onSurfaceCreated?(tileID)
         onTerminalSurfaceCreated?(sessionID)
+        deliverInitialCommandIfNeeded(created)
         return created
+    }
+
+    /// Sessions whose initial command has been handed to a surface. Once per
+    /// session, never per surface: a respawned shell must not re-run the agent.
+    private var initialCommandDeliveredSessionIDs: Set<UUID> = []
+
+    /// Deliver `session.initialCommand` (e.g. `claude --resume <id>` from
+    /// cold-start restore) by typing it into the started shell over the
+    /// automation text bridge. libghostty's per-surface `command` and
+    /// `initial_input` configs are silently ignored for surfaces created after
+    /// the app's first (observed against the 1.3.1 pin with the struct fields
+    /// verified set at `ghostty_surface_new`), so typed delivery is the one
+    /// mechanism that reaches every surface — and it keeps the launch command
+    /// byte-identical to a plain shell, so tmux/plain behavior cannot diverge.
+    private func deliverInitialCommandIfNeeded(_ terminal: TerminalSurface) {
+        guard let initialCommand = terminal.session.initialCommand,
+            !initialCommandDeliveredSessionIDs.contains(terminal.session.id)
+        else { return }
+        initialCommandDeliveredSessionIDs.insert(terminal.session.id)
+        let sessionID = terminal.session.id
+
+        Task { @MainActor [weak terminal] in
+            // Wait for the surface's shell to come alive, then settle briefly so
+            // the paste lands at a prompt instead of racing shell/tmux startup.
+            for _ in 0..<40 {
+                guard let terminal else { return }
+                if terminal.surfaceView.isSurfaceAlive { break }
+                try? await Task.sleep(for: .milliseconds(250))
+            }
+            try? await Task.sleep(for: .milliseconds(1500))
+            guard let terminal else {
+                NSLog(
+                    "[SurfaceStore] initial command dropped: surface gone for session %@",
+                    sessionID.uuidString)
+                return
+            }
+            let wrote = GhosttySurfaceTextInputBridge.writeAutomationText(
+                into: terminal.surfaceView, text: initialCommand)
+            let submitted =
+                wrote && GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
+            NSLog(
+                "[SurfaceStore] initial command %@ for session %@",
+                submitted ? "delivered" : "DROPPED",
+                sessionID.uuidString)
+        }
     }
 
     // MARK: - Web

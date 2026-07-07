@@ -174,4 +174,55 @@ struct TerminalRestorePlannerTests {
         #expect(plan.surfaces.map(\.hostSessionID) == [first, second])
         #expect(plan.selectedHostSessionID == second)
     }
+
+    @Test("The prior run's identity threads through to the plan")
+    func previousRunIDThreadsThrough() throws {
+        let planner = makePlanner()
+        let plan = planner.plan(rows: [makeRow()], layout: nil, previousRunID: "run-7")
+        #expect(plan.previousRunID == "run-7")
+        #expect(planner.plan(rows: [makeRow()], layout: nil).previousRunID == nil)
+    }
+
+    @Test("A plan is handled only when its run identity matches the recorded one")
+    func wasHandledMatchesRunIdentity() throws {
+        let plan = RestorePlan(surfaces: [], selectedHostSessionID: nil, previousRunID: "run-7")
+        #expect(plan.wasHandled(handledRunID: "run-7"))
+        #expect(!plan.wasHandled(handledRunID: "run-6"))
+        #expect(!plan.wasHandled(handledRunID: nil))
+
+        // No run identity (pre-v2 data) → never suppressed: offer rather than
+        // silently drop a restorable session set.
+        let unidentified = RestorePlan(surfaces: [], selectedHostSessionID: nil, previousRunID: nil)
+        #expect(!unidentified.wasHandled(handledRunID: "run-7"))
+        #expect(!unidentified.wasHandled(handledRunID: nil))
+    }
+
+    @Test("A plan of only seed-key fresh shells offers nothing beyond launch")
+    func seedOnlyPlanOffersNothing() throws {
+        func surface(
+            key: HostTerminalSessionKey, action: RestoreSurfaceAction
+        ) -> RestoreSurfacePlan {
+            RestoreSurfacePlan(
+                hostSessionID: UUID(), key: key,
+                directory: URL(fileURLWithPath: "/tmp"), action: action)
+        }
+
+        let seedFresh = RestorePlan(
+            surfaces: [surface(key: .defaultHome, action: .freshShell)],
+            selectedHostSessionID: nil)
+        #expect(!seedFresh.offersMoreThanLaunchSeed(seedKey: .defaultHome))
+
+        let seedResume = RestorePlan(
+            surfaces: [surface(key: .defaultHome, action: .resumeClaude(agentSessionID: "s1"))],
+            selectedHostSessionID: nil)
+        #expect(seedResume.offersMoreThanLaunchSeed(seedKey: .defaultHome))
+
+        let withRepo = RestorePlan(
+            surfaces: [
+                surface(key: .defaultHome, action: .freshShell),
+                surface(key: .repoPath("/code/repo"), action: .freshShell),
+            ],
+            selectedHostSessionID: nil)
+        #expect(withRepo.offersMoreThanLaunchSeed(seedKey: .defaultHome))
+    }
 }
