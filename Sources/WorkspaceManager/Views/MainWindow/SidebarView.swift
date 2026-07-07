@@ -96,6 +96,12 @@ struct SidebarView: View {
     @State private var foregroundNameBySessionID: [UUID: String] = [:]
     private let foregroundResolver = TerminalForegroundProcessResolver()
 
+    /// Last assistant message per Claude Code agent tab, resolved lazily when a hover card
+    /// opens and shown on the card. Populated by `refreshTranscriptTails`; fails closed to
+    /// absent for every non-happy path (see #680).
+    @State private var transcriptTailBySessionID: [UUID: String] = [:]
+    private let transcriptTailResolver = ClaudeTranscriptTailResolver()
+
     private var isUIFixtureMode: Bool {
         ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1"
     }
@@ -479,6 +485,7 @@ struct SidebarView: View {
             },
             tabsProvider: {
                 refreshForegroundProcessNames(for: repoSessionKey)
+                refreshTranscriptTails(for: repoSessionKey)
                 return tabSummaries(for: repoSessionKey)
             }
         )
@@ -571,6 +578,7 @@ struct SidebarView: View {
             showsDisclosure: !workspace.webSources.isEmpty,
             tabsProvider: {
                 refreshForegroundProcessNames(for: sessionKey(for: workspace))
+                refreshTranscriptTails(for: sessionKey(for: workspace))
                 return tabSummaries(for: workspace)
             },
             onToggleExpansion: {
@@ -1491,10 +1499,16 @@ struct SidebarView: View {
                         foregroundName: foregroundNameBySessionID[session.id],
                         terminalTitle: title)
                     : title
+                // Only Claude Code tabs carry a transcript tail. Gating on the current kind (not
+                // just presence of a cached entry) keeps a stale tail from a prior Claude session
+                // from leaking onto a non-Claude agent that later reuses the same host session id.
+                let transcriptTail =
+                    agentStatus?.kind == .claudeCode ? transcriptTailBySessionID[session.id] : nil
                 return SidebarTabSummary(
                     id: session.id,
                     title: displayTitle,
-                    agentStatus: agentStatus
+                    agentStatus: agentStatus,
+                    transcriptTail: transcriptTail
                 )
             }
     }
@@ -1523,6 +1537,32 @@ struct SidebarView: View {
                     foregroundNameBySessionID[session.id] = name
                 } else if name == nil, foregroundNameBySessionID[session.id] != nil {
                     foregroundNameBySessionID.removeValue(forKey: session.id)
+                }
+            }
+        }
+    }
+
+    /// Kicks off async transcript-tail resolution for the Claude Code agent tabs under `key`,
+    /// updating `transcriptTailBySessionID` when a message resolves. Fire-and-forget and
+    /// idempotent — the resolver caches per file for a short TTL and this writes only on change —
+    /// so it is safe to call from the hover card's lazy `tabsProvider`. Non-Claude tabs and every
+    /// read/parse failure resolve to absent (#680).
+    private func refreshTranscriptTails(for key: HostTerminalSessionKey) {
+        let normalizedKey = key.normalized()
+        let agentSessions = hostSessions.filter {
+            $0.key == normalizedKey && agentStatusBySessionID[$0.id]?.kind == .claudeCode
+        }
+        guard !agentSessions.isEmpty else { return }
+        let resolver = transcriptTailResolver
+        Task { @MainActor in
+            for session in agentSessions {
+                guard let status = agentStatusBySessionID[session.id] else { continue }
+                let tail = await resolver.tail(
+                    cwd: status.cwd, agentSessionID: status.agentSessionID, kind: status.kind)
+                if let tail, transcriptTailBySessionID[session.id] != tail {
+                    transcriptTailBySessionID[session.id] = tail
+                } else if tail == nil, transcriptTailBySessionID[session.id] != nil {
+                    transcriptTailBySessionID.removeValue(forKey: session.id)
                 }
             }
         }

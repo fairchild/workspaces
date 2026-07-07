@@ -101,6 +101,17 @@ public enum SessionActivity: Equatable, Sendable {
         paneCount > 1
     }
 
+    /// Whether a card's activity snippet should render with primary (not secondary) emphasis:
+    /// the attention states a glance should land on first (#680).
+    public var emphasizesPreview: Bool {
+        switch self {
+        case .awaitingInput, .errored:
+            return true
+        case .inactive, .live, .active, .thinking, .runningTool:
+            return false
+        }
+    }
+
     /// Severity ranking used to merge a baseline (own-session) activity with a bubbled
     /// activity derived from child workspaces, and to order the session switcher. Higher wins.
     public var severity: Int {
