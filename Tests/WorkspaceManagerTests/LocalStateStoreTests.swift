@@ -462,6 +462,33 @@ struct LocalStateStoreTests {
         #expect(try await current.fetchPreviousRunSessions().isEmpty)  // NULL run excluded
     }
 
+    @Test("fetchPreviousRunID identifies the same run fetchPreviousRunSessions scopes to")
+    func previousRunIDMatchesPreviousRunScope() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let current0 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        #expect(try await current0.fetchPreviousRunID() == nil)  // first launch
+
+        let priorRunID = UUID()
+        let prior = try LocalStateStore(
+            databaseURL: db, runID: priorRunID, runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        try await prior.recordTerminalSession(
+            HostTerminalSession(
+                id: UUID(), key: .repoPath("/code/prev"), directory: URL(fileURLWithPath: "/code/prev")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let current = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+        try await current.recordTerminalSession(
+            HostTerminalSession(id: UUID(), key: .repoPath("/code/now"), directory: URL(fileURLWithPath: "/code/now")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        #expect(try await current.fetchPreviousRunID() == priorRunID.uuidString)
+    }
+
     private func repoRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

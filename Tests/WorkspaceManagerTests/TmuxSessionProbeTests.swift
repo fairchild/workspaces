@@ -98,6 +98,34 @@ struct TmuxSessionProbeTests {
         #expect(await probe.foregroundCommand(forSessionNamed: "wm-repo-abcd1234") == nil)
     }
 
+    @Test("killSession invokes kill-session on the workspaces socket with an exact-match target")
+    func buildsExactMatchKillSessionCommand() async throws {
+        let recorder = ArgumentRecorder()
+        let probe = TmuxSessionProbe(
+            run: { executable, arguments, _ in
+                await recorder.record(executable: executable, arguments: arguments)
+                return 0
+            },
+            environment: [:]
+        )
+        #expect(await probe.killSession("wm-repo-abcd1234"))
+
+        let calls = await recorder.calls
+        let call = try #require(calls.first)
+        #expect(calls.count == 1)
+        #expect(call.executable == "/usr/bin/env")
+        #expect(call.arguments.contains("tmux"))
+        #expect(call.arguments.contains("kill-session"))
+        #expect(adjacent(call.arguments, "-L", "workspaces"))
+        #expect(adjacent(call.arguments, "-t", "=wm-repo-abcd1234"))
+    }
+
+    @Test("killSession reports false when no session matched")
+    func killSessionReportsFalseOnMiss() async {
+        let probe = TmuxSessionProbe(run: { _, _, _ in 1 }, environment: [:])
+        #expect(await probe.killSession("wm-repo-abcd1234") == false)
+    }
+
     private func adjacent(_ arguments: [String], _ first: String, _ second: String) -> Bool {
         guard let index = arguments.firstIndex(of: first), index + 1 < arguments.count else { return false }
         return arguments[index + 1] == second

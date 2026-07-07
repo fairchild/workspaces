@@ -706,6 +706,28 @@ public actor LocalStateStore {
         }
     }
 
+    /// The `run_id` of the single most-recent *prior* app run — the same run
+    /// `fetchPreviousRunSessions` scopes to — or `nil` on first launch / pre-v2
+    /// data. Lets restore identify which prior run a plan was built from, so an
+    /// already-handled (restored or dismissed) run is not re-offered when a later
+    /// launch selects the same prior run again.
+    public func fetchPreviousRunID() async throws -> String? {
+        let currentRunStartedAt = runStartedAt
+        return try await dbPool.read { db -> String? in
+            try String.fetchOne(
+                db,
+                sql: """
+                    SELECT run_id
+                    FROM terminal_sessions
+                    WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                    ORDER BY run_started_at DESC
+                    LIMIT 1
+                    """,
+                arguments: [currentRunStartedAt]
+            )
+        }
+    }
+
     /// Continuity read model (local-state-store plan, slice 3): the most recently
     /// captured terminal layout snapshot with its split pane rows, or `nil` when
     /// no snapshot has been recorded.

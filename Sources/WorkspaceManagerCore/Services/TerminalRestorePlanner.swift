@@ -50,13 +50,48 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
 /// The full ordered restore plan. `surfaces` preserves read-model order (newest
 /// `last_seen_at` first). `selectedHostSessionID` is advisory — which surface to
 /// focus after restore — and is honored by the wiring slice, not here.
+/// `previousRunID` identifies the prior app run the plan was built from, so the
+/// banner can avoid re-offering a run the user already restored or dismissed.
 public struct RestorePlan: Sendable, Equatable {
     public let surfaces: [RestoreSurfacePlan]
     public let selectedHostSessionID: UUID?
+    public let previousRunID: String?
 
-    public init(surfaces: [RestoreSurfacePlan], selectedHostSessionID: UUID?) {
+    public init(
+        surfaces: [RestoreSurfacePlan],
+        selectedHostSessionID: UUID?,
+        previousRunID: String? = nil
+    ) {
         self.surfaces = surfaces
         self.selectedHostSessionID = selectedHostSessionID
+        self.previousRunID = previousRunID
+    }
+
+    /// Whether this plan's prior run was already handled (restored or dismissed).
+    /// A plan without a run identity is never considered handled — when in doubt,
+    /// offer the banner rather than silently drop a restorable session set.
+    public func wasHandled(handledRunID: String?) -> Bool {
+        guard let previousRunID, let handledRunID else { return false }
+        return previousRunID == handledRunID
+    }
+
+    /// Whether the plan restores anything beyond what a fresh launch already
+    /// provides. Startup seeds a plain shell on `seedKey` at `seedDirectory`
+    /// before restore runs, so a plan consisting only of fresh shells matching
+    /// both duplicates the seed and is not worth a banner. A fresh shell on the
+    /// seed key at a different directory is still a real restore (the default
+    /// host directory can change between runs) and keeps the banner.
+    public func offersMoreThanLaunchSeed(
+        seedKey: HostTerminalSessionKey,
+        seedDirectory: URL
+    ) -> Bool {
+        let normalizedSeedPath = seedDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+        return surfaces.contains { surface in
+            surface.action != .freshShell
+                || surface.key != seedKey
+                || surface.directory.standardizedFileURL.resolvingSymlinksInPath().path
+                    != normalizedSeedPath
+        }
     }
 }
 
@@ -105,7 +140,8 @@ public struct TerminalRestorePlanner: Sendable {
 
     public func plan(
         rows: [TerminalSessionContinuityRow],
-        layout: TerminalLayoutSnapshotRow?
+        layout: TerminalLayoutSnapshotRow?,
+        previousRunID: String? = nil
     ) -> RestorePlan {
         var surfaces: [RestoreSurfacePlan] = []
         for row in rows {
@@ -121,7 +157,11 @@ public struct TerminalRestorePlanner: Sendable {
                 )
             )
         }
-        return RestorePlan(surfaces: surfaces, selectedHostSessionID: layout?.activeHostSessionID)
+        return RestorePlan(
+            surfaces: surfaces,
+            selectedHostSessionID: layout?.activeHostSessionID,
+            previousRunID: previousRunID
+        )
     }
 
     /// The restore ladder: live tmux → resumable Claude transcript → fresh shell.

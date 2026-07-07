@@ -45,75 +45,35 @@ struct GhosttyTerminalConfigTests {
         #expect(command.contains("'wm-repo-a-"))
     }
 
-    @Test("tmux mode runs an initial command as the session's process under the login shell")
-    func tmuxModeRunsInitialCommand() throws {
-        let config = GhosttyTerminalConfig(
-            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
-            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
-            terminalMultiplexingMode: .tmuxPerSession,
-            isTmuxAvailableOverride: true,
-            initialCommand: "claude --resume sess-123"
-        )
-
-        let command = try #require(config.command)
-        // Login shell wraps the tmux invocation → the tmux session inherits the login PATH,
-        // so `claude` resolves (the whole point of the #783 fix vs the fixed-PATH path).
-        #expect(command.contains("/bin/zsh --login -c "))
-        #expect(command.contains("tmux -L workspaces new-session -A -s"))
-        #expect(command.contains("claude --resume sess-123"))
-    }
-
-    @Test("ghostty-splits mode runs an initial command via cd + exec in the login shell")
-    func ghosttyModeRunsInitialCommand() throws {
-        let config = GhosttyTerminalConfig(
-            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
-            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
-            terminalMultiplexingMode: .ghosttyManagedSplits,
-            isTmuxAvailableOverride: true,
-            initialCommand: "claude --resume sess-123"
-        )
-
-        let command = try #require(config.command)
-        #expect(command.contains("/bin/zsh --login -c "))
-        #expect(command.contains("exec claude --resume sess-123"))
-        #expect(command.contains("/tmp/repo-a"))
-        #expect(!command.contains("tmux"))
-    }
-
-    @Test("A nil initial command leaves each mode's command unchanged")
-    func nilInitialCommandIsNoOp() throws {
-        let splits = GhosttyTerminalConfig(
-            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
-            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
-            terminalMultiplexingMode: .ghosttyManagedSplits,
-            isTmuxAvailableOverride: true,
-            initialCommand: nil
-        )
-        #expect(splits.command == "/bin/zsh --login")  // identical to the reattach/fresh path
-
-        let tmux = GhosttyTerminalConfig(
-            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
-            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
-            terminalMultiplexingMode: .tmuxPerSession,
-            isTmuxAvailableOverride: true,
-            initialCommand: nil
-        )
-        let tmuxCommand = try #require(tmux.command)
-        #expect(!tmuxCommand.contains(" exec claude"))  // no trailing initial command
-    }
-
-    @Test("Single quotes in an initial command are escaped")
-    func initialCommandQuotesEscaped() throws {
-        let config = GhosttyTerminalConfig(
-            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
-            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
-            terminalMultiplexingMode: .ghosttyManagedSplits,
-            isTmuxAvailableOverride: true,
-            initialCommand: "echo x'y"
-        )
-        // The whole cd+exec is single-quoted, so an inner ' becomes '"'"'.
-        let command = try #require(config.command)
-        #expect(command.contains("x'\"'\"'y"))
+    @Test("A resume session's launch command is identical to a plain shell's")
+    func resumeSessionLaunchCommandMatchesPlainShell() throws {
+        // The initial command is delivered by SurfaceStore over the automation
+        // text bridge, never embedded in the launch command — libghostty ignores
+        // a per-surface `command` for surfaces created after the app's first,
+        // and an identical command means tmux/plain behavior can't diverge.
+        let environment = ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"]
+        for mode in [TerminalMultiplexingMode.tmuxPerSession, .ghosttyManagedSplits] {
+            let resume = GhosttyTerminalConfig(
+                launchContext: .hostSession(
+                    HostTerminalSession(
+                        key: .repoPath("/tmp/repo-a"),
+                        directory: URL(fileURLWithPath: "/tmp/repo-a"),
+                        initialCommand: "claude --resume sess-123"
+                    ),
+                    hooksSocketPath: nil
+                ),
+                environment: environment,
+                terminalMultiplexingMode: mode,
+                isTmuxAvailableOverride: true
+            )
+            let plain = GhosttyTerminalConfig(
+                workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+                environment: environment,
+                terminalMultiplexingMode: mode,
+                isTmuxAvailableOverride: true
+            )
+            #expect(resume.command == plain.command)
+        }
     }
 
     @Test("tmux mode falls back to login shell when tmux unavailable")

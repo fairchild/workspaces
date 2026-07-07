@@ -34,7 +34,7 @@ struct TerminalSessionLaunchContextTests {
         #expect(hookEnvironment["WORKSPACES_COMMAND_STATUS_ZSH"] == "/tmp/command-status.zsh")
     }
 
-    @Test("A resume session stays directory-backed with hook env and carries its initial command")
+    @Test("A resume session stays directory-backed with hook env")
     func resumeSessionIsDirectoryBackedWithInitialCommand() {
         let hostSessionID = UUID(uuidString: "7BD8C9BD-7F3B-456D-A9EC-16CDB2221339")!
         let session = HostTerminalSession(
@@ -47,9 +47,9 @@ struct TerminalSessionLaunchContextTests {
         let context = TerminalSessionLaunchContext.hostSession(session, hooksSocketPath: "/tmp/hooks.sock")
 
         #expect(context.commandModeLabel == "directory")
-        #expect(context.initialCommand == "claude --resume sess-9")
         // The resumed claude runs through the directory path, so it still gets hooks —
-        // unlike the old fixed-PATH customCommand path.
+        // unlike the old fixed-PATH customCommand path. (The initial command itself is
+        // delivered by SurfaceStore over the automation text bridge, not the launch context.)
         #expect(context.agentCommunication == .hookEnvironment)
     }
 
@@ -63,7 +63,6 @@ struct TerminalSessionLaunchContextTests {
         )
         let context = TerminalSessionLaunchContext.hostSession(session, hooksSocketPath: "/tmp/hooks.sock")
         #expect(context.commandModeLabel == "custom")
-        #expect(context.initialCommand == nil)
     }
 
     @Test("Incomplete directory hook context falls back to terminal signals")

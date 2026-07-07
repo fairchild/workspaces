@@ -22,6 +22,13 @@ enum RestorePathNormalization {
     }
 }
 
+/// UserDefaults key recording the prior run a restore banner action (Restore or
+/// Dismiss) already handled, so later launches that select the same prior run
+/// don't re-offer it (issue #783 #4 — banner frequency guard).
+enum TerminalRestoreBannerStorage {
+    static let handledRunIDKey = "terminalRestoreHandledRunID"
+}
+
 struct TerminalRestoreCoordinator: Sendable {
     let localStateStore: LocalStateStore
     let tmuxProbe: TmuxSessionProbe
@@ -46,6 +53,7 @@ struct TerminalRestoreCoordinator: Sendable {
     func makePlan(index: RestoreTargetIndex) async -> RestorePlan {
         let rows = (try? await localStateStore.fetchPreviousRunSessions(limit: 100)) ?? []
         let layout = (try? await localStateStore.fetchLatestLayoutSnapshot()) ?? nil
+        let previousRunID = (try? await localStateStore.fetchPreviousRunID()) ?? nil
 
         let liveNames = await probeLiveTmuxSessions(Set(rows.compactMap(\.tmuxSessionName)))
 
@@ -55,7 +63,7 @@ struct TerminalRestoreCoordinator: Sendable {
             isTmuxSessionAlive: { liveNames.contains($0) },
             isTranscriptResumable: transcriptResumability.asCheck()
         )
-        return planner.plan(rows: rows, layout: layout)
+        return planner.plan(rows: rows, layout: layout, previousRunID: previousRunID)
     }
 
     /// Fan out `has-session` probes concurrently and collect the live names, so
