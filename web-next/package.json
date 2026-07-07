@@ -11,6 +11,7 @@
 		"test:e2e": "playwright test",
 		"typecheck": "tsc --noEmit",
 		"lint": "eslint .",
+		"clean": "node scripts/clean.mjs",
 		"evidence": "node scripts/evidence.mjs",
 		"perf": "node perf/run.mjs",
 		"validate": "node scripts/validate.mjs"
