@@ -320,6 +320,20 @@ def derive_milestone_name(title: str) -> str:
     return strip_discussion_tags(title)
 
 
+MILESTONE_PREFIX_RE = re.compile(r"^\[[A-Za-z]+\d+\]\s*")
+
+
+def strip_milestone_prefix(title: str | None) -> str:
+    """Drop a leading lane/order tag like ``[D1] `` or ``[W3] `` from a milestone
+    title. The roadmap prefixes milestone titles so execution order is legible on
+    sight (D = desktop, W = web-next); peter derives its name from the discussion
+    title without that prefix, so it matches on the descriptive remainder and stays
+    stable when a milestone is re-lettered."""
+    if not title:
+        return ""
+    return MILESTONE_PREFIX_RE.sub("", title).strip()
+
+
 def comment_marker(discussion_number: int, status: str) -> str:
     return f"<!-- peter-planner:discussion={discussion_number};status={status} -->"
 
@@ -971,7 +985,7 @@ def build_execution_state(
                 break
         if milestone is None:
             for candidate in existing_milestones:
-                if candidate.get("title") == plan.milestone_name:
+                if strip_milestone_prefix(candidate.get("title")) == plan.milestone_name:
                     milestone = candidate
                     break
 
@@ -1127,7 +1141,7 @@ def create_or_reuse_milestone(
     for milestone in milestones:
         if has_milestone_marker(milestone.get("description"), discussion_number):
             return milestone
-        if milestone.get("title") == plan.milestone_name:
+        if strip_milestone_prefix(milestone.get("title")) == plan.milestone_name:
             return milestone
     raise PlannerError(
         f"milestone '{plan.milestone_name}' was not available after creation attempt"
@@ -1358,6 +1372,10 @@ def main() -> int:
         add_discussion_comment(discussion["id"], compose_ack_comment(number, env), env)
 
     milestone = create_or_reuse_milestone(repo, number, normalized, execution, env)
+    # Assign issues by the resolved milestone's actual title, not the derived
+    # plan name — the two diverge once a milestone carries a roadmap lane/order
+    # prefix (`[D1] …`), and `gh issue --milestone` resolves by exact title.
+    assigned_milestone_title = milestone["title"] if milestone else None
     plan_priorities = {issue.priority for issue in normalized.issues}
     resolved_by_priority: dict[int, int] = {}
     resolved_issues: list[dict[str, Any]] = []
@@ -1370,7 +1388,7 @@ def main() -> int:
         resolved_issue = ensure_issue(
             item.issue,
             item.existing_issue,
-            normalized.milestone_name,
+            assigned_milestone_title,
             normalized.discussion_url,
             normalized.discussion_number,
             blocked_by_numbers,

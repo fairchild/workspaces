@@ -1,0 +1,32 @@
+# Drift gate for milestone legibility — verifies every OPEN milestone is
+# self-describing (lane/order title prefix + [LANE: …] posture header) so
+# relative priority and roadmap order read straight from the milestone list.
+# Read-only. Milestones are GitHub state (not files), so a PR can't catch an
+# edit — this runs on a schedule and on demand, and validates the check script
+# itself on PRs that touch it. Convention: backlog/ROADMAP.md § "Active
+# milestone stack".
+name: Milestone Legibility
+
+on:
+  schedule:
+    - cron: "37 13 * * *"
+  pull_request:
+    paths:
+      - "scripts/milestone-legibility-check.py"
+      - ".github/workflows/milestone-legibility.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  legibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check open milestones are legible
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run scripts/milestone-legibility-check.py
