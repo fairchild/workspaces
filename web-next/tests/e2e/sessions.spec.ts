@@ -23,7 +23,7 @@ test.beforeAll(async () => {
 	// request, and in auth-bypass mode the unauthenticated readiness probe
 	// never touches the session tables — so without this the DELETEs below can
 	// hit tables that don't exist yet on a cold server.
-	await fetch("http://localhost:3100/", {
+	await fetch(`http://localhost:${process.env.E2E_PORT ?? 3100}/`, {
 		headers: { cookie: "test-auth-login=fairchild" },
 	});
 	// Same file the e2e server opened (see e2e:server); libSQL file handles
