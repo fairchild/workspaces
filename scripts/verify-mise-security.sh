@@ -132,8 +132,16 @@ verify_latest_mise_pin() {
 
   [[ "$draft" == "false" ]] || fail "latest mise release is a draft: $latest_tag"
   [[ "$prerelease" == "false" ]] || fail "latest mise release is a prerelease: $latest_tag"
-  [[ "$latest_tag" == "$MISE_EXPECTED_VERSION" ]] \
-    || fail "sandbox mise pin $MISE_EXPECTED_VERSION is not latest stable $latest_tag"
+  # Pin freshness is advisory here: upstream releases would otherwise red this
+  # lane on every PR touching its paths (two forced bumps on 2026-07-06/07).
+  # The weekly mise-pin-refresh workflow owns staleness and maintains a single
+  # bump PR. Set MISE_PIN_ENFORCE_LATEST=1 to restore the hard gate.
+  if [[ "$latest_tag" != "$MISE_EXPECTED_VERSION" ]]; then
+    if [[ "${MISE_PIN_ENFORCE_LATEST:-0}" == "1" ]]; then
+      fail "sandbox mise pin $MISE_EXPECTED_VERSION is not latest stable $latest_tag"
+    fi
+    echo "warning: sandbox mise pin $MISE_EXPECTED_VERSION is behind latest stable $latest_tag (mise-pin-refresh will open the bump PR)" >&2
+  fi
 
   grep -Fq "MISE_VERSION='$MISE_EXPECTED_VERSION'" web/src/lib/agent-runtime/vercel-sandbox.ts \
     || fail "sandbox mise version is not pinned to $MISE_EXPECTED_VERSION"
