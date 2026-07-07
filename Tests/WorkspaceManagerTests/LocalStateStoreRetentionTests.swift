@@ -152,4 +152,49 @@ struct LocalStateStoreRetentionTests {
         #expect(summary.integrityOK == true)
         #expect(summary.lastRetentionAt != nil)
     }
+
+    @Test("A fully-ended prior run survives retention so restore doesn't fall back to an older run")
+    func fullyEndedPriorRunSurvivesAsSentinel() async throws {
+        let tempDir = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let db = tempDir.appendingPathComponent("state.sqlite")
+
+        // Ancient run: a never-ended crash leftover. It must NOT become the
+        // restore set just because a newer, cleanly-closed run aged out.
+        let ancient = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_600_000_000))
+        let staleID = UUID()
+        try await ancient.recordTerminalSession(
+            HostTerminalSession(
+                id: staleID, key: .repoPath("/code/stale"),
+                directory: URL(fileURLWithPath: "/code/stale")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        // Most-recent prior run: everything cleanly ended, and old enough to age out.
+        let prior = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let endedID = UUID()
+        try await prior.recordTerminalSession(
+            HostTerminalSession(
+                id: endedID, key: .repoPath("/code/closed"),
+                directory: URL(fileURLWithPath: "/code/closed")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+        try await prior.markTerminalSessionEnded(hostSessionID: endedID)
+
+        let current = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+
+        // A cleanly-closed prior run reads as "nothing to restore" — before and
+        // after retention. Without the prior-run sentinel preservation, pruning
+        // the ended run would make the reader select the ancient run and offer
+        // its stale crash row.
+        #expect(try await current.fetchPreviousRunSessions().isEmpty)
+
+        let outcome = try await current.runRetention(now: Date(timeIntervalSince1970: 2_000_000_000))
+        #expect(outcome.integrityOK)
+
+        let after = try await current.fetchPreviousRunSessions()
+        #expect(after.isEmpty)
+        #expect(!after.contains { $0.hostSessionID == staleID })
+    }
 }

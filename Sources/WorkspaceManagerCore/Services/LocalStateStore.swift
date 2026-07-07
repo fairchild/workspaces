@@ -216,6 +216,8 @@ public struct LocalStateRetentionPolicy: Sendable, Equatable {
 
 /// Result of one retention pass: how many rows each high-volume table shed, plus
 /// the `PRAGMA quick_check` health signal captured at the end of the pass.
+/// Counts are the rows each DELETE removed directly — child rows cleared by an
+/// ended session's `ON DELETE CASCADE` are not included in `deletedAgentEvents`.
 public struct LocalStateRetentionOutcome: Sendable, Equatable {
     public let deletedEndedSessions: Int
     public let deletedAgentEvents: Int
@@ -840,16 +842,40 @@ public actor LocalStateStore {
         let agentCutoff = Self.isoString(now.addingTimeInterval(-policy.agentEventMaxAge))
         let diagnosticCutoff = Self.isoString(now.addingTimeInterval(-policy.diagnosticEventMaxAge))
         let completedAt = Self.isoString(now)
+        let currentRunStartedAt = runStartedAt
 
-        return try await dbPool.write { db -> LocalStateRetentionOutcome in
+        let deletions = try await dbPool.write { db -> (sessions: Int, agentEvents: Int, diagnostics: Int) in
             // Ended + aged sessions first; ON DELETE CASCADE clears their agent
             // events and split snapshots. Active rows never match this predicate.
+            // One exception: a *fully-ended* most-recent prior run keeps its rows.
+            // `fetchPreviousRunSessions` selects the prior run from all rows, so
+            // deleting the last rows of a cleanly-closed prior run would make the
+            // reader fall back to an older run's stale never-ended crash rows and
+            // offer the wrong restore set — a cleanly-closed prior run must read
+            // as "nothing to restore", not as an older run's leftovers. When the
+            // prior run still has active rows, those anchor the reader and its
+            // ended rows prune normally. (The EXISTS probe checks active rows,
+            // which this statement never deletes, so it is stable mid-delete.)
             try db.execute(
                 sql: """
                     DELETE FROM terminal_sessions
                     WHERE is_active = 0 AND ended_at IS NOT NULL AND ended_at < ?
+                      AND (
+                          run_id IS NOT (
+                              SELECT run_id
+                              FROM terminal_sessions
+                              WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                              ORDER BY run_started_at DESC
+                              LIMIT 1
+                          )
+                          OR EXISTS (
+                              SELECT 1 FROM terminal_sessions anchor
+                              WHERE anchor.run_id = terminal_sessions.run_id
+                                AND anchor.is_active = 1 AND anchor.ended_at IS NULL
+                          )
+                      )
                     """,
-                arguments: [sessionCutoff])
+                arguments: [sessionCutoff, currentRunStartedAt])
             let deletedEndedSessions = db.changesCount
 
             // Aged agent events, except the latest per still-active session. The
@@ -884,22 +910,32 @@ public actor LocalStateStore {
                 arguments: [diagnosticCutoff])
             let deletedDiagnosticEvents = db.changesCount
 
-            let quickCheck = try String.fetchAll(db, sql: "PRAGMA quick_check")
-            let integrityOK = quickCheck == ["ok"]
-            let integrityDetail = quickCheck.isEmpty ? "ok" : quickCheck.joined(separator: "; ")
+            return (deletedEndedSessions, deletedAgentEvents, deletedDiagnosticEvents)
+        }
 
+        // The integrity probe runs outside the pruning transaction: quick_check
+        // scans the whole file, and holding the writer slot for that at launch
+        // would stall the first session/event writes. A read connection suffices
+        // — the probe is a health signal, not a gate on the deletes.
+        let quickCheck = try await dbPool.read { db in
+            try String.fetchAll(db, sql: "PRAGMA quick_check")
+        }
+        let integrityOK = quickCheck == ["ok"]
+        let integrityDetail = quickCheck.isEmpty ? "ok" : quickCheck.joined(separator: "; ")
+
+        try await dbPool.write { db in
             try Self.writeMetadataValue(db, key: "last_retention_at", value: completedAt)
             try Self.writeMetadataValue(db, key: "last_integrity_ok", value: integrityOK ? "1" : "0")
             try Self.writeMetadataValue(db, key: "last_integrity_detail", value: integrityDetail)
-
-            return LocalStateRetentionOutcome(
-                deletedEndedSessions: deletedEndedSessions,
-                deletedAgentEvents: deletedAgentEvents,
-                deletedDiagnosticEvents: deletedDiagnosticEvents,
-                integrityOK: integrityOK,
-                integrityDetail: integrityDetail
-            )
         }
+
+        return LocalStateRetentionOutcome(
+            deletedEndedSessions: deletions.sessions,
+            deletedAgentEvents: deletions.agentEvents,
+            deletedDiagnosticEvents: deletions.diagnostics,
+            integrityOK: integrityOK,
+            integrityDetail: integrityDetail
+        )
     }
 
     /// Standalone `PRAGMA quick_check` probe. Returns `true` when SQLite reports a
