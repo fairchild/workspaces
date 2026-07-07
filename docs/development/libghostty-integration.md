@@ -223,6 +223,9 @@ Homebrew's `zig@0.15` formula carries the Darwin linker patch needed on Tahoe
 hosts, so `scripts/build-ghosttykit.sh` prefers:
 - `GHOSTTY_ZIG_BIN`, if set
 - `/opt/homebrew/opt/zig@0.15/bin/zig`, if installed
+- `$(brew --prefix zig@0.15)/bin/zig`, if installed — covers Xcode Cloud
+  macOS images that run Homebrew from `/usr/local` instead of the standard
+  Apple Silicon `/opt/homebrew` prefix
 - `mise exec zig@0.15.2` as a fallback
 
 Do not bump Ghostty to Zig `0.16.0` for this release line: Ghostty `v1.3.1`
