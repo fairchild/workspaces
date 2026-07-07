@@ -72,6 +72,46 @@ struct SidebarViewTests {
         #expect(preferredRepo?.id == repoA.id)
     }
 
+    @Test("Active workspace count excludes archived workspaces from the badge")
+    func activeWorkspaceCountExcludesArchived() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let active1 = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/workspaces/alpha/feature-a"),
+            sourceRepo: repo,
+            status: .active
+        )
+        let active2 = Workspace(
+            name: "feature-b",
+            path: URL(fileURLWithPath: "/tmp/workspaces/alpha/feature-b"),
+            sourceRepo: repo,
+            status: .stopped
+        )
+        let archived = Workspace(
+            name: "old-feature",
+            path: URL(fileURLWithPath: "/tmp/workspaces/alpha/.archived/old-feature"),
+            sourceRepo: repo,
+            status: .archived
+        )
+        repo.workspaces = [active1, active2, archived]
+
+        #expect(SidebarWorkspaceController.activeWorkspaceCount(in: repo.workspaces) == 2)
+    }
+
+    @Test("Active workspace count is zero for an archived-only repo")
+    func activeWorkspaceCountZeroWhenAllArchived() {
+        let repo = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/beta"))
+        let archived = Workspace(
+            name: "old-feature",
+            path: URL(fileURLWithPath: "/tmp/workspaces/beta/.archived/old-feature"),
+            sourceRepo: repo,
+            status: .archived
+        )
+        repo.workspaces = [archived]
+
+        #expect(SidebarWorkspaceController.activeWorkspaceCount(in: repo.workspaces) == 0)
+    }
+
     @Test("Local creation message matches progress phase")
     func localCreationMessageMatchesPhase() {
         #expect(SidebarWorkspaceController.localCreationMessage(for: .preparing) == "Preparing workspace...")

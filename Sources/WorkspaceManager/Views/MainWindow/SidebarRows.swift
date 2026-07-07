@@ -212,6 +212,9 @@ private struct SessionActivityIndicator: View {
 
 struct RepoRow: View {
     let repo: Repo
+    /// Non-archived workspace count; archived workspaces live in a separate collapsed
+    /// section, so the badge counts only the rows shown when the repo is expanded.
+    let activeWorkspaceCount: Int
     let sessionActivity: SidebarSessionActivity
     let paneCount: Int
     let isSelected: Bool
@@ -232,7 +235,7 @@ struct RepoRow: View {
 
     var body: some View {
         let repoName = repo.name
-        let workspaceCount = repo.workspaces.count
+        let workspaceCount = activeWorkspaceCount
         let showsVisibleQuickActions = showsQuickActions && isHovering
         let accessibilityDescription =
             "\(repoName), \(workspaceCount) workspace\(workspaceCount == 1 ? "" : "s"), \(sessionActivity.accessibilityDescription)"

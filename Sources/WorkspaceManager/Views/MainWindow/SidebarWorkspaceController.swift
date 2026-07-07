@@ -67,6 +67,13 @@ struct SidebarWorkspaceController {
         return repos.first
     }
 
+    /// Count of workspaces shown in a repo's active section — archived workspaces live in
+    /// their own collapsed section, so the collapsed-repo badge must exclude them to match
+    /// the rows listed when the repo is expanded.
+    nonisolated static func activeWorkspaceCount(in workspaces: [Workspace]) -> Int {
+        workspaces.filter { $0.status != .archived }.count
+    }
+
     nonisolated static func localCreationMessage(for phase: WorkspaceCreationPhase) -> String {
         switch phase {
         case .preparing:
