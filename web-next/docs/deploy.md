@@ -66,3 +66,18 @@ Notes:
   list must include `<BETTER_AUTH_URL>/api/auth/callback/github`.
 - Exact runtime var names are finalized when #750 lands; this is the canonical set
   to provision against.
+
+## Validation identity (#814)
+
+`scripts/validate.mjs` drives *deployed* environments with two credentials —
+never committed, present in GitHub Actions secrets (for
+`.github/workflows/web-next-validate.yml`) and the local `.env`. Full
+rationale: `docs/decisions/web-next-validation-identity.md` (repo root).
+
+| Variable | Purpose |
+|---|---|
+| `WEB_NEXT_VALIDATION_SESSION` | Pre-minted Better Auth session token for the allowlisted validation identity; replayed as the session cookie (`__Secure-better-auth.session_token` on https targets). Expiry degrades authed stages to `skipped: validation session expired — re-seed`. |
+| `VERCEL_AUTOMATION_BYPASS_SECRET` | Vercel Protection Bypass for Automation (`x-vercel-protection-bypass` header) — clears deployment-protection SSO on previews; production is publicly reachable without it. |
+
+A run missing either reports the affected stages as explicit skips — validation
+never silently passes an environment it couldn't actually reach or sign into.

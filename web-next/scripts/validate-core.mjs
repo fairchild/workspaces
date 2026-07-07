@@ -181,6 +181,46 @@ export function validationSessionCookieName(baseUrl) {
 }
 
 /**
+ * The cookie an authenticated stage sends, chosen by the target's observed
+ * auth mode: a bypass-mode target (local spawn / e2e server) accepts the test
+ * cookie with no credential at all, while a real-auth target needs the
+ * pre-minted validation session (#814). `null` means the stage can't
+ * authenticate and should gate itself with `gateStage`.
+ */
+export function authedCookie(mode, baseUrl, env) {
+	if (mode === "bypass") return "test-auth-login=fairchild";
+	if (!env.WEB_NEXT_VALIDATION_SESSION) return null;
+	return `${validationSessionCookieName(baseUrl)}=${env.WEB_NEXT_VALIDATION_SESSION}`;
+}
+
+/**
+ * #814's authenticated-flows check: an authenticated GET of an auth-gated,
+ * data-reading API (`/api/repos`) must answer 200 with the shape the client
+ * is built against. This proves the validation identity clears the full auth
+ * stack (middleware freshness + allowlist verdict) end to end.
+ */
+export function evaluateAuthedProbe(probe) {
+	const ok200 = probe.status === 200;
+	const body = probe.body;
+	const shapeOk =
+		!!body && Array.isArray(body.repos) && typeof body.degraded === "boolean";
+	return [
+		{
+			id: "authed_api_200",
+			status: ok200 ? "pass" : "fail",
+			detail: `GET /api/repos (authenticated) → ${probe.status}`,
+		},
+		{
+			id: "authed_api_shape",
+			status: ok200 && shapeOk ? "pass" : "fail",
+			detail: shapeOk
+				? `repos: ${body.repos.length}, degraded: ${body.degraded}`
+				: "response is not { repos: [...], degraded: boolean }",
+		},
+	];
+}
+
+/**
  * Replaces every occurrence of the given secret values in a string with a
  * placeholder. Probe/report text can otherwise carry a secret verbatim: a
  * malformed credential (say, a trailing newline from a sloppy copy-paste)
@@ -274,6 +314,80 @@ export function evaluateE2eResults(report) {
 			detail: `${spec.title} → ${statuses.join(", ")}`,
 		};
 	});
+}
+
+const STATUS_LABEL = {
+	pass: "✅ pass",
+	fail: "❌ FAIL",
+	skip: "⏭️ skipped",
+};
+
+function stageVerdict(stage) {
+	if (stage.status === "skip") return "skip";
+	return stage.checks.some((c) => c.status === "fail") ? "fail" : "pass";
+}
+
+const formatSeconds = (ms) =>
+	typeof ms === "number" ? `${(ms / 1000).toFixed(1)}s` : "—";
+
+/**
+ * The #819 human report: one Markdown document per run — stage table with
+ * timings, failing-check detail, skip reasons, and evidence paths — written
+ * alongside the JSON record and suitable verbatim as a PR/handoff note or a
+ * CI job summary. Pure renderer: callers gather the evidence file list.
+ */
+export function renderMarkdownReport(run) {
+	const { target, ranAt, stages, evidence = [] } = run;
+	const lines = [
+		`# web-next validation — ${target.envName}`,
+		"",
+		`Target: ${target.baseUrl} · ran ${ranAt} · total ${formatSeconds(
+			stages.reduce((sum, s) => sum + (s.tookMs ?? 0), 0),
+		)}`,
+		"",
+		"| Stage | Result | Checks | Took |",
+		"|---|---|---|---|",
+	];
+	for (const stage of stages) {
+		const verdict = stageVerdict(stage);
+		const checks =
+			stage.status === "skip"
+				? "—"
+				: `${stage.checks.filter((c) => c.status === "pass").length}/${stage.checks.length}`;
+		lines.push(
+			`| ${stage.id} | ${STATUS_LABEL[verdict]} | ${checks} | ${formatSeconds(stage.tookMs)} |`,
+		);
+	}
+
+	const skipped = stages.filter((s) => s.status === "skip");
+	if (skipped.length > 0) {
+		lines.push("", "## Skipped");
+		for (const stage of skipped) {
+			lines.push(`- **${stage.id}** — ${stage.reason}`);
+		}
+	}
+
+	const failing = stages.flatMap((stage) =>
+		(stage.checks ?? [])
+			.filter((c) => c.status === "fail")
+			.map((c) => ({ stage: stage.id, ...c })),
+	);
+	if (failing.length > 0) {
+		lines.push("", "## Failing checks");
+		for (const f of failing) {
+			lines.push(`- **${f.stage}** / \`${f.id}\`: ${f.detail}`);
+		}
+	}
+
+	if (evidence.length > 0) {
+		lines.push("", "## Evidence");
+		for (const file of evidence) {
+			lines.push(`- \`${file}\``);
+		}
+	}
+
+	lines.push("");
+	return lines.join("\n");
 }
 
 /** Collapses stage results into the exit verdict and the human summary lines. */

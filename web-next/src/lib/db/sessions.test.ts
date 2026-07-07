@@ -9,6 +9,7 @@ import {
 	type AppendEvent,
 	appendEvents,
 	createSession,
+	deleteSession,
 	getSession,
 	readEvents,
 	readTranscript,
@@ -245,5 +246,41 @@ describe("session store", () => {
 				],
 			},
 		]);
+	});
+});
+
+describe("deleteSession", () => {
+	test("removes the session, its event log, and its terminal tickets together", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "goner", provider: "vercel" });
+		await createSession(handle, { id: "keeper", provider: "mock" });
+		await appendEvents(handle, "goner", [
+			evt("user", { type: "text", content: "hello" }),
+			evt("assistant", { type: "done", content: "" }),
+		]);
+		await appendEvents(handle, "keeper", [evt("user", { type: "text", content: "stay" })]);
+		await handle.client.execute({
+			sql: "INSERT INTO terminal_tickets (ticket_hash, login, session_id, mode, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+			args: ["h1", "fairchild", "goner", "mock", "2026-01-01", "2026-01-01"],
+		});
+
+		expect(await deleteSession(handle, "goner")).toBe(true);
+		expect(await getSession(handle, "goner")).toBeUndefined();
+		expect(await readEvents(handle, "goner")).toEqual([]);
+		const tickets = await handle.client.execute(
+			"SELECT ticket_hash FROM terminal_tickets WHERE session_id = 'goner'",
+		);
+		expect(tickets.rows).toHaveLength(0);
+
+		// The cascade is scoped: the other session and its log are untouched.
+		expect(await getSession(handle, "keeper")).toBeDefined();
+		expect(await readEvents(handle, "keeper")).toHaveLength(1);
+	});
+
+	test("deleting an unknown session reports false and touches nothing", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "only", provider: "mock" });
+		expect(await deleteSession(handle, "ghost")).toBe(false);
+		expect(await getSession(handle, "only")).toBeDefined();
 	});
 });

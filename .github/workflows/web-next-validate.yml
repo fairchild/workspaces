@@ -1,0 +1,122 @@
+name: Web Next Validate
+
+# Scheduled deployed-environment validation for web-next (#819): runs the full
+# staged suite (scripts/validate.mjs — reachability, posture, authenticated
+# flows, model sweep, deployed-safe e2e, and one real agentic coding turn)
+# against production daily, uploading the per-env JSON + Markdown report and
+# evidence screenshots as one artifact. Stage *failures* turn the run red;
+# credential/deployment-gap *skips* do not — the report names each skip.
+#
+# Preview validation has no stable origin to resolve without Vercel API access
+# (deploys are manual/label-driven — see web-next-preview.yml), so the
+# scheduled run targets prod only; a preview run is a workflow_dispatch with
+# its URL pasted into `target_url`.
+#
+# Spend note: each run includes one small real coding turn in a sandbox
+# (cents). The cadence lever is the cron below.
+
+on:
+  schedule:
+    - cron: "23 9 * * *"
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: "Optional explicit target origin (e.g. a preview URL); defaults to production"
+        required: false
+        type: string
+      env_name:
+        description: "Environment label for the report/artifact when target_url is set"
+        required: false
+        default: "preview"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-next-validate
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate deployed web-next
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: web-next
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - uses: pnpm/action-setup@02f6c237bd2518259fed6c71566509edfb3f2b74 # v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web-next/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: pw-version
+        run: echo "version=$(pnpm exec playwright --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-web-next-${{ runner.os }}-${{ steps.pw-version.outputs.version }}
+
+      - name: Install Playwright browsers
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm exec playwright install chromium --with-deps
+
+      - name: Install Playwright system deps
+        if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: pnpm exec playwright install-deps chromium
+
+      # Secrets ride only in env vars: validate.mjs redacts them from any
+      # error text before it can reach the console, the JSON record, or the
+      # report (see redactSecrets in scripts/validate-core.mjs), and the
+      # deployed e2e seam turns Playwright traces off so no artifact embeds
+      # the session cookie or bypass header.
+      - name: Validate
+        id: run
+        env:
+          WEB_NEXT_VALIDATION_SESSION: ${{ secrets.WEB_NEXT_VALIDATION_SESSION }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          TARGET_URL: ${{ inputs.target_url }}
+          ENV_NAME: ${{ inputs.env_name }}
+        run: |
+          if [ -n "$TARGET_URL" ]; then
+            echo "env_name=${ENV_NAME:-preview}" >> "$GITHUB_OUTPUT"
+            pnpm validate --url "$TARGET_URL" --env "${ENV_NAME:-preview}"
+          else
+            echo "env_name=prod" >> "$GITHUB_OUTPUT"
+            pnpm validate --env prod
+          fi
+
+      - name: Report to job summary
+        if: always()
+        env:
+          ENV_NAME: ${{ steps.run.outputs.env_name || 'prod' }}
+        run: |
+          report="output/validate/$ENV_NAME/report.md"
+          if [ -f "$report" ]; then
+            cat "$report" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report was written (the run failed before the reporter)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload validation artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: web-next-validate
+          path: web-next/output/validate/
+          if-no-files-found: warn
