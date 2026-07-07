@@ -10,6 +10,7 @@ final class AutomationController: AutomationControlling {
     private let isInputWriteEnabled: @MainActor () -> Bool
     private var webSurfaces: @MainActor () -> [AutomationWebSurfaceDescriptor]
     private var webSnapshot: @MainActor (UUID) async -> WebSnapshotOutcome
+    private var windows: @MainActor () -> [AutomationWindowDescriptor]
 
     init(
         handleRegistry: AutomationHandleRegistry,
@@ -18,6 +19,7 @@ final class AutomationController: AutomationControlling {
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
         webSurfaces: @escaping @MainActor () -> [AutomationWebSurfaceDescriptor] = { [] },
         webSnapshot: @escaping @MainActor (UUID) async -> WebSnapshotOutcome = { _ in .unknownSource },
+        windows: @escaping @MainActor () -> [AutomationWindowDescriptor] = { [] },
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         }
@@ -28,6 +30,7 @@ final class AutomationController: AutomationControlling {
         self.requestCloseTerminal = requestCloseTerminal
         self.webSurfaces = webSurfaces
         self.webSnapshot = webSnapshot
+        self.windows = windows
         self.isInputWriteEnabled = isInputWriteEnabled
     }
 
@@ -36,7 +39,8 @@ final class AutomationController: AutomationControlling {
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
         webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil,
-        webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil
+        webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil,
+        windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
@@ -46,6 +50,9 @@ final class AutomationController: AutomationControlling {
         }
         if let webSnapshot {
             self.webSnapshot = webSnapshot
+        }
+        if let windows {
+            self.windows = windows
         }
     }
 
@@ -60,6 +67,22 @@ final class AutomationController: AutomationControlling {
             surfaces: surfaceDescriptors(for: resolved),
             system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
         )
+    }
+
+    func automationWindows(for handle: String) throws -> AutomationWindowsResult {
+        // Operator scope: capture-only listing of the app's windows. The caller need not own a
+        // terminal tile, so this resolves the handle without the tile-liveness check — only the
+        // window.read capability and operator-scope guard apply. A tile handle lacks window.read
+        // and fails capability_denied.
+        let entry = try resolveOperator(handle, requiring: .windowRead)
+        return AutomationWindowsResult(
+            windows: windows(),
+            system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+        )
+    }
+
+    func automationHandleIsOperator(_ handle: String) -> Bool {
+        handleRegistry.resolve(handle)?.isOperator ?? false
     }
 
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {
@@ -201,6 +224,33 @@ final class AutomationController: AutomationControlling {
     private struct ResolvedHandle {
         let entry: AutomationHandleRegistry.Entry
         let tileTreeStore: TileTreeStore
+    }
+
+    /// Resolves an operator handle for a capture-only route. Unlike `resolve`, it does not require a
+    /// live terminal tile — operator scope exists outside any tile. It still fails closed: a
+    /// missing/stale handle is `stale_handle`, an under-capable handle is `capability_denied`, and a
+    /// tile handle that somehow reaches here (it lacks the operator capabilities by construction) is
+    /// `capability_denied` on the operator-scope guard.
+    private func resolveOperator(
+        _ handle: String,
+        requiring capability: AutomationCapability
+    ) throws -> AutomationHandleRegistry.Entry {
+        guard let entry = handleRegistry.resolve(handle) else {
+            throw AutomationServiceError(.staleHandle, "The automation handle is missing or stale.")
+        }
+        guard entry.capabilities.contains(capability) else {
+            throw AutomationServiceError(
+                .capabilityDenied,
+                "The automation handle does not include \(capability.rawValue)."
+            )
+        }
+        guard entry.isOperator else {
+            throw AutomationServiceError(
+                .capabilityDenied,
+                "This route requires an operator handle."
+            )
+        }
+        return entry
     }
 
     private func resolve(

@@ -48,6 +48,40 @@ private final class FakeAutomationController: AutomationControlling {
         return AutomationSurfacesResult(surfaces: [])
     }
 
+    var windowCalls: [String] = []
+
+    func automationWindows(for handle: String) throws -> AutomationWindowsResult {
+        // Only an operator handle carries window.read; a tile handle ("live") fails closed, and an
+        // unknown handle is stale — mirrors the real controller's operator-scope projection.
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include window.read.")
+        }
+        windowCalls.append(handle)
+        return AutomationWindowsResult(
+            windows: [
+                AutomationWindowDescriptor(
+                    windowID: "42",
+                    title: "WorkSpaces",
+                    subtitle: "Development Build",
+                    isMain: true,
+                    isKey: true,
+                    isVisible: true,
+                    x: 0,
+                    y: 0,
+                    width: 1400,
+                    height: 900
+                )
+            ]
+        )
+    }
+
+    func automationHandleIsOperator(_ handle: String) -> Bool {
+        handle == "operator"
+    }
+
     var webSurfaceCalls: [String] = []
 
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {
@@ -640,6 +674,193 @@ struct AutomationAPITests {
         )
         #expect(denied.status == 403)
         #expect(deniedEnvelope.error?.code == .capabilityDenied)
+    }
+
+    @Test("Registry mints an operator handle carrying only capture-only capabilities")
+    @MainActor
+    func registryRegistersOperatorHandle() {
+        let registry = AutomationHandleRegistry(makeHandle: { "op-1" })
+        let entry = registry.registerOperator(appScopeID: "workspaces.local")
+
+        #expect(entry.handle == "op-1")
+        #expect(entry.isOperator)
+        #expect(entry.tileID == nil)
+        #expect(entry.capabilities == [.windowRead])
+        // Capture-only: an operator handle never carries tile mutation or input.write.
+        #expect(!entry.capabilities.contains(.tileClose))
+        #expect(!entry.capabilities.contains(.inputWrite))
+        #expect(registry.resolve("op-1")?.isOperator == true)
+
+        // The handle dies with the launch: once the registry is cleared it no longer resolves,
+        // so a credential left behind by a crashed launch fails closed against a fresh registry.
+        registry.removeAll()
+        #expect(registry.resolve("op-1") == nil)
+    }
+
+    @Test("GET /v1/windows succeeds for an operator handle and denies a tile handle")
+    @MainActor
+    func routerWindows() async throws {
+        let controller = FakeAutomationController()
+
+        let ok = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/windows",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWindowsResult>.self,
+            from: ok.body
+        )
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.windows.count == 1)
+        #expect(okEnvelope.result?.windows.first?.windowID == "42")
+        #expect(okEnvelope.result?.system.capabilities == [.windowRead])
+        #expect(controller.windowCalls == ["operator"])
+
+        // A tile handle holds the v1 tile capabilities but not window.read → capability_denied.
+        let denied = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/windows",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: denied.body
+        )
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        let missing = await AutomationHTTPRouter.route(
+            HTTPRequest(method: "GET", path: "/v1/windows", headers: [:], body: Data()),
+            controller: controller,
+            enabled: true
+        )
+        let missingEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: missing.body
+        )
+        #expect(missing.status == 401)
+        #expect(missingEnvelope.error?.code == .missingHandle)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/windows",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
+    @Test("Operator credential round-trips through the store and is written user-only (0600)")
+    func operatorCredentialStoreRoundTrip() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-op-cred-\(UUID().uuidString.prefix(8)).json")
+        defer { AutomationOperatorCredentialStore.remove(at: url) }
+
+        let credential = AutomationOperatorCredential(socketPath: "/tmp/automation.sock", handle: "op-xyz")
+        try AutomationOperatorCredentialStore.write(credential, to: url)
+
+        let loaded = AutomationOperatorCredentialStore.load(from: url)
+        #expect(loaded == credential)
+        #expect(loaded?.capabilities == [.windowRead])
+
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
+        #expect(permissions == 0o600)
+
+        AutomationOperatorCredentialStore.remove(at: url)
+        #expect(AutomationOperatorCredentialStore.load(from: url) == nil)
+    }
+
+    @Test("Provisioner mints only when opted in and clears a stale credential otherwise")
+    @MainActor
+    func operatorProvisionerGate() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-op-prov-\(UUID().uuidString.prefix(8)).json")
+        defer { AutomationOperatorCredentialStore.remove(at: url) }
+
+        // Opt-in launch mints: the credential file exists and its handle resolves as an operator
+        // entry carrying window.read.
+        let registry = AutomationHandleRegistry()
+        let minted = AutomationOperatorProvisioner.provision(
+            optedIn: true,
+            registry: registry,
+            socketPath: "/tmp/automation.sock",
+            appScopeID: "workspaces.local",
+            credentialURL: url
+        )
+        let mintedCredential = try #require(minted)
+        #expect(AutomationOperatorCredentialStore.load(from: url) == mintedCredential)
+        #expect(registry.resolve(mintedCredential.handle)?.capabilities == [.windowRead])
+        #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)
+
+        // A non-opt-in launch mints nothing and clears any stale credential left on disk.
+        let freshRegistry = AutomationHandleRegistry()
+        let notMinted = AutomationOperatorProvisioner.provision(
+            optedIn: false,
+            registry: freshRegistry,
+            socketPath: "/tmp/automation.sock",
+            appScopeID: "workspaces.local",
+            credentialURL: url
+        )
+        #expect(notMinted == nil)
+        #expect(AutomationOperatorCredentialStore.load(from: url) == nil)
+    }
+
+    @Test("Audit log records the operator flag so operator calls are distinguishable")
+    func auditLogTagsOperatorCalls() async throws {
+        let auditURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-op-audit-\(UUID().uuidString.prefix(8)).jsonl")
+        defer { try? FileManager.default.removeItem(at: auditURL) }
+        let logger = AutomationAuditLogger(auditURL: auditURL)
+
+        let okBody = try AutomationJSON.encoder.encode(
+            AutomationResponseEnvelope(result: AutomationWindowsResult(windows: []))
+        )
+        await logger.record(
+            method: "GET",
+            path: "/v1/windows",
+            headers: [AutomationAPI.handleHeader: "op"],
+            responseBody: okBody,
+            operatorHandle: true
+        )
+        await logger.record(
+            method: "GET",
+            path: "/v1/context",
+            headers: [AutomationAPI.handleHeader: "tile"],
+            responseBody: okBody,
+            operatorHandle: false
+        )
+
+        let contents = try String(contentsOf: auditURL, encoding: .utf8)
+        let lines = contents.split(separator: "\n").map(String.init)
+        #expect(lines.count == 2)
+        let events = try lines.map { line in
+            try AutomationJSON.decoder.decode(AutomationAuditLogger.Event.self, from: Data(line.utf8))
+        }
+        let windowsEvent = try #require(events.first { $0.path == "/v1/windows" })
+        #expect(windowsEvent.operatorHandle)
+        let contextEvent = try #require(events.first { $0.path == "/v1/context" })
+        #expect(!contextEvent.operatorHandle)
     }
 
     @Test("CLI formatter emits result JSON and surfaces envelope errors")

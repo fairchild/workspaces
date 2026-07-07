@@ -23,11 +23,23 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var teardownObserver: Any?
     private var didStart = false
     private var startTask: Task<String, Error>?
+    private var operatorCredentialURL: URL?
+
+    /// The app scope id operator handles carry — matched to the value `TileTreeStore` stamps on tile
+    /// handles so audit and context read consistently across both handle classes.
+    private static let appScopeID = "workspaces.local"
 
     private init() {}
 
     var isEnabled: Bool {
         ExperimentalFeatures.isEnabled(.automationAPI)
+    }
+
+    /// Whether this launch opted into operator scope. Operator scope rides on the automation listener,
+    /// so it requires the Automation API experiment as well; the caller only reaches minting when the
+    /// listener is enabled.
+    private var isOperatorEnabled: Bool {
+        ExperimentalFeatures.isEnabled(.automationOperator)
     }
 
     func configure(
@@ -38,6 +50,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     ) async {
         guard isEnabled else {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
+            // Fail closed: an app without the Automation API leaves no operator credential behind.
+            clearOperatorCredential()
             return
         }
 
@@ -72,6 +86,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             tileTreeStore: tileTreeStore,
             webSurfaceRecords: webSurfaceRecords
         )
+        let windows: @MainActor () -> [AutomationWindowDescriptor] = {
+            AutomationWindowEnumerator.descriptors()
+        }
 
         if let startTask {
             let socketPath = try await startTask.value
@@ -80,7 +97,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal,
                 webSurfaces: webSurfaces,
-                webSnapshot: webSnapshot
+                webSnapshot: webSnapshot,
+                windows: windows
             )
             return socketPath
         }
@@ -91,7 +109,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal,
                 webSurfaces: webSurfaces,
-                webSnapshot: webSnapshot
+                webSnapshot: webSnapshot,
+                windows: windows
             )
             guard let socketPath else {
                 throw AutomationListener.ListenerError.socketBindFailed("listener started without a socket path")
@@ -105,7 +124,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             focusTerminal: focusTerminal,
             requestCloseTerminal: requestCloseTerminal,
             webSurfaces: webSurfaces,
-            webSnapshot: webSnapshot
+            webSnapshot: webSnapshot,
+            windows: windows
         )
 
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
@@ -140,11 +160,35 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         self.startTask = nil
         NSLog("[AutomationIntegration] listener started at %@", listener.socketPath)
 
+        // Mint the per-launch operator credential exactly once, on first start. Opted-in launches
+        // register an operator handle and write the credential next to the socket; every other
+        // launch clears any stale credential so a non-opted-in app never leaves one behind.
+        let credentialURL = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
+        operatorCredentialURL = credentialURL
+        let credential = AutomationOperatorProvisioner.provision(
+            optedIn: isOperatorEnabled,
+            registry: handleRegistry,
+            socketPath: startedSocketPath,
+            appScopeID: Self.appScopeID,
+            credentialURL: credentialURL
+        )
+        if credential != nil {
+            NSLog("[AutomationIntegration] operator credential minted at %@", credentialURL.path)
+        }
+
         teardownObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
+            // Remove the credential synchronously here: the async stop() Task below may not run
+            // before the process exits, and "dies with the launch" should hold on a clean quit.
+            // (A crash can't clean up, which is why a stale credential also fails closed against the
+            // fresh registry — see AutomationOperatorCredentialStore.)
+            let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
+            AutomationOperatorCredentialStore.remove(
+                at: AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
+            )
             Task { @MainActor [weak self] in await self?.stop() }
         }
         return listener.socketPath
@@ -191,9 +235,20 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         socketPath = nil
         didStart = false
         handleRegistry.removeAll()
+        // The operator handle dies with the launch; remove its credential file on the way out so a
+        // clean exit leaves nothing readable (a crash can't, which is why stale credentials fail
+        // closed against the fresh registry — see AutomationOperatorCredentialStore).
+        clearOperatorCredential()
         if let teardownObserver {
             NotificationCenter.default.removeObserver(teardownObserver)
             self.teardownObserver = nil
         }
+    }
+
+    private func clearOperatorCredential() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
+        let url = operatorCredentialURL ?? AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
+        AutomationOperatorCredentialStore.remove(at: url)
+        operatorCredentialURL = nil
     }
 }

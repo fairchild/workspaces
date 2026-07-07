@@ -19,6 +19,11 @@ public enum AutomationAPI {
     /// Kept separate from `v1Capabilities` so default handles never widen.
     public static let inputWriteCapabilities = v1Capabilities + [AutomationCapability.inputWrite]
 
+    /// Capabilities granted to an opt-in operator handle (`[A1]`). Capture-only at first:
+    /// `window.read` lists the app's windows. `window.snapshot` is a follow-on slice and is
+    /// deliberately absent here. Operator handles never carry tile mutation capabilities.
+    public static let operatorCapabilities = [AutomationCapability.windowRead]
+
     public static let inputWriteMaxUTF8Bytes = 32_768
 
     /// Bounds for `GET /v1/web-surfaces/{id}/snapshot` (`browser.read`). The snapshot
@@ -40,6 +45,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case tileClose = "tile.close"
     case inputWrite = "input.write"
     case browserRead = "browser.read"
+    case windowRead = "window.read"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -257,6 +263,62 @@ public struct AutomationSurfacesResult: Codable, Sendable, Equatable {
     }
 }
 
+/// Read-only descriptor for one of the app's on-screen windows (`window.read`, operator scope).
+/// `windowID` is the AppKit window number as a string — stable for the window's lifetime and the
+/// same identity `CGWindowList`/ScreenCaptureKit address, so the follow-on `window.snapshot` slice
+/// can target it. Geometry is in AppKit points (bottom-left origin, the global display space).
+public struct AutomationWindowDescriptor: Codable, Sendable, Equatable {
+    public let windowID: String
+    public let title: String
+    public let subtitle: String?
+    public let isMain: Bool
+    public let isKey: Bool
+    public let isVisible: Bool
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+
+    public init(
+        windowID: String,
+        title: String,
+        subtitle: String?,
+        isMain: Bool,
+        isKey: Bool,
+        isVisible: Bool,
+        x: Double,
+        y: Double,
+        width: Double,
+        height: Double
+    ) {
+        self.windowID = windowID
+        self.title = title
+        self.subtitle = subtitle
+        self.isMain = isMain
+        self.isKey = isKey
+        self.isVisible = isVisible
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+public struct AutomationWindowsResult: Codable, Sendable, Equatable {
+    public let windows: [AutomationWindowDescriptor]
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        windows: [AutomationWindowDescriptor],
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.windows = windows
+        self.system = system
+    }
+}
+
 public struct AutomationMutationResult: Codable, Sendable, Equatable {
     public let changed: Bool
     public let focusedSurfaceID: String?
@@ -318,6 +380,30 @@ public struct AutomationTerminalEnvironment: Sendable, Equatable {
     public init(socketPath: String, handle: String) {
         self.socketPath = socketPath
         self.handle = handle
+    }
+}
+
+/// The per-launch operator credential (`[A1]`). An opt-in launch mints this and writes it to a
+/// user-private file next to `automation.sock`; any same-user process (a dev shell, `evidence.sh`,
+/// CI) reads it to call operator-scoped routes without living inside a terminal tile. The `handle`
+/// registers in the live handle registry and dies with the launch, so a credential left behind by a
+/// crashed launch fails closed (`stale_handle`) against the fresh registry. Normal launches mint no
+/// credential; the file's absence is the fail-closed signal.
+public struct AutomationOperatorCredential: Codable, Sendable, Equatable {
+    public let v: Int
+    public let socketPath: String
+    public let handle: String
+    public let capabilities: [AutomationCapability]
+
+    public init(
+        socketPath: String,
+        handle: String,
+        capabilities: [AutomationCapability] = AutomationAPI.operatorCapabilities
+    ) {
+        self.v = AutomationAPI.version
+        self.socketPath = socketPath
+        self.handle = handle
+        self.capabilities = capabilities
     }
 }
 
@@ -402,6 +488,7 @@ public struct AutomationServiceError: Error, Sendable, Equatable {
 public protocol AutomationControlling: AnyObject, Sendable {
     func automationContext(for handle: String) throws -> AutomationContextResult
     func automationSurfaces(for handle: String) throws -> AutomationSurfacesResult
+    func automationWindows(for handle: String) throws -> AutomationWindowsResult
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult
     func automationWebSurfaceSnapshot(
         for handle: String,
@@ -421,4 +508,9 @@ public protocol AutomationControlling: AnyObject, Sendable {
         text: String,
         submit: Bool
     ) throws -> AutomationInputWriteResult
+
+    /// Whether `handle` resolves to a live operator entry. The listener consults this to tag audit
+    /// events, so operator calls are distinguishable in `automation-audit.jsonl` without the audit
+    /// logger seeing the opaque handle's scope. A missing/stale handle is not an operator handle.
+    func automationHandleIsOperator(_ handle: String) -> Bool
 }

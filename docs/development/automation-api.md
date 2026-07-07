@@ -41,7 +41,32 @@ processes only receive automation environment when their surface is created.
 
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
-not terminal input or output.
+not terminal input or output. Each event carries an `operatorHandle` boolean so
+operator calls are distinguishable from tile calls (`[A1]`).
+
+### Operator scope (`[A1]`)
+
+A second handle class for trusted callers *outside* any tile — dev sessions,
+`evidence.sh`, CI — enabling capture-only global reads without living inside a
+WorkSpaces terminal tile. See
+[Automation Operator Scope Decision](../decisions/automation-operator-scope.md).
+
+- **Opt-in launch.** Operator scope exists only when the launch enables it:
+  the `Automation Operator Scope` experiment, or `WORKSPACES_AUTOMATION_OPERATOR=1`.
+  It rides on the automation listener, so the Automation API experiment must
+  also be on. Normal launches mint no operator credential and fail closed.
+- **Minted credential.** An opt-in launch registers a per-launch operator
+  handle in the live handle registry and writes it to a user-private file,
+  `automation-operator.json`, next to `automation.sock`. The file is owner-only
+  (0600) JSON: `{ "v", "socketPath", "handle", "capabilities" }`. Any same-user
+  process reads it to call operator-scoped routes.
+- **Dies with the launch.** The handle is in-memory; it is gone once the app
+  exits, and the credential file is removed on a clean exit. A credential left
+  behind by a crashed launch fails closed — its handle no longer resolves
+  against the fresh registry (`stale_handle`).
+- **Capture-only.** The initial operator capability set is `window.read`
+  (list windows). `window.snapshot` arrives with the follow-on slice. Operator
+  handles never carry tile mutation or `input.write`.
 
 ## Invariants
 
@@ -88,6 +113,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | --- | --- |
 | `GET /v1/context` | Returns the caller's resolved context and capabilities. |
 | `GET /v1/surfaces` | Returns visible terminal surfaces in the caller's window/app scope. |
+| `GET /v1/windows` | **Operator scope.** Returns the app's on-screen windows with stable identifiers (`window.read`). Keyed by the AppKit window number — the same identity `CGWindowList`/ScreenCaptureKit address. Requires an operator handle; a tile handle lacks `window.read` and fails `capability_denied`. |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -116,6 +142,7 @@ handle.
 | `context.read` | `GET /v1/context` |
 | `surfaces.read` | `GET /v1/surfaces` |
 | `browser.read` | `GET /v1/web-surfaces` (read-only listing) and `GET /v1/web-surfaces/{id}/snapshot` (bounded PNG of a live surface); granted to default handles under the Automation API experiment |
+| `window.read` | `GET /v1/windows` (list the app's windows); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -191,6 +218,17 @@ workspaces input write 'echo hi'
 workspaces input write 'echo hi' --submit
 ```
 
+`workspaces window list` is the operator-scope command. Unlike the tile-scoped
+commands, it reads the per-launch operator credential file (minted next to the
+socket by an opt-in launch) rather than the injected terminal environment, so it
+works from any same-user shell outside a WorkSpaces tile. Absent the credential
+it fails closed with guidance.
+
+```bash
+workspaces window list
+workspaces window list --json
+```
+
 ## Implementation Map
 
 | Concern | File |
@@ -199,6 +237,8 @@ workspaces input write 'echo hi' --submit
 | Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
 | HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |
 | Web-surface snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WebSurfaceSnapshotEncoder.swift` |
+| Operator credential store + provisioner | `Sources/WorkspaceManagerCore/Services/Automation/AutomationOperatorCredentialStore.swift` |
+| Window enumeration (AppKit → descriptors) | `Sources/WorkspaceManager/Views/MainWindow/AutomationWindowEnumerator.swift` |
 | Web-surface snapshot capture (MainActor) | `Sources/WorkspaceManager/Web/WebSurfaceSnapshotCapture.swift` |
 | CLI socket client | `Sources/WorkspaceManagerCore/Services/Automation/AutomationSocketClient.swift` |
 | CLI formatting | `Sources/WorkspaceManagerCore/Services/Automation/AutomationCLIFormatting.swift` |
@@ -227,8 +267,10 @@ If docs or public examples changed, also run the docs checks listed in
 V1 does not support browser mutation (navigating, clicking, filling, or
 evaluating JavaScript in a web surface), opening web URLs, tab title or metadata
 changes, writing into other tiles, resize/equalize, or global cross-workspace
-control. Those capabilities require separate product and safety review before
-they can be added. Two reviewed exceptions widen the read/write surface
+*mutation*. Those capabilities require separate product and safety review before
+they can be added. Read-only global window listing is the one reviewed
+exception, and it is gated behind the opt-in operator scope above
+(`window.read`), not granted to tile handles. Two reviewed exceptions widen the read/write surface
 deliberately: caller-scoped input injection ships as the experimental,
 double-gated `input.write` capability (see
 [Automation Input Write Decision](../decisions/automation-input-write.md)), and
