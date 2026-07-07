@@ -50,7 +50,17 @@ pnpm validate    # env-targetable validation (--env local|prod, --url <origin>)
 `pnpm validate` also runs against real deployments — `pnpm validate --env prod`
 probes reachability and auth/security posture with zero credentials, and
 credential-gated stages report themselves skipped rather than passing silently
-(see `docs/roadmap.md` Phase 2 / milestone #13).
+(see `docs/roadmap.md` Phase 2 / milestone #13). Two more stages gate on the
+same `WEB_NEXT_VALIDATION_SESSION` (the pre-minted validation identity —
+`docs/decisions/web-next-validation-identity.md`): a model sweep (#816) that
+calls `/api/diag/gateway?model=<id>` once per selectable model
+(`agent-runtime/models.ts`) to prove selection actually routes in the target,
+and an e2e stage (#817) that replays the `@deployed-safe`-tagged specs in
+`tests/e2e/` against the target through `playwright.config.ts`'s
+`VALIDATE_TARGET_URL` seam — set by `validate.mjs` itself, not meant to be
+set by hand. Both report `skipped: validation session expired — re-seed`
+when the session cookie doesn't authenticate, matching the decision doc's
+expiry wording, rather than failing.
 
 ## Cleaning up
 
