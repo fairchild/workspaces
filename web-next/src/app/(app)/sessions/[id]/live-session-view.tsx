@@ -13,10 +13,20 @@
  * fresh tab) reflects the same value because page.tsx reads it back from the
  * DB. The context figure is recomputed from the live transcript on every
  * render, so it advances turn-by-turn instead of only after a reload.
+ *
+ * The title (#823) follows the same seeded-client-state + PATCH-chain shape
+ * as the model, plus one addition: while the session has no persisted title
+ * yet, the masthead shows a *client-derived preview* — `deriveSessionTitle`
+ * run against the first visible user message, the exact pure function the
+ * server runs durably at turn-start (turn-ingest.ts) — so the title appears
+ * the instant the first message lands instead of waiting for a reload. A
+ * reload always agrees because both sides compute the same function over the
+ * same text; a user edit (or the eventual server write) replaces the preview
+ * with the real persisted string.
  */
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { modelLabel } from "@/lib/agent-runtime/models";
 import {
 	type ActiveTurnData,
@@ -24,6 +34,7 @@ import {
 	type SessionViewData,
 } from "@/components/folio/session-view";
 import type { FolioDataParts, FolioMessage } from "@/components/folio/types";
+import { deriveSessionTitle } from "@/lib/session-title";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
@@ -33,6 +44,16 @@ function lastUserText(messages: FolioMessage[]): string {
 	const last = [...messages].reverse().find((m) => m.role === "user");
 	return (
 		last?.parts
+			.filter((part) => part.type === "text")
+			.map((part) => part.text)
+			.join("") ?? ""
+	);
+}
+
+function firstUserText(messages: FolioMessage[]): string {
+	const first = messages.find((m) => m.role === "user");
+	return (
+		first?.parts
 			.filter((part) => part.type === "text")
 			.map((part) => part.text)
 			.join("") ?? ""
@@ -89,6 +110,53 @@ export function LiveSessionView({
 			})
 				.then((res) => {
 					if (!res.ok) revert();
+				})
+				.catch(revert),
+		);
+	};
+
+	// The persisted title, "" until either the auto-titler or an edit sets one.
+	// Same seeded-state + chained-PATCH-with-revert shape as the model above.
+	const [title, setTitle] = useState(session.masthead.title);
+	const latestTitleRef = useRef(session.masthead.title);
+	const titlePatchChain = useRef<Promise<void>>(Promise.resolve());
+	const handleTitleChange = (nextTitle: string) => {
+		const previous = latestTitleRef.current;
+		latestTitleRef.current = nextTitle;
+		setTitle(nextTitle);
+		const revert = () => {
+			if (latestTitleRef.current === nextTitle) {
+				latestTitleRef.current = previous;
+				setTitle(previous);
+			}
+		};
+		titlePatchChain.current = titlePatchChain.current.then(() =>
+			fetch(`/api/sessions/${sessionId}`, {
+				method: "PATCH",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ title: nextTitle }),
+			})
+				.then(async (res) => {
+					if (!res.ok) {
+						revert();
+						return;
+					}
+					// The route cleans the title server-side (trim + whitespace
+					// collapse), which can differ from the raw optimistic text (e.g.
+					// "Fix   the  bug" → "Fix the bug") — reconcile so the display
+					// matches what's actually persisted, unless a newer edit has
+					// already superseded this one.
+					const data = (await res.json().catch(() => null)) as {
+						title?: string;
+					} | null;
+					if (
+						data?.title &&
+						data.title !== nextTitle &&
+						latestTitleRef.current === nextTitle
+					) {
+						latestTitleRef.current = data.title;
+						setTitle(data.title);
+					}
 				})
 				.catch(revert),
 		);
@@ -161,12 +229,25 @@ export function LiveSessionView({
 				}
 			: undefined;
 
+	// Before the session has a real title, show the same derivation the
+	// server will persist durably at turn-start — computed here purely for
+	// instant paint, never written from the client.
+	const displayTitle = useMemo(
+		() => title || deriveSessionTitle(firstUserText(visibleMessages)),
+		[title, visibleMessages],
+	);
+
+	useEffect(() => {
+		document.title = displayTitle ? `${displayTitle} — Spaces` : "Spaces";
+	}, [displayTitle]);
+
 	return (
 		<SessionView
 			session={{
 				...session,
 				messages: visibleMessages,
 				activeTurn,
+				masthead: { ...session.masthead, title: displayTitle },
 				statusLine: {
 					...session.statusLine,
 					model,
@@ -177,6 +258,7 @@ export function LiveSessionView({
 			onSend={send}
 			composeDisabled={busy}
 			onModelChange={handleModelChange}
+			onTitleChange={handleTitleChange}
 		/>
 	);
 }

@@ -79,6 +79,9 @@ export interface SessionViewProps {
 	/** Model picker handler (client wrappers wire this; fixtures omit it, which
 	 * leaves the status line's model as static text — see status-line.tsx). */
 	onModelChange?: (id: string) => void;
+	/** Inline title-edit handler (client wrappers wire this; fixtures omit it,
+	 * which leaves the masthead title as static text — see session-masthead.tsx). */
+	onTitleChange?: (title: string) => void;
 }
 
 export function SessionView({
@@ -86,11 +89,12 @@ export function SessionView({
 	onSend,
 	composeDisabled,
 	onModelChange,
+	onTitleChange,
 }: SessionViewProps) {
 	const isEmpty = session.messages.length === 0 && !session.activeTurn;
 	return (
 		<>
-			<SessionMasthead session={session.masthead} />
+			<SessionMasthead session={session.masthead} onTitleChange={onTitleChange} />
 			<main className="mx-auto max-w-[680px] px-5 pt-[76px] pb-6">
 				{isEmpty && session.empty && (
 					<div

@@ -17,10 +17,19 @@
  * This is the seam #750 replaces with a sandbox-side detached runner: the
  * contract is exactly "append the turn's chunks to the log under (sessionId,
  * seq), notify, and terminate the run with a `done`".
+ *
+ * startTurn also carries the auto-title write (#823): same durability
+ * argument applies — it has to land before a tab close can lose it.
  */
 import { EventEmitter } from "node:events";
 import type { DatabaseHandle } from "../db/client";
-import { appendEvents, type Session, updateSession } from "../db/sessions";
+import {
+	appendEvents,
+	type Session,
+	titleSessionIfEmpty,
+	updateSession,
+} from "../db/sessions";
+import { deriveSessionTitle } from "../session-title";
 import {
 	type ComputeProvider,
 	getProvider,
@@ -88,6 +97,23 @@ export async function startTurn(
 	const userSeq = await appendEvents(handle, session.id, [
 		{ role: "user", chunk: { type: "text", content: userText } },
 	]);
+	// Auto-title (#823): runs on every turn, not just conditionally "the
+	// first" — `titleSessionIfEmpty`'s atomic `WHERE title = ''` is what
+	// actually enforces "only once", so a first message that derives no
+	// usable title (blank/whitespace) correctly leaves the session open for
+	// a later turn to name it, and a user-edited title is never touched
+	// (its row no longer matches the empty-title guard). This sits before
+	// the detached ingest starts, on the same durable path as the user
+	// event itself, so a closed tab can't lose the title. Best-effort: the
+	// user event above is already durably committed by this point, so a
+	// title-write failure (a DB hiccup) must not fail the whole turn-start
+	// and strand that committed message — it just leaves the session
+	// untitled for the next turn to retry.
+	try {
+		await titleSessionIfEmpty(handle, session.id, deriveSessionTitle(userText));
+	} catch (error) {
+		console.error(`[turn-ingest] auto-title write failed for ${session.id}`, error);
+	}
 	const fromSeq = userSeq + 1;
 	const ingest = ingestTurn(handle, session, userText, provider);
 	activeTurns.set(session.id, { fromSeq, startedAt: Date.now() });

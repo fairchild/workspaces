@@ -12,6 +12,7 @@ import {
 	getSession,
 	readEvents,
 	readTranscript,
+	titleSessionIfEmpty,
 	updateSession,
 } from "./sessions";
 
@@ -94,6 +95,46 @@ describe("session store", () => {
 		await createSession(handle, { id: "s1", provider: "mock" });
 		await updateSession(handle, "s1", { model: "claude-opus-4-8" });
 		expect((await getSession(handle, "s1"))?.model).toBe("claude-opus-4-8");
+	});
+
+	test("updateSession persists a user-edited title (#823)", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "mock" });
+		await updateSession(handle, "s1", { title: "My title" });
+		expect((await getSession(handle, "s1"))?.title).toBe("My title");
+	});
+
+	test("titleSessionIfEmpty sets the title only while it is empty (#823)", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "mock" });
+
+		expect(await titleSessionIfEmpty(handle, "s1", "Fix the bug")).toBe(true);
+		expect((await getSession(handle, "s1"))?.title).toBe("Fix the bug");
+
+		// A second call — e.g. a later turn, or the #811 concurrent-first-send
+		// race — never overwrites the title once it is set.
+		expect(await titleSessionIfEmpty(handle, "s1", "Something else entirely")).toBe(
+			false,
+		);
+		expect((await getSession(handle, "s1"))?.title).toBe("Fix the bug");
+	});
+
+	test("titleSessionIfEmpty never overwrites a user-edited title", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "mock" });
+		await updateSession(handle, "s1", { title: "My own title" });
+
+		expect(await titleSessionIfEmpty(handle, "s1", "Derived from a message")).toBe(
+			false,
+		);
+		expect((await getSession(handle, "s1"))?.title).toBe("My own title");
+	});
+
+	test("titleSessionIfEmpty is a no-op for a blank derived title", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "mock" });
+		expect(await titleSessionIfEmpty(handle, "s1", "")).toBe(false);
+		expect((await getSession(handle, "s1"))?.title).toBe("");
 	});
 
 	test("updateSession persists and clears the harness resume handle", async () => {

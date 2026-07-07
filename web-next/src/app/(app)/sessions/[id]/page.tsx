@@ -11,6 +11,7 @@
  * double-rendering: the AI SDK continues an existing assistant message, so a
  * full-replay against an SSR'd prefix would duplicate it.
  */
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { MODEL_OPTIONS, modelLabel } from "@/lib/agent-runtime/models";
 import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
@@ -21,6 +22,18 @@ import { getRepo } from "@/lib/db/repos";
 import { getSession, readTranscript } from "@/lib/db/sessions";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 import { LiveSessionView } from "./live-session-view";
+
+// The tab title (#823): the persisted title when there is one, otherwise the
+// app's own default — never "Untitled", matching the masthead/home rule.
+export async function generateMetadata({
+	params,
+}: {
+	params: Promise<{ id: string }>;
+}): Promise<Metadata> {
+	const { id } = await params;
+	const session = await getSession(getDatabase(), id);
+	return { title: session?.title ? `${session.title} — Spaces` : "Spaces" };
+}
 
 export default async function SessionPage({
 	params,
@@ -67,7 +80,10 @@ export default async function SessionPage({
 					repo: repoName,
 					// null (unknown/unverified) omits the segment — never claim "main".
 					branch: repo?.defaultBranch ?? null,
-					title: session.title || "New session",
+					// Raw — possibly "". LiveSessionView derives a client-side preview
+					// from the first user message when it's empty (#823), and the
+					// masthead itself falls back to "New session" display text.
+					title: session.title,
 					agentName: "Claude",
 					stateLabel: "idle",
 				},

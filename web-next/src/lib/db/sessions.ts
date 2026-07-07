@@ -90,8 +90,10 @@ export async function createSession(
 
 /**
  * Persists the harness handle a turn parked with `detach()` (claude session id
- * + JSON resume payload; `resumeState` of `null` clears a stale handle) and/or
- * the session's selected model (#824's picker).
+ * + JSON resume payload; `resumeState` of `null` clears a stale handle),
+ * the session's selected model (#824's picker), and/or a user-edited title
+ * (#823 — unconditional, unlike `titleSessionIfEmpty` below: an explicit edit
+ * always wins).
  */
 export async function updateSession(
 	handle: DatabaseHandle,
@@ -100,6 +102,7 @@ export async function updateSession(
 		claudeSessionId?: string | null;
 		resumeState?: string | null;
 		model?: string;
+		title?: string;
 	},
 ): Promise<void> {
 	await ensureSchema(handle);
@@ -107,8 +110,47 @@ export async function updateSession(
 	if ("claudeSessionId" in fields) set.claude_session_id = fields.claudeSessionId ?? null;
 	if ("resumeState" in fields) set.resume_state = fields.resumeState ?? null;
 	if ("model" in fields && fields.model) set.model = fields.model;
+	if ("title" in fields && fields.title) set.title = fields.title;
 	if (Object.keys(set).length === 0) return;
 	await handle.db.updateTable("sessions").set(set).where("id", "=", id).execute();
+}
+
+/**
+ * Titles a session ONLY if it has no title yet — the auto-titler's write
+ * (#823). The empty-title check and the write share one atomic UPDATE
+ * (`WHERE title = ''`), not a separate read-then-write, so two concurrent
+ * first turns on the same session (the #811 race a `TurnConflictError` can't
+ * always catch) can't both "win": SQLite serializes the two UPDATEs, the
+ * first to commit clears the `title = ''` match, and the second is a no-op.
+ * A blank `title` (the deriver's empty-message fallback) is also a no-op —
+ * the session stays untitled for a later turn to name. Returns whether this
+ * call was the one that set it.
+ *
+ * Known gap (codex review, #823): the guard makes the write race-safe (no
+ * exception, no double-title, no lost update) but not race-*correct* in the
+ * sense of always reflecting the log's true first user event — under the
+ * same #811 double-first-send race, whichever caller's transaction commits
+ * first wins the title, which is not guaranteed to be the caller holding the
+ * lower `seq`. This is the same out-of-scope boundary #811 already draws
+ * ("full serialization would need a DB reservation"); closing it fully means
+ * deriving from a `SELECT ... ORDER BY seq LIMIT 1` read of the log rather
+ * than the caller's local text, which folds into #811's eventual fix rather
+ * than #823's.
+ */
+export async function titleSessionIfEmpty(
+	handle: DatabaseHandle,
+	id: string,
+	title: string,
+): Promise<boolean> {
+	await ensureSchema(handle);
+	if (!title) return false;
+	const result = await handle.db
+		.updateTable("sessions")
+		.set({ title })
+		.where("id", "=", id)
+		.where("title", "=", "")
+		.execute();
+	return Number(result[0]?.numUpdatedRows ?? 0) > 0;
 }
 
 /** A sessions-home row: the session plus its repo's display name. */
