@@ -441,6 +441,7 @@ struct SidebarView: View {
 
         RepoRow(
             repo: repo,
+            activeWorkspaceCount: SidebarWorkspaceController.activeWorkspaceCount(in: repo.workspaces),
             sessionActivity: bubbledActivity,
             paneCount: paneCount(for: repoSessionKey),
             isSelected: selectedRepo?.id == repo.id,
