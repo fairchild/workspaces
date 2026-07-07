@@ -42,6 +42,26 @@ enum GhosttySurfaceTextInputBridge {
         return true
     }
 
+    /// Automation submit path: presses and releases Return through the key-event pipeline.
+    /// `ghostty_surface_text` treats its payload as a paste, so a CR appended to the text arrives
+    /// inside the bracketed-paste envelope and shells insert it literally instead of executing.
+    /// A synthetic key event encodes CR outside any paste envelope, matching a physical Return.
+    static func sendAutomationReturn(into view: GhosttySurfaceView) -> Bool {
+        guard let surface = view.surface else { return false }
+        for action in [GHOSTTY_ACTION_PRESS, GHOSTTY_ACTION_RELEASE] {
+            var keyEvent = ghostty_input_key_s()
+            keyEvent.action = action
+            keyEvent.keycode = 0x24  // kVK_Return
+            keyEvent.text = nil
+            keyEvent.composing = false
+            keyEvent.mods = GHOSTTY_MODS_NONE
+            keyEvent.consumed_mods = GHOSTTY_MODS_NONE
+            keyEvent.unshifted_codepoint = 0x0D
+            _ = ghostty_surface_key(surface, keyEvent)
+        }
+        return true
+    }
+
     static func doCommand(in view: GhosttySurfaceView, selector: Selector) {
         if let lastPerformKeyEvent = view.lastPerformKeyEvent,
             let currentEvent = NSApp.currentEvent,

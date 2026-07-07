@@ -141,13 +141,17 @@ final class AutomationController: AutomationControlling {
                 "The automation handle no longer maps to a live terminal surface."
             )
         }
-        let payload = submit ? text + "\r" : text
-        guard GhosttySurfaceTextInputBridge.writeAutomationText(into: terminal, text: payload) else {
+        guard GhosttySurfaceTextInputBridge.writeAutomationText(into: terminal, text: text) else {
             throw AutomationServiceError(.staleHandle, "The terminal surface is not ready to receive input.")
+        }
+        // Submit goes through the key-event path, not an appended "\r": the text path is a paste,
+        // and bracketed paste turns an embedded CR into a literal newline instead of accept-line.
+        if submit, !GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal) {
+            throw AutomationServiceError(.staleHandle, "The terminal surface dropped before the submit key.")
         }
         return AutomationInputWriteResult(
             accepted: true,
-            byteCount: payload.utf8.count,
+            byteCount: text.utf8.count,
             surfaceID: resolved.entry.hostSessionID.uuidString,
             system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
         )

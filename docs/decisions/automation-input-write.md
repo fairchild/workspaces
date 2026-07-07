@@ -38,8 +38,15 @@ Add `POST /v1/input/write` guarded by a new `input.write` capability.
   contract (and its golden-string test) is unchanged when the experiment is
   off.
 - **Bounded payloads.** `text` must be a non-empty string of at most 32 KiB
-  UTF-8. `submit: true` appends a single carriage return (`\r`, what Enter
-  sends to a PTY). No other transformation is applied.
+  UTF-8. No transformation is applied to the text.
+- **Submit is a synthetic Return key, not an appended `\r`.** The text path
+  (`ghostty_surface_text`) treats its payload as a paste, so with bracketed
+  paste on (default in zsh) an embedded CR is inserted literally instead of
+  executing. `submit: true` therefore delivers the text first, then a
+  press/release of Return through the key-event path
+  (`ghostty_surface_key`), which encodes CR outside any paste envelope —
+  exactly what a physical Enter produces. Found by interactive smoke on the
+  first implementation, which appended `\r` to the paste payload.
 - **Content-free audit.** The listener's audit log records route-level
   metadata and error codes for every allowed and denied request, and never
   the written text — the same contract the audit stream already documents.
@@ -55,9 +62,10 @@ Add `POST /v1/input/write` guarded by a new `input.write` capability.
 - Users who never enable the experiment see no change: capability lists,
   envelopes, and docs describe `input.write` as experimental and off by
   default.
-- The submit semantics (`\r`) are verified against real shells; multi-line
-  payloads into bracketed-paste-aware TUIs may need paste-bracket wrapping in
-  a follow-up if smoke testing shows per-line autocomplete firing.
+- The submit semantics are smoke-verified against zsh with bracketed paste
+  on: text lands as a paste, the synthetic Return executes it. Multi-line
+  text benefits from the same split — the payload stays one paste, and only
+  the final submit is a key event.
 
 ## Rejected Alternatives
 
