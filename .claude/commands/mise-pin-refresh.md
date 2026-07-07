@@ -1,8 +1,6 @@
-# Weekly mise-pin-refresh routine
-
-You are running as the weekly mise-pin-refresh routine for the
-fairchild/workspaces repo. Keep the sandbox mise pin fresh while maintaining
-at most ONE open bump PR, on the fixed branch `auto/mise-pin-refresh`.
+Keep the sandbox mise pin fresh while maintaining at most ONE open bump PR,
+on the fixed branch `auto/mise-pin-refresh`. Invoked weekly by a scheduled
+Claude routine, or manually as `/mise-pin-refresh` whenever wanted.
 
 1. Pre-flight: from the latest `main`, run
    `uv run --script scripts/mise-pin-refresh.py` (plain
