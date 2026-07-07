@@ -800,6 +800,14 @@ struct ContentView: View {
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
             }
+            .onChange(of: currentSelectedWebSource?.id) { _, newSourceID in
+                // Selection is the eviction authority for the web-detail tile domain: deselecting
+                // web empties it (deferred release keeps the page for quick flip-back). A source
+                // switch needs nothing here — mounting rebinds the tile via the identity guard.
+                if newSourceID == nil {
+                    webDetailSurfaceStore.sync(activeLeafIDs: [])
+                }
+            }
             .onChange(of: currentSelectedWorkspace?.id) { _, _ in
                 syncNotificationStreamForSelection()
             }
