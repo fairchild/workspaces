@@ -2,9 +2,12 @@
  * Maps AI SDK dynamic-tool parts onto tool-ledger row content: a verb, a
  * subject, a right-aligned meta summary, and an expandable body. Pure logic
  * so #748 can point real tool outputs at the same rows without UI changes.
+ * A landed edit's diff (when its structured output carries one) is a body
+ * kind like any other — the Edit ledger row is the diff's one home; there
+ * is no separate free-floating diff card in the transcript (#790).
  */
-import type { DynamicToolUIPart } from "ai";
-import type { TurnStatsData } from "./types";
+import { isDynamicToolUIPart, type DynamicToolUIPart } from "ai";
+import type { DiffCardData, FolioMessage, TurnStatsData } from "./types";
 
 export type LedgerMeta =
 	| { kind: "text"; text: string }
@@ -12,7 +15,8 @@ export type LedgerMeta =
 
 export type LedgerBody =
 	| { kind: "code"; content: string }
-	| { kind: "test-output"; content: string; passed: boolean };
+	| { kind: "test-output"; content: string; passed: boolean }
+	| { kind: "diff"; diff: DiffCardData };
 
 export interface LedgerRowModel {
 	verb: string;
@@ -29,10 +33,11 @@ const TOOL_VERBS: Record<string, string> = {
 	Bash: "Ran",
 };
 
-/** Tool outputs may carry a display summary next to their content. */
+/** Tool outputs may carry a display summary and/or the edit's landed diff. */
 interface StructuredToolOutput {
 	content: string;
 	summary?: string;
+	diff?: DiffCardData;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -45,12 +50,22 @@ function asOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
+/** Duck-types a diff payload: an object with a `lines` array is close enough. */
+function asDiff(value: unknown): DiffCardData | undefined {
+	const record = asRecord(value);
+	return Array.isArray(record.lines) ? (value as DiffCardData) : undefined;
+}
+
 function normalizeOutput(output: unknown): StructuredToolOutput | undefined {
 	if (typeof output === "string") return { content: output };
 	const record = asRecord(output);
 	const content = asOptionalString(record.content);
 	if (content === undefined) return undefined;
-	return { content, summary: asOptionalString(record.summary) };
+	return {
+		content,
+		summary: asOptionalString(record.summary),
+		diff: asDiff(record.diff),
+	};
 }
 
 function countLines(text: string): number {
@@ -90,13 +105,16 @@ export function describeToolPart(part: DynamicToolUIPart): LedgerRowModel {
 		part.state === "output-available" ? normalizeOutput(part.output) : undefined;
 	if (output === undefined) return { verb, subject };
 
-	const body: LedgerBody = looksLikeTestOutput(output.content)
-		? {
-				kind: "test-output",
-				content: output.content,
-				passed: !/\d+\s+failed|[✗×]/.test(output.content),
-			}
-		: { kind: "code", content: output.content };
+	const body: LedgerBody =
+		output.diff !== undefined
+			? { kind: "diff", diff: output.diff }
+			: looksLikeTestOutput(output.content)
+				? {
+						kind: "test-output",
+						content: output.content,
+						passed: !/\d+\s+failed|[✗×]/.test(output.content),
+					}
+				: { kind: "code", content: output.content };
 
 	return { verb, subject, meta: deriveMeta(part, input, output), body };
 }
@@ -106,6 +124,14 @@ function deriveMeta(
 	input: Record<string, unknown>,
 	output: StructuredToolOutput,
 ): LedgerMeta | undefined {
+	// The diff's own counts are exact (derived from the real hunk); prefer
+	// them over a summary string or an old/new-string line count estimate.
+	if (output.diff !== undefined)
+		return {
+			kind: "delta",
+			additions: output.diff.additions,
+			deletions: output.diff.deletions,
+		};
 	if (output.summary !== undefined)
 		return { kind: "text", text: output.summary };
 	const oldString = asOptionalString(input.old_string);
@@ -122,6 +148,26 @@ function deriveMeta(
 	if (part.toolName === "Read")
 		return { kind: "text", text: `${countLines(output.content)} lines` };
 	return undefined;
+}
+
+// --- the contextual moment ---------------------------------------------------
+
+/**
+ * The toolCallId of the "just landed" contextual moment: the message's very
+ * last part, if it's a completed tool call whose body is a diff. Its ledger
+ * row starts open — the diff surfacing because the edit landed, per Folio's
+ * "contextual moments are the star" principle. Any later part (more prose,
+ * another tool call) supersedes it, so this reports nothing once something
+ * newer has arrived; the row's caller re-keys on this id and remounts
+ * collapsed when it changes, which is the auto-collapse.
+ */
+export function contextualOpenToolCallId(
+	parts: FolioMessage["parts"],
+): string | undefined {
+	const last = parts.at(-1);
+	if (last === undefined || !isDynamicToolUIPart(last)) return undefined;
+	if (last.state !== "output-available") return undefined;
+	return describeToolPart(last).body?.kind === "diff" ? last.toolCallId : undefined;
 }
 
 // --- test-output highlighting -----------------------------------------------

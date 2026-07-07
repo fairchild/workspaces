@@ -1,11 +1,13 @@
 import type { DynamicToolUIPart } from "ai";
 import { describe, expect, it } from "vitest";
 import {
+	contextualOpenToolCallId,
 	describeToolPart,
 	formatTurnStats,
 	highlightTestOutput,
 	parseTestSummary,
 } from "./ledger";
+import type { FolioMessage } from "./types";
 
 function toolPart(overrides: Partial<DynamicToolUIPart>): DynamicToolUIPart {
 	return {
@@ -97,6 +99,82 @@ describe("describeToolPart", () => {
 			} as Partial<DynamicToolUIPart>),
 		);
 		expect(row).toEqual({ verb: "Ran", subject: "pnpm test" });
+	});
+
+	it("renders a landed edit's diff as the body, with counts from the diff itself", () => {
+		const diff = {
+			file: "src/session/resume.ts",
+			additions: 4,
+			deletions: 1,
+			lines: [{ kind: "add" as const, text: "+ throw new SessionNotFoundError(id);" }],
+		};
+		const row = describeToolPart(
+			toolPart({
+				toolName: "Edit",
+				input: {
+					file_path: "src/session/resume.ts",
+					old_string: "return hydrate(record);",
+					new_string: "if (!record) throw e;\nreturn hydrate(record);",
+				},
+				output: { content: "guard added", diff },
+			}),
+		);
+		expect(row.body).toEqual({ kind: "diff", diff });
+		// The diff's real counts win over the old/new-string line-count estimate.
+		expect(row.meta).toEqual({ kind: "delta", additions: 4, deletions: 1 });
+	});
+});
+
+describe("contextualOpenToolCallId", () => {
+	function editPart(toolCallId: string, hasDiff: boolean): DynamicToolUIPart {
+		return toolPart({
+			toolCallId,
+			toolName: "Edit",
+			state: "output-available",
+			output: hasDiff
+				? {
+						content: "landed",
+						diff: { file: "a.ts", additions: 1, deletions: 0, lines: [] },
+					}
+				: "landed",
+		});
+	}
+
+	function parts(...items: DynamicToolUIPart[]): FolioMessage["parts"] {
+		return items as unknown as FolioMessage["parts"];
+	}
+
+	it("is the last part's toolCallId when it's a completed edit with a diff", () => {
+		expect(contextualOpenToolCallId(parts(editPart("tool-3", true)))).toBe("tool-3");
+	});
+
+	it("is undefined once a newer part has landed after the edit", () => {
+		const withTrailingText = [
+			editPart("tool-3", true),
+			{ type: "text", text: "Done." },
+		] as unknown as FolioMessage["parts"];
+		expect(contextualOpenToolCallId(withTrailingText)).toBeUndefined();
+
+		const withTrailingTool = parts(editPart("tool-3", true), editPart("tool-4", false));
+		expect(contextualOpenToolCallId(withTrailingTool)).toBeUndefined();
+	});
+
+	it("is undefined when the last tool call has no diff", () => {
+		expect(contextualOpenToolCallId(parts(editPart("tool-3", false)))).toBeUndefined();
+	});
+
+	it("is undefined when the last tool call is still running", () => {
+		const running = toolPart({
+			toolCallId: "tool-3",
+			toolName: "Edit",
+			state: "input-available",
+			output: undefined,
+		} as Partial<DynamicToolUIPart>);
+		expect(contextualOpenToolCallId(parts(running))).toBeUndefined();
+	});
+
+	it("is undefined for an empty parts list", () => {
+		expect(contextualOpenToolCallId(parts())).toBeUndefined();
 	});
 });
 

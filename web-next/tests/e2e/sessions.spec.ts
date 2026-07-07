@@ -140,11 +140,14 @@ test("sending a message streams a mock coding turn into the Folio transcript", a
 	await expect(rows.nth(2)).toContainText("+3 −1");
 	await expect(rows.nth(3)).toContainText("Ran");
 	await expect(rows.nth(3)).toContainText("pnpm test session");
-	// …the landed diff card…
-	await expect(page.getByTestId("diff-card")).toContainText(
+	// …the landed edit's diff — its one home is the Edit row itself, never a
+	// separate floating card.
+	await expect(page.getByTestId("diff-card")).toHaveCount(0);
+	await rows.nth(2).locator("button").first().click();
+	await expect(rows.nth(2).getByTestId("diff-lines")).toContainText(
 		"SessionNotFoundError",
-		{ timeout: TURN_TIMEOUT },
 	);
+	await rows.nth(2).locator("button").first().click(); // collapse it back
 	// …and the end-of-turn receipt derived from the stream.
 	await expect(page.getByTestId("turn-stats")).toContainText(
 		"4 tools · 1 file · +3 −1 · 4 tests",
@@ -174,8 +177,15 @@ test("a reload renders the same turn from the persisted event log", async ({
 	await expect(page.locator('[data-message-role="user"]')).toContainText(
 		"Fix the failing session test",
 	);
-	await expect(page.getByTestId("tool-row")).toHaveCount(4);
-	await expect(page.getByTestId("diff-card")).toContainText("src/lib/session.ts");
+	const reloadedRows = page.getByTestId("tool-row");
+	await expect(reloadedRows).toHaveCount(4);
+	await expect(page.getByTestId("diff-card")).toHaveCount(0);
+	// The Edit row's own subject carries the file; expanding it reveals the diff.
+	await expect(reloadedRows.nth(2)).toContainText("src/lib/session.ts");
+	await reloadedRows.nth(2).locator("button").first().click();
+	await expect(reloadedRows.nth(2).getByTestId("diff-lines")).toContainText(
+		"SessionNotFoundError",
+	);
 	await expect(page.getByTestId("turn-stats")).toContainText(
 		"4 tools · 1 file · +3 −1 · 4 tests",
 	);

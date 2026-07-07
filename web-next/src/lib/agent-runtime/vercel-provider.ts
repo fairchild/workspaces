@@ -540,11 +540,16 @@ export const vercelProvider: ComputeProvider = {
 				}
 				yield chunk;
 			}
-			// Synthesize a diff card per changed file from the working tree (the
-			// Edit/Write results carry no patch; the real diff lives in git). Emit
-			// each as a tool_use + tool_result pair — the Folio adapter renders the
-			// DiffCard from a tool_result's metadata.diff, and the AI SDK only keeps
-			// a tool result that has a matching opened call.
+			// Synthesize one Diff ledger row per changed file from the working tree
+			// (the Edit/Write results carry no patch; the real diff lives in git).
+			// Emitted as a tool_use + tool_result pair — the Folio adapter merges
+			// metadata.diff into that same call's own output (#790: a diff's home
+			// is its own expandable ledger row, never a separate floating card),
+			// and the AI SDK only keeps a tool result that has a matching opened
+			// call. This is a per-file summary, not per Edit invocation — git diff
+			// can't attribute hunks back to individual tool calls when a file is
+			// edited more than once in a turn, so multiple edits to one file land
+			// as a single Diff row rather than each Edit call carrying its own.
 			for (const diff of await changedFileDiffs(sandbox)) {
 				const toolUseId = `diff:${diff.file}`;
 				yield {
@@ -597,8 +602,8 @@ interface RunnableSandbox {
 	}) => PromiseLike<{ exitCode: number; stdout: string; stderr: string }>;
 }
 
-/** A rendered diff card: file, line counts, and the hunk lines. */
-interface DiffCard {
+/** One changed file's diff: file, line counts, and the hunk lines. */
+interface FileDiff {
 	file: string;
 	additions: number;
 	deletions: number;
@@ -606,15 +611,15 @@ interface DiffCard {
 	lines: { kind: "add" | "del" | "context"; text: string }[];
 }
 
-/** Beyond this many hunk lines a single file's card is truncated. */
+/** Beyond this many hunk lines a single file's diff is truncated. */
 const DIFF_LINE_CAP = 200;
 
 /**
  * Runs `git diff` over the workspace (untracked files marked intent-to-add so
- * new files show) and parses it into one diff card per changed file. Best-effort
- * — any failure yields no cards, never breaking the turn.
+ * new files show) and parses it into one diff per changed file. Best-effort —
+ * any failure yields no diffs, never breaking the turn.
  */
-async function changedFileDiffs(sandbox: RunnableSandbox | undefined): Promise<DiffCard[]> {
+async function changedFileDiffs(sandbox: RunnableSandbox | undefined): Promise<FileDiff[]> {
 	if (!sandbox) return [];
 	try {
 		const res = await sandbox.run({
@@ -626,14 +631,14 @@ async function changedFileDiffs(sandbox: RunnableSandbox | undefined): Promise<D
 	}
 }
 
-/** Splits a multi-file unified diff into per-file cards. */
-export function parseGitDiff(raw: string): DiffCard[] {
-	const cards: DiffCard[] = [];
-	let current: DiffCard | undefined;
+/** Splits a multi-file unified diff into per-file diffs. */
+export function parseGitDiff(raw: string): FileDiff[] {
+	const diffs: FileDiff[] = [];
+	let current: FileDiff | undefined;
 	let inHunk = false;
 	for (const line of raw.split("\n")) {
 		if (line.startsWith("diff --git")) {
-			if (current && current.lines.length > 0) cards.push(current);
+			if (current && current.lines.length > 0) diffs.push(current);
 			const file = line.match(/ b\/(.+)$/)?.[1] ?? "(file)";
 			current = { file, additions: 0, deletions: 0, note: "edit landed", lines: [] };
 			inHunk = false;
@@ -657,8 +662,8 @@ export function parseGitDiff(raw: string): DiffCard[] {
 			current.lines.push({ kind: "context", text: line });
 		}
 	}
-	if (current && current.lines.length > 0) cards.push(current);
-	return cards;
+	if (current && current.lines.length > 0) diffs.push(current);
+	return diffs;
 }
 
 /**

@@ -1,11 +1,13 @@
 /*
  * Fixture data for /sessions/demo: the refine-folio prototype's session —
- * one completed coding turn (a thinking block, workings, landed diff, receipt),
- * a follow-up, and an in-progress turn — expressed as AI SDK UIMessages. Also:
+ * one completed coding turn (a thinking block, workings, a landed edit whose
+ * diff lives in its own Edit ledger row, receipt), a follow-up, and an
+ * in-progress turn — expressed as AI SDK UIMessages. Also:
  *   - seededDemoSession: arbitrary-length transcripts for transcript_render_200.
  *   - adversarialSession (?scenario=adversarial): one worst-case turn — a long
  *     reasoning trace, 16 tool calls (one failed), a 100+ line diff, long prose —
- *     the stress test the turn frame, workings, diff card, and receipt must hold.
+ *     the stress test the turn frame, workings, diff-carrying ledger row, and
+ *     receipt must hold.
  *   - longTranscriptSession (?scenario=long): 15+ stacked turns to check the
  *     card-in-card framing (recent turn lifted, older ones quiet) at scale.
  */
@@ -21,7 +23,7 @@ function completedTool(
 	toolCallId: string,
 	toolName: string,
 	input: Record<string, unknown>,
-	output: string | { content: string; summary?: string },
+	output: string | { content: string; summary?: string; diff?: DiffCardData },
 ): DynamicToolUIPart {
 	return {
 		type: "dynamic-tool",
@@ -120,7 +122,27 @@ export function demoSession(): SessionViewData {
 						new_string:
 							"  if (!record) {\n    throw new SessionNotFoundError(id);\n  }\n  return hydrate(record);",
 					},
-					"guard added before hydrate() — see the change below",
+					{
+						content: "guard added before hydrate() — see the change below",
+						diff: {
+							file: "src/session/resume.ts",
+							additions: 4,
+							deletions: 1,
+							lines: [
+								{
+									kind: "context",
+									text: "  export async function resumeSession(id: SessionId): Promise<Session> {",
+								},
+								{ kind: "context", text: "    const record = await store.get(id);" },
+								{ kind: "del", text: "-   return hydrate(record);" },
+								{ kind: "add", text: "+   if (!record) {" },
+								{ kind: "add", text: "+     throw new SessionNotFoundError(id);" },
+								{ kind: "add", text: "+   }" },
+								{ kind: "add", text: "+   return hydrate(record);" },
+								{ kind: "context", text: "  }" },
+							],
+						},
+					},
 				),
 				completedTool(
 					"tool-4",
@@ -128,28 +150,6 @@ export function demoSession(): SessionViewData {
 					{ command: "pnpm test" },
 					TEST_RUN_OUTPUT,
 				),
-				{
-					type: "data-diff",
-					data: {
-						file: "src/session/resume.ts",
-						additions: 4,
-						deletions: 1,
-						note: "edit landed · just now",
-						lines: [
-							{
-								kind: "context",
-								text: "  export async function resumeSession(id: SessionId): Promise<Session> {",
-							},
-							{ kind: "context", text: "    const record = await store.get(id);" },
-							{ kind: "del", text: "-   return hydrate(record);" },
-							{ kind: "add", text: "+   if (!record) {" },
-							{ kind: "add", text: "+     throw new SessionNotFoundError(id);" },
-							{ kind: "add", text: "+   }" },
-							{ kind: "add", text: "+   return hydrate(record);" },
-							{ kind: "context", text: "  }" },
-						],
-					},
-				},
 				{
 					type: "text",
 					text: "The guard now rejects at the boundary, before hydration is ever attempted. Full suite is green — 28 tests across three files, including the two that were red.",
@@ -358,8 +358,10 @@ function bigRefactorDiff(): DiffCardData {
 }
 
 /** 16 tool calls — a grep, a spread of reads, four edits, a failed typecheck,
- * its green re-run, and the suite. One `output-error` row exercises failure. */
-function adversarialWorkings(): DynamicToolUIPart[] {
+ * its green re-run, and the suite. One `output-error` row exercises failure.
+ * The turn's aggregate diff (a git-diff-style summary spanning all 13 files)
+ * lands on the last Edit call — its ledger row is the diff's one home. */
+function adversarialWorkings(diff: DiffCardData): DynamicToolUIPart[] {
 	const tools: DynamicToolUIPart[] = [
 		completedTool(
 			"adv-1",
@@ -407,6 +409,7 @@ function adversarialWorkings(): DynamicToolUIPart[] {
 			"switch replaced by a registry lookup",
 		),
 	);
+	const lastEditIndex = 2;
 	ADVERSARIAL_MODULES.slice(0, 3).forEach((name, i) => {
 		tools.push(
 			completedTool(
@@ -417,7 +420,7 @@ function adversarialWorkings(): DynamicToolUIPart[] {
 					old_string: `registerLegacy("${name}", ${name}Provider);`,
 					new_string: `registerProvider(${name}Provider);`,
 				},
-				"self-registration",
+				i === lastEditIndex ? { content: "self-registration", diff } : "self-registration",
 			),
 		);
 	});
@@ -463,7 +466,8 @@ const ADVERSARIAL_CONCLUSION =
 /**
  * One worst-case turn: a long thinking block, 16 tool calls (one failed), a
  * 100+ line diff, and long prose on both sides — the stress test the turn
- * frame, workings apparatus, diff card, reasoning block, and receipt must hold.
+ * frame, workings apparatus, a diff-carrying ledger row, reasoning block, and
+ * receipt must hold.
  */
 export function adversarialSession(): SessionViewData {
 	const diff = bigRefactorDiff();
@@ -493,8 +497,7 @@ export function adversarialSession(): SessionViewData {
 			parts: [
 				{ type: "reasoning", state: "done", text: ADVERSARIAL_REASONING },
 				{ type: "text", text: ADVERSARIAL_INTRO },
-				...adversarialWorkings(),
-				{ type: "data-diff", data: diff },
+				...adversarialWorkings(diff),
 				{ type: "text", text: ADVERSARIAL_CONCLUSION },
 			],
 		},

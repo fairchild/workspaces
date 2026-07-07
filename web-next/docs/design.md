@@ -77,8 +77,13 @@ Each is a specific call and the reason for it.
 - **The tool ledger is one line per step, expandable.** Read / Edit / Run as
   quiet rows that open on demand. No decorative left rule — the turn frame now
   carries the grouping, so the rule was chrome without meaning.
-- **Diffs and test output are contextual panels**, surfaced when the work
-  produces them, not persistent regions.
+- **A landed edit has one home: its Edit ledger row.** Expanding the row reveals
+  its diff inline, reusing the same add/del hunk everywhere — there is no
+  separate floating diff card in the transcript. The just-landed edit's row
+  auto-expands (the contextual moment the edit itself triggers) and collapses
+  again once a newer step arrives, so the reveal earns its beat without
+  becoming a second persistent thing to manage. Test output works the same
+  way, inside its Bash row.
 
 ## Identity
 

@@ -147,18 +147,42 @@ describe("toUIMessageChunks", () => {
 		expect(out.at(-1)).toEqual({ type: "finish" });
 	});
 
-	test("a tool_result carrying a diff also emits a data-diff part", async () => {
+	test("a tool_result carrying a diff merges it into that call's own output, not a separate part", async () => {
 		const diff = { file: "a.ts", additions: 3, deletions: 1, lines: [] };
 		const out = await collect([
 			{ type: "tool_use", content: "Edit", metadata: { toolUseId: "t-1" } },
 			{ type: "tool_result", content: "ok", metadata: { toolUseId: "t-1", diff } },
 			{ type: "done", content: "" },
 		]);
-		const outputIndex = out.findIndex((c) => c.type === "tool-output-available");
-		expect(out[outputIndex + 1]).toEqual({
-			type: "data-diff",
-			id: "id-0",
-			data: diff,
+		expect(out).toContainEqual({
+			type: "tool-output-available",
+			toolCallId: "t-1",
+			output: { content: "ok", diff },
+			dynamic: true,
+		});
+		expect(out.some((c) => c.type === "data-diff")).toBe(false);
+	});
+
+	test("a diff on a structured output object is folded in alongside its other fields", async () => {
+		const diff = { file: "a.ts", additions: 1, deletions: 0, lines: [] };
+		const out = await collect([
+			{ type: "tool_use", content: "Edit", metadata: { toolUseId: "t-1" } },
+			{
+				type: "tool_result",
+				content: "ok",
+				metadata: {
+					toolUseId: "t-1",
+					output: { content: "ok", summary: "landed" },
+					diff,
+				},
+			},
+			{ type: "done", content: "" },
+		]);
+		expect(out).toContainEqual({
+			type: "tool-output-available",
+			toolCallId: "t-1",
+			output: { content: "ok", summary: "landed", diff },
+			dynamic: true,
 		});
 	});
 

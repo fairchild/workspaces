@@ -112,12 +112,15 @@ async function captureSessionTurn(page, shot) {
 	);
 	await page.screenshot({ path: shot("session-turn-midstream") });
 
-	// Final: receipt rendered; disclose the passing re-run's output panel
+	// Final: receipt rendered; disclose the passing re-run's output panel and
+	// the landed edit's diff — its one home is the Edit row itself (#790)
 	// (the mock turn is: failed run, Read, Edit, passing run).
 	await page.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.getByTestId("tool-row").nth(2).locator("button").first().click();
+	await page.getByTestId("diff-lines").waitFor();
 	await page.getByTestId("tool-row").nth(3).locator("button").first().click();
 	await page.getByTestId("test-output").waitFor();
-	// Scroll to the end of the turn so diff card + receipt are in frame.
+	// Scroll to the end of the turn so the diff + receipt are in frame.
 	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
 	await page.waitForTimeout(ANIMATION_SETTLE_MS);
 	await page.screenshot({ path: shot("session-turn-final") });
