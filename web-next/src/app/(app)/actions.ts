@@ -7,7 +7,11 @@
 import { redirect } from "next/navigation";
 import { requireAuthorizedUser } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
-import { RepoUnavailableError, startSession } from "@/lib/db/start-session";
+import {
+	isValidRepoFullName,
+	RepoUnavailableError,
+	startSession,
+} from "@/lib/db/start-session";
 
 export interface CreateSessionState {
 	error?: string;
@@ -24,7 +28,12 @@ export async function createSessionAction(
 	formData: FormData,
 ): Promise<CreateSessionState> {
 	await requireAuthorizedUser();
-	const repo = String(formData.get("repo") ?? "");
+	const repo = String(formData.get("repo") ?? "").trim();
+	// The input's pattern blocks this in the UI; a direct POST gets the same
+	// calm state instead of an unhandled server-action throw.
+	if (!isValidRepoFullName(repo)) {
+		return { error: `${repo || "(empty)"} isn't an owner/name repository.` };
+	}
 	let session: Awaited<ReturnType<typeof startSession>>;
 	try {
 		session = await startSession(getDatabase(), repo);

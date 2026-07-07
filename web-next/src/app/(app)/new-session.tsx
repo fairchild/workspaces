@@ -26,10 +26,10 @@ export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 	const [repos, setRepos] = useState<PickerRepo[] | null>(null);
 	const [degraded, setDegraded] = useState(false);
 	const inputRef = useRef<HTMLInputElement>(null);
-	const [state, formAction] = useActionState<CreateSessionState | null, FormData>(
-		createSessionAction,
-		null,
-	);
+	const [state, formAction, isPending] = useActionState<
+		CreateSessionState | null,
+		FormData
+	>(createSessionAction, null);
 
 	// Focus the owner/name field when the picker is revealed by hand (not on
 	// the empty home, where stealing focus would be presumptuous).
@@ -89,7 +89,8 @@ export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 								<input type="hidden" name="repo" value={repo.fullName} />
 								<button
 									type="submit"
-									className="w-full rounded-md px-2.5 py-2 text-left font-mono text-[13px] text-item-ink transition-colors hover:bg-hover-bg hover:text-accent"
+									disabled={isPending}
+									className="w-full rounded-md px-2.5 py-2 text-left font-mono text-[13px] text-item-ink transition-colors hover:bg-hover-bg hover:text-accent disabled:pointer-events-none disabled:opacity-60"
 								>
 									{repo.fullName}
 								</button>
@@ -98,7 +99,16 @@ export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 					))}
 				</ul>
 			)}
-			<form action={formAction} className="flex items-center gap-2.5 px-2.5 py-2">
+			<form
+				action={formAction}
+				// One shared action across every row form and this one: swallow
+				// re-submits while a create is in flight (double-Enter would queue
+				// a second session) without disabling the input and losing focus.
+				onSubmit={(event) => {
+					if (isPending) event.preventDefault();
+				}}
+				className="flex items-center gap-2.5 px-2.5 py-2"
+			>
 				<span aria-hidden className="font-mono text-[13px] text-accent">
 					›
 				</span>
@@ -118,7 +128,7 @@ export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 					className="min-w-0 flex-1 border-b border-line bg-transparent pb-1 font-mono text-[13px] text-ink transition-colors outline-none placeholder:text-faint focus:border-focus-line"
 				/>
 			</form>
-			{state?.error && (
+			{state?.error && !isPending && (
 				<p
 					data-testid="new-session-error"
 					className="px-2.5 pt-1 font-mono text-caption text-faint italic"
