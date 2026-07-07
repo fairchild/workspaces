@@ -22,7 +22,8 @@ export interface MastheadData {
 	/** The session's current best title, possibly `""` (no title yet). */
 	title: string;
 	agentName: string;
-	/** e.g. "sandbox active"; `live` adds the green halo dot. */
+	/** e.g. "sandbox live"; `""` (state not yet known) omits the segment —
+	 * absence over a guess, per #753's truthful-state rule. */
 	stateLabel: string;
 	live?: boolean;
 }
@@ -38,10 +39,15 @@ function Separator() {
 export function SessionMasthead({
 	session,
 	onTitleChange,
+	onSandboxStop,
 }: {
 	session: MastheadData;
 	/** Wired by the live session view; omitted on fixtures/demo pages. */
 	onTitleChange?: (title: string) => void;
+	/** Stops the session's live sandbox (#753). Supplied only when there is
+	 * actually something running to stop; a quiet hover-revealed action beside
+	 * the state label, never persistent chrome. */
+	onSandboxStop?: () => void;
 }) {
 	const inputRef = useRef<HTMLInputElement>(null);
 
@@ -94,12 +100,35 @@ export function SessionMasthead({
 				</span>
 			)}
 			<span className="flex shrink-0 items-center whitespace-nowrap">
-				{session.agentName}
-				<Separator />
-				{session.live && (
-					<span className="mr-2 inline-block h-[7px] w-[7px] rounded-full bg-live align-[1px] shadow-[0_0_0_3px_var(--live-halo)]" />
+				{/* The agent name yields first at phone widths — the sandbox state is
+				    the load-bearing fact on the right (#753). */}
+				<span className="hidden items-center sm:flex">
+					{session.agentName}
+					{session.stateLabel && <Separator />}
+				</span>
+				{session.stateLabel && (
+					<span
+						data-testid="sandbox-state"
+						className="group/sandbox flex items-center"
+					>
+						{session.live && (
+							<span className="mr-2 inline-block h-[7px] w-[7px] rounded-full bg-live align-[1px] shadow-[0_0_0_3px_var(--live-halo)]" />
+						)}
+						{session.stateLabel}
+						{onSandboxStop && (
+							<button
+								type="button"
+								data-testid="sandbox-stop"
+								title="Stop the sandbox"
+								aria-label="Stop sandbox"
+								onClick={onSandboxStop}
+								className="ml-2 rounded-[5px] border-b border-transparent px-1 py-0.5 leading-none text-faint opacity-0 transition-opacity duration-200 group-hover/sandbox:opacity-100 hover:text-del-ink focus-visible:opacity-100"
+							>
+								stop
+							</button>
+						)}
+					</span>
 				)}
-				{session.stateLabel}
 				<ThemeToggle />
 			</span>
 		</header>

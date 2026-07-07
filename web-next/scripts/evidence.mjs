@@ -3,10 +3,11 @@
  * an empty session reached through the real new-session flow, a real mock
  * turn streamed into that session (mid-stream, final, and reloaded from the
  * event log), the terminal drawer (#752), a failing turn's inline failure
- * card + retry-to-success (#808), the durable disconnect→resume story (tab
- * closed mid-turn, a fresh tab catching up, then completed), the Folio
- * session demo, and the refine-folio prototype beside it for pixel
- * comparison. Runs against a production build in auth-bypass
+ * card + retry-to-success (#808), the three first-class error surfaces +
+ * the stop control + the 375px mobile walk (#753), the durable
+ * disconnect→resume story (tab closed mid-turn, a fresh tab catching up,
+ * then completed), the Folio session demo, and the refine-folio prototype
+ * beside it for pixel comparison. Runs against a production build in auth-bypass
  * mode over a throwaway database. Output goes to output/evidence/
  * (gitignored); CI uploads it as an artifact — the sanctioned publish path
  * per docs/development/remote-sessions.md.
@@ -190,6 +191,90 @@ async function captureFailedTurn(page, shot) {
 	await page.screenshot({ path: shot("session-turn-failed-retried") });
 }
 
+/** A fresh session via the picker (the connected repo, one click). */
+async function newSession(page) {
+	await page.goto("/", { waitUntil: "networkidle" });
+	await page.getByRole("button", { name: "+ new session" }).click();
+	await page
+		.getByTestId("new-session-picker")
+		.getByRole("button", { name: "fairchild/workspaces" })
+		.click();
+	await page.waitForURL(/\/sessions\//, { timeout: TURN_TIMEOUT_MS });
+}
+
+/**
+ * The three first-class error surfaces (#753), one capture per class via the
+ * mock provider's deterministic triggers: provisioning failure (the card is
+ * the whole reply), sandbox died mid-turn (streamed work survives above the
+ * card), stream error (the provider's own structured error text).
+ */
+async function captureErrorSurfaces(page, shot) {
+	const cases = [
+		["session-error-provisioning", "Build the importer __mock_provision_error__"],
+		["session-error-sandbox-died", "Fix the flaky test __mock_sandbox_died__"],
+		["session-error-stream", "Refactor the adapter __mock_stream_error__"],
+	];
+	for (const [name, text] of cases) {
+		await newSession(page);
+		await page.getByRole("textbox", { name: "Reply to Claude" }).fill(text);
+		await page.keyboard.press("Enter");
+		await page.getByTestId("turn-failure").waitFor({ timeout: TURN_TIMEOUT_MS });
+		await page.getByTestId("turn-failure").scrollIntoViewIfNeeded();
+		await page.waitForTimeout(ANIMATION_SETTLE_MS);
+		await page.screenshot({ path: shot(name) });
+	}
+}
+
+/**
+ * The stop control (#753): mid-stream the send affordance is the stop; the
+ * first capture holds that moment, the second the stopped turn's honest
+ * record ("Turn stopped.") with compose handed back.
+ */
+async function captureStoppedTurn(page, shot) {
+	await newSession(page);
+	await page
+		.getByRole("textbox", { name: "Reply to Claude" })
+		.fill("Fix the failing session test");
+	await page.keyboard.press("Enter");
+	const stop = page.getByRole("button", { name: "Stop" });
+	await stop.waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.getByTestId("activity-line").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.waitForTimeout(350);
+	await page.screenshot({ path: shot("session-turn-stopping") });
+	await stop.click();
+	await page
+		.getByTestId("turn-failure")
+		.waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("session-turn-stopped") });
+}
+
+/**
+ * The 375px surface (#753): a full streamed turn on a phone-width viewport —
+ * transcript mid-scroll with the receipt, then the expanded diff (the widest
+ * content) — proving the page never scrolls sideways. Uses its own page so
+ * the shared 1280px page is untouched.
+ */
+async function captureMobile(context, shot) {
+	const page = await context.newPage();
+	await page.setViewportSize({ width: 375, height: 812 });
+	await newSession(page);
+	await page
+		.getByRole("textbox", { name: "Reply to Claude" })
+		.fill("Fix the failing session test");
+	await page.keyboard.press("Enter");
+	await page.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("session-mobile-turn") });
+	const rows = page.getByTestId("tool-row");
+	await rows.nth(2).locator("button").first().click();
+	await page.getByTestId("diff-lines").waitFor();
+	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("session-mobile-diff") });
+	await page.close();
+}
+
 /**
  * The durable-turn story: start a turn, close the tab mid-stream, reopen the
  * session in a fresh tab and watch it catch up and complete. Manages its own
@@ -320,6 +405,9 @@ async function main() {
 			await captureSessionTurn(page, shot);
 			await captureTerminalDrawer(page, shot("session-terminal-drawer"));
 			await captureFailedTurn(page, shot);
+			await captureErrorSurfaces(page, shot);
+			await captureStoppedTurn(page, shot);
+			await captureMobile(context, shot);
 			await captureDisconnectResume(context, shot);
 			await seedPopulatedHome(db);
 			await captureSettled(page, "/", shot("home-populated"));
@@ -328,7 +416,7 @@ async function main() {
 			await capturePrototype(page, colorScheme, shot("prototype-folio"));
 			await context.close();
 			console.log(
-				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + terminal drawer + failed turn (failure, retried) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
+				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + terminal drawer + failed turn (failure, retried) + error surfaces (provisioning, sandbox-died, stream) + stop control (stopping, stopped) + mobile 375px (turn, diff) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
 			);
 		}
 	} finally {

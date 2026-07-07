@@ -59,6 +59,7 @@ import {
 	recordLiveTurnError,
 } from "@/lib/transcript/live-turn-error";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
+import { sandboxStateLabel, useSandboxState } from "./use-sandbox-state";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
 const TOKEN_THROTTLE_MS = 50;
@@ -220,6 +221,20 @@ export function LiveSessionView({
 	});
 
 	const busy = status === "submitted" || status === "streaming";
+
+	// The sandbox lifecycle surface (#753): a verified state in the masthead,
+	// and two honest controls — stop the in-flight turn (the compose's send
+	// affordance while busy), stop the live VM (a quiet masthead action).
+	const { sandbox, stopSandbox } = useSandboxState(sessionId, busy);
+	const stopTurn = () => {
+		// Fire-and-forget: the server closes the turn's log, the live stream
+		// surfaces the stop as this turn's failure card ("Turn stopped."), and
+		// the hook's own status transition re-enables compose — the UI follows
+		// the stream, not this request. A 409 (the turn just finished on its
+		// own) needs no handling: there is nothing left to stop.
+		void fetch(`/api/sessions/${sessionId}/stop`, { method: "POST" });
+	};
+
 	const send = (text: string) => {
 		setSteps([]);
 		// Await any in-flight model PATCH first, so the turn the server starts
@@ -288,7 +303,12 @@ export function LiveSessionView({
 					...session,
 					messages: visibleMessages,
 					activeTurn,
-					masthead: { ...session.masthead, title: displayTitle },
+					masthead: {
+						...session.masthead,
+						title: displayTitle,
+						stateLabel: sandboxStateLabel(sandbox),
+						live: sandbox?.state === "live",
+					},
 					statusLine: {
 						...session.statusLine,
 						model,
@@ -301,6 +321,10 @@ export function LiveSessionView({
 				composeDisabled={busy}
 				onModelChange={handleModelChange}
 				onTitleChange={handleTitleChange}
+				onStopTurn={busy ? stopTurn : undefined}
+				onSandboxStop={
+					sandbox?.state === "live" && !busy ? () => void stopSandbox() : undefined
+				}
 			/>
 		</>
 	);

@@ -116,13 +116,15 @@ test("sending a message streams a mock coding turn into the Folio transcript", a
 	await compose.fill("Fix the failing session test");
 	await page.keyboard.press("Enter");
 
-	// The user message lands at once; compose clears and holds while busy.
+	// The user message lands at once; compose clears and holds while busy —
+	// the send affordance becomes the stop control for the in-flight turn (#753).
 	await expect(page.locator('[data-message-role="user"]')).toContainText(
 		"Fix the failing session test",
 	);
 	await expect(page.getByTestId("empty-transcript")).toHaveCount(0);
 	await expect(compose).toHaveValue("");
-	await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
+	await expect(page.getByRole("button", { name: "Send" })).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
 	// The activity line breathes while the provider provisions.
 	await expect(page.getByTestId("activity-line")).toBeVisible();

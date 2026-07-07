@@ -12,8 +12,11 @@
  * running the script — a deterministic, hermetic way to exercise a whole-turn
  * failure (turn-ingest.ts's catch appends the `error` + aborted `done` a real
  * provider fault or dead sandbox would) without depending on timing or a real
- * provider outage. Test-only by convention: nothing in the product surface
- * sends this text on purpose.
+ * provider outage. #753 adds one trigger per first-class error surface —
+ * provisioning failure, sandbox died mid-turn, stream error — each failing at
+ * the point and through the mechanism its real counterpart would (see the
+ * trigger constants below). Test-only by convention: nothing in the product
+ * surface sends this text on purpose.
  *
  * `mockCodingTurn` itself always fails when the trigger is present — that's
  * what makes it hermetically unit-testable. `mockProvider.runTurn` (the seam
@@ -35,6 +38,41 @@ const EDITED_FILE = "src/lib/session.ts";
 
 /** A user message containing this text makes the mock turn fail (#808). */
 export const MOCK_TURN_ERROR_TRIGGER = "__mock_turn_error__";
+
+/**
+ * The #753 error-class seams, one per first-class failure surface. Same
+ * contract as MOCK_TURN_ERROR_TRIGGER (deterministic, hermetic, spent once
+ * per session so a Retry succeeds), but each fails at the point — and through
+ * the mechanism — its real counterpart would:
+ *
+ * - provisioning: throws before any content streams, while the turn is still
+ *   "Starting sandbox" — a sandbox that never came up (turn-ingest's catch
+ *   closes it, exactly like a real create failure).
+ * - sandbox died: throws mid-turn, after prose and a tool call already
+ *   landed — a VM lost under a running agent; the streamed work survives in
+ *   the log, the failure is recorded after it.
+ * - stream error: emits an `error` CHUNK mid-stream and ends without `done`
+ *   — the provider's own structured error path (#811), exercising the
+ *   adapter's error case rather than the ingest catch.
+ */
+export const MOCK_PROVISION_ERROR_TRIGGER = "__mock_provision_error__";
+export const MOCK_SANDBOX_DIED_TRIGGER = "__mock_sandbox_died__";
+export const MOCK_STREAM_ERROR_TRIGGER = "__mock_stream_error__";
+
+export const MOCK_PROVISION_ERROR_TEXT =
+	"Sandbox provisioning failed — the sandbox never started (mock).";
+export const MOCK_SANDBOX_DIED_TEXT =
+	"The sandbox died mid-turn — connection to the running agent was lost (mock).";
+export const MOCK_STREAM_ERROR_TEXT =
+	"The stream broke before the turn finished (mock).";
+
+/** Every failure seam the mock honors; runTurn spends each once per session. */
+const ERROR_TRIGGERS = [
+	MOCK_TURN_ERROR_TRIGGER,
+	MOCK_PROVISION_ERROR_TRIGGER,
+	MOCK_SANDBOX_DIED_TRIGGER,
+	MOCK_STREAM_ERROR_TRIGGER,
+] as const;
 
 const REASONING_TRACE = [
 	"The repro says `resumeSession` comes back with undefined for an unknown id, and the test expects a thrown `SessionNotFoundError`.",
@@ -106,6 +144,11 @@ export async function* mockCodingTurn(
 	if (userMessage.includes(MOCK_TURN_ERROR_TRIGGER)) {
 		throw new Error("Simulated turn failure (mock provider)");
 	}
+	// Provisioning failure (#753): the sandbox never comes up — the turn dies
+	// before a single content chunk, so the failure card is the whole reply.
+	if (userMessage.includes(MOCK_PROVISION_ERROR_TRIGGER)) {
+		throw new Error(MOCK_PROVISION_ERROR_TEXT);
+	}
 
 	yield { type: "status", content: "Cloning repo" };
 	await sleep(300);
@@ -115,6 +158,14 @@ export async function* mockCodingTurn(
 	yield* prose(
 		`You asked: "${userMessage}". Let me reproduce the failure first.`,
 	);
+
+	// Stream error (#753): the provider's own structured `error` chunk lands
+	// mid-stream and the turn ends without a `done` — ingest synthesizes the
+	// terminal, and deriveTurnError picks the chunk's text up on both paths.
+	if (userMessage.includes(MOCK_STREAM_ERROR_TRIGGER)) {
+		yield { type: "error", content: MOCK_STREAM_ERROR_TEXT };
+		return;
+	}
 
 	yield { type: "status", content: "Running `pnpm test session`" };
 	yield {
@@ -132,6 +183,12 @@ export async function* mockCodingTurn(
 		content: FAILING_TEST_OUTPUT,
 		metadata: { toolUseId: "tool-1", isError: true },
 	};
+
+	// Sandbox died (#753): the VM vanishes under a running agent — prose and a
+	// tool call already landed, so the log keeps that work ahead of the failure.
+	if (userMessage.includes(MOCK_SANDBOX_DIED_TRIGGER)) {
+		throw new Error(MOCK_SANDBOX_DIED_TEXT);
+	}
 
 	yield* prose(
 		"Confirmed — it throws a `TypeError` inside `hydrate` instead of rejecting. Reading the source.",
@@ -219,24 +276,27 @@ export async function* mockCodingTurn(
 	};
 }
 
-/** Sessions whose one guaranteed `MOCK_TURN_ERROR_TRIGGER` failure has already
- * fired — dev/e2e-only in-memory state, same lifetime as turn-ingest.ts's
- * `activeTurns`; never pruned. */
-const spentErrorTrigger = new Set<string>();
+/** `sessionId:trigger` pairs whose one guaranteed failure has already fired —
+ * dev/e2e-only in-memory state, same lifetime as turn-ingest.ts's
+ * `activeTurns`; never pruned. Keyed per trigger so each error class gets its
+ * own spend on a session. */
+const spentErrorTriggers = new Set<string>();
 
 export const mockProvider: ComputeProvider = {
 	id: "mock",
 	runTurn: (request: TurnRequest) => {
 		let userMessage = request.userMessage;
-		if (userMessage.includes(MOCK_TURN_ERROR_TRIGGER)) {
-			if (spentErrorTrigger.has(request.sessionId)) {
+		for (const trigger of ERROR_TRIGGERS) {
+			if (!userMessage.includes(trigger)) continue;
+			const spendKey = `${request.sessionId}:${trigger}`;
+			if (spentErrorTriggers.has(spendKey)) {
 				// Already spent on this session — strip the trigger so the script
 				// runs normally instead of failing forever (the persisted user
 				// event, appended before the provider ever runs, keeps the original
 				// text regardless of what's passed here).
-				userMessage = userMessage.split(MOCK_TURN_ERROR_TRIGGER).join("").trim();
+				userMessage = userMessage.split(trigger).join("").trim();
 			} else {
-				spentErrorTrigger.add(request.sessionId);
+				spentErrorTriggers.add(spendKey);
 			}
 		}
 		return mockCodingTurn(userMessage, undefined, request.model);

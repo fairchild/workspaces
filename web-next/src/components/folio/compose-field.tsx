@@ -14,9 +14,13 @@ export interface ComposeFieldProps {
 	onSend?: (text: string) => void;
 	/** While true, submits are held and the draft kept (turn in flight). */
 	disabled?: boolean;
+	/** Stops the in-flight turn (#753). While `disabled` (a turn is running)
+	 * the send affordance becomes this stop — same footprint, honest verb —
+	 * rather than a dead button beside new chrome. */
+	onStop?: () => void;
 }
 
-export function ComposeField({ agentName, onSend, disabled }: ComposeFieldProps) {
+export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFieldProps) {
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [text, setText] = useState("");
 
@@ -57,16 +61,28 @@ export function ComposeField({ agentName, onSend, disabled }: ComposeFieldProps)
 					}}
 					className="min-w-0 flex-1 border-none bg-transparent font-serif text-compose text-ink outline-none"
 				/>
-				<button
-					type="button"
-					title="Send"
-					aria-label="Send"
-					disabled={disabled}
-					onClick={submit}
-					className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent disabled:opacity-40 disabled:group-focus-within:border-line-strong disabled:group-focus-within:bg-transparent disabled:group-focus-within:text-muted disabled:hover:border-line-strong disabled:hover:text-muted"
-				>
-					↑
-				</button>
+				{disabled && onStop ? (
+					<button
+						type="button"
+						title="Stop the turn"
+						aria-label="Stop"
+						onClick={onStop}
+						className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[11px] leading-none text-muted transition-colors duration-200 hover:border-del-ink hover:text-del-ink"
+					>
+						■
+					</button>
+				) : (
+					<button
+						type="button"
+						title="Send"
+						aria-label="Send"
+						disabled={disabled}
+						onClick={submit}
+						className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent disabled:opacity-40 disabled:group-focus-within:border-line-strong disabled:group-focus-within:bg-transparent disabled:group-focus-within:text-muted disabled:hover:border-line-strong disabled:hover:text-muted"
+					>
+						↑
+					</button>
+				)}
 			</div>
 		</div>
 	);
