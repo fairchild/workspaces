@@ -125,6 +125,17 @@ export async function updateSession(
  * A blank `title` (the deriver's empty-message fallback) is also a no-op —
  * the session stays untitled for a later turn to name. Returns whether this
  * call was the one that set it.
+ *
+ * Known gap (codex review, #823): the guard makes the write race-safe (no
+ * exception, no double-title, no lost update) but not race-*correct* in the
+ * sense of always reflecting the log's true first user event — under the
+ * same #811 double-first-send race, whichever caller's transaction commits
+ * first wins the title, which is not guaranteed to be the caller holding the
+ * lower `seq`. This is the same out-of-scope boundary #811 already draws
+ * ("full serialization would need a DB reservation"); closing it fully means
+ * deriving from a `SELECT ... ORDER BY seq LIMIT 1` read of the log rather
+ * than the caller's local text, which folds into #811's eventual fix rather
+ * than #823's.
  */
 export async function titleSessionIfEmpty(
 	handle: DatabaseHandle,

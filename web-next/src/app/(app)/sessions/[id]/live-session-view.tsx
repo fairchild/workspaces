@@ -136,8 +136,27 @@ export function LiveSessionView({
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ title: nextTitle }),
 			})
-				.then((res) => {
-					if (!res.ok) revert();
+				.then(async (res) => {
+					if (!res.ok) {
+						revert();
+						return;
+					}
+					// The route cleans the title server-side (trim + whitespace
+					// collapse), which can differ from the raw optimistic text (e.g.
+					// "Fix   the  bug" → "Fix the bug") — reconcile so the display
+					// matches what's actually persisted, unless a newer edit has
+					// already superseded this one.
+					const data = (await res.json().catch(() => null)) as {
+						title?: string;
+					} | null;
+					if (
+						data?.title &&
+						data.title !== nextTitle &&
+						latestTitleRef.current === nextTitle
+					) {
+						latestTitleRef.current = data.title;
+						setTitle(data.title);
+					}
 				})
 				.catch(revert),
 		);

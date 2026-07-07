@@ -111,6 +111,13 @@ describe("PATCH /api/sessions/[id]", () => {
 		expect(res.status).toBe(400);
 	});
 
+	test("rejects a title made only of zero-width characters (review finding)", async () => {
+		const id = await freshSession();
+		const res = await patch(id, { title: "\u200B\u200C\u200D" });
+		expect(res.status).toBe(400);
+		expect((await res.json()).error).toMatch(/empty/);
+	});
+
 	test("rejects an empty body — no field is a no-op patch", async () => {
 		const id = await freshSession();
 		const res = await patch(id, {});
