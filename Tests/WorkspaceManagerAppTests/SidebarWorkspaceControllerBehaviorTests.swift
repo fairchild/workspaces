@@ -710,6 +710,96 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(workspace.path == liveURL.path)
     }
 
+    @Test("Unarchiving a provider-backed workspace flips status without touching the local archiver")
+    @MainActor
+    func unarchivingProviderBackedWorkspaceIsStatusOnly() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(
+            name: "api",
+            localPath: URL(fileURLWithPath: "/tmp/api"),
+            remoteURL: "git@github.com:acme/api.git"
+        )
+        // Non-local archive never relocates host files, so the path stays at the live
+        // location. Unarchive must stay a pure status flip and never route through the
+        // local directory archiver — otherwise a remote workspace could hit the #663
+        // path-walk corruption that only ever made sense for local directories.
+        let liveURL = URL(fileURLWithPath: "/tmp/api/workspaces/feature-a")
+        let workspace = Workspace(
+            name: "feature-a",
+            path: liveURL,
+            sourceRepo: repo,
+            status: .archived,
+            backendIdentifier: DaytonaWorkspaceProvider.identifier,
+            remoteId: "daytona-123"
+        )
+        workspace.archivedAt = Date()
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: DaytonaWorkspaceProvider.identifier,
+                displayName: "Daytona",
+                description: "Remote Linux workspaces.",
+                supportsArchive: true,
+                requiresRemoteRepository: true
+            )
+        )
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider(), provider]
+        )
+
+        try await controller.unarchive(workspace)
+
+        #expect(workspaceService.unarchiveWorkspaceCalls.isEmpty)
+        #expect(workspace.status == .active)
+        #expect(workspace.archivedAt == nil)
+        #expect(workspace.path == liveURL.path)
+    }
+
+    @Test("Deleting an archived local workspace targets its moved .archived path")
+    @MainActor
+    func deletingArchivedLocalWorkspaceTargetsArchivedPath() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let liveURL = URL(fileURLWithPath: "/tmp/workspaces/api/feature-a")
+        let workspace = Workspace(
+            name: "feature-a",
+            path: liveURL,
+            sourceRepo: repo,
+            status: .active,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        try await controller.archive(workspace)
+        let archivedPath = "/tmp/workspaces/.archived/api/feature-a"
+        #expect(workspace.path == archivedPath)
+
+        try await controller.deleteWorkspace(workspace, deleteFiles: true)
+
+        // Delete follows the workspace's current (post-archive) location, not the
+        // pre-archive live path — deleting an archived workspace must clean up where
+        // the files actually moved to.
+        #expect(workspaceService.deleteWorkspaceCalls.count == 1)
+        #expect(workspaceService.deleteWorkspaceCalls.first?.workspaceURL.path == archivedPath)
+    }
+
     @Test("Archiving local workspace retires terminal sessions before service lifecycle")
     @MainActor
     func archivingLocalWorkspaceRetiresTerminalSessionsBeforeServiceLifecycle() async throws {

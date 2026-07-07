@@ -901,6 +901,23 @@ struct WorkspaceServiceTests {
         #expect(restored.path == source.path)
     }
 
+    // restoredDestination assumes its input is an archived path shaped
+    // `<root>/.archived/<repo>/<name>` and walks three levels up to recover `<root>`.
+    // Handed a pre-#661 legacy path (files never relocated, still at the live
+    // `<root>/<repo>/<name>`), that same walk overshoots by one level and lands
+    // *outside* the workspaces root — the corruption behind #663. This pins that
+    // hazard so the invariant stays visible: callers must not route a live path
+    // through restoredDestination (SidebarWorkspaceController.unarchive guards on the
+    // positional `.archived` shape for exactly this reason).
+    @Test("restoredDestination overshoots the root for a legacy live-path source")
+    func restoredDestinationOvershootsForLivePathSource() {
+        let livePath = URL(fileURLWithPath: "/tmp/roots/myrepo/feature-x", isDirectory: true)
+        let restored = WorkspaceDirectoryArchiver.restoredDestination(for: livePath)
+        // Walks past `/tmp/roots` to `/tmp` — one level above the workspaces root.
+        #expect(restored.path == "/tmp/myrepo/feature-x")
+        #expect(restored.path != livePath.path)
+    }
+
     @Test("archiveWorkspace moves a linked worktree and updates git metadata")
     func archiveWorkspaceMovesLinkedWorktree() async throws {
         let service = WorkspaceService()
