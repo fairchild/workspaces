@@ -59,6 +59,10 @@ final class ShortcutRoutingPolicy {
     /// Current app-owned shortcut set. Keep this intentionally small.
     private let appOwnedDefaults: Set<ShortcutChord> = AppChromeShortcutCatalog.appOwnedDefaultChords
 
+    /// Standard macOS menu shortcuts that must reach AppKit even while a terminal is focused.
+    private let standardAppMenuShortcuts: Set<ShortcutChord> =
+        StandardAppMenuShortcutCatalog.defaultChords
+
     /// Future user-configurable routing overrides (`App` vs `Ghostty`).
     /// Empty for now, but shape is in place to avoid ad-hoc key handling.
     private var overrides: [ShortcutChord: ShortcutRouteTarget] = [:]
@@ -66,6 +70,10 @@ final class ShortcutRoutingPolicy {
     func route(for chord: ShortcutChord) -> ShortcutRouteTarget {
         if let override = overrides[chord] {
             return override
+        }
+
+        if standardAppMenuShortcuts.contains(chord) {
+            return .appChrome
         }
 
         if appOwnedDefaults.contains(chord) {
@@ -93,4 +101,41 @@ final class ShortcutRoutingPolicy {
     func clearOverrides() {
         overrides.removeAll()
     }
+}
+
+enum StandardAppMenuShortcut: CaseIterable {
+    case quit
+    case hide
+    case hideOthers
+    case minimize
+    case minimizeAll
+    case help
+    case nextWindow
+    case previousWindow
+
+    var chord: ShortcutChord {
+        switch self {
+        case .quit:
+            return ShortcutChord(key: "q", modifiers: [.command])
+        case .hide:
+            return ShortcutChord(key: "h", modifiers: [.command])
+        case .hideOthers:
+            return ShortcutChord(key: "h", modifiers: [.command, .option])
+        case .minimize:
+            return ShortcutChord(key: "m", modifiers: [.command])
+        case .minimizeAll:
+            return ShortcutChord(key: "m", modifiers: [.command, .option])
+        case .help:
+            return ShortcutChord(key: "/", modifiers: [.command, .shift])
+        case .nextWindow:
+            return ShortcutChord(key: "`", modifiers: [.command])
+        case .previousWindow:
+            return ShortcutChord(key: "`", modifiers: [.command, .shift])
+        }
+    }
+}
+
+enum StandardAppMenuShortcutCatalog {
+    static let defaults: [StandardAppMenuShortcut] = StandardAppMenuShortcut.allCases
+    static let defaultChords: Set<ShortcutChord> = Set(defaults.map(\.chord))
 }
