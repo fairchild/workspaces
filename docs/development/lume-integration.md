@@ -113,6 +113,12 @@ This isolation keeps three classes of VM separate:
 - disposable validator clones
 - user-facing workspace VMs
 
+### Missing `workspaces` storage location
+
+Lifecycle calls for workspace VMs address them through the `workspaces` storage selector (see the storage-selector mapping in `LumeWorkspaceProvider`). That selector only resolves if a `workspaces` storage location is registered in Lume pointing at `workspace-vms/`. If it is not, Lume answers with a 404 that used to surface as a generic "Not found" — most visibly when cleaning up an orphaned VM, where the reconciler has already confirmed the VM directory exists on disk.
+
+Workspace-VM cleanup now maps that not-found to an actionable diagnostic (`LumeErrorHeuristics.missingWorkspacesStorageDiagnostic`): _"The 'workspaces' storage location is not configured in Lume. Run `lume storage list` to verify it exists, then add it before retrying cleanup."_ Run `lume storage list` and confirm a `workspaces` entry resolves to the `workspace-vms/` directory above; if it is absent, re-add it before retrying.
+
 ## Standalone Validation Flow
 
 The canonical gate is `./scripts/lume-standalone-validate.sh`.

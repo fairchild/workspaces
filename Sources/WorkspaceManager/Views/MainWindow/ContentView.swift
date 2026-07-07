@@ -2318,7 +2318,16 @@ struct ContentView: View {
             throw WorkspaceOrphanReconciliationError.unsupportedCleanupItem
         }
 
-        try await provider.deleteWorkspace(target)
+        do {
+            try await provider.deleteWorkspace(target)
+        } catch {
+            // The VM directory was just found on disk, so a Lume not-found here means the
+            // `workspaces` storage location isn't registered — surface that instead of "Not found".
+            guard let diagnostic = LumeErrorHeuristics.missingWorkspacesStorageDiagnostic(for: error) else {
+                throw error
+            }
+            throw WorkspaceProviderError.unavailable(diagnostic)
+        }
     }
 
     private func workspaceOrphanCleanupTitle(for item: WorkspaceOrphanItem?) -> String {
