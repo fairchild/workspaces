@@ -17,6 +17,7 @@
  */
 import type { HarnessAgentSandboxConfig } from "@ai-sdk/harness/agent";
 import { mintInstallationToken } from "../diag/github-app";
+import { TERMINAL_INSTALL_SCRIPT } from "../terminal/install";
 import type {
 	ComputeProvider,
 	SessionResumeHandle,
@@ -36,6 +37,14 @@ const TARGET_REPO = process.env.AGENT_TARGET_REPO ?? "fairchild/workspaces";
 /** Port the in-sandbox harness bridge binds; must be declared on the sandbox. */
 const BRIDGE_PORT = 4000;
 /**
+ * Port the in-sandbox ttyd terminal binds (#752) — declared on the sandbox so
+ * `sandbox.domain(TERMINAL_PORT)` publishes it; the terminal routes attach a
+ * shell to the SAME sandbox the session's turns run in (the shared-sandbox
+ * pattern). Sandboxes created before this port was declared have no terminal;
+ * the drawer reports that calmly rather than booting anything.
+ */
+export const TERMINAL_PORT = 7681;
+/**
  * Max sandbox lifetime. Also the resume window: a parked (detached) session
  * reconnects only while its sandbox is still alive, so this bounds how long a
  * conversation can idle between turns before the next turn re-clones fresh.
@@ -43,8 +52,9 @@ const BRIDGE_PORT = 4000;
 const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
 /** The persistent per-session working copy: name under the sandbox default cwd. */
 const WORKSPACE_DIR_NAME = "workspace";
-/** Absolute path to that working copy (sandbox default cwd is /vercel/sandbox). */
-const WORKSPACE_DIR = `/vercel/sandbox/${WORKSPACE_DIR_NAME}`;
+/** Absolute path to that working copy (sandbox default cwd is /vercel/sandbox).
+ * Exported so the terminal (#752) opens its shell in the same working copy. */
+export const WORKSPACE_DIR = `/vercel/sandbox/${WORKSPACE_DIR_NAME}`;
 /**
  * Stable template name so `runTurn` and `prewarmVercelTemplate` target the same
  * named snapshot; the harness reuses a template only when the sandbox identity
@@ -54,8 +64,10 @@ const TEMPLATE_NAME = "web-next-claude-code";
 /**
  * Bump whenever the `onBootstrap` side effects change — it invalidates the
  * reusable snapshot so the next prewarm (or first turn) rebuilds the template.
+ * v2: + ttyd/tmux static binaries for the terminal drawer (#752), and the
+ * sandbox now declares TERMINAL_PORT (a fresh template picks that up too).
  */
-const BOOTSTRAP_HASH = "claude-code-cli-v1";
+const BOOTSTRAP_HASH = "claude-code-cli-v2-terminal";
 
 /** A stable per-session branch the agent commits and opens its PR from. */
 function sessionBranch(sessionId: string): string {
@@ -310,6 +322,15 @@ export function createHarness(
 const SESSION_SANDBOX_PREFIX = "ai-sdk-harness-session";
 
 /**
+ * The Vercel sandbox name a parked harness session lives under — the same
+ * derivation the adapter's resume path uses, exported so the terminal routes
+ * (#752) can attach to the LIVE sandbox of a session and nothing else.
+ */
+export function sessionSandboxName(harnessSessionId: string): string {
+	return `${SESSION_SANDBOX_PREFIX}-${harnessSessionId}`;
+}
+
+/**
  * The Vercel sandbox provider, built via the factory path with a stable `name`
  * so `runTurn` and prewarm target the same named template snapshot.
  *
@@ -326,7 +347,7 @@ function createSandboxProvider(createVercelSandbox: CreateVercelSandbox) {
 	const projectId = process.env.VERCEL_PROJECT_ID;
 	const provider = createVercelSandbox({
 		runtime: "node22",
-		ports: [BRIDGE_PORT],
+		ports: [BRIDGE_PORT, TERMINAL_PORT],
 		resources: { vcpus: 4 },
 		timeout: SANDBOX_TIMEOUT_MS,
 		token,
@@ -348,7 +369,7 @@ function createSandboxProvider(createVercelSandbox: CreateVercelSandbox) {
 		}) => {
 			const { Sandbox } = await import("@vercel/sandbox");
 			const sandbox = await Sandbox.get({
-				name: `${SESSION_SANDBOX_PREFIX}-${sessionId}`,
+				name: sessionSandboxName(sessionId),
 				token,
 				teamId,
 				projectId,
@@ -379,6 +400,19 @@ const SANDBOX_BOOTSTRAP: Omit<HarnessAgentSandboxConfig, "onSession"> = {
 			throw new Error(
 				`claude CLI install failed (exit ${r.exitCode}): ${r.stderr.slice(0, 400)}`,
 			);
+		// Bake the terminal binaries (ttyd + tmux, #752) into the snapshot so
+		// drawer-open doesn't pay the download. Best-effort: a transient fetch
+		// failure must never block the chat path — the terminal mint route
+		// re-runs the same idempotent script as a fallback.
+		try {
+			const res = await session.run({ command: TERMINAL_INSTALL_SCRIPT });
+			if (res.exitCode !== 0 && process.env.HARNESS_DEBUG === "1")
+				console.error(
+					`[dbg onBootstrap] terminal install failed (exit ${res.exitCode}): ${res.stderr.slice(0, 200)}`,
+				);
+		} catch {
+			// best-effort — the mint route re-runs the same idempotent script
+		}
 		if (process.env.HARNESS_DEBUG === "1") {
 			const v = await session.run({ command: "claude --version" });
 			console.error(`[dbg onBootstrap] claude installed: ${v.stdout.trim()}`);

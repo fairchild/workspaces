@@ -7,7 +7,11 @@
  */
 import { defineConfig, devices } from "@playwright/test";
 
-const BASE_URL = "http://localhost:3100";
+// E2E_PORT lets concurrent checkouts (sibling worktrees) run their own e2e
+// servers without colliding on one port — parity with the perf runner's
+// PERF_PORT. Default stays 3100 (CI and the common case).
+const PORT = Number(process.env.E2E_PORT ?? 3100);
+const BASE_URL = `http://localhost:${PORT}`;
 
 /** Must match ALLOWED_LOGINS in the e2e:server script. */
 export const E2E_LOGIN = "fairchild";
@@ -56,6 +60,15 @@ export default defineConfig({
 		{
 			name: "chromium",
 			use: { ...devices["Desktop Chrome"] },
+			// sessions.spec owns the sessions table (wipes + counts rows), so
+			// specs that create sessions of their own run in a later project.
+			testIgnore: /terminal\.spec\.ts/,
+		},
+		{
+			name: "terminal",
+			use: { ...devices["Desktop Chrome"] },
+			testMatch: /terminal\.spec\.ts/,
+			dependencies: ["chromium"],
 		},
 	],
 	webServer: {

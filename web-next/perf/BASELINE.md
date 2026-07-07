@@ -32,6 +32,7 @@ tightening any budget.
 | route_sessions_demo | lcp_ms | median | 78 | 190 | pass |
 | route_sessions_demo | tbt_ms | median | 0 | 0 | pass |
 | route_sessions_demo | first_load_js_kb | exact | 118.5 | 135 | pass |
+| terminal_drawer_interactive | drawer_interactive_ms | median | 120 / 181.5 | 480 | pass |
 | resume_latency_100 | resume_ms | median | 203.8 | 450 | pass |
 
 Raw samples from the 2026-07-07 (#856) refresh — 10 full `pnpm run perf`
@@ -62,6 +63,17 @@ resume_ms 197.3/800 (all pass).
 
 Reading notes:
 
+- **2026-07-07 (#752):** `terminal_drawer_interactive` added (measured) — on
+  a fresh empty session, Ctrl+` to the drawer's shell painted interactive
+  against the mock PTY seam: lazy ghostty-web WASM load + init, the ticket
+  mint/redeem exchange, first PTY bytes in a painted frame. Two 10-run
+  batches on the same commit: samples 258, 339, 287, 131, 77, 106, 90, 86,
+  109, 188 (median 120) and 158, 197, 267, 361, 362, 176, 134, 187, 157, 150
+  (median 181.5); max observed 362 → budget ceil(362 × 1.3) ≈ 471, rounded
+  to 480. `route_session_empty` first-load JS moved 183.8 → 187.3 kB gz (the
+  drawer shell + transport seam in the session route's first load; ghostty-web
+  itself is a lazily-loaded chunk and stays out of first load). All other
+  scenarios re-verified inside budget on the same runs.
 - **2026-07-07 (#856):** Re-baselined budgets from the loose initial values
   (set once, generously, when each scenario first went from pending to
   measured) to the measured floor: a real regression guard instead of a

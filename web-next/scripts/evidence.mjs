@@ -133,6 +133,31 @@ async function captureSessionTurn(page, shot) {
 }
 
 /**
+ * The terminal drawer (#752), on the session the turn just ran in: Ctrl+`
+ * opens it (lazy ghostty-web init + the ticket mint/redeem exchange over the
+ * mock PTY seam), a command runs in the shell, and the drawer is captured
+ * over the transcript.
+ */
+async function captureTerminalDrawer(page, file) {
+	await page.keyboard.press("Control+Backquote");
+	await page.waitForFunction(
+		() =>
+			document.querySelector('[data-testid="terminal-drawer"]')?.dataset
+				.ready === "true",
+		undefined,
+		{ timeout: TURN_TIMEOUT_MS },
+	);
+	await page.keyboard.type("echo hello from the session sandbox");
+	await page.keyboard.press("Enter");
+	await page.keyboard.type("pwd");
+	await page.keyboard.press("Enter");
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: file });
+	// Leave the page as we found it for the captures that follow.
+	await page.keyboard.press("Control+Backquote");
+}
+
+/**
  * The durable-turn story: start a turn, close the tab mid-stream, reopen the
  * session in a fresh tab and watch it catch up and complete. Manages its own
  * pages (the starter tab is closed on purpose) so the caller's page is left
@@ -260,6 +285,7 @@ async function main() {
 			await captureSettled(page, "/", shot("home-empty"));
 			await captureNewSessionFlow(page, shot("session-empty"));
 			await captureSessionTurn(page, shot);
+			await captureTerminalDrawer(page, shot("session-terminal-drawer"));
 			await captureDisconnectResume(context, shot);
 			await seedPopulatedHome(db);
 			await captureSettled(page, "/", shot("home-populated"));
