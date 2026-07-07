@@ -319,6 +319,79 @@ test("closing the tab mid-turn does not kill it — a fresh tab catches up", asy
 	await expect(reopened.getByTestId("activity-line")).toHaveCount(0);
 });
 
+// A failing turn (#808): mock-provider.ts's MOCK_TURN_ERROR_TRIGGER
+// ("__mock_turn_error__" in the sent text) fails the turn deterministically
+// instead of running the script — the hermetic seam for driving this without
+// a real provider outage. The same provider spends that trigger once per
+// session, so a retry re-sending the identical text succeeds.
+test("a failing turn surfaces an inline failure + retry, live and after reload (#808)", async ({
+	page,
+}) => {
+	// A brand-new session, isolated from the shared turn session above.
+	await page.goto("/");
+	await page.getByRole("button", { name: "+ new session" }).click();
+	await page
+		.getByTestId("new-session-picker")
+		.getByRole("button", { name: "fairchild/workspaces" })
+		.click();
+	await expect(page).toHaveURL(SESSION_URL);
+
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await compose.fill("Fix the bug __mock_turn_error__");
+	await page.keyboard.press("Enter");
+
+	// The user's message lands at once — it is never at risk, durably
+	// persisted before the turn even starts — and the activity line breathes
+	// briefly while the mock "provisions".
+	await expect(page.locator('[data-message-role="user"]')).toContainText(
+		"Fix the bug",
+	);
+	await expect(page.getByTestId("activity-line")).toBeVisible();
+
+	// The turn fails: a calm inline failure card (no toast/alert chrome) with
+	// the stream's error text and a Retry action; compose re-enables.
+	await expect(page.getByTestId("turn-failure")).toContainText(
+		"Simulated turn failure (mock provider)",
+		{ timeout: TURN_TIMEOUT },
+	);
+	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+
+	// Retry re-sends the turn's original text — recoverable, not lost, even
+	// though the compose field itself cleared on the original submit — WITHOUT
+	// a reload in between: this is the live-only path, where the failed
+	// turn's card is tagged by a sticky client-side record (live-turn-error.ts)
+	// rather than the server projection. A status-gated version of that record
+	// would un-tag the card the instant this retry's turn leaves the "error"
+	// status, making it vanish here even though the log still has it — so this
+	// ordering (retry BEFORE reload) is the one that actually exercises that.
+	// The mock has already spent its one guaranteed failure on this session,
+	// so this attempt runs the normal script through to completion.
+	await page.getByRole("button", { name: "Retry" }).click();
+	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
+	await expect(
+		page.locator('[data-message-role="user"]').nth(1),
+	).toContainText("Fix the bug");
+	await expect(page.getByTestId("turn-stats")).toBeVisible({
+		timeout: TURN_TIMEOUT,
+	});
+	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+
+	// The failed turn's own card is still there, live — retry started a new
+	// turn, it didn't erase the record of the failure.
+	await expect(page.getByTestId("turn-failure")).toBeVisible();
+
+	// A reload projects the identical story from the persisted log — both the
+	// failure card and the successful retry turn survive it, proving live and
+	// reloaded agree throughout, not just in the moment right after failing.
+	await page.reload();
+	await expect(page.getByTestId("turn-failure")).toContainText(
+		"Simulated turn failure (mock provider)",
+	);
+	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
+	await expect(page.getByTestId("turn-stats")).toBeVisible();
+});
+
 // GitHub-backed repo picker (#825): the /api/repos fixture list under
 // AUTH_BYPASS covers both a real (non-"main") default branch landing in the
 // masthead and a calm inline error for a repo the fixture directory doesn't

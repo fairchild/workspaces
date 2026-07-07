@@ -7,6 +7,21 @@
  * The requested model is recorded (not used — there's no real model call
  * here) on the terminal `done` chunk, so #824's routing is unit-testable
  * against this provider without a sandbox.
+ *
+ * A user message containing `MOCK_TURN_ERROR_TRIGGER` (#808) throws instead of
+ * running the script — a deterministic, hermetic way to exercise a whole-turn
+ * failure (turn-ingest.ts's catch appends the `error` + aborted `done` a real
+ * provider fault or dead sandbox would) without depending on timing or a real
+ * provider outage. Test-only by convention: nothing in the product surface
+ * sends this text on purpose.
+ *
+ * `mockCodingTurn` itself always fails when the trigger is present — that's
+ * what makes it hermetically unit-testable. `mockProvider.runTurn` (the seam
+ * sessions actually call) spends the trigger once per session: the first turn
+ * against a session whose text carries it fails, and a later turn against
+ * that same session — e.g. a UI Retry re-sending the identical failed text —
+ * runs the normal script instead of failing forever. This is what lets #808's
+ * e2e spec drive a real "retry succeeds" turn without a second magic string.
  */
 import { DEFAULT_MODEL } from "./models";
 import type { ComputeProvider, TurnRequest } from "./provider";
@@ -17,6 +32,9 @@ type Sleep = (ms: number) => Promise<void>;
 const defaultSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const EDITED_FILE = "src/lib/session.ts";
+
+/** A user message containing this text makes the mock turn fail (#808). */
+export const MOCK_TURN_ERROR_TRIGGER = "__mock_turn_error__";
 
 const REASONING_TRACE = [
 	"The repro says `resumeSession` comes back with undefined for an unknown id, and the test expects a thrown `SessionNotFoundError`.",
@@ -84,6 +102,11 @@ export async function* mockCodingTurn(
 
 	yield { type: "status", content: "Starting sandbox" };
 	await sleep(300);
+
+	if (userMessage.includes(MOCK_TURN_ERROR_TRIGGER)) {
+		throw new Error("Simulated turn failure (mock provider)");
+	}
+
 	yield { type: "status", content: "Cloning repo" };
 	await sleep(300);
 
@@ -196,8 +219,26 @@ export async function* mockCodingTurn(
 	};
 }
 
+/** Sessions whose one guaranteed `MOCK_TURN_ERROR_TRIGGER` failure has already
+ * fired — dev/e2e-only in-memory state, same lifetime as turn-ingest.ts's
+ * `activeTurns`; never pruned. */
+const spentErrorTrigger = new Set<string>();
+
 export const mockProvider: ComputeProvider = {
 	id: "mock",
-	runTurn: (request: TurnRequest) =>
-		mockCodingTurn(request.userMessage, undefined, request.model),
+	runTurn: (request: TurnRequest) => {
+		let userMessage = request.userMessage;
+		if (userMessage.includes(MOCK_TURN_ERROR_TRIGGER)) {
+			if (spentErrorTrigger.has(request.sessionId)) {
+				// Already spent on this session — strip the trigger so the script
+				// runs normally instead of failing forever (the persisted user
+				// event, appended before the provider ever runs, keeps the original
+				// text regardless of what's passed here).
+				userMessage = userMessage.split(MOCK_TURN_ERROR_TRIGGER).join("").trim();
+			} else {
+				spentErrorTrigger.add(request.sessionId);
+			}
+		}
+		return mockCodingTurn(userMessage, undefined, request.model);
+	},
 };

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { deriveTurnStats } from "../transcript/turn-stats";
-import { mockCodingTurn, mockProvider } from "./mock-provider";
+import { MOCK_TURN_ERROR_TRIGGER, mockCodingTurn, mockProvider } from "./mock-provider";
 import { DEFAULT_MODEL } from "./models";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -118,5 +118,71 @@ describe("mockCodingTurn", () => {
 		const chunks = await fullTurn("go");
 		const done = chunks.find((chunk) => chunk.type === "done");
 		expect(done?.metadata?.contextTokens).toBeGreaterThan(0);
+	});
+
+	describe("MOCK_TURN_ERROR_TRIGGER (#808)", () => {
+		test("throws instead of running the script when the trigger is present", async () => {
+			const iterator = mockCodingTurn(
+				`please fix it ${MOCK_TURN_ERROR_TRIGGER}`,
+				() => Promise.resolve(),
+			)[Symbol.asyncIterator]();
+			// One status chunk (realistic provisioning) precedes the failure.
+			const first = await iterator.next();
+			expect(first.value).toEqual({ type: "status", content: "Starting sandbox" });
+			await expect(iterator.next()).rejects.toThrow(
+				"Simulated turn failure (mock provider)",
+			);
+		});
+
+		test("a message without the trigger runs the normal script unaffected", async () => {
+			const chunks = await fullTurn(`no trigger here`);
+			expect(chunks.some((chunk) => chunk.type === "error")).toBe(false);
+			expect(chunks.at(-1)).toMatchObject({ type: "done" });
+		});
+
+		test("mockProvider.runTurn fails once per session, then succeeds on retry", async () => {
+			// mockProvider.runTurn (unlike fullTurn's injectable sleep) paces with
+			// the real scripted delays, so this only reads the first couple of
+			// chunks of each run — enough to prove which path it took — rather
+			// than draining the whole ~9s script.
+			const sessionId = `s-${crypto.randomUUID()}`;
+			const text = `Fix it ${MOCK_TURN_ERROR_TRIGGER}`;
+
+			// First turn against this session: the trigger fires.
+			const first = mockProvider
+				.runTurn({ sessionId, userMessage: text })
+				[Symbol.asyncIterator]();
+			await expect(first.next()).resolves.toEqual({
+				value: { type: "status", content: "Starting sandbox" },
+				done: false,
+			});
+			await expect(first.next()).rejects.toThrow(
+				"Simulated turn failure (mock provider)",
+			);
+
+			// A retry re-sending the identical text against the SAME session
+			// succeeds — the trigger is spent (#808's e2e "retry succeeds" case):
+			// the second status chunk (only reachable past the would-be throw)
+			// proves the normal script ran instead of failing again.
+			const retry = mockProvider
+				.runTurn({ sessionId, userMessage: text })
+				[Symbol.asyncIterator]();
+			await retry.next();
+			await expect(retry.next()).resolves.toEqual({
+				value: { type: "status", content: "Cloning repo" },
+				done: false,
+			});
+			await retry.return?.(undefined);
+
+			// A DIFFERENT session with the same text still gets its own guaranteed
+			// failure — the gate is per-session, not global.
+			const other = mockProvider
+				.runTurn({ sessionId: `s-${crypto.randomUUID()}`, userMessage: text })
+				[Symbol.asyncIterator]();
+			await other.next();
+			await expect(other.next()).rejects.toThrow(
+				"Simulated turn failure (mock provider)",
+			);
+		});
 	});
 });

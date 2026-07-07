@@ -237,6 +237,49 @@ describe("projectSessionEvents", () => {
 		expect(messages.map((m) => m.role)).toEqual(["user"]);
 	});
 
+	test("a failed turn with no content still projects, as a visible failure (#808)", async () => {
+		const messages = await projectSessionEvents("s", [
+			u(1, "go"),
+			a(2, "status", "Starting sandbox"),
+			a(3, "error", "Simulated turn failure (mock provider)"),
+			a(4, "done", "", { aborted: true }),
+		]);
+		expect(messages).toHaveLength(2);
+		expect(messages[1]).toEqual({
+			id: "s:2",
+			role: "assistant",
+			metadata: { author: "Claude", error: "Simulated turn failure (mock provider)" },
+			parts: [],
+		});
+	});
+
+	test("a failed turn keeps whatever content streamed before the failure (#808)", async () => {
+		const messages = await projectSessionEvents("s", [
+			u(1, "go"),
+			a(2, "text", "Let me check "),
+			a(3, "error", "sandbox died"),
+			a(4, "done", "", { aborted: true }),
+		]);
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			metadata: { author: "Claude", error: "sandbox died" },
+			parts: [{ type: "text", text: "Let me check " }],
+		});
+	});
+
+	test("an interrupted turn (closeAbandonedTurn's synthesized terminal) also projects as a failure (#808)", async () => {
+		const messages = await projectSessionEvents("s", [
+			u(1, "go"),
+			a(2, "error", "Turn interrupted before completion."),
+			a(3, "done", "", { aborted: true }),
+		]);
+		expect(messages[1]).toMatchObject({
+			role: "assistant",
+			metadata: { error: "Turn interrupted before completion." },
+			parts: [],
+		});
+	});
+
 	test("concatenates consecutive user events into one message", async () => {
 		const messages = await projectSessionEvents("s", [
 			u(1, "part one "),
