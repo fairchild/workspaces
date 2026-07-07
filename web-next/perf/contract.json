@@ -1,6 +1,7 @@
 {
 	"version": 1,
 	"note": "Canonical web-next performance scenarios + budgets (mirrors config/performance/contract.json culture). Budgets gate local + CI runs of perf/run.mjs against a production build (`next start` on localhost, headless Chromium). Baselines live in BASELINE.md; refresh them before tightening a budget. Pending scenarios are declared here so the runner and budgets exist before their surfaces land — the runner reports them as pending and never fails on them.",
+	"ratchet_policy": "Budgets are a regression guard against the measured floor, not a target. Build-artifact-size metrics (first_load_js_kb) are deterministic across runs on a given commit: budget = ceil(median * 1.10), rounded to the nearest 5kb. Wall-clock browser timing metrics (ttft_ms, initial_render_ms, projection_ms, lcp_ms, tbt_ms, resume_ms) are exposed to host CPU scheduling noise: budget = ceil(max-observed-across-runs * 1.3), rounded to a sensible figure (10-50ms), over at least 10 runs so the max reflects real tail noise rather than one sample's jitter. Budgets only ever tighten: a formula result above the current budget keeps the current budget unchanged. Derivation rationale and refresh procedure: docs/perf-floor.md; measured baselines: BASELINE.md.",
 	"methodology": {
 		"paint_timing": "waitForFunction polls on requestAnimationFrame, so 'painted' means the frame after the DOM change — within one frame of true paint.",
 		"long_tasks": "PerformanceObserver longtask entries, observed in-page. The longtask API only reports tasks >= 50ms, so longest_task_ms reads 0 in a clean run and any nonzero value is a budget violation.",
@@ -16,7 +17,7 @@
 			"description": "On a real empty session at /sessions/[id], submit a message (the full send path: chat route auth gate, user-event append, mock provider); time from submit to the first assistant token painted in the Folio transcript. One fresh seeded session per run.",
 			"runs": 3,
 			"metrics": {
-				"ttft_ms": { "stat": "median", "budget": 1500 }
+				"ttft_ms": { "stat": "median", "budget": 1050 }
 			}
 		},
 		{
@@ -25,7 +26,7 @@
 			"description": "While a full mock turn streams into the Folio transcript on /sessions/[id] (prose, ledger rows, diff card, receipt), no main-thread long task may exceed 50ms. One fresh seeded session per run.",
 			"runs": 3,
 			"metrics": {
-				"longest_task_ms": { "stat": "max", "budget": 50 }
+				"longest_task_ms": { "stat": "max", "budget": 0 }
 			}
 		},
 		{
@@ -35,7 +36,7 @@
 			"route": "/sessions/demo?seed=200",
 			"runs": 3,
 			"metrics": {
-				"initial_render_ms": { "stat": "median", "budget": 500 }
+				"initial_render_ms": { "stat": "median", "budget": 450 }
 			}
 		},
 		{
@@ -45,7 +46,7 @@
 			"description": "Project a 200-event session log (20 interleaved user+assistant turns with status/text/tool events) into UIMessage[] in-process; median wall-clock over the runs. This is the read path #749's tail/resume replays; it must stay cheap enough to project a full transcript on reconnect without blocking.",
 			"runs": 3,
 			"metrics": {
-				"projection_ms": { "stat": "median", "budget": 40 }
+				"projection_ms": { "stat": "median", "budget": 30 }
 			}
 		},
 		{
@@ -55,9 +56,9 @@
 			"route": "/",
 			"runs": 3,
 			"metrics": {
-				"lcp_ms": { "stat": "median", "budget": 1200 },
-				"tbt_ms": { "stat": "median", "budget": 200 },
-				"first_load_js_kb": { "stat": "exact", "budget": 200 }
+				"lcp_ms": { "stat": "median", "budget": 120 },
+				"tbt_ms": { "stat": "median", "budget": 0 },
+				"first_load_js_kb": { "stat": "exact", "budget": 130 }
 			}
 		},
 		{
@@ -68,8 +69,8 @@
 			"manifest_route": "/sessions/[id]",
 			"runs": 3,
 			"metrics": {
-				"lcp_ms": { "stat": "median", "budget": 1200 },
-				"tbt_ms": { "stat": "median", "budget": 200 },
+				"lcp_ms": { "stat": "median", "budget": 140 },
+				"tbt_ms": { "stat": "median", "budget": 0 },
 				"first_load_js_kb": { "stat": "exact", "budget": 200 }
 			}
 		},
@@ -80,9 +81,9 @@
 			"route": "/sessions/demo",
 			"runs": 3,
 			"metrics": {
-				"lcp_ms": { "stat": "median", "budget": 1200 },
-				"tbt_ms": { "stat": "median", "budget": 200 },
-				"first_load_js_kb": { "stat": "exact", "budget": 200 }
+				"lcp_ms": { "stat": "median", "budget": 190 },
+				"tbt_ms": { "stat": "median", "budget": 0 },
+				"first_load_js_kb": { "stat": "exact", "budget": 135 }
 			}
 		},
 		{
@@ -91,7 +92,7 @@
 			"description": "Load a session whose ~100-event assistant turn was left in flight (seeded stale, no `done`): the client resumes it, the tail route closes the abandoned turn and backfills the whole log. Median time from navigation start to the turn's last event (a marker) painted. One fresh interrupted session per run.",
 			"runs": 3,
 			"metrics": {
-				"resume_ms": { "stat": "median", "budget": 800 }
+				"resume_ms": { "stat": "median", "budget": 450 }
 			}
 		}
 	]
