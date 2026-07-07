@@ -265,10 +265,10 @@ struct TileTreeReducerTests {
 
     // MARK: - Directional focus (depth ≥ 2, cross-axis)
     //
-    // Depth-1 directional focus is depth-1 parity above; the geometric ancestor-walk at depth ≥ 2 is
-    // new behavior with no legacy baseline (PR #658 review follow-up). These pin the cross-axis cases —
-    // moving across a split whose axis differs from the one being navigated — which exercise the
-    // "rise to the nearest matching-axis ancestor, then descend into the entering edge" traversal.
+    // Depth-1 directional focus is depth-1 parity above; depth ≥ 2 resolves against unit-square
+    // geometry (edge adjacency + max perpendicular overlap, ties toward top/left — #690). These pin
+    // the cross-axis cases, the 2×2 grid the pre-geometric ancestor walk got wrong, overlap
+    // selection, and true-edge blocking.
 
     /// Focus `from`, then navigate `direction`; returns the resulting focused tile (== `from` when the
     /// move is blocked, since the reducer leaves focus put when there is no neighbor).
@@ -345,6 +345,103 @@ struct TileTreeReducerTests {
         #expect(directional(state, reducer: reducer, from: b, .left) == b)
         #expect(directional(state, reducer: reducer, from: c, .down) == c)
         #expect(directional(state, reducer: reducer, from: a, .left) == a)
+    }
+
+    @Test("Directional focus in a 2×2 grid respects perpendicular position")
+    func directionalGridRespectsPosition() {
+        // (a | b) over (c | d): a top-left, b top-right, c bottom-left, d bottom-right.
+        let reducer = TileTreeReducer()
+        let a = TileID()
+        let b = TileID()
+        let c = TileID()
+        let d = TileID()
+        let state = TileTreeState(
+            root: .split(
+                id: SplitID(),
+                axis: .topBottom,
+                ratio: 0.5,
+                first: .split(id: SplitID(), axis: .leadingTrailing, ratio: 0.5, first: .tile(a), second: .tile(b)),
+                second: .split(id: SplitID(), axis: .leadingTrailing, ratio: 0.5, first: .tile(c), second: .tile(d))
+            ),
+            focusedTileID: a
+        )
+
+        // Vertical moves land in the same column — the case the pre-geometric walk got wrong
+        // (down from b used to land on c, the first leaf of the bottom subtree).
+        #expect(directional(state, reducer: reducer, from: b, .down) == d)
+        #expect(directional(state, reducer: reducer, from: a, .down) == c)
+        #expect(directional(state, reducer: reducer, from: d, .up) == b)
+        #expect(directional(state, reducer: reducer, from: c, .up) == a)
+        // Horizontal moves stay in the same row.
+        #expect(directional(state, reducer: reducer, from: a, .right) == b)
+        #expect(directional(state, reducer: reducer, from: d, .left) == c)
+        // True edges are blocked in all four corners.
+        #expect(directional(state, reducer: reducer, from: a, .left) == a)
+        #expect(directional(state, reducer: reducer, from: b, .up) == b)
+        #expect(directional(state, reducer: reducer, from: c, .down) == c)
+        #expect(directional(state, reducer: reducer, from: d, .right) == d)
+    }
+
+    @Test("Directional focus picks the neighbor with the largest perpendicular overlap")
+    func directionalMaxOverlap() {
+        // a over (c | d) with the bottom split off-center at 0.3: a spans the full width, so both
+        // bottom panes face it — d overlaps 0.7 vs c's 0.3 and must win.
+        let reducer = TileTreeReducer()
+        let a = TileID()
+        let c = TileID()
+        let d = TileID()
+        let state = TileTreeState(
+            root: .split(
+                id: SplitID(),
+                axis: .topBottom,
+                ratio: 0.5,
+                first: .tile(a),
+                second: .split(id: SplitID(), axis: .leadingTrailing, ratio: 0.3, first: .tile(c), second: .tile(d))
+            ),
+            focusedTileID: a
+        )
+
+        #expect(directional(state, reducer: reducer, from: a, .down) == d)
+        // Ties (equal overlap) break toward the top/left: both bottom panes reach a going up.
+        #expect(directional(state, reducer: reducer, from: c, .up) == a)
+        #expect(directional(state, reducer: reducer, from: d, .up) == a)
+    }
+
+    @Test("Directional focus at depth 3 crosses only true shared edges")
+    func directionalDepthThree() {
+        // a | (b over (c | d)): a is a full-height column; the right column stacks b over a
+        // nested row of c | d. d does not touch a, so d ← must land on c, not skip to a.
+        let reducer = TileTreeReducer()
+        let a = TileID()
+        let b = TileID()
+        let c = TileID()
+        let d = TileID()
+        let state = TileTreeState(
+            root: .split(
+                id: SplitID(),
+                axis: .leadingTrailing,
+                ratio: 0.5,
+                first: .tile(a),
+                second: .split(
+                    id: SplitID(),
+                    axis: .topBottom,
+                    ratio: 0.5,
+                    first: .tile(b),
+                    second: .split(
+                        id: SplitID(), axis: .leadingTrailing, ratio: 0.5, first: .tile(c), second: .tile(d))
+                )
+            ),
+            focusedTileID: a
+        )
+
+        #expect(directional(state, reducer: reducer, from: d, .left) == c)
+        #expect(directional(state, reducer: reducer, from: c, .left) == a)
+        #expect(directional(state, reducer: reducer, from: d, .up) == b)
+        #expect(directional(state, reducer: reducer, from: c, .up) == b)
+        // From a, both b (0.5 overlap) and c (0.5 overlap) face right; tie breaks to the top: b.
+        #expect(directional(state, reducer: reducer, from: a, .right) == b)
+        // b spans the full right column width; moving down, c and d tie — top/left wins: c.
+        #expect(directional(state, reducer: reducer, from: b, .down) == c)
     }
 
     // MARK: - Relative focus

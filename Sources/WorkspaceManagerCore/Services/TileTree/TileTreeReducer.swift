@@ -104,36 +104,63 @@ public struct TileTreeReducer {
         return next
     }
 
-    /// Recursive ancestor walk: rise from `from` to the root and take the first split whose axis
-    /// matches `direction` and where `from` sits on the side you can move away from, then descend
-    /// into the other child toward the entering edge. Reproduces the legacy two-pane `splitFocusTarget`
-    /// exactly at depth 1; the deeper-than-1 traversal is a deliberate not-hardened fallback.
+    /// Geometric neighbor resolution over the unit-square layout (`unitLeafFrames`): the target is
+    /// the leaf that (1) faces `from` across the crossed edge — its opposite edge lies exactly on
+    /// `from`'s edge in `direction` — and (2) overlaps `from` the most along the perpendicular
+    /// axis, ties breaking toward the top/left. No adjacent overlapping leaf ⇒ a true edge ⇒ `nil`.
+    ///
+    /// Depth-1 behavior is unchanged. This replaces the ancestor-walk descent that ignored
+    /// perpendicular position — in a 2×2 grid, moving down from the top-right pane used to land
+    /// bottom-left (#690). Exact edge equality is sound because shared boundaries are computed
+    /// once and inherited (see `TileTreeGeometry.swift`).
     private func directionalTarget(
         from: TileID,
         direction: TileFocusDirection,
         in root: TileTree
     ) -> TileID? {
-        guard let frames = ancestors(of: from, in: root) else { return nil }
+        let frames = root.unitLeafFrames()
+        guard let origin = frames[from] else { return nil }
 
-        let requiredAxis: SplitAxis
-        let requiredSide: ChildSide
-        let descendToLastLeaf: Bool
+        let crossedEdge: Double
+        let facingEdge: (TileUnitRect) -> Double
+        let perpendicularSpan: (TileUnitRect) -> (lo: Double, hi: Double)
         switch direction {
         case .right:
-            (requiredAxis, requiredSide, descendToLastLeaf) = (.leadingTrailing, .first, false)
+            crossedEdge = origin.maxX
+            facingEdge = { $0.minX }
+            perpendicularSpan = { ($0.minY, $0.maxY) }
         case .left:
-            (requiredAxis, requiredSide, descendToLastLeaf) = (.leadingTrailing, .second, true)
+            crossedEdge = origin.minX
+            facingEdge = { $0.maxX }
+            perpendicularSpan = { ($0.minY, $0.maxY) }
         case .down:
-            (requiredAxis, requiredSide, descendToLastLeaf) = (.topBottom, .first, false)
+            crossedEdge = origin.maxY
+            facingEdge = { $0.minY }
+            perpendicularSpan = { ($0.minX, $0.maxX) }
         case .up:
-            (requiredAxis, requiredSide, descendToLastLeaf) = (.topBottom, .second, true)
+            crossedEdge = origin.minY
+            facingEdge = { $0.maxY }
+            perpendicularSpan = { ($0.minX, $0.maxX) }
         }
 
-        for frame in frames.reversed() where frame.axis == requiredAxis && frame.side == requiredSide {
-            let otherChild = requiredSide == .first ? frame.second : frame.first
-            return descendToLastLeaf ? otherChild.lastLeafID : otherChild.firstLeafID
+        let originSpan = perpendicularSpan(origin)
+        var best: (id: TileID, overlap: Double, position: Double)?
+        for (id, rect) in frames where id != from {
+            guard facingEdge(rect) == crossedEdge else { continue }
+            let span = perpendicularSpan(rect)
+            let overlap = min(span.hi, originSpan.hi) - max(span.lo, originSpan.lo)
+            guard overlap > 0 else { continue }
+            // Two facing candidates can never share both overlap and position (they would occupy
+            // the same region), so this ordering is deterministic despite dictionary iteration.
+            if let current = best,
+                !(overlap > current.overlap
+                    || (overlap == current.overlap && span.lo < current.position))
+            {
+                continue
+            }
+            best = (id, overlap, span.lo)
         }
-        return nil
+        return best?.id
     }
 
     private func relativeTarget(
@@ -274,33 +301,4 @@ public struct TileTreeReducer {
         }
     }
 
-    // MARK: - Ancestor path
-
-    private enum ChildSide: Equatable {
-        case first
-        case second
-    }
-
-    private struct AncestorFrame {
-        let axis: SplitAxis
-        let first: TileTree
-        let second: TileTree
-        let side: ChildSide
-    }
-
-    /// Ancestors of `target` from the root down to its parent split, or `nil` if `target` is absent.
-    private func ancestors(of target: TileID, in node: TileTree) -> [AncestorFrame]? {
-        switch node {
-        case .tile(let id):
-            return id == target ? [] : nil
-        case .split(_, let axis, _, let first, let second):
-            if let deeper = ancestors(of: target, in: first) {
-                return [AncestorFrame(axis: axis, first: first, second: second, side: .first)] + deeper
-            }
-            if let deeper = ancestors(of: target, in: second) {
-                return [AncestorFrame(axis: axis, first: first, second: second, side: .second)] + deeper
-            }
-            return nil
-        }
-    }
 }
