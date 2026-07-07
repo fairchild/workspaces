@@ -52,6 +52,18 @@ enum AutomationHTTPRouter {
 
         let handle = try scopedHandle(from: request)
 
+        // Dynamic route: /v1/web-surfaces/{id}/snapshot. Checked before the static switch
+        // since it shares the /v1/web-surfaces prefix but never collides with the exact path.
+        if let segment = webSurfaceSnapshotSegment(inPath: request.path) {
+            guard method == "GET" else {
+                throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/web-surfaces/{id}/snapshot.")
+            }
+            guard let sourceID = UUID(uuidString: segment) else {
+                throw AutomationServiceError(.invalidRequest, "Web surface id must be a UUID.")
+            }
+            return try await controller.automationWebSurfaceSnapshot(for: handle, sourceID: sourceID)
+        }
+
         switch (method, request.path) {
         case ("GET", "/v1/context"):
             return try await controller.automationContext(for: handle)
@@ -107,6 +119,21 @@ enum AutomationHTTPRouter {
         default:
             throw AutomationServiceError(.routeNotFound, "Unsupported automation route: \(method) \(request.path)")
         }
+    }
+
+    /// The raw id segment of `/v1/web-surfaces/{segment}/snapshot`, or `nil` when `path`
+    /// is not that shape. UUID validation is the caller's job so a well-shaped path with a
+    /// bad id reports `invalid_request` rather than falling through to `route_not_found`.
+    private static func webSurfaceSnapshotSegment(inPath path: String) -> String? {
+        let prefix = "/v1/web-surfaces/"
+        let suffix = "/snapshot"
+        guard path.hasPrefix(prefix), path.hasSuffix(suffix) else { return nil }
+        let start = path.index(path.startIndex, offsetBy: prefix.count)
+        let end = path.index(path.endIndex, offsetBy: -suffix.count)
+        guard start < end else { return nil }
+        let segment = String(path[start..<end])
+        guard !segment.contains("/") else { return nil }
+        return segment
     }
 
     private static func scopedHandle(from request: HTTPRequest) throws -> String {
@@ -259,6 +286,7 @@ extension AutomationHealthResult: CodableSendableEquatable {}
 extension AutomationContextResult: CodableSendableEquatable {}
 extension AutomationSurfacesResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}
+extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}
 extension AutomationMutationResult: CodableSendableEquatable {}
 extension AutomationInputWriteResult: CodableSendableEquatable {}
 extension AutomationEmptyResult: CodableSendableEquatable {}

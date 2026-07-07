@@ -89,6 +89,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/context` | Returns the caller's resolved context and capabilities. |
 | `GET /v1/surfaces` | Returns visible terminal surfaces in the caller's window/app scope. |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
+| `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
 | `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` from a primary tile. Each successful split creates a new terminal surface in the caller's tab. Secondary split-tile callers return `unsupported` in V1. |
 | `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. |
@@ -114,13 +115,41 @@ handle.
 | --- | --- |
 | `context.read` | `GET /v1/context` |
 | `surfaces.read` | `GET /v1/surfaces` |
-| `browser.read` | `GET /v1/web-surfaces` (read-only web-surface listing; granted to default handles under the Automation API experiment) |
+| `browser.read` | `GET /v1/web-surfaces` (read-only listing) and `GET /v1/web-surfaces/{id}/snapshot` (bounded PNG of a live surface); granted to default handles under the Automation API experiment |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
 | `input.write` | `POST /v1/input/write` (experimental; granted per-handle only while the Automation Input Write experiment is enabled, and re-checked per request) |
 
 Under-capable handles fail with `capability_denied`.
+
+## Web-surface snapshot bounds
+
+`GET /v1/web-surfaces/{id}/snapshot` returns the standard success envelope with a
+base64 PNG, not raw image bytes:
+
+```json
+{ "sourceID": "…", "encoding": "png", "width": 640, "height": 480,
+  "byteCount": 12497, "data": "<base64 png>" }
+```
+
+`byteCount` is the raw (pre-base64) PNG size; `width`/`height` are its pixel
+dimensions. Decode with `jq -r .result.data | base64 -d > snapshot.png`.
+
+The snapshot is bounded three ways so a caller cannot pull an unbounded image or
+wedge the server:
+
+| Bound | Value | Behavior |
+| --- | --- | --- |
+| Max width | 1600 px (`WKSnapshotConfiguration.snapshotWidth`) | Output is scaled to at most this width. Capture uses the live view's visible bounds (viewport), never the full scroll height, so a long page is not captured in full. Backing-store scale (Retina) may 2× the pixel width. |
+| Max raw bytes | 8 MiB | A PNG over the cap is rejected (`unsupported`), never truncated. |
+| Timeout | 5 s | `takeSnapshot` is raced against a deadline; a capture that does not complete returns `unsupported` rather than blocking the automation server. |
+
+Failure mapping (reusing the stable error codes): an id matching no web source →
+`invalid_request`; a source with no live `WKWebView` → `unsupported`; a capture
+timeout or over-cap PNG → `unsupported` (distinct messages); an internal capture
+error → `internal_error`. Snapshotting a source whose view is not instantiated
+never creates one — the request fails closed.
 
 ## Error Codes
 
@@ -169,6 +198,8 @@ workspaces input write 'echo hi' --submit
 | Wire models and envelopes | `Sources/WorkspaceManagerCore/Services/Automation/AutomationAPI.swift` |
 | Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
 | HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |
+| Web-surface snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WebSurfaceSnapshotEncoder.swift` |
+| Web-surface snapshot capture (MainActor) | `Sources/WorkspaceManager/Web/WebSurfaceSnapshotCapture.swift` |
 | CLI socket client | `Sources/WorkspaceManagerCore/Services/Automation/AutomationSocketClient.swift` |
 | CLI formatting | `Sources/WorkspaceManagerCore/Services/Automation/AutomationCLIFormatting.swift` |
 | App-side controller | `Sources/WorkspaceManager/Views/MainWindow/AutomationController.swift` |
@@ -201,7 +232,9 @@ they can be added. Two reviewed exceptions widen the read/write surface
 deliberately: caller-scoped input injection ships as the experimental,
 double-gated `input.write` capability (see
 [Automation Input Write Decision](../decisions/automation-input-write.md)), and
-read-only web-surface listing ships as `browser.read` (`GET /v1/web-surfaces`),
-granted to default handles under the Automation API experiment. Web-surface
-snapshotting and any browser interaction remain out of scope pending the
+read-only web-surface reads ship as `browser.read` — both listing
+(`GET /v1/web-surfaces`) and bounded snapshots
+(`GET /v1/web-surfaces/{id}/snapshot`), granted to default handles under the
+Automation API experiment. Browser *mutation* (navigating, clicking, filling, or
+evaluating JavaScript in a web surface) remains out of scope pending the
 JavaScript-evaluation trust-boundary review.

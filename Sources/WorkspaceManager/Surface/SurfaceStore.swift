@@ -1,4 +1,5 @@
 import AppKit
+import WebKit
 import WorkspaceManagerCore
 
 /// Owns the live `Surface` for each `TileID` in a tile tree: a `[TileID: any Surface]` map plus a
@@ -205,6 +206,14 @@ final class SurfaceStore {
     /// instantiates a store, so listing web surfaces can't spin up hidden WKWebViews.
     func liveWebState(forSourceID sourceID: UUID) -> WebSurfaceLiveState? {
         webStoresBySourceID[sourceID]?.liveState
+    }
+
+    /// The live `WKWebView` backing `sourceID`, or `nil` when none is instantiated. The
+    /// non-creating peek the Automation API's browser-read snapshot resolves through: like
+    /// `liveWebState(forSourceID:)` it never spins up a store, so snapshotting a released
+    /// surface fails closed instead of loading a hidden page.
+    func liveWebView(forSourceID sourceID: UUID) -> WKWebView? {
+        webStoresBySourceID[sourceID]?.liveWebView
     }
 
     /// Get-or-create the shared per-source store backing `sourceID`'s web views.
