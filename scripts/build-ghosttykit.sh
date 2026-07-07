@@ -23,6 +23,12 @@ set -euo pipefail
 #   GHOSTTY_CACHE_DIR Cache root for auto-cloned Ghostty checkout.
 #   GHOSTTY_ZIG_BIN   Zig executable to use for building Ghostty.
 #   GHOSTTY_ZIG_CACHE_DIR Zig cache root for building Ghostty.
+#   GHOSTTY_ARCH_DIAGNOSTICS  Set to 0 to silence the post-build architecture
+#                     report (host arch, zig binary arch, xcframework slice
+#                     info). Defaults to 1. Added to chase down a "no such
+#                     module 'GhosttyKit'" failure suspected to be a Rosetta/
+#                     x86_64 zig producing a slice that doesn't match an
+#                     arm64 build; safe to flip off once that's resolved.
 # -----------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +39,7 @@ OUT_DIR="$PROJECT_DIR/Frameworks"
 GHOSTTY_COMMIT="332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28"
 ZIG_VERSION="0.15.2"
 HOMEBREW_ZIG_BIN="/opt/homebrew/opt/zig@0.15/bin/zig"
+GHOSTTY_ARCH_DIAGNOSTICS="${GHOSTTY_ARCH_DIAGNOSTICS:-1}"
 
 GHOSTTY_REPO_URL="https://github.com/ghostty-org/ghostty.git"
 CACHE_DIR="${GHOSTTY_CACHE_DIR:-$HOME/.cache/workspacemanager}"
@@ -205,6 +212,40 @@ postprocess_xcframework() {
   done < <(find "$framework_dir" -type f -name "libghostty-fat.a")
 }
 
+log_arch_diagnostics() {
+  local framework_dir="$1"
+
+  if [[ "$GHOSTTY_ARCH_DIAGNOSTICS" != "1" ]]; then
+    return
+  fi
+
+  echo "--- GhosttyKit architecture diagnostics (set GHOSTTY_ARCH_DIAGNOSTICS=0 to disable) ---"
+  echo "host arch (uname -m): $(uname -m)"
+
+  local zig_bin="${ZIG_RUNNER[0]}"
+  if [[ -x "$zig_bin" ]]; then
+    echo "zig runner binary: $zig_bin"
+    file "$zig_bin" 2>&1 || true
+  else
+    echo "zig runner: ${ZIG_RUNNER[*]} (mise-wrapped invocation, not a direct binary path)"
+  fi
+
+  local info_plist="$framework_dir/Info.plist"
+  if [[ -f "$info_plist" ]]; then
+    echo "xcframework Info.plist ($info_plist):"
+    plutil -p "$info_plist" 2>&1 || cat "$info_plist"
+  fi
+
+  local archive
+  while IFS= read -r archive; do
+    echo "xcframework archive: $archive"
+    file "$archive" 2>&1 || true
+    lipo -info "$archive" 2>&1 || true
+  done < <(find "$framework_dir" -type f -name "libghostty-fat.a" 2>/dev/null)
+
+  echo "--- end GhosttyKit architecture diagnostics ---"
+}
+
 resolve_ghostty_dir() {
   if [[ -n "$EXPLICIT_GHOSTTY_DIR" ]]; then
     GHOSTTY_DIR="$EXPLICIT_GHOSTTY_DIR"
@@ -304,6 +345,7 @@ main() {
 
   install_xcframework "$xcframework_src"
   postprocess_xcframework "$OUT_DIR/GhosttyKit.xcframework"
+  log_arch_diagnostics "$OUT_DIR/GhosttyKit.xcframework"
   echo "Built GhosttyKit.xcframework -> $OUT_DIR/GhosttyKit.xcframework"
 }
 
