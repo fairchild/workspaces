@@ -63,6 +63,9 @@ docs/papers/*.pdf
 .claude/skills/sandbox/
 .pi/skills/sandbox/
 
+# Agent inbox — local file-based coordination messages, not shared state
+.agents/inbox/
+
 # Playwright
 web/.auth/
 web/output/preview-qa/
