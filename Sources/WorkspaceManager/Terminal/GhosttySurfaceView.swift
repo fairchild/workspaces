@@ -24,7 +24,7 @@ enum GhosttySurfaceRetirementCloseError: LocalizedError {
 }
 
 @MainActor
-final class GhosttySurfaceView: NSView {
+final class GhosttySurfaceView: NSView, RetirementClosableSurface {
     private let workingDirectory: URL
     var onProcessExit: (() -> Void)?
     var onCloseConfirmationRequired: (() -> Void)?
@@ -277,42 +277,23 @@ final class GhosttySurfaceView: NSView {
         ghostty_surface_request_close(surface)
     }
 
-    func requestCloseForSessionRetirement(
-        timeout: Duration = .seconds(5),
-        pollInterval: Duration = .milliseconds(50)
-    ) async throws {
-        guard let surface else { return }
-        guard !ghostty_surface_process_exited(surface) else { return }
+    // MARK: - Retirement close seam
 
-        var processStillRunning = false
-        let previousCloseConfirmation = onCloseConfirmationRequired
-        onCloseConfirmationRequired = {
-            processStillRunning = true
-        }
-        defer {
-            onCloseConfirmationRequired = previousCloseConfirmation
-        }
-
-        ghostty_surface_request_close(surface)
-
-        let deadline = ContinuousClock.now.advanced(by: timeout)
-        while ContinuousClock.now < deadline {
-            if self.surface == nil || ghostty_surface_process_exited(surface) {
-                return
-            }
-            if processStillRunning {
-                throw GhosttySurfaceRetirementCloseError.processStillRunning(title: displayTitleForLifecycleError)
-            }
-            try await Task.sleep(for: pollInterval)
-        }
-
-        if self.surface == nil || ghostty_surface_process_exited(surface) {
-            return
-        }
-        throw GhosttySurfaceRetirementCloseError.timedOut(title: displayTitleForLifecycleError)
+    var isSurfaceAlive: Bool {
+        surface != nil
     }
 
-    private var displayTitleForLifecycleError: String {
+    var hasProcessExited: Bool {
+        guard let surface else { return false }
+        return ghostty_surface_process_exited(surface)
+    }
+
+    func requestSurfaceClose() {
+        guard let surface else { return }
+        ghostty_surface_request_close(surface)
+    }
+
+    var retirementDisplayTitle: String {
         let title = terminalTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         if !title.isEmpty {
             return title

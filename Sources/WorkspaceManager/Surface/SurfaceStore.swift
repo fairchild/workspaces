@@ -260,10 +260,10 @@ final class SurfaceStore {
     /// Run the terminal's session-retirement close (process-alive teardown) if a surface is mounted.
     @discardableResult
     func closeForSessionRetirement(sessionID: UUID) async throws -> Bool {
-        guard let surfaceView = terminalSurface(forSession: sessionID)?.surfaceView else {
+        guard let surface = terminalSurface(forSession: sessionID) else {
             return false
         }
-        try await surfaceView.requestCloseForSessionRetirement()
+        try await surface.closeForSessionRetirement()
         return true
     }
 

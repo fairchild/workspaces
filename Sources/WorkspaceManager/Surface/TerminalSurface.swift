@@ -79,6 +79,13 @@ final class TerminalSurface: Surface {
         surfaceView.requestClose()
     }
 
+    /// Session-retirement close (process-alive teardown with confirmation-as-error semantics),
+    /// driven through the tested `GhosttySurfaceRetirementCloser` state machine. The surface
+    /// conformer owns this lifecycle so callers never reach into the libghostty view (#710).
+    func closeForSessionRetirement() async throws {
+        try await GhosttySurfaceRetirementCloser().close(surfaceView)
+    }
+
     func tearDown() {
         // Detach the view and drop the title hook; the libghostty C handle frees via ARC/`deinit`
         // (no explicit free exists today). The title hook holds a strong `self`-capture into the
