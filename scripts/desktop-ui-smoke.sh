@@ -379,8 +379,10 @@ restored = later_workspace[0]
 if restored.get("sessionScope") != first_workspace.get("sessionScope"):
     fail("restored workspace session scope did not match the original workspace")
 
-# Flow 3: the web pane rendered through the Surface seam, and the workspace
-# terminal re-attached after it (the web swap did not strand the terminal).
+# Flow 3: the web pane rendered through the Surface seam, and workspace
+# selection routed a terminal session again afterwards. This gates session
+# routing after the web swap; surface remount/focus stays best-effort
+# (surface_focused), matching Flows 1-2.
 web_attaches = [e for e in events if e.get("type") == "web_surface_attached"]
 post_web_workspace = [
     a
@@ -388,7 +390,7 @@ post_web_workspace = [
     if events.index(a) > events.index(web_attaches[0])
 ]
 if not post_web_workspace:
-    fail("workspace terminal did not re-attach after the web pane")
+    fail("no workspace terminal session attached after the web pane")
 
 # scenario_complete must be the terminal milestone.
 if types[-1] != "scenario_complete":

@@ -784,10 +784,11 @@ struct ContentView: View {
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
                 resolveSurfaceLifecycle()
             }
-            .onChange(of: modelSnapshot) { _, _ in
+            .onChange(of: modelSnapshot) { old, new in
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
+                releaseRemovedWebSources(old: old, new: new)
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
@@ -1345,6 +1346,17 @@ struct ContentView: View {
         )
     }
 
+    /// Web sources removed from the model lose their per-source web store immediately — deletion
+    /// is a hard release whether or not the source was selected, so a deleted page never rides out
+    /// the deferred-release grace window (codex review finding on the P6 seam PR).
+    @MainActor
+    private func releaseRemovedWebSources(old: ModelSnapshot, new: ModelSnapshot) {
+        let removedSourceIDs = Set(old.webSourceIDs).subtracting(new.webSourceIDs)
+        for sourceID in removedSourceIDs {
+            webDetailSurfaceStore.releaseWebResources(forSourceID: sourceID)
+        }
+    }
+
     @MainActor
     private func reconcileSelectionAfterModelChange() {
         clearInvalidLastSurfaceIfNeeded()
@@ -1353,9 +1365,8 @@ struct ContentView: View {
             currentSelectedWebSource == nil
         {
             setSelectedWebSource(nil)
-            // The source was deleted from the model: hard-release its web view now rather than
-            // letting the deferred-release window keep a dead page alive.
-            webDetailSurfaceStore.releaseWebResources(forSourceID: selectedWebSource.webSourceID)
+            // Hard release happens in releaseRemovedWebSources (deletion-diff authority);
+            // this path only repairs the dangling selection.
             handleSelectedWebSourceRemoval(selectedWebSource)
             return
         }

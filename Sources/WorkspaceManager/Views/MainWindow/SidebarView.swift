@@ -1303,8 +1303,9 @@ struct SidebarView: View {
             timeout: .seconds(15)
         )
 
-        // Flow 3: web main content renders through the Surface seam, then the
-        // terminal re-attaches on return. about:blank keeps the gate
+        // Flow 3: web main content renders through the Surface seam, then returning to the
+        // workspace routes a terminal session again (session routing is the hard gate; surface
+        // focus stays best-effort in headless runs, like Flows 1–2). about:blank keeps the gate
         // network-independent — the milestone is the surface mount, not a page load.
         if let webSource = ensureDesktopUISmokeWebSource() {
             let webBaseline = desktopUISmokeAutomation.webSurfaceAttachCount
