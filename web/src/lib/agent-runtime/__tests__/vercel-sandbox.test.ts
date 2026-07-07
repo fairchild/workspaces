@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	VercelSandboxProvider,
+	baseSnapshotFingerprint,
 	buildGitCloneArgs,
+	computeBaseSnapshotVersion,
 	terminalAnthropicApiKey,
 	ttydPathToken,
 } from "../vercel-sandbox";
@@ -181,5 +183,59 @@ describe("terminalAnthropicApiKey", () => {
 				TERMINAL_ANTHROPIC_API_KEY: "1",
 			}),
 		).toBe("sk-test");
+	});
+});
+
+describe("base snapshot cache key", () => {
+	const base = {
+		miseVersion: "v2026.7.1",
+		miseSha256: "a".repeat(64),
+		tmuxUrl: "https://example.com/tmux.gz",
+	};
+
+	it("produces a deterministic 12-char hex fingerprint", () => {
+		const a = baseSnapshotFingerprint(base);
+		const b = baseSnapshotFingerprint({ ...base });
+		expect(a).toBe(b);
+		expect(a).toMatch(/^[0-9a-f]{12}$/);
+	});
+
+	it("changes when the mise version changes", () => {
+		const before = baseSnapshotFingerprint(base);
+		const after = baseSnapshotFingerprint({
+			...base,
+			miseVersion: "v2026.7.2",
+		});
+		expect(after).not.toBe(before);
+	});
+
+	it("changes when the mise checksum changes", () => {
+		const before = baseSnapshotFingerprint(base);
+		const after = baseSnapshotFingerprint({
+			...base,
+			miseSha256: "b".repeat(64),
+		});
+		expect(after).not.toBe(before);
+	});
+
+	it("changes when a pinned binary URL changes", () => {
+		const before = baseSnapshotFingerprint(base);
+		const after = baseSnapshotFingerprint({
+			...base,
+			tmuxUrl: "https://example.com/other.gz",
+		});
+		expect(after).not.toBe(before);
+	});
+
+	it("prefixes the human label and appends the fingerprint", () => {
+		const version = computeBaseSnapshotVersion("v5-pi-skills", base);
+		expect(version).toBe(`v5-pi-skills-${baseSnapshotFingerprint(base)}`);
+		expect(version).toMatch(/^v5-pi-skills-[0-9a-f]{12}$/);
+	});
+
+	it("keeps the version stable for the same recipe (no accidental churn)", () => {
+		expect(computeBaseSnapshotVersion("v5-pi-skills", base)).toBe(
+			computeBaseSnapshotVersion("v5-pi-skills", { ...base }),
+		);
 	});
 });

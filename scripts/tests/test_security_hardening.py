@@ -324,11 +324,15 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("enable-global-virtual-store=true", web_npmrc)
 
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
-        self.assertIn("MISE_VERSION='v2026.7.1'", sandbox)
+        # The pin lives in TS constants (single source of truth) that feed both
+        # the install command and the base-snapshot fingerprint.
+        self.assertIn('const MISE_VERSION = "v2026.7.1"', sandbox)
         self.assertIn(
-            "MISE_SHA256='1fd2f4337ea305fff1971460ea57b977c70de04e8f6184368b7745251504c2d5'",
+            '"1fd2f4337ea305fff1971460ea57b977c70de04e8f6184368b7745251504c2d5"',
             sandbox,
         )
+        # The install command still wires the pinned constant and verifies it.
+        self.assertIn("MISE_VERSION='${MISE_VERSION}'", sandbox)
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
 
