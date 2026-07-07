@@ -63,7 +63,13 @@ swift run workspaces .
 swift run workspaces repo add ~/code/my-repo
 swift run workspaces ws new my-repo feature-auth
 swift run workspaces open my-repo/feature-auth --cmd "claude"
+swift run workspaces ws race my-repo "add a health endpoint" --n 3 --cmd "claude"
 ```
+
+`ws race` fans one prompt across N fresh worktree workspaces (`race-<slug>-1..N`)
+and runs the agent headlessly in each (`<cmd> -p '<prompt>'`, output in the
+workspace's `.race-agent.log`). Use `workspaces open <repo>/<name>` to attach to
+any of them interactively.
 
 ## Configuration
 

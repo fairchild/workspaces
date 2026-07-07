@@ -199,7 +199,7 @@ private final class CLIApp {
 
     private func runWorkspace(arguments: [String], state: inout CLIState) async throws -> Int32 {
         guard let subcommand = arguments.first else {
-            throw CLIError("Missing ws subcommand. Expected: new, list, path")
+            throw CLIError("Missing ws subcommand. Expected: new, list, path, race")
         }
 
         switch subcommand {
@@ -267,9 +267,190 @@ private final class CLIApp {
             print(workspace.path)
             return 0
 
+        case "race":
+            return try await runWorkspaceRace(arguments: Array(arguments.dropFirst()), state: &state)
+
         default:
-            throw CLIError("Unknown ws subcommand '\(subcommand)'. Expected: new, list, path")
+            throw CLIError("Unknown ws subcommand '\(subcommand)'. Expected: new, list, path, race")
         }
+    }
+
+    /// Fans one prompt across N fresh worktree workspaces and launches a detached headless
+    /// agent (`<cmd> -p '<prompt>'`) in each. Fail-fast: a failure at workspace k keeps
+    /// workspaces 1..k-1 (recoverable via `ws list`) and reports what was created.
+    private func runWorkspaceRace(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        let usage = "workspaces ws race <repo> <prompt...> [--n 3] [--cmd \"claude\"] [--name <slug>] [--no-launch]"
+
+        var repoToken: String?
+        var promptWords: [String] = []
+        var count = 3
+        var command = "claude"
+        var nameOverride: String?
+        var launch = true
+
+        var index = 0
+        while index < arguments.count {
+            let token = arguments[index]
+            switch token {
+            case "--n":
+                index += 1
+                guard index < arguments.count, let parsed = Int(arguments[index]) else {
+                    throw CLIError("Missing or invalid value for --n")
+                }
+                count = parsed
+            case "--cmd":
+                index += 1
+                guard index < arguments.count else {
+                    throw CLIError("Missing value for --cmd")
+                }
+                command = arguments[index]
+            case "--name":
+                index += 1
+                guard index < arguments.count else {
+                    throw CLIError("Missing value for --name")
+                }
+                nameOverride = arguments[index]
+            case "--no-launch":
+                launch = false
+            default:
+                if repoToken == nil {
+                    repoToken = token
+                } else {
+                    promptWords.append(token)
+                }
+            }
+            index += 1
+        }
+
+        guard let repoToken else {
+            throw CLIError("Usage: \(usage)")
+        }
+        let prompt = promptWords.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+        guard RaceGroupPlanner.countRange.contains(count) else {
+            let range = RaceGroupPlanner.countRange
+            throw CLIError("--n must be between \(range.lowerBound) and \(range.upperBound).")
+        }
+        guard let repo = resolveRepo(token: repoToken, state: state) else {
+            throw CLIError("Repository not found: \(repoToken)")
+        }
+
+        let plan = RaceGroupPlanner.plan(
+            prompt: prompt,
+            count: count,
+            command: command,
+            nameOverride: nameOverride
+        )
+
+        var createdWorkspaces: [WorkspaceRecord] = []
+        var failure: (name: String, error: Error)?
+        for name in plan.workspaceNames {
+            do {
+                let info = try await workspaceService.createWorkspace(
+                    repoName: repo.name,
+                    repoLocalURL: URL(fileURLWithPath: repo.path),
+                    name: name
+                )
+                createdWorkspaces.append(
+                    WorkspaceRecord(
+                        id: UUID(),
+                        name: info.name,
+                        repoName: repo.name,
+                        repoPath: repo.path,
+                        path: info.path.path,
+                        gitBranch: info.gitBranch,
+                        createdAt: Date(),
+                        lastAccessedAt: Date(),
+                        defaultCommand: command
+                    )
+                )
+            } catch {
+                failure = (name, error)
+                break
+            }
+        }
+
+        for workspace in createdWorkspaces {
+            state.workspaces.removeAll { $0.path == workspace.path }
+            state.workspaces.append(workspace)
+        }
+
+        if !createdWorkspaces.isEmpty {
+            var record = RaceGroupRecord(
+                id: UUID(),
+                slug: plan.slug,
+                repoName: repo.name,
+                prompt: prompt,
+                command: command,
+                workspaceIDs: createdWorkspaces.map(\.id),
+                createdAt: Date(),
+                agentPIDs: []
+            )
+            if launch {
+                for workspace in createdWorkspaces {
+                    if let pid = spawnDetachedAgent(
+                        command: plan.agentCommand,
+                        workspaceURL: URL(fileURLWithPath: workspace.path)
+                    ) {
+                        record.agentPIDs.append(pid)
+                    }
+                }
+            }
+            var groups = state.raceGroups ?? []
+            groups.append(record)
+            state.raceGroups = groups
+        }
+        try stateStore.save(state)
+
+        for workspace in createdWorkspaces {
+            print("Created workspace: \(workspaceDisplayName(workspace))")
+            print("  Path: \(workspace.path)")
+            print("  Branch: \(workspace.gitBranch)")
+            if launch {
+                print("  Log: \(workspace.path)/\(Self.raceAgentLogName)")
+            }
+            print("  Attach: workspaces open \(workspace.repoName)/\(workspace.name)")
+        }
+
+        if let failure {
+            writeStderr("error: failed to create workspace '\(failure.name)': \(failure.error.localizedDescription)")
+            let progress = "\(createdWorkspaces.count) of \(plan.workspaceNames.count)"
+            writeStderr("Created \(progress) workspaces before failing; see 'workspaces ws list'.")
+            return 1
+        }
+        return 0
+    }
+
+    private static let raceAgentLogName = ".race-agent.log"
+
+    /// Launches the agent as a detached child (no waitUntilExit) with output captured to
+    /// the workspace's race log. Returns the PID, or nil when launch fails (recorded as a
+    /// warning; the workspace itself stays usable via `workspaces open`).
+    private func spawnDetachedAgent(command: String, workspaceURL: URL) -> Int32? {
+        let logURL = workspaceURL.appendingPathComponent(Self.raceAgentLogName)
+        FileManager.default.createFile(atPath: logURL.path, contents: nil)
+        guard let logHandle = FileHandle(forWritingAtPath: logURL.path) else {
+            writeStderr("warning: could not open \(logURL.path) for agent output; skipping launch")
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", command]
+        process.currentDirectoryURL = workspaceURL
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = logHandle
+        process.standardError = logHandle
+
+        do {
+            try process.run()
+        } catch {
+            writeStderr("warning: failed to launch agent in \(workspaceURL.path): \(error.localizedDescription)")
+            return nil
+        }
+        return process.processIdentifier
     }
 
     private func runOpen(arguments: [String], state: inout CLIState) async throws -> Int32 {
@@ -917,6 +1098,8 @@ private struct CLIState: Codable {
     var workspaces: [WorkspaceRecord] = []
     var recents: [RecentSession] = []
     var lastSession: LastSession?
+    // Optional so state.json files written before race groups existed keep decoding.
+    var raceGroups: [RaceGroupRecord]?
 }
 
 private struct RepoRecord: Codable {
@@ -936,6 +1119,17 @@ private struct WorkspaceRecord: Codable {
     var createdAt: Date
     var lastAccessedAt: Date
     var defaultCommand: String?
+}
+
+private struct RaceGroupRecord: Codable {
+    var id: UUID
+    var slug: String
+    var repoName: String
+    var prompt: String
+    var command: String
+    var workspaceIDs: [UUID]
+    var createdAt: Date
+    var agentPIDs: [Int32]
 }
 
 private struct RecentSession: Codable {
@@ -1160,6 +1354,7 @@ private func printHelp() {
           workspaces ws new <repo> <name>
           workspaces ws list
           workspaces ws path <workspace>
+          workspaces ws race <repo> <prompt...> [--n 3] [--cmd "claude"] [--name <slug>] [--no-launch]
           workspaces open <workspace> [--cmd "command"]
           workspaces run <workspace> -- <command...>
           workspaces run <workspace> --cmd "command"
