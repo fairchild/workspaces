@@ -14,6 +14,13 @@ import WorkspaceManagerCore
 final class SurfaceStore {
     private var surfaces: [TileID: any Surface] = [:]
 
+    /// Shared-per-source web view stores (the Phase 6 decision from the PR #633 review): a
+    /// `WebSurfaceStore` — and its `WKWebView` — belongs to the `WebSource`, not to any one tile
+    /// binding, so an evicted web surface's page survives the release grace window and a re-bound
+    /// tile picks it up without a reload. Entries are dropped by `releaseWebResources(forSourceID:)`
+    /// (source deleted); an idle entry otherwise holds no `WKWebView` after its deferred release fires.
+    private var webStoresBySourceID: [UUID: WebSurfaceStore] = [:]
+
     /// Forwarded to terminal surfaces at creation so libghostty can reach the agent hook socket.
     var hooksSocketPath: String?
     /// Forwarded to terminal surfaces at creation so tile-local processes can reach the Automation
@@ -117,11 +124,41 @@ final class SurfaceStore {
         let created = WebSurface(
             tileID: tileID,
             source: source,
+            surfaceStore: webStore(forSourceID: source.id),
             onBlockedNavigation: onBlockedNavigation
         )
         surfaces[tileID] = created
         onSurfaceCreated?(tileID)
         return created
+    }
+
+    /// The web surface bound to `tileID`, if any. Backs source-level actions (reload,
+    /// open-in-browser) that need the live `WKWebView` behind the current web tile.
+    func webSurface(for tileID: TileID) -> WebSurface? {
+        surfaces[tileID] as? WebSurface
+    }
+
+    /// Get-or-create the shared per-source store backing `sourceID`'s web views.
+    func webStore(forSourceID sourceID: UUID) -> WebSurfaceStore {
+        if let store = webStoresBySourceID[sourceID] {
+            return store
+        }
+        let store = WebSurfaceStore()
+        webStoresBySourceID[sourceID] = store
+        return store
+    }
+
+    /// Immediately release everything held for `sourceID` — the web surface (if a tile is bound to
+    /// it) and the per-source store's `WKWebView`, skipping the deferred-release grace window. For
+    /// hard teardown (the source was deleted), where lazy release would keep a dead page alive.
+    func releaseWebResources(forSourceID sourceID: UUID) {
+        for (tileID, surface) in surfaces {
+            if let webSurface = surface as? WebSurface, webSurface.source.id == sourceID {
+                invalidate(tileID: tileID)
+            }
+        }
+        guard let store = webStoresBySourceID.removeValue(forKey: sourceID) else { return }
+        store.releaseInactiveSurface()
     }
 
     // MARK: - Resolver

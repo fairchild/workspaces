@@ -162,6 +162,40 @@ struct AutomationControllerTests {
         }
     }
 
+    @Test("Web surface handles are rejected as unsupported")
+    func webSurfaceHandleIsRejected() throws {
+        let store = HostTerminalStateStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "web-handle" })
+        // Even with a live host session and full capabilities, a non-terminal surface kind gates
+        // the request before the liveness check (which would misreport it as a stale handle).
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .web,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            hostTerminalState: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in }
+        )
+
+        do {
+            _ = try controller.automationContext(for: "web-handle")
+            Issue.record("Expected web-surface handle to be rejected as unsupported")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .unsupported)
+        }
+    }
+
     @Test("Input write requires the input.write capability")
     func inputWriteRequiresCapability() throws {
         let fixture = makeFixture()

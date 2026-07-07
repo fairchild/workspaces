@@ -179,6 +179,14 @@ final class AutomationController: AutomationControlling {
                 "The automation handle does not include \(capability.rawValue)."
             )
         }
+        // Before the terminal-session liveness check: a web entry's host-session id can never
+        // resolve to a terminal tab, so checking liveness first would misreport `.staleHandle`.
+        guard entry.surfaceKind == .terminal else {
+            throw AutomationServiceError(
+                .unsupported,
+                "Automation v1 drives terminal tiles only; this handle targets a \(entry.surfaceKind.rawValue) surface."
+            )
+        }
         guard hostTerminalState.primarySessionID(containing: entry.hostSessionID) != nil else {
             handleRegistry.remove(hostSessionID: entry.hostSessionID)
             throw AutomationServiceError(.staleHandle, "The automation handle no longer maps to a live terminal tile.")

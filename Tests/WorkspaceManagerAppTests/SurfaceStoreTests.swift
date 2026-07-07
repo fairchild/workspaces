@@ -237,6 +237,55 @@ struct SurfaceConformerTests {
         #expect(surface.surfaceView.superview == nil)
     }
 
+    @Test("Web surfaces share one store per source across rebinds — flip-back keeps the live page")
+    func webStoreSharedPerSourceAcrossRebinds() {
+        let store = SurfaceStore()
+        let tile = TileID()
+        let sourceA = makeWebSource(name: "A", host: "a.example.com")
+        let sourceB = makeWebSource(name: "B", host: "b.example.com")
+
+        let surfaceA = store.webSurface(for: tile, source: sourceA)
+        let webViewA = surfaceA.webView
+        let storeA = store.webStore(forSourceID: sourceA.id)
+        #expect(storeA.hasActiveSurface)
+
+        // Rebinding the tile to B evicts A's surface (identity guard) but A's page release is
+        // deferred — the web half of the per-conformer eviction policy.
+        let surfaceB = store.webSurface(for: tile, source: sourceB)
+        #expect(surfaceB !== surfaceA)
+        #expect(store.webStore(forSourceID: sourceB.id) !== storeA)
+        #expect(storeA.hasActiveSurface)
+
+        // Rebinding back to A inside the grace window resumes the same live web view — no reload.
+        let surfaceA2 = store.webSurface(for: tile, source: sourceA)
+        #expect(surfaceA2 !== surfaceA)
+        #expect(surfaceA2.webView === webViewA)
+    }
+
+    @Test("Web eviction defers release; releaseWebResources frees immediately and drops the store")
+    func webEvictionPolicyAndHardRelease() {
+        let store = SurfaceStore()
+        let tile = TileID()
+        let source = makeWebSource(name: "Docs", host: "docs.example.com")
+
+        let surface = store.webSurface(for: tile, source: source)
+        _ = surface.webView
+        let webStore = store.webStore(forSourceID: source.id)
+        #expect(webStore.hasActiveSurface)
+
+        store.invalidate(tileID: tile)
+        #expect(store.surface(for: tile) == nil)
+        #expect(webStore.hasActiveSurface)
+
+        store.releaseWebResources(forSourceID: source.id)
+        #expect(!webStore.hasActiveSurface)
+        #expect(store.webStore(forSourceID: source.id) !== webStore)
+    }
+
+    private func makeWebSource(name: String, host: String) -> WebSource {
+        WebSource(name: name, baseURLString: "https://\(host)", allowedHost: host)
+    }
+
     @Test("WebSurface carries no agent coupling and titles from its source")
     func webSurfaceShape() {
         let tile = TileID()

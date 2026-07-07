@@ -70,7 +70,11 @@ struct ContentView: View {
     @State private var accessRecorder = MainWindowAccessRecorder()
     @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
-    @StateObject private var webSurfaceStore = WebSurfaceStore()
+    /// Seam store for the web main-content pane: a one-tile `SurfaceStore` domain. Source switches
+    /// rebind `webDetailTileID` to a new `WebSurface` (identity-guarded); per-source `WebSurfaceStore`s
+    /// inside keep each source's page alive through the deferred-release window.
+    @State private var webDetailSurfaceStore = SurfaceStore()
+    @State private var webDetailTileID = TileID()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
     private let buildIdentity = AppBuildIdentity.current
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
@@ -549,7 +553,8 @@ struct ContentView: View {
         if let selectedWebSource = currentSelectedWebSource {
             WebSourceDetailView(
                 source: selectedWebSource,
-                surfaceStore: webSurfaceStore
+                tileID: webDetailTileID,
+                surfaceStore: webDetailSurfaceStore
             )
         } else if let selectedRepo = currentSelectedRepoForLanding {
             RepoLandingView(
@@ -1342,7 +1347,9 @@ struct ContentView: View {
             currentSelectedWebSource == nil
         {
             setSelectedWebSource(nil)
-            webSurfaceStore.releaseInactiveSurface()
+            // The source was deleted from the model: hard-release its web view now rather than
+            // letting the deferred-release window keep a dead page alive.
+            webDetailSurfaceStore.releaseWebResources(forSourceID: selectedWebSource.webSourceID)
             handleSelectedWebSourceRemoval(selectedWebSource)
             return
         }
@@ -1658,7 +1665,9 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "web_source_selected")
         abandonPendingRemoteConnection(reason: "web_source_selected")
         applyNavigationDestination(.webView(source))
-        webSurfaceStore.cancelPendingRelease()
+        // Reselecting inside the deferred-release window rescues the source's live page before the
+        // pane re-mounts (mounting would cancel too; this makes the intent explicit and immediate).
+        webDetailSurfaceStore.webStore(forSourceID: source.id).cancelPendingRelease()
         markAccessed(webSource: source)
     }
 
@@ -2540,7 +2549,10 @@ struct ContentView: View {
     @MainActor
     private func openSelectedWebSourceInBrowser() {
         guard let selectedWebSource = currentSelectedWebSource else { return }
-        let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
+        let webView =
+            webDetailSurfaceStore
+            .webSurface(for: webDetailTileID, source: selectedWebSource)
+            .webView
         if let currentURL = webView.url {
             NSWorkspace.shared.open(currentURL)
         } else if let baseURL = selectedWebSource.baseURL {
@@ -2551,7 +2563,10 @@ struct ContentView: View {
     @MainActor
     private func reloadSelectedWebSource() {
         guard let selectedWebSource = currentSelectedWebSource else { return }
-        let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
+        let webView =
+            webDetailSurfaceStore
+            .webSurface(for: webDetailTileID, source: selectedWebSource)
+            .webView
         if let currentURL = webView.url {
             webView.load(URLRequest(url: currentURL))
         } else if let baseURL = selectedWebSource.baseURL {
