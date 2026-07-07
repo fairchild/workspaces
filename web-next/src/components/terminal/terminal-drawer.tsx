@@ -74,6 +74,8 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	const [phase, setPhase] = useState<Phase>("idle");
 	const [note, setNote] = useState("");
 	const [ready, setReady] = useState(false);
+	/** Transport the exchange resolved — shown honestly in the status bar. */
+	const [mode, setMode] = useState<"ttyd" | "mock" | null>(null);
 
 	const hostRef = useRef<HTMLDivElement>(null);
 	const transcriptRef = useRef<HTMLDivElement>(null);
@@ -128,7 +130,14 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 		try {
 			const term = await ensureTerminal();
 			if (!term) return;
-			const access = await requestTerminalAccess(sessionId);
+			let access: Awaited<ReturnType<typeof requestTerminalAccess>>;
+			try {
+				access = await requestTerminalAccess(sessionId);
+			} catch (error) {
+				setNote(error instanceof Error ? error.message : "connection failed");
+				setPhase("denied");
+				return;
+			}
 			if (access.kind === "no-sandbox") {
 				setNote(access.reason);
 				setPhase("no-sandbox");
@@ -170,6 +179,7 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 							cols: term.cols,
 							rows: term.rows,
 						});
+			setMode(access.kind);
 			setPhase("ready");
 			term.focus();
 		} finally {
@@ -226,7 +236,10 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 	const statusLabel: Record<Phase, string> = {
 		idle: "",
 		connecting: "connecting…",
-		ready: "attached to the session's sandbox",
+		ready:
+			mode === "mock"
+				? "mock PTY (AUTH_BYPASS)"
+				: "attached to the session's sandbox",
 		"no-sandbox": "no live sandbox",
 		denied: "access denied",
 		disconnected: "disconnected",

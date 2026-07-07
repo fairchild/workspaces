@@ -66,9 +66,8 @@ test("Ctrl+` opens a live shell and a typed command runs in it", async ({
 	await expect(page.getByTestId("terminal-transcript")).toContainText(
 		"drawer-proof-42",
 	);
-	await expect(page.getByTestId("terminal-status")).toContainText(
-		"attached to the session's sandbox",
-	);
+	// The status bar names the transport honestly: this is the mock seam.
+	await expect(page.getByTestId("terminal-status")).toContainText("mock PTY");
 
 	// The exchange really ran (a ticket was minted)…
 	expect(mintedTicket).not.toBe("");

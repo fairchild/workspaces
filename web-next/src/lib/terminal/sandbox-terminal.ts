@@ -154,6 +154,7 @@ export async function ensureTerminal(
 			detached: true,
 		});
 	}
-	const wss = domain.replace(/^https:/, "wss:").replace(/\/$/, "");
+	// http → ws, https → wss (the shared prefix makes one replace cover both).
+	const wss = domain.replace(/^http/, "ws").replace(/\/$/, "");
 	return { wsUrl: `${wss}/${token}/ws` };
 }
