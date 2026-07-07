@@ -8,8 +8,16 @@
  * request is still in flight): `retryDisabled` from the caller covers the
  * turn-level "another turn is already running" state, but there's a gap
  * between the click and that flag flipping true, so a local latch closes it.
+ *
+ * The latch is a ref, not state: two `handleRetry` calls from the same click
+ * burst (e.g. a fast double-click, or React batching two events before a
+ * re-render) both read `pendingRef.current` synchronously, so the second call
+ * sees the first's write immediately — a `useState` flag would still show its
+ * pre-click value to both, since neither call observes the other's `setState`
+ * until the next render, and one render can't happen between two events fired
+ * before it.
  */
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 export interface TurnFailureProps {
 	/** The stream's error text, or the interrupted-turn fallback message. */
@@ -21,11 +29,14 @@ export interface TurnFailureProps {
 }
 
 export function TurnFailure({ message, onRetry, retryDisabled }: TurnFailureProps) {
+	const pendingRef = useRef(false);
+	// Mirrors pendingRef into render output (refs alone don't trigger one).
 	const [pending, setPending] = useState(false);
 	const disabled = retryDisabled || pending;
 
 	const handleRetry = () => {
-		if (disabled || !onRetry) return;
+		if (retryDisabled || pendingRef.current || !onRetry) return;
+		pendingRef.current = true;
 		setPending(true);
 		onRetry();
 	};

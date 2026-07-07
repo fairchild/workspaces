@@ -4,36 +4,70 @@
  * `processUIMessageStream` rethrows it) before the adapter's `finish` chunk —
  * which is what would normally carry `metadata.error` — ever arrives, so the
  * assistant message useChat already pushed at `start` never gets tagged.
- * `withLiveTurnError` reproduces that tag locally from the hook's
- * `status`/`error` state, so the live and reloaded failure states render
- * through the exact same Message component (see chunk-adapter.ts's
+ * `applyLiveTurnErrors` reproduces that tag locally from a *sticky* record of
+ * failures keyed by message id (live-session-view.tsx populates it from the
+ * hook's `status`/`error` state), so the live and reloaded failure states
+ * render through the exact same Message component (see chunk-adapter.ts's
  * `case "error"` and turn-stats.ts's `deriveTurnError` for the server-side
  * half of this contract, which projection relies on directly).
+ *
+ * Sticky, not derived-from-current-status: a naive "patch the trailing
+ * message while status === 'error'" only holds while that message stays both
+ * trailing AND the hook's status hasn't moved on. The moment a later turn
+ * starts (e.g. its own Retry), status leaves "error" and a new message
+ * becomes trailing — a status-gated patch would silently un-tag the earlier
+ * failure, making its card vanish from the live view (only a reload would
+ * bring it back, via project-events.ts's independent persisted tagging).
+ * Recording each failure once, by the id it was caught on, keeps it tagged
+ * for the rest of the session regardless of what happens afterward.
  */
 import type { FolioMessage } from "@/components/folio/types";
 
+/** Matches turn-stats.ts's deriveTurnError fallback for an empty error chunk
+ * — keeps the live and projected text identical in that edge case too. */
+const EMPTY_ERROR_FALLBACK = "The turn failed.";
+
+/** messageId -> error text, accumulated for the life of the session view. */
+export type LiveTurnErrors = Readonly<Record<string, string>>;
+
 /**
- * Tags the trailing assistant message with the live failure, if one hasn't
- * already been recorded. A no-op when the trailing message isn't an
- * assistant reply (nothing to tag) or already carries `metadata.error`
- * (idempotent — safe to call on every render while `status === "error"`).
+ * Records the trailing assistant message's failure, if the hook just entered
+ * `status === "error"` and that message isn't already recorded — a no-op
+ * otherwise (including on every later re-render, since the id is already a
+ * key). Returns the SAME object when nothing changed, so callers can use it
+ * as a `setState` updater without triggering an extra render.
  */
-export function withLiveTurnError(
-	messages: FolioMessage[],
+export function recordLiveTurnError(
+	current: LiveTurnErrors,
+	messages: readonly FolioMessage[],
 	errorText: string,
+): LiveTurnErrors {
+	const last = messages.at(-1);
+	if (!last || last.role !== "assistant" || current[last.id] !== undefined) {
+		return current;
+	}
+	return { ...current, [last.id]: errorText.length > 0 ? errorText : EMPTY_ERROR_FALLBACK };
+}
+
+/** Tags every message with a recorded failure, leaving the rest untouched. */
+export function applyLiveTurnErrors(
+	messages: FolioMessage[],
+	failures: LiveTurnErrors,
 	fallbackAuthor: string,
 ): FolioMessage[] {
-	const last = messages.at(-1);
-	if (!last || last.role !== "assistant" || last.metadata?.error) return messages;
-	const patched: FolioMessage = {
-		...last,
-		metadata: {
-			...last.metadata,
-			author: last.metadata?.author ?? fallbackAuthor,
-			error: errorText,
-		},
-	};
-	return [...messages.slice(0, -1), patched];
+	if (Object.keys(failures).length === 0) return messages;
+	return messages.map((message) => {
+		const errorText = failures[message.id];
+		if (errorText === undefined || message.metadata?.error !== undefined) return message;
+		return {
+			...message,
+			metadata: {
+				...message.metadata,
+				author: message.metadata?.author ?? fallbackAuthor,
+				error: errorText,
+			},
+		};
+	});
 }
 
 /**

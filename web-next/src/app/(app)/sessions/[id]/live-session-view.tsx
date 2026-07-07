@@ -24,15 +24,21 @@
  * same text; a user edit (or the eventual server write) replaces the preview
  * with the real persisted string.
  *
- * A turn that errors (#808) surfaces the same way live and after a reload:
- * `status === "error"` here tags the trailing assistant message with
- * `metadata.error` (see live-turn-error.ts — the SDK's error throw cuts the
- * stream before the adapter's `finish` chunk, which would normally carry that
- * tag, ever arrives), and project-events.ts tags it server-side from the
- * persisted `error`/aborted-`done` chunks on reload. Either way the message
- * flows into `visibleMessages` and renders through Message's failure card;
- * its Retry button (session-view.tsx) re-sends the turn's original text,
- * which `send` already exists to do.
+ * A turn that errors (#808) surfaces the same way live and after a reload.
+ * Live: `status === "error"` records the trailing assistant message's id
+ * against the error text (see live-turn-error.ts's `recordLiveTurnError` —
+ * the SDK's error throw cuts the stream before the adapter's `finish` chunk,
+ * which would normally carry `metadata.error`, ever arrives) in a *sticky*
+ * `liveFailures` map, not a value re-derived from the hook's current status —
+ * a status-gated patch would un-tag an earlier failed turn the instant a
+ * later turn's Retry moves `status` off "error", making its card vanish
+ * until the next reload. Reload: project-events.ts tags it server-side from
+ * the persisted `error`/aborted-`done` chunks — independently durable, so a
+ * turn's failure card survives even if the live map above were somehow lost
+ * (e.g. this component remounting). Either way the message flows into
+ * `visibleMessages` and renders through Message's failure card; its Retry
+ * button (session-view.tsx) re-sends the turn's original text, which `send`
+ * already exists to do.
  */
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
@@ -46,7 +52,12 @@ import {
 import type { FolioDataParts, FolioMessage } from "@/components/folio/types";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
-import { isVisibleMessage, withLiveTurnError } from "@/lib/transcript/live-turn-error";
+import {
+	applyLiveTurnErrors,
+	isVisibleMessage,
+	type LiveTurnErrors,
+	recordLiveTurnError,
+} from "@/lib/transcript/live-turn-error";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
@@ -220,12 +231,19 @@ export function LiveSessionView({
 
 	// A live failure (#808): the trailing assistant message useChat pushed at
 	// the turn's `start` never gets `metadata.error` from the stream itself
-	// (see live-turn-error.ts), so tag it here from the hook's own error
-	// state — idempotent, so this is safe to recompute every render.
-	const displayMessages =
-		status === "error" && error
-			? withLiveTurnError(messages, error.message, session.masthead.agentName)
-			: messages;
+	// (see live-turn-error.ts), so record it here from the hook's own error
+	// state the moment it appears. Sticky by message id (real state, not a
+	// value re-derived from the current `status`) — a later turn's own
+	// status transitions must not erase an earlier turn's recorded failure.
+	const [liveFailures, setLiveFailures] = useState<LiveTurnErrors>({});
+	useEffect(() => {
+		if (status !== "error" || !error) return;
+		setLiveFailures((current) => recordLiveTurnError(current, messages, error.message));
+	}, [status, error, messages]);
+	const displayMessages = useMemo(
+		() => applyLiveTurnErrors(messages, liveFailures, session.masthead.agentName),
+		[messages, liveFailures, session.masthead.agentName],
+	);
 
 	// The reply message exists (empty) as soon as the stream starts; keep it
 	// out of the transcript until it has content or has failed — the activity

@@ -357,20 +357,16 @@ test("a failing turn surfaces an inline failure + retry, live and after reload (
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
 	await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
 
-	// A reload projects the identical failure from the persisted log — same
-	// card, same message, same turn — proving live and reloaded agree.
-	await page.reload();
-	await expect(page.getByTestId("turn-failure")).toContainText(
-		"Simulated turn failure (mock provider)",
-	);
-	await expect(page.locator('[data-message-role="user"]')).toContainText(
-		"Fix the bug",
-	);
-
 	// Retry re-sends the turn's original text — recoverable, not lost, even
-	// though the compose field itself cleared on the original submit. The mock
-	// has already spent its one guaranteed failure on this session, so this
-	// attempt runs the normal script through to completion.
+	// though the compose field itself cleared on the original submit — WITHOUT
+	// a reload in between: this is the live-only path, where the failed
+	// turn's card is tagged by a sticky client-side record (live-turn-error.ts)
+	// rather than the server projection. A status-gated version of that record
+	// would un-tag the card the instant this retry's turn leaves the "error"
+	// status, making it vanish here even though the log still has it — so this
+	// ordering (retry BEFORE reload) is the one that actually exercises that.
+	// The mock has already spent its one guaranteed failure on this session,
+	// so this attempt runs the normal script through to completion.
 	await page.getByRole("button", { name: "Retry" }).click();
 	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
 	await expect(
@@ -381,9 +377,19 @@ test("a failing turn surfaces an inline failure + retry, live and after reload (
 	});
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
 
-	// The failed turn's own card is untouched — retry started a new turn, it
-	// didn't erase the record of the failure.
+	// The failed turn's own card is still there, live — retry started a new
+	// turn, it didn't erase the record of the failure.
 	await expect(page.getByTestId("turn-failure")).toBeVisible();
+
+	// A reload projects the identical story from the persisted log — both the
+	// failure card and the successful retry turn survive it, proving live and
+	// reloaded agree throughout, not just in the moment right after failing.
+	await page.reload();
+	await expect(page.getByTestId("turn-failure")).toContainText(
+		"Simulated turn failure (mock provider)",
+	);
+	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
+	await expect(page.getByTestId("turn-stats")).toBeVisible();
 });
 
 // GitHub-backed repo picker (#825): the /api/repos fixture list under
