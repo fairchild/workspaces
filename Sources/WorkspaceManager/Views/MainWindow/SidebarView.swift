@@ -1499,11 +1499,16 @@ struct SidebarView: View {
                         foregroundName: foregroundNameBySessionID[session.id],
                         terminalTitle: title)
                     : title
+                // Only Claude Code tabs carry a transcript tail. Gating on the current kind (not
+                // just presence of a cached entry) keeps a stale tail from a prior Claude session
+                // from leaking onto a non-Claude agent that later reuses the same host session id.
+                let transcriptTail =
+                    agentStatus?.kind == .claudeCode ? transcriptTailBySessionID[session.id] : nil
                 return SidebarTabSummary(
                     id: session.id,
                     title: displayTitle,
                     agentStatus: agentStatus,
-                    transcriptTail: transcriptTailBySessionID[session.id]
+                    transcriptTail: transcriptTail
                 )
             }
     }

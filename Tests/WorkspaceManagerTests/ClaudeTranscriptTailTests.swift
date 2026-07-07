@@ -133,4 +133,55 @@ struct ClaudeTranscriptTailTests {
             cwd: cwd, agentSessionID: sessionID, kind: .opencode, homeDirectory: home)
         #expect(wrongKind == nil)
     }
+
+    @Test("Resolver rejects a non-regular file at the transcript path")
+    func resolverRejectsNonRegularFile() async throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cc-home-\(UUID().uuidString)", isDirectory: true)
+        let cwd = "/Users/tester/project"
+        let sessionID = "session-\(UUID().uuidString)"
+        let dir =
+            home
+            .appendingPathComponent(
+                ".claude/projects/\(ClaudeTranscriptTail.projectSlug(forCWD: cwd))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // Put a *directory* where the "<id>.jsonl" file would be — a stand-in for any non-regular
+        // path (symlink/FIFO/device). The resolver must reject it, not open it.
+        let nonRegular = dir.appendingPathComponent("\(sessionID).jsonl")
+        try FileManager.default.createDirectory(at: nonRegular, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let resolver = ClaudeTranscriptTailResolver()
+        let resolved = await resolver.tail(
+            cwd: cwd, agentSessionID: sessionID, kind: .claudeCode, homeDirectory: home)
+        #expect(resolved == nil)
+    }
+
+    @Test("A final record larger than the tail budget fails closed to nil, never an older message")
+    func oversizedFinalRecordFailsClosed() async throws {
+        let home = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cc-home-\(UUID().uuidString)", isDirectory: true)
+        let cwd = "/Users/tester/project"
+        let sessionID = "session-\(UUID().uuidString)"
+        let dir =
+            home
+            .appendingPathComponent(
+                ".claude/projects/\(ClaudeTranscriptTail.projectSlug(forCWD: cwd))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("\(sessionID).jsonl")
+        // An earlier valid assistant message, then a final record far larger than the tail budget.
+        let huge = String(repeating: "z", count: 4096)
+        let transcript =
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Older answer.\"}]}}\n"
+            + "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"\(huge)\"}]}}"
+        try transcript.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        // A tiny tail budget starts the read inside the final record: it fails closed to nil rather
+        // than surfacing the *older* "Older answer." message.
+        let resolver = ClaudeTranscriptTailResolver(tailByteCount: 256)
+        let resolved = await resolver.tail(
+            cwd: cwd, agentSessionID: sessionID, kind: .claudeCode, homeDirectory: home)
+        #expect(resolved == nil)
+    }
 }

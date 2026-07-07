@@ -13,9 +13,11 @@
 import Foundation
 
 public enum ClaudeTranscriptTail {
-    /// Default number of bytes read from the end of a transcript. Comfortably larger than a
-    /// single assistant turn's JSONL line, so the last message is present without loading the file.
-    public static let defaultTailByteCount = 16_384
+    /// Default number of bytes read from the end of a transcript. Comfortably larger than a single
+    /// assistant turn's JSONL line, so the last message is present without loading the file. A final
+    /// record larger than this still fails closed to nil (a valid last message is missed, never a
+    /// wrong or older one), which is why the budget is generous rather than minimal.
+    public static let defaultTailByteCount = 65_536
 
     /// The on-disk transcript for a Claude Code session, or `nil` when it can't apply (non-Claude
     /// agent, missing session id, or empty cwd). Existence is not checked here — callers read lazily.
@@ -113,7 +115,15 @@ public actor ClaudeTranscriptTailResolver {
         else { return nil }
 
         let path = url.path
-        let modificationDate = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+        // Only ever read a plain file. `attributesOfItem` does not follow symlinks, so a symlink,
+        // FIFO, or device at the transcript path is rejected here — never opened — which keeps a
+        // pathological path from blocking the resolver's actor in `FileHandle(forReadingFrom:)`.
+        guard attributes?[.type] as? FileAttributeType == .typeRegular else {
+            cache[path] = CacheEntry(value: nil, modificationDate: nil, expiresAt: now.addingTimeInterval(ttl))
+            return nil
+        }
+        let modificationDate = attributes?[.modificationDate] as? Date
         if let cached = cache[path],
             cached.expiresAt > now,
             cached.modificationDate == modificationDate
