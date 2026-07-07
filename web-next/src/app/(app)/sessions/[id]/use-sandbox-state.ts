@@ -17,11 +17,18 @@ const REFRESH_INTERVAL_MS = 60_000;
 export function useSandboxState(sessionId: string, turnInFlight: boolean) {
 	const [sandbox, setSandbox] = useState<SandboxState | null>(null);
 
+	// Monotonic fetch ordering: only the NEWEST in-flight check may write the
+	// state. Without this, a slow earlier GET resolving after a fast later one
+	// would overwrite the fresher verdict with a stale one — exactly the lie
+	// this surface exists to avoid.
+	const fetchSeq = useRef(0);
 	const refresh = useCallback(async () => {
+		const seq = ++fetchSeq.current;
 		try {
 			const res = await fetch(`/api/sessions/${sessionId}/sandbox`);
-			if (!res.ok) return;
+			if (!res.ok || seq !== fetchSeq.current) return;
 			const data = (await res.json()) as SandboxState;
+			if (seq !== fetchSeq.current) return;
 			if (data && typeof data.state === "string") setSandbox(data);
 		} catch {
 			// Network hiccup: keep the last verified state rather than flapping.
