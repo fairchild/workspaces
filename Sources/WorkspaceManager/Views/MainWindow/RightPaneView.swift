@@ -138,6 +138,7 @@ struct RightPaneView: View {
     @EnvironmentObject private var workspaceJournal: WorkspaceJournal
     @ObservedObject private var state: RightPaneSessionState
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
+    @State private var reviewDiffTarget: FileChange?
 
     enum Tab: String, CaseIterable {
         case files = "Files"
@@ -250,7 +251,8 @@ struct RightPaneView: View {
                     ChangedFilesTabView(
                         changes: state.changedFiles,
                         isLoading: state.isLoading,
-                        onFileSelected: selectFile
+                        onFileSelected: selectFile,
+                        onReviewDiff: { reviewDiffTarget = $0 }
                     )
                 case .timeline:
                     TimelineTabView(
@@ -345,6 +347,15 @@ struct RightPaneView: View {
         }
         .onChange(of: notificationsEnabled) { _, _ in
             normalizeSelectedTab()
+        }
+        .sheet(item: $reviewDiffTarget) { change in
+            if let directoryURL {
+                DiffReviewSheet(
+                    filePath: change.path,
+                    directoryURL: directoryURL,
+                    onClose: { reviewDiffTarget = nil }
+                )
+            }
         }
     }
 
@@ -666,6 +677,7 @@ struct ChangedFilesTabView: View {
     let changes: [FileChange]
     let isLoading: Bool
     let onFileSelected: (String) -> Void
+    var onReviewDiff: (FileChange) -> Void = { _ in }
 
     var body: some View {
         if changes.isEmpty && !isLoading {
@@ -676,24 +688,35 @@ struct ChangedFilesTabView: View {
             )
         } else {
             List(changes) { change in
-                Button {
-                    onFileSelected(change.path)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: change.status.icon)
-                            .foregroundStyle(change.status.color)
-                            .frame(width: 16)
+                HStack(spacing: 6) {
+                    Button {
+                        onFileSelected(change.path)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: change.status.icon)
+                                .foregroundStyle(change.status.color)
+                                .frame(width: 16)
 
-                        Text(change.path)
-                            .font(.system(.body, design: .monospaced))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                            Text(change.path)
+                                .font(.system(.body, design: .monospaced))
+                                .lineLimit(1)
+                                .truncationMode(.middle)
 
-                        Spacer()
+                            Spacer(minLength: 4)
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 2)
                     }
-                    .padding(.vertical, 2)
+                    .buttonStyle(.plain)
+
+                    Button {
+                        onReviewDiff(change)
+                    } label: {
+                        Image(systemName: "plusminus.circle")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Review diff")
                 }
-                .buttonStyle(.plain)
             }
             .listStyle(.plain)
         }
