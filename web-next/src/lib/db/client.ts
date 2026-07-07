@@ -50,6 +50,8 @@ export interface SessionsTable {
 	 * this on the next turn so the conversation and warm sandbox continue.
 	 */
 	resume_state: string | null;
+	/** Claude model id this session's turns run on (migration `0004_session_model`, #824). */
+	model: string;
 	created_at: string;
 	last_activity_at: string;
 }

@@ -175,6 +175,29 @@ describe("runSessionTurn", () => {
 		});
 	});
 
+	test("threads the session's selected model into the provider request (#824)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "s1",
+			provider: "vercel",
+			model: "claude-opus-4-8",
+		});
+
+		let seen: TurnRequest | undefined;
+		const capturing: ComputeProvider = {
+			id: "vercel",
+			runTurn: async function* (request) {
+				seen = request;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+		const turn = await runSessionTurn(handle, session, "go", capturing);
+		await drain(turn.stream);
+		await turn.ingest;
+
+		expect(seen?.model).toBe("claude-opus-4-8");
+	});
+
 	test("persists a parked handle from the done chunk and strips it from the log", async () => {
 		const handle = freshDb();
 		const session = await createSession(handle, { id: "s1", provider: "vercel" });

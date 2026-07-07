@@ -161,7 +161,8 @@ export function highlightTestOutput(content: string): OutputSegment[][] {
 
 // --- end-of-turn receipt ----------------------------------------------------
 
-function formatTokenCount(count: number): string {
+/** "820" / "3.2k" — shared with the status line's context figure (#824). */
+export function formatTokenCount(count: number): string {
 	if (count < 1000) return String(count);
 	return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
 }

@@ -156,6 +156,7 @@ export async function* mapFullStream(
 	startedAt: number,
 ): AsyncGenerator<StreamChunk> {
 	let outputTokens: number | undefined;
+	let contextTokens: number | undefined;
 	for await (const part of fullStream) {
 		if (process.env.HARNESS_DEBUG === "1") {
 			const detail =
@@ -211,8 +212,21 @@ export async function* mapFullStream(
 				};
 				break;
 			case "finish": {
-				const usage = part.totalUsage as { outputTokens?: number } | undefined;
-				outputTokens = usage?.outputTokens;
+				// `LanguageModelV4Usage` (@ai-sdk/provider) nests both figures under
+				// `{ total, ... }`, not a bare number — confirmed against the
+				// installed harness's own zod schema (harnessV1FinishPartSchema).
+				const usage = part.totalUsage as
+					| {
+							inputTokens?: { total?: number };
+							outputTokens?: { total?: number };
+					  }
+					| undefined;
+				outputTokens = usage?.outputTokens?.total;
+				// The turn's total input tokens is the best available proxy for
+				// "current context window usage" — it's what the model actually saw
+				// on this call, which for a resumed conversation is the accumulated
+				// history. Real, not a placeholder; see status-line wiring in #824.
+				contextTokens = usage?.inputTokens?.total;
 				break;
 			}
 			default:
@@ -222,7 +236,11 @@ export async function* mapFullStream(
 	yield {
 		type: "done",
 		content: "",
-		metadata: { durationMs: Date.now() - startedAt, tokenCount: outputTokens },
+		metadata: {
+			durationMs: Date.now() - startedAt,
+			tokenCount: outputTokens,
+			contextTokens,
+		},
 	};
 }
 
@@ -269,12 +287,23 @@ function resolveAuth() {
 			: undefined;
 }
 
-/** The claude-code harness adapter. Identical inputs on both paths. */
-function createHarness(
+/**
+ * The claude-code harness adapter. Identical inputs on both paths, plus an
+ * optional per-turn model override (#824): `settings.model` forwards
+ * unchanged onto the sandbox bridge's `claudeSdk.query({ options: { model } })`
+ * call (verified against the installed `@ai-sdk/harness-claude-code` bundle —
+ * no enum/allowlist at that layer), so any id from `./models.ts` works. Model
+ * is deliberately NOT part of the reusable sandbox template identity
+ * (`SANDBOX_BOOTSTRAP`/`BOOTSTRAP_HASH`) — it only affects which model the CLI
+ * invokes inside an already-warm sandbox, so per-session model choice never
+ * invalidates the shared snapshot prewarm builds.
+ */
+export function createHarness(
 	createClaudeCode: CreateClaudeCode,
 	auth: ReturnType<typeof resolveAuth>,
+	model?: string,
 ) {
-	return createClaudeCode({ auth, thinking: "on" });
+	return createClaudeCode({ auth, thinking: "on", ...(model ? { model } : {}) });
 }
 
 /** The Vercel sandbox naming scheme the adapter uses for per-session sandboxes. */
@@ -407,7 +436,7 @@ export const vercelProvider: ComputeProvider = {
 
 		const agent = new HarnessAgent({
 			id: `web-next-${request.sessionId}`,
-			harness: createHarness(createClaudeCode, resolveAuth()),
+			harness: createHarness(createClaudeCode, resolveAuth(), request.model),
 			sandbox: createSandboxProvider(createVercelSandbox),
 			sandboxConfig: {
 				// Same template-identity bootstrap as prewarm, plus the per-session

@@ -76,9 +76,17 @@ export interface SessionViewProps {
 	onSend?: (text: string) => void;
 	/** Holds sends (keeping the draft) while a turn is streaming. */
 	composeDisabled?: boolean;
+	/** Model picker handler (client wrappers wire this; fixtures omit it, which
+	 * leaves the status line's model as static text — see status-line.tsx). */
+	onModelChange?: (id: string) => void;
 }
 
-export function SessionView({ session, onSend, composeDisabled }: SessionViewProps) {
+export function SessionView({
+	session,
+	onSend,
+	composeDisabled,
+	onModelChange,
+}: SessionViewProps) {
 	const isEmpty = session.messages.length === 0 && !session.activeTurn;
 	return (
 		<>
@@ -150,7 +158,7 @@ export function SessionView({ session, onSend, composeDisabled }: SessionViewPro
 					onSend={onSend}
 					disabled={composeDisabled}
 				/>
-				<StatusLine status={session.statusLine} />
+				<StatusLine status={session.statusLine} onModelChange={onModelChange} />
 			</footer>
 		</>
 	);

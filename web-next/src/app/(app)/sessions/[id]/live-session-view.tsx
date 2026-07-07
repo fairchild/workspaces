@@ -6,16 +6,25 @@
  * from the server-projected event log, so what streamed live and what a
  * reload renders are the same messages. Token application is batched
  * (experimental_throttle), not per-chunk state.
+ *
+ * The model picker (#824) is owned here as client state seeded from the
+ * server-resolved session: changing it PATCHes the session row and updates
+ * the status line immediately, without waiting for a reload — a reload (or a
+ * fresh tab) reflects the same value because page.tsx reads it back from the
+ * DB. The context figure is recomputed from the live transcript on every
+ * render, so it advances turn-by-turn instead of only after a reload.
  */
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useMemo, useState } from "react";
+import { modelLabel } from "@/lib/agent-runtime/models";
 import {
 	type ActiveTurnData,
 	SessionView,
 	type SessionViewData,
 } from "@/components/folio/session-view";
 import type { FolioDataParts, FolioMessage } from "@/components/folio/types";
+import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
 const TOKEN_THROTTLE_MS = 50;
@@ -48,6 +57,23 @@ export function LiveSessionView({
 }) {
 	// Transient provider statuses of the in-flight turn, oldest first.
 	const [steps, setSteps] = useState<string[]>([]);
+
+	// The selected model: seeded from the server-resolved session, updated
+	// optimistically on change (reverted if the PATCH fails).
+	const [model, setModel] = useState(session.statusLine.model);
+	const handleModelChange = (nextModel: string) => {
+		const previous = model;
+		setModel(nextModel);
+		fetch(`/api/sessions/${sessionId}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ model: nextModel }),
+		})
+			.then((res) => {
+				if (!res.ok) setModel(previous);
+			})
+			.catch(() => setModel(previous));
+	};
 
 	const transport = useMemo(
 		() =>
@@ -114,9 +140,20 @@ export function LiveSessionView({
 
 	return (
 		<SessionView
-			session={{ ...session, messages: visibleMessages, activeTurn }}
+			session={{
+				...session,
+				messages: visibleMessages,
+				activeTurn,
+				statusLine: {
+					...session.statusLine,
+					model,
+					modelLabel: modelLabel(model),
+					contextLabel: deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
+				},
+			}}
 			onSend={send}
 			composeDisabled={busy}
+			onModelChange={handleModelChange}
 		/>
 	);
 }

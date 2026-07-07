@@ -5,7 +5,12 @@
  * chunk adapter's messageMetadata hook, so live streams and replayed logs
  * produce identical stats (the numbers are in the persisted events).
  */
-import type { FolioMetadata, TurnStatsData } from "@/components/folio/types";
+import { formatTokenCount } from "@/components/folio/ledger";
+import type {
+	FolioMessage,
+	FolioMetadata,
+	TurnStatsData,
+} from "@/components/folio/types";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 
 /** The agent's display name on assistant messages (single-agent for now). */
@@ -75,6 +80,7 @@ export function deriveTurnStats(
 		toolCount,
 		durationMs: asNumber(done.metadata?.durationMs) ?? 0,
 		tokenCount: asNumber(done.metadata?.tokenCount),
+		contextTokens: asNumber(done.metadata?.contextTokens),
 		filesChanged: changedFiles.size > 0 ? changedFiles.size : undefined,
 		additions,
 		deletions,
@@ -91,4 +97,21 @@ export function folioTurnMetadata(
 ): FolioMetadata {
 	const turnStats = deriveTurnStats(chunks);
 	return turnStats ? { author: AGENT_AUTHOR, turnStats } : { author: AGENT_AUTHOR };
+}
+
+/**
+ * The status line's real "N ctx" figure (#824): the most recent completed
+ * turn's total input tokens — what the model actually saw last, the best
+ * available proxy for current context usage. Undefined when no turn has
+ * completed yet, or none reported the figure — the status line hides the
+ * segment rather than showing a fake "0 ctx".
+ */
+export function deriveContextLabel(
+	messages: readonly FolioMessage[],
+): string | undefined {
+	for (let i = messages.length - 1; i >= 0; i -= 1) {
+		const contextTokens = messages[i].metadata?.turnStats?.contextTokens;
+		if (contextTokens !== undefined) return `${formatTokenCount(contextTokens)} ctx`;
+	}
+	return undefined;
 }

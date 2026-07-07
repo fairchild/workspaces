@@ -13,6 +13,13 @@ import type { UIMessage } from "ai";
 export interface TurnStatsData {
 	toolCount: number;
 	tokenCount?: number;
+	/**
+	 * The turn's total input (context) tokens — the real figure the session
+	 * status line's "N ctx" reads (#824), reported by the provider's `done`
+	 * chunk. Undefined for turns that predate this field or ran on a provider
+	 * that doesn't report it (the status line hides the figure, not a fake 0).
+	 */
+	contextTokens?: number;
 	durationMs: number;
 	/** Distinct files changed by Edit/Write calls. */
 	filesChanged?: number;

@@ -47,6 +47,7 @@ that log, never stored here.
 | `status` | text | Lifecycle — `active` \| `idle` \| `archived` (owned by #749/#750). |
 | `claude_session_id` | text? | Harness/Claude session id for resume; null until a real turn parks one. |
 | `resume_state` | text? | JSON harness resume payload from the last turn's `detach()` (migration `0003_session_resume_state`); null until a real turn parks, cleared when the parked sandbox expires. Session-row state, deliberately not in the event log. |
+| `model` | text | Claude model id this session's turns run on (migration `0004_session_model`, #824); NOT NULL, defaulting to `DEFAULT_MODEL` (`src/lib/agent-runtime/models.ts` — the single source of truth for the selectable set). Threaded into `TurnRequest.model` on every turn; changed via the status line's picker (`PATCH /api/sessions/[id]`). |
 | `created_at` | text | ISO-8601. |
 | `last_activity_at` | text | ISO-8601; bumped on every event append. |
 

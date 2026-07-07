@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
+import type { FolioMessage } from "@/components/folio/types";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
-import { deriveTurnStats, folioTurnMetadata } from "./turn-stats";
+import { deriveContextLabel, deriveTurnStats, folioTurnMetadata } from "./turn-stats";
 
 const done = (metadata?: Record<string, unknown>): StreamChunk => ({
 	type: "done",
@@ -71,6 +72,41 @@ describe("deriveTurnStats", () => {
 			toolCount: 0,
 			durationMs: 0,
 		});
+	});
+
+	test("extracts the real contextTokens figure from done metadata (#824)", () => {
+		const stats = deriveTurnStats([done({ durationMs: 10, contextTokens: 2000 })]);
+		expect(stats).toMatchObject({ contextTokens: 2000 });
+	});
+});
+
+describe("deriveContextLabel", () => {
+	function assistantMessage(contextTokens?: number): FolioMessage {
+		return {
+			id: "m",
+			role: "assistant",
+			parts: [],
+			metadata:
+				contextTokens === undefined
+					? { author: "Claude" }
+					: { author: "Claude", turnStats: { toolCount: 0, durationMs: 0, contextTokens } },
+		};
+	}
+
+	test("undefined when no turn has reported a context figure", () => {
+		expect(deriveContextLabel([assistantMessage()])).toBeUndefined();
+	});
+
+	test("formats the most recent completed turn's figure", () => {
+		expect(
+			deriveContextLabel([assistantMessage(500), assistantMessage(2300)]),
+		).toBe("2.3k ctx");
+	});
+
+	test("looks back past a trailing turn that hasn't reported one yet", () => {
+		expect(deriveContextLabel([assistantMessage(500), assistantMessage()])).toBe(
+			"500 ctx",
+		);
 	});
 });
 

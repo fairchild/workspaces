@@ -183,6 +183,28 @@ test("a reload renders the same turn from the persisted event log", async ({
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
 });
 
+test("the status line's model picker changes the model and persists across reload (#824)", async ({
+	page,
+}) => {
+	await page.goto(turnSessionUrl);
+	const select = page.getByTestId("model-select");
+
+	// New sessions stamp the current-best model — Fable 5.
+	await expect(select).toHaveValue("claude-fable-5");
+	await expect(page.getByTestId("status-line")).toContainText("Fable 5");
+
+	await select.selectOption("claude-sonnet-5");
+	await expect(page.getByTestId("status-line")).toContainText("Sonnet 5");
+
+	// The end-of-turn receipt from the earlier mock turn also gave the status
+	// line a real context figure — no more fake "0 ctx" placeholder.
+	await expect(page.getByTestId("status-line")).toContainText("ctx");
+
+	await page.reload();
+	await expect(page.getByTestId("model-select")).toHaveValue("claude-sonnet-5");
+	await expect(page.getByTestId("status-line")).toContainText("Sonnet 5");
+});
+
 test("a turn survives a mid-stream reload and resumes to completion", async ({
 	page,
 }) => {

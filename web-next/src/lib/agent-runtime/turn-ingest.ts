@@ -120,6 +120,7 @@ async function ingestTurn(
 			sessionId: session.id,
 			userMessage: userText,
 			resume: resumeHandle(session),
+			model: session.model,
 		})) {
 			// A terminal `done` may carry the harness handle the turn parked with
 			// detach(); persist it to the session row (not the transcript) so the
