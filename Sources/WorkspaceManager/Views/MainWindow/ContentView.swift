@@ -83,6 +83,7 @@ struct ContentView: View {
     private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
     @State private var mainSelectionCoordinator = MainSelectionCoordinator()
+    @State private var statusAggregationCoalescer = WorkspaceStatusAggregationCoalescer()
     private let navigationStateController = MainWindowNavigationStateController()
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
     private let launchActionHandler = MainWindowLaunchActionHandler()
@@ -762,11 +763,11 @@ struct ContentView: View {
                 }
             }
             .onChange(of: agentSessionRegistry.statuses) { _, _ in
-                refreshWorkspaceStatusAggregator()
+                scheduleWorkspaceStatusAggregatorRefresh()
                 refreshSessionSwitcherSnapshotIfPresented()
             }
             .onChange(of: tileTreeStore.sessions) { _, _ in
-                refreshWorkspaceStatusAggregator()
+                scheduleWorkspaceStatusAggregatorRefresh()
                 refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
@@ -780,6 +781,7 @@ struct ContentView: View {
             }
             .onDisappear {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
+                statusAggregationCoalescer.cancel()
             }
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
                 resolveSurfaceLifecycle()
@@ -2954,6 +2956,14 @@ struct ContentView: View {
             _ = activateHostSession(key: target.key, directory: target.directoryURL)
         }
         NSLog("[Restore] executed %ld surface(s)", plan.surfaces.count)
+    }
+
+    /// Coalesces the high-frequency agent-event refresh path: bursts of status or
+    /// session changes collapse to one trailing-edge aggregation pass. Immediate
+    /// call sites (launch, model changes, user acknowledgement) stay direct so the
+    /// sidebar updates without the window's delay.
+    private func scheduleWorkspaceStatusAggregatorRefresh() {
+        statusAggregationCoalescer.schedule { refreshWorkspaceStatusAggregator() }
     }
 
     private func refreshWorkspaceStatusAggregator() {
