@@ -67,6 +67,13 @@ struct SidebarWorkspaceController {
         return repos.first
     }
 
+    /// Count of workspaces shown in a repo's active section — archived workspaces live in
+    /// their own collapsed section, so the collapsed-repo badge must exclude them to match
+    /// the rows listed when the repo is expanded.
+    nonisolated static func activeWorkspaceCount(in workspaces: [Workspace]) -> Int {
+        workspaces.filter { $0.status != .archived }.count
+    }
+
     nonisolated static func localCreationMessage(for phase: WorkspaceCreationPhase) -> String {
         switch phase {
         case .preparing:
@@ -214,8 +221,19 @@ struct SidebarWorkspaceController {
 
     /// Restores a local workspace: moves its directory back out of `.archived/` and
     /// clears the archived state. Non-local workspaces just flip status back.
+    ///
+    /// Workspaces archived before directory moves existed were never relocated — their
+    /// files still sit at the live path with no `.archived/` component. Moving one back
+    /// out of `.archived/` would walk a level too far and land outside the workspaces
+    /// root, so legacy records restore in place with a status flip only. The guard checks
+    /// the exact shape `restoredDestination` assumes — `…/.archived/<repo>/<name>` — not
+    /// mere component containment, so a repo or workspace literally named `.archived`
+    /// at its live path also restores in place rather than taking a bogus move.
     func unarchive(_ workspace: Workspace) async throws {
-        if workspace.backend == .local {
+        let components = workspace.workspaceURL.pathComponents
+        let isUnderArchived =
+            components.dropLast(2).last == WorkspaceDirectoryArchiver.archivedDirectoryComponent
+        if workspace.backend == .local && isUnderArchived {
             let restoredURL = try await workspaceService.unarchiveWorkspace(at: workspace.workspaceURL)
             workspace.path = restoredURL.path
         }

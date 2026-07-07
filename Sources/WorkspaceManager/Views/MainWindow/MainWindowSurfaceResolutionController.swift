@@ -33,9 +33,12 @@ enum MainWindowSurfaceResolutionAction {
 }
 
 struct MainWindowSurfaceResolutionController {
-    private let bootstrapController = MainWindowBootstrapController()
-
-    func nextAction(context: MainWindowSurfaceResolutionContext) -> MainWindowSurfaceResolutionAction {
+    /// The bootstrap controller is injected per call rather than constructed here, so the
+    /// root view's single instance is the only one driving startup/selection-restore logic.
+    func nextAction(
+        context: MainWindowSurfaceResolutionContext,
+        bootstrapController: MainWindowBootstrapController
+    ) -> MainWindowSurfaceResolutionAction {
         switch bootstrapController.deepLinkDecision(
             pendingRequest: context.pendingRequest,
             repos: context.repos,

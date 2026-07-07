@@ -42,6 +42,32 @@ describe("agent runtime config", () => {
 		).not.toThrow();
 	});
 
+	it("accepts BETTER_AUTH_SECRET as the terminal-signing secret when TTYD_TOKEN_SECRET is unset", () => {
+		expect(() =>
+			validateProductionAgentRuntimeConfig({
+				NODE_ENV: "production",
+				ALLOWED_AGENT_LOGINS: "fairchild",
+				BETTER_AUTH_SECRET: "auth-secret",
+				// TTYD_TOKEN_SECRET intentionally unset — the signer falls back
+				// to BETTER_AUTH_SECRET, so the runtime config is valid.
+				VERCEL_OIDC_TOKEN: "oidc-token",
+				ANTHROPIC_API_KEY: "sk-test",
+			}),
+		).not.toThrow();
+	});
+
+	it("still fails closed when neither terminal-signing secret is present", () => {
+		expect(() =>
+			validateProductionAgentRuntimeConfig({
+				NODE_ENV: "production",
+				ALLOWED_AGENT_LOGINS: "fairchild",
+				// Both BETTER_AUTH_SECRET and TTYD_TOKEN_SECRET missing.
+				VERCEL_OIDC_TOKEN: "oidc-token",
+				ANTHROPIC_API_KEY: "sk-test",
+			}),
+		).toThrow(/TTYD_TOKEN_SECRET or BETTER_AUTH_SECRET/);
+	});
+
 	it("requires GitHub App credentials when the PR reviewer is enabled", () => {
 		expect(() =>
 			validateProductionAgentRuntimeConfig({

@@ -53,10 +53,10 @@ struct ContentView: View {
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
+    @State private var errorPresenter = MainWindowErrorPresenter()
     @State private var repoForNewWorkspaceFromLanding: Repo?
     @State private var isPreparingLandingNewWorkspaceSheet = false
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
-    @State private var landingErrorMessage: String?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
     @State private var didPrewarmPerfTerminalSurfaces = false
@@ -83,6 +83,7 @@ struct ContentView: View {
     private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
     @State private var mainSelectionCoordinator = MainSelectionCoordinator()
+    @State private var statusAggregationCoalescer = WorkspaceStatusAggregationCoalescer()
     private let navigationStateController = MainWindowNavigationStateController()
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
     private let launchActionHandler = MainWindowLaunchActionHandler()
@@ -494,17 +495,6 @@ struct ContentView: View {
         workspaceEnvironmentSheetState.lumeRuntimeSnapshot
     }
 
-    private var isShowingOpenInEditorError: Binding<Bool> {
-        Binding(
-            get: { viewState.openInEditorErrorMessage != nil },
-            set: { isPresented in
-                if !isPresented {
-                    viewState.openInEditorErrorMessage = nil
-                }
-            }
-        )
-    }
-
     @ViewBuilder
     private var terminalDetailContent: some View {
         MainTerminalDetailView(
@@ -762,11 +752,11 @@ struct ContentView: View {
                 }
             }
             .onChange(of: agentSessionRegistry.statuses) { _, _ in
-                refreshWorkspaceStatusAggregator()
+                scheduleWorkspaceStatusAggregatorRefresh()
                 refreshSessionSwitcherSnapshotIfPresented()
             }
             .onChange(of: tileTreeStore.sessions) { _, _ in
-                refreshWorkspaceStatusAggregator()
+                scheduleWorkspaceStatusAggregatorRefresh()
                 refreshSessionSwitcherSnapshotIfPresented()
                 persistTerminalContinuitySnapshot()
             }
@@ -780,6 +770,7 @@ struct ContentView: View {
             }
             .onDisappear {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
+                statusAggregationCoalescer.cancel()
             }
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
                 resolveSurfaceLifecycle()
@@ -862,27 +853,7 @@ struct ContentView: View {
 
     private var splitViewWithFocusAndAlerts: some View {
         splitViewWithLifecycleHandlers
-            .alert(
-                "Could Not Open Editor",
-                isPresented: isShowingOpenInEditorError
-            ) {
-                Button("OK", role: .cancel) {
-                    viewState.openInEditorErrorMessage = nil
-                }
-            } message: {
-                Text(viewState.openInEditorErrorMessage ?? "Unknown error.")
-            }
-            .alert(
-                "Could Not Open Workspace",
-                isPresented: Binding(
-                    get: { viewState.workspaceOperationErrorMessage != nil },
-                    set: { if !$0 { viewState.workspaceOperationErrorMessage = nil } }
-                )
-            ) {
-                Button("OK", role: .cancel) { viewState.workspaceOperationErrorMessage = nil }
-            } message: {
-                Text(viewState.workspaceOperationErrorMessage ?? "Unknown error.")
-            }
+            .mainWindowErrorAlert($errorPresenter)
             .alert(
                 workspaceOrphanCleanupTitle(for: pendingWorkspaceOrphanCleanup),
                 isPresented: Binding(
@@ -992,7 +963,7 @@ struct ContentView: View {
                     )
                 }
             }
-            .onChange(of: viewState.workspaceOperationErrorMessage) { _, message in
+            .onChange(of: errorPresenter.message(from: .workspaceOperation)) { _, message in
                 guard let message else { return }
                 Task { @MainActor in
                     await hostLumeSmokeAutomation.noteFailure(
@@ -1113,17 +1084,6 @@ struct ContentView: View {
                     onDismiss: { isShowingFeedbackSheet = false }
                 )
             }
-            .alert(
-                "Error",
-                isPresented: Binding(
-                    get: { landingErrorMessage != nil },
-                    set: { if !$0 { landingErrorMessage = nil } }
-                )
-            ) {
-                Button("OK", role: .cancel) { landingErrorMessage = nil }
-            } message: {
-                Text(landingErrorMessage ?? "Unknown error.")
-            }
     }
 
     @MainActor
@@ -1241,7 +1201,8 @@ struct ContentView: View {
                     webConfiguration: fixtureWebBootstrapConfiguration,
                     repos: repos,
                     webSources: webSources
-                )
+                ),
+                bootstrapController: bootstrapController
             )
 
             guard applySurfaceResolutionAction(action) else { break }
@@ -1606,8 +1567,9 @@ struct ContentView: View {
     @MainActor
     private func handleProviderBackedWorkspaceSelection(_ workspace: Workspace) {
         guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
-            viewState.workspaceOperationErrorMessage =
+            presentWorkspaceOperationError(
                 "No workspace provider is registered for '\(workspace.backendIdentifier)'."
+            )
             return
         }
 
@@ -1639,7 +1601,7 @@ struct ContentView: View {
                     await connectToProviderBackedWorkspace(workspace, provider: provider)
                 }
             } catch {
-                viewState.workspaceOperationErrorMessage = error.localizedDescription
+                presentWorkspaceOperationError(error.localizedDescription)
             }
         }
     }
@@ -1684,7 +1646,7 @@ struct ContentView: View {
             )
             guard viewState.connectingWorkspaceID == workspace.id else { return }
             viewState.connectingWorkspaceID = nil
-            viewState.workspaceOperationErrorMessage = error.localizedDescription
+            presentWorkspaceOperationError(error.localizedDescription)
         }
     }
 
@@ -1717,7 +1679,7 @@ struct ContentView: View {
     ) async {
         do {
             guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
-                landingErrorMessage = "Workspace provider '\(providerID)' is not registered."
+                presentLandingError("Workspace provider '\(providerID)' is not registered.")
                 return
             }
 
@@ -1735,7 +1697,7 @@ struct ContentView: View {
                         skipSetup: true
                     )
                 } catch {
-                    landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+                    presentLandingError("Failed to create workspace: \(error.localizedDescription)")
                 }
             } perform: {
                 do {
@@ -1748,11 +1710,11 @@ struct ContentView: View {
                         skipSetup: true
                     )
                 } catch {
-                    landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+                    presentLandingError("Failed to create workspace: \(error.localizedDescription)")
                 }
             }
         } catch {
-            landingErrorMessage = "Failed to create workspace: \(error.localizedDescription)"
+            presentLandingError("Failed to create workspace: \(error.localizedDescription)")
         }
     }
 
@@ -1806,7 +1768,7 @@ struct ContentView: View {
         do {
             try await controller.archive(workspace)
         } catch {
-            landingErrorMessage = "Failed to archive workspace: \(error.localizedDescription)"
+            presentLandingError("Failed to archive workspace: \(error.localizedDescription)")
         }
     }
 
@@ -1845,9 +1807,11 @@ struct ContentView: View {
             handleWebSourceSelection(source)
         } catch {
             if let validationError = error as? WebSourceValidationError {
-                landingErrorMessage = validationError.errorDescription
+                if let description = validationError.errorDescription {
+                    presentLandingError(description)
+                }
             } else {
-                landingErrorMessage = error.localizedDescription
+                presentLandingError(error.localizedDescription)
             }
             modelContext.rollback()
         }
@@ -2323,8 +2287,9 @@ struct ContentView: View {
             dismissedWorkspaceOrphanItemIDs.remove(item.id)
             await refreshWorkspaceOrphans(trigger: "cleanup")
         } catch {
-            viewState.workspaceOperationErrorMessage =
+            presentWorkspaceOperationError(
                 "Could not clean '\(item.resourceName)': \(error.localizedDescription)"
+            )
         }
     }
 
@@ -2385,8 +2350,9 @@ struct ContentView: View {
     @MainActor
     private func openDesktop(for workspace: Workspace) {
         guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
-            viewState.workspaceOperationErrorMessage =
+            presentWorkspaceOperationError(
                 "No workspace provider is registered for '\(workspace.backendIdentifier)'."
+            )
             return
         }
 
@@ -2399,7 +2365,7 @@ struct ContentView: View {
                     await openDesktopAfterSetup(workspace, provider: provider)
                 }
             } catch {
-                viewState.workspaceOperationErrorMessage = error.localizedDescription
+                presentWorkspaceOperationError(error.localizedDescription)
             }
         }
     }
@@ -2433,7 +2399,7 @@ struct ContentView: View {
         } catch {
             guard viewState.connectingWorkspaceID == workspace.id else { return }
             viewState.connectingWorkspaceID = nil
-            viewState.workspaceOperationErrorMessage = error.localizedDescription
+            presentWorkspaceOperationError(error.localizedDescription)
         }
     }
 
@@ -2814,12 +2780,27 @@ struct ContentView: View {
 
     @MainActor
     private func presentOpenInEditorError(_ error: Error) {
+        let message: String
         if let externalEditorError = error as? ExternalEditorError {
-            viewState.openInEditorErrorMessage =
-                externalEditorError.errorDescription ?? "Could not open the selected file."
+            message = externalEditorError.errorDescription ?? "Could not open the selected file."
         } else {
-            viewState.openInEditorErrorMessage = error.localizedDescription
+            message = error.localizedDescription
         }
+        errorPresenter.present(source: .openInEditor, title: "Could Not Open Editor", message: message)
+    }
+
+    /// Surfaces a workspace-operation failure through the shared error presenter. Only this
+    /// source notifies the host-Lume smoke automation (see the `.workspaceOperation` onChange).
+    @MainActor
+    private func presentWorkspaceOperationError(_ message: String) {
+        errorPresenter.present(source: .workspaceOperation, title: "Could Not Open Workspace", message: message)
+    }
+
+    /// Surfaces a landing-flow failure (repo import, workspace creation from the landing view)
+    /// through the shared error presenter.
+    @MainActor
+    private func presentLandingError(_ message: String) {
+        errorPresenter.present(source: .landing, title: "Error", message: message)
     }
 
     @MainActor
@@ -2954,6 +2935,14 @@ struct ContentView: View {
             _ = activateHostSession(key: target.key, directory: target.directoryURL)
         }
         NSLog("[Restore] executed %ld surface(s)", plan.surfaces.count)
+    }
+
+    /// Coalesces the high-frequency agent-event refresh path: bursts of status or
+    /// session changes collapse to one trailing-edge aggregation pass. Immediate
+    /// call sites (launch, model changes, user acknowledgement) stay direct so the
+    /// sidebar updates without the window's delay.
+    private func scheduleWorkspaceStatusAggregatorRefresh() {
+        statusAggregationCoalescer.schedule { refreshWorkspaceStatusAggregator() }
     }
 
     private func refreshWorkspaceStatusAggregator() {

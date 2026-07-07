@@ -700,9 +700,9 @@ final class TileTreeStore: ObservableObject {
     }
 
     /// Resolves the focus target for `goto_split` by reducing from the source pane's tile: directional
-    /// moves use the reducer's geometric traversal, previous/next cycle the depth-first leaf order. The
-    /// reducer reproduces the legacy two-pane table exactly at depth 1; deeper traversal is new (and
-    /// flagged not-hardened). Persists the moved focus so a following split grows from the right tile.
+    /// moves use the reducer's geometric traversal (unit-square frames, edge adjacency, max
+    /// perpendicular overlap — hardened for depth ≥ 2 in #690), previous/next cycle the depth-first
+    /// leaf order. Persists the moved focus so a following split grows from the right tile.
     func splitFocusTarget(
         from sourceSessionID: UUID,
         direction: GhosttyAppManager.SplitFocusDirection

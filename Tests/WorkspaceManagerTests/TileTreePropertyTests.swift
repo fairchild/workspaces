@@ -108,6 +108,92 @@ struct TileTreePropertyTests {
         }
     }
 
+    @Test("Directional focus is a true geometric neighbor — or a true edge", arguments: 0..<48)
+    func directionalFocusIsGeometric(seed: Int) {
+        var rng = SeededGenerator(seed: UInt64(seed) &+ 5000)
+        let gen = IDGen()
+        let reducer = TileTreeReducer(makeTileID: gen.tile, makeSplitID: gen.split)
+        var state = TileTreeState(singleTile: gen.tile())
+
+        // Grow a random tree (splits/resizes only, biased deep), then probe every leaf × direction.
+        for _ in 0..<10 {
+            let action = randomAction(for: state, using: &rng)
+            switch action {
+            case .split, .resize, .setRatio:
+                state = reducer.reduce(state, action)
+            default:
+                break
+            }
+        }
+
+        let frames = state.root.unitLeafFrames()
+        let directions: [TileFocusDirection] = [.up, .down, .left, .right]
+        for from in state.leafIDs {
+            let origin = frames[from]!
+            for direction in directions {
+                let next = reducer.reduce(
+                    reducer.reduce(state, .setFocus(from)),
+                    .focusDirectional(from: from, direction: direction)
+                )
+                let target = next.focusedTileID == from ? nil : next.focusedTileID
+
+                // Independently derive the facing candidates (with overlap and perpendicular
+                // position) from the frames.
+                let candidates: [(id: TileID, overlap: Double, position: Double)] = frames.compactMap {
+                    id, rect in
+                    guard id != from else { return nil }
+                    let facing: Bool
+                    let overlap: Double
+                    let position: Double
+                    switch direction {
+                    case .right:
+                        facing = rect.minX == origin.maxX
+                        overlap = min(rect.maxY, origin.maxY) - max(rect.minY, origin.minY)
+                        position = rect.minY
+                    case .left:
+                        facing = rect.maxX == origin.minX
+                        overlap = min(rect.maxY, origin.maxY) - max(rect.minY, origin.minY)
+                        position = rect.minY
+                    case .down:
+                        facing = rect.minY == origin.maxY
+                        overlap = min(rect.maxX, origin.maxX) - max(rect.minX, origin.minX)
+                        position = rect.minX
+                    case .up:
+                        facing = rect.maxY == origin.minY
+                        overlap = min(rect.maxX, origin.maxX) - max(rect.minX, origin.minX)
+                        position = rect.minX
+                    }
+                    guard facing, overlap > 0 else { return nil }
+                    return (id, overlap, position)
+                }
+
+                if let target {
+                    let chosen = candidates.first { $0.id == target }
+                    #expect(
+                        chosen != nil,
+                        "seed=\(seed) \(direction): target \(target) is not a facing neighbor of \(from)"
+                    )
+                    // The winner must be overlap-optimal, ties broken toward the top/left.
+                    if let chosen {
+                        let beaten = candidates.allSatisfy { candidate in
+                            candidate.overlap < chosen.overlap
+                                || (candidate.overlap == chosen.overlap && candidate.position >= chosen.position)
+                        }
+                        #expect(
+                            beaten,
+                            "seed=\(seed) \(direction): \(target) is not the max-overlap/top-left candidate"
+                        )
+                    }
+                } else {
+                    #expect(
+                        candidates.isEmpty,
+                        "seed=\(seed) \(direction): move from \(from) was blocked despite facing neighbors \(candidates.map(\.id))"
+                    )
+                }
+            }
+        }
+    }
+
     @Test("Split grows the leaf set by exactly one and focuses the new tile", arguments: 0..<32)
     func splitAddsOneLeaf(seed: Int) {
         var rng = SeededGenerator(seed: UInt64(seed) &+ 1000)
