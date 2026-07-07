@@ -34,6 +34,7 @@ import {
 	type SessionViewData,
 } from "@/components/folio/session-view";
 import type { FolioDataParts, FolioMessage } from "@/components/folio/types";
+import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 
@@ -242,23 +243,29 @@ export function LiveSessionView({
 	}, [displayTitle]);
 
 	return (
-		<SessionView
-			session={{
-				...session,
-				messages: visibleMessages,
-				activeTurn,
-				masthead: { ...session.masthead, title: displayTitle },
-				statusLine: {
-					...session.statusLine,
-					model,
-					modelLabel: modelLabel(model),
-					contextLabel: deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
-				},
-			}}
-			onSend={send}
-			composeDisabled={busy}
-			onModelChange={handleModelChange}
-			onTitleChange={handleTitleChange}
-		/>
+		<>
+			<TerminalDrawer sessionId={sessionId} />
+			<SessionView
+				session={{
+					...session,
+					messages: visibleMessages,
+					activeTurn,
+					masthead: { ...session.masthead, title: displayTitle },
+					statusLine: {
+						...session.statusLine,
+						model,
+						modelLabel: modelLabel(model),
+						contextLabel:
+							deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
+					},
+				}}
+				onSend={send}
+				composeDisabled={busy}
+				onModelChange={handleModelChange}
+				onTitleChange={handleTitleChange}
+			/>
+		</>
+	);
+}
 	);
 }
