@@ -218,10 +218,14 @@ struct SidebarWorkspaceController {
     /// Workspaces archived before directory moves existed were never relocated — their
     /// files still sit at the live path with no `.archived/` component. Moving one back
     /// out of `.archived/` would walk a level too far and land outside the workspaces
-    /// root, so legacy records restore in place with a status flip only.
+    /// root, so legacy records restore in place with a status flip only. The guard checks
+    /// the exact shape `restoredDestination` assumes — `…/.archived/<repo>/<name>` — not
+    /// mere component containment, so a repo or workspace literally named `.archived`
+    /// at its live path also restores in place rather than taking a bogus move.
     func unarchive(_ workspace: Workspace) async throws {
-        let isUnderArchived = workspace.workspaceURL.pathComponents
-            .contains(WorkspaceDirectoryArchiver.archivedDirectoryComponent)
+        let components = workspace.workspaceURL.pathComponents
+        let isUnderArchived =
+            components.dropLast(2).last == WorkspaceDirectoryArchiver.archivedDirectoryComponent
         if workspace.backend == .local && isUnderArchived {
             let restoredURL = try await workspaceService.unarchiveWorkspace(at: workspace.workspaceURL)
             workspace.path = restoredURL.path
