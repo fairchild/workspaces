@@ -76,11 +76,22 @@ public struct RestorePlan: Sendable, Equatable {
     }
 
     /// Whether the plan restores anything beyond what a fresh launch already
-    /// provides. Startup seeds a plain shell on `seedKey` before restore runs,
-    /// so a plan consisting only of fresh shells on that key duplicates the seed
-    /// and is not worth a banner.
-    public func offersMoreThanLaunchSeed(seedKey: HostTerminalSessionKey) -> Bool {
-        surfaces.contains { $0.action != .freshShell || $0.key != seedKey }
+    /// provides. Startup seeds a plain shell on `seedKey` at `seedDirectory`
+    /// before restore runs, so a plan consisting only of fresh shells matching
+    /// both duplicates the seed and is not worth a banner. A fresh shell on the
+    /// seed key at a different directory is still a real restore (the default
+    /// host directory can change between runs) and keeps the banner.
+    public func offersMoreThanLaunchSeed(
+        seedKey: HostTerminalSessionKey,
+        seedDirectory: URL
+    ) -> Bool {
+        let normalizedSeedPath = seedDirectory.standardizedFileURL.resolvingSymlinksInPath().path
+        return surfaces.contains { surface in
+            surface.action != .freshShell
+                || surface.key != seedKey
+                || surface.directory.standardizedFileURL.resolvingSymlinksInPath().path
+                    != normalizedSeedPath
+        }
     }
 }
 

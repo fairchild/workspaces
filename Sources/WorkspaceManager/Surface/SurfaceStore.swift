@@ -132,28 +132,34 @@ final class SurfaceStore {
         initialCommandDeliveredSessionIDs.insert(terminal.session.id)
         let sessionID = terminal.session.id
 
-        Task { @MainActor [weak terminal] in
+        Task { @MainActor [weak self, weak terminal] in
             // Wait for the surface's shell to come alive, then settle briefly so
             // the paste lands at a prompt instead of racing shell/tmux startup.
             for _ in 0..<40 {
-                guard let terminal else { return }
-                if terminal.surfaceView.isSurfaceAlive { break }
+                guard terminal != nil else { break }
+                if terminal?.surfaceView.isSurfaceAlive == true { break }
                 try? await Task.sleep(for: .milliseconds(250))
             }
             try? await Task.sleep(for: .milliseconds(1500))
-            guard let terminal else {
-                NSLog(
-                    "[SurfaceStore] initial command dropped: surface gone for session %@",
-                    sessionID.uuidString)
-                return
+            // The command reached no shell unless both bridge calls succeed. On any
+            // failure (surface evicted mid-poll, dead surface, dropped write), un-mark
+            // the session so a recreated surface retries — nothing ran, so a retry
+            // cannot double-run the agent.
+            let submitted: Bool
+            if let terminal {
+                submitted =
+                    GhosttySurfaceTextInputBridge.writeAutomationText(
+                        into: terminal.surfaceView, text: initialCommand)
+                    && GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
+            } else {
+                submitted = false
             }
-            let wrote = GhosttySurfaceTextInputBridge.writeAutomationText(
-                into: terminal.surfaceView, text: initialCommand)
-            let submitted =
-                wrote && GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
+            if !submitted {
+                self?.initialCommandDeliveredSessionIDs.remove(sessionID)
+            }
             NSLog(
                 "[SurfaceStore] initial command %@ for session %@",
-                submitted ? "delivered" : "DROPPED",
+                submitted ? "delivered" : "DROPPED (will retry on a new surface)",
                 sessionID.uuidString)
         }
     }

@@ -197,25 +197,27 @@ struct TerminalRestorePlannerTests {
         #expect(!unidentified.wasHandled(handledRunID: nil))
     }
 
-    @Test("A plan of only seed-key fresh shells offers nothing beyond launch")
+    @Test("A plan of only seed-matching fresh shells offers nothing beyond launch")
     func seedOnlyPlanOffersNothing() throws {
+        let seedDirectory = URL(fileURLWithPath: "/tmp")
         func surface(
-            key: HostTerminalSessionKey, action: RestoreSurfaceAction
+            key: HostTerminalSessionKey, action: RestoreSurfaceAction,
+            directory: URL = URL(fileURLWithPath: "/tmp")
         ) -> RestoreSurfacePlan {
             RestoreSurfacePlan(
                 hostSessionID: UUID(), key: key,
-                directory: URL(fileURLWithPath: "/tmp"), action: action)
+                directory: directory, action: action)
         }
 
         let seedFresh = RestorePlan(
             surfaces: [surface(key: .defaultHome, action: .freshShell)],
             selectedHostSessionID: nil)
-        #expect(!seedFresh.offersMoreThanLaunchSeed(seedKey: .defaultHome))
+        #expect(!seedFresh.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
 
         let seedResume = RestorePlan(
             surfaces: [surface(key: .defaultHome, action: .resumeClaude(agentSessionID: "s1"))],
             selectedHostSessionID: nil)
-        #expect(seedResume.offersMoreThanLaunchSeed(seedKey: .defaultHome))
+        #expect(seedResume.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
 
         let withRepo = RestorePlan(
             surfaces: [
@@ -223,6 +225,19 @@ struct TerminalRestorePlannerTests {
                 surface(key: .repoPath("/code/repo"), action: .freshShell),
             ],
             selectedHostSessionID: nil)
-        #expect(withRepo.offersMoreThanLaunchSeed(seedKey: .defaultHome))
+        #expect(withRepo.offersMoreThanLaunchSeed(seedKey: .defaultHome, seedDirectory: seedDirectory))
+
+        // A seed-key fresh shell at a DIFFERENT directory is a real restore, not a
+        // seed duplicate (the default host directory can change between runs).
+        let differentDirectory = RestorePlan(
+            surfaces: [
+                surface(
+                    key: .defaultHome, action: .freshShell,
+                    directory: URL(fileURLWithPath: "/somewhere/else"))
+            ],
+            selectedHostSessionID: nil)
+        #expect(
+            differentDirectory.offersMoreThanLaunchSeed(
+                seedKey: .defaultHome, seedDirectory: seedDirectory))
     }
 }

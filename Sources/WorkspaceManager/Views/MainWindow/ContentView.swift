@@ -2908,7 +2908,9 @@ struct ContentView: View {
             NSLog(
                 "[Restore] suppressed banner: previous run %@ already handled",
                 plan.previousRunID ?? "?")
-        } else if !plan.offersMoreThanLaunchSeed(seedKey: .defaultHome) {
+        } else if !plan.offersMoreThanLaunchSeed(
+            seedKey: .defaultHome, seedDirectory: resolvedDefaultHostDirectory)
+        {
             NSLog("[Restore] suppressed banner: plan only duplicates the launch seed")
         } else {
             NSLog("[Restore] planned %ld restorable surface(s)", plan.surfaces.count)
