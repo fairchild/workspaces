@@ -68,6 +68,10 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             tileTreeStore: tileTreeStore,
             webSurfaceRecords: webSurfaceRecords
         )
+        let webSnapshot = Self.makeWebSnapshot(
+            tileTreeStore: tileTreeStore,
+            webSurfaceRecords: webSurfaceRecords
+        )
 
         if let startTask {
             let socketPath = try await startTask.value
@@ -75,7 +79,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal,
-                webSurfaces: webSurfaces
+                webSurfaces: webSurfaces,
+                webSnapshot: webSnapshot
             )
             return socketPath
         }
@@ -85,7 +90,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal,
-                webSurfaces: webSurfaces
+                webSurfaces: webSurfaces,
+                webSnapshot: webSnapshot
             )
             guard let socketPath else {
                 throw AutomationListener.ListenerError.socketBindFailed("listener started without a socket path")
@@ -98,7 +104,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             tileTreeStore: tileTreeStore,
             focusTerminal: focusTerminal,
             requestCloseTerminal: requestCloseTerminal,
-            webSurfaces: webSurfaces
+            webSurfaces: webSurfaces,
+            webSnapshot: webSnapshot
         )
 
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
@@ -154,6 +161,24 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                     tileTreeStore?.surfaceStore.liveWebState(forSourceID: sourceID)
                 }
             )
+        }
+    }
+
+    /// Resolves a snapshot request against the caller's live source records and the surface
+    /// store's live `WKWebView` (both non-creating), then captures on the MainActor. Fails
+    /// closed: an unknown id or a source without an instantiated view never spins up a page.
+    private static func makeWebSnapshot(
+        tileTreeStore: TileTreeStore,
+        webSurfaceRecords: @escaping @MainActor () -> [WebSurfaceRecord]
+    ) -> @MainActor (UUID) async -> WebSnapshotOutcome {
+        { [weak tileTreeStore] sourceID in
+            guard webSurfaceRecords().contains(where: { $0.sourceID == sourceID }) else {
+                return .unknownSource
+            }
+            guard let webView = tileTreeStore?.surfaceStore.liveWebView(forSourceID: sourceID) else {
+                return .notLive
+            }
+            return await WebSurfaceSnapshotCapture.capture(webView)
         }
     }
 

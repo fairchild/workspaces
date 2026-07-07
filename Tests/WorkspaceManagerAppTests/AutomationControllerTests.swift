@@ -1,5 +1,7 @@
+import AppKit
 import Foundation
 import Testing
+import WebKit
 
 @testable import WorkspaceManager
 @testable import WorkspaceManagerCore
@@ -281,6 +283,150 @@ struct AutomationControllerTests {
             Issue.record("Expected browser.read to be required for web-surface listing")
         } catch let error as AutomationServiceError {
             #expect(error.response.code == .capabilityDenied)
+        }
+    }
+
+    @Test("Web-surface snapshot returns the provider's captured PNG for a browser.read handle")
+    func webSurfaceSnapshotReturnsCapture() async throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "browser" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        let sourceID = UUID()
+        let png = Data([0x89, 0x50, 0x4E, 0x47])
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            webSnapshot: { requested in
+                requested == sourceID ? .captured(pngData: png, width: 8, height: 4) : .unknownSource
+            }
+        )
+
+        let result = try await controller.automationWebSurfaceSnapshot(for: "browser", sourceID: sourceID)
+        #expect(result.sourceID == sourceID)
+        #expect(result.width == 8)
+        #expect(result.byteCount == png.count)
+        #expect(Data(base64Encoded: result.data) == png)
+        #expect(result.system.capabilities.contains(.browserRead))
+    }
+
+    @Test("Web-surface snapshot maps a not-live source to unsupported")
+    func webSurfaceSnapshotNotLive() async throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "browser" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            webSnapshot: { _ in .notLive }
+        )
+
+        do {
+            _ = try await controller.automationWebSurfaceSnapshot(for: "browser", sourceID: UUID())
+            Issue.record("Expected a not-live source to fail as unsupported")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .unsupported)
+        }
+    }
+
+    @Test("Web-surface snapshot denies handles without browser.read before capturing")
+    func webSurfaceSnapshotDeniesWithoutBrowserRead() async throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "limited" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: [.contextRead]
+        )
+        var captureCalls = 0
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            webSnapshot: { _ in
+                captureCalls += 1
+                return .notLive
+            }
+        )
+
+        do {
+            _ = try await controller.automationWebSurfaceSnapshot(for: "limited", sourceID: UUID())
+            Issue.record("Expected browser.read to be required for snapshotting")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+        // The capability gate runs before the capture provider, so no snapshot was attempted.
+        #expect(captureCalls == 0)
+    }
+
+    @Test("Live WKWebView capture produces a bounded, non-empty PNG")
+    func liveWebViewCaptureProducesPNG() async throws {
+        let webView = WKWebView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView?.addSubview(webView)
+        webView.loadHTMLString(
+            "<html><body style=\"margin:0;background:#2266cc;\"><h1 style=\"color:white\">snapshot</h1></body></html>",
+            baseURL: nil
+        )
+        // Let the page paint before capturing; takeSnapshot of a blank view is a valid but empty PNG.
+        try? await Task.sleep(for: .milliseconds(800))
+
+        let outcome = await WebSurfaceSnapshotCapture.capture(webView, maxWidth: 320, timeoutSeconds: 5)
+        guard case .captured(let pngData, let width, let height) = outcome else {
+            Issue.record("Expected a captured PNG, got \(outcome)")
+            return
+        }
+        #expect(!pngData.isEmpty)
+        #expect(width > 0)
+        #expect(height > 0)
+        // Bounded: scaled to at most maxWidth (backing-store scale may 2x on Retina).
+        #expect(width <= 320 * 2)
+        #expect(pngData.count <= AutomationAPI.webSnapshotMaxRawBytes)
+
+        if let dir = ProcessInfo.processInfo.environment["WEB_SNAPSHOT_EVIDENCE_DIR"] {
+            let url = URL(fileURLWithPath: dir).appendingPathComponent("web-surface-snapshot.png")
+            try? pngData.write(to: url)
         }
     }
 

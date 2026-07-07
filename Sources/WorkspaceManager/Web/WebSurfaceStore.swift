@@ -44,6 +44,14 @@ final class WebSurfaceStore: ObservableObject {
         )
     }
 
+    /// The live `WKWebView` for the Automation API's browser-read snapshot, or `nil`
+    /// when no surface is instantiated. A non-creating peek (like `liveState`): it never
+    /// instantiates a view, so snapshotting a released surface fails closed rather than
+    /// spinning up a hidden page.
+    var liveWebView: WKWebView? {
+        activeSurface?.webView
+    }
+
     func ensureSurface(
         for source: WebSource,
         onBlockedNavigation: ((URL) -> Void)? = nil

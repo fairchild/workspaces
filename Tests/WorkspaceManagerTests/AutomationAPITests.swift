@@ -73,6 +73,26 @@ private final class FakeAutomationController: AutomationControlling {
         )
     }
 
+    var snapshotCalls: [UUID] = []
+
+    func automationWebSurfaceSnapshot(
+        for handle: String,
+        sourceID: UUID
+    ) async throws -> AutomationWebSurfaceSnapshotResult {
+        guard handle != "nobrowser" else {
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include browser.read.")
+        }
+        _ = try automationContext(for: handle)
+        snapshotCalls.append(sourceID)
+        return AutomationWebSurfaceSnapshotResult(
+            sourceID: sourceID,
+            width: 2,
+            height: 1,
+            byteCount: 4,
+            data: "AQID"
+        )
+    }
+
     func automationFocusTile(
         for handle: String,
         direction: AutomationTileFocusDirection
@@ -466,6 +486,160 @@ struct AutomationAPITests {
         )
         #expect(wrongMethod.status == 405)
         #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
+    @Test("Snapshot encoder base64-encodes a captured PNG and reports raw byte count")
+    func snapshotEncoderCaptured() throws {
+        let sourceID = UUID()
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
+        let result = try WebSurfaceSnapshotEncoder.result(
+            from: .captured(pngData: png, width: 320, height: 200),
+            sourceID: sourceID,
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        #expect(result.sourceID == sourceID)
+        #expect(result.encoding == "png")
+        #expect(result.width == 320)
+        #expect(result.height == 200)
+        #expect(result.byteCount == png.count)
+        #expect(Data(base64Encoded: result.data) == png)
+        #expect(result.system.capabilities.contains(.browserRead))
+    }
+
+    @Test("Snapshot encoder rejects a capture over the raw byte cap as unsupported")
+    func snapshotEncoderOverCap() throws {
+        let png = Data(repeating: 0xAB, count: 64)
+        do {
+            _ = try WebSurfaceSnapshotEncoder.result(
+                from: .captured(pngData: png, width: 10, height: 10),
+                sourceID: UUID(),
+                maxRawBytes: 32,
+                capabilities: AutomationAPI.v1Capabilities
+            )
+            Issue.record("Expected an over-cap capture to be rejected")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .unsupported)
+            #expect(error.response.message.contains("cap"))
+        }
+    }
+
+    @Test("Snapshot encoder maps each failure outcome to its structured error code")
+    func snapshotEncoderFailureMapping() throws {
+        let sourceID = UUID()
+        func code(_ outcome: WebSnapshotOutcome) -> AutomationErrorCode? {
+            do {
+                _ = try WebSurfaceSnapshotEncoder.result(
+                    from: outcome,
+                    sourceID: sourceID,
+                    capabilities: AutomationAPI.v1Capabilities
+                )
+                return nil
+            } catch let error as AutomationServiceError {
+                return error.response.code
+            } catch {
+                return nil
+            }
+        }
+        #expect(code(.unknownSource) == .invalidRequest)
+        #expect(code(.notLive) == .unsupported)
+        #expect(code(.timedOut) == .unsupported)
+        #expect(code(.captureFailed("boom")) == .internalError)
+    }
+
+    @Test("Router captures a web-surface snapshot, rejects a bad id, wrong method, and under-capable handle")
+    @MainActor
+    func routerWebSurfaceSnapshot() async throws {
+        let controller = FakeAutomationController()
+        let sourceID = UUID(uuidString: "66666666-6666-6666-6666-666666666666")!
+
+        let ok = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/web-surfaces/\(sourceID.uuidString)/snapshot",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWebSurfaceSnapshotResult>.self,
+            from: ok.body
+        )
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.sourceID == sourceID)
+        #expect(okEnvelope.result?.encoding == "png")
+        #expect(controller.snapshotCalls == [sourceID])
+
+        let badID = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/web-surfaces/not-a-uuid/snapshot",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let badIDEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: badID.body
+        )
+        #expect(badID.status == 400)
+        #expect(badIDEnvelope.error?.code == .invalidRequest)
+
+        // An empty id (`/v1/web-surfaces//snapshot`) is a well-shaped snapshot path with a
+        // bad id, so it reports invalid_request rather than falling through to route_not_found.
+        let emptyID = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/web-surfaces//snapshot",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let emptyIDEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: emptyID.body
+        )
+        #expect(emptyID.status == 400)
+        #expect(emptyIDEnvelope.error?.code == .invalidRequest)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/web-surfaces/\(sourceID.uuidString)/snapshot",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+
+        let denied = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/web-surfaces/\(sourceID.uuidString)/snapshot",
+                headers: [AutomationAPI.handleHeader: "nobrowser"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: denied.body
+        )
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
     }
 
     @Test("CLI formatter emits result JSON and surfaces envelope errors")

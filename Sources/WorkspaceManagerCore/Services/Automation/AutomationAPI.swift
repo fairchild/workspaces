@@ -20,6 +20,16 @@ public enum AutomationAPI {
     public static let inputWriteCapabilities = v1Capabilities + [AutomationCapability.inputWrite]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
+
+    /// Bounds for `GET /v1/web-surfaces/{id}/snapshot` (`browser.read`). The snapshot
+    /// captures the live view's currently-rendered viewport (WKWebView bounds), scaled
+    /// to at most `webSnapshotMaxWidth`; a page taller than the viewport is not captured
+    /// in full. The encoded PNG is rejected past `webSnapshotMaxRawBytes` rather than
+    /// truncated, and the capture is abandoned past `webSnapshotTimeoutSeconds` so a hung
+    /// page cannot wedge the automation server.
+    public static let webSnapshotMaxWidth = 1600
+    public static let webSnapshotMaxRawBytes = 8 * 1_024 * 1_024
+    public static let webSnapshotTimeoutSeconds = 5.0
 }
 
 public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equatable {
@@ -181,6 +191,39 @@ public struct AutomationWebSurfacesResult: Codable, Sendable, Equatable {
         system: AutomationSystemDescriptor = AutomationSystemDescriptor()
     ) {
         self.webSurfaces = webSurfaces
+        self.system = system
+    }
+}
+
+/// Bounded PNG snapshot of a live WorkSpaces-owned web surface (`browser.read`).
+/// `data` is the base64-encoded PNG; `byteCount` is the raw (pre-base64) PNG size,
+/// bounded by `AutomationAPI.webSnapshotMaxRawBytes`. `width`/`height` are the PNG's
+/// pixel dimensions. Produced only when a `WKWebView` is live for the source — a
+/// non-live source fails with `unsupported` rather than returning a fabricated image.
+public struct AutomationWebSurfaceSnapshotResult: Codable, Sendable, Equatable {
+    public let sourceID: UUID
+    public let encoding: String
+    public let width: Int
+    public let height: Int
+    public let byteCount: Int
+    public let data: String
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        sourceID: UUID,
+        encoding: String = "png",
+        width: Int,
+        height: Int,
+        byteCount: Int,
+        data: String,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor()
+    ) {
+        self.sourceID = sourceID
+        self.encoding = encoding
+        self.width = width
+        self.height = height
+        self.byteCount = byteCount
+        self.data = data
         self.system = system
     }
 }
@@ -360,6 +403,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
     func automationContext(for handle: String) throws -> AutomationContextResult
     func automationSurfaces(for handle: String) throws -> AutomationSurfacesResult
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult
+    func automationWebSurfaceSnapshot(
+        for handle: String,
+        sourceID: UUID
+    ) async throws -> AutomationWebSurfaceSnapshotResult
     func automationFocusTile(
         for handle: String,
         direction: AutomationTileFocusDirection

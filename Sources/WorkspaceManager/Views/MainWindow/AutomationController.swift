@@ -9,6 +9,7 @@ final class AutomationController: AutomationControlling {
     private var requestCloseTerminal: @MainActor (UUID) -> Void
     private let isInputWriteEnabled: @MainActor () -> Bool
     private var webSurfaces: @MainActor () -> [AutomationWebSurfaceDescriptor]
+    private var webSnapshot: @MainActor (UUID) async -> WebSnapshotOutcome
 
     init(
         handleRegistry: AutomationHandleRegistry,
@@ -16,6 +17,7 @@ final class AutomationController: AutomationControlling {
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
         webSurfaces: @escaping @MainActor () -> [AutomationWebSurfaceDescriptor] = { [] },
+        webSnapshot: @escaping @MainActor (UUID) async -> WebSnapshotOutcome = { _ in .unknownSource },
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         }
@@ -25,6 +27,7 @@ final class AutomationController: AutomationControlling {
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
         self.webSurfaces = webSurfaces
+        self.webSnapshot = webSnapshot
         self.isInputWriteEnabled = isInputWriteEnabled
     }
 
@@ -32,13 +35,17 @@ final class AutomationController: AutomationControlling {
         tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
-        webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil
+        webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil,
+        webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
         if let webSurfaces {
             self.webSurfaces = webSurfaces
+        }
+        if let webSnapshot {
+            self.webSnapshot = webSnapshot
         }
     }
 
@@ -63,6 +70,22 @@ final class AutomationController: AutomationControlling {
         return AutomationWebSurfacesResult(
             webSurfaces: webSurfaces(),
             system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
+        )
+    }
+
+    func automationWebSurfaceSnapshot(
+        for handle: String,
+        sourceID: UUID
+    ) async throws -> AutomationWebSurfaceSnapshotResult {
+        // Same trust level as the web-surface list: read-only pixels of an already-visible
+        // surface, gated on browser.read. The caller is a terminal tile; the snapshot targets
+        // an app-owned web surface addressed by stable WebSource id, never the caller's tile.
+        let resolved = try resolve(handle, requiring: .browserRead)
+        let outcome = await webSnapshot(sourceID)
+        return try WebSurfaceSnapshotEncoder.result(
+            from: outcome,
+            sourceID: sourceID,
+            capabilities: resolved.entry.capabilities
         )
     }
 
