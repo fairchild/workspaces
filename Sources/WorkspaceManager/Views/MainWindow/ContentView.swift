@@ -1027,6 +1027,11 @@ struct ContentView: View {
             .onDisappear {
                 clearAppCommands()
                 accessRecorder.flushPendingSave(modelContext: modelContext)
+                // Window close: the app outlives its last window, so tear the web-detail domain
+                // down deterministically instead of leaning on ARC scene disposal. This is the
+                // root view — a new window gets a fresh @State store, so this can never race a
+                // remount the way the pane-level onDisappear could.
+                webDetailSurfaceStore.sync(activeLeafIDs: [])
             }
             .onReceive(NotificationCenter.default.publisher(for: .showFeedbackSheet)) { _ in
                 isShowingFeedbackSheet = true
