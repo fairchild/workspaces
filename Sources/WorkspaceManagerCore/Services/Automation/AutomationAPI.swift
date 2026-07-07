@@ -12,6 +12,7 @@ public enum AutomationAPI {
         .tileFocus,
         .tileSplit,
         .tileClose,
+        .browserRead,
     ]
 
     /// V1 capabilities plus the experimental caller-scoped `input.write` grant.
@@ -28,6 +29,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case tileSplit = "tile.split"
     case tileClose = "tile.close"
     case inputWrite = "input.write"
+    case browserRead = "browser.read"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -122,6 +124,64 @@ public struct AutomationSurfaceDescriptor: Codable, Sendable, Equatable {
         self.isActive = isActive
         self.isVisible = isVisible
         self.capabilities = capabilities
+    }
+}
+
+public enum AutomationWebSurfaceScope: String, Codable, Sendable, Equatable {
+    case global
+    case repo
+    case workspace
+}
+
+/// Read-only descriptor for a WorkSpaces-owned embedded web surface (`browser.read`).
+/// Live fields (`liveURL`, `title`, `isLoading`) are populated only when an
+/// instantiated `WKWebView` backs the source; when none is live they are `nil` and
+/// `isLive` is `false` — the surface is never given a fabricated URL or title.
+/// `configuredURL` is the source's declared home, not a claim about the live page.
+public struct AutomationWebSurfaceDescriptor: Codable, Sendable, Equatable {
+    public let sourceID: UUID
+    public let scope: AutomationWebSurfaceScope
+    public let ownerID: UUID?
+    public let displayName: String
+    public let configuredURL: String
+    public let liveURL: String?
+    public let title: String?
+    public let isLive: Bool
+    public let isLoading: Bool?
+
+    public init(
+        sourceID: UUID,
+        scope: AutomationWebSurfaceScope,
+        ownerID: UUID?,
+        displayName: String,
+        configuredURL: String,
+        liveURL: String?,
+        title: String?,
+        isLive: Bool,
+        isLoading: Bool?
+    ) {
+        self.sourceID = sourceID
+        self.scope = scope
+        self.ownerID = ownerID
+        self.displayName = displayName
+        self.configuredURL = configuredURL
+        self.liveURL = liveURL
+        self.title = title
+        self.isLive = isLive
+        self.isLoading = isLoading
+    }
+}
+
+public struct AutomationWebSurfacesResult: Codable, Sendable, Equatable {
+    public let webSurfaces: [AutomationWebSurfaceDescriptor]
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        webSurfaces: [AutomationWebSurfaceDescriptor],
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor()
+    ) {
+        self.webSurfaces = webSurfaces
+        self.system = system
     }
 }
 
@@ -299,6 +359,7 @@ public struct AutomationServiceError: Error, Sendable, Equatable {
 public protocol AutomationControlling: AnyObject, Sendable {
     func automationContext(for handle: String) throws -> AutomationContextResult
     func automationSurfaces(for handle: String) throws -> AutomationSurfacesResult
+    func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult
     func automationFocusTile(
         for handle: String,
         direction: AutomationTileFocusDirection

@@ -8,12 +8,14 @@ final class AutomationController: AutomationControlling {
     private var focusTerminal: @MainActor (UUID) -> Void
     private var requestCloseTerminal: @MainActor (UUID) -> Void
     private let isInputWriteEnabled: @MainActor () -> Bool
+    private var webSurfaces: @MainActor () -> [AutomationWebSurfaceDescriptor]
 
     init(
         handleRegistry: AutomationHandleRegistry,
         tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
+        webSurfaces: @escaping @MainActor () -> [AutomationWebSurfaceDescriptor] = { [] },
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         }
@@ -22,17 +24,22 @@ final class AutomationController: AutomationControlling {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
+        self.webSurfaces = webSurfaces
         self.isInputWriteEnabled = isInputWriteEnabled
     }
 
     func update(
         tileTreeStore: TileTreeStore,
         focusTerminal: @escaping @MainActor (UUID) -> Void,
-        requestCloseTerminal: @escaping @MainActor (UUID) -> Void
+        requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
+        webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
+        if let webSurfaces {
+            self.webSurfaces = webSurfaces
+        }
     }
 
     func automationContext(for handle: String) throws -> AutomationContextResult {
@@ -44,6 +51,17 @@ final class AutomationController: AutomationControlling {
         let resolved = try resolve(handle, requiring: .surfacesRead)
         return AutomationSurfacesResult(
             surfaces: surfaceDescriptors(for: resolved),
+            system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
+        )
+    }
+
+    func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {
+        // The caller is a terminal tile (resolve enforces that); browser.read lets it
+        // read the app's web surfaces, which are separate entities addressed by stable
+        // WebSource id, never the caller's own tile.
+        let resolved = try resolve(handle, requiring: .browserRead)
+        return AutomationWebSurfacesResult(
+            webSurfaces: webSurfaces(),
             system: AutomationSystemDescriptor(capabilities: resolved.entry.capabilities)
         )
     }

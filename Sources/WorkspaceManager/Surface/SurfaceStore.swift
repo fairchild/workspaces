@@ -200,6 +200,13 @@ final class SurfaceStore {
         surfaces[tileID] as? WebSurface
     }
 
+    /// Live navigation state for an already-instantiated web surface, or `nil` when
+    /// none is live. A non-creating peek: unlike `webStore(forSourceID:)` it never
+    /// instantiates a store, so listing web surfaces can't spin up hidden WKWebViews.
+    func liveWebState(forSourceID sourceID: UUID) -> WebSurfaceLiveState? {
+        webStoresBySourceID[sourceID]?.liveState
+    }
+
     /// Get-or-create the shared per-source store backing `sourceID`'s web views.
     func webStore(forSourceID sourceID: UUID) -> WebSurfaceStore {
         if let store = webStoresBySourceID[sourceID] {
