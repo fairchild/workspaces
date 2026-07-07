@@ -2,8 +2,6 @@ import Foundation
 import Testing
 import WorkspaceManagerCore
 
-@testable import WorkspaceManager
-
 @Suite("SessionSwitcherSnapshot")
 struct SessionSwitcherSnapshotTests {
     @Test("Live workspace session row keeps exact host session target and metadata")

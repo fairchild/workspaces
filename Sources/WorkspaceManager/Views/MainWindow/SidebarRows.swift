@@ -14,76 +14,14 @@ private enum SidebarTreeMetrics {
     static let iconColumnWidth: CGFloat = 18
 }
 
-enum SidebarSessionActivity: Equatable {
-    case inactive
-    case live
-    case active
-    case thinking
-    case runningTool
-    case awaitingInput
-    case errored(category: AgentErrorCategory)
+/// The sidebar's activity type is the Core `SessionActivity` (the single encoding of the
+/// attention ladder, shared with the session-switcher read model — #680). This layer only
+/// adds the SwiftUI styling.
+typealias SidebarSessionActivity = SessionActivity
 
-    init(hasLiveSession: Bool, isActiveSession: Bool) {
-        if isActiveSession {
-            self = .active
-        } else if hasLiveSession {
-            self = .live
-        } else {
-            self = .inactive
-        }
-    }
-
-    /// Map an agent registry status to a sidebar activity. Returns `.inactive` when
-    /// the host has no registered agent status.
-    static func from(_ status: AgentSessionStatus?) -> SidebarSessionActivity {
-        guard let status else { return .inactive }
-        switch status.run {
-        case .idle:
-            return .live
-        case .thinking:
-            return .thinking
-        case .runningTool:
-            return .runningTool
-        case .awaitingInput:
-            return .awaitingInput
-        case .complete:
-            return .live
-        case .errored(let category, _):
-            return .errored(category: category)
-        }
-    }
-
-    var isActive: Bool {
-        self == .active
-    }
-
-    var hasLiveSession: Bool {
-        switch self {
-        case .inactive: return false
-        case .live, .active, .thinking, .runningTool, .awaitingInput, .errored:
-            return true
-        }
-    }
-
+extension SessionActivity {
     var indicatorColor: Color {
         indicatorTone.color
-    }
-
-    var indicatorTone: AgentChromeProjection.Tone {
-        switch self {
-        case .inactive:
-            return .hidden
-        case .live:
-            return .live
-        case .active:
-            return .active
-        case .thinking, .runningTool:
-            return .running
-        case .awaitingInput:
-            return .attention
-        case .errored:
-            return .critical
-        }
     }
 
     func iconColor(inactiveColor: Color) -> Color {
@@ -98,53 +36,6 @@ enum SidebarSessionActivity: Equatable {
 
     var badgeColor: Color {
         isActive ? .primary : .secondary
-    }
-
-    var accessibilityDescription: String {
-        switch self {
-        case .inactive:
-            return "no live session"
-        case .live:
-            return "live session"
-        case .active:
-            return "active session"
-        case .thinking:
-            return AgentChromeProjection.runState(.thinking).accessibilityDescription
-        case .runningTool:
-            return AgentChromeProjection.runState(.runningTool(name: "", detail: nil)).accessibilityDescription
-        case .awaitingInput:
-            return AgentChromeProjection.runState(.awaitingInput(reason: .custom)).accessibilityDescription
-        case .errored(let category):
-            return AgentChromeProjection.runState(.errored(category: category, message: nil)).accessibilityDescription
-        }
-    }
-
-    static func showsPaneCountBadge(for paneCount: Int) -> Bool {
-        paneCount > 1
-    }
-
-    /// Severity ranking used to merge a baseline (own-session) activity with a
-    /// bubbled activity derived from child workspaces. Higher wins.
-    var severity: Int {
-        switch self {
-        case .errored(let category):
-            return AgentChromeProjection.runState(.errored(category: category, message: nil)).sidebarPriority
-        case .awaitingInput:
-            return AgentChromeProjection.runState(.awaitingInput(reason: .custom)).sidebarPriority
-        case .runningTool:
-            return AgentChromeProjection.runState(.runningTool(name: "", detail: nil)).sidebarPriority
-        case .thinking:
-            return AgentChromeProjection.runState(.thinking).sidebarPriority
-        case .active: return 2
-        case .live: return 1
-        case .inactive: return 0
-        }
-    }
-
-    /// Combine this activity with another, returning the more severe one. Ties
-    /// prefer `self` so callers can pass the baseline first.
-    func mergedWithBubbled(_ other: SidebarSessionActivity) -> SidebarSessionActivity {
-        other.severity > self.severity ? other : self
     }
 }
 
