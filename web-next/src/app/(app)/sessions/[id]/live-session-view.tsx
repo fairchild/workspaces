@@ -227,12 +227,32 @@ export function LiveSessionView({
 	// affordance while busy), stop the live VM (a quiet masthead action).
 	const { sandbox, stopSandbox } = useSandboxState(sessionId, busy);
 	const stopTurn = () => {
-		// Fire-and-forget: the server closes the turn's log, the live stream
-		// surfaces the stop as this turn's failure card ("Turn stopped."), and
-		// the hook's own status transition re-enables compose — the UI follows
-		// the stream, not this request. A 409 (the turn just finished on its
-		// own) needs no handling: there is nothing left to stop.
-		void fetch(`/api/sessions/${sessionId}/stop`, { method: "POST" });
+		// On success the UI follows the stream, not this request: the server
+		// closes the turn's log, the tail surfaces the stop as this turn's
+		// failure card ("Turn stopped."), and the hook's status transition
+		// re-enables compose. A refusal is surfaced as an activity step — the
+		// one case a shown control can't act (the turn's runner lives on
+		// another server instance) must not be a silent click (codex finding,
+		// gpt-5.5 xhigh). The benign 409 right after the turn finished on its
+		// own adds a step nothing renders: the activity line is already gone.
+		void (async () => {
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}/stop`, {
+					method: "POST",
+				});
+				if (!res.ok) {
+					const data = (await res.json().catch(() => null)) as {
+						error?: string;
+					} | null;
+					setSteps((current) => [
+						...current,
+						`Stop unavailable — ${data?.error ?? `HTTP ${res.status}`}`,
+					]);
+				}
+			} catch {
+				setSteps((current) => [...current, "Stop unavailable — network error"]);
+			}
+		})();
 	};
 
 	const send = (text: string) => {
