@@ -75,10 +75,33 @@ export interface SessionEventsTable {
 	created_at: string;
 }
 
+/**
+ * Single-use, short-TTL terminal access tickets (#752): issued by the
+ * authenticated mint route and redeemed exactly once, binding a login +
+ * session to one sandbox attach. Only the SHA-256 of the ticket is stored;
+ * the ticket itself exists solely in the mint response and the redeem body.
+ */
+export interface TerminalTicketsTable {
+	/** SHA-256 hex of the ticket string — the lookup key; never the ticket. */
+	ticket_hash: string;
+	/** GitHub login the ticket was issued to (web-next identity is the login). */
+	login: string;
+	/** sessions.id the ticket authorizes a terminal for. */
+	session_id: string;
+	/** Transport the mint resolved — "ttyd" (live sandbox) | "mock" (bypass). */
+	mode: string;
+	/** Vercel sandbox name the ticket is pinned to; null in mock mode. */
+	sandbox_name: string | null;
+	created_at: string;
+	expires_at: string;
+	redeemed_at: string | null;
+}
+
 export interface Database {
 	repos: ReposTable;
 	sessions: SessionsTable;
 	session_events: SessionEventsTable;
+	terminal_tickets: TerminalTicketsTable;
 }
 
 /** A connected database: the raw client (for PRAGMA/DDL) and the typed builder. */

@@ -191,9 +191,34 @@ const sessionModel: Migration = {
 	},
 };
 
+/**
+ * Adds `terminal_tickets` — single-use, short-TTL terminal access tickets
+ * (#752, the ticket/HMAC model ported from web/'s terminal_access_tickets).
+ * Rows are pruned opportunistically on issue; no index beyond the PK is
+ * needed at this volume (one user, seconds-long TTLs).
+ */
+const terminalTickets: Migration = {
+	id: "0005_terminal_tickets",
+	async up(db) {
+		await db.schema
+			.createTable("terminal_tickets")
+			.ifNotExists()
+			.addColumn("ticket_hash", "text", (c) => c.primaryKey())
+			.addColumn("login", "text", (c) => c.notNull())
+			.addColumn("session_id", "text", (c) => c.notNull())
+			.addColumn("mode", "text", (c) => c.notNull())
+			.addColumn("sandbox_name", "text")
+			.addColumn("created_at", "text", (c) => c.notNull())
+			.addColumn("expires_at", "text", (c) => c.notNull())
+			.addColumn("redeemed_at", "text")
+			.execute();
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
 	sessionResumeState,
 	sessionModel,
+	terminalTickets,
 ];

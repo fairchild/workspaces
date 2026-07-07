@@ -53,6 +53,7 @@ describe("session store", () => {
 			"0002_auth_tables",
 			"0003_session_resume_state",
 			"0004_session_model",
+			"0005_terminal_tickets",
 		]);
 	});
 
