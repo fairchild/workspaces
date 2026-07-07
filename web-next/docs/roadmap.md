@@ -26,8 +26,21 @@ app, can:
 7. **Get the change out as a PR.** *Mechanics proven (#822's smoke opened #821); #820 is now the product surface design.*
 8. **Trust all of the above** via automated validation against the real deployment. *#13.*
 9. **Hand it to someone else to try** — sessions are owner-scoped, so an added
-   allowlist login sees only their own sessions. *Gap: no owner column today (#829).*
+   allowlist login sees only their own sessions. *Deferred (2026-07-07): web-next
+   is a single-user tool for now; #829 is parked (`idea`) until a real second
+   login is wanted. Bars 1–8 + 10 are the live target; this bar returns when
+   sharing is actually on the table.*
 10. It is **the primary surface**, old chat/terminal demoted. *#754.*
+
+> **Posture (2026-07-07 grooming).** web-next is the **web lane** of a two-lane
+> product — it runs in parallel with the desktop app, one active milestone per
+> lane (see `backlog/ROADMAP.md` § Milestone Alignment). It is a **single-user
+> (owner) tool** until a second allowlist login is wanted: sharing (#829) and
+> assistive-tech/mobile a11y (#804/#809) are deferred, while contrast/keyboard/
+> visible-failure work (#805/#806/#808) stays because it serves the owner.
+> **Open gap:** the surface meant to become *primary* (#754) has no performance
+> budget — establish a minimal perf floor before cutover, matching the desktop
+> performance contract.
 
 ## Current state (2026-07-06)
 
@@ -74,7 +87,7 @@ in-app path. #750 and #826 are closed. The mock remains the default provider.
 | [#11 Sessions-first web](https://github.com/fairchild/workspaces/milestone/11) | The build-out: ~~#750/#826~~ real runtime (**landed**: #822 + #831), **#752** terminal drawer, **#753** lifecycle + error states + mobile, **#754** cutover, **#790** edit→diff, **#780** build/404 flake. |
 | [#12 Refinement pass 1](https://github.com/fairchild/workspaces/milestone/12) | a11y, resilience & polish: **#804–#809** a11y/UX, **#810** resume liveness, **#811** turn concurrency, **#812** font-doc drift, **#828** API 401 JSON. |
 | [#13 Self-validation](https://github.com/fairchild/workspaces/milestone/13) | Environment-targetable validation harness: **#813–#819** (local → preview → staging → prod). |
-| [#14 Usability completeness](https://github.com/fairchild/workspaces/milestone/14) | The start-and-identify loop + shareability: **#823** titles, **#824** model selection, **#825** real repo picker, **#829** owner-scoped sessions. |
+| [#14 Usability completeness](https://github.com/fairchild/workspaces/milestone/14) | The start-and-identify loop: **#823** titles, **#824** model selection, **#825** real repo picker. *(**#829** owner-scoped sessions parked `idea` 2026-07-07 — single-user tool; returns when sharing is wanted.)* |
 | _followup_ | **#820** agent opens a GitHub PR from a session — mechanics proven by #821; the open design is the product surface. |
 
 ## Phased sequence
@@ -110,18 +123,22 @@ stages; with #831 merged, #818 has a real user-driven turn to exercise — and
 - **#790** one representation for viewing edits (expand Edit → its diff)
 - **#752** terminal drawer (PTY into the sandbox)
 
-### Phase 4 — Accessibility & polish
+### Phase 4 — Accessibility & polish *(thinned for single-user, 2026-07-07)*
+Keep what serves the owner; defer what only pays off with an audience.
 - **#806** WCAG-AA contrast — *pull forward; one palette change, affects every screen*
-- **#804** live-region announcements + follow-scroll, **#805** keyboard-reachable reveals + semantic heading, **#807** multiline compose, **#809** mobile touch targets, **#812** font-doc reconciliation
+- **#805** keyboard-reachable reveals + semantic heading, **#807** multiline compose, **#812** font-doc reconciliation
+- **Deferred pending a real audience:** **#804** live-region announcements + follow-scroll (assistive tech), **#809** mobile touch targets. Reinstate when a second person actually uses web-next.
 
 ### Phase 5 — Ship as primary + shareable
 Production already exists (real OAuth + allowlist, verified); what remains is
-making it *shareable* and *primary*, and keeping it proven.
-- **#829** per-user session ownership — the prerequisite to adding anyone else
-  to the allowlist
+making it *primary*, and keeping it proven. Shareability is deferred with #829.
 - **#828** API routes answer 401 JSON, not a sign-in redirect
-- **#754** cutover to the primary session surface (demote old chat/terminal)
+- **#754** cutover to the primary session surface (demote old chat/terminal) —
+  gate on a minimal web-next perf floor first (open gap: no perf budget yet)
 - **#820** agent opens a PR from a session — *after its design pass*
+- **#829** per-user session ownership — *parked `idea`; the prerequisite to
+  adding anyone else to the allowlist. Reinstate this phase when sharing is on
+  the table.*
 
 ## Critical path
 
