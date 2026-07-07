@@ -639,6 +639,42 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(workspace.path == workspaceURL.path)
     }
 
+    @Test("Unarchiving a legacy archived workspace restores in place without a directory move")
+    @MainActor
+    func unarchivingLegacyArchivedWorkspaceRestoresInPlace() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        // Pre-#661 archive left files at the live path with no `.archived/` component
+        // and never recorded `archivedAt`.
+        let liveURL = URL(fileURLWithPath: "/tmp/workspaces/api/feature-a")
+        let workspace = Workspace(
+            name: "feature-a",
+            path: liveURL,
+            sourceRepo: repo,
+            status: .archived,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        workspace.archivedAt = nil
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let workspaceService = MockWorkspaceService()
+        let controller = makeController(
+            context: context,
+            workspaceService: workspaceService,
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        try await controller.unarchive(workspace)
+
+        #expect(workspaceService.unarchiveWorkspaceCalls.isEmpty)
+        #expect(workspace.status == .active)
+        #expect(workspace.archivedAt == nil)
+        #expect(workspace.path == liveURL.path)
+    }
+
     @Test("Archiving local workspace retires terminal sessions before service lifecycle")
     @MainActor
     func archivingLocalWorkspaceRetiresTerminalSessionsBeforeServiceLifecycle() async throws {

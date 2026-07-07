@@ -214,8 +214,15 @@ struct SidebarWorkspaceController {
 
     /// Restores a local workspace: moves its directory back out of `.archived/` and
     /// clears the archived state. Non-local workspaces just flip status back.
+    ///
+    /// Workspaces archived before directory moves existed were never relocated — their
+    /// files still sit at the live path with no `.archived/` component. Moving one back
+    /// out of `.archived/` would walk a level too far and land outside the workspaces
+    /// root, so legacy records restore in place with a status flip only.
     func unarchive(_ workspace: Workspace) async throws {
-        if workspace.backend == .local {
+        let isUnderArchived = workspace.workspaceURL.pathComponents
+            .contains(WorkspaceDirectoryArchiver.archivedDirectoryComponent)
+        if workspace.backend == .local && isUnderArchived {
             let restoredURL = try await workspaceService.unarchiveWorkspace(at: workspace.workspaceURL)
             workspace.path = restoredURL.path
         }
