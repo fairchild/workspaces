@@ -125,6 +125,7 @@ struct DiagnosticsTabView: View {
                 DiagnosticsMetricCard(label: "Schema", value: localStateSchemaText)
                 DiagnosticsMetricCard(label: "Rows", value: "\(localStateRowCount)")
                 DiagnosticsMetricCard(label: "Latest", value: localStateLatestText)
+                DiagnosticsMetricCard(label: "Integrity", value: localStateIntegrityText)
             }
 
             DiagnosticsKeyValueRow(
@@ -365,6 +366,13 @@ struct DiagnosticsTabView: View {
             return "None"
         }
         return latest.formatted(.relative(presentation: .named))
+    }
+
+    /// Result of the last retention pass's `PRAGMA quick_check`. "Pending" until the
+    /// first pass runs (once per launch); "OK" or "Check failed" thereafter.
+    private var localStateIntegrityText: String {
+        guard let integrityOK = viewModel.localStateSummary?.integrityOK else { return "Pending" }
+        return integrityOK ? "OK" : "Check failed"
     }
 }
 
