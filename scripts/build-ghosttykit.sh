@@ -109,6 +109,13 @@ prepare_slice_arch_patch() {
     if [[ "$NEEDS_SLICE_ARCH_PATCH" == "1" ]]; then
       die "resolved zig does not match host arch and GHOSTTY_DIR is set; refusing to patch a user-managed checkout. Provide a host-arch zig via GHOSTTY_ZIG_BIN or unset GHOSTTY_DIR."
     fi
+
+    # A user-managed checkout is never mutated, so a leftover slice-arch patch
+    # (e.g. GHOSTTY_DIR pointing at this script's own cache dir after a killed
+    # patched run) must fail loudly instead of silently retargeting the slice.
+    if [[ -n "$(git -C "$GHOSTTY_DIR" status --porcelain -- "$SLICE_ARCH_PATCH_FILE")" ]]; then
+      die "GHOSTTY_DIR has local modifications to $SLICE_ARCH_PATCH_FILE; reset it (git -C \"$GHOSTTY_DIR\" checkout -- $SLICE_ARCH_PATCH_FILE) or unset GHOSTTY_DIR"
+    fi
     return
   fi
 
@@ -315,6 +322,15 @@ assert_host_arch_slice() {
   if [[ "$found" == "0" ]]; then
     die "no libghostty-fat.a found in $framework_dir to verify architecture"
   fi
+
+  # SwiftPM selects the slice from Info.plist metadata, not the archive, so a
+  # repaired archive with the right objects can still hide a wrong-arch slice
+  # declaration. The exact-quoted match ("arm64") does not false-positive on
+  # LibraryIdentifier values like "macos-arm64".
+  local info_plist="$framework_dir/Info.plist"
+  if ! plutil -p "$info_plist" 2>/dev/null | grep -q "\"$host_arch\""; then
+    die "xcframework Info.plist does not declare a slice supporting host arch $host_arch: $info_plist"
+  fi
 }
 
 log_arch_diagnostics() {
@@ -387,6 +403,10 @@ ensure_pinned_commit() {
   fi
 
   if [[ "$current_commit" != "$GHOSTTY_COMMIT" ]]; then
+    # A slice-arch patch left behind by a killed run would make the detach
+    # below refuse to overwrite local changes; drop it first (best-effort —
+    # the file may not exist at the old commit).
+    git -C "$GHOSTTY_DIR" checkout -- "$SLICE_ARCH_PATCH_FILE" 2>/dev/null || true
     # Ghostty's `tip` tag moves; force tag updates so it does not block pinned commits.
     git -C "$GHOSTTY_DIR" fetch --force --tags origin
     git -C "$GHOSTTY_DIR" checkout --detach "$GHOSTTY_COMMIT"
