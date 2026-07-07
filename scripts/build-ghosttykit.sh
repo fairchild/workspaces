@@ -28,8 +28,8 @@ set -euo pipefail
 #                     info). Defaults to 1. Added to chase down a "no such
 #                     module 'GhosttyKit'" failure that turned out to be a
 #                     Rosetta/x86_64 zig producing a slice that doesn't match
-#                     an arm64 build target; see resolve_zig_runner() below
-#                     for the fix, kept on to catch a regression.
+#                     an arm64 build target; see prepare_slice_arch_patch()
+#                     below for the fix, kept on to catch a regression.
 # -----------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -81,34 +81,60 @@ zig_binary_matches_host_arch() {
 
 # Confirmed on an Xcode Cloud macOS image: its only available zig@0.15 bottle
 # was Rosetta-translated x86_64 even though the host (and its own `uname -m`)
-# is arm64. Upstream ziglang.org's official arm64 build is not a substitute —
-# it fails to link its own build runner against this repo's supported Xcode
-# SDKs with "undefined symbol: __availability_version_check" and a long list
-# of missing libSystem symbols (confirmed locally against Xcode 26.4.1); only
-# Homebrew's zig@0.15 formula carries the Darwin linker patch this needs. So
-# when the available zig is wrong-arch, bootstrap a real native Homebrew at
-# the standard Apple Silicon prefix instead, and get a correctly-arched
-# zig@0.15 bottle from it.
-bootstrap_arm64_homebrew_zig() {
-  echo "warning: resolved zig@0.15 does not match host arch ($(uname -m)); bootstrapping a native Homebrew at $ARM64_HOMEBREW_PREFIX to get a correctly-arched build" >&2
+# is arm64. Neither replacement compiler works there: upstream ziglang.org's
+# arm64 build fails to link its own build runner against this repo's supported
+# Xcode SDKs ("undefined symbol: __availability_version_check" plus missing
+# libSystem symbols; only Homebrew's zig@0.15 formula carries the needed
+# Darwin linker patch), and bootstrapping a native /opt/homebrew needs sudo
+# the Xcode Cloud user does not have (confirmed via build 574's log). So a
+# wrong-arch Homebrew zig is accepted and asked to CROSS-COMPILE the host-arch
+# slice: Ghostty's native xcframework slice hardcodes the zig compiler
+# binary's own arch (`Config.genericMacOSTarget(b, null)`), so the pinned
+# checkout gets a one-token patch replacing that `null` with the real host
+# arch. zig is a native cross-compiler; the compiler binary's arch stops
+# mattering once the slice target is explicit.
+NEEDS_SLICE_ARCH_PATCH=0
+SLICE_ARCH_PATCH_FILE="src/build/GhosttyXCFramework.zig"
 
-  if [[ ! -x "$ARM64_HOMEBREW_PREFIX/bin/brew" ]]; then
-    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+host_zig_cpu_arch() {
+  case "$(uname -m)" in
+    arm64 | aarch64) echo "aarch64" ;;
+    x86_64) echo "x86_64" ;;
+    *) die "unsupported host architecture for GhosttyKit: $(uname -m)" ;;
+  esac
+}
+
+prepare_slice_arch_patch() {
+  if [[ -n "$EXPLICIT_GHOSTTY_DIR" ]]; then
+    if [[ "$NEEDS_SLICE_ARCH_PATCH" == "1" ]]; then
+      die "resolved zig does not match host arch and GHOSTTY_DIR is set; refusing to patch a user-managed checkout. Provide a host-arch zig via GHOSTTY_ZIG_BIN or unset GHOSTTY_DIR."
+    fi
+    return
   fi
 
-  if [[ ! -x "$ARM64_HOMEBREW_PREFIX/bin/brew" ]]; then
-    die "expected a native Homebrew at $ARM64_HOMEBREW_PREFIX/bin/brew after bootstrap but it is missing"
+  # Reset unconditionally so a patch from a previous run never leaks into an
+  # arch-matched build via the cached checkout.
+  git -C "$GHOSTTY_DIR" checkout -- "$SLICE_ARCH_PATCH_FILE"
+
+  if [[ "$NEEDS_SLICE_ARCH_PATCH" != "1" ]]; then
+    return
   fi
 
-  "$ARM64_HOMEBREW_PREFIX/bin/brew" install zig@0.15
+  local arch
+  arch="$(host_zig_cpu_arch)"
+  local patch_path="$GHOSTTY_DIR/$SLICE_ARCH_PATCH_FILE"
 
-  if [[ ! -x "$HOMEBREW_ZIG_BIN" ]]; then
-    die "bootstrapped Homebrew at $ARM64_HOMEBREW_PREFIX but zig@0.15 is still missing at $HOMEBREW_ZIG_BIN"
+  if ! grep -q 'Config\.genericMacOSTarget(b, null)' "$patch_path"; then
+    die "expected 'Config.genericMacOSTarget(b, null)' in $SLICE_ARCH_PATCH_FILE at pinned commit $GHOSTTY_COMMIT; the pin changed — re-verify the slice-arch patch"
   fi
 
-  if ! zig_binary_matches_host_arch "$HOMEBREW_ZIG_BIN"; then
-    die "bootstrapped a native Homebrew at $ARM64_HOMEBREW_PREFIX but its zig@0.15 still does not match host arch ($(uname -m))"
+  sed -i '' "s/Config\.genericMacOSTarget(b, null)/Config.genericMacOSTarget(b, .$arch)/" "$patch_path"
+
+  if ! grep -q "Config\.genericMacOSTarget(b, \.$arch)" "$patch_path"; then
+    die "failed to patch $SLICE_ARCH_PATCH_FILE for host arch .$arch"
   fi
+
+  echo "warning: resolved zig does not match host arch ($(uname -m)); patched $SLICE_ARCH_PATCH_FILE to cross-compile the native slice for .$arch" >&2
 }
 
 resolve_zig_runner() {
@@ -117,6 +143,9 @@ resolve_zig_runner() {
       die "GHOSTTY_ZIG_BIN is set but is not executable: $EXPLICIT_ZIG_BIN"
     fi
 
+    if ! zig_binary_matches_host_arch "$EXPLICIT_ZIG_BIN"; then
+      NEEDS_SLICE_ARCH_PATCH=1
+    fi
     ZIG_RUNNER=("$EXPLICIT_ZIG_BIN")
     return
   fi
@@ -130,19 +159,18 @@ resolve_zig_runner() {
   # standard Apple Silicon /opt/homebrew prefix. Only used as a fallback here
   # so a host with a real /opt/homebrew zig@0.15 (checked above) never gets
   # overridden by a different-prefix (and potentially different-arch) one.
+  # A wrong-arch brew zig is still usable — it cross-compiles the host-arch
+  # slice via the pinned-source patch (see prepare_slice_arch_patch).
   if command -v brew >/dev/null 2>&1; then
     local brew_zig_prefix
     brew_zig_prefix="$(brew --prefix zig@0.15 2>/dev/null || true)"
-    if [[ -n "$brew_zig_prefix" && -x "$brew_zig_prefix/bin/zig" ]] && zig_binary_matches_host_arch "$brew_zig_prefix/bin/zig"; then
+    if [[ -n "$brew_zig_prefix" && -x "$brew_zig_prefix/bin/zig" ]]; then
+      if ! zig_binary_matches_host_arch "$brew_zig_prefix/bin/zig"; then
+        NEEDS_SLICE_ARCH_PATCH=1
+      fi
       ZIG_RUNNER=("$brew_zig_prefix/bin/zig")
       return
     fi
-  fi
-
-  if [[ "$(uname -m)" == "arm64" ]] && command -v brew >/dev/null 2>&1; then
-    bootstrap_arm64_homebrew_zig
-    ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
-    return
   fi
 
   if command -v mise >/dev/null 2>&1; then
@@ -228,6 +256,11 @@ repair_ghostty_archive_if_needed() {
   local index=0
   local source_archive
   while IFS= read -r source_archive; do
+    # Fat archives (lipo products, e.g. from a universal-mode build sharing
+    # this cache) are not ar-extractable; only thin archives carry objects.
+    if lipo -info "$source_archive" 2>/dev/null | grep -q '^Architectures in the fat file'; then
+      continue
+    fi
     local archive_dir="$tmp_dir/objects/$index"
     mkdir -p "$archive_dir"
     (
@@ -261,6 +294,27 @@ postprocess_xcframework() {
     repair_ghostty_archive_if_needed "$archive"
     xcrun strip -S -x "$archive"
   done < <(find "$framework_dir" -type f -name "libghostty-fat.a")
+}
+
+# The failure mode this whole arch dance guards against is a silently
+# wrong-arch slice that only surfaces later as "no such module 'GhosttyKit'"
+# at Swift compile time. Fail here, loudly, instead.
+assert_host_arch_slice() {
+  local framework_dir="$1"
+  local host_arch
+  host_arch="$(uname -m)"
+
+  local archive found=0
+  while IFS= read -r archive; do
+    found=1
+    if ! lipo -info "$archive" 2>/dev/null | grep -q "$host_arch"; then
+      die "built GhosttyKit slice does not contain host arch $host_arch: $(lipo -info "$archive" 2>&1)"
+    fi
+  done < <(find "$framework_dir" -type f -name "libghostty-fat.a" 2>/dev/null)
+
+  if [[ "$found" == "0" ]]; then
+    die "no libghostty-fat.a found in $framework_dir to verify architecture"
+  fi
 }
 
 log_arch_diagnostics() {
@@ -387,6 +441,7 @@ main() {
   resolve_ghostty_dir
   ensure_ghostty_checkout
   ensure_pinned_commit
+  prepare_slice_arch_patch
   build_ghostty_xcframework
 
   local xcframework_src
@@ -397,6 +452,7 @@ main() {
   install_xcframework "$xcframework_src"
   postprocess_xcframework "$OUT_DIR/GhosttyKit.xcframework"
   log_arch_diagnostics "$OUT_DIR/GhosttyKit.xcframework"
+  assert_host_arch_slice "$OUT_DIR/GhosttyKit.xcframework"
   echo "Built GhosttyKit.xcframework -> $OUT_DIR/GhosttyKit.xcframework"
 }
 

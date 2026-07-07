@@ -226,22 +226,28 @@ carries the Darwin linker patch needed on Tahoe hosts, so
 - `GHOSTTY_ZIG_BIN`, if set
 - `/opt/homebrew/opt/zig@0.15/bin/zig`, if installed and its architecture
   matches the host (`uname -m`)
-- `$(brew --prefix zig@0.15)/bin/zig`, if installed and matching — covers
-  Xcode Cloud macOS images that run Homebrew from `/usr/local` instead of the
-  standard Apple Silicon `/opt/homebrew` prefix
-- otherwise, on an arm64 host with any `brew` on `PATH`: bootstrap (or reuse)
-  a native Homebrew at `/opt/homebrew` and install `zig@0.15` there. Confirmed
-  on one Xcode Cloud macOS image whose only available `zig@0.15` bottle was
-  itself Rosetta-translated x86_64 even though the host reports arm64 —
-  Ghostty's `build.zig` resolves `-Dxcframework-target=native` via the zig
-  compiler binary's own baked-in architecture, not the actual host CPU, so a
-  wrong-arch zig here silently produces a GhosttyKit slice that doesn't match
-  the app's arm64 build target. That doesn't fail the framework build; it
-  surfaces later as `error: no such module 'GhosttyKit'` during `swift build`,
-  which is a confusing place to debug an architecture mismatch. Vanilla
-  upstream zig is not a viable substitute for this fallback (see the linker
-  bug above), so this is a real Homebrew bootstrap, not a tarball download.
+- `$(brew --prefix zig@0.15)/bin/zig`, matching or not — covers Xcode Cloud
+  macOS images that run Homebrew from `/usr/local` instead of the standard
+  Apple Silicon `/opt/homebrew` prefix
 - `mise exec zig@0.15.2` as a final fallback
+
+A wrong-arch Homebrew zig (or `GHOSTTY_ZIG_BIN`) is accepted and asked to
+cross-compile. Confirmed on one Xcode Cloud macOS image whose only available
+`zig@0.15` bottle was itself Rosetta-translated x86_64 even though the host
+reports arm64 — Ghostty's `build.zig` resolves `-Dxcframework-target=native`
+via the zig compiler binary's own baked-in architecture, not the actual host
+CPU, so a wrong-arch zig silently produces a GhosttyKit slice that doesn't
+match the app's arm64 build target. That doesn't fail the framework build; it
+surfaces later as `error: no such module 'GhosttyKit'` during `swift build`,
+which is a confusing place to debug an architecture mismatch. When the script
+detects the mismatch it patches the pinned checkout's
+`src/build/GhosttyXCFramework.zig` (one token: the native slice's
+`Config.genericMacOSTarget(b, null)` becomes `.aarch64`/`.x86_64` for the real
+host arch) so zig cross-compiles the correct slice, and a post-build assertion
+fails loudly if the produced slice still doesn't contain the host arch. The
+two tempting alternatives are both dead on that image: vanilla upstream zig
+hits the linker bug above, and bootstrapping a native `/opt/homebrew` needs
+sudo the Xcode Cloud user does not have (confirmed via build 574's log).
 
 `GHOSTTY_ARCH_DIAGNOSTICS` (default on) reports the resolved zig binary's
 `file` output and the built xcframework's `Info.plist` slice list, so a
