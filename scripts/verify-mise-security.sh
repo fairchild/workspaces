@@ -143,10 +143,14 @@ verify_latest_mise_pin() {
     echo "warning: sandbox mise pin $MISE_EXPECTED_VERSION is behind latest stable $latest_tag (mise-pin-refresh will open the bump PR)" >&2
   fi
 
-  grep -Fq "MISE_VERSION='$MISE_EXPECTED_VERSION'" web/src/lib/agent-runtime/vercel-sandbox.ts \
+  # The pin lives in TS constants (single source of truth) that feed both the
+  # install command and the base-snapshot fingerprint. Match the constant form.
+  grep -Fq "const MISE_VERSION = \"$MISE_EXPECTED_VERSION\"" web/src/lib/agent-runtime/vercel-sandbox.ts \
     || fail "sandbox mise version is not pinned to $MISE_EXPECTED_VERSION"
-  grep -Fq "MISE_SHA256='$MISE_EXPECTED_LINUX_X64_SHA256'" web/src/lib/agent-runtime/vercel-sandbox.ts \
+  grep -Fq "\"$MISE_EXPECTED_LINUX_X64_SHA256\"" web/src/lib/agent-runtime/vercel-sandbox.ts \
     || fail "sandbox mise sha256 does not match verifier"
+  grep -Fq "MISE_VERSION='\${MISE_VERSION}'" web/src/lib/agent-runtime/vercel-sandbox.ts \
+    || fail "sandbox install must wire the pinned MISE_VERSION constant"
   grep -Fq "sha256sum -c -" web/src/lib/agent-runtime/vercel-sandbox.ts \
     || fail "sandbox must verify mise checksum"
   grep -Fq "mise-latest-linux-x64" web/src/lib/agent-runtime/vercel-sandbox.ts \

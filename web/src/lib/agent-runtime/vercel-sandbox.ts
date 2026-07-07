@@ -28,9 +28,12 @@ const FULL_TOOLS = "Read,Write,Edit,Bash,Glob,Grep,WebFetch";
 const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
 
 /**
- * Bump this version when the base snapshot contents change (new tools,
- * package updates, etc.). Old versions remain valid until manually deleted —
- * this lets us roll back without rebuilding.
+ * Human-readable label for the base snapshot recipe. The effective cache key is
+ * `BASE_SNAPSHOT_VERSION` below = `${LABEL}-${recipe fingerprint}`. Bump this
+ * label for structural recipe changes the fingerprint doesn't cover (new npm
+ * tools, banner, skill packs). Changes to pinned binary versions/checksums
+ * (mise, tmux) are folded into the fingerprint automatically, so those no longer
+ * need a manual label bump. Old versions remain valid until deleted/expired.
  *
  * v1:         node22 + @anthropic-ai/claude-code
  * v2-ttyd:    + ttyd for WebSocket terminal access
@@ -60,7 +63,7 @@ const CLAUDE_CONFIG_DIR = "/vercel/sandbox/claude-config";
  *                  Discovery: dnf IS available (Amazon Linux 2023)
  *                  for system packages — use `sudo: true`.
  */
-const BASE_SNAPSHOT_VERSION = "v5-pi-skills";
+const BASE_SNAPSHOT_LABEL = "v5-pi-skills";
 
 /**
  * Static tmux binary download URL. See
@@ -80,6 +83,51 @@ const GIT_CREDENTIAL_TOKEN_PATH = "/vercel/sandbox/github-clone-token";
 const GIT_CREDENTIAL_HELPER_PATH =
 	"/vercel/sandbox/github-credential-helper.sh";
 const DEV_TTYD_TOKEN_SECRET = "dev-only-fallback-do-not-use-in-prod";
+
+/**
+ * Pinned mise binary for sandbox tool installs. Single source of truth: these
+ * feed BOTH the checksum-verified install command in `resolveBaseSnapshot` and
+ * the base-snapshot fingerprint below, so a pin bump can't silently no-op
+ * against a stale cached snapshot. Keep in sync with
+ * `scripts/verify-mise-security.sh` (MISE_EXPECTED_*).
+ */
+const MISE_VERSION = "v2026.7.1";
+const MISE_SHA256 =
+	"1fd2f4337ea305fff1971460ea57b977c70de04e8f6184368b7745251504c2d5";
+
+/**
+ * Content fingerprint of the pinned tools baked into the base snapshot. Any
+ * change to a pinned version/checksum/URL changes this hash, so the effective
+ * `BASE_SNAPSHOT_VERSION` changes and the cached snapshot is rebuilt on next
+ * deploy — a pin bump can no longer read as shipped while sandboxes keep running
+ * the old binary. See docs/decisions and issue #864.
+ */
+export function baseSnapshotFingerprint(parts: {
+	miseVersion: string;
+	miseSha256: string;
+	tmuxUrl: string;
+}): string {
+	const recipe = [
+		`mise=${parts.miseVersion}`,
+		`mise-sha256=${parts.miseSha256}`,
+		`tmux-url=${parts.tmuxUrl}`,
+	].join("\n");
+	return crypto.createHash("sha256").update(recipe).digest("hex").slice(0, 12);
+}
+
+/** `<label>-<recipe fingerprint>`; the label stays human-readable for logs. */
+export function computeBaseSnapshotVersion(
+	label: string,
+	parts: { miseVersion: string; miseSha256: string; tmuxUrl: string },
+): string {
+	return `${label}-${baseSnapshotFingerprint(parts)}`;
+}
+
+const BASE_SNAPSHOT_VERSION = computeBaseSnapshotVersion(BASE_SNAPSHOT_LABEL, {
+	miseVersion: MISE_VERSION,
+	miseSha256: MISE_SHA256,
+	tmuxUrl: TMUX_STATIC_URL,
+});
 
 /**
  * Run a command in a sandbox and throw if it exits non-zero. The
@@ -348,8 +396,8 @@ async function resolveBaseSnapshot(): Promise<string> {
 			"-c",
 			[
 				"set -euo pipefail",
-				"MISE_VERSION='v2026.7.1'",
-				"MISE_SHA256='1fd2f4337ea305fff1971460ea57b977c70de04e8f6184368b7745251504c2d5'",
+				`MISE_VERSION='${MISE_VERSION}'`,
+				`MISE_SHA256='${MISE_SHA256}'`,
 				'MISE_URL="https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-linux-x64"',
 				"echo '--- downloading mise ---'",
 				'curl -fsSL "$MISE_URL" -o /tmp/mise',
