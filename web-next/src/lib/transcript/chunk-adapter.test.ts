@@ -186,6 +186,25 @@ describe("toUIMessageChunks", () => {
 		});
 	});
 
+	test("a diff on an object output with no content of its own falls back to the chunk's content, never dropping the diff", async () => {
+		const diff = { file: "a.ts", additions: 1, deletions: 0, lines: [] };
+		const out = await collect([
+			{ type: "tool_use", content: "Edit", metadata: { toolUseId: "t-1" } },
+			{
+				type: "tool_result",
+				content: "fallback text",
+				metadata: { toolUseId: "t-1", output: { summary: "landed" }, diff },
+			},
+			{ type: "done", content: "" },
+		]);
+		expect(out).toContainEqual({
+			type: "tool-output-available",
+			toolCallId: "t-1",
+			output: { summary: "landed", content: "fallback text", diff },
+			dynamic: true,
+		});
+	});
+
 	test("messageMetadata is emitted on start (no chunks) and finish (all chunks)", async () => {
 		const seen: number[] = [];
 		const out = [];

@@ -123,6 +123,43 @@ describe("describeToolPart", () => {
 		// The diff's real counts win over the old/new-string line-count estimate.
 		expect(row.meta).toEqual({ kind: "delta", additions: 4, deletions: 1 });
 	});
+
+	it("sanitizes a malformed persisted diff instead of rendering it broken", () => {
+		const row = describeToolPart(
+			toolPart({
+				toolName: "Edit",
+				output: {
+					content: "guard added",
+					diff: {
+						file: "a.ts",
+						additions: "not-a-number",
+						deletions: null,
+						lines: [
+							{ kind: "add", text: "+ ok" },
+							{ kind: "add", text: 42 }, // non-string text: dropped
+							{ kind: "explode", text: "+ bogus kind" }, // bad kind: dropped
+							"not even an object", // dropped
+							{ kind: "del", text: "- also ok" },
+						],
+					},
+				},
+			}),
+		);
+		expect(row.body).toEqual({
+			kind: "diff",
+			diff: {
+				file: "a.ts",
+				// Falls back to counting the sanitized lines, not "NaN"/"+undefined".
+				additions: 1,
+				deletions: 1,
+				lines: [
+					{ kind: "add", text: "+ ok" },
+					{ kind: "del", text: "- also ok" },
+				],
+			},
+		});
+		expect(row.meta).toEqual({ kind: "delta", additions: 1, deletions: 1 });
+	});
 });
 
 describe("contextualOpenToolCallId", () => {

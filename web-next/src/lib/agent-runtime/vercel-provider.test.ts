@@ -6,6 +6,7 @@ import {
 	mapFullStream,
 	parseGitDiff,
 	toolResultContent,
+	uniqueDiffToolCallId,
 } from "./vercel-provider";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -259,5 +260,23 @@ describe("parseGitDiff", () => {
 
 	test("returns no cards for an empty diff", () => {
 		expect(parseGitDiff("")).toEqual([]);
+	});
+});
+
+describe("uniqueDiffToolCallId", () => {
+	test("is diff:<file> when nothing has claimed that id yet", () => {
+		expect(uniqueDiffToolCallId("a.ts", new Set())).toBe("diff:a.ts");
+	});
+
+	// A real tool call id is never diff:<path>-shaped, but the id space is
+	// shared, so a synthetic Diff row must not silently overwrite one that is.
+	test("disambiguates against a real toolCallId already used this turn", () => {
+		const seen = new Set(["diff:a.ts"]);
+		expect(uniqueDiffToolCallId("a.ts", seen)).toBe("diff:a.ts#1");
+	});
+
+	test("keeps disambiguating past a single collision", () => {
+		const seen = new Set(["diff:a.ts", "diff:a.ts#1", "diff:a.ts#2"]);
+		expect(uniqueDiffToolCallId("a.ts", seen)).toBe("diff:a.ts#3");
 	});
 });

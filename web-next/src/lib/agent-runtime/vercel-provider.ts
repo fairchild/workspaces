@@ -429,9 +429,9 @@ export const vercelProvider: ComputeProvider = {
 		const debugHarness = process.env.HARNESS_DEBUG === "1";
 
 		// The sandbox session is captured here so the turn can run `git diff` after
-		// streaming to synthesize diff cards (the harness session drives turns, not
-		// arbitrary commands). The sandbox stays alive until detach, so it is valid
-		// through the end of the turn.
+		// streaming to synthesize Diff ledger rows (the harness session drives
+		// turns, not arbitrary commands). The sandbox stays alive until detach, so
+		// it is valid through the end of the turn.
 		let sandbox: RunnableSandbox | undefined;
 
 		const agent = new HarnessAgent({
@@ -530,14 +530,21 @@ export const vercelProvider: ComputeProvider = {
 				prompt: buildPrompt(request.userMessage, request.sessionId, !resumed),
 			});
 			let doneChunk: StreamChunk | undefined;
+			// Tracks every real toolCallId this turn so the synthetic Diff rows
+			// below can't collide with one — the AI SDK upserts dynamic-tool parts
+			// by toolCallId, so a collision would silently overwrite a real tool's
+			// result instead of adding a second row.
+			const seenToolCallIds = new Set<string>();
 			for await (const chunk of mapFullStream(
 				result.fullStream as AsyncIterable<{ type: string; [k: string]: unknown }>,
 				startedAt,
 			)) {
 				if (chunk.type === "done") {
 					doneChunk = chunk;
-					break; // the terminal chunk — emit diff cards, then park, then it
+					break; // the terminal chunk — emit Diff rows, then park, then it
 				}
+				const id = chunk.metadata?.toolUseId;
+				if (typeof id === "string") seenToolCallIds.add(id);
 				yield chunk;
 			}
 			// Synthesize one Diff ledger row per changed file from the working tree
@@ -551,7 +558,8 @@ export const vercelProvider: ComputeProvider = {
 			// edited more than once in a turn, so multiple edits to one file land
 			// as a single Diff row rather than each Edit call carrying its own.
 			for (const diff of await changedFileDiffs(sandbox)) {
-				const toolUseId = `diff:${diff.file}`;
+				const toolUseId = uniqueDiffToolCallId(diff.file, seenToolCallIds);
+				seenToolCallIds.add(toolUseId);
 				yield {
 					type: "tool_use",
 					content: "Diff",
@@ -593,6 +601,19 @@ function isNameCollision(error: unknown): boolean {
 	const e = error as { message?: unknown; text?: unknown; json?: unknown };
 	const haystack = [asText(e?.message), asText(e?.text), asText(e?.json)].join(" ");
 	return /already exists/i.test(haystack);
+}
+
+/**
+ * A synthetic diff row's id, disambiguated against any real toolCallId
+ * already seen this turn. In practice a real id (the model provider's own
+ * tool-use id) never looks like `diff:<path>`, but the id space is shared
+ * with real tool calls, so this guards the collision explicitly rather than
+ * assuming it can't happen.
+ */
+export function uniqueDiffToolCallId(file: string, seen: ReadonlySet<string>): string {
+	let id = `diff:${file}`;
+	for (let suffix = 1; seen.has(id); suffix += 1) id = `diff:${file}#${suffix}`;
+	return id;
 }
 
 /** A sandbox session that can run shell commands (the onSession surface). */

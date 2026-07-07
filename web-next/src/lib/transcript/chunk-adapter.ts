@@ -25,11 +25,20 @@ function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-/** Folds a diff onto a tool's output, coercing a bare string into `{ content }` first. */
-function withDiff(output: unknown, diff: unknown): unknown {
+/**
+ * Folds a diff onto a tool's output, guaranteeing a string `content` so the
+ * ledger's normalizeOutput never drops the diff for want of one — `fallback`
+ * is the tool_result chunk's own `content` (always a string on StreamChunk),
+ * used when `output` is an object that doesn't already carry its own.
+ */
+function withDiff(output: unknown, diff: unknown, fallback: string): unknown {
 	if (typeof output === "string") return { content: output, diff };
-	if (typeof output === "object" && output !== null) return { ...output, diff };
-	return { content: "", diff };
+	if (typeof output === "object" && output !== null) {
+		const record = output as Record<string, unknown>;
+		const content = typeof record.content === "string" ? record.content : fallback;
+		return { ...record, content, diff };
+	}
+	return { content: fallback, diff };
 }
 
 /**
@@ -139,7 +148,7 @@ export async function* toUIMessageChunks(
 				const baseOutput = chunk.metadata?.output ?? chunk.content;
 				const output =
 					chunk.metadata?.diff !== undefined
-						? withDiff(baseOutput, chunk.metadata.diff)
+						? withDiff(baseOutput, chunk.metadata.diff, chunk.content)
 						: baseOutput;
 				yield {
 					type: chunk.metadata?.isError

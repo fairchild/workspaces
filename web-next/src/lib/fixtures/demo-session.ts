@@ -294,7 +294,8 @@ const ADVERSARIAL_TEST_OUTPUT = [
 /**
  * A 100+ line refactor: a hand-wired provider `switch` replaced by a
  * self-registering map, rippling across a dozen backend modules. Deliberately
- * tall — the stress the diff card (and the frame around it) has to survive.
+ * tall — the stress the diff-carrying ledger row (and the frame around it)
+ * has to survive.
  */
 function bigRefactorDiff(): DiffCardData {
 	const lines: DiffLine[] = [

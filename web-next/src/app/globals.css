@@ -133,10 +133,10 @@
 	--text-body--line-height: 1.72;
 	--text-compose: 17px;
 	--text-title: 13.5px; /* masthead center title, serif italic */
-	--text-tool: 13px; /* ledger rows, diff body */
+	--text-tool: 13px; /* ledger rows, diff hunk */
 	--text-code: 12.5px; /* expanded step bodies */
 	--text-code--line-height: 1.75;
-	--text-caption: 12px; /* diff-card caption, ledger meta */
+	--text-caption: 12px; /* ledger meta */
 	--text-masthead: 11.5px;
 	--text-stat: 11px; /* turn stats, status line */
 	--text-label: 10.5px; /* message author labels */

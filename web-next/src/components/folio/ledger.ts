@@ -7,7 +7,7 @@
  * is no separate free-floating diff card in the transcript (#790).
  */
 import { isDynamicToolUIPart, type DynamicToolUIPart } from "ai";
-import type { DiffCardData, FolioMessage, TurnStatsData } from "./types";
+import type { DiffCardData, DiffLine, FolioMessage, TurnStatsData } from "./types";
 
 export type LedgerMeta =
 	| { kind: "text"; text: string }
@@ -50,10 +50,43 @@ function asOptionalString(value: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
-/** Duck-types a diff payload: an object with a `lines` array is close enough. */
+const DIFF_LINE_KINDS = new Set<DiffLine["kind"]>(["context", "add", "del"]);
+
+function asDiffLine(value: unknown): DiffLine | undefined {
+	const record = asRecord(value);
+	const kind = record.kind;
+	if (typeof kind !== "string" || !DIFF_LINE_KINDS.has(kind as DiffLine["kind"]))
+		return undefined;
+	const text = asOptionalString(record.text);
+	if (text === undefined) return undefined;
+	return { kind: kind as DiffLine["kind"], text };
+}
+
+/**
+ * Duck-types a diff payload defensively — this can be an old/malformed
+ * persisted event, not just a fresh one this version produced. A line that
+ * doesn't match the expected shape is dropped rather than rendered broken,
+ * and additions/deletions fall back to counting the (sanitized) lines, so a
+ * corrupted row can't surface as a literal "+undefined −undefined".
+ */
 function asDiff(value: unknown): DiffCardData | undefined {
 	const record = asRecord(value);
-	return Array.isArray(record.lines) ? (value as DiffCardData) : undefined;
+	if (!Array.isArray(record.lines)) return undefined;
+	const lines = record.lines
+		.map(asDiffLine)
+		.filter((line): line is DiffLine => line !== undefined);
+	return {
+		file: asOptionalString(record.file) ?? "",
+		additions:
+			typeof record.additions === "number"
+				? record.additions
+				: lines.filter((line) => line.kind === "add").length,
+		deletions:
+			typeof record.deletions === "number"
+				? record.deletions
+				: lines.filter((line) => line.kind === "del").length,
+		lines,
+	};
 }
 
 function normalizeOutput(output: unknown): StructuredToolOutput | undefined {
