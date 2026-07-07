@@ -73,12 +73,18 @@ struct TerminalForegroundProcessResolver: Sendable {
         return terminalTitle
     }
 
-    /// Production cwd resolver: the first non-agent program whose cwd is the session's
-    /// directory, per `WorkspaceProcessMonitor` (which ignores shells and known agents).
-    /// Returns nil for a bare shell so the caller falls back to the title.
+    /// The program to surface from a directory's detected processes: the first non-agent
+    /// program. Known agents are surfaced through the agent path (and their tabs are not
+    /// plain), and `WorkspaceProcessMonitor` already drops shells, so a bare shell yields
+    /// no processes here and resolves to nil (title fallback).
+    static func programName(from status: WorkspaceProcessMonitor.AgentStatus) -> String? {
+        status.processes.first { !$0.isKnownAgent }?.displayName
+    }
+
+    /// Production cwd resolver: the non-agent program whose cwd is the session's directory,
+    /// per `WorkspaceProcessMonitor` (which ignores shells and known noise).
     static let defaultCwdProgramName: @Sendable (URL) async -> String? = { directory in
-        let status = await WorkspaceProcessMonitor().detectAgentSession(in: directory)
-        return status.processes.first { !$0.isKnownAgent }?.displayName
+        programName(from: await WorkspaceProcessMonitor().detectAgentSession(in: directory))
     }
 
     private final class CacheBox: @unchecked Sendable {

@@ -69,4 +69,25 @@ struct TerminalForegroundProcessResolverTests {
         let resolver = resolver(tmuxOutput: nil, cwdProgram: nil)
         #expect(await resolver.foregroundName(for: session(), mode: .ghosttyManagedSplits) == nil)
     }
+
+    // MARK: - cwd program selection (shell/agent filtering)
+
+    @Test("cwd selection skips known agents and picks the plain program")
+    func cwdSelectionSkipsKnownAgents() {
+        let status = WorkspaceProcessMonitor.AgentStatus(processes: [
+            WorkspaceProcessMonitor.DetectedProcess(displayName: "Claude", isKnownAgent: true),
+            WorkspaceProcessMonitor.DetectedProcess(displayName: "vim", isKnownAgent: false),
+        ])
+        #expect(TerminalForegroundProcessResolver.programName(from: status) == "vim")
+    }
+
+    @Test("cwd selection yields nil when only agents run and for a bare shell")
+    func cwdSelectionNilForAgentOnlyOrBareShell() {
+        let agentOnly = WorkspaceProcessMonitor.AgentStatus(processes: [
+            WorkspaceProcessMonitor.DetectedProcess(displayName: "Claude", isKnownAgent: true)
+        ])
+        #expect(TerminalForegroundProcessResolver.programName(from: agentOnly) == nil)
+        // WorkspaceProcessMonitor already drops shells, so a bare shell yields no processes.
+        #expect(TerminalForegroundProcessResolver.programName(from: .inactive) == nil)
+    }
 }
