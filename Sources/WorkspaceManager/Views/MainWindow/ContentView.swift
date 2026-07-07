@@ -70,7 +70,11 @@ struct ContentView: View {
     @State private var accessRecorder = MainWindowAccessRecorder()
     @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
-    @StateObject private var webSurfaceStore = WebSurfaceStore()
+    /// Seam store for the web main-content pane: a one-tile `SurfaceStore` domain. Source switches
+    /// rebind `webDetailTileID` to a new `WebSurface` (identity-guarded); per-source `WebSurfaceStore`s
+    /// inside keep each source's page alive through the deferred-release window.
+    @State private var webDetailSurfaceStore = SurfaceStore()
+    @State private var webDetailTileID = TileID()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
     private let buildIdentity = AppBuildIdentity.current
     private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
@@ -549,7 +553,14 @@ struct ContentView: View {
         if let selectedWebSource = currentSelectedWebSource {
             WebSourceDetailView(
                 source: selectedWebSource,
-                surfaceStore: webSurfaceStore
+                tileID: webDetailTileID,
+                surfaceStore: webDetailSurfaceStore,
+                onSurfaceMounted: desktopUISmokeAutomation.isEnabled
+                    ? { source in
+                        let automation = desktopUISmokeAutomation
+                        Task { await automation.noteWebSurfaceAttached(sourceName: source.name) }
+                    }
+                    : nil
             )
         } else if let selectedRepo = currentSelectedRepoForLanding {
             RepoLandingView(
@@ -773,10 +784,11 @@ struct ContentView: View {
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
                 resolveSurfaceLifecycle()
             }
-            .onChange(of: modelSnapshot) { _, _ in
+            .onChange(of: modelSnapshot) { old, new in
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
+                releaseRemovedWebSources(old: old, new: new)
                 reconcileSelectionAfterModelChange()
                 resolveSurfaceLifecycle()
                 applyDiagnosticsFixtureIfNeeded()
@@ -1334,6 +1346,17 @@ struct ContentView: View {
         )
     }
 
+    /// Web sources removed from the model lose their per-source web store immediately — deletion
+    /// is a hard release whether or not the source was selected, so a deleted page never rides out
+    /// the deferred-release grace window (codex review finding on the P6 seam PR).
+    @MainActor
+    private func releaseRemovedWebSources(old: ModelSnapshot, new: ModelSnapshot) {
+        let removedSourceIDs = Set(old.webSourceIDs).subtracting(new.webSourceIDs)
+        for sourceID in removedSourceIDs {
+            webDetailSurfaceStore.releaseWebResources(forSourceID: sourceID)
+        }
+    }
+
     @MainActor
     private func reconcileSelectionAfterModelChange() {
         clearInvalidLastSurfaceIfNeeded()
@@ -1342,7 +1365,8 @@ struct ContentView: View {
             currentSelectedWebSource == nil
         {
             setSelectedWebSource(nil)
-            webSurfaceStore.releaseInactiveSurface()
+            // Hard release happens in releaseRemovedWebSources (deletion-diff authority);
+            // this path only repairs the dangling selection.
             handleSelectedWebSourceRemoval(selectedWebSource)
             return
         }
@@ -1658,7 +1682,9 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "web_source_selected")
         abandonPendingRemoteConnection(reason: "web_source_selected")
         applyNavigationDestination(.webView(source))
-        webSurfaceStore.cancelPendingRelease()
+        // Reselecting inside the deferred-release window rescues the source's live page before the
+        // pane re-mounts (mounting would cancel too; this makes the intent explicit and immediate).
+        webDetailSurfaceStore.webStore(forSourceID: source.id).cancelPendingRelease()
         markAccessed(webSource: source)
     }
 
@@ -2540,7 +2566,10 @@ struct ContentView: View {
     @MainActor
     private func openSelectedWebSourceInBrowser() {
         guard let selectedWebSource = currentSelectedWebSource else { return }
-        let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
+        let webView =
+            webDetailSurfaceStore
+            .webSurface(for: webDetailTileID, source: selectedWebSource)
+            .webView
         if let currentURL = webView.url {
             NSWorkspace.shared.open(currentURL)
         } else if let baseURL = selectedWebSource.baseURL {
@@ -2551,7 +2580,10 @@ struct ContentView: View {
     @MainActor
     private func reloadSelectedWebSource() {
         guard let selectedWebSource = currentSelectedWebSource else { return }
-        let webView = webSurfaceStore.ensureSurface(for: selectedWebSource)
+        let webView =
+            webDetailSurfaceStore
+            .webSurface(for: webDetailTileID, source: selectedWebSource)
+            .webView
         if let currentURL = webView.url {
             webView.load(URLRequest(url: currentURL))
         } else if let baseURL = selectedWebSource.baseURL {

@@ -69,6 +69,7 @@ private struct DesktopUISmokeEvent: Codable, Sendable {
         case workspaceCreated = "workspace_created"
         case sidebarUpdated = "sidebar_updated"
         case terminalSessionAttached = "terminal_session_attached"
+        case webSurfaceAttached = "web_surface_attached"
         case surfaceFocused = "surface_focused"
         case surfaceFocusTimedOut = "surface_focus_timed_out"
         case scenarioComplete = "scenario_complete"
@@ -86,6 +87,7 @@ private struct DesktopUISmokeEvent: Codable, Sendable {
     let sessionID: String?
     let sessionScope: String?
     let sidebarWorkspaceCount: Int?
+    let webSourceName: String?
     let message: String?
 }
 
@@ -144,6 +146,10 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     /// The scenario captures it before a selection action and waits for it to
     /// advance, so it never races a focus callback that already fired.
     @Published private(set) var surfaceFocusCount = 0
+
+    /// Monotonic counter for web surface mounts, same baseline-then-wait
+    /// contract as `surfaceFocusCount`.
+    @Published private(set) var webSurfaceAttachCount = 0
 
     init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let configuration = DesktopUISmokeAutomationConfiguration.from(environment: environment)
@@ -249,6 +255,13 @@ final class DesktopUISmokeAutomationController: ObservableObject {
         await emit(makeEvent(type: .surfaceFocused, sessionID: sessionID.uuidString))
     }
 
+    /// A web main-content surface mounted through the Surface seam for `sourceName`.
+    func noteWebSurfaceAttached(sourceName: String) async {
+        guard isEnabled else { return }
+        webSurfaceAttachCount += 1
+        await emit(makeEvent(type: .webSurfaceAttached, webSourceName: sourceName))
+    }
+
     func noteScenarioComplete() async {
         guard isEnabled else { return }
         await emit(makeEvent(type: .scenarioComplete))
@@ -277,6 +290,20 @@ final class DesktopUISmokeAutomationController: ObservableObject {
         return true
     }
 
+    /// Suspend until a web surface mounts after `baseline`, or `timeout` elapses.
+    /// No milestone on timeout — the caller reports failure (this is a hard gate:
+    /// mounting is deterministic, unlike focus).
+    func waitForWebSurfaceAttach(after baseline: Int, timeout: Duration) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while webSurfaceAttachCount <= baseline {
+            if ContinuousClock.now >= deadline {
+                return false
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
     private func emit(_ event: DesktopUISmokeEvent) async {
         guard let writer else { return }
         await writer.emit(event)
@@ -293,6 +320,7 @@ final class DesktopUISmokeAutomationController: ObservableObject {
         sessionID: String? = nil,
         sessionScope: String? = nil,
         sidebarWorkspaceCount: Int? = nil,
+        webSourceName: String? = nil,
         message: String? = nil
     ) -> DesktopUISmokeEvent {
         DesktopUISmokeEvent(
@@ -307,6 +335,7 @@ final class DesktopUISmokeAutomationController: ObservableObject {
             sessionID: sessionID,
             sessionScope: sessionScope,
             sidebarWorkspaceCount: sidebarWorkspaceCount,
+            webSourceName: webSourceName,
             message: message
         )
     }

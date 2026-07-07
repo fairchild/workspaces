@@ -2,14 +2,17 @@ import AppKit
 import WebKit
 import WorkspaceManagerCore
 
-/// `Surface` conformer backing a web tile with a `WKWebView` managed by `WebSurfaceStore`.
+/// `Surface` conformer backing a web tile with a `WKWebView` managed by a `WebSurfaceStore`.
 ///
 /// Carries none of the agent-domain coupling a `TerminalSurface` does — no registry, OSC, command
 /// status, or local state — which is the asymmetry that proves the seam is genuinely generic.
-/// `tearDown` releases the web view immediately (`releaseInactiveSurface`). Because each `WebSurface`
-/// privately owns its `WebSurfaceStore`, an evicted web tile reloads when reopened; whether to keep a
-/// shared store-per-source (reuse the view, defer release) is an explicit Phase 6 decision (PR #633
-/// review), not wired here.
+///
+/// Store ownership is **shared per source** (the Phase 6 decision from the PR #633 review): the
+/// owning `SurfaceStore` keys `WebSurfaceStore`s by `WebSource.id` and injects them here, so the
+/// `WKWebView` outlives any one surface binding. `tearDown` is correspondingly **deferred**
+/// (`scheduleInactiveRelease`): an evicted web tile keeps its page alive through the release
+/// grace window, so flipping away and back does not reload — the web half of the per-conformer
+/// eviction policy (terminal frees immediately; web releases lazily).
 @MainActor
 final class WebSurface: Surface {
     let kind: SurfaceKind = .web
@@ -32,6 +35,12 @@ final class WebSurface: Surface {
     }
 
     func makeContentView() -> NSView {
+        surfaceStore.ensureSurface(for: source, onBlockedNavigation: onBlockedNavigation)
+    }
+
+    /// The live `WKWebView`, instantiated on demand. Backs source-level actions that need the
+    /// actual page state — reload, open-current-URL-in-browser.
+    var webView: WKWebView {
         surfaceStore.ensureSurface(for: source, onBlockedNavigation: onBlockedNavigation)
     }
 
@@ -61,12 +70,11 @@ final class WebSurface: Surface {
 
     func requestClose() {
         // Web has no close-confirmation gate (unlike the terminal), so user-intent close and
-        // unconditional teardown coincide. Issuing the tree `.close` for a web tile lands with
-        // main-content unification (Phase 6); here we simply release the view.
+        // store eviction coincide — both defer to the shared store's release grace window.
         tearDown()
     }
 
     func tearDown() {
-        surfaceStore.releaseInactiveSurface()
+        surfaceStore.scheduleInactiveRelease()
     }
 }

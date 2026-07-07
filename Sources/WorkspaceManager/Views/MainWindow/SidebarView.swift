@@ -1303,7 +1303,45 @@ struct SidebarView: View {
             timeout: .seconds(15)
         )
 
+        // Flow 3: web main content renders through the Surface seam, then returning to the
+        // workspace routes a terminal session again (session routing is the hard gate; surface
+        // focus stays best-effort in headless runs, like Flows 1–2). about:blank keeps the gate
+        // network-independent — the milestone is the surface mount, not a page load.
+        if let webSource = ensureDesktopUISmokeWebSource() {
+            let webBaseline = desktopUISmokeAutomation.webSurfaceAttachCount
+            onWebSourceSelected(webSource)
+            let webAttached = await desktopUISmokeAutomation.waitForWebSurfaceAttach(
+                after: webBaseline,
+                timeout: .seconds(10)
+            )
+            if !webAttached {
+                await desktopUISmokeAutomation.noteFailure(
+                    message: "Web surface did not mount after web source selection."
+                )
+            }
+
+            let focusBaselineAfterWeb = desktopUISmokeAutomation.surfaceFocusCount
+            selectWorkspace(workspace)
+            _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
+                after: focusBaselineAfterWeb,
+                timeout: .seconds(15)
+            )
+        }
+
         await desktopUISmokeAutomation.noteScenarioComplete()
+    }
+
+    /// The web source Flow 3 selects, created on first run. `about:blank` renders without network.
+    @MainActor
+    private func ensureDesktopUISmokeWebSource() -> WebSource? {
+        let name = "desktop-ui-smoke-web"
+        if let existing = webSources.first(where: { $0.name == name }) {
+            return existing
+        }
+        let source = WebSource(name: name, baseURLString: "about:blank", allowedHost: "")
+        modelContext.insert(source)
+        guard saveModelContext(action: "create desktop-ui-smoke web source") else { return nil }
+        return source
     }
 
     /// Confirms the new workspace is present under its repo in the live sidebar

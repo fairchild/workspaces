@@ -2,7 +2,8 @@
 //  WebSourceDetailView.swift
 //  WorkspaceManager
 //
-//  Detail pane for URL source browsing.
+//  Detail pane for URL source browsing, rendered through the Surface seam: the pane is a
+//  single-tile SurfaceStore domain whose tile is rebound across source switches.
 //
 
 import AppKit
@@ -11,20 +12,30 @@ import WorkspaceManagerCore
 
 struct WebSourceDetailView: View {
     let source: WebSource
-    @ObservedObject var surfaceStore: WebSurfaceStore
+    let tileID: TileID
+    let surfaceStore: SurfaceStore
+    /// Fired (async, post-update) when the tile's surface view mounts. Dev automation observes
+    /// this to gate on "web renders through the seam".
+    var onSurfaceMounted: ((WebSource) -> Void)?
 
     @State private var lastBlockedURL: URL?
 
     var body: some View {
         VStack(spacing: 0) {
             if source.baseURL != nil {
-                WebSourceView(
+                WebSurfacePaneView(
+                    tileID: tileID,
                     source: source,
                     surfaceStore: surfaceStore,
                     onBlockedNavigation: { blockedURL in
                         lastBlockedURL = blockedURL
-                    }
+                    },
+                    onSurfaceMounted: onSurfaceMounted
                 )
+                // Source switches rebind the tile to a new surface (the store's identity guard
+                // evicts the old one), so the mounted NSView changes — force a fresh mount rather
+                // than asking updateNSView to swap views.
+                .id(source.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ContentUnavailableView(
@@ -52,14 +63,47 @@ struct WebSourceDetailView: View {
             }
         }
         .navigationTitle(source.name)
-        .onAppear {
-            surfaceStore.cancelPendingRelease()
-        }
         .onChange(of: source.id) { _, _ in
             lastBlockedURL = nil
         }
         .onDisappear {
-            surfaceStore.scheduleInactiveRelease()
+            // Leaving the web pane empties this one-tile domain. Web tearDown is deferred
+            // (shared per-source store keeps the page through the release grace window), so
+            // flipping back shortly after does not reload.
+            surfaceStore.sync(activeLeafIDs: [])
         }
+    }
+}
+
+/// Mounts the web tile's surface view from the seam. `makeContentView` is store-owned and
+/// reused across updates; the enclosing `.id(source.id)` guarantees a given representable
+/// instance only ever sees one (tile, source) binding.
+private struct WebSurfacePaneView: NSViewRepresentable {
+    let tileID: TileID
+    let source: WebSource
+    let surfaceStore: SurfaceStore
+    var onBlockedNavigation: ((URL) -> Void)?
+    var onSurfaceMounted: ((WebSource) -> Void)?
+
+    func makeNSView(context: Context) -> NSView {
+        let view = mountedView()
+        if let onSurfaceMounted {
+            let source = source
+            // Defer past the SwiftUI update so observers can publish freely.
+            DispatchQueue.main.async { onSurfaceMounted(source) }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        // Re-resolving on update refreshes the blocked-navigation hook on the live policy,
+        // matching the legacy direct-path behavior.
+        _ = mountedView()
+    }
+
+    private func mountedView() -> NSView {
+        surfaceStore
+            .webSurface(for: tileID, source: source, onBlockedNavigation: onBlockedNavigation)
+            .makeContentView()
     }
 }
