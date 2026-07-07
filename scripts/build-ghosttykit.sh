@@ -26,9 +26,10 @@ set -euo pipefail
 #   GHOSTTY_ARCH_DIAGNOSTICS  Set to 0 to silence the post-build architecture
 #                     report (host arch, zig binary arch, xcframework slice
 #                     info). Defaults to 1. Added to chase down a "no such
-#                     module 'GhosttyKit'" failure suspected to be a Rosetta/
-#                     x86_64 zig producing a slice that doesn't match an
-#                     arm64 build; safe to flip off once that's resolved.
+#                     module 'GhosttyKit'" failure that turned out to be a
+#                     Rosetta/x86_64 zig producing a slice that doesn't match
+#                     an arm64 build target; see resolve_zig_runner() below
+#                     for the fix, kept on to catch a regression.
 # -----------------------------------------------------------------------------
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,7 +39,8 @@ OUT_DIR="$PROJECT_DIR/Frameworks"
 # Pinned versions for reproducible builds.
 GHOSTTY_COMMIT="332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28"
 ZIG_VERSION="0.15.2"
-HOMEBREW_ZIG_BIN="/opt/homebrew/opt/zig@0.15/bin/zig"
+ARM64_HOMEBREW_PREFIX="/opt/homebrew"
+HOMEBREW_ZIG_BIN="$ARM64_HOMEBREW_PREFIX/opt/zig@0.15/bin/zig"
 GHOSTTY_ARCH_DIAGNOSTICS="${GHOSTTY_ARCH_DIAGNOSTICS:-1}"
 
 GHOSTTY_REPO_URL="https://github.com/ghostty-org/ghostty.git"
@@ -66,6 +68,49 @@ require_cmd() {
   fi
 }
 
+# Ghostty's build.zig resolves "-Dxcframework-target=native" via the zig
+# compiler binary's own baked-in build architecture, not the actual runtime
+# host CPU. A zig binary that doesn't match `uname -m` (e.g. a
+# Rosetta-translated x86_64 build on an arm64 host) silently produces a
+# GhosttyKit slice for the wrong architecture instead of failing here — it
+# surfaces later as "no such module 'GhosttyKit'" at Swift compile time.
+zig_binary_matches_host_arch() {
+  local zig_bin="$1"
+  file "$zig_bin" 2>/dev/null | grep -q "$(uname -m)"
+}
+
+# Confirmed on an Xcode Cloud macOS image: its only available zig@0.15 bottle
+# was Rosetta-translated x86_64 even though the host (and its own `uname -m`)
+# is arm64. Upstream ziglang.org's official arm64 build is not a substitute —
+# it fails to link its own build runner against this repo's supported Xcode
+# SDKs with "undefined symbol: __availability_version_check" and a long list
+# of missing libSystem symbols (confirmed locally against Xcode 26.4.1); only
+# Homebrew's zig@0.15 formula carries the Darwin linker patch this needs. So
+# when the available zig is wrong-arch, bootstrap a real native Homebrew at
+# the standard Apple Silicon prefix instead, and get a correctly-arched
+# zig@0.15 bottle from it.
+bootstrap_arm64_homebrew_zig() {
+  echo "warning: resolved zig@0.15 does not match host arch ($(uname -m)); bootstrapping a native Homebrew at $ARM64_HOMEBREW_PREFIX to get a correctly-arched build" >&2
+
+  if [[ ! -x "$ARM64_HOMEBREW_PREFIX/bin/brew" ]]; then
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+  fi
+
+  if [[ ! -x "$ARM64_HOMEBREW_PREFIX/bin/brew" ]]; then
+    die "expected a native Homebrew at $ARM64_HOMEBREW_PREFIX/bin/brew after bootstrap but it is missing"
+  fi
+
+  "$ARM64_HOMEBREW_PREFIX/bin/brew" install zig@0.15
+
+  if [[ ! -x "$HOMEBREW_ZIG_BIN" ]]; then
+    die "bootstrapped Homebrew at $ARM64_HOMEBREW_PREFIX but zig@0.15 is still missing at $HOMEBREW_ZIG_BIN"
+  fi
+
+  if ! zig_binary_matches_host_arch "$HOMEBREW_ZIG_BIN"; then
+    die "bootstrapped a native Homebrew at $ARM64_HOMEBREW_PREFIX but its zig@0.15 still does not match host arch ($(uname -m))"
+  fi
+}
+
 resolve_zig_runner() {
   if [[ -n "$EXPLICIT_ZIG_BIN" ]]; then
     if [[ ! -x "$EXPLICIT_ZIG_BIN" ]]; then
@@ -76,7 +121,7 @@ resolve_zig_runner() {
     return
   fi
 
-  if [[ -x "$HOMEBREW_ZIG_BIN" ]]; then
+  if [[ -x "$HOMEBREW_ZIG_BIN" ]] && zig_binary_matches_host_arch "$HOMEBREW_ZIG_BIN"; then
     ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
     return
   fi
@@ -88,10 +133,16 @@ resolve_zig_runner() {
   if command -v brew >/dev/null 2>&1; then
     local brew_zig_prefix
     brew_zig_prefix="$(brew --prefix zig@0.15 2>/dev/null || true)"
-    if [[ -n "$brew_zig_prefix" && -x "$brew_zig_prefix/bin/zig" ]]; then
+    if [[ -n "$brew_zig_prefix" && -x "$brew_zig_prefix/bin/zig" ]] && zig_binary_matches_host_arch "$brew_zig_prefix/bin/zig"; then
       ZIG_RUNNER=("$brew_zig_prefix/bin/zig")
       return
     fi
+  fi
+
+  if [[ "$(uname -m)" == "arm64" ]] && command -v brew >/dev/null 2>&1; then
+    bootstrap_arm64_homebrew_zig
+    ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
+    return
   fi
 
   if command -v mise >/dev/null 2>&1; then
