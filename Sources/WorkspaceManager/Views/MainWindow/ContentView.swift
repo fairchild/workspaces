@@ -2660,10 +2660,11 @@ struct ContentView: View {
             pendingCodePreviewNavigation = nil
             commitPendingCodePreviewNavigation(pending)
         case .saveThenProceed:
+            // The dialog dismissal already cleared `pendingCodePreviewNavigation`; the captured
+            // `pending` drives the commit. Deliberately do not touch that state again here — a
+            // second navigation raised during the await owns it now.
             Task { @MainActor in
-                let didSave = await appCommandState.saveDirtyDocument()
-                pendingCodePreviewNavigation = nil
-                if didSave {
+                if await appCommandState.saveDirtyDocument() {
                     commitPendingCodePreviewNavigation(pending)
                 }
             }

@@ -174,6 +174,14 @@ public actor GitService: GitServiceProtocol {
             throw GitError.untrackedTargetMissing(relativePath: file)
         }
 
+        // Defense in depth against a stale caller status: confirm git does not track this path
+        // before deleting it. `ls-files --error-unmatch` exits 0 only for a tracked path; a tracked
+        // file must go through `discard` (recoverable) rather than an unrecoverable delete.
+        let tracked = try await runGitResult(["ls-files", "--error-unmatch", "--", file], at: path)
+        guard tracked.exitCode != 0 else {
+            throw GitError.discardUntrackedOnTrackedFile(relativePath: file)
+        }
+
         try FileManager.default.removeItem(at: lexicalTarget)
     }
 
@@ -398,6 +406,7 @@ public enum GitError: LocalizedError, Equatable {
     case pathEscapesRoot
     case symlinkRefused
     case untrackedTargetMissing(relativePath: String)
+    case discardUntrackedOnTrackedFile(relativePath: String)
 
     public var errorDescription: String? {
         switch self {
@@ -415,6 +424,8 @@ public enum GitError: LocalizedError, Equatable {
             return "Refused because the selected file is a symbolic link."
         case .untrackedTargetMissing(let path):
             return "There is no untracked file at '\(path)' to delete."
+        case .discardUntrackedOnTrackedFile(let path):
+            return "Refused to delete '\(path)' because git tracks it; discard its changes instead."
         }
     }
 }

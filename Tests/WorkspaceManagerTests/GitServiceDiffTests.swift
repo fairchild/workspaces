@@ -147,6 +147,21 @@ struct GitServiceDiffTests {
         #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("real-secret.txt").path))
     }
 
+    @Test("discardUntracked refuses to delete a tracked file even if asked")
+    func discardUntrackedRefusesTrackedFile() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+
+        try repo.createFile("tracked.txt", content: "committed\n")
+        try repo.commit(message: "init")
+
+        await #expect(throws: GitError.discardUntrackedOnTrackedFile(relativePath: "tracked.txt")) {
+            try await GitService.shared.discardUntracked(file: "tracked.txt", at: repo.url)
+        }
+        // The tracked file is untouched — the delete is refused at the service layer.
+        #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("tracked.txt").path))
+    }
+
     @Test("discardUntracked reports a missing target instead of failing silently")
     func discardUntrackedReportsMissingTarget() async throws {
         let repo = try TestGitRepository.create()
