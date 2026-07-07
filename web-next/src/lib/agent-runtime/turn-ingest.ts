@@ -37,10 +37,12 @@ import {
 } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 
-/** One in-flight turn: where its assistant message starts, and when it began. */
+/** One in-flight turn: where its assistant message starts, when it began, and
+ * the handle a user-initiated stop (#753) aborts it through. */
 interface ActiveTurn {
 	fromSeq: number;
 	startedAt: number;
+	controller: AbortController;
 }
 
 /** Turns whose ingest loop is running in THIS process, keyed by session id. */
@@ -70,6 +72,33 @@ export function isTurnActive(sessionId: string): boolean {
 /** The started-at of an in-process turn, or undefined if none is running. */
 export function activeTurnStartedAt(sessionId: string): number | undefined {
 	return activeTurns.get(sessionId)?.startedAt;
+}
+
+/** The calm terminal text a stopped turn's failure card shows. */
+export const TURN_STOPPED_MESSAGE = "Turn stopped.";
+
+/** Thrown inside the ingest loop when a stop aborts the turn — the existing
+ * catch then records it like any other turn failure, so a stopped turn closes
+ * with the same durable error + aborted-`done` pair an interrupted one does. */
+class TurnStoppedError extends Error {
+	constructor() {
+		super(TURN_STOPPED_MESSAGE);
+		this.name = "TurnStoppedError";
+	}
+}
+
+/**
+ * Stops the session's in-flight turn, if its ingest loop runs in THIS process:
+ * aborts the loop (which closes the turn durably with `error` + aborted
+ * `done`) and returns true. Returns false when no in-process turn exists —
+ * the caller distinguishes "nothing to stop" from "running on another
+ * instance" via resolveTurn, since this map is process-local by design.
+ */
+export function stopActiveTurn(sessionId: string): boolean {
+	const active = activeTurns.get(sessionId);
+	if (!active) return false;
+	active.controller.abort();
+	return true;
 }
 
 export interface StartedTurn {
@@ -115,8 +144,9 @@ export async function startTurn(
 		console.error(`[turn-ingest] auto-title write failed for ${session.id}`, error);
 	}
 	const fromSeq = userSeq + 1;
-	const ingest = ingestTurn(handle, session, userText, provider);
-	activeTurns.set(session.id, { fromSeq, startedAt: Date.now() });
+	const controller = new AbortController();
+	const ingest = ingestTurn(handle, session, userText, provider, controller.signal);
+	activeTurns.set(session.id, { fromSeq, startedAt: Date.now(), controller });
 	// Deregister once this turn settles — but only if a newer turn hasn't
 	// already taken the slot (guards a fast resend replacing the entry).
 	void ingest.finally(() => {
@@ -127,27 +157,73 @@ export async function startTurn(
 	return { fromSeq, ingest };
 }
 
+/** The abort-race verdict: the source yielded (or finished), or the stop won. */
+type NextOrAborted<T> = { aborted: true } | { aborted: false; result: IteratorResult<T> };
+
+/**
+ * Races the iterator's next value against the stop signal, so a stop takes
+ * effect between chunks without waiting out a slow provider step. On abort
+ * the underlying generator's `return()` is fired (not awaited — its cleanup,
+ * e.g. the vercel provider's sandbox teardown, proceeds in the background and
+ * can only touch the sandbox, never this session's log) and any still-pending
+ * `next` is defused so it can't surface as an unhandled rejection.
+ */
+async function nextOrAborted<T>(
+	iterator: AsyncIterator<T>,
+	signal: AbortSignal,
+): Promise<NextOrAborted<T>> {
+	if (signal.aborted) return { aborted: true };
+	let onAbort: () => void = () => {};
+	const aborted = new Promise<{ aborted: true }>((resolve) => {
+		onAbort = () => resolve({ aborted: true });
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	const next = iterator
+		.next()
+		.then((result) => ({ aborted: false as const, result }));
+	try {
+		return await Promise.race([next, aborted]);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+		if (signal.aborted) {
+			next.catch(() => {});
+			void iterator.return?.()?.catch?.(() => {});
+		}
+	}
+}
+
 /**
  * Consumes the provider turn, appending each chunk to the log and notifying
  * tail readers. Guarantees the run is closed by exactly one terminal `done`:
  * providers that emit their own `done` (the norm) close themselves; a provider
- * that ends without one, or throws, gets a synthesized terminal so the turn is
- * never left open in the log. Never rejects — failures are recorded as events.
+ * that ends without one, throws, or is stopped mid-turn (#753) gets a
+ * synthesized terminal so the turn is never left open in the log — and a
+ * failure arriving AFTER the provider's own `done` (including a stop racing
+ * the turn's natural finish) appends nothing, so the log never carries a
+ * second terminal. Never rejects — failures are recorded as events.
  */
 async function ingestTurn(
 	handle: DatabaseHandle,
 	session: Session,
 	userText: string,
 	provider: ComputeProvider,
+	signal: AbortSignal,
 ): Promise<void> {
 	let closed = false;
 	try {
-		for await (const chunk of provider.runTurn({
-			sessionId: session.id,
-			userMessage: userText,
-			resume: resumeHandle(session),
-			model: session.model,
-		})) {
+		const iterator = provider
+			.runTurn({
+				sessionId: session.id,
+				userMessage: userText,
+				resume: resumeHandle(session),
+				model: session.model,
+			})
+			[Symbol.asyncIterator]();
+		while (true) {
+			const verdict = await nextOrAborted(iterator, signal);
+			if (verdict.aborted) throw new TurnStoppedError();
+			if (verdict.result.done) break;
+			const chunk = verdict.result.value;
 			// A terminal `done` may carry the harness handle the turn parked with
 			// detach(); persist it to the session row (not the transcript) so the
 			// next turn reconnects, and store the chunk without that private blob.
@@ -166,6 +242,7 @@ async function ingestTurn(
 			notify(session.id);
 		}
 	} catch (error) {
+		if (closed) return; // the run already has its terminal `done` — never a second
 		const message = error instanceof Error ? error.message : "the turn failed";
 		await appendEvents(handle, session.id, [
 			{ role: "assistant", chunk: { type: "error", content: message } },

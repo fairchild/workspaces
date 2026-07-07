@@ -1,6 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { deriveTurnStats } from "../transcript/turn-stats";
-import { MOCK_TURN_ERROR_TRIGGER, mockCodingTurn, mockProvider } from "./mock-provider";
+import { deriveTurnError, deriveTurnStats } from "../transcript/turn-stats";
+import {
+	MOCK_PROVISION_ERROR_TEXT,
+	MOCK_PROVISION_ERROR_TRIGGER,
+	MOCK_SANDBOX_DIED_TEXT,
+	MOCK_SANDBOX_DIED_TRIGGER,
+	MOCK_STREAM_ERROR_TEXT,
+	MOCK_STREAM_ERROR_TRIGGER,
+	MOCK_TURN_ERROR_TRIGGER,
+	mockCodingTurn,
+	mockProvider,
+} from "./mock-provider";
 import { DEFAULT_MODEL } from "./models";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -183,6 +193,90 @@ describe("mockCodingTurn", () => {
 			await expect(other.next()).rejects.toThrow(
 				"Simulated turn failure (mock provider)",
 			);
+		});
+	});
+
+	describe("error-class triggers (#753)", () => {
+		test("provisioning failure: throws before ANY content chunk streams", async () => {
+			const iterator = mockCodingTurn(
+				`build it ${MOCK_PROVISION_ERROR_TRIGGER}`,
+				() => Promise.resolve(),
+			)[Symbol.asyncIterator]();
+			const first = await iterator.next();
+			expect(first.value).toEqual({ type: "status", content: "Starting sandbox" });
+			await expect(iterator.next()).rejects.toThrow(MOCK_PROVISION_ERROR_TEXT);
+		});
+
+		test("sandbox died: fails mid-turn, AFTER prose and a tool call landed", async () => {
+			const chunks: StreamChunk[] = [];
+			const turn = mockCodingTurn(
+				`build it ${MOCK_SANDBOX_DIED_TRIGGER}`,
+				() => Promise.resolve(),
+			);
+			await expect(async () => {
+				for await (const chunk of turn) chunks.push(chunk);
+			}).rejects.toThrow(MOCK_SANDBOX_DIED_TEXT);
+			// The work streamed before the VM died is real and precedes the failure.
+			expect(chunks.some((chunk) => chunk.type === "text")).toBe(true);
+			expect(chunks.some((chunk) => chunk.type === "tool_result")).toBe(true);
+		});
+
+		test("stream error: an `error` CHUNK mid-stream, ending without `done`", async () => {
+			const chunks: StreamChunk[] = [];
+			for await (const chunk of mockCodingTurn(
+				`build it ${MOCK_STREAM_ERROR_TRIGGER}`,
+				() => Promise.resolve(),
+			)) {
+				chunks.push(chunk);
+			}
+			// Prose streamed first; the structured error chunk closes the stream.
+			expect(chunks.some((chunk) => chunk.type === "text")).toBe(true);
+			expect(chunks.at(-1)).toEqual({
+				type: "error",
+				content: MOCK_STREAM_ERROR_TEXT,
+			});
+			expect(chunks.some((chunk) => chunk.type === "done")).toBe(false);
+			// deriveTurnError tags the turn from the chunk — the same read both the
+			// projection and the live receipt path use.
+			expect(deriveTurnError(chunks)).toBe(MOCK_STREAM_ERROR_TEXT);
+		});
+
+		test("each trigger spends independently on the same session", async () => {
+			const sessionId = `s-${crypto.randomUUID()}`;
+
+			// Spend the provisioning trigger…
+			const provision = mockProvider
+				.runTurn({
+					sessionId,
+					userMessage: `go ${MOCK_PROVISION_ERROR_TRIGGER}`,
+				})
+				[Symbol.asyncIterator]();
+			await provision.next();
+			await expect(provision.next()).rejects.toThrow(MOCK_PROVISION_ERROR_TEXT);
+
+			// …the generic trigger (also unspent, also failing at the same early
+			// point) still gets ITS guaranteed failure on this session.
+			const generic = mockProvider
+				.runTurn({ sessionId, userMessage: `go ${MOCK_TURN_ERROR_TRIGGER}` })
+				[Symbol.asyncIterator]();
+			await generic.next();
+			await expect(generic.next()).rejects.toThrow(
+				"Simulated turn failure (mock provider)",
+			);
+
+			// And a provisioning retry (that trigger already spent) runs the script.
+			const retry = mockProvider
+				.runTurn({
+					sessionId,
+					userMessage: `go ${MOCK_PROVISION_ERROR_TRIGGER}`,
+				})
+				[Symbol.asyncIterator]();
+			await retry.next();
+			await expect(retry.next()).resolves.toEqual({
+				value: { type: "status", content: "Cloning repo" },
+				done: false,
+			});
+			await retry.return?.(undefined);
 		});
 	});
 });

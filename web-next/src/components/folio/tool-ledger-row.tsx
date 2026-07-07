@@ -40,7 +40,7 @@ export function ToolLedgerRow({
 					▸
 				</span>
 				<span className="min-w-[3.6em] text-faint">{verb}</span>
-				<span>{subject}</span>
+				<span className="min-w-0 flex-1 truncate">{subject}</span>
 				{meta !== undefined && (
 					<span className="ml-auto pl-4 text-caption whitespace-nowrap text-faint">
 						{meta}

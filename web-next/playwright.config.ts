@@ -149,12 +149,21 @@ export default defineConfig({
 			use: { ...devices["Desktop Chrome"] },
 			// sessions.spec owns the sessions table (wipes + counts rows), so
 			// specs that create sessions of their own run in a later project.
-			testIgnore: /terminal\.spec\.ts/,
+			testIgnore: /(terminal|errors|mobile)\.spec\.ts/,
 		},
 		{
 			name: "terminal",
 			use: { ...devices["Desktop Chrome"] },
 			testMatch: /terminal\.spec\.ts/,
+			dependencies: ["chromium"],
+		},
+		{
+			// Error surfaces + lifecycle controls + the 375px walk (#753): these
+			// create their own sessions, so they run after sessions.spec's wipe.
+			// mobile.spec narrows its own viewport via test.use.
+			name: "lifecycle",
+			use: { ...devices["Desktop Chrome"] },
+			testMatch: /(errors|mobile)\.spec\.ts/,
 			dependencies: ["chromium"],
 		},
 	],

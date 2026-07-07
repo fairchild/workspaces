@@ -92,6 +92,12 @@ export interface SessionViewProps {
 	/** Inline title-edit handler (client wrappers wire this; fixtures omit it,
 	 * which leaves the masthead title as static text — see session-masthead.tsx). */
 	onTitleChange?: (title: string) => void;
+	/** Stops the in-flight turn (#753); the compose's send affordance becomes
+	 * the stop while a turn runs. Fixtures omit it. */
+	onStopTurn?: () => void;
+	/** Stops the session's live sandbox (#753); a quiet masthead action beside
+	 * the state label. Fixtures omit it. */
+	onSandboxStop?: () => void;
 }
 
 export function SessionView({
@@ -100,12 +106,21 @@ export function SessionView({
 	composeDisabled,
 	onModelChange,
 	onTitleChange,
+	onStopTurn,
+	onSandboxStop,
 }: SessionViewProps) {
 	const isEmpty = session.messages.length === 0 && !session.activeTurn;
 	return (
 		<>
-			<SessionMasthead session={session.masthead} onTitleChange={onTitleChange} />
-			<main className="mx-auto max-w-[680px] px-5 pt-[76px] pb-6">
+			<SessionMasthead
+				session={session.masthead}
+				onTitleChange={onTitleChange}
+				onSandboxStop={onSandboxStop}
+			/>
+			{/* break-words inherits into the prose, so an unbroken token (a long
+			    path, a URL) wraps instead of forcing 375px pages sideways (#753);
+			    pre/diff bodies keep their own inner overflow-x scrolling. */}
+			<main className="mx-auto max-w-[680px] px-4 pt-[76px] pb-6 break-words sm:px-5">
 				{isEmpty && session.empty && (
 					<div
 						data-testid="empty-transcript"
@@ -140,7 +155,7 @@ export function SessionView({
 							<section
 								key={turn.key}
 								data-turn={recent ? "recent" : "past"}
-								className={`animate-rise mb-9 rounded-[18px] border ${frame} px-8 py-7`}
+								className={`animate-rise mb-9 rounded-[18px] border ${frame} px-4 py-5 sm:px-8 sm:py-7`}
 							>
 								{turn.messages.map((message) => (
 									<Message
@@ -178,6 +193,7 @@ export function SessionView({
 					agentName={session.masthead.agentName}
 					onSend={onSend}
 					disabled={composeDisabled}
+					onStop={onStopTurn}
 				/>
 				<StatusLine status={session.statusLine} onModelChange={onModelChange} />
 			</footer>

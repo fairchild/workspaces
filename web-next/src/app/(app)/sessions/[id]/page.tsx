@@ -85,7 +85,9 @@ export default async function SessionPage({
 					// masthead itself falls back to "New session" display text.
 					title: session.title,
 					agentName: "Claude",
-					stateLabel: "idle",
+					// The client fills this in from the verified sandbox state (#753);
+					// "" renders as absence — the masthead never guesses.
+					stateLabel: "",
 				},
 				statusLine: {
 					model: session.model,
