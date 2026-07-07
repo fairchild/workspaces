@@ -54,11 +54,17 @@ The foundation landed in PR #483 and shipped in WorkSpaces v0.15.0:
    - Consider an opt-in SQLite snapshot using SQLite backup or `VACUUM INTO` after redaction policy is settled.
    - Tests: default export never includes raw prompts or terminal transcript payloads.
 
-6. Add retention and health checks.
-   - Define retention for high-volume event tables.
-   - Add a lightweight integrity probe with `PRAGMA quick_check`.
-   - Add cleanup hooks for ended sessions and old diagnostic events.
-   - Tests: retention deletes old rows while preserving recent continuity rows.
+6. Add retention and health checks. **(Shipped — #789.)**
+   - `LocalStateStore.runRetention(policy:now:)` prunes aged `agent_status_events`,
+     `diagnostic_events`, and ended/aged `terminal_sessions` in one write transaction.
+   - Restore-aware: only ended sessions are removed (active rows — including the
+     previous run's resumable sessions — are never touched), and the latest event
+     per active session is kept regardless of age, using the same latest-per-session
+     projection the continuity readers use. So `fetchPreviousRunSessions` /
+     `fetchContinuitySessions` return the same restore set after a pass.
+   - `PRAGMA quick_check` runs at the end of each pass; the result is recorded in
+     `local_state_metadata` and surfaced via `summary()` and the Diagnostics pane.
+   - Wired best-effort once per launch from `bootstrap`. No schema change.
 
 ## Schema Stewardship
 

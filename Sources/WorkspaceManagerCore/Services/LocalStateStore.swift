@@ -94,6 +94,22 @@ public enum LocalStateStoreBootstrapper {
                 fileManager: fileManager
             )
             let store = try LocalStateStore(databaseURL: databaseURL)
+            // Best-effort retention once per launch. Detached so it never blocks
+            // startup; it only prunes aged rows and never touches active sessions,
+            // so racing early writes is safe.
+            Task.detached(priority: .utility) {
+                do {
+                    let outcome = try await store.runRetention()
+                    NSLog(
+                        "[LocalStateStore] retention: sessions=%d agent_events=%d diagnostics=%d integrity=%@",
+                        outcome.deletedEndedSessions,
+                        outcome.deletedAgentEvents,
+                        outcome.deletedDiagnosticEvents,
+                        outcome.integrityOK ? "ok" : outcome.integrityDetail)
+                } catch {
+                    NSLog("[LocalStateStore] retention failed: %@", String(describing: error))
+                }
+            }
             return LocalStateStoreBootstrapResult(
                 store: store,
                 mode: .persistent(path: databaseURL.path),
@@ -152,19 +168,75 @@ public struct LocalStateStoreSummary: Codable, Equatable, Sendable {
     public let generatedAt: Date
     public let tableCounts: [String: Int]
     public let latestEventTimes: [String: Date]
+    /// When the last retention pass completed, and whether its `PRAGMA quick_check`
+    /// reported a sound database. `nil` until retention has run at least once.
+    public let lastRetentionAt: Date?
+    public let integrityOK: Bool?
 
     public init(
         schemaVersion: Int,
         databasePath: String,
         generatedAt: Date,
         tableCounts: [String: Int],
-        latestEventTimes: [String: Date] = [:]
+        latestEventTimes: [String: Date] = [:],
+        lastRetentionAt: Date? = nil,
+        integrityOK: Bool? = nil
     ) {
         self.schemaVersion = schemaVersion
         self.databasePath = databasePath
         self.generatedAt = generatedAt
         self.tableCounts = tableCounts
         self.latestEventTimes = latestEventTimes
+        self.lastRetentionAt = lastRetentionAt
+        self.integrityOK = integrityOK
+    }
+}
+
+/// Bounds how long the high-volume tables keep rows. Ages are measured against
+/// the retention pass's `now`; anything older than a table's max age is eligible
+/// for pruning except the rows the cold-start restore path depends on, which are
+/// preserved regardless of age (see `LocalStateStore.runRetention`).
+public struct LocalStateRetentionPolicy: Sendable, Equatable {
+    public var agentEventMaxAge: TimeInterval
+    public var diagnosticEventMaxAge: TimeInterval
+    public var endedSessionMaxAge: TimeInterval
+
+    public init(
+        agentEventMaxAge: TimeInterval = 30 * 86_400,
+        diagnosticEventMaxAge: TimeInterval = 14 * 86_400,
+        endedSessionMaxAge: TimeInterval = 30 * 86_400
+    ) {
+        self.agentEventMaxAge = agentEventMaxAge
+        self.diagnosticEventMaxAge = diagnosticEventMaxAge
+        self.endedSessionMaxAge = endedSessionMaxAge
+    }
+
+    public static let `default` = LocalStateRetentionPolicy()
+}
+
+/// Result of one retention pass: how many rows each high-volume table shed, plus
+/// the `PRAGMA quick_check` health signal captured at the end of the pass.
+/// Counts are the rows each DELETE removed directly — child rows cleared by an
+/// ended session's `ON DELETE CASCADE` are not included in `deletedAgentEvents`.
+public struct LocalStateRetentionOutcome: Sendable, Equatable {
+    public let deletedEndedSessions: Int
+    public let deletedAgentEvents: Int
+    public let deletedDiagnosticEvents: Int
+    public let integrityOK: Bool
+    public let integrityDetail: String
+
+    public init(
+        deletedEndedSessions: Int,
+        deletedAgentEvents: Int,
+        deletedDiagnosticEvents: Int,
+        integrityOK: Bool,
+        integrityDetail: String
+    ) {
+        self.deletedEndedSessions = deletedEndedSessions
+        self.deletedAgentEvents = deletedAgentEvents
+        self.deletedDiagnosticEvents = deletedDiagnosticEvents
+        self.integrityOK = integrityOK
+        self.integrityDetail = integrityDetail
     }
 }
 
@@ -742,6 +814,138 @@ public actor LocalStateStore {
         }
     }
 
+    // MARK: - Retention & Health
+
+    /// Prunes aged rows from the high-volume tables and probes integrity, without
+    /// disturbing anything the cold-start restore path reads. Two invariants hold
+    /// regardless of `policy` or `now`:
+    ///
+    /// - Only ended *and* aged `terminal_sessions` are removed, so every active
+    ///   row — including the previous run's resumable sessions that
+    ///   `fetchPreviousRunSessions` enumerates — is preserved. Removing an ended
+    ///   session cascades its `agent_status_events` and split snapshots away.
+    /// - The latest `agent_status_events` row per still-active session is kept
+    ///   regardless of age (it carries the `agent_session_id` that drives
+    ///   `claude --resume`); only older, non-latest events past the cutoff are
+    ///   pruned. The preserved set is computed with the same latest-per-session
+    ///   projection the continuity readers use, so what survives is exactly what
+    ///   they return.
+    ///
+    /// The pass runs in a single write transaction and finishes with
+    /// `PRAGMA quick_check`, recording the result so `summary()` can surface it.
+    @discardableResult
+    public func runRetention(
+        policy: LocalStateRetentionPolicy = .default,
+        now: Date = Date()
+    ) async throws -> LocalStateRetentionOutcome {
+        let sessionCutoff = Self.isoString(now.addingTimeInterval(-policy.endedSessionMaxAge))
+        let agentCutoff = Self.isoString(now.addingTimeInterval(-policy.agentEventMaxAge))
+        let diagnosticCutoff = Self.isoString(now.addingTimeInterval(-policy.diagnosticEventMaxAge))
+        let completedAt = Self.isoString(now)
+        let currentRunStartedAt = runStartedAt
+
+        let deletions = try await dbPool.write { db -> (sessions: Int, agentEvents: Int, diagnostics: Int) in
+            // Ended + aged sessions first; ON DELETE CASCADE clears their agent
+            // events and split snapshots. Active rows never match this predicate.
+            // One exception: a *fully-ended* most-recent prior run keeps its rows.
+            // `fetchPreviousRunSessions` selects the prior run from all rows, so
+            // deleting the last rows of a cleanly-closed prior run would make the
+            // reader fall back to an older run's stale never-ended crash rows and
+            // offer the wrong restore set — a cleanly-closed prior run must read
+            // as "nothing to restore", not as an older run's leftovers. When the
+            // prior run still has active rows, those anchor the reader and its
+            // ended rows prune normally. (The EXISTS probe checks active rows,
+            // which this statement never deletes, so it is stable mid-delete.)
+            try db.execute(
+                sql: """
+                    DELETE FROM terminal_sessions
+                    WHERE is_active = 0 AND ended_at IS NOT NULL AND ended_at < ?
+                      AND (
+                          run_id IS NOT (
+                              SELECT run_id
+                              FROM terminal_sessions
+                              WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                              ORDER BY run_started_at DESC
+                              LIMIT 1
+                          )
+                          OR EXISTS (
+                              SELECT 1 FROM terminal_sessions anchor
+                              WHERE anchor.run_id = terminal_sessions.run_id
+                                AND anchor.is_active = 1 AND anchor.ended_at IS NULL
+                          )
+                      )
+                    """,
+                arguments: [sessionCutoff, currentRunStartedAt])
+            let deletedEndedSessions = db.changesCount
+
+            // Aged agent events, except the latest per still-active session. The
+            // ROW_NUMBER projection mirrors fetchContinuitySessions /
+            // fetchPreviousRunSessions, so the row each reader joins as "latest"
+            // is exactly the row this keeps.
+            try db.execute(
+                sql: """
+                    DELETE FROM agent_status_events
+                    WHERE event_at < ?
+                      AND id NOT IN (
+                          SELECT id FROM (
+                              SELECT
+                                  ae.id,
+                                  ROW_NUMBER() OVER (
+                                      PARTITION BY ae.host_session_id
+                                      ORDER BY ae.event_at DESC, ae.id DESC
+                                  ) AS event_rank
+                              FROM agent_status_events ae
+                              JOIN terminal_sessions ts
+                                  ON ts.host_session_id = ae.host_session_id
+                              WHERE ts.is_active = 1 AND ts.ended_at IS NULL
+                          )
+                          WHERE event_rank = 1
+                      )
+                    """,
+                arguments: [agentCutoff])
+            let deletedAgentEvents = db.changesCount
+
+            try db.execute(
+                sql: "DELETE FROM diagnostic_events WHERE event_at < ?",
+                arguments: [diagnosticCutoff])
+            let deletedDiagnosticEvents = db.changesCount
+
+            return (deletedEndedSessions, deletedAgentEvents, deletedDiagnosticEvents)
+        }
+
+        // The integrity probe runs outside the pruning transaction: quick_check
+        // scans the whole file, and holding the writer slot for that at launch
+        // would stall the first session/event writes. A read connection suffices
+        // — the probe is a health signal, not a gate on the deletes.
+        let quickCheck = try await dbPool.read { db in
+            try String.fetchAll(db, sql: "PRAGMA quick_check")
+        }
+        let integrityOK = quickCheck == ["ok"]
+        let integrityDetail = quickCheck.isEmpty ? "ok" : quickCheck.joined(separator: "; ")
+
+        try await dbPool.write { db in
+            try Self.writeMetadataValue(db, key: "last_retention_at", value: completedAt)
+            try Self.writeMetadataValue(db, key: "last_integrity_ok", value: integrityOK ? "1" : "0")
+            try Self.writeMetadataValue(db, key: "last_integrity_detail", value: integrityDetail)
+        }
+
+        return LocalStateRetentionOutcome(
+            deletedEndedSessions: deletions.sessions,
+            deletedAgentEvents: deletions.agentEvents,
+            deletedDiagnosticEvents: deletions.diagnostics,
+            integrityOK: integrityOK,
+            integrityDetail: integrityDetail
+        )
+    }
+
+    /// Standalone `PRAGMA quick_check` probe. Returns `true` when SQLite reports a
+    /// structurally sound database (`["ok"]`).
+    public func checkIntegrity() async throws -> Bool {
+        try await dbPool.read { db in
+            try String.fetchAll(db, sql: "PRAGMA quick_check") == ["ok"]
+        }
+    }
+
     public func summary() async throws -> LocalStateStoreSummary {
         let tables = [
             "terminal_sessions",
@@ -778,28 +982,48 @@ public actor LocalStateStore {
             return result
         }
 
+        let metadata = try await dbPool.read { db -> [String: String] in
+            var result: [String: String] = [:]
+            let rows = try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT key, value FROM local_state_metadata
+                    WHERE key IN ('last_retention_at', 'last_integrity_ok')
+                    """
+            )
+            for row in rows {
+                result[row["key"]] = row["value"]
+            }
+            return result
+        }
+
         return LocalStateStoreSummary(
             schemaVersion: Self.schemaVersion,
             databasePath: databaseURL.path,
             generatedAt: Date(),
             tableCounts: counts,
-            latestEventTimes: latestEventTimes
+            latestEventTimes: latestEventTimes,
+            lastRetentionAt: metadata["last_retention_at"].flatMap(Self.date(fromISOString:)),
+            integrityOK: metadata["last_integrity_ok"].map { $0 == "1" }
         )
     }
 
     private static func writeMetadata(in dbPool: DatabasePool) throws {
-        let now = Self.isoString(Date())
         try dbPool.write { db in
-            try db.execute(
-                sql: """
-                    INSERT INTO local_state_metadata (key, value, updated_at)
-                    VALUES ('schema_version', ?, ?)
-                    ON CONFLICT(key) DO UPDATE SET
-                        value = excluded.value,
-                        updated_at = excluded.updated_at
-                    """,
-                arguments: [String(Self.schemaVersion), now])
+            try writeMetadataValue(db, key: "schema_version", value: String(Self.schemaVersion))
         }
+    }
+
+    private static func writeMetadataValue(_ db: Database, key: String, value: String) throws {
+        try db.execute(
+            sql: """
+                INSERT INTO local_state_metadata (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+            arguments: [key, value, Self.isoString(Date())])
     }
 
     private static var migrator: DatabaseMigrator {
