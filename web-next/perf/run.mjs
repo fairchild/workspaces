@@ -247,7 +247,8 @@ async function runResumeLatency(browser, baseUrl, scenario) {
 			waitUntil: "commit",
 		});
 		await page.waitForFunction(
-			(marker) => document.body.innerText.includes(marker),
+			// body can be briefly null right after "commit" — poll past it.
+			(marker) => Boolean(document.body?.innerText.includes(marker)),
 			RESUME_MARKER,
 			{ timeout: TURN_TIMEOUT_MS },
 		);
@@ -255,6 +256,34 @@ async function runResumeLatency(browser, baseUrl, scenario) {
 		await context.close();
 	}
 	return { resume_ms: samples };
+}
+
+// Drawer-open → interactive (#752): on a fresh seeded session, press Ctrl+`
+// and time until the drawer reports data-ready — the lazy ghostty-web WASM
+// load + init, the ticket mint/redeem exchange, and the first PTY bytes of
+// the mock seam in a painted frame (data-ready flips on a rAF after the
+// first onData). Cold context per run, so every run pays the full cost.
+async function runTerminalDrawer(browser, baseUrl, scenario) {
+	const samples = [];
+	for (let i = 0; i < scenario.runs; i++) {
+		const { context, page } = await openSession(
+			browser,
+			baseUrl,
+			`perf-drawer-${i}`,
+		);
+		const start = Date.now();
+		await page.keyboard.press("Control+Backquote");
+		await page.waitForFunction(
+			() =>
+				document.querySelector('[data-testid="terminal-drawer"]')?.dataset
+					.ready === "true",
+			undefined,
+			{ timeout: TURN_TIMEOUT_MS },
+		);
+		samples.push(Date.now() - start);
+		await context.close();
+	}
+	return { drawer_interactive_ms: samples };
 }
 
 // Time from navigation start until every seeded message is present in a
@@ -299,6 +328,7 @@ const SCENARIO_RUNNERS = {
 	streaming_cadence: (browser, baseUrl, scenario) =>
 		runStreamingCadence(browser, baseUrl, scenario.runs),
 	resume_latency_100: runResumeLatency,
+	terminal_drawer_interactive: runTerminalDrawer,
 	transcript_render_200: (browser, baseUrl, scenario) =>
 		runTranscriptRender(browser, baseUrl, scenario.route, scenario.runs),
 	projection_200: (browser, baseUrl, scenario) => runProjectionBench(scenario),
@@ -478,6 +508,9 @@ async function runLocalSuite() {
 	}
 	for (let i = 0; i < runsOf("streaming_cadence"); i++) {
 		await seedSession(`perf-cadence-${i}`);
+	}
+	for (let i = 0; i < runsOf("terminal_drawer_interactive"); i++) {
+		await seedSession(`perf-drawer-${i}`);
 	}
 	// resume_latency_100: one interrupted turn per run. Each is a ~100-event
 	// assistant turn with NO `done` and a backdated clock, so resolveTurn reads
