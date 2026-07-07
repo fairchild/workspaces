@@ -48,6 +48,8 @@ test.describe("signed out", () => {
 			{ method: "PATCH", path: "/api/sessions/any" },
 			{ method: "GET", path: "/api/sessions/any/stream" },
 			{ method: "GET", path: "/api/diag/gateway" },
+			{ method: "GET", path: "/api/diag/preflight" },
+			{ method: "GET", path: "/api/diag/prewarm" },
 			{ method: "GET", path: "/api/repos" },
 		];
 		for (const { method, path } of probes) {
