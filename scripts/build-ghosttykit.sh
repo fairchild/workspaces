@@ -74,6 +74,19 @@ resolve_zig_runner() {
     return
   fi
 
+  # Some Xcode Cloud macOS images run Homebrew from /usr/local instead of the
+  # standard Apple Silicon /opt/homebrew prefix. Only used as a fallback here
+  # so a host with a real /opt/homebrew zig@0.15 (checked above) never gets
+  # overridden by a different-prefix (and potentially different-arch) one.
+  if command -v brew >/dev/null 2>&1; then
+    local brew_zig_prefix
+    brew_zig_prefix="$(brew --prefix zig@0.15 2>/dev/null || true)"
+    if [[ -n "$brew_zig_prefix" && -x "$brew_zig_prefix/bin/zig" ]]; then
+      ZIG_RUNNER=("$brew_zig_prefix/bin/zig")
+      return
+    fi
+  fi
+
   if command -v mise >/dev/null 2>&1; then
     ZIG_RUNNER=(
       env
