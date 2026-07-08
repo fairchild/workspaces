@@ -80,6 +80,15 @@ final class AutomationController: AutomationControlling {
         }
     }
 
+    /// Drops the gesture-verb layer when the window that installed it goes away. The app stays alive
+    /// as an accessory after its last window closes, so without this an escaped `performSelection`
+    /// closure would keep `workspace.select` "working" against a window that no longer exists. Clearing
+    /// it here is what makes a post-teardown select correctly return `unsupported` (no live window)
+    /// rather than driving a stale gesture. A window reappearing reinstalls it via `configure`.
+    func detachGestureVerbs() {
+        gestureVerbs = nil
+    }
+
     func automationContext(for handle: String) throws -> AutomationContextResult {
         let resolved = try resolve(handle, requiring: .contextRead)
         return try context(for: resolved)

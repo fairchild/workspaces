@@ -248,6 +248,14 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         }
     }
 
+    /// Detaches the gesture-verb layer when the installing window disappears, so a mutation verb
+    /// fails closed (`unsupported`) rather than driving a stale gesture while the app lingers as an
+    /// accessory. The listener and operator credential stay up — only the window-bound gesture layer
+    /// drops; a reappearing window reinstalls it via `configure`.
+    func detachGestureVerbs() {
+        controller?.detachGestureVerbs()
+    }
+
     func stop() async {
         startTask?.cancel()
         startTask = nil

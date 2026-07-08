@@ -104,6 +104,32 @@ struct AutomationSelectVerbTests {
         }
     }
 
+    @Test("detaching the gesture layer (window gone) makes select unsupported, not a stale drive")
+    func detachedGestureLayerIsUnsupported() async throws {
+        var drove = false
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: {
+                AutomationGestureVerbs.WorkspaceTarget(workspaceID: $0, name: "ws", isArchived: false)
+            },
+            performSelection: { _ in
+                drove = true
+                return AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            }
+        )
+        let (controller, _, handle) = operatorController(gestureVerbs: verbs)
+
+        // The window that installed the gesture layer disappears (the app lingers as an accessory).
+        controller.detachGestureVerbs()
+
+        await expectFailure(.unsupported) {
+            try await controller.automationSelectWorkspace(
+                for: handle, workspaceID: UUID().uuidString)
+        }
+        // Fail closed: the stale gesture is never driven after detach.
+        #expect(!drove)
+    }
+
     @Test("a non-UUID id is invalid_request")
     func badUUIDInvalid() async throws {
         let verbs = AutomationGestureVerbs(

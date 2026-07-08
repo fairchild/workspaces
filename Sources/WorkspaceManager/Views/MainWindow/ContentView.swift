@@ -773,6 +773,10 @@ struct ContentView: View {
             .onDisappear {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
                 statusAggregationCoalescer.cancel()
+                // The window that installed the gesture-verb layer is gone; drop it so an operator
+                // mutation verb fails closed (unsupported) instead of driving a stale selection
+                // gesture while the app lingers as an accessory. Reappearing reinstalls it via onAppear.
+                AutomationIntegrationLifecycle.shared.detachGestureVerbs()
             }
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
                 resolveSurfaceLifecycle()
