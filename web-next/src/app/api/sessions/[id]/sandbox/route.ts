@@ -1,10 +1,11 @@
 /*
  * The session's sandbox lifecycle surface (#753). GET reports the sandbox's
  * real state (live / parked / none — checked against the platform, never
- * inferred); DELETE stops a live VM and reports the state that's actually
- * left. Auth-gated same as the chat route; both verbs are safe to repeat —
- * a re-GET re-checks, a re-DELETE of an already-parked sandbox is a no-op
- * that returns the honest current state.
+ * inferred) and sweeps parked live VMs after the adaptive idle window; DELETE
+ * stops a live VM and reports the state that's actually left. Auth-gated same
+ * as the chat route; both verbs are safe to repeat — a re-GET re-checks, a
+ * re-DELETE of an already-parked sandbox is a no-op that returns the honest
+ * current state.
  */
 import {
 	resolveSandboxState,

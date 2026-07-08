@@ -9,11 +9,12 @@
  * open a PR against it. The turn is driven by the user's actual message.
  *
  * Sessions are durable: after each turn the harness session is `detach()`-ed
- * (parked with the sandbox left running) and its resume payload persisted; the
- * next turn reconnects that warm session so the conversation and working copy
- * continue. Reconnect is bounded by the sandbox lifetime — once it expires the
- * turn falls back to a fresh clone. Heavy deps load lazily so the seam stays
- * light for the mock path; sessions opt in via sessions.provider = "vercel".
+ * and its resume payload persisted; the next turn reconnects that warm session
+ * so the conversation and working copy continue. The lifecycle state endpoint
+ * may stop an idle parked VM after a short warm window (#970); once the harness
+ * session is unresumable, the turn falls back to a fresh clone plus replayed
+ * context. Heavy deps load lazily so the seam stays light for the mock path;
+ * sessions opt in via sessions.provider = "vercel".
  */
 import type { HarnessAgentSandboxConfig } from "@ai-sdk/harness/agent";
 import { mintInstallationToken } from "../diag/github-app";
@@ -47,9 +48,8 @@ const BRIDGE_PORT = 4000;
  */
 export const TERMINAL_PORT = 7681;
 /**
- * Max sandbox lifetime. Also the resume window: a parked (detached) session
- * reconnects only while its sandbox is still alive, so this bounds how long a
- * conversation can idle between turns before the next turn re-clones fresh.
+ * Max sandbox lifetime. Adaptive idle-stop normally cuts parked VMs off much
+ * sooner, but this remains the platform backstop if no sweeper observes them.
  */
 const SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
 /** The persistent per-session working copy: name under the sandbox default cwd. */
@@ -1015,10 +1015,9 @@ export function parseGitDiff(raw: string): FileDiff[] {
 }
 
 /**
- * Detaches the session (parks it with the sandbox left running) under the id
- * that names its sandbox, and returns the handle to persist for the next turn —
- * or null when parking fails, so the caller tears the session down and clears
- * any stored handle.
+ * Detaches the session under the id that names its sandbox, and returns the
+ * handle to persist for the next turn — or null when parking fails, so the
+ * caller tears the session down and clears any stored handle.
  */
 async function parkSession(
 	session: { detach: () => Promise<unknown> },

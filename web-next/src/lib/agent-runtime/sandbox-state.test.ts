@@ -7,6 +7,7 @@
  */
 import { describe, expect, test, vi } from "vitest";
 import {
+	ADAPTIVE_IDLE_STOP_MS,
 	type LifecycleSandbox,
 	resolveSandboxState,
 	stopSessionSandbox,
@@ -17,6 +18,7 @@ const PARKED_SESSION = {
 	claudeSessionId: "harness-1",
 	resumeState: '{"parked":true}',
 };
+const NOW = new Date("2026-07-08T17:00:00.000Z");
 
 function sandboxWith(status: string): LifecycleSandbox & { stop: ReturnType<typeof vi.fn> } {
 	return {
@@ -55,6 +57,64 @@ describe("resolveSandboxState", () => {
 			sandboxWith(status),
 		);
 		expect(state).toEqual({ state: "live" });
+	});
+
+	test("a live sandbox inside the adaptive idle window stays warm", async () => {
+		const sandbox = sandboxWith("running");
+		const state = await resolveSandboxState(
+			{
+				...PARKED_SESSION,
+				lastActivityAt: new Date(
+					NOW.getTime() - ADAPTIVE_IDLE_STOP_MS + 1_000,
+				).toISOString(),
+			},
+			async () => sandbox,
+			{ now: NOW },
+		);
+
+		expect(sandbox.stop).not.toHaveBeenCalled();
+		expect(state).toEqual({ state: "live" });
+	});
+
+	test("a live sandbox past the adaptive idle window is stopped and reported parked", async () => {
+		const sandbox = sandboxWith("running");
+		const state = await resolveSandboxState(
+			{
+				...PARKED_SESSION,
+				lastActivityAt: new Date(
+					NOW.getTime() - ADAPTIVE_IDLE_STOP_MS - 1_000,
+				).toISOString(),
+			},
+			async () => sandbox,
+			{ now: NOW },
+		);
+
+		expect(sandbox.stop).toHaveBeenCalledTimes(1);
+		expect(state).toEqual({ state: "parked", detail: "stopped" });
+	});
+
+	test("adaptive idle-stop failures leave the sandbox live and do not throw", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const sandbox = sandboxWith("running");
+		sandbox.stop.mockRejectedValueOnce(new Error("api timeout"));
+
+		const state = await resolveSandboxState(
+			{
+				...PARKED_SESSION,
+				lastActivityAt: new Date(
+					NOW.getTime() - ADAPTIVE_IDLE_STOP_MS - 1_000,
+				).toISOString(),
+			},
+			async () => sandbox,
+			{ now: NOW },
+		);
+
+		expect(sandbox.stop).toHaveBeenCalledTimes(1);
+		expect(state).toEqual({ state: "live" });
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("adaptive idle-stop failed"),
+		);
+		warn.mockRestore();
 	});
 
 	test.each(["stopping", "stopped", "snapshotting"])(
