@@ -6,12 +6,7 @@ description: >
   them work live in the Orca UI and take over/type into any session himself.
   Layers on top of the global orca-cli and orchestration skills, which own the
   full CLI mechanics — this skill only adds what's specific to this repo.
-  STRICTLY OPT-IN: only use when Michael explicitly names Orca in the current
-  turn ("use orca", "fan out with orca", "open an orca worktree/session").
-  Never reach for this on a bare "spin up some agents" / "parallelize this" —
-  that stays on the Agent tool per subagent-delegation. Do not self-trigger
-  from the global skills' broader phrase matches (e.g. "spawn codex in a
-  worktree") unless Michael said Orca too.
+disable-model-invocation: true
 ---
 
 # orca-agents: Orca fan-out conventions for this repo
