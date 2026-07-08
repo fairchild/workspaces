@@ -9,7 +9,12 @@
 export const TARGETS = {
 	build: [".next"],
 	data: [".data"],
-	"e2e-data": [".data/e2e.db", ".data/e2e.db-shm", ".data/e2e.db-wal"],
+	"e2e-data": [
+		".data/e2e.db",
+		".data/e2e.db-shm",
+		".data/e2e.db-wal",
+		".data/sessions-spec.lock",
+	],
 	artifacts: [
 		"output",
 		"playwright-report",
