@@ -7,8 +7,9 @@
  * reload-persistence (post-turn and mid-turn).
  */
 import { createClient } from "@libsql/client";
+import { mkdir, open, rm } from "node:fs/promises";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 
 // Serial: these tests narrate one stateful flow over the shared e2e DB.
 test.describe.configure({ mode: "serial" });
@@ -17,8 +18,85 @@ const SESSION_URL = /\/sessions\/[0-9a-f-]{36}$/;
 
 // The mock turn takes ~9s of scripted delays end to end.
 const TURN_TIMEOUT = 20_000;
+const SESSIONS_SPEC_LOCK = path.resolve(
+	__dirname,
+	"../../.data/sessions-spec.lock",
+);
+const SESSIONS_SPEC_LOCK_TIMEOUT = 10 * 60_000;
 
-test.beforeAll(async () => {
+let releaseSessionsSpecLock: (() => Promise<void>) | undefined;
+
+function isSqliteBusy(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const code = "code" in error ? error.code : undefined;
+	return error.message.includes("SQLITE_BUSY") || code === "SQLITE_BUSY";
+}
+
+function isFileExists(error: unknown): boolean {
+	return (
+		error instanceof Error &&
+		"code" in error &&
+		error.code === "EEXIST"
+	);
+}
+
+async function sleep(ms: number): Promise<void> {
+	await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function acquireSessionsSpecLock(): Promise<() => Promise<void>> {
+	await mkdir(path.dirname(SESSIONS_SPEC_LOCK), { recursive: true });
+	const deadline = Date.now() + SESSIONS_SPEC_LOCK_TIMEOUT;
+	while (true) {
+		try {
+			const file = await open(SESSIONS_SPEC_LOCK, "wx");
+			await file.writeFile(`${process.pid}\n`);
+			return async () => {
+				await file.close();
+				await rm(SESSIONS_SPEC_LOCK, { force: true });
+			};
+		} catch (error) {
+			if (!isFileExists(error) || Date.now() > deadline) throw error;
+			await sleep(100);
+		}
+	}
+}
+
+async function executeWithBusyRetry(
+	db: ReturnType<typeof createClient>,
+	sql: string,
+): Promise<void> {
+	let lastError: unknown;
+	for (let attempt = 0; attempt < 6; attempt += 1) {
+		try {
+			await db.execute(sql);
+			return;
+		} catch (error) {
+			if (!isSqliteBusy(error)) throw error;
+			lastError = error;
+			await sleep(50 * 2 ** attempt);
+		}
+	}
+	throw lastError;
+}
+
+async function createSessionForRepo(
+	page: Page,
+	repo = "fairchild/workspaces",
+): Promise<void> {
+	await page.goto("/");
+	const picker = page.getByTestId("new-session-picker");
+	if (!(await picker.isVisible())) {
+		await page.getByRole("button", { name: "+ new session" }).click();
+	}
+	await page.getByRole("textbox", { name: "Repository (owner/name)" }).fill(repo);
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL(SESSION_URL);
+}
+
+test.beforeAll(async ({}, testInfo) => {
+	testInfo.setTimeout(SESSIONS_SPEC_LOCK_TIMEOUT);
+	releaseSessionsSpecLock = await acquireSessionsSpecLock();
 	// Warm the schema first: migrations run lazily on the first authorized
 	// request, and in auth-bypass mode the unauthenticated readiness probe
 	// never touches the session tables — so without this the DELETEs below can
@@ -31,10 +109,16 @@ test.beforeAll(async () => {
 	const db = createClient({
 		url: `file:${path.resolve(__dirname, "../../.data/e2e.db")}`,
 	});
+	await db.execute("PRAGMA busy_timeout = 5000");
 	for (const table of ["session_events", "sessions", "repos"]) {
-		await db.execute(`DELETE FROM ${table}`);
+		await executeWithBusyRetry(db, `DELETE FROM ${table}`);
 	}
 	db.close();
+});
+
+test.afterAll(async () => {
+	await releaseSessionsSpecLock?.();
+	releaseSessionsSpecLock = undefined;
 });
 
 test("an empty home shows the calm empty state with the picker open", async ({
@@ -289,13 +373,7 @@ test("closing the tab mid-turn does not kill it — a fresh tab catches up", asy
 	context,
 }) => {
 	// A brand-new session, isolated from the shared turn session above.
-	await page.goto("/");
-	await page.getByRole("button", { name: "+ new session" }).click();
-	await page
-		.getByTestId("new-session-picker")
-		.getByRole("button", { name: "fairchild/workspaces" })
-		.click();
-	await expect(page).toHaveURL(SESSION_URL);
+	await createSessionForRepo(page);
 	const sessionUrl = page.url();
 
 	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
@@ -330,13 +408,7 @@ test("a failing turn surfaces an inline failure + retry, live and after reload (
 	page,
 }) => {
 	// A brand-new session, isolated from the shared turn session above.
-	await page.goto("/");
-	await page.getByRole("button", { name: "+ new session" }).click();
-	await page
-		.getByTestId("new-session-picker")
-		.getByRole("button", { name: "fairchild/workspaces" })
-		.click();
-	await expect(page).toHaveURL(SESSION_URL);
+	await createSessionForRepo(page);
 
 	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
 	await compose.fill("Fix the bug __mock_turn_error__");
@@ -369,29 +441,39 @@ test("a failing turn surfaces an inline failure + retry, live and after reload (
 	// ordering (retry BEFORE reload) is the one that actually exercises that.
 	// The mock has already spent its one guaranteed failure on this session,
 	// so this attempt runs the normal script through to completion.
-	await page.getByRole("button", { name: "Retry" }).click();
-	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
+	const turns = page.locator("main section");
+	const failedTurn = turns.first();
+	await failedTurn.getByRole("button", { name: "Retry" }).click();
+	await expect(turns).toHaveCount(2, { timeout: TURN_TIMEOUT });
+	const retryTurn = turns.nth(1);
+	await expect(retryTurn.locator('[data-message-role="user"]')).toHaveCount(1);
 	await expect(
-		page.locator('[data-message-role="user"]').nth(1),
+		retryTurn.locator('[data-message-role="user"]'),
 	).toContainText("Fix the bug");
-	await expect(page.getByTestId("turn-stats")).toBeVisible({
-		timeout: TURN_TIMEOUT,
-	});
+	await expect(retryTurn.getByTestId("turn-stats")).toContainText(
+		"4 tools · 1 file · +3 −1 · 4 tests",
+		{ timeout: TURN_TIMEOUT },
+	);
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
 
 	// The failed turn's own card is still there, live — retry started a new
 	// turn, it didn't erase the record of the failure.
-	await expect(page.getByTestId("turn-failure")).toBeVisible();
+	await expect(failedTurn.getByTestId("turn-failure")).toContainText(
+		"Simulated turn failure (mock provider)",
+	);
 
 	// A reload projects the identical story from the persisted log — both the
 	// failure card and the successful retry turn survive it, proving live and
 	// reloaded agree throughout, not just in the moment right after failing.
 	await page.reload();
-	await expect(page.getByTestId("turn-failure")).toContainText(
+	await expect(page.locator("main section")).toHaveCount(2);
+	await expect(page.locator("main section").first().getByTestId("turn-failure")).toContainText(
 		"Simulated turn failure (mock provider)",
 	);
 	await expect(page.locator('[data-message-role="user"]')).toHaveCount(2);
-	await expect(page.getByTestId("turn-stats")).toBeVisible();
+	await expect(page.locator("main section").nth(1).getByTestId("turn-stats")).toContainText(
+		"4 tools · 1 file · +3 −1 · 4 tests",
+	);
 });
 
 // GitHub-backed repo picker (#825): the /api/repos fixture list under
