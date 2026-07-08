@@ -41,6 +41,7 @@ public final class AutomationHandleRegistry {
 
     private var handleByHostSessionID: [UUID: String] = [:]
     private var entriesByHandle: [String: Entry] = [:]
+    private var createdHostSessionIDsByOperatorHandle: [String: Set<UUID>] = [:]
     private let makeHandle: () -> String
 
     public init(makeHandle: @escaping () -> String = { UUID().uuidString.lowercased() }) {
@@ -107,14 +108,28 @@ public final class AutomationHandleRegistry {
         handleByHostSessionID[hostSessionID]
     }
 
+    public func recordWorkspaceCreation(operatorHandle: String, hostSessionID: UUID) {
+        guard entriesByHandle[operatorHandle]?.isOperator == true else { return }
+        createdHostSessionIDsByOperatorHandle[operatorHandle, default: []].insert(hostSessionID)
+    }
+
+    public func operatorHandle(_ handle: String, createdHostSessionID hostSessionID: UUID) -> Bool {
+        createdHostSessionIDsByOperatorHandle[handle]?.contains(hostSessionID) == true
+    }
+
     public func remove(hostSessionID: UUID) {
         guard let handle = handleByHostSessionID.removeValue(forKey: hostSessionID) else { return }
         entriesByHandle.removeValue(forKey: handle)
+        createdHostSessionIDsByOperatorHandle.removeValue(forKey: handle)
+        for operatorHandle in Array(createdHostSessionIDsByOperatorHandle.keys) {
+            createdHostSessionIDsByOperatorHandle[operatorHandle]?.remove(hostSessionID)
+        }
     }
 
     public func removeAll() {
         handleByHostSessionID.removeAll()
         entriesByHandle.removeAll()
+        createdHostSessionIDsByOperatorHandle.removeAll()
     }
 
     private func makeUniqueHandle() -> String {

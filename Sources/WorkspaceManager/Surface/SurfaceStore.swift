@@ -315,6 +315,10 @@ final class SurfaceStore {
         terminalSurface(forSession: sessionID)?.surfaceView
     }
 
+    func terminalPlainText(for sessionID: UUID) -> String? {
+        terminalSurface(forSession: sessionID)?.surfaceView.readPlainScreenText()
+    }
+
     /// The display title for `session`'s terminal, falling back to its directory name before the
     /// surface mounts. Mirrors the legacy `HostTerminalSurfaceStore.displayTitle(for:)`.
     func displayTitle(for session: HostTerminalSession) -> String {

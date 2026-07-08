@@ -511,7 +511,7 @@ struct AutomationControllerTests {
         #expect(result.windows == [descriptor])
         #expect(
             result.system.capabilities == [
-                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
             ])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
@@ -605,7 +605,7 @@ struct AutomationControllerTests {
         #expect(result.workspaces.first?.backend == "lume")
         #expect(
             result.system.capabilities == [
-                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
             ])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
@@ -679,7 +679,7 @@ struct AutomationControllerTests {
         #expect(Data(base64Encoded: result.data) == png)
         #expect(
             result.system.capabilities == [
-                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
             ])
         #expect(requestedWindowIDs == ["42"])
     }

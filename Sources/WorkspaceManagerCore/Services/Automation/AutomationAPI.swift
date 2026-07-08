@@ -25,7 +25,7 @@ public enum AutomationAPI {
     /// Operator handles still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
         AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
-        .workspaceCreate,
+        .workspaceCreate, .surfaceRead,
     ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
@@ -46,6 +46,13 @@ public enum AutomationAPI {
     /// no width bound — the snapshot is the window at its true composited resolution, since
     /// full-fidelity evidence is the whole point of the operator capture lane.
     public static let windowSnapshotMaxRawBytes = 64 * 1_024 * 1_024
+
+    /// Bounds for `POST /v1/surface/read` (`surface.read`, operator scope). Requests asking for
+    /// more than `surfaceReadMaxLines` are clamped, not rejected. Returned text is also clamped to
+    /// `surfaceReadMaxUTF8Bytes` without splitting a UTF-8 scalar; if a single terminal line exceeds
+    /// the cap, the returned line is the UTF-8-safe suffix of that line.
+    public static let surfaceReadMaxLines = 500
+    public static let surfaceReadMaxUTF8Bytes = 256 * 1_024
 }
 
 public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equatable {
@@ -61,6 +68,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case workspaceRead = "workspace.read"
     case workspaceSelect = "workspace.select"
     case workspaceCreate = "workspace.create"
+    case surfaceRead = "surface.read"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -697,6 +705,50 @@ public struct AutomationWorkspaceCreateResult: Codable, Sendable, Equatable {
     }
 }
 
+public struct AutomationSurfaceReadRequest: Codable, Sendable, Equatable {
+    public let surfaceID: String
+    public let lines: Int
+
+    public init(surfaceID: String, lines: Int) {
+        self.surfaceID = surfaceID
+        self.lines = lines
+    }
+}
+
+/// Plain-text read-back for an operator-created terminal surface (`surface.read`). `text` is the
+/// bounded, style-free terminal dump suffix. `requestedLines` is the caller's original request;
+/// `lines` is the effective line cap after clamping to `AutomationAPI.surfaceReadMaxLines`;
+/// `returnedLines` and `byteCount` describe the bounded payload actually returned.
+public struct AutomationSurfaceReadResult: Codable, Sendable, Equatable {
+    public let surfaceID: String
+    public let requestedLines: Int
+    public let lines: Int
+    public let returnedLines: Int
+    public let byteCount: Int
+    public let text: String
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        surfaceID: String,
+        requestedLines: Int,
+        lines: Int,
+        returnedLines: Int,
+        byteCount: Int,
+        text: String,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.surfaceID = surfaceID
+        self.requestedLines = requestedLines
+        self.lines = lines
+        self.returnedLines = returnedLines
+        self.byteCount = byteCount
+        self.text = text
+        self.system = system
+    }
+}
+
 public struct AutomationMutationResult: Codable, Sendable, Equatable {
     public let changed: Bool
     public let focusedSurfaceID: String?
@@ -880,6 +932,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
         for handle: String,
         windowID: String
     ) async throws -> AutomationWindowSnapshotResult
+    func automationReadSurface(
+        for handle: String,
+        request: AutomationSurfaceReadRequest
+    ) throws -> AutomationSurfaceReadResult
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult
     func automationWebSurfaceSnapshot(
         for handle: String,

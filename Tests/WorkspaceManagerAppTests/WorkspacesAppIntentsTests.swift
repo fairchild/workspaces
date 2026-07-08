@@ -108,6 +108,13 @@ private final class FakeWorkspacesAppIntentController: AutomationControlling {
         throw AutomationServiceError(.unsupported, "Not used by App Intents.")
     }
 
+    func automationReadSurface(
+        for handle: String,
+        request: AutomationSurfaceReadRequest
+    ) throws -> AutomationSurfaceReadResult {
+        throw AutomationServiceError(.unsupported, "Not used by App Intents.")
+    }
+
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {
         throw AutomationServiceError(.unsupported, "Not used by App Intents.")
     }

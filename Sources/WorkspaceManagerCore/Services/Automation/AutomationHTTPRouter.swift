@@ -92,6 +92,10 @@ enum AutomationHTTPRouter {
             let create = try decodeWorkspaceCreate(from: request.body)
             return try await controller.automationCreateWorkspace(for: handle, request: create)
 
+        case ("POST", "/v1/surface/read"):
+            let read = try decodeSurfaceRead(from: request.body)
+            return try await controller.automationReadSurface(for: handle, request: read)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -136,6 +140,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/select.")
         case (_, "/v1/workspace/create"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/create.")
+        case (_, "/v1/surface/read"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/surface/read.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -313,6 +319,28 @@ enum AutomationHTTPRouter {
         return request
     }
 
+    private static func decodeSurfaceRead(from body: Data) throws -> AutomationSurfaceReadRequest {
+        guard !body.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request body is required.")
+        }
+        let request: AutomationSurfaceReadRequest
+        do {
+            request = try AutomationJSON.decoder.decode(AutomationSurfaceReadRequest.self, from: body)
+        } catch {
+            throw AutomationServiceError(
+                .invalidRequest,
+                "Request body must be JSON with string 'surfaceID' and positive integer 'lines'."
+            )
+        }
+        guard !request.surfaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request 'surfaceID' must be a non-empty string.")
+        }
+        guard request.lines > 0 else {
+            throw AutomationServiceError(.invalidRequest, "Request 'lines' must be greater than zero.")
+        }
+        return request
+    }
+
     private static func rejectCallerSuppliedTargetIDs(in body: Data, allowEmptyBody: Bool) throws {
         guard !body.isEmpty else {
             if allowEmptyBody { return }
@@ -409,6 +437,7 @@ extension AutomationWorkspacesResult: CodableSendableEquatable {}
 extension AutomationWorkspaceSelectResult: CodableSendableEquatable {}
 extension AutomationWorkspaceCreateResult: CodableSendableEquatable {}
 extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
+extension AutomationSurfaceReadResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}
 extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}
 extension AutomationMutationResult: CodableSendableEquatable {}

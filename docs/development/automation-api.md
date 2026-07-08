@@ -66,7 +66,9 @@ WorkSpaces terminal tile. See
   against the fresh registry (`stale_handle`).
 - **Capture, read, and operator mutations.** The operator capability set is
   `window.read` (list windows), `window.snapshot` (composited PNG of a listed
-  window), and `workspace.read` (list repos and workspaces), plus
+  window), `workspace.read` (list repos and workspaces), and `surface.read`
+  (bounded terminal text read-back for surfaces this same operator handle
+  created through `workspace.create` this launch), plus
   `workspace.select` and `workspace.create`, reviewed exceptions that drive real
   UI gestures rather than data-layer writes
   (see [Verb contract](#verb-contract-verbs--clicks)). Operator handles still
@@ -94,6 +96,9 @@ WorkSpaces terminal tile. See
 - Input injection is caller-scoped only and double-gated behind the
   `Automation Input Write` experiment; see
   [Automation Input Write Decision](../decisions/automation-input-write.md).
+- Terminal text read-back is creation-scoped to the operator handle that created
+  the workspace terminal via `workspace.create` in this launch; see
+  [Automation Surface Read Decision](../decisions/automation-surface-read.md).
 
 ## Verb contract: verbs = clicks
 
@@ -191,6 +196,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/workspaces` | **Operator scope.** Returns the app's tracked repos and workspaces with stable SwiftData model ids, names, and enough state to target: per workspace, its `status`, `isArchived`, `backend`, and whether it `isSelected`; per repo, whether it `isSelected`. Read-only — mutation verbs use these stable targets. Requires `workspace.read`; a tile handle lacks it and fails `capability_denied`. See [Workspace list](#workspace-list). |
 | `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null,"select":true,"fromRef":"origin/main"}`; `providerID` defaults to `local`, `select` defaults to `true`, and `fromRef` is omitted by default. Returns `completed` with the created workspace and, when selected, the attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
+| `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from a terminal surface created by the same operator handle through `workspace.create` this launch. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is the `attachedSurfaceID` from that create result. Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles and non-created/unattributed surfaces fail `capability_denied`. See [Surface read](#surface-read). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -224,6 +230,7 @@ handle.
 | `workspace.read` | `GET /v1/workspaces` (list the app's repos and workspaces); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); granted only to operator handles, never to tile handles |
 | `workspace.create` | `POST /v1/workspace/create` (drive the real sidebar create helper for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.read` and `workspace.select` so the read/write split stays legible |
+| `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for surfaces created by the same operator handle through `workspace.create` this launch); granted only to operator handles, never to tile handles |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -327,7 +334,7 @@ mutation rides this route.
   "system": {
     "capabilities": [
       "window.read", "window.snapshot", "workspace.read",
-      "workspace.select", "workspace.create"
+      "workspace.select", "workspace.create", "surface.read"
     ]
   }
 }
@@ -438,6 +445,46 @@ user must confirm:
 - **Operator mutation.** Requires `workspace.create`, distinct from
   `workspace.read` and `workspace.select`. A tile handle lacks it and fails
   `capability_denied`.
+
+## Surface read
+
+`POST /v1/surface/read` (operator scope, `surface.read`) returns bounded plain
+text from a terminal surface created by the same operator handle through
+`workspace.create` during this app launch:
+
+```json
+{ "surfaceID": "…", "lines": 200 }
+```
+
+The success envelope carries the text plus the effective bounds:
+
+```json
+{
+  "surfaceID": "…",
+  "requestedLines": 10000,
+  "lines": 500,
+  "returnedLines": 200,
+  "byteCount": 8192,
+  "text": "plain terminal text\n",
+  "system": { "capabilities": [ … ] }
+}
+```
+
+- **Creation-scoped authority.** The only readable terminal surfaces are those
+  whose `attachedSurfaceID` came from a completed `workspace.create` call made by
+  the same operator handle in the same launch. This is not a blanket grant to
+  read the human owner's arbitrary terminal tiles. A different operator handle, a
+  tile handle, or an unattributed surface fails `capability_denied`.
+- **Ghostty text API.** The app reads GhosttyKit's plain terminal text through
+  `ghostty_surface_read_text` over the whole screen/scrollback selection. No OCR
+  or screenshot path is used.
+- **Bounds.** `lines` must be greater than zero. Values over 500 are clamped to
+  500, not rejected. The returned UTF-8 payload is capped at 256 KiB; if the line
+  suffix still exceeds that, older lines are dropped first, and a single over-cap
+  line is UTF-8-safely truncated from the front.
+- **Content-free audit.** `automation-audit.jsonl` records the route, surface id,
+  requested line count, returned line count, allow/deny outcome, and error code.
+  It never records the terminal text.
 
 ## Workspace select
 

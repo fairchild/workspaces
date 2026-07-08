@@ -13,6 +13,7 @@ final class AutomationController: AutomationControlling {
     private var windows: @MainActor () -> [AutomationWindowDescriptor]
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
     private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
+    private var surfaceTextReader: @MainActor (TileTreeStore, UUID) -> String?
     /// The gesture-verb layer — the single place workspace mutation verbs enter
     /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
     /// condition: a mutation verb cannot run without a live window, and never falls back.
@@ -30,6 +31,9 @@ final class AutomationController: AutomationControlling {
         workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory = {
             AutomationWorkspaceInventory()
         },
+        surfaceTextReader: @escaping @MainActor (TileTreeStore, UUID) -> String? = { store, surfaceID in
+            store.surfaceStore.terminalPlainText(for: surfaceID)
+        },
         gestureVerbs: AutomationGestureVerbs? = nil,
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
@@ -44,6 +48,7 @@ final class AutomationController: AutomationControlling {
         self.windows = windows
         self.windowSnapshot = windowSnapshot
         self.workspaceInventory = workspaceInventory
+        self.surfaceTextReader = surfaceTextReader
         self.gestureVerbs = gestureVerbs
         self.isInputWriteEnabled = isInputWriteEnabled
     }
@@ -57,6 +62,7 @@ final class AutomationController: AutomationControlling {
         windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil,
         windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil,
         workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil,
+        surfaceTextReader: (@MainActor (TileTreeStore, UUID) -> String?)? = nil,
         gestureVerbs: AutomationGestureVerbs? = nil
     ) {
         self.tileTreeStore = tileTreeStore
@@ -77,6 +83,9 @@ final class AutomationController: AutomationControlling {
         }
         if let workspaceInventory {
             self.workspaceInventory = workspaceInventory
+        }
+        if let surfaceTextReader {
+            self.surfaceTextReader = surfaceTextReader
         }
     }
 
@@ -220,6 +229,12 @@ final class AutomationController: AutomationControlling {
         let capabilities = entry.capabilities
         switch await gestureVerbs.createWorkspace(command) {
         case .completed(let effect):
+            if effect.attachedTerminal, let attachedSurfaceID = effect.attachedSurfaceID {
+                handleRegistry.recordWorkspaceCreation(
+                    operatorHandle: entry.handle,
+                    hostSessionID: attachedSurfaceID
+                )
+            }
             return AutomationWorkspaceCreateResult(
                 repoID: repoIDText,
                 workspaceID: effect.workspaceID,
@@ -265,6 +280,48 @@ final class AutomationController: AutomationControlling {
             from: outcome,
             windowID: windowID,
             capabilities: entry.capabilities
+        )
+    }
+
+    func automationReadSurface(
+        for handle: String,
+        request: AutomationSurfaceReadRequest
+    ) throws -> AutomationSurfaceReadResult {
+        let entry = try resolveOperator(handle, requiring: .surfaceRead)
+        guard let surfaceID = UUID(uuidString: request.surfaceID) else {
+            throw AutomationServiceError(.invalidRequest, "surfaceID must be a UUID.")
+        }
+        guard handleRegistry.operatorHandle(entry.handle, createdHostSessionID: surfaceID) else {
+            throw AutomationServiceError(
+                .capabilityDenied,
+                "This operator handle did not create the requested terminal surface this launch."
+            )
+        }
+        guard let tileTreeStore else {
+            throw AutomationServiceError(
+                .unsupported, "No WorkSpaces window is currently attached to the Automation API.")
+        }
+        guard tileTreeStore.primarySessionID(containing: surfaceID) != nil else {
+            throw AutomationServiceError(.staleHandle, "The requested terminal surface is no longer live.")
+        }
+        guard let fullText = surfaceTextReader(tileTreeStore, surfaceID) else {
+            throw AutomationServiceError(.staleHandle, "The requested terminal surface is not ready to read.")
+        }
+
+        let lineLimit = min(request.lines, AutomationAPI.surfaceReadMaxLines)
+        let bounded = Self.boundedSurfaceReadText(
+            fullText,
+            maxLines: lineLimit,
+            maxUTF8Bytes: AutomationAPI.surfaceReadMaxUTF8Bytes
+        )
+        return AutomationSurfaceReadResult(
+            surfaceID: surfaceID.uuidString,
+            requestedLines: request.lines,
+            lines: lineLimit,
+            returnedLines: Self.lineCount(in: bounded),
+            byteCount: bounded.utf8.count,
+            text: bounded,
+            system: AutomationSystemDescriptor(capabilities: entry.capabilities)
         )
     }
 
@@ -560,6 +617,52 @@ final class AutomationController: AutomationControlling {
             isVisible: isVisible,
             capabilities: capabilities
         )
+    }
+
+    private static func boundedSurfaceReadText(
+        _ text: String,
+        maxLines: Int,
+        maxUTF8Bytes: Int
+    ) -> String {
+        guard maxLines > 0, maxUTF8Bytes > 0, !text.isEmpty else { return "" }
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let hadTrailingNewline = lines.last == ""
+        if hadTrailingNewline {
+            lines.removeLast()
+        }
+
+        var selected = Array(lines.suffix(maxLines))
+        while !selected.isEmpty {
+            let candidate = selected.joined(separator: "\n") + (hadTrailingNewline ? "\n" : "")
+            if candidate.utf8.count <= maxUTF8Bytes {
+                return candidate
+            }
+            if selected.count == 1 {
+                return utf8SafeSuffix(candidate, maxBytes: maxUTF8Bytes)
+            }
+            selected.removeFirst()
+        }
+        return ""
+    }
+
+    private static func utf8SafeSuffix(_ text: String, maxBytes: Int) -> String {
+        guard text.utf8.count > maxBytes else { return text }
+        let suffix = text.utf8.suffix(maxBytes)
+        guard var start = suffix.indices.first else { return "" }
+        while start < suffix.endIndex, (suffix[start] & 0b1100_0000) == 0b1000_0000 {
+            start = suffix.index(after: start)
+        }
+        return String(decoding: suffix[start..<suffix.endIndex], as: UTF8.self)
+    }
+
+    private static func lineCount(in text: String) -> Int {
+        guard !text.isEmpty else { return 0 }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).count
+        if text.hasSuffix("\n") {
+            lines -= 1
+        }
+        return max(lines, 0)
     }
 }
 
