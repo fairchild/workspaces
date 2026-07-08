@@ -11,6 +11,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 # shellcheck source=../../../../scripts/lib/ui-test-common.sh
 source "$REPO_ROOT/scripts/lib/ui-test-common.sh"
+# shellcheck source=../../../../scripts/lib/fixture-scenarios.sh
+source "$REPO_ROOT/scripts/lib/fixture-scenarios.sh"
 
 scenario=""
 output_path=""
@@ -72,36 +74,14 @@ if [[ -z "$scenario" ]]; then
     exit 2
 fi
 
-if [[ "$scenario" == inline:* ]]; then
-    agent_states="${scenario#inline:}"
-    command_statuses=""
-    scenario_id="inline"
-else
-    case "$scenario" in
-        phase-1-release)
-            agent_states="feature-auth:thinking,bugfix-422:awaitingInput,refactor-runtime:errored"
-            command_statuses=""
-            ;;
-        m6-status-sliver)
-            agent_states=""
-            command_statuses="feature-auth:failed"
-            ;;
-        attention-only)
-            agent_states="bugfix-422:awaitingInput"
-            command_statuses=""
-            ;;
-        clean)
-            agent_states=""
-            command_statuses=""
-            ;;
-        *)
-            echo "ERROR: unknown scenario '$scenario'." >&2
-            usage
-            exit 2
-            ;;
-    esac
-    scenario_id="$scenario"
+if ! fixture_resolve_scenario "$scenario"; then
+    echo "ERROR: unknown scenario '$scenario'." >&2
+    usage
+    exit 2
 fi
+agent_states="$FIXTURE_AGENT_STATES"
+command_statuses="$FIXTURE_COMMAND_STATUSES"
+scenario_id="$FIXTURE_SCENARIO_ID"
 
 DEFAULT_OUTPUT_DIR="$REPO_ROOT/output/release-screenshots"
 mkdir -p "$DEFAULT_OUTPUT_DIR"

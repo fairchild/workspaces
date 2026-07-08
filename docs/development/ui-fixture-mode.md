@@ -170,7 +170,7 @@ The command-status env var's `<status>` tokens map to `UIFixtureSeeder.FixtureCo
 
 ### A new named release-screenshot scenario
 
-Edit `.claude/skills/release-screenshot/scripts/capture.sh`'s `case` block and mirror the entry in `.claude/skills/release-screenshot/references/scenarios.md`. The script is the source of truth; the doc mirrors it. See `.claude/skills/release-screenshot/references/extending.md` for the full walkthrough.
+Edit `scripts/lib/fixture-scenarios.sh`'s `case` block — the single source of truth for named scenarios — and mirror the entry in `.claude/skills/release-screenshot/references/scenarios.md`. Both the release-screenshot `capture.sh` and the [app evidence lane](evidence.md#app-evidence-lane-first-choice-ui-capture) (`./scripts/evidence.sh --fixture <scenario>`) resolve scenarios through that library, so a new entry is immediately available to both. See `.claude/skills/release-screenshot/references/extending.md` for the full walkthrough.
 
 ## Known limits
 
@@ -183,6 +183,8 @@ Edit `.claude/skills/release-screenshot/scripts/capture.sh`'s `case` block and m
 
 ## Related
 
+- `docs/development/evidence.md` § "App evidence lane" — the first-choice path that stages a fixture state, snapshots the main window via operator scope, and uploads in one command (`./scripts/evidence.sh --fixture <scenario>`).
+- `scripts/lib/fixture-scenarios.sh` — single source of truth mapping scenario names to fixture env; shared by the evidence lane and the release-screenshot capture script.
 - `.claude/skills/release-screenshot/SKILL.md` — the agent-facing skill that wraps fixture mode for repeatable captures.
 - `scripts/sidebar-capture.sh` — older capture script; uses `WORKSPACES_UI_FIXTURE=1` without the agent-state env var. The release-screenshot skill's `capture.sh` is the modern equivalent.
 - `Sources/WorkspaceManager/App/UIFixtureSeeder.swift` — the seeder implementation.

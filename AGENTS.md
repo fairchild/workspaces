@@ -66,7 +66,7 @@ Shortcut/split routing references: `docs/development/shortcut-routing.md`; longe
 Evidence is a merge gate. Do not create a PR without it. In order:
 
 1. **Run tests** — `swift test` or `cd web && pnpm test`
-2. **Capture evidence** — `./scripts/evidence.sh --pr <number> --name <slug>` (screenshots for UI changes, test output otherwise; web screenshots without auth: `mise run web:dev`)
+2. **Capture evidence** — for macOS-app UI, first-choice is the app evidence lane: `./scripts/evidence.sh --pr <number> --fixture <scenario>` (launches a fixture state, snapshots the main window via operator scope, uploads — no activation, no focus steal). Otherwise `./scripts/evidence.sh --pr <number> --name <slug>` (test output; web screenshots without auth: `mise run web:dev`). Fallbacks (ImageRenderer, qlmanage logs, VM lane) in `docs/development/evidence.md`.
 3. **Paste the uploaded evidence URLs into the PR body**
 4. **Only then create the PR** — no `[pending-ci]` unless evidence is genuinely impossible locally
 
