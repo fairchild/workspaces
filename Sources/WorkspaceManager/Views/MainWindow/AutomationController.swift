@@ -11,6 +11,7 @@ final class AutomationController: AutomationControlling {
     private var webSurfaces: @MainActor () -> [AutomationWebSurfaceDescriptor]
     private var webSnapshot: @MainActor (UUID) async -> WebSnapshotOutcome
     private var windows: @MainActor () -> [AutomationWindowDescriptor]
+    private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
 
     init(
         handleRegistry: AutomationHandleRegistry,
@@ -20,6 +21,7 @@ final class AutomationController: AutomationControlling {
         webSurfaces: @escaping @MainActor () -> [AutomationWebSurfaceDescriptor] = { [] },
         webSnapshot: @escaping @MainActor (UUID) async -> WebSnapshotOutcome = { _ in .unknownSource },
         windows: @escaping @MainActor () -> [AutomationWindowDescriptor] = { [] },
+        windowSnapshot: @escaping @MainActor (String) async -> WindowSnapshotOutcome = { _ in .unknownWindow },
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         }
@@ -31,6 +33,7 @@ final class AutomationController: AutomationControlling {
         self.webSurfaces = webSurfaces
         self.webSnapshot = webSnapshot
         self.windows = windows
+        self.windowSnapshot = windowSnapshot
         self.isInputWriteEnabled = isInputWriteEnabled
     }
 
@@ -40,7 +43,8 @@ final class AutomationController: AutomationControlling {
         requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
         webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil,
         webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil,
-        windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil
+        windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil,
+        windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
@@ -53,6 +57,9 @@ final class AutomationController: AutomationControlling {
         }
         if let windows {
             self.windows = windows
+        }
+        if let windowSnapshot {
+            self.windowSnapshot = windowSnapshot
         }
     }
 
@@ -78,6 +85,22 @@ final class AutomationController: AutomationControlling {
         return AutomationWindowsResult(
             windows: windows(),
             system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+        )
+    }
+
+    func automationWindowSnapshot(
+        for handle: String,
+        windowID: String
+    ) async throws -> AutomationWindowSnapshotResult {
+        // Operator scope, capture-only: like the window list, this resolves without the tile-liveness
+        // check — the caller need not own a terminal tile. window.snapshot is gated here; a tile
+        // handle lacks it and fails capability_denied before any capture runs.
+        let entry = try resolveOperator(handle, requiring: .windowSnapshot)
+        let outcome = await windowSnapshot(windowID)
+        return try WindowSnapshotEncoder.result(
+            from: outcome,
+            windowID: windowID,
+            capabilities: entry.capabilities
         )
     }
 

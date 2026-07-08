@@ -89,6 +89,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         let windows: @MainActor () -> [AutomationWindowDescriptor] = {
             AutomationWindowEnumerator.descriptors()
         }
+        let windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome = { windowID in
+            WindowSnapshotService.snapshot(windowID: windowID)
+        }
 
         if let startTask {
             let socketPath = try await startTask.value
@@ -98,7 +101,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 requestCloseTerminal: requestCloseTerminal,
                 webSurfaces: webSurfaces,
                 webSnapshot: webSnapshot,
-                windows: windows
+                windows: windows,
+                windowSnapshot: windowSnapshot
             )
             return socketPath
         }
@@ -110,7 +114,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 requestCloseTerminal: requestCloseTerminal,
                 webSurfaces: webSurfaces,
                 webSnapshot: webSnapshot,
-                windows: windows
+                windows: windows,
+                windowSnapshot: windowSnapshot
             )
             guard let socketPath else {
                 throw AutomationListener.ListenerError.socketBindFailed("listener started without a socket path")
@@ -125,7 +130,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             requestCloseTerminal: requestCloseTerminal,
             webSurfaces: webSurfaces,
             webSnapshot: webSnapshot,
-            windows: windows
+            windows: windows,
+            windowSnapshot: windowSnapshot
         )
 
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"

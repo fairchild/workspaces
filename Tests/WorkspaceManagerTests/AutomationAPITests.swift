@@ -78,6 +78,30 @@ private final class FakeAutomationController: AutomationControlling {
         )
     }
 
+    var windowSnapshotCalls: [String] = []
+
+    func automationWindowSnapshot(
+        for handle: String,
+        windowID: String
+    ) async throws -> AutomationWindowSnapshotResult {
+        // Mirrors the operator-scope projection: only an operator handle carries window.snapshot; a
+        // tile handle ("live") is capability_denied and any other handle is stale.
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include window.snapshot.")
+        }
+        windowSnapshotCalls.append(windowID)
+        return AutomationWindowSnapshotResult(
+            windowID: windowID,
+            width: 2,
+            height: 1,
+            byteCount: 4,
+            data: "AQID"
+        )
+    }
+
     func automationHandleIsOperator(_ handle: String) -> Bool {
         handle == "operator"
     }
@@ -685,7 +709,7 @@ struct AutomationAPITests {
         #expect(entry.handle == "op-1")
         #expect(entry.isOperator)
         #expect(entry.tileID == nil)
-        #expect(entry.capabilities == [.windowRead])
+        #expect(entry.capabilities == [.windowRead, .windowSnapshot])
         // Capture-only: an operator handle never carries tile mutation or input.write.
         #expect(!entry.capabilities.contains(.tileClose))
         #expect(!entry.capabilities.contains(.inputWrite))
@@ -719,7 +743,7 @@ struct AutomationAPITests {
         #expect(ok.status == 200)
         #expect(okEnvelope.result?.windows.count == 1)
         #expect(okEnvelope.result?.windows.first?.windowID == "42")
-        #expect(okEnvelope.result?.system.capabilities == [.windowRead])
+        #expect(okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot])
         #expect(controller.windowCalls == ["operator"])
 
         // A tile handle holds the v1 tile capabilities but not window.read → capability_denied.
@@ -770,6 +794,143 @@ struct AutomationAPITests {
         #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
     }
 
+    @Test("Window-snapshot encoder base64-encodes a captured PNG and reports raw byte count")
+    func windowSnapshotEncoderCaptured() throws {
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
+        let result = try WindowSnapshotEncoder.result(
+            from: .captured(pngData: png, width: 2800, height: 1800),
+            windowID: "42",
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+        #expect(result.windowID == "42")
+        #expect(result.encoding == "png")
+        #expect(result.width == 2800)
+        #expect(result.height == 1800)
+        #expect(result.byteCount == png.count)
+        #expect(Data(base64Encoded: result.data) == png)
+        #expect(result.system.capabilities.contains(.windowSnapshot))
+    }
+
+    @Test("Window-snapshot encoder rejects a capture over the raw byte cap as unsupported")
+    func windowSnapshotEncoderOverCap() throws {
+        let png = Data(repeating: 0xAB, count: 64)
+        do {
+            _ = try WindowSnapshotEncoder.result(
+                from: .captured(pngData: png, width: 10, height: 10),
+                windowID: "42",
+                maxRawBytes: 32,
+                capabilities: AutomationAPI.operatorCapabilities
+            )
+            Issue.record("Expected an over-cap capture to be rejected")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .unsupported)
+            #expect(error.response.message.contains("cap"))
+        }
+    }
+
+    @Test("Window-snapshot encoder maps each failure outcome to its structured error code")
+    func windowSnapshotEncoderFailureMapping() throws {
+        func code(_ outcome: WindowSnapshotOutcome) -> AutomationErrorCode? {
+            do {
+                _ = try WindowSnapshotEncoder.result(
+                    from: outcome,
+                    windowID: "42",
+                    capabilities: AutomationAPI.operatorCapabilities
+                )
+                return nil
+            } catch let error as AutomationServiceError {
+                return error.response.code
+            } catch {
+                return nil
+            }
+        }
+        #expect(code(.unknownWindow) == .invalidRequest)
+        #expect(code(.notCapturable) == .unsupported)
+        #expect(code(.captureFailed("boom")) == .internalError)
+    }
+
+    @Test("POST /v1/window/snapshot captures for an operator handle and fails closed otherwise")
+    @MainActor
+    func routerWindowSnapshot() async throws {
+        let controller = FakeAutomationController()
+        let body = try JSONSerialization.data(withJSONObject: ["windowID": "42"], options: [.sortedKeys])
+
+        let ok = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/window/snapshot",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: body
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWindowSnapshotResult>.self,
+            from: ok.body
+        )
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.windowID == "42")
+        #expect(okEnvelope.result?.encoding == "png")
+        #expect(controller.windowSnapshotCalls == ["42"])
+
+        // A tile handle holds tile capabilities but not window.snapshot → capability_denied.
+        let denied = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/window/snapshot",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: body
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: denied.body
+        )
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        // Missing body → invalid_request, before any capture is attempted.
+        let noBody = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/window/snapshot",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let noBodyEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: noBody.body
+        )
+        #expect(noBody.status == 400)
+        #expect(noBodyEnvelope.error?.code == .invalidRequest)
+
+        // Wrong method on the snapshot path → method_not_allowed.
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/window/snapshot",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+        // The capture provider was never reached on the denied/malformed/wrong-method attempts.
+        #expect(controller.windowSnapshotCalls == ["42"])
+    }
+
     @Test("Operator credential round-trips through the store and is written user-only (0600)")
     func operatorCredentialStoreRoundTrip() throws {
         let url = FileManager.default.temporaryDirectory
@@ -781,7 +942,7 @@ struct AutomationAPITests {
 
         let loaded = AutomationOperatorCredentialStore.load(from: url)
         #expect(loaded == credential)
-        #expect(loaded?.capabilities == [.windowRead])
+        #expect(loaded?.capabilities == [.windowRead, .windowSnapshot])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
@@ -810,7 +971,7 @@ struct AutomationAPITests {
         )
         let mintedCredential = try #require(minted)
         #expect(AutomationOperatorCredentialStore.load(from: url) == mintedCredential)
-        #expect(registry.resolve(mintedCredential.handle)?.capabilities == [.windowRead])
+        #expect(registry.resolve(mintedCredential.handle)?.capabilities == [.windowRead, .windowSnapshot])
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)
 
         // A non-opt-in launch mints nothing and clears any stale credential left on disk.
