@@ -21,13 +21,16 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
@@ -566,15 +569,24 @@ Write your commentary post now. Output only the markdown body, no preamble."""
 # ---------------------------------------------------------------------------
 
 
+# The fleet (April, Plat, Carl) shares one CLAUDE_CODE_OAUTH_TOKEN, so a Carl
+# run that overlaps a contributor run can get a transient 429. Retry those (and
+# transient 5xx) a few times with capped backoff rather than failing the day.
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 529})
+MAX_RETRY_DELAY_SECONDS = 30.0
+
+
 def call_claude(
     system: str, user: str, *, model: str, oauth_token: str = "", api_key: str = "",
+    max_attempts: int = 4,
 ) -> str:
     """Call the Anthropic Messages API via urllib (no SDK dependency).
 
     Prefers a Claude Code OAuth token (Authorization: Bearer + the oauth beta
     header) so Carl can reuse the CLAUDE_CODE_OAUTH_TOKEN the rest of the fleet
     already has; falls back to a raw ANTHROPIC_API_KEY via x-api-key. Never
-    sends both — the API rejects that.
+    sends both — the API rejects that. Retries transient rate-limit/5xx
+    responses with capped exponential backoff (honoring Retry-After).
     """
     # Sonnet 5 (and the 4.7+ family) reject sampling params like temperature.
     payload = json.dumps({
@@ -601,17 +613,45 @@ def call_claude(
         method="POST",
     )
 
-    try:
-        with urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-    except Exception as e:
-        raise CarlError(f"Claude API call failed: {e}") from e
+    data = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with urlopen(req, timeout=60) as resp:
+                data = json.loads(resp.read())
+            break
+        except HTTPError as e:
+            if e.code in RETRYABLE_STATUS and attempt < max_attempts:
+                delay = _retry_delay(e, attempt)
+                log(
+                    f"Claude API returned HTTP {e.code}; retrying in {delay:.0f}s "
+                    f"(attempt {attempt}/{max_attempts})"
+                )
+                time.sleep(delay)
+                continue
+            raise CarlError(f"Claude API call failed: HTTP Error {e.code}: {e.reason}") from e
+        except Exception as e:
+            raise CarlError(f"Claude API call failed: {e}") from e
+
+    if data is None:
+        raise CarlError(
+            f"Claude API still rate-limited after {max_attempts} attempts "
+            "(the fleet shares one OAuth token)."
+        )
 
     for block in data.get("content", []):
         if block.get("type") == "text":
             return block["text"]
 
     raise CarlError(f"No text content in API response: {data}")
+
+
+def _retry_delay(error: HTTPError, attempt: int) -> float:
+    """Honor a numeric Retry-After header, else exponential backoff with jitter,
+    both capped so a rate-limited run fails cleanly instead of hanging the job."""
+    retry_after = error.headers.get("retry-after") if error.headers else None
+    if retry_after and retry_after.strip().isdigit():
+        return min(float(retry_after), MAX_RETRY_DELAY_SECONDS)
+    return min(2.0**attempt + random.uniform(0, 1), MAX_RETRY_DELAY_SECONDS)
 
 
 # ---------------------------------------------------------------------------

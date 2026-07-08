@@ -11,6 +11,8 @@ on:
       - "scripts/tests/test_run_contributor.py"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
+      - "scripts/carl-community.py"
+      - "scripts/tests/test_carl_community.py"
   pull_request:
     branches: [main]
     paths:
@@ -21,6 +23,8 @@ on:
       - "scripts/tests/test_run_contributor.py"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
+      - "scripts/carl-community.py"
+      - "scripts/tests/test_carl_community.py"
   workflow_dispatch:
 
 permissions:
@@ -57,3 +61,6 @@ jobs:
 
       - name: Run Fable orchestrator tests
         run: uv run --script scripts/tests/test_fable_orchestrator.py
+
+      - name: Run Carl community tests
+        run: uv run --script scripts/tests/test_carl_community.py
