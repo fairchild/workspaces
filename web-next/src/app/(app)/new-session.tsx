@@ -62,7 +62,7 @@ export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 			<button
 				type="button"
 				onClick={() => setOpen(true)}
-				className="font-mono text-[13px] text-faint transition-colors hover:text-accent"
+				className="font-mono text-[13px] text-hint transition-colors hover:text-accent"
 			>
 				+ new session
 			</button>
@@ -125,19 +125,19 @@ export function NewSession({ startOpen = false }: { startOpen?: boolean }) {
 					placeholder="owner/repository — search or connect"
 					autoComplete="off"
 					spellCheck={false}
-					className="min-w-0 flex-1 border-b border-line bg-transparent pb-1 font-mono text-[13px] text-ink transition-colors outline-none placeholder:text-faint focus:border-focus-line"
+					className="min-w-0 flex-1 border-b border-line bg-transparent pb-1 font-mono text-[13px] text-ink transition-colors outline-none placeholder:text-hint focus:border-focus-line"
 				/>
 			</form>
 			{state?.error && !isPending && (
 				<p
 					data-testid="new-session-error"
-					className="px-2.5 pt-1 font-mono text-caption text-faint italic"
+					className="px-2.5 pt-1 font-mono text-caption text-hint italic"
 				>
 					{state.error}
 				</p>
 			)}
 			{degraded && !state?.error && (
-				<p className="px-2.5 pt-1 font-mono text-caption text-faint italic">
+				<p className="px-2.5 pt-1 font-mono text-caption text-hint italic">
 					Repositories aren&apos;t verified against GitHub right now — entries
 					are accepted unverified.
 				</p>

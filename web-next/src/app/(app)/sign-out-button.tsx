@@ -21,7 +21,7 @@ export function SignOutButton() {
 		<button
 			type="button"
 			onClick={handleSignOut}
-			className="mt-3 font-mono text-[13px] text-faint underline decoration-line-strong underline-offset-4 transition-colors hover:text-accent"
+			className="mt-3 font-mono text-[13px] text-hint underline decoration-line-strong underline-offset-4 transition-colors hover:text-accent"
 		>
 			sign out
 		</button>

@@ -33,7 +33,7 @@ export function ActivityLine({ action, details }: ActivityLineProps) {
 					<button
 						type="button"
 						onClick={() => setShowDetails((current) => !current)}
-						className="ml-auto border-b border-transparent pb-px font-mono text-masthead tracking-[.06em] text-faint opacity-0 transition-opacity duration-[.25s] group-hover:opacity-100 hover:border-accent hover:text-accent"
+						className="ml-auto border-b border-transparent pb-px font-mono text-masthead tracking-[.06em] text-hint opacity-0 transition-opacity duration-[.25s] group-hover:opacity-100 hover:border-accent hover:text-accent focus-visible:opacity-100"
 					>
 						details
 					</button>
@@ -44,7 +44,7 @@ export function ActivityLine({ action, details }: ActivityLineProps) {
 					{details.map((row, i) => (
 						<div
 							key={i}
-							className={`flex gap-2.5 py-[3px] font-mono text-code ${row.state === "current" ? "text-muted" : "text-faint"}`}
+							className={`flex gap-2.5 py-[3px] font-mono text-code ${row.state === "current" ? "text-muted" : "text-hint"}`}
 						>
 							{row.state === "current" ? (
 								<span className="animate-breathe-fast text-accent">▍</span>

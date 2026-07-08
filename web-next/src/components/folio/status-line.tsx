@@ -59,7 +59,7 @@ export function StatusLine({
 	return (
 		<div
 			data-testid="status-line"
-			className="h-[30px] border-t border-line bg-status-bg font-mono text-stat tracking-[.03em] text-faint"
+			className="h-[30px] border-t border-line bg-status-bg font-mono text-stat tracking-[.03em] text-hint"
 		>
 			<div className="mx-auto flex h-full max-w-[680px] items-center px-0.5">
 				<span className="font-medium text-muted before:mr-2 before:inline-block before:h-[5px] before:w-[5px] before:rounded-full before:bg-accent before:align-[2px] before:opacity-75 before:content-['']">
@@ -84,7 +84,7 @@ export function StatusLine({
 				</span>
 				{status.contextLabel && (
 					<>
-						<span className="mx-[9px] opacity-55">·</span>
+						<span className="mx-[9px] text-faint opacity-55">·</span>
 						{status.contextLabel}
 					</>
 				)}

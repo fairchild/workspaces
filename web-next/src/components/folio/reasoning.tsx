@@ -154,7 +154,7 @@ export const ReasoningTrigger = memo(function ReasoningTrigger({
 	const { isStreaming, isOpen, duration } = useReasoning();
 	return (
 		<Collapsible.Trigger
-			className={`group/reasoning flex w-full items-center gap-2.5 rounded-md py-[5px] pr-2 text-left font-mono text-tool text-faint transition-colors hover:text-muted ${className ?? ""}`}
+			className={`group/reasoning flex w-full items-center gap-2.5 rounded-md py-[5px] pr-2 text-left font-mono text-tool text-hint transition-colors hover:text-muted ${className ?? ""}`}
 			{...props}
 		>
 			{children ?? (

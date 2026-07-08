@@ -62,13 +62,16 @@ export function MessageArticle({
 					: undefined
 			}
 		>
-			<div className="mb-3.5 flex items-baseline gap-3 font-mono text-label font-medium tracking-[.16em] uppercase text-faint">
+			<div className="mb-3.5 flex items-baseline gap-3 font-mono text-label font-medium tracking-[.16em] uppercase text-hint">
 				{role === "user" && (
 					<span aria-hidden className="h-px w-3.5 self-center bg-faint" />
 				)}
 				{author}
+				{/* The stamp reveals at full opacity: it inherits text-hint, and a
+				    partial-opacity reveal would blend the readable time back below
+				    AA (#806) — the hover gating is the quietness. */}
 				{stamp !== undefined && (
-					<span className="font-normal tracking-[.04em] opacity-0 transition-opacity duration-[.25s] group-hover:opacity-80">
+					<span className="font-normal tracking-[.04em] opacity-0 transition-opacity duration-[.25s] group-hover:opacity-100">
 						{stamp}
 					</span>
 				)}

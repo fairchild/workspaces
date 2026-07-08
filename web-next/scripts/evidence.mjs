@@ -1,16 +1,17 @@
 /*
  * Evidence capture, light + dark: the sessions home (empty and populated),
- * an empty session reached through the real new-session flow, a real mock
- * turn streamed into that session (mid-stream, final, and reloaded from the
- * event log), the terminal drawer (#752), a failing turn's inline failure
- * card + retry-to-success (#808), the three first-class error surfaces +
- * the stop control + the 375px mobile walk (#753), the durable
- * disconnect→resume story (tab closed mid-turn, a fresh tab catching up,
- * then completed), the Folio session demo, and the refine-folio prototype
- * beside it for pixel comparison. Runs against a production build in auth-bypass
- * mode over a throwaway database. Output goes to output/evidence/
- * (gitignored); CI uploads it as an artifact — the sanctioned publish path
- * per docs/development/remote-sessions.md.
+ * an empty session reached through the real new-session flow, the compose
+ * field's states (#807 — empty, a grown multiline draft, disabled-with-Stop
+ * mid-turn), a real mock turn streamed into that session (mid-stream, final,
+ * and reloaded from the event log), the terminal drawer (#752), a failing
+ * turn's inline failure card + retry-to-success (#808), the three
+ * first-class error surfaces + the stop control + the 375px mobile walk
+ * (#753), the durable disconnect→resume story (tab closed mid-turn, a fresh
+ * tab catching up, then completed), the Folio session demo, and the
+ * refine-folio prototype beside it for pixel comparison. Runs against a
+ * production build in auth-bypass mode over a throwaway database. Output
+ * goes to output/evidence/ (gitignored); CI uploads it as an artifact — the
+ * sanctioned publish path per docs/development/remote-sessions.md.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
@@ -86,6 +87,29 @@ async function captureNewSessionFlow(page, file) {
 }
 
 /**
+ * The compose field's states (#807), on the empty session the new-session
+ * flow just made: the resting single-line field (autofocused, no
+ * placeholder), then a multi-line draft (two Shift+Enter newlines) grown to
+ * its taller auto-height — cleared before captureSessionTurn sends the real
+ * turn that follows.
+ */
+async function captureComposeStates(page, shot) {
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await page.screenshot({ path: shot("compose-empty") });
+
+	await compose.fill("Here's the stack trace:");
+	await compose.press("Shift+Enter");
+	await compose.type("  at Object.<anonymous> (session.test.ts:42:11)");
+	await compose.press("Shift+Enter");
+	await compose.type("Can you fix the underlying bug?");
+	await page.waitForTimeout(200);
+	await page.screenshot({ path: shot("compose-multiline") });
+
+	await compose.fill("");
+}
+
+/**
  * Streams a real mock turn in the session the new-session flow just made
  * (the page is already on it): mid-stream while the activity line breathes,
  * mid-stream as ledger rows land, final with the receipt + disclosed test
@@ -99,10 +123,13 @@ async function captureSessionTurn(page, shot) {
 
 	// Mid-stream, early: the provisioning activity line. The provisioning
 	// window is ~650ms, so give the 0.55s rise animation most of its run
-	// without letting the first prose token close the window.
+	// without letting the first prose token close the window. Also the
+	// compose's disabled-while-busy state (#807): draft held, Stop affordance
+	// live (#935).
 	await page.getByTestId("activity-line").waitFor({ timeout: TURN_TIMEOUT_MS });
 	await page.waitForTimeout(350);
 	await page.screenshot({ path: shot("session-turn-streaming") });
+	await page.screenshot({ path: shot("compose-disabled") });
 
 	// Mid-stream, later: two ledger rows landed, the turn still open.
 	await page.waitForFunction(
@@ -402,6 +429,7 @@ async function main() {
 			await wipeRows(db);
 			await captureSettled(page, "/", shot("home-empty"));
 			await captureNewSessionFlow(page, shot("session-empty"));
+			await captureComposeStates(page, shot);
 			await captureSessionTurn(page, shot);
 			await captureTerminalDrawer(page, shot("session-terminal-drawer"));
 			await captureFailedTurn(page, shot);
@@ -416,7 +444,7 @@ async function main() {
 			await capturePrototype(page, colorScheme, shot("prototype-folio"));
 			await context.close();
 			console.log(
-				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + terminal drawer + failed turn (failure, retried) + error surfaces (provisioning, sandbox-died, stream) + stop control (stopping, stopped) + mobile 375px (turn, diff) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
+				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + compose (empty, multiline, disabled) + terminal drawer + failed turn (failure, retried) + error surfaces (provisioning, sandbox-died, stream) + stop control (stopping, stopped) + mobile 375px (turn, diff) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
 			);
 		}
 	} finally {

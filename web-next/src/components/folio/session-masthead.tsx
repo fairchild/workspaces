@@ -11,6 +11,11 @@
  * on hover/focus (a quiet background wash), matching the status line's model
  * picker (status-line.tsx). Callers that omit it (fixtures, demo pages) get
  * the old static span, unchanged.
+ *
+ * The decorative centered title (input or span) is `md:block` — hidden below
+ * md, same as before. A real, unconditional `sr-only` `<h1>` (#805) carries
+ * the session's semantic heading and gives screen readers a title at every
+ * viewport width, since the decorative copy alone is invisible on phones.
  */
 import { useRef } from "react";
 import { ThemeToggle } from "./theme-toggle";
@@ -73,6 +78,9 @@ export function SessionMasthead({
 					</>
 				)}
 			</span>
+			{/* Real heading (#805): present at every width regardless of the
+			    decorative copy's md:block gating, visually unchanged. */}
+			<h1 className="sr-only">{session.title || UNTITLED_MASTHEAD_TITLE}</h1>
 			{onTitleChange ? (
 				<input
 					key={session.title}
@@ -92,10 +100,10 @@ export function SessionMasthead({
 							event.currentTarget.blur();
 						}
 					}}
-					className="absolute left-1/2 hidden w-[46%] max-w-[420px] -translate-x-1/2 truncate rounded-[6px] border-none bg-transparent px-1.5 py-0.5 text-center font-serif text-title text-faint italic tracking-[.01em] outline-none transition-colors duration-150 placeholder:text-faint hover:bg-hover-bg hover:text-ink focus:bg-hover-bg focus:text-ink focus:shadow-[0_0_0_3px_var(--focus-ring)] md:block"
+					className="absolute left-1/2 hidden w-[46%] max-w-[420px] -translate-x-1/2 truncate rounded-[6px] border-none bg-transparent px-1.5 py-0.5 text-center font-serif text-title text-hint italic tracking-[.01em] outline-none transition-colors duration-150 placeholder:text-hint hover:bg-hover-bg hover:text-ink focus:bg-hover-bg focus:text-ink focus:shadow-[0_0_0_3px_var(--focus-ring)] md:block"
 				/>
 			) : (
-				<span className="absolute left-1/2 hidden -translate-x-1/2 font-serif text-title italic tracking-[.01em] text-faint md:block">
+				<span className="absolute left-1/2 hidden -translate-x-1/2 font-serif text-title italic tracking-[.01em] text-hint md:block">
 					{session.title || UNTITLED_MASTHEAD_TITLE}
 				</span>
 			)}
@@ -122,7 +130,7 @@ export function SessionMasthead({
 								title="Stop the sandbox"
 								aria-label="Stop sandbox"
 								onClick={onSandboxStop}
-								className="ml-2 rounded-[5px] border-b border-transparent px-1 py-0.5 leading-none text-faint opacity-0 transition-opacity duration-200 group-hover/sandbox:opacity-100 hover:text-del-ink focus-visible:opacity-100"
+								className="ml-2 rounded-[5px] border-b border-transparent px-1 py-0.5 leading-none text-hint opacity-0 transition-opacity duration-200 group-hover/sandbox:opacity-100 hover:text-del-ink focus-visible:opacity-100"
 							>
 								stop
 							</button>
