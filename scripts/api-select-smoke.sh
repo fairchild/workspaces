@@ -260,6 +260,15 @@ if attach is None:
 print(f"OK: API select attached workspace terminal session {attach.get('sessionID')} scope={attach.get('sessionScope')}")
 PY
 
+    # Best-effort visual: snapshot the app window (operator scope) in the post-select state, showing
+    # the workspace's terminal attached. Composited capture fails on a locked screen (unsupported) —
+    # that is fine, the JSONL above is the load-bearing evidence; the snapshot is a bonus when unlocked.
+    if "$CLI_BIN" window snapshot --out "$RUN_DIR/after-select.png" >/dev/null 2>&1; then
+        log "Captured post-select window snapshot: $RUN_DIR/after-select.png"
+    else
+        log "Window snapshot unavailable (likely a locked screen) — JSONL + select result stand as evidence."
+    fi
+
     RUN_STATUS="passed"
     log "PASS — API-driven workspace.select attached the workspace terminal via the real binding."
     {
