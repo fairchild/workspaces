@@ -12,16 +12,29 @@
 import Foundation
 import WorkspaceManagerCore
 
+/// Who drives the "switch selection back to the workspace" step of the smoke. `ui` (default) drives
+/// the real selection binding directly, as a sidebar click does. `api` parks after creating the
+/// workspace and selecting the repo terminal, leaving an external `workspace.select` verb (the operator
+/// route) to drive the reselect — the same binding, entered through the API instead. `api` mode is how
+/// the smoke proves an API-driven select produces the identical `terminal_session_attached` milestone a
+/// click does, and that it switches the active PTY off the repo terminal (the wrong-PTY guard).
+enum DesktopUISmokeSelectDriver: String, Sendable {
+    case ui
+    case api
+}
+
 struct DesktopUISmokeAutomationConfiguration: Equatable, Sendable {
     static let modeEnvironmentKey = "WORKSPACES_AUTOMATION_MODE"
     static let repoPathEnvironmentKey = "WORKSPACES_AUTOMATION_REPO_PATH"
     static let workspaceNameEnvironmentKey = "WORKSPACES_AUTOMATION_WORKSPACE_NAME"
     static let eventsPathEnvironmentKey = "WORKSPACES_AUTOMATION_EVENTS_PATH"
+    static let selectDriverEnvironmentKey = "WORKSPACES_AUTOMATION_SELECT_DRIVER"
     static let modeValue = "desktop-ui-smoke"
 
     let repoURL: URL
     let workspaceName: String
     let eventsURL: URL
+    let selectDriver: DesktopUISmokeSelectDriver
 
     static func from(environment: [String: String]) -> DesktopUISmokeAutomationConfiguration? {
         guard
@@ -45,10 +58,17 @@ struct DesktopUISmokeAutomationConfiguration: Equatable, Sendable {
             return nil
         }
 
+        let selectDriverRaw =
+            environment[selectDriverEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let selectDriver = selectDriverRaw.flatMap(DesktopUISmokeSelectDriver.init(rawValue:)) ?? .ui
+
         return DesktopUISmokeAutomationConfiguration(
             repoURL: URL(fileURLWithPath: (repoPath as NSString).expandingTildeInPath),
             workspaceName: workspaceName,
-            eventsURL: URL(fileURLWithPath: (eventsPath as NSString).expandingTildeInPath)
+            eventsURL: URL(fileURLWithPath: (eventsPath as NSString).expandingTildeInPath),
+            selectDriver: selectDriver
         )
     }
 }
@@ -69,6 +89,7 @@ private struct DesktopUISmokeEvent: Codable, Sendable {
         case workspaceCreated = "workspace_created"
         case sidebarUpdated = "sidebar_updated"
         case terminalSessionAttached = "terminal_session_attached"
+        case awaitingApiSelect = "awaiting_api_select"
         case webSurfaceAttached = "web_surface_attached"
         case surfaceFocused = "surface_focused"
         case surfaceFocusTimedOut = "surface_focus_timed_out"
@@ -167,6 +188,27 @@ final class DesktopUISmokeAutomationController: ObservableObject {
 
     var targetWorkspaceName: String? {
         configuration?.workspaceName
+    }
+
+    /// Whether the reselect step is left to an external `workspace.select` verb rather than driven
+    /// in-process. See `DesktopUISmokeSelectDriver`.
+    var usesAPISelectDriver: Bool {
+        configuration?.selectDriver == .api
+    }
+
+    /// Signals the scenario has created the workspace, parked the active surface on the repo terminal,
+    /// and is now waiting for an external API-driven select to switch back to the workspace. The
+    /// api-select smoke script keys its `workspaces workspace select` on this milestone.
+    func noteAwaitingAPISelect(workspace: Workspace) async {
+        guard isEnabled else { return }
+        await emit(
+            makeEvent(
+                type: .awaitingApiSelect,
+                workspaceName: workspace.name,
+                workspacePath: workspace.path,
+                workspaceID: workspace.id.uuidString
+            )
+        )
     }
 
     func matchingRepo(in repos: [Repo], normalizePath: (URL) -> String) -> Repo? {

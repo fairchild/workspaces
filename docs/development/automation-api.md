@@ -64,10 +64,13 @@ WorkSpaces terminal tile. See
   exits, and the credential file is removed on a clean exit. A credential left
   behind by a crashed launch fails closed — its handle no longer resolves
   against the fresh registry (`stale_handle`).
-- **Capture-plus-read.** The operator capability set is `window.read` (list
-  windows) and `window.snapshot` (composited PNG of a listed window) from `[A1]`,
-  plus `workspace.read` (list repos and workspaces) from `[A2]`. All read-only —
-  operator handles never carry tile mutation or `input.write`.
+- **Capture, read, and the first mutation.** The operator capability set is
+  `window.read` (list windows), `window.snapshot` (composited PNG of a listed
+  window), and `workspace.read` (list repos and workspaces), plus — the one
+  operator *mutation* — `workspace.select`, a reviewed exception that drives
+  the real selection gesture rather than a data-layer write
+  (see [Verb contract](#verb-contract-verbs--clicks)). Operator handles still
+  never carry tile mutation or `input.write`.
 
 ## Invariants
 
@@ -80,12 +83,57 @@ WorkSpaces terminal tile. See
   `hostSessionID`.
 - Capabilities are enforced before each scoped operation.
 - Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
+- Mutation verbs enter the same UI gesture the equivalent user action does — they
+  never write the data layer directly. See [Verb contract](#verb-contract-verbs--clicks).
 - Browser **read** (listing WorkSpaces-owned web surfaces) is supported; browser
   **mutation** (navigating, clicking, evaluating JS), resize/equalize, and global
   control remain out of V1.
 - Input injection is caller-scoped only and double-gated behind the
   `Automation Input Write` experiment; see
   [Automation Input Write Decision](../decisions/automation-input-write.md).
+
+## Verb contract: verbs = clicks
+
+Every mutation verb enters the same UI path the equivalent user gesture does. A
+verb never writes the service or SwiftData layer directly; it drives the real UI
+entry point and inherits exactly what a click produces. The single place this rule
+is enforced is the internal gesture-verb layer
+(`AutomationGestureVerbs`): it is constructed with *only* gesture closures — the
+app's real UI entry points — and holds no backend handle, so a verb structurally
+cannot bypass the UI.
+
+`workspace.select` is the exemplar. Selecting a workspace via the API writes the
+*same selection binding* a sidebar click writes — the binding whose setter attaches
+the terminal session and requests focus — so an API-driven select produces the
+identical user-visible reactions a click does: the sidebar highlights, the
+workspace's terminal attaches, and focus is requested. Concretely, this is why the
+rule matters:
+
+- **A snapshot taken after a verb shows what actually happened.** A data-layer
+  `workspace.select` would flip selection state without attaching the terminal, so a
+  follow-up `window.snapshot` would show stale UI — evidence that lies. Entering the
+  binding makes the snapshot honest.
+- **The next input lands in the right PTY.** Selecting workspace A attaches (and
+  activates) A's terminal surface, so a subsequent write targets A. A data-layer
+  select would leave the previously focused terminal live and misroute the write —
+  the wrong-PTY bug the regression test `selecting workspace A then workspace B routes
+  input to each workspace's own PTY` guards against.
+- **Refactors that disconnect UI wiring stay visible.** A verb entering the real
+  binding fails exactly when a user click would, so a broken selection path is caught
+  by the verb, not hidden behind a service call that still "succeeds."
+
+Verbs return a structured outcome so dialogs and dead-ends become data, never a
+hang or a fallback:
+
+| Outcome | Meaning | Wire |
+| --- | --- | --- |
+| `completed` | The gesture ran through the real UI path; the result reports what it did (e.g. `attachedTerminal`, `attachedSurfaceID`). | Success envelope, `outcome: "completed"`. |
+| `confirmation_required` | The gesture would surface a modal; the message is what the user would confirm. Surfaced as data so a verb never blocks on modal UI. `workspace.select` has no confirmation dialog, so it never raises this — the shared contract models it for sibling verbs. | Success envelope, `outcome: "confirmation_required"`. |
+| `unsupported` | The verb cannot run in the current context — most often no live window. It fails closed rather than falling back to a data-layer write. | Error envelope, code `unsupported`. |
+
+An id that resolves to no tracked workspace fails `invalid_request` (it is not a
+gesture outcome — nothing was driven). App Intents and any companion app call the
+same verb layer, so "Siri said done" and "the sidebar updated" are the same event.
 
 ## Envelope
 
@@ -117,6 +165,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/windows` | **Operator scope.** Returns the app's on-screen windows with stable identifiers (`window.read`). Keyed by the AppKit window number — the same identity `CGWindowList`/ScreenCaptureKit address. Requires an operator handle; a tile handle lacks `window.read` and fails `capability_denied`. |
 | `POST /v1/window/snapshot` | **Operator scope.** Returns a composited PNG of the app window named by the body's `windowID` (a `window.read` id). The capture includes the full window — sidebar chrome *and* the GhosttyKit terminal surface — and works with the app backgrounded (no activation). Requires `window.snapshot`; own-window only, so an id the app does not own fails `invalid_request`. See [Window snapshot](#window-snapshot). |
 | `GET /v1/workspaces` | **Operator scope.** Returns the app's tracked repos and workspaces with stable SwiftData model ids, names, and enough state to target: per workspace, its `status`, `isArchived`, `backend`, and whether it `isSelected`; per repo, whether it `isSelected`. Read-only — the stable-target list later `[A2]` orchestration verbs act on. Requires `workspace.read`; a tile handle lacks it and fails `capability_denied`. See [Workspace list](#workspace-list). |
+| `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -148,6 +197,7 @@ handle.
 | `window.read` | `GET /v1/windows` (list the app's windows); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `window.snapshot` | `POST /v1/window/snapshot` (composited PNG of a listed window); granted only to operator handles, never to tile handles |
 | `workspace.read` | `GET /v1/workspaces` (list the app's repos and workspaces); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
+| `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); the first operator *mutation* capability, granted only to operator handles, never to tile handles — distinct from `workspace.read` so the read/write split stays legible |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -264,6 +314,41 @@ read-only: no mutation rides this route.
   read from the live SwiftData models and selection state — distinct from the
   CLI's own local-state store (`workspaces ws list`).
 
+## Workspace select
+
+`POST /v1/workspace/select` (operator scope, `workspace.select`) selects a workspace
+by driving the real selection gesture — the verbs-=-clicks exemplar (see
+[Verb contract](#verb-contract-verbs--clicks)). The body names the target by a
+`workspaceID` obtained from `workspace.read`:
+
+```json
+{ "workspaceID": "…" }
+```
+
+The success envelope reports the structured gesture outcome and what the selection
+did:
+
+```json
+{ "workspaceID": "…", "outcome": "completed", "changed": true,
+  "selectedWorkspaceID": "…", "attachedTerminal": true,
+  "attachedSurfaceID": "…", "system": { "capabilities": [ … ] } }
+```
+
+- **Same path as a click.** The verb writes the selection binding whose setter runs
+  the workspace-selection handler — terminal attach + focus request. So the sidebar
+  highlights the workspace, its terminal attaches, and focus is requested, identical
+  to a sidebar click. `attachedSurfaceID` is the session a following input would land
+  in; `attachedTerminal` is `false` for an archived workspace (selection navigates to
+  its repo overview instead of attaching a terminal, so it completes without one).
+- **Structured outcome.** `outcome` is `completed` or `confirmation_required`;
+  `workspace.select` only ever `completed`s today. A live-window-less app fails
+  `unsupported` (never a data-layer fallback), and an unknown or non-UUID
+  `workspaceID` fails `invalid_request`.
+- **Operator mutation.** Requires `workspace.select` — the first operator mutation
+  capability, distinct from the read-only `workspace.read`. A tile handle lacks it
+  and fails `capability_denied`. The call is operator-tagged in
+  `automation-audit.jsonl` like every operator route.
+
 ## Error Codes
 
 | Code | Meaning |
@@ -318,6 +403,8 @@ workspaces window snapshot --out shot.png            # main window, or first if 
 workspaces window snapshot --out shot.png --window 42 # a specific window.read id
 workspaces workspace list                            # repos + workspaces, human-readable
 workspaces workspace list --json                     # same, as the raw result envelope
+workspaces workspace select <id>                     # drive the real selection gesture for <id>
+workspaces workspace select <id> --json              # same, as the raw result envelope
 ```
 
 `workspace list` reads the running app's repos and workspaces (`workspace.read`),
@@ -330,11 +417,18 @@ main window (falling back to the first listed) so the common "snapshot the app"
 case needs no id lookup. It works with the app backgrounded — no activation, no
 focus steal.
 
+`workspace select <id>` drives the running app's real selection gesture for the
+workspace with stable `<id>` (from `workspace list`): the app highlights it,
+attaches its terminal, and requests focus, exactly as a sidebar click would. It
+prints whether a terminal attached; `--json` emits the raw result envelope. Absent a
+live window it fails `unsupported` — it never falls back to a data-layer write.
+
 ## Implementation Map
 
 | Concern | File |
 | --- | --- |
 | Wire models and envelopes | `Sources/WorkspaceManagerCore/Services/Automation/AutomationAPI.swift` |
+| Gesture-verb layer (verbs = clicks) | `Sources/WorkspaceManagerCore/Services/Automation/AutomationGestureVerbs.swift` |
 | Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
 | HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |
 | Web-surface snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WebSurfaceSnapshotEncoder.swift` |
@@ -363,6 +457,14 @@ swift-format lint --strict --recursive Sources/ Tests/
 ./scripts/dev-smoke.sh --no-build
 ```
 
+For a change touching a mutation verb, also verify it against the real app — an
+API-driven `workspace.select` through the socket must attach the workspace's
+terminal, proving the verb entered the real binding:
+
+```bash
+./scripts/api-select-smoke.sh --no-build   # asserts terminal_session_attached after the CLI select
+```
+
 If docs or public examples changed, also run the docs checks listed in
 [Docs Site Runbook](../README.md).
 
@@ -370,12 +472,15 @@ If docs or public examples changed, also run the docs checks listed in
 
 V1 does not support browser mutation (navigating, clicking, filling, or
 evaluating JavaScript in a web surface), opening web URLs, tab title or metadata
-changes, writing into other tiles, resize/equalize, or global cross-workspace
-*mutation*. Those capabilities require separate product and safety review before
-they can be added. Read-only global reads are the reviewed operator-scope
-exceptions — window capture (`window.read` listing and `window.snapshot`
-composited snapshots) and the repo/workspace inventory (`workspace.read`) — gated
-behind the opt-in operator scope above, never granted to tile handles. Two reviewed exceptions widen the read/write surface
+changes, writing into other tiles, resize/equalize, or *arbitrary* global
+cross-workspace mutation. Those capabilities require separate product and safety
+review before they can be added. Read-only global reads are the reviewed
+operator-scope exceptions — window capture (`window.read` listing and
+`window.snapshot` composited snapshots) and the repo/workspace inventory
+(`workspace.read`) — gated behind the opt-in operator scope above, never granted to
+tile handles. The one operator *mutation* is `workspace.select`, a
+reviewed exception that drives the real selection gesture under the verbs-=-clicks
+contract, never a data-layer write. Two reviewed exceptions widen the read/write surface
 deliberately: caller-scoped input injection ships as the experimental,
 double-gated `input.write` capability (see
 [Automation Input Write Decision](../decisions/automation-input-write.md)), and

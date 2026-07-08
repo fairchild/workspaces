@@ -974,9 +974,17 @@ private final class CLIApp {
     /// credential it fails closed with guidance. Distinct from `ws list`, which lists the CLI's own
     /// local-state workspaces; this reflects what the running app currently has.
     private func runWorkspaceOperator(arguments: [String]) throws -> Int32 {
-        guard arguments.first == "list" else {
-            throw CLIError("Usage: workspaces workspace list [--json]")
+        switch arguments.first {
+        case "list":
+            return try runWorkspaceList(arguments: arguments)
+        case "select":
+            return try runWorkspaceSelect(arguments: Array(arguments.dropFirst()))
+        default:
+            throw CLIError("Usage: workspaces workspace list [--json] | workspace select <id> [--json]")
         }
+    }
+
+    private func runWorkspaceList(arguments: [String]) throws -> Int32 {
         let usage = "workspaces workspace list [--json]"
         var json = false
         for argument in arguments.dropFirst() {
@@ -1027,6 +1035,57 @@ private final class CLIApp {
                         + "\(workspace.status)\t\(workspace.backend)\t\(branch)"
                 )
             }
+        }
+        return 0
+    }
+
+    /// `workspaces workspace select <id> [--json]` — the first operator mutation verb. Drives the
+    /// running app's real selection gesture (the same path a sidebar click takes) via the socket, so
+    /// the app highlights the workspace, attaches its terminal, and requests focus. `<id>` is a stable
+    /// workspace id from `workspace list`. Operator scope: reads the per-launch credential, so it works
+    /// from any same-user shell outside a tile.
+    private func runWorkspaceSelect(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces workspace select <id> [--json]"
+        var json = false
+        var workspaceID: String?
+        for argument in arguments {
+            switch argument {
+            case "--json":
+                json = true
+            default:
+                guard workspaceID == nil else { throw CLIError("Usage: \(usage)") }
+                workspaceID = argument
+            }
+        }
+        guard let workspaceID, !workspaceID.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let credential = try loadOperatorCredential()
+        let body = try JSONSerialization.data(withJSONObject: ["workspaceID": workspaceID])
+        let result = try operatorRequest(
+            AutomationWorkspaceSelectResult.self,
+            credential: credential,
+            method: "POST",
+            path: "/v1/workspace/select",
+            body: body
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        switch result.outcome {
+        case .completed:
+            if result.attachedTerminal {
+                let surface = result.attachedSurfaceID ?? "-"
+                print("Selected \(result.workspaceID) — terminal attached (surface \(surface)).")
+            } else {
+                print("Selected \(result.workspaceID) — no terminal attached.")
+            }
+        case .confirmationRequired:
+            print("Confirmation required: \(result.message ?? "the app needs confirmation to proceed.")")
         }
         return 0
     }

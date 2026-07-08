@@ -19,12 +19,14 @@ public enum AutomationAPI {
     /// Kept separate from `v1Capabilities` so default handles never widen.
     public static let inputWriteCapabilities = v1Capabilities + [AutomationCapability.inputWrite]
 
-    /// Capabilities granted to an opt-in operator handle. Capture-only plus read-only inventory:
-    /// `window.read` lists the app's windows, `window.snapshot` returns a composited PNG of one of
-    /// them (`[A1]`), and `workspace.read` lists the app's repos and workspaces so later
-    /// orchestration verbs have stable targets (`[A2]`). Operator handles never carry tile mutation
-    /// or `input.write` capabilities.
-    public static let operatorCapabilities = [AutomationCapability.windowRead, .windowSnapshot, .workspaceRead]
+    /// Capabilities granted to an opt-in operator handle. Capture and read (`window.read`,
+    /// `window.snapshot` — composited PNGs; `workspace.read` — the repo/workspace inventory)
+    /// plus the first operator *mutation* capability, `workspace.select`: a reviewed
+    /// exception that drives the real selection gesture, never a data-layer write. Operator handles
+    /// still never carry tile mutation or `input.write`.
+    public static let operatorCapabilities = [
+        AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
+    ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
 
@@ -57,6 +59,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case windowRead = "window.read"
     case windowSnapshot = "window.snapshot"
     case workspaceRead = "workspace.read"
+    case workspaceSelect = "workspace.select"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -463,6 +466,77 @@ public struct AutomationWorkspacesResult: Codable, Sendable, Equatable {
     }
 }
 
+/// The structured outcome shared by every gesture verb. A verb either `completed` (the
+/// gesture ran through the real UI path), needs `confirmationRequired` (a modal the user would see,
+/// surfaced as data instead of blocking on UI), or is `unsupported` (it cannot run — most often no
+/// live window). `notFound` is the id-does-not-resolve case, mapped to `invalid_request` at the wire.
+/// The gesture-verb layer (`AutomationGestureVerbs`) is the single place that produces these, so the
+/// verbs-=-clicks rule has one enforcement point. See the layer's doc for why a verb never falls back
+/// to a data-layer write.
+public enum AutomationGestureOutcomeKind: String, Codable, Sendable, Equatable {
+    case completed
+    case confirmationRequired = "confirmation_required"
+}
+
+/// What driving the real selection gesture produced. `attachedTerminal` is the observable proof the
+/// verb behaved like a click: selecting a live local workspace attaches (and focuses) its terminal
+/// surface, so `attachedSurfaceID` is the session a subsequent input would land in — the wrong-PTY
+/// guard. Selecting an archived workspace navigates to its repo overview instead, so it completes
+/// with `attachedTerminal == false` and no surface.
+public struct AutomationWorkspaceSelectEffect: Sendable, Equatable {
+    public let selectedWorkspaceID: UUID?
+    public let attachedSurfaceID: UUID?
+    public let attachedTerminal: Bool
+
+    public init(
+        selectedWorkspaceID: UUID?,
+        attachedSurfaceID: UUID?,
+        attachedTerminal: Bool
+    ) {
+        self.selectedWorkspaceID = selectedWorkspaceID
+        self.attachedSurfaceID = attachedSurfaceID
+        self.attachedTerminal = attachedTerminal
+    }
+}
+
+/// Response for `POST /v1/workspace/select` (`workspace.select`, operator scope). `outcome` is the
+/// structured gesture outcome (`completed` or `confirmation_required`); the `unsupported` and bad-id
+/// cases fail closed with the stable error codes instead. On `completed`, `attachedTerminal` and
+/// `attachedSurfaceID` report what the real selection gesture did — the same terminal attach a
+/// sidebar click produces.
+public struct AutomationWorkspaceSelectResult: Codable, Sendable, Equatable {
+    public let workspaceID: String
+    public let outcome: AutomationGestureOutcomeKind
+    public let changed: Bool
+    public let selectedWorkspaceID: UUID?
+    public let attachedTerminal: Bool
+    public let attachedSurfaceID: String?
+    public let message: String?
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        workspaceID: String,
+        outcome: AutomationGestureOutcomeKind,
+        changed: Bool,
+        selectedWorkspaceID: UUID? = nil,
+        attachedTerminal: Bool = false,
+        attachedSurfaceID: String? = nil,
+        message: String? = nil,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.workspaceID = workspaceID
+        self.outcome = outcome
+        self.changed = changed
+        self.selectedWorkspaceID = selectedWorkspaceID
+        self.attachedTerminal = attachedTerminal
+        self.attachedSurfaceID = attachedSurfaceID
+        self.message = message
+        self.system = system
+    }
+}
+
 public struct AutomationMutationResult: Codable, Sendable, Equatable {
     public let changed: Bool
     public let focusedSurfaceID: String?
@@ -634,6 +708,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
     func automationSurfaces(for handle: String) throws -> AutomationSurfacesResult
     func automationWindows(for handle: String) throws -> AutomationWindowsResult
     func automationWorkspaces(for handle: String) throws -> AutomationWorkspacesResult
+    func automationSelectWorkspace(
+        for handle: String,
+        workspaceID: String
+    ) async throws -> AutomationWorkspaceSelectResult
     func automationWindowSnapshot(
         for handle: String,
         windowID: String
