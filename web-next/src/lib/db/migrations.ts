@@ -215,10 +215,32 @@ const terminalTickets: Migration = {
 	},
 };
 
+/**
+ * Adds `sessions.owner_login` — the allowlisted GitHub login that created the
+ * session (#910). Nullable by design: pre-existing rows have no stamped owner
+ * and remain accessible until they are naturally replaced.
+ */
+const sessionOwnerLogin: Migration = {
+	id: "0006_session_owner_login",
+	async up(db) {
+		const info = await sql<{
+			name: string;
+		}>`PRAGMA table_info(sessions)`.execute(db);
+		const hasColumn = info.rows.some((row) => row.name === "owner_login");
+		if (!hasColumn) {
+			await db.schema
+				.alterTable("sessions")
+				.addColumn("owner_login", "text")
+				.execute();
+		}
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
 	sessionResumeState,
 	sessionModel,
 	terminalTickets,
+	sessionOwnerLogin,
 ];

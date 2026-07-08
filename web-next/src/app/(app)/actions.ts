@@ -27,7 +27,7 @@ export async function createSessionAction(
 	_prevState: CreateSessionState | null,
 	formData: FormData,
 ): Promise<CreateSessionState> {
-	await requireAuthorizedUser();
+	const user = await requireAuthorizedUser();
 	const repo = String(formData.get("repo") ?? "").trim();
 	// The input's pattern blocks this in the UI; a direct POST gets the same
 	// calm state instead of an unhandled server-action throw.
@@ -36,7 +36,7 @@ export async function createSessionAction(
 	}
 	let session: Awaited<ReturnType<typeof startSession>>;
 	try {
-		session = await startSession(getDatabase(), repo);
+		session = await startSession(getDatabase(), repo, user.login);
 	} catch (error) {
 		if (error instanceof RepoUnavailableError) {
 			return {

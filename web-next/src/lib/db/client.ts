@@ -37,6 +37,8 @@ export interface SessionsTable {
 	id: string;
 	/** repos.id this session runs against; null for not-yet-bound sessions. */
 	repo_id: string | null;
+	/** GitHub login that created the session; null for legacy grandfathered rows. */
+	owner_login: string | null;
 	title: string;
 	/** Compute provider id — "mock" | "vercel" | "anthropic" | … */
 	provider: string;

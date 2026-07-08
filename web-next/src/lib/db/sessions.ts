@@ -22,6 +22,8 @@ import { ensureSchema } from "./schema";
 export interface NewSession {
 	id: string;
 	repoId?: string | null;
+	/** Acting GitHub login; omitted only for legacy/test rows. */
+	ownerLogin?: string | null;
 	title?: string;
 	provider: string;
 	status?: string;
@@ -33,6 +35,8 @@ export interface NewSession {
 export interface Session {
 	id: string;
 	repoId: string | null;
+	/** GitHub login that created the session; null for legacy grandfathered rows. */
+	ownerLogin: string | null;
 	title: string;
 	provider: string;
 	status: string;
@@ -55,6 +59,7 @@ function rowToSession(row: SessionsTable): Session {
 	return {
 		id: row.id,
 		repoId: row.repo_id,
+		ownerLogin: row.owner_login,
 		title: row.title,
 		provider: row.provider,
 		status: row.status,
@@ -75,6 +80,7 @@ export async function createSession(
 	const row: SessionsTable = {
 		id: session.id,
 		repo_id: session.repoId ?? null,
+		owner_login: session.ownerLogin?.trim().toLowerCase() || null,
 		title: session.title ?? "",
 		provider: session.provider,
 		status: session.status ?? "active",

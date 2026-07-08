@@ -71,6 +71,7 @@ export async function POST(request: Request) {
 
 	const session = await createSession(getDatabase(), {
 		id: crypto.randomUUID(),
+		ownerLogin: auth.user.login,
 		title,
 		provider,
 	});

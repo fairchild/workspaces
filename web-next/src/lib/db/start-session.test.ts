@@ -81,9 +81,10 @@ describe("ensureRepo (default_branch recording)", () => {
 describe("startSession", () => {
 	test("creates the repo on first use and an empty active session on it", async () => {
 		const handle = freshDb();
-		const session = await startSession(handle, "fairchild/workspaces");
+		const session = await startSession(handle, "fairchild/workspaces", "FairChild");
 		expect(session).toMatchObject({
 			repoId: "fairchild/workspaces",
+			ownerLogin: "fairchild",
 			title: "",
 			provider: "mock",
 			status: "active",
