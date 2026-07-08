@@ -93,6 +93,7 @@ struct SidebarWorkspaceController {
         nameSource: WorkspaceNameSource = .manual,
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
+        fromRef: String? = nil,
         progress: WorkspaceProviderProgressHandler? = nil,
         onPersisted: (@MainActor @Sendable (HostLumeSmokeWorkspaceRecord) async -> Void)? = nil
     ) async throws -> Workspace {
@@ -117,7 +118,8 @@ struct SidebarWorkspaceController {
             repoLocalURL: repo.localURL,
             repoRemoteURL: repo.remoteURL,
             workspaceName: reservation.resolvedName,
-            guestOS: guestOS
+            guestOS: guestOS,
+            fromRef: fromRef
         )
 
         do {

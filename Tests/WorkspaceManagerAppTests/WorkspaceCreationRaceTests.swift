@@ -169,6 +169,7 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         repoName: String,
         repoLocalURL: URL,
         name: String,
+        fromRef: String?,
         progress: WorkspaceCreationProgressHandler?
     ) async throws -> NewWorkspaceInfo {
         await createWorkspaceDelay()

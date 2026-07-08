@@ -868,7 +868,9 @@ struct SidebarView: View {
             name: command.name,
             nameSource: .manual,
             providerID: command.providerID,
-            guestOS: command.guestOS
+            guestOS: command.guestOS,
+            shouldSelect: command.shouldSelect,
+            fromRef: command.fromRef
         )
 
         switch result {
@@ -881,7 +883,7 @@ struct SidebarView: View {
                     workspaceID: workspace.id,
                     workspaceName: workspace.name,
                     workspacePath: workspace.path,
-                    selectedWorkspaceID: workspace.id,
+                    selectedWorkspaceID: command.shouldSelect ? workspace.id : selectedWorkspace?.id,
                     attachedSurfaceID: nil,
                     attachedTerminal: false
                 )
@@ -917,7 +919,9 @@ struct SidebarView: View {
         name: String,
         nameSource: WorkspaceNameSource,
         providerID: String,
-        guestOS: WorkspaceGuestOS? = nil
+        guestOS: WorkspaceGuestOS? = nil,
+        shouldSelect: Bool = true,
+        fromRef: String? = nil
     ) async -> SidebarWorkspaceCreationResult {
         guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
             let message = "Workspace provider '\(providerID)' is not registered."
@@ -937,7 +941,9 @@ struct SidebarView: View {
                     name: name,
                     nameSource: nameSource,
                     providerID: providerID,
-                    guestOS: guestOS
+                    guestOS: guestOS,
+                    shouldSelect: shouldSelect,
+                    fromRef: fromRef
                 )
             } perform: {
                 createdWorkspace = await createWorkspaceAfterSetup(
@@ -945,7 +951,9 @@ struct SidebarView: View {
                     name: name,
                     nameSource: nameSource,
                     providerID: providerID,
-                    guestOS: guestOS
+                    guestOS: guestOS,
+                    shouldSelect: shouldSelect,
+                    fromRef: fromRef
                 )
             }
             if intercepted {
@@ -982,7 +990,9 @@ struct SidebarView: View {
         name: String,
         nameSource: WorkspaceNameSource,
         providerID: String,
-        guestOS: WorkspaceGuestOS? = nil
+        guestOS: WorkspaceGuestOS? = nil,
+        shouldSelect: Bool = true,
+        fromRef: String? = nil
     ) async -> Workspace? {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return nil }
@@ -1018,6 +1028,7 @@ struct SidebarView: View {
                 nameSource: nameSource,
                 providerID: providerID,
                 guestOS: guestOS,
+                fromRef: fromRef,
                 progress: { phase in
                     creationLog.debug("createWorkspaceAfterSetup: progress phase=\(phase)")
                     await MainActor.run {
@@ -1032,7 +1043,9 @@ struct SidebarView: View {
             creationLog.info("createWorkspaceAfterSetup: workspace created, updating selection")
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             onWorkspaceCreated()
-            selectedWorkspace = workspace
+            if shouldSelect {
+                selectedWorkspace = workspace
+            }
             await hostLumeSmokeAutomation.noteWorkspaceActive(
                 HostLumeSmokeWorkspaceRecord(workspace: workspace)
             )

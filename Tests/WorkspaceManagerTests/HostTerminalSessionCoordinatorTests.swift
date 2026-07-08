@@ -33,6 +33,27 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(coordinator.activeSessionID == first.session.id)
     }
 
+    @Test("Ensures a session without changing the active session")
+    func ensureSessionDoesNotActivateWhenAnotherSessionIsActive() {
+        var coordinator = HostTerminalSessionCoordinator()
+        let repoURL = URL(fileURLWithPath: "/tmp/repo-a")
+        let workspaceURL = URL(fileURLWithPath: "/tmp/workspaces/repo-a/feature")
+
+        let active = coordinator.activate(
+            key: .repoPath(repoURL.path),
+            directory: repoURL
+        ).session
+        let ensured = coordinator.ensureSession(
+            key: .hostPath(workspaceURL.path),
+            directory: workspaceURL
+        )
+
+        #expect(ensured.created)
+        #expect(coordinator.sessions.count == 2)
+        #expect(coordinator.activeSessionID == active.id)
+        #expect(coordinator.activeSessionIDByScopeKey[.hostPath(workspaceURL.path).normalized()] == ensured.session.id)
+    }
+
     @Test("Reuses existing session by canonical path when key differs")
     func reusesByCanonicalPath() {
         var coordinator = HostTerminalSessionCoordinator()

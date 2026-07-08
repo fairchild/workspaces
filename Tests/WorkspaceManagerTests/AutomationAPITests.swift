@@ -1207,6 +1207,29 @@ struct AutomationAPITests {
         #expect(okEnvelope.result?.system.capabilities.contains(.workspaceCreate) == true)
         #expect(controller.createCalls == [AutomationWorkspaceCreateRequest(repoID: validRepoID, name: "created")])
 
+        let withOptions = await post(
+            "operator",
+            body: try AutomationJSON.encoder.encode(
+                AutomationWorkspaceCreateRequest(
+                    repoID: validRepoID,
+                    name: "from-ref",
+                    select: false,
+                    fromRef: "origin/main"
+                )
+            )
+        )
+        #expect(withOptions.status == 200)
+        #expect(
+            controller.createCalls == [
+                AutomationWorkspaceCreateRequest(repoID: validRepoID, name: "created"),
+                AutomationWorkspaceCreateRequest(
+                    repoID: validRepoID,
+                    name: "from-ref",
+                    select: false,
+                    fromRef: "origin/main"
+                ),
+            ])
+
         let confirmation = await post(
             "operator",
             body: try body(repoID: FakeAutomationController.createConfirmationRepoID, name: "needs-lume")
@@ -1242,6 +1265,20 @@ struct AutomationAPITests {
 
         let empty = await post("operator", body: Data())
         #expect(empty.status == 400)
+        let badRef = await post(
+            "operator",
+            body: try AutomationJSON.encoder.encode(
+                AutomationWorkspaceCreateRequest(
+                    repoID: validRepoID,
+                    name: "bad-ref",
+                    fromRef: "origin/main; rm -rf /"
+                )
+            )
+        )
+        let badRefEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: badRef.body)
+        #expect(badRef.status == 400)
+        #expect(badRefEnvelope.error?.code == .invalidRequest)
         let wrongMethod = await AutomationHTTPRouter.route(
             HTTPRequest(
                 method: "GET", path: "/v1/workspace/create",
@@ -1494,10 +1531,25 @@ struct AutomationAPITests {
             responseBody: okBody,
             operatorHandle: false
         )
+        await logger.record(
+            method: "POST",
+            path: "/v1/workspace/create",
+            headers: [AutomationAPI.handleHeader: "op"],
+            requestBody: try AutomationJSON.encoder.encode(
+                AutomationWorkspaceCreateRequest(
+                    repoID: UUID().uuidString,
+                    name: "created",
+                    select: false,
+                    fromRef: "origin/main"
+                )
+            ),
+            responseBody: okBody,
+            operatorHandle: true
+        )
 
         let contents = try String(contentsOf: auditURL, encoding: .utf8)
         let lines = contents.split(separator: "\n").map(String.init)
-        #expect(lines.count == 2)
+        #expect(lines.count == 3)
         let events = try lines.map { line in
             try AutomationJSON.decoder.decode(AutomationAuditLogger.Event.self, from: Data(line.utf8))
         }
@@ -1505,6 +1557,10 @@ struct AutomationAPITests {
         #expect(windowsEvent.operatorHandle)
         let contextEvent = try #require(events.first { $0.path == "/v1/context" })
         #expect(!contextEvent.operatorHandle)
+        let createEvent = try #require(events.first { $0.path == "/v1/workspace/create" })
+        #expect(createEvent.metadata?["workspaceCreate.select"] == "provided")
+        #expect(createEvent.metadata?["workspaceCreate.fromRef"] == "provided")
+        #expect(!String(describing: createEvent.metadata).contains("origin/main"))
     }
 
     @Test("CLI formatter emits result JSON and surfaces envelope errors")

@@ -190,7 +190,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/window/snapshot` | **Operator scope.** Returns a composited PNG of the app window named by the body's `windowID` (a `window.read` id). The capture includes the full window — sidebar chrome *and* the GhosttyKit terminal surface — and works with the app backgrounded (no activation). Requires `window.snapshot`; own-window only, so an id the app does not own fails `invalid_request`. See [Window snapshot](#window-snapshot). |
 | `GET /v1/workspaces` | **Operator scope.** Returns the app's tracked repos and workspaces with stable SwiftData model ids, names, and enough state to target: per workspace, its `status`, `isArchived`, `backend`, and whether it `isSelected`; per repo, whether it `isSelected`. Read-only — mutation verbs use these stable targets. Requires `workspace.read`; a tile handle lacks it and fails `capability_denied`. See [Workspace list](#workspace-list). |
 | `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
-| `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null}`; `providerID` defaults to `local`. Returns `completed` with the created workspace and attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
+| `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null,"select":true,"fromRef":"origin/main"}`; `providerID` defaults to `local`, `select` defaults to `true`, and `fromRef` is omitted by default. Returns `completed` with the created workspace and, when selected, the attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -351,14 +351,29 @@ mutation rides this route.
 workspace by driving the sidebar create helper used by the New Workspace sheet
 and desktop UI smoke driver. The body names a repo from `workspace.read`; `name`
 is the workspace name; `providerID` defaults to `local`; `guestOS` is optional
-and used by providers that support guest OS variants:
+and used by providers that support guest OS variants; `select` is optional and
+defaults to `true`; `fromRef` is optional and, when present, is fetched before
+the workspace branch is created:
 
 ```json
-{ "repoID": "…", "name": "feature-a", "providerID": "local", "guestOS": null }
+{
+  "repoID": "…",
+  "name": "feature-a",
+  "providerID": "local",
+  "guestOS": null,
+  "select": false,
+  "fromRef": "origin/main"
+}
 ```
 
-The success envelope reports the structured gesture outcome and, on completion,
-the selected and attached workspace terminal:
+Omitting `select` and `fromRef` preserves the previous behavior exactly:
+creation branches from the source repo's local `HEAD`, selects the created
+workspace, and attaches/activates its terminal through the normal selection
+binding.
+
+The success envelope reports the structured gesture outcome and, when the
+workspace is selected on completion, the selected and attached workspace
+terminal:
 
 ```json
 {
@@ -401,10 +416,21 @@ user must confirm:
 - **Same path as the UI.** The verb enters the sidebar create helper, not
   `WorkspaceService` or SwiftData directly. On completion, the helper selects the
   created workspace through the same binding the UI uses, which attaches and
-  activates the workspace terminal.
+  activates the workspace terminal. If `select` is `false`, the helper skips only
+  that final selection write so the owner's current sidebar selection and focus
+  stay untouched.
+- **Ref freshness.** If `fromRef` is present, WorkSpaces validates it as a
+  plausible git ref name, fetches before creating the worktree, and creates the
+  workspace branch from that fetched ref. Empty, whitespace-padded, option-like,
+  or shell-metacharacter-shaped values fail `invalid_request`. Omitted `fromRef`
+  keeps the previous local-`HEAD` behavior.
 - **Wrong-PTY guard.** `attachedSurfaceID` is the active terminal session after
-  create. A following caller-scoped input write targets that PTY, not the repo
-  terminal or a previously selected workspace.
+  create when `select` is true. A following caller-scoped input write targets
+  that PTY, not the repo terminal or a previously selected workspace. With
+  `select: false`, the response reflects the pre-existing selection/active
+  surface instead of claiming the new workspace owns focus.
+- **No start command.** `workspace.create` does not accept `startCommand`; that
+  option is intentionally blocked pending the libghostty issue tracked by #889.
 - **Structured outcome.** `outcome` is `completed` or `confirmation_required`.
   A live-window-less app fails `unsupported` (never a data-layer fallback), an
   unknown/non-UUID `repoID` fails `invalid_request`, and unknown providers fail

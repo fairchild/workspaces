@@ -14,7 +14,8 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
     // MARK: - Call Tracking
 
     var createBranchCalls: [(name: String, path: URL)] = []
-    var createWorktreeCalls: [(branchName: String, destination: URL, source: URL)] = []
+    var createWorktreeCalls: [(branchName: String, destination: URL, source: URL, startPoint: String?)] = []
+    var fetchAllCalls: [URL] = []
     var getCurrentBranchCalls: [URL] = []
 
     // MARK: - Configurable Returns
@@ -25,6 +26,7 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
     var fileTreeResult: FileNode = FileNode(name: "root", path: "", isDirectory: true, children: [])
     var createBranchError: Error? = nil
     var createWorktreeError: Error? = nil
+    var fetchAllError: Error? = nil
 
     // MARK: - Protocol Conformance
 
@@ -41,6 +43,13 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
         return currentBranchResult
     }
 
+    func fetchAll(at path: URL) async throws {
+        fetchAllCalls.append(path)
+        if let error = fetchAllError {
+            throw error
+        }
+    }
+
     func createBranch(_ name: String, at path: URL) async throws {
         createBranchCalls.append((name: name, path: path))
         if let error = createBranchError {
@@ -48,8 +57,19 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
         }
     }
 
-    func createWorktree(branchName: String, at destination: URL, from source: URL) async throws {
-        createWorktreeCalls.append((branchName: branchName, destination: destination, source: source))
+    func createWorktree(
+        branchName: String,
+        at destination: URL,
+        from source: URL,
+        startPoint: String?
+    ) async throws {
+        createWorktreeCalls.append(
+            (
+                branchName: branchName,
+                destination: destination,
+                source: source,
+                startPoint: startPoint
+            ))
         if let error = createWorktreeError {
             throw error
         }

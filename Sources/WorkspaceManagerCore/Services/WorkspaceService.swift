@@ -22,6 +22,63 @@ private let defaultCleanupFailureReporter: @Sendable (WorkspaceCleanupFailure) -
     )
 }
 
+public struct WorkspaceCreationRefValidationError: Error, Sendable, Equatable {
+    public let message: String
+}
+
+public enum WorkspaceCreationRefValidator {
+    public static func normalize(_ rawValue: String?) -> Result<String?, WorkspaceCreationRefValidationError> {
+        guard let rawValue else { return .success(nil) }
+        let ref = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ref.isEmpty else {
+            return .failure(WorkspaceCreationRefValidationError(message: "fromRef must be non-empty when provided."))
+        }
+        guard ref == rawValue else {
+            return .failure(
+                WorkspaceCreationRefValidationError(
+                    message: "fromRef must not contain leading or trailing whitespace."))
+        }
+        guard isPlausibleRefName(ref) else {
+            return .failure(WorkspaceCreationRefValidationError(message: "fromRef must be a plausible git ref name."))
+        }
+        return .success(ref)
+    }
+
+    public static func normalizedValue(_ rawValue: String?) throws -> String? {
+        switch normalize(rawValue) {
+        case .success(let ref):
+            return ref
+        case .failure(let error):
+            throw WorkspaceError.invalidRef(error.message)
+        }
+    }
+
+    private static func isPlausibleRefName(_ ref: String) -> Bool {
+        if ref == "@" || ref.hasPrefix("-") || ref.hasPrefix("/") || ref.hasSuffix("/")
+            || ref.hasSuffix(".")
+        {
+            return false
+        }
+
+        let forbiddenScalars = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
+        if ref.rangeOfCharacter(from: forbiddenScalars) != nil { return false }
+
+        let forbiddenFragments = [
+            "..", "//", "@{", "\\", "~", "^", ":", "?", "*", "[", "]",
+            ";", "&", "|", "$", "`", "\"", "'", "<", ">", "(", ")",
+        ]
+        if forbiddenFragments.contains(where: ref.contains) { return false }
+
+        return ref.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { component in
+            !component.isEmpty
+                && component != "."
+                && component != ".."
+                && !component.hasPrefix(".")
+                && !component.hasSuffix(".lock")
+        }
+    }
+}
+
 public actor WorkspaceService: WorkspaceServiceProtocol {
     public static let shared = WorkspaceService()
 
@@ -84,12 +141,14 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         repoName: String,
         repoLocalURL: URL,
         name: String,
+        fromRef: String? = nil,
         progress: WorkspaceCreationProgressHandler? = nil
     ) async throws -> NewWorkspaceInfo {
         let sanitizedName = Self.sanitizeWorkspaceNameComponent(name)
         guard Self.isValidWorkspaceNameComponent(sanitizedName) else {
             throw WorkspaceError.invalidName(name: name)
         }
+        let normalizedFromRef = try WorkspaceCreationRefValidator.normalizedValue(fromRef)
 
         let repoDir = workspacesRoot.appendingPathComponent(repoName, isDirectory: true)
         let workspaceDir = repoDir.appendingPathComponent(sanitizedName, isDirectory: true)
@@ -119,7 +178,8 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             materializedWorkspace = try await materializer.materializeWorkspace(
                 named: sanitizedName,
                 at: workspaceDir,
-                from: repoLocalURL
+                from: repoLocalURL,
+                fromRef: normalizedFromRef
             )
         } catch {
             await cleanupMaterializedWorkspace(at: workspaceDir, context: "materialization failure")
@@ -413,6 +473,7 @@ public enum WorkspaceError: LocalizedError {
     case notAGitRepo
     case alreadyExists(name: String)
     case invalidName(name: String)
+    case invalidRef(String)
     case materializationFailed(operation: String, reason: String)
     case deletionFailed(reason: String)
 
@@ -424,6 +485,8 @@ public enum WorkspaceError: LocalizedError {
             return "A workspace named '\(name)' already exists"
         case .invalidName(let name):
             return "Workspace name '\(name)' is not valid"
+        case .invalidRef(let message):
+            return message
         case .materializationFailed(let operation, let reason):
             return "Failed to \(operation): \(reason)"
         case .deletionFailed(let reason):

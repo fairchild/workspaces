@@ -253,6 +253,49 @@ public struct HostTerminalSessionCoordinator: Sendable {
     }
 
     @discardableResult
+    public mutating func ensureSession(
+        key: HostTerminalSessionKey,
+        directory: URL,
+        customCommand: String? = nil,
+        initialCommand: String? = nil
+    ) -> HostTerminalSessionActivationResult {
+        let normalizedDirectory = HostTerminalSession.normalize(directory)
+        let normalizedPath = normalizedDirectory.path
+        let normalizedKey = key.normalized()
+
+        if let activeScopeSession = activeSessionIDByScopeKey[normalizedKey].flatMap(session(withID:)) {
+            return HostTerminalSessionActivationResult(session: activeScopeSession, created: false)
+        }
+
+        if let existing = sessions.first(where: { $0.key == normalizedKey }) {
+            activeSessionIDByScopeKey[normalizedKey] = existing.id
+            return HostTerminalSessionActivationResult(session: existing, created: false)
+        }
+
+        if shouldReuseByDirectoryPath(for: normalizedKey),
+            let existing = sessions.first(where: {
+                shouldReuseByDirectoryPath(for: $0.key) && $0.directoryPath == normalizedPath
+            })
+        {
+            activeSessionIDByScopeKey[normalizedKey] = existing.id
+            return HostTerminalSessionActivationResult(session: existing, created: false)
+        }
+
+        let session = HostTerminalSession(
+            key: normalizedKey,
+            directory: normalizedDirectory,
+            customCommand: customCommand,
+            initialCommand: initialCommand
+        )
+        sessions.append(session)
+        activeSessionIDByScopeKey[normalizedKey] = session.id
+        if activeSessionID == nil {
+            setActiveSessionID(session.id)
+        }
+        return HostTerminalSessionActivationResult(session: session, created: true)
+    }
+
+    @discardableResult
     public mutating func activate(sessionID: UUID) -> HostTerminalSession? {
         guard let session = session(withID: sessionID) else { return nil }
         setActiveSessionID(session.id)

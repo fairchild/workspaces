@@ -39,6 +39,7 @@ public struct LocalWorkspaceProvider: WorkspaceProviderProtocol {
             repoName: request.repoName,
             repoLocalURL: request.repoLocalURL,
             name: request.workspaceName,
+            fromRef: request.fromRef,
             progress: { phase in
                 await progress?(Self.progressMessage(for: phase))
             }

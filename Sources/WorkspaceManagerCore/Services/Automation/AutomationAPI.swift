@@ -571,17 +571,23 @@ public struct AutomationWorkspaceCreateRequest: Codable, Sendable, Equatable {
     public let name: String
     public let providerID: String?
     public let guestOS: WorkspaceGuestOS?
+    public let select: Bool?
+    public let fromRef: String?
 
     public init(
         repoID: String,
         name: String,
         providerID: String? = nil,
-        guestOS: WorkspaceGuestOS? = nil
+        guestOS: WorkspaceGuestOS? = nil,
+        select: Bool? = nil,
+        fromRef: String? = nil
     ) {
         self.repoID = repoID
         self.name = name
         self.providerID = providerID
         self.guestOS = guestOS
+        self.select = select
+        self.fromRef = fromRef
     }
 }
 
@@ -590,23 +596,30 @@ public struct AutomationWorkspaceCreateCommand: Sendable, Equatable {
     public let name: String
     public let providerID: String
     public let guestOS: WorkspaceGuestOS?
+    public let shouldSelect: Bool
+    public let fromRef: String?
 
     public init(
         repoID: UUID,
         name: String,
         providerID: String,
-        guestOS: WorkspaceGuestOS? = nil
+        guestOS: WorkspaceGuestOS? = nil,
+        shouldSelect: Bool = true,
+        fromRef: String? = nil
     ) {
         self.repoID = repoID
         self.name = name
         self.providerID = providerID
         self.guestOS = guestOS
+        self.shouldSelect = shouldSelect
+        self.fromRef = fromRef
     }
 }
 
-/// What driving the real workspace-create gesture produced. A completed create must report the
-/// created workspace, the selected workspace, and the attached terminal surface so callers can prove
-/// the next input will land in the newly created PTY.
+/// What driving the real workspace-create gesture produced. When `shouldSelect` is true, a completed
+/// create reports the selected workspace and attached terminal surface so callers can prove the next
+/// input will land in the newly created PTY. With `shouldSelect` false, creation still runs through
+/// the sidebar helper but intentionally preserves the current selection and active surface.
 public struct AutomationWorkspaceCreateEffect: Sendable, Equatable {
     public let repoID: UUID
     public let workspaceID: UUID
