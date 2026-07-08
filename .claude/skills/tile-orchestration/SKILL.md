@@ -45,6 +45,12 @@ contract, gating, and merge flow are `codex-execution` unchanged.
    names. Nothing enforces single-coordinator use — a concurrent session may
    already be spawning workers against the same app instance. See
    Concurrency below.
+5. **Check remaining codex quota before a big fan-out.**
+   `uv run --script scripts/check-usage.py` queries both codex's and Claude
+   Code's remaining 5-hour/weekly usage without spending a real request
+   (reverse-engineered from the open-source Orca app's status-bar fetcher —
+   see the script's docstring for the exact mechanism). Cheap enough to run
+   before dispatching every batch of workers, not just once per session.
 
 ## Spawn a worker
 
@@ -195,10 +201,11 @@ normally prompt. No more "tell the owner to clean up manually."
   running while another live coordinator session was *also* running its own
   `xhigh` codex processes for unrelated work, exhausted the quota mid-review
   today (`ERROR: You've hit your usage limit ... try again at <time>`).
-  There is no visible remaining-quota check before you hit the wall. Budget
-  for this: stagger heavy (`xhigh`) calls, don't reflexively re-fire a
-  timed-out review, and treat a quota error as a real, document-worthy
-  finding rather than a transient glitch to retry through.
+  There *is* a remaining-quota check — see
+  [scripts/check-usage.py](scripts/check-usage.py) — it just isn't a
+  documented CLI flag. Run it before a big `xhigh` fan-out, not just after
+  hitting the wall; treat a quota error you didn't check for as a real,
+  document-worthy finding rather than a transient glitch to retry through.
 - **A flaky-under-load test is not necessarily your regression.** A test
   entirely unrelated to one PR's diff failed once during a full-suite run
   under heavy concurrent build/test load, then passed clean on an isolated
@@ -244,9 +251,12 @@ pattern for unrelated web-next issues, at the same time):
   the spawn step (a small wrapper around `workspace.create`, or a
   post-create hook) so N parallel workers don't each pay their own 10–20
   minute native rebuild.
-- **A remaining-codex-quota check before a big fan-out.** If codex exposes
-  a usage-remaining signal, check it before dispatching several `xhigh`
-  workers at once, especially when you know or suspect another session is
+- ~~A remaining-codex-quota check before a big fan-out.~~ **Done** —
+  [scripts/check-usage.py](scripts/check-usage.py) queries both codex
+  (`app-server` JSON-RPC `account/rateLimits/read`) and Claude Code (the
+  Keychain-backed `api.anthropic.com/api/oauth/usage` endpoint) without
+  spending a real request. Run it before dispatching several `xhigh` workers
+  at once, especially when you know or suspect another session is
   concurrently active.
 - **A reusable, precisely-anchored monitor helper.** The `rg -q
   "^\[worker-N\] finished"` pattern is easy to get wrong ad hoc (a looser
