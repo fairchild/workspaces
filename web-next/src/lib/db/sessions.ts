@@ -9,6 +9,7 @@
  * the raw log as the source of truth lets projection improve across adapter
  * versions and keeps #749's ingest a dumb append.
  */
+import { sql } from "kysely";
 import { DEFAULT_MODEL } from "../agent-runtime/models";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 import type {
@@ -18,6 +19,10 @@ import type {
 import { projectSessionEvents } from "../transcript/project-events";
 import type { DatabaseHandle, SessionsTable } from "./client";
 import { ensureSchema } from "./schema";
+
+const SESSION_STATUSES = ["active", "idle", "archived"] as const;
+
+export type SessionStatus = (typeof SESSION_STATUSES)[number];
 
 export interface NewSession {
 	id: string;
@@ -38,6 +43,7 @@ export interface Session {
 	/** GitHub login that created the session; null for legacy grandfathered rows. */
 	ownerLogin: string | null;
 	title: string;
+	firstUserMessage: string | null;
 	provider: string;
 	status: string;
 	claudeSessionId: string | null;
@@ -61,6 +67,7 @@ function rowToSession(row: SessionsTable): Session {
 		repoId: row.repo_id,
 		ownerLogin: row.owner_login,
 		title: row.title,
+		firstUserMessage: row.first_user_message,
 		provider: row.provider,
 		status: row.status,
 		claudeSessionId: row.claude_session_id,
@@ -82,6 +89,7 @@ export async function createSession(
 		repo_id: session.repoId ?? null,
 		owner_login: session.ownerLogin?.trim().toLowerCase() || null,
 		title: session.title ?? "",
+		first_user_message: null,
 		provider: session.provider,
 		status: session.status ?? "active",
 		claude_session_id: session.claudeSessionId ?? null,
@@ -184,27 +192,110 @@ export interface SessionListItem extends Session {
 	repoFullName: string | null;
 }
 
+export interface SessionListFilters {
+	query?: string;
+	repoId?: string;
+	status?: string;
+	limit?: number;
+}
+
 /**
  * Sessions for the home screen, most recently active first (served by the
  * `idx_sessions_last_activity` index).
  */
 export async function listSessions(
 	handle: DatabaseHandle,
-	limit = 100,
+	filtersOrLimit: SessionListFilters | number = {},
 ): Promise<SessionListItem[]> {
 	await ensureSchema(handle);
-	const rows = await handle.db
+	const filters =
+		typeof filtersOrLimit === "number" ? { limit: filtersOrLimit } : filtersOrLimit;
+	const query = filters.query?.trim();
+	// Literal % and _ in a search must not act as LIKE wildcards.
+	const likeQuery = query
+		? `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+		: undefined;
+	let builder = handle.db
 		.selectFrom("sessions")
 		.leftJoin("repos", "repos.id", "sessions.repo_id")
 		.selectAll("sessions")
-		.select("repos.full_name as repo_full_name")
+		.select("repos.full_name as repo_full_name");
+
+	if (likeQuery) {
+		builder = builder.where((eb) =>
+			eb.or([
+				sql<boolean>`sessions.title like ${likeQuery} escape '\\'`,
+				sql<boolean>`sessions.first_user_message like ${likeQuery} escape '\\'`,
+			]),
+		);
+	}
+	if (filters.repoId) {
+		builder =
+			filters.repoId === "__none"
+				? builder.where("sessions.repo_id", "is", null)
+				: builder.where("sessions.repo_id", "=", filters.repoId);
+	}
+	if (filters.status && SESSION_STATUSES.includes(filters.status as SessionStatus)) {
+		builder = builder.where("sessions.status", "=", filters.status);
+	}
+
+	const rows = await builder
 		.orderBy("sessions.last_activity_at", "desc")
-		.limit(limit)
+		.limit(filters.limit ?? 100)
 		.execute();
 	return rows.map((row) => ({
 		...rowToSession(row),
 		repoFullName: row.repo_full_name,
 	}));
+}
+
+export interface SessionListFilterOption {
+	value: string;
+	label: string;
+	count: number;
+}
+
+export interface SessionListFilterOptions {
+	repos: SessionListFilterOption[];
+	statuses: SessionListFilterOption[];
+}
+
+/** Distinct repo/state facets for the sessions-home filters. */
+export async function listSessionFilterOptions(
+	handle: DatabaseHandle,
+): Promise<SessionListFilterOptions> {
+	await ensureSchema(handle);
+	const [repoRows, statusRows] = await Promise.all([
+		handle.db
+			.selectFrom("sessions")
+			.leftJoin("repos", "repos.id", "sessions.repo_id")
+			.select(({ fn }) => [
+				"sessions.repo_id as repo_id",
+				"repos.full_name as repo_full_name",
+				fn.countAll<number>().as("count"),
+			])
+			.groupBy(["sessions.repo_id", "repos.full_name"])
+			.orderBy("repos.full_name", "asc")
+			.execute(),
+		handle.db
+			.selectFrom("sessions")
+			.select(({ fn }) => ["status", fn.countAll<number>().as("count")])
+			.groupBy("status")
+			.orderBy("status", "asc")
+			.execute(),
+	]);
+	return {
+		repos: repoRows.map((row) => ({
+			value: row.repo_id ?? "__none",
+			label: row.repo_full_name ?? "no repository",
+			count: Number(row.count),
+		})),
+		statuses: statusRows.map((row) => ({
+			value: row.status,
+			label: row.status,
+			count: Number(row.count),
+		})),
+	};
 }
 
 export async function getSession(
@@ -262,6 +353,15 @@ export async function appendEvents(
 			.set({ last_activity_at: now })
 			.where("id", "=", sessionId)
 			.execute();
+		const firstUserMessage = firstUserMessageFrom(events);
+		if (firstUserMessage) {
+			await trx
+				.updateTable("sessions")
+				.set({ first_user_message: firstUserMessage })
+				.where("id", "=", sessionId)
+				.where(sql<boolean>`first_user_message is null`)
+				.execute();
+		}
 		return seq;
 	});
 }
@@ -336,8 +436,26 @@ async function appendIfOpenOnce(
 			.set({ last_activity_at: now })
 			.where("id", "=", sessionId)
 			.execute();
+		const firstUserMessage = firstUserMessageFrom(events);
+		if (firstUserMessage) {
+			await trx
+				.updateTable("sessions")
+				.set({ first_user_message: firstUserMessage })
+				.where("id", "=", sessionId)
+				.where(sql<boolean>`first_user_message is null`)
+				.execute();
+		}
 		return true;
 	});
+}
+
+function firstUserMessageFrom(events: readonly AppendEvent[]): string | null {
+	for (const event of events) {
+		if (event.role !== "user" || event.chunk.type !== "text") continue;
+		const content = event.chunk.content.trim();
+		if (content) return content;
+	}
+	return null;
 }
 
 async function currentMaxSeq(

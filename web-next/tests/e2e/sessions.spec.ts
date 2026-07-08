@@ -295,6 +295,26 @@ test("the derived title shows on home and is inline-editable from the masthead, 
 	await expect(page).toHaveURL(SESSION_URL);
 });
 
+test("home search narrows the list and keyboard resume opens the selected session (#986)", async ({
+	page,
+}) => {
+	await page.goto("/");
+	const sessionLinks = page.locator("main ul li a");
+	await expect(sessionLinks).toHaveCount(2);
+
+	await page.keyboard.press("/");
+	const search = page.getByRole("searchbox", { name: "Search sessions" });
+	await expect(search).toBeFocused();
+	await search.type("failing session");
+
+	await expect(sessionLinks).toHaveCount(1);
+	await expect(sessionLinks.first()).toContainText("Renamed by hand");
+
+	await search.press("ArrowDown");
+	await search.press("Enter");
+	await expect(page).toHaveURL(turnSessionUrl);
+});
+
 test("a reload renders the same turn from the persisted event log", async ({
 	page,
 }) => {

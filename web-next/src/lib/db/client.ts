@@ -40,6 +40,8 @@ export interface SessionsTable {
 	/** GitHub login that created the session; null for legacy grandfathered rows. */
 	owner_login: string | null;
 	title: string;
+	/** First user-authored text chunk, projected for cheap sessions-home search. */
+	first_user_message: string | null;
 	/** Compute provider id — "mock" | "vercel" | "anthropic" | … */
 	provider: string;
 	/** Lifecycle state — "active" | "idle" | "archived" (owned by #749/#750). */
