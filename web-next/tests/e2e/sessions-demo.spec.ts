@@ -158,3 +158,47 @@ test("seeded transcript renders the requested message count @deployed-safe", asy
 	await page.goto("/sessions/demo?seed=20");
 	await expect(page.locator("[data-message-role]")).toHaveCount(20);
 });
+
+test("session page renders a real h1 carrying the title @deployed-safe", async ({
+	page,
+}) => {
+	await page.goto("/sessions/demo");
+	// #805: a real <h1>, present regardless of the decorative centered
+	// title's md:block gating — visually sr-only, not the masthead copy.
+	await expect(page.getByRole("heading", { level: 1 })).toHaveText(
+		"Fix the failing session-resume test",
+	);
+});
+
+test("keyboard-tab reveals the hover-only activity-line details toggle @deployed-safe", async ({
+	page,
+}) => {
+	await page.goto("/sessions/demo");
+	// #805: reveal-on-hover controls must also reveal on keyboard focus. A
+	// real Tab walk (not .focus()) — script-focus doesn't reliably engage
+	// :focus-visible, which is what the CSS keys off.
+	const detailsToggle = page.getByRole("button", { name: "details" });
+	await expect(detailsToggle).toHaveCSS("opacity", "0");
+	for (let i = 0; i < 60; i++) {
+		if (await detailsToggle.evaluate((el) => el === document.activeElement)) break;
+		await page.keyboard.press("Tab");
+	}
+	await expect(detailsToggle).toBeFocused();
+	await expect(detailsToggle).toHaveCSS("opacity", "1");
+});
+
+test("compose: Shift+Enter inserts a newline, bare Enter sends the multiline draft @deployed-safe", async ({
+	page,
+}) => {
+	await page.goto("/sessions/demo");
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await compose.fill("line one");
+	await compose.press("Shift+Enter");
+	await compose.type("line two");
+	await expect(compose).toHaveValue("line one\nline two");
+
+	// Bare Enter sends (and clears the draft) even mid-multiline-edit — the
+	// newline above did NOT submit.
+	await compose.press("Enter");
+	await expect(compose).toHaveValue("");
+});
