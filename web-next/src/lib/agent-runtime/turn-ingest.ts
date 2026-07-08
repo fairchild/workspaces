@@ -27,6 +27,7 @@ import { getRepo } from "../db/repos";
 import {
 	appendEvents,
 	getSession,
+	readEvents,
 	type Session,
 	titleSessionIfEmpty,
 	updateSession,
@@ -36,11 +37,13 @@ import {
 	type TurnNotificationOutcome,
 } from "../notify/turn-notification";
 import { deriveSessionTitle } from "../session-title";
+import { projectReplayContext } from "../transcript/replay-context";
 import {
 	type ComputeProvider,
 	getProvider,
 	type SessionResumeHandle,
 	type TurnRepo,
+	type TurnRequest,
 } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -152,9 +155,25 @@ export async function startTurn(
 		console.error(`[turn-ingest] auto-title write failed for ${session.id}`, error);
 	}
 	const fromSeq = userSeq + 1;
+	const resume = resumeHandle(session);
+	const priorContext = await replayContextForTurn(
+		handle,
+		session.id,
+		userSeq,
+		resume,
+	);
 	const controller = new AbortController();
 	const startedAt = Date.now();
-	const ingest = ingestTurn(handle, session, userText, provider, controller.signal, repo).then(
+	const ingest = ingestTurn(
+		handle,
+		session,
+		userText,
+		provider,
+		controller.signal,
+		repo,
+		resume,
+		priorContext,
+	).then(
 		(outcome) => {
 			// Deregister once this turn settles — but only if a newer turn hasn't
 			// already taken the slot (guards a fast resend replacing the entry).
@@ -223,6 +242,26 @@ async function resolveTurnRepo(
 	return { fullName: repo.fullName, defaultBranch: repo.defaultBranch };
 }
 
+async function replayContextForTurn(
+	handle: DatabaseHandle,
+	sessionId: string,
+	currentUserSeq: number,
+	resume: SessionResumeHandle | null,
+): Promise<string | null> {
+	if (!resume && currentUserSeq <= 1) return null;
+	try {
+		const events = await readEvents(handle, sessionId);
+		const priorEvents = events.filter((event) => event.seq < currentUserSeq);
+		return projectReplayContext(priorEvents);
+	} catch (error) {
+		console.error(
+			`[turn-ingest] prior context replay failed for ${sessionId}`,
+			error,
+		);
+		return null;
+	}
+}
+
 /** The abort-race verdict: the source yielded (or finished), or the stop won. */
 type NextOrAborted<T> = { aborted: true } | { aborted: false; result: IteratorResult<T> };
 
@@ -275,6 +314,8 @@ async function ingestTurn(
 	provider: ComputeProvider,
 	signal: AbortSignal,
 	repo: TurnRepo | null,
+	resume: SessionResumeHandle | null,
+	priorContext: string | null,
 ): Promise<TurnNotificationOutcome> {
 	let closed = false;
 	// An `error` chunk anywhere in the stream marks the turn failed for the
@@ -283,14 +324,16 @@ async function ingestTurn(
 	// not whether the stream terminated cleanly.
 	let sawError = false;
 	try {
+		const request: TurnRequest = {
+			sessionId: session.id,
+			userMessage: userText,
+			repo,
+			resume,
+			model: session.model,
+		};
+		if (priorContext) request.priorContext = priorContext;
 		const iterator = provider
-			.runTurn({
-				sessionId: session.id,
-				userMessage: userText,
-				repo,
-				resume: resumeHandle(session),
-				model: session.model,
-			})
+			.runTurn(request)
 			[Symbol.asyncIterator]();
 		while (true) {
 			const verdict = await nextOrAborted(iterator, signal);

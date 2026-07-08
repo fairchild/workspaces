@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { projectReplayContext } from "../transcript/replay-context";
 import {
 	buildPrompt,
 	buildSessionSetupScript,
@@ -162,6 +163,67 @@ describe("repo targeting", () => {
 			type: "done",
 			metadata: { aborted: true },
 		});
+	});
+});
+
+describe("buildPrompt", () => {
+	const repo = {
+		fullName: "fairchild/web-next-fixtures",
+		defaultBranch: "trunk",
+	};
+
+	test("frames projected prior context on a fresh fallback with history", () => {
+		const priorContext = projectReplayContext([
+			{ seq: 1, role: "user", chunk: { type: "text", content: "Fix resume" } },
+			{
+				seq: 2,
+				role: "assistant",
+				chunk: { type: "text", content: "I restored the branch." },
+			},
+			{ seq: 3, role: "assistant", chunk: { type: "done", content: "" } },
+		]);
+
+		const prompt = buildPrompt(
+			"Now add the replay test",
+			"abcdef123456",
+			true,
+			repo,
+			priorContext,
+		);
+
+		expect(prompt).toContain(
+			"The conversation so far (the sandbox restarted; your working copy was restored from the session branch):",
+		);
+		expect(prompt).toContain("User: Fix resume");
+		expect(prompt).toContain("Assistant: I restored the branch.");
+		expect(prompt.indexOf("User: Fix resume")).toBeLessThan(
+			prompt.indexOf("The user's request:"),
+		);
+		expect(prompt).toContain("The user's request:\nNow add the replay test");
+	});
+
+	test("keeps the first-turn prompt byte-identical when no prior context exists", () => {
+		const prompt = buildPrompt("Fix the failing test", "abcdef123456", true, repo);
+
+		expect(buildPrompt("Fix the failing test", "abcdef123456", true, repo, null)).toBe(
+			prompt,
+		);
+		expect(
+			buildPrompt("Fix the failing test", "abcdef123456", true, repo, " \n\t "),
+		).toBe(prompt);
+		expect(prompt).not.toContain("The conversation so far");
+	});
+
+	test("ignores priorContext on a successful warm resume", () => {
+		expect(
+			buildPrompt(
+				"Continue from the live harness session",
+				"abcdef123456",
+				false,
+				repo,
+				"User: old\n\nAssistant: context",
+			),
+		).toBe("Continue from the live harness session");
 	});
 });
 

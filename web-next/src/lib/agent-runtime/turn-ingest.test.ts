@@ -10,9 +10,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { type DatabaseHandle, openDatabase } from "../db/client";
 import { ensureRepo } from "../db/repos";
-import { createSession, getSession, readEvents } from "../db/sessions";
+import {
+	appendEvents,
+	createSession,
+	getSession,
+	readEvents,
+} from "../db/sessions";
 import { notifyTurnCompleted } from "../notify/turn-notification";
-import type { ComputeProvider } from "./provider";
+import type { ComputeProvider, TurnRequest } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 import { startTurn, stopActiveTurn } from "./turn-ingest";
 
@@ -130,6 +135,86 @@ describe("startTurn — auto-title failure isolation", () => {
 			fullName: "fairchild/web-next-fixtures",
 			defaultBranch: "trunk",
 		});
+	});
+});
+
+describe("startTurn — prior context threading", () => {
+	test("passes a compact replay when the session already has prior turns", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "context-session",
+			provider: "mock",
+		});
+		await appendEvents(handle, "context-session", [
+			{ role: "user", chunk: { type: "text", content: "Find the flaky test" } },
+			{ role: "assistant", chunk: { type: "status", content: "Starting sandbox" } },
+			{ role: "assistant", chunk: { type: "text", content: "I found it. " } },
+			{
+				role: "assistant",
+				chunk: {
+					type: "tool_use",
+					content: "Read",
+					metadata: { toolUseId: "t-1", toolName: "Read" },
+				},
+			},
+			{
+				role: "assistant",
+				chunk: {
+					type: "tool_result",
+					content: "file contents",
+					metadata: { toolUseId: "t-1" },
+				},
+			},
+			{ role: "assistant", chunk: { type: "text", content: "The guard is missing." } },
+			{ role: "assistant", chunk: { type: "done", content: "" } },
+		]);
+		let seenRequest: TurnRequest | undefined;
+		const provider: ComputeProvider = {
+			id: "capture",
+			runTurn: async function* (request) {
+				seenRequest = request;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+
+		const started = await startTurn(
+			handle,
+			session,
+			"Now add the regression test",
+			provider,
+		);
+		await started.ingest;
+
+		expect(seenRequest?.priorContext).toBe(
+			[
+				"User: Find the flaky test",
+				"Assistant: I found it. The guard is missing.",
+			].join("\n\n"),
+		);
+		expect(seenRequest?.priorContext).not.toContain("Now add");
+		expect(seenRequest?.priorContext).not.toContain("Starting sandbox");
+		expect(seenRequest?.priorContext).not.toContain("file contents");
+	});
+
+	test("omits priorContext on a genuine first turn", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "first-turn-session",
+			provider: "mock",
+		});
+		let seenRequest: TurnRequest | undefined;
+		const provider: ComputeProvider = {
+			id: "capture",
+			runTurn: async function* (request) {
+				seenRequest = request;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+
+		const started = await startTurn(handle, session, "Start fresh", provider);
+		await started.ingest;
+
+		expect(Object.hasOwn(seenRequest ?? {}, "priorContext")).toBe(false);
 	});
 });
 
