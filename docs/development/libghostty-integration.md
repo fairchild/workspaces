@@ -313,18 +313,23 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - if you launched with `--no-activate`, pause your own keyboard/mouse input
    - run `./scripts/capture-window.sh`
    - resume input after the capture finishes
-6. Exercise shortcuts when activation is allowed:
+6. Verify the daily-driver smoke lanes:
+   - authoritative UI lane: `./scripts/desktop-ui-smoke.sh --no-build`
+   - API parity lane: `./scripts/api-desktop-ui-smoke.sh --no-build`
+   - repeated comparison report: `uv run --script scripts/desktop-ui-smoke-parity.py --runs 3 --no-build`
+   - the API lane drives `workspace.create` and `workspace.select` through the operator socket; repo selection remains app-side until a reviewed repo-select verb exists
+7. Exercise shortcuts when activation is allowed:
    - `Cmd+B` collapse/restore sidebar
    - `Cmd+D` create split pane
    - optional: trigger configured resize/equalize bindings and confirm divider movement / 50:50 reset
    - `./scripts/shortcut-pass-through-smoke.sh` is intentionally not shared-desktop-safe and requires `Ghostty Splits` mode
    - Optional scripted smoke: `mask verify-shortcuts`
-7. Verify split runtime path in logs:
+8. Verify split runtime path in logs:
    - `tail -n 80 .dev-data/logs/launch-dev-*.log`
    - Expect `"[GhosttyAppManager] action=new_split direction="`
    - Optional resize/equalize traces:
      - `"[GhosttyAppManager] action=resize_split direction="`
      - `"[GhosttyAppManager] action=equalize_splits"`
-8. If you need input-driving automation without foreground activation on a shared desktop, escalate to Tart/Lume or a separate macOS user/session instead of forcing local focus.
+9. If you need input-driving automation without foreground activation on a shared desktop, escalate to Tart/Lume or a separate macOS user/session instead of forcing local focus.
 
 If shortcut behavior regresses, first confirm step 4 before changing code.

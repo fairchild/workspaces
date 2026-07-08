@@ -58,6 +58,16 @@ description = "Drive the daily-driver desktop flows (create workspace, terminal 
 run = "./scripts/desktop-ui-smoke.sh"
 usage = "[--no-build] [--keep-artifacts] [--timeout-seconds <n>] [--inactivity-seconds <n>]"
 
+[tasks."dev-api-ui-smoke"]
+description = "Drive the daily-driver desktop flows through operator workspace create/select verbs."
+run = "./scripts/api-desktop-ui-smoke.sh"
+usage = "[--no-build] [--keep-artifacts] [--timeout-seconds <n>]"
+
+[tasks."dev-ui-smoke-parity"]
+description = "Run UI and API desktop smoke lanes repeatedly and write a milestone parity report."
+run = "uv run --script scripts/desktop-ui-smoke-parity.py"
+usage = "[--runs <n>] [--no-build] [--timeout-seconds <n>]"
+
 [tasks."claude-integration-smoke"]
 description = "Run the interactive Claude Code integration smoke and evidence capture harness."
 run = "./scripts/claude-integration-smoke.sh"

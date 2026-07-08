@@ -553,6 +553,8 @@ milestones that prove the verb entered the real UI path:
 ```bash
 ./scripts/api-select-smoke.sh --no-build   # asserts terminal_session_attached after the CLI select
 ./scripts/api-create-smoke.sh --no-build   # asserts create, selection, and new workspace attach
+./scripts/api-desktop-ui-smoke.sh --no-build
+uv run --script scripts/desktop-ui-smoke-parity.py --runs 3 --no-build
 ```
 
 If docs or public examples changed, also run the docs checks listed in

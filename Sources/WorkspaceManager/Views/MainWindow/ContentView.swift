@@ -2152,6 +2152,21 @@ struct ContentView: View {
                 let selectedID = currentSelectedWorkspace?.id
                 let activeSessionID = tileTreeStore.activeSessionID
                 let attached = selectedID == effect.workspaceID && activeSessionID != nil
+                if desktopUISmokeAutomation.usesAPICreateDriver,
+                    desktopUISmokeAutomation.usesAPISelectDriver,
+                    let repo = repos.first(where: { $0.id == effect.repoID }),
+                    let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == effect.workspaceID })
+                {
+                    Task { @MainActor in
+                        let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
+                        handleRepoTerminalSelection(repo)
+                        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
+                            after: focusBaselineBeforeRepoPark,
+                            timeout: .seconds(15)
+                        )
+                        await desktopUISmokeAutomation.noteAwaitingAPISelect(workspace: workspace)
+                    }
+                }
                 return .completed(
                     AutomationWorkspaceCreateEffect(
                         repoID: effect.repoID,
