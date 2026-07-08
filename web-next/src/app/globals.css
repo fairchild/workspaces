@@ -15,7 +15,7 @@
 	--paper: #f7f4ed;
 	--raised: #fdfbf6;
 	--ink: #26221a;
-	--muted: #736b5b;
+	--muted: #6e6757;
 	/* Decorative-only: hairlines, separators, icon-glyph buttons. Needs only
 	   the 3:1 WCAG floor for graphical objects (1.4.11), never carries
 	   readable words — see --hint below for that (#806). */
@@ -23,8 +23,10 @@
 	/* Readable small text that used to ride on --faint (captions, hints,
 	   timestamps, placeholders, ledger verbs/meta): #806 split this out so it
 	   can hit the 4.5:1 AA floor for text without flattening the decorative
-	   marks that shared the old --faint value. */
-	--hint: #726c60;
+	   marks that shared the old --faint value. Both --hint and --muted are
+	   set to clear 4.5:1 on --status-bg (#f1ede0), the darkest surface small
+	   text sits on — paper and raised are lighter, so they only gain. */
+	--hint: #6d685c;
 	--line: #e7e1d2;
 	--line-strong: #dcd3bf;
 	--accent: #a15c31;

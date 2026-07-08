@@ -14,6 +14,13 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+/** Collapse-then-grow: height tracks content, capped by the CSS max-height. */
+function autoGrow(el: HTMLTextAreaElement | null) {
+	if (!el) return;
+	el.style.height = "auto";
+	el.style.height = `${el.scrollHeight}px`;
+}
+
 export interface ComposeFieldProps {
 	/** Names the reply target for assistive tech ("Reply to Claude"). */
 	agentName: string;
@@ -46,11 +53,26 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 	// past the bound. Layout-effect so the resize lands before paint (no
 	// visible jump on the growing keystroke).
 	useLayoutEffect(() => {
+		autoGrow(textareaRef.current);
+	}, [text]);
+
+	// Wrapping also changes when the field gets narrower or wider (viewport
+	// resize, mobile rotation) with no text change, so a keystroke-only
+	// re-measure would leave a stale height. Width is what drives rewrapping;
+	// gating on it also keeps the observer loop-safe (autoGrow writes height,
+	// never width). Codex finding (gpt-5.5, xhigh).
+	useEffect(() => {
 		const el = textareaRef.current;
 		if (!el) return;
-		el.style.height = "auto";
-		el.style.height = `${el.scrollHeight}px`;
-	}, [text]);
+		let lastWidth = el.clientWidth;
+		const observer = new ResizeObserver(() => {
+			if (el.clientWidth === lastWidth) return;
+			lastWidth = el.clientWidth;
+			autoGrow(el);
+		});
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, []);
 
 	const submit = () => {
 		const trimmed = text.trim();
