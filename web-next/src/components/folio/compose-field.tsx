@@ -5,8 +5,14 @@
  * hint chips, the whole field a click target, the send affordance warming
  * up only while focused. Sits over a paper gradient so the transcript
  * fades out beneath it.
+ *
+ * The field is an auto-growing textarea (#807): it starts at one line and
+ * grows with the draft up to a bounded max height, then scrolls internally
+ * rather than pushing the page around. Enter sends, Shift+Enter inserts a
+ * newline — the peer-tool convention (Slack, Discord, ChatGPT) — so pasting
+ * a stack trace or writing a multi-paragraph instruction doesn't truncate.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 export interface ComposeFieldProps {
 	/** Names the reply target for assistive tech ("Reply to Claude"). */
@@ -21,7 +27,7 @@ export interface ComposeFieldProps {
 }
 
 export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFieldProps) {
-	const inputRef = useRef<HTMLInputElement>(null);
+	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [text, setText] = useState("");
 
 	// Focus after mount rather than via the `autoFocus` attribute: an
@@ -30,8 +36,21 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 	// trip a hydration mismatch. This covers initial mount and client-nav
 	// remounts alike.
 	useEffect(() => {
-		inputRef.current?.focus();
+		textareaRef.current?.focus();
 	}, []);
+
+	// Re-measure on every keystroke (and on mount, e.g. a draft restored from
+	// elsewhere): collapse to one line first so a deleted line shrinks the
+	// field back down, then grow to the content's natural height, capped by
+	// the CSS max-height — which is what makes it scroll instead of growing
+	// past the bound. Layout-effect so the resize lands before paint (no
+	// visible jump on the growing keystroke).
+	useLayoutEffect(() => {
+		const el = textareaRef.current;
+		if (!el) return;
+		el.style.height = "auto";
+		el.style.height = `${el.scrollHeight}px`;
+	}, [text]);
 
 	const submit = () => {
 		const trimmed = text.trim();
@@ -43,23 +62,34 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 	return (
 		<div className="bg-[linear-gradient(to_top,var(--paper)_66%,var(--paper-0))] px-5 pt-11 pb-5">
 			<div
-				className="group mx-auto flex min-h-[54px] max-w-[680px] cursor-text items-center gap-[13px] rounded-[13px] border border-line-strong bg-raised py-2 pr-2 pl-[19px] shadow-field transition-[border-color,box-shadow] duration-200 hover:border-focus-line focus-within:border-focus-line focus-within:shadow-[0_0_0_3px_var(--focus-ring),var(--field-shadow)]"
+				className="group mx-auto flex min-h-[54px] max-w-[680px] cursor-text items-end gap-[13px] rounded-[13px] border border-line-strong bg-raised py-2 pr-2 pl-[19px] shadow-field transition-[border-color,box-shadow] duration-200 hover:border-focus-line focus-within:border-focus-line focus-within:shadow-[0_0_0_3px_var(--focus-ring),var(--field-shadow)]"
 				onClick={(event) => {
 					if (!(event.target as HTMLElement).closest("button"))
-						inputRef.current?.focus();
+						textareaRef.current?.focus();
 				}}
 			>
-				<span className="font-mono text-[15px] text-accent">›</span>
-				<input
-					ref={inputRef}
-					type="text"
+				<span aria-hidden className="mb-[7px] font-mono text-[15px] text-accent">
+					›
+				</span>
+				<textarea
+					ref={textareaRef}
+					rows={1}
 					aria-label={`Reply to ${agentName}`}
 					value={text}
 					onChange={(event) => setText(event.target.value)}
 					onKeyDown={(event) => {
-						if (event.key === "Enter") submit();
+						if (
+							event.key === "Enter" &&
+							!event.shiftKey &&
+							!event.nativeEvent.isComposing
+						) {
+							event.preventDefault();
+							submit();
+						}
 					}}
-					className="min-w-0 flex-1 border-none bg-transparent font-serif text-compose text-ink outline-none"
+					// Bounded growth (#807): past this height the draft scrolls inside
+					// the field instead of growing the field (and the page) forever.
+					className="my-[7px] max-h-[168px] min-w-0 flex-1 resize-none overflow-y-auto border-none bg-transparent font-serif text-compose text-ink outline-none"
 				/>
 				{disabled && onStop ? (
 					<button

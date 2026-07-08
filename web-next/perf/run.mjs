@@ -118,7 +118,8 @@ async function openSession(browser, baseUrl, sessionId) {
 }
 
 async function sendSessionMessage(page, text) {
-	const compose = 'input[aria-label="Reply to Claude"]';
+	// A textarea since #807 (auto-growing multiline compose) — was <input>.
+	const compose = 'textarea[aria-label="Reply to Claude"]';
 	await page.fill(compose, text);
 	await page.press(compose, "Enter");
 }
