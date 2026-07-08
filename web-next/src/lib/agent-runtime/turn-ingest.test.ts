@@ -7,12 +7,14 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { type DatabaseHandle, openDatabase } from "../db/client";
+import { ensureRepo } from "../db/repos";
 import { createSession, getSession, readEvents } from "../db/sessions";
+import { notifyTurnCompleted } from "../notify/turn-notification";
 import type { ComputeProvider } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
-import { startTurn } from "./turn-ingest";
+import { startTurn, stopActiveTurn } from "./turn-ingest";
 
 vi.mock("../db/sessions", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../db/sessions")>();
@@ -24,14 +26,24 @@ vi.mock("../db/sessions", async (importOriginal) => {
 	};
 });
 
+vi.mock("../notify/turn-notification", () => ({
+	notifyTurnCompleted: vi.fn(async () => {}),
+}));
+
 let open: DatabaseHandle | undefined;
 let dir: string | undefined;
+const notifyTurnCompletedMock = vi.mocked(notifyTurnCompleted);
 
 function freshDb(): DatabaseHandle {
 	dir = mkdtempSync(join(tmpdir(), "web-next-turn-ingest-"));
 	open = openDatabase(`file:${join(dir, "test.db")}`);
 	return open;
 }
+
+beforeEach(() => {
+	notifyTurnCompletedMock.mockReset();
+	notifyTurnCompletedMock.mockResolvedValue(undefined);
+});
 
 afterEach(async () => {
 	await open?.db.destroy();
@@ -40,10 +52,30 @@ afterEach(async () => {
 	dir = undefined;
 });
 
-function stubProvider(): ComputeProvider {
+function stubProvider(chunks: StreamChunk[] = [{ type: "done", content: "" }]): ComputeProvider {
 	return {
 		id: "stub",
 		runTurn: async function* () {
+			for (const chunk of chunks) yield chunk;
+		},
+	};
+}
+
+function throwingProvider(error: Error): ComputeProvider {
+	return {
+		id: "throwing",
+		runTurn: async function* () {
+			throw error;
+			yield { type: "done", content: "" } as StreamChunk;
+		},
+	};
+}
+
+function hangingProvider(): ComputeProvider {
+	return {
+		id: "hanging",
+		runTurn: async function* () {
+			await new Promise(() => {});
 			yield { type: "done", content: "" } as StreamChunk;
 		},
 	};
@@ -66,5 +98,144 @@ describe("startTurn — auto-title failure isolation", () => {
 		// The (mocked) title write failed — the session stays untitled, but
 		// nothing else about the turn was lost or blocked.
 		expect((await getSession(handle, "s1"))?.title).toBe("");
+	});
+});
+
+describe("startTurn — completion notification", () => {
+	test("fires with a completed payload after the terminal done is durable", async () => {
+		const handle = freshDb();
+		const repo = await ensureRepo(handle, "fairchild/workspaces", "main");
+		const session = await createSession(handle, {
+			id: "complete-session",
+			provider: "mock",
+			repoId: repo.id,
+			title: "Fix notifications",
+		});
+
+		const started = await startTurn(handle, session, "Ship it", stubProvider());
+		await started.ingest;
+
+		const events = await readEvents(handle, "complete-session");
+		expect(events.at(-1)?.chunk).toMatchObject({ type: "done" });
+		await vi.waitFor(() => {
+			expect(notifyTurnCompletedMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					durationMs: expect.any(Number),
+					outcome: "completed",
+					// The payload carries the repo's owner/name, resolved from the
+					// repos row — sessions store only the opaque repo row id.
+					repoFullName: "fairchild/workspaces",
+					session: expect.objectContaining({
+						id: "complete-session",
+						title: "Fix notifications",
+					}),
+				}),
+			);
+		});
+	});
+
+	test("a turn that streams an error chunk but closes normally notifies failed", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "errored-session",
+			provider: "mock",
+		});
+
+		const started = await startTurn(
+			handle,
+			session,
+			"Try anyway",
+			stubProvider([
+				{ type: "error", content: "provider hiccup" },
+				{ type: "done", content: "" },
+			]),
+		);
+		await started.ingest;
+
+		await vi.waitFor(() => {
+			expect(notifyTurnCompletedMock).toHaveBeenCalledWith(
+				expect.objectContaining({ outcome: "failed" }),
+			);
+		});
+	});
+
+	test("fires with a failed payload after error and aborted done are durable", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "failed-session",
+			provider: "mock",
+			repoId: "fairchild/workspaces",
+			title: "Broken turn",
+		});
+
+		const started = await startTurn(
+			handle,
+			session,
+			"Fail",
+			throwingProvider(new Error("sandbox died")),
+		);
+		await started.ingest;
+
+		const events = await readEvents(handle, "failed-session");
+		expect(events.slice(-2).map((event) => event.chunk)).toEqual([
+			{ type: "error", content: "sandbox died" },
+			{ type: "done", content: "", metadata: { aborted: true } },
+		]);
+		await vi.waitFor(() => {
+			expect(notifyTurnCompletedMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					outcome: "failed",
+					session: expect.objectContaining({ id: "failed-session" }),
+				}),
+			);
+		});
+	});
+
+	test("fires with a stopped payload for the stop path", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "stopped-session",
+			provider: "mock",
+			repoId: "fairchild/workspaces",
+			title: "Stopped turn",
+		});
+
+		const started = await startTurn(handle, session, "Stop me", hangingProvider());
+		expect(stopActiveTurn("stopped-session")).toBe(true);
+		await started.ingest;
+
+		const events = await readEvents(handle, "stopped-session");
+		expect(events.slice(-2).map((event) => event.chunk)).toEqual([
+			{ type: "error", content: "Turn stopped." },
+			{ type: "done", content: "", metadata: { aborted: true } },
+		]);
+		await vi.waitFor(() => {
+			expect(notifyTurnCompletedMock).toHaveBeenCalledWith(
+				expect.objectContaining({
+					outcome: "stopped",
+					session: expect.objectContaining({ id: "stopped-session" }),
+				}),
+			);
+		});
+	});
+
+	test("a synchronously throwing notifier does not reject the ingest path", async () => {
+		notifyTurnCompletedMock.mockImplementationOnce(() => {
+			throw new Error("notify blew up");
+		});
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "notify-throws-session",
+			provider: "mock",
+		});
+
+		const started = await startTurn(handle, session, "Survive", stubProvider());
+		await expect(started.ingest).resolves.toBeUndefined();
+
+		const events = await readEvents(handle, "notify-throws-session");
+		expect(events.at(-1)?.chunk).toMatchObject({ type: "done" });
+		await vi.waitFor(() => {
+			expect(notifyTurnCompletedMock).toHaveBeenCalledOnce();
+		});
 	});
 });
