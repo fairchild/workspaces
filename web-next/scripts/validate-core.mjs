@@ -7,7 +7,7 @@
  */
 
 /** The deployed production origin; override with WEB_NEXT_PROD_URL. */
-export const DEFAULT_PROD_URL = "https://web-next-ivory-six.vercel.app";
+export const DEFAULT_PROD_URL = "https://folio.cloudcompute.com";
 
 export const LOCAL_PORT = 3101;
 
@@ -274,7 +274,7 @@ export function evaluateModelChecks(results) {
 			status: ok ? "pass" : "fail",
 			detail: ok
 				? `${id} → routed via ${body.gatewayModel ?? "?"} in ${body.latencyMs ?? "?"}ms: ${JSON.stringify(body.reply)}`
-				: `${id} → HTTP ${status} ${JSON.stringify(body).slice(0, 200)}`,
+				: `${id} → HTTP ${status} ${JSON.stringify(body ?? null).slice(0, 200)}`,
 		};
 	});
 }

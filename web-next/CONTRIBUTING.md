@@ -146,7 +146,7 @@ env vars) — per the matrix in [`docs/deploy.md`](docs/deploy.md).
 ## Deploying
 
 The app is linked to Vercel project **`cloudcompute/web-next`**
-(https://web-next-ivory-six.vercel.app):
+(https://folio.cloudcompute.com):
 
 ```bash
 npx vercel login            # device flow
