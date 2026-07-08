@@ -109,8 +109,12 @@ export function resolveTargetRepo(
 }
 
 /** A stable per-session branch the agent commits and opens its PR from. */
-function sessionBranch(sessionId: string): string {
+export function sessionBranch(sessionId: string): string {
 	return `agent/session-${sessionId.slice(0, 8)}`;
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**
@@ -126,6 +130,12 @@ export function buildSessionSetupScript(
 	repo: TurnRepo,
 ): string {
 	const branch = sessionBranch(sessionId);
+	const branchArg = shellQuote(branch);
+	const repoUrl = `https://github.com/${repo.fullName}.git`;
+	const remoteRefspec = shellQuote(
+		`refs/heads/${branch}:refs/remotes/origin/${branch}`,
+	);
+	const remoteBranchArg = shellQuote(`origin/${branch}`);
 	return [
 		"set -e",
 		"umask 077",
@@ -136,11 +146,16 @@ export function buildSessionSetupScript(
 		'printf "%s" "$GH_TOKEN" > /tmp/gh_token',
 		`if [ ! -d ${WORKSPACE_DIR}/.git ]; then`,
 		`  if [ -n "$DEFAULT_BRANCH" ]; then`,
-		`    git clone --depth 50 --branch "$DEFAULT_BRANCH" https://github.com/${repo.fullName}.git ${WORKSPACE_DIR}`,
+		`    git clone --depth 50 --branch "$DEFAULT_BRANCH" ${repoUrl} ${WORKSPACE_DIR}`,
 		"  else",
-		`    git clone --depth 50 https://github.com/${repo.fullName}.git ${WORKSPACE_DIR}`,
+		`    git clone --depth 50 ${repoUrl} ${WORKSPACE_DIR}`,
 		"  fi",
-		`  git -C ${WORKSPACE_DIR} checkout -b ${branch}`,
+		`  if git -C ${WORKSPACE_DIR} ls-remote --exit-code --heads origin ${branchArg} >/dev/null 2>&1; then`,
+		`    git -C ${WORKSPACE_DIR} fetch --depth 50 origin ${remoteRefspec}`,
+		`    git -C ${WORKSPACE_DIR} checkout ${branchArg} 2>/dev/null || git -C ${WORKSPACE_DIR} checkout -b ${branchArg} --track ${remoteBranchArg}`,
+		"  else",
+		`    git -C ${WORKSPACE_DIR} checkout -b ${branchArg}`,
+		"  fi",
 		"fi",
 		`if [ -z "$DEFAULT_BRANCH" ]; then`,
 		`  DEFAULT_BRANCH="$(git -C ${WORKSPACE_DIR} symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's#^origin/##' || true)"`,
@@ -321,10 +336,6 @@ function baseBranchLabel(repo: TurnRepo): string {
 
 function promptCurlBase(repo: TurnRepo): string {
 	return repo.defaultBranch ?? "$(cat /tmp/default_branch)";
-}
-
-function shellQuote(value: string): string {
-	return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 export function buildPrompt(
@@ -669,44 +680,23 @@ export const vercelProvider: ComputeProvider = {
 				if (typeof id === "string") seenToolCallIds.add(id);
 				yield chunk;
 			}
-			// Synthesize one Diff ledger row per changed file from the working tree
-			// (the Edit/Write results carry no patch; the real diff lives in git).
-			// Emitted as a tool_use + tool_result pair — the Folio adapter merges
-			// metadata.diff into that same call's own output (#790: a diff's home
-			// is its own expandable ledger row, never a separate floating card),
-			// and the AI SDK only keeps a tool result that has a matching opened
-			// call. This is a per-file summary, not per Edit invocation — git diff
-			// can't attribute hunks back to individual tool calls when a file is
-			// edited more than once in a turn, so multiple edits to one file land
-			// as a single Diff row rather than each Edit call carrying its own.
-			for (const diff of await changedFileDiffs(sandbox)) {
-				const toolUseId = uniqueDiffToolCallId(diff.file, seenToolCallIds);
-				seenToolCallIds.add(toolUseId);
-				yield {
-					type: "tool_use",
-					content: "Diff",
-					metadata: {
-						toolUseId,
-						toolName: "Diff",
-						input: { file_path: diff.file },
-					},
-				};
-				yield {
-					type: "tool_result",
-					content: "",
-					metadata: { toolUseId, output: "", diff },
-				};
+			const tail = runTurnTail({
+				sandbox,
+				branch: sessionBranch(request.sessionId),
+				seenToolCallIds,
+				doneChunk,
+				session,
+				sandboxSessionId,
+				debug: debugHarness,
+			});
+			for (;;) {
+				const next = await tail.next();
+				if (next.done) {
+					detached = next.value;
+					break;
+				}
+				yield next.value;
 			}
-			// Park the session so the next turn reconnects it; carry the resume
-			// payload out on the done chunk for the ingest loop to persist. If
-			// parking fails, `resume: null` clears the stale handle and the session
-			// is torn down below.
-			const resume = await parkSession(session, sandboxSessionId, debugHarness);
-			detached = resume !== null;
-			yield {
-				...(doneChunk ?? { type: "done", content: "" }),
-				metadata: { ...doneChunk?.metadata, resume },
-			};
 		} finally {
 			if (!detached) await session.destroy().catch(() => {});
 		}
@@ -739,7 +729,7 @@ export function uniqueDiffToolCallId(file: string, seen: ReadonlySet<string>): s
 }
 
 /** A sandbox session that can run shell commands (the onSession surface). */
-interface RunnableSandbox {
+export interface RunnableSandbox {
 	run: (opts: {
 		command: string;
 	}) => PromiseLike<{ exitCode: number; stdout: string; stderr: string }>;
@@ -772,6 +762,190 @@ async function changedFileDiffs(sandbox: RunnableSandbox | undefined): Promise<F
 	} catch {
 		return [];
 	}
+}
+
+const CHECKPOINT_COMMIT_MESSAGE = "wip(session): checkpoint after turn";
+const CHECKPOINT_ERROR_CAP = 240;
+
+function commandFailure(
+	label: string,
+	res: { exitCode: number; stdout: string; stderr: string },
+): Error {
+	const detail = [res.stderr.trim(), res.stdout.trim()].filter(Boolean).join("\n");
+	return new Error(
+		`${label} failed (exit ${res.exitCode})${detail ? `: ${detail}` : ""}`,
+	);
+}
+
+async function runRequired(
+	sandbox: RunnableSandbox,
+	label: string,
+	command: string,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const res = await sandbox.run({ command });
+	if (res.exitCode !== 0) throw commandFailure(label, res);
+	return res;
+}
+
+function capCheckpointError(value: unknown): string {
+	const text = errorText(value).replace(/\s+/g, " ").trim() || "unknown error";
+	if (text.length <= CHECKPOINT_ERROR_CAP) return text;
+	return `${text.slice(0, CHECKPOINT_ERROR_CAP - 3)}...`;
+}
+
+async function unpushedCommitCount(
+	sandbox: RunnableSandbox,
+	branch: string,
+): Promise<number> {
+	const branchArg = shellQuote(branch);
+	const remoteRef = `refs/remotes/origin/${branch}`;
+	const remoteExists = await sandbox.run({
+		command: `git -C ${WORKSPACE_DIR} ls-remote --exit-code --heads origin ${branchArg} >/dev/null`,
+	});
+	let baseRef: string;
+	if (remoteExists.exitCode === 0) {
+		await runRequired(
+			sandbox,
+			"checkpoint fetch",
+			`git -C ${WORKSPACE_DIR} fetch --depth 50 origin ${shellQuote(`refs/heads/${branch}:refs/remotes/origin/${branch}`)}`,
+		);
+		baseRef = remoteRef;
+	} else if (remoteExists.exitCode === 2) {
+		baseRef = "origin/HEAD";
+	} else {
+		throw commandFailure("checkpoint remote branch check", remoteExists);
+	}
+
+	const ahead = await runRequired(
+		sandbox,
+		"checkpoint ahead check",
+		`git -C ${WORKSPACE_DIR} rev-list --count ${shellQuote(`${baseRef}..HEAD`)}`,
+	);
+	const count = Number.parseInt(ahead.stdout.trim(), 10);
+	if (!Number.isFinite(count)) {
+		throw new Error(`checkpoint ahead check returned ${JSON.stringify(ahead.stdout)}`);
+	}
+	return count;
+}
+
+/**
+ * Best-effort end-of-turn preservation. It records dirty work as a WIP commit
+ * and pushes the session branch when local commits are ahead of the remote.
+ * Failures become calm status chunks; they never fail the agent turn.
+ */
+export async function checkpointSessionBranch(
+	sandbox: RunnableSandbox | undefined,
+	branch: string,
+): Promise<string | undefined> {
+	if (!sandbox) return undefined;
+	try {
+		const status = await runRequired(
+			sandbox,
+			"checkpoint status",
+			`git -C ${WORKSPACE_DIR} status --porcelain=v1`,
+		);
+		const hasTreeChanges = status.stdout.trim().length > 0;
+		if (hasTreeChanges) {
+			await runRequired(
+				sandbox,
+				"checkpoint add",
+				`git -C ${WORKSPACE_DIR} add -A`,
+			);
+			const staged = await runRequired(
+				sandbox,
+				"checkpoint staged check",
+				[
+					"set +e",
+					`git -C ${WORKSPACE_DIR} diff --cached --quiet`,
+					"code=$?",
+					"set -e",
+					'if [ "$code" -eq 0 ]; then printf clean; elif [ "$code" -eq 1 ]; then printf dirty; else exit "$code"; fi',
+				].join("; "),
+			);
+			if (staged.stdout.trim() === "dirty") {
+				await runRequired(
+					sandbox,
+					"checkpoint commit",
+					`git -C ${WORKSPACE_DIR} commit -m ${shellQuote(CHECKPOINT_COMMIT_MESSAGE)}`,
+				);
+			}
+		}
+
+		const ahead = await unpushedCommitCount(sandbox, branch);
+		if (ahead <= 0) return undefined;
+
+		await runRequired(
+			sandbox,
+			"checkpoint push",
+			`git -C ${WORKSPACE_DIR} push -u origin ${shellQuote(branch)}`,
+		);
+		return `Pushed checkpoint to ${branch}`;
+	} catch (error) {
+		return `Checkpoint push failed: ${capCheckpointError(error)}`;
+	}
+}
+
+export interface TurnTailOptions {
+	sandbox: RunnableSandbox | undefined;
+	branch: string;
+	seenToolCallIds: Set<string>;
+	doneChunk: StreamChunk | undefined;
+	session: { detach: () => Promise<unknown> };
+	sandboxSessionId: string;
+	debug: boolean;
+}
+
+export async function* runTurnTail({
+	sandbox,
+	branch,
+	seenToolCallIds,
+	doneChunk,
+	session,
+	sandboxSessionId,
+	debug,
+}: TurnTailOptions): AsyncGenerator<StreamChunk, boolean, void> {
+	// Synthesize one Diff ledger row per changed file from the working tree
+	// (the Edit/Write results carry no patch; the real diff lives in git).
+	// Emitted as a tool_use + tool_result pair — the Folio adapter merges
+	// metadata.diff into that same call's own output (#790: a diff's home
+	// is its own expandable ledger row, never a separate floating card),
+	// and the AI SDK only keeps a tool result that has a matching opened
+	// call. This is a per-file summary, not per Edit invocation — git diff
+	// can't attribute hunks back to individual tool calls when a file is
+	// edited more than once in a turn, so multiple edits to one file land
+	// as a single Diff row rather than each Edit call carrying its own.
+	for (const diff of await changedFileDiffs(sandbox)) {
+		const toolUseId = uniqueDiffToolCallId(diff.file, seenToolCallIds);
+		seenToolCallIds.add(toolUseId);
+		yield {
+			type: "tool_use",
+			content: "Diff",
+			metadata: {
+				toolUseId,
+				toolName: "Diff",
+				input: { file_path: diff.file },
+			},
+		};
+		yield {
+			type: "tool_result",
+			content: "",
+			metadata: { toolUseId, output: "", diff },
+		};
+	}
+
+	const checkpointStatus = await checkpointSessionBranch(sandbox, branch);
+	if (checkpointStatus) yield { type: "status", content: checkpointStatus };
+
+	// Park the session so the next turn reconnects it; carry the resume
+	// payload out on the done chunk for the ingest loop to persist. If
+	// parking fails, `resume: null` clears the stale handle and the session
+	// is torn down by the caller.
+	const resume = await parkSession(session, sandboxSessionId, debug);
+	yield {
+		...(doneChunk ?? { type: "done", content: "" }),
+		metadata: { ...doneChunk?.metadata, resume },
+	};
+	return resume !== null;
 }
 
 /** Splits a multi-file unified diff into per-file diffs. */
