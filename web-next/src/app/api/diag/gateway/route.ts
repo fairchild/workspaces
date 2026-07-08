@@ -49,7 +49,9 @@ export async function GET(request: Request) {
 			body: JSON.stringify({
 				model: resolved.gatewayModel,
 				messages: [{ role: "user", content: "Reply with exactly: gateway live" }],
-				max_tokens: 10,
+				// Reasoning models (fable-5) spend completion budget on thinking
+				// before any text — 10 tokens yields an empty reply and a false red.
+				max_tokens: 400,
 			}),
 		});
 	} catch (error) {

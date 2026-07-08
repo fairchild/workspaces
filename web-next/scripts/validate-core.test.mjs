@@ -235,6 +235,19 @@ describe("evaluateModelChecks (#816)", () => {
 		expect(byId["model:claude-opus-4-8"]).toBe("fail");
 		expect(byId["model:claude-sonnet-5"]).toBe("fail");
 	});
+
+	test("an unreachable probe (no body at all) is a failed check, not a crash", () => {
+		const checks = evaluateModelChecks([
+			{ id: "claude-fable-5", status: 0, body: undefined },
+		]);
+		expect(checks).toEqual([
+			{
+				id: "model:claude-fable-5",
+				status: "fail",
+				detail: "claude-fable-5 → HTTP 0 null",
+			},
+		]);
+	});
 });
 
 describe("evaluateE2eResults (#817)", () => {
