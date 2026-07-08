@@ -47,6 +47,12 @@ pnpm perf        # perf harness vs perf/contract.json budgets
 pnpm validate    # env-targetable validation (--env local|prod, --url <origin>)
 ```
 
+`pnpm evidence` only writes local files — the repo's evidence gate needs
+uploaded URLs in the PR body (`docs/development/evidence.md`). Upload the
+whole walk in one shot with `pnpm evidence:upload -- --pr <N>` (wraps
+repo-root `scripts/evidence.sh` once per PNG, needs `EVIDENCE_UPLOAD_TOKEN`)
+and paste the printed markdown summary into the PR.
+
 `pnpm validate` also runs against real deployments — `pnpm validate --env prod`
 probes reachability and auth/security posture with zero credentials, and
 credential-gated stages report themselves skipped rather than passing silently
