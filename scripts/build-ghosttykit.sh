@@ -279,6 +279,26 @@ repair_ghostty_archive_if_needed() {
   rm -f "$archives_file"
 
   chmod -R u+rwX "$tmp_dir"
+
+  # The zig cache also holds build-time helper objects compiled for the
+  # compiler host's own arch (e.g. x86_64 on a Rosetta-translated zig running
+  # on an arm64 host), not just the target slice — sweeping every *.o
+  # unfiltered produces a needlessly fat archive (both arches present, though
+  # harmless since the linker only pulls the matching slice). Keep only
+  # objects matching the host arch, using the same `file`-output convention
+  # as zig_binary_matches_host_arch.
+  local host_arch object
+  host_arch="$(uname -m)"
+  while IFS= read -r object; do
+    if ! file "$object" 2>/dev/null | grep -q "$host_arch"; then
+      rm -f "$object"
+    fi
+  done < <(find "$tmp_dir/objects" -type f -name "*.o")
+
+  if ! find "$tmp_dir/objects" -type f -name "*.o" -print -quit | grep -q .; then
+    die "no $host_arch objects found in the Zig cache to repair the GhosttyKit archive"
+  fi
+
   find "$tmp_dir/objects" -type f -name "*.o" -print0 \
     | xargs -0 libtool -static -o "$tmp_dir/libghostty-fat.a"
   mv "$tmp_dir/libghostty-fat.a" "$archive"
