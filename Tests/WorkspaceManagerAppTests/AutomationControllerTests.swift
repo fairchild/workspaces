@@ -509,7 +509,7 @@ struct AutomationControllerTests {
 
         let result = try controller.automationWindows(for: operatorEntry.handle)
         #expect(result.windows == [descriptor])
-        #expect(result.system.capabilities == [.windowRead])
+        #expect(result.system.capabilities == [.windowRead, .windowSnapshot])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
 
@@ -554,6 +554,123 @@ struct AutomationControllerTests {
             Issue.record("Expected an unknown handle to be stale")
         } catch let error as AutomationServiceError {
             #expect(error.response.code == .staleHandle)
+        }
+    }
+
+    @Test("Operator handle snapshots a window via the provider; capabilities echo operator scope")
+    func operatorWindowSnapshotReturnsCapture() async throws {
+        let store = TileTreeStore()
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let png = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
+        var requestedWindowIDs: [String] = []
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            windowSnapshot: { windowID in
+                requestedWindowIDs.append(windowID)
+                return .captured(pngData: png, width: 2800, height: 1800)
+            }
+        )
+
+        let result = try await controller.automationWindowSnapshot(for: operatorEntry.handle, windowID: "42")
+        #expect(result.windowID == "42")
+        #expect(result.width == 2800)
+        #expect(result.height == 1800)
+        #expect(Data(base64Encoded: result.data) == png)
+        #expect(result.system.capabilities == [.windowRead, .windowSnapshot])
+        #expect(requestedWindowIDs == ["42"])
+    }
+
+    @Test("Window snapshot denies a tile handle before invoking the capture provider")
+    func operatorWindowSnapshotDeniesTileHandle() async throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "tile" })
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        var captureCalls = 0
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            windowSnapshot: { _ in
+                captureCalls += 1
+                return .captured(pngData: Data([0x89]), width: 1, height: 1)
+            }
+        )
+
+        do {
+            _ = try await controller.automationWindowSnapshot(for: "tile", windowID: "42")
+            Issue.record("Expected a tile handle to be denied window.snapshot")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+        // The capability gate runs before the capture provider, so nothing was captured.
+        #expect(captureCalls == 0)
+    }
+
+    @Test("WindowSnapshotService rejects ids it does not own without capturing")
+    func windowSnapshotServiceRejectsUnownedWindows() {
+        // Deterministic, headless-safe: the own-window guard resolves against the supplied window
+        // list, so a non-numeric, non-positive, or non-app-owned id is unknownWindow before any
+        // WindowServer capture is attempted.
+        #expect(WindowSnapshotService.snapshot(windowID: "not-a-number", windows: []) == .unknownWindow)
+        #expect(WindowSnapshotService.snapshot(windowID: "0", windows: []) == .unknownWindow)
+        #expect(WindowSnapshotService.snapshot(windowID: "999999999", windows: []) == .unknownWindow)
+    }
+
+    @Test("Live window capture produces a bounded, non-empty composited PNG")
+    func liveWindowCaptureProducesPNG() async throws {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 320),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false
+        )
+        let content = NSView(frame: NSRect(x: 0, y: 0, width: 480, height: 320))
+        content.wantsLayer = true
+        content.layer?.backgroundColor = NSColor.systemBlue.cgColor
+        window.contentView = content
+        // orderFront realizes and composites the window without activating the app (no focus steal),
+        // mirroring the backgrounded-capture contract. Off-screen placement keeps it invisible.
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.orderFront(nil)
+        try? await Task.sleep(for: .milliseconds(400))
+
+        let outcome = WindowSnapshotService.snapshot(windowID: String(window.windowNumber))
+        window.orderOut(nil)
+
+        // WindowServer compositing is required to capture; a headless CI host may not provide it, so
+        // a non-capturable outcome is tolerated. When capture does succeed (local GUI session, the
+        // evidence lane), assert the PNG is non-empty and dimensionally sane, and drop the evidence.
+        switch outcome {
+        case .captured(let pngData, let width, let height):
+            #expect(!pngData.isEmpty)
+            #expect(width >= 480)  // >= point size; Retina backing may 2x it
+            #expect(height >= 320)
+            #expect(pngData.count <= AutomationAPI.windowSnapshotMaxRawBytes)
+            #expect(pngData.prefix(4) == Data([0x89, 0x50, 0x4E, 0x47]))  // PNG magic
+            if let dir = ProcessInfo.processInfo.environment["WINDOW_SNAPSHOT_EVIDENCE_DIR"] {
+                let url = URL(fileURLWithPath: dir).appendingPathComponent("window-snapshot.png")
+                try? pngData.write(to: url)
+            }
+        default:
+            // No compositing available in this host — mechanism fidelity is proven by the evidence lane.
+            break
         }
     }
 

@@ -64,9 +64,9 @@ WorkSpaces terminal tile. See
   exits, and the credential file is removed on a clean exit. A credential left
   behind by a crashed launch fails closed — its handle no longer resolves
   against the fresh registry (`stale_handle`).
-- **Capture-only.** The initial operator capability set is `window.read`
-  (list windows). `window.snapshot` arrives with the follow-on slice. Operator
-  handles never carry tile mutation or `input.write`.
+- **Capture-only.** The operator capability set is `window.read` (list windows)
+  and `window.snapshot` (composited PNG of a listed window). Operator handles
+  never carry tile mutation or `input.write`.
 
 ## Invariants
 
@@ -114,6 +114,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/context` | Returns the caller's resolved context and capabilities. |
 | `GET /v1/surfaces` | Returns visible terminal surfaces in the caller's window/app scope. |
 | `GET /v1/windows` | **Operator scope.** Returns the app's on-screen windows with stable identifiers (`window.read`). Keyed by the AppKit window number — the same identity `CGWindowList`/ScreenCaptureKit address. Requires an operator handle; a tile handle lacks `window.read` and fails `capability_denied`. |
+| `POST /v1/window/snapshot` | **Operator scope.** Returns a composited PNG of the app window named by the body's `windowID` (a `window.read` id). The capture includes the full window — sidebar chrome *and* the GhosttyKit terminal surface — and works with the app backgrounded (no activation). Requires `window.snapshot`; own-window only, so an id the app does not own fails `invalid_request`. See [Window snapshot](#window-snapshot). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -143,6 +144,7 @@ handle.
 | `surfaces.read` | `GET /v1/surfaces` |
 | `browser.read` | `GET /v1/web-surfaces` (read-only listing) and `GET /v1/web-surfaces/{id}/snapshot` (bounded PNG of a live surface); granted to default handles under the Automation API experiment |
 | `window.read` | `GET /v1/windows` (list the app's windows); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
+| `window.snapshot` | `POST /v1/window/snapshot` (composited PNG of a listed window); granted only to operator handles, never to tile handles |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -177,6 +179,55 @@ Failure mapping (reusing the stable error codes): an id matching no web source �
 timeout or over-cap PNG → `unsupported` (distinct messages); an internal capture
 error → `internal_error`. Snapshotting a source whose view is not instantiated
 never creates one — the request fails closed.
+
+## Window snapshot
+
+`POST /v1/window/snapshot` (operator scope, `window.snapshot`) returns a
+composited PNG of one of the app's windows. The body names the target by the
+`windowID` a caller obtained from `GET /v1/windows`:
+
+```json
+{ "windowID": "42" }
+```
+
+The success envelope carries the same base64-PNG shape as the web-surface
+snapshot, keyed by `windowID`:
+
+```json
+{ "windowID": "42", "encoding": "png", "width": 2800, "height": 1800,
+  "byteCount": 481203, "data": "<base64 png>" }
+```
+
+`byteCount` is the raw (pre-base64) PNG size; `width`/`height` are its true pixel
+dimensions (Retina-scaled, never down-sampled). Decode with
+`jq -r .result.data | base64 -d > window.png`.
+
+Mechanism and properties (chosen by spike
+[#915](https://github.com/fairchild/workspaces/issues/915), recorded in the
+[operator-scope ADR](../decisions/automation-operator-scope.md)):
+
+- **`CGWindowListCreateImage` scoped to the app's own window number.** TCC-free
+  for own windows (no Screen Recording grant, no prompt) and full composited
+  fidelity — sidebar chrome *and* the GhosttyKit `IOSurfaceLayer` terminal
+  surface in one call. Deprecated in macOS 14 but functional; ScreenCaptureKit is
+  the migration target behind the stable `WindowSnapshotService` interface.
+- **Backgrounded, no focus steal.** WindowServer retains each window's IOSurface
+  regardless of z-order, so a non-frontmost or occluded window still yields its
+  real last-composited content. The route never activates the app or reorders the
+  window.
+- **Own-window only.** The `windowID` must belong to a window the app owns (the
+  set `window.read` lists); any other id fails `invalid_request`. This is the
+  security boundary — an operator cannot capture a stranger's window.
+- **Bound.** A PNG over 64 MiB is rejected (`unsupported`), never truncated.
+  There is no width bound: the capture is the window at its true composited
+  resolution, since full-fidelity evidence is the point of this lane.
+
+Failure mapping: an id naming no app-owned window → `invalid_request`; a window
+that is not compositing (minimized, off the active Space, or locked screen) →
+`unsupported`; an over-cap PNG → `unsupported`; an internal capture/encode error
+→ `internal_error`. Locked-screen full-window capture is not achievable in-process
+(every composited path fails when the session is locked); that evidence keeps the
+VM / `tart-ui` fallback lane.
 
 ## Error Codes
 
@@ -218,16 +269,23 @@ workspaces input write 'echo hi'
 workspaces input write 'echo hi' --submit
 ```
 
-`workspaces window list` is the operator-scope command. Unlike the tile-scoped
-commands, it reads the per-launch operator credential file (minted next to the
-socket by an opt-in launch) rather than the injected terminal environment, so it
-works from any same-user shell outside a WorkSpaces tile. Absent the credential
-it fails closed with guidance.
+`workspaces window list` and `workspaces window snapshot` are the operator-scope
+commands. Unlike the tile-scoped commands, they read the per-launch operator
+credential file (minted next to the socket by an opt-in launch) rather than the
+injected terminal environment, so they work from any same-user shell outside a
+WorkSpaces tile. Absent the credential they fail closed with guidance.
 
 ```bash
 workspaces window list
 workspaces window list --json
+workspaces window snapshot --out shot.png            # main window, or first if none is main
+workspaces window snapshot --out shot.png --window 42 # a specific window.read id
 ```
+
+`window snapshot` writes the PNG to `--out` and, with no `--window`, targets the
+main window (falling back to the first listed) so the common "snapshot the app"
+case needs no id lookup. It works with the app backgrounded — no activation, no
+focus steal.
 
 ## Implementation Map
 
@@ -237,8 +295,10 @@ workspaces window list --json
 | Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
 | HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |
 | Web-surface snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WebSurfaceSnapshotEncoder.swift` |
+| Window snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WindowSnapshotEncoder.swift` |
 | Operator credential store + provisioner | `Sources/WorkspaceManagerCore/Services/Automation/AutomationOperatorCredentialStore.swift` |
 | Window enumeration (AppKit → descriptors) | `Sources/WorkspaceManager/Views/MainWindow/AutomationWindowEnumerator.swift` |
+| Window snapshot capture (`CGWindowList`, MainActor) | `Sources/WorkspaceManager/Views/MainWindow/WindowSnapshotService.swift` |
 | Web-surface snapshot capture (MainActor) | `Sources/WorkspaceManager/Web/WebSurfaceSnapshotCapture.swift` |
 | CLI socket client | `Sources/WorkspaceManagerCore/Services/Automation/AutomationSocketClient.swift` |
 | CLI formatting | `Sources/WorkspaceManagerCore/Services/Automation/AutomationCLIFormatting.swift` |
@@ -268,9 +328,10 @@ V1 does not support browser mutation (navigating, clicking, filling, or
 evaluating JavaScript in a web surface), opening web URLs, tab title or metadata
 changes, writing into other tiles, resize/equalize, or global cross-workspace
 *mutation*. Those capabilities require separate product and safety review before
-they can be added. Read-only global window listing is the one reviewed
-exception, and it is gated behind the opt-in operator scope above
-(`window.read`), not granted to tile handles. Two reviewed exceptions widen the read/write surface
+they can be added. Read-only global window capture is the one reviewed
+exception — listing (`window.read`) and composited snapshots
+(`window.snapshot`) — gated behind the opt-in operator scope above, never
+granted to tile handles. Two reviewed exceptions widen the read/write surface
 deliberately: caller-scoped input injection ships as the experimental,
 double-gated `input.write` capability (see
 [Automation Input Write Decision](../decisions/automation-input-write.md)), and

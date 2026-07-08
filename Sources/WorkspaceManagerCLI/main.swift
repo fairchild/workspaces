@@ -840,18 +840,25 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces window list [--json]` — the operator-scope command. Unlike the tile-scoped
-    /// commands, it reads the per-launch operator credential file (minted next to the socket by an
-    /// opted-in launch) rather than the `WORKSPACES_AUTOMATION_HANDLE` env, so it works from any
-    /// same-user shell outside a WorkSpaces tile. Absent the credential it fails closed with guidance.
+    /// `workspaces window <list|snapshot>` — the operator-scope commands. Unlike the tile-scoped
+    /// commands, they read the per-launch operator credential file (minted next to the socket by an
+    /// opted-in launch) rather than the `WORKSPACES_AUTOMATION_HANDLE` env, so they work from any
+    /// same-user shell outside a WorkSpaces tile. Absent the credential they fail closed with guidance.
     private func runWindow(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces window list [--json]"
-        guard arguments.first == "list" else {
-            throw CLIError("Usage: \(usage)")
+        switch arguments.first {
+        case "list":
+            return try runWindowList(arguments: Array(arguments.dropFirst()))
+        case "snapshot":
+            return try runWindowSnapshot(arguments: Array(arguments.dropFirst()))
+        default:
+            throw CLIError("Usage: workspaces window list [--json] | window snapshot --out <path> [--window <id>]")
         }
+    }
 
+    private func runWindowList(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces window list [--json]"
         var json = false
-        for argument in arguments.dropFirst() {
+        for argument in arguments {
             switch argument {
             case "--json":
                 json = true
@@ -861,21 +868,13 @@ private final class CLIApp {
         }
 
         let credential = try loadOperatorCredential()
-        let client = AutomationSocketClient(socketPath: credential.socketPath)
-        let response = try client.request(
+        let result = try operatorRequest(
+            AutomationWindowsResult.self,
+            credential: credential,
             method: "GET",
             path: "/v1/windows",
-            handle: credential.handle,
             body: Data()
         )
-        let result: AutomationWindowsResult
-        do {
-            result = try AutomationCLIResultPrinter.decodeEnvelope(AutomationWindowsResult.self, from: response)
-        } catch let error as AutomationServiceError {
-            throw CLIError(
-                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
-            )
-        }
 
         if json {
             print(try AutomationCLIResultPrinter.resultJSON(result))
@@ -892,6 +891,100 @@ private final class CLIApp {
             print("\(window.windowID)\t\(size)\t\(title)")
         }
         return 0
+    }
+
+    /// `workspaces window snapshot --out <path> [--window <id>]` — writes a composited PNG of an app
+    /// window (operator scope). With no `--window`, it targets the main window (falling back to the
+    /// first listed), so the common "snapshot the app" case needs no id lookup. Works with the app
+    /// backgrounded — no activation, no focus steal.
+    private func runWindowSnapshot(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces window snapshot --out <path> [--window <id>]"
+        var outPath: String?
+        var windowID: String?
+
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--out":
+                index += 1
+                guard index < arguments.count else { throw CLIError("Missing value for --out") }
+                outPath = arguments[index]
+            case "--window":
+                index += 1
+                guard index < arguments.count else { throw CLIError("Missing value for --window") }
+                windowID = arguments[index]
+            default:
+                throw CLIError("Usage: \(usage)")
+            }
+            index += 1
+        }
+
+        guard let outPath, !outPath.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let credential = try loadOperatorCredential()
+
+        let targetWindowID: String
+        if let windowID {
+            targetWindowID = windowID
+        } else {
+            let windows = try operatorRequest(
+                AutomationWindowsResult.self,
+                credential: credential,
+                method: "GET",
+                path: "/v1/windows",
+                body: Data()
+            )
+            guard
+                let target = windows.windows.first(where: { $0.isMain }) ?? windows.windows.first
+            else {
+                throw CLIError("No capturable WorkSpaces window is open.")
+            }
+            targetWindowID = target.windowID
+        }
+
+        let body = try JSONSerialization.data(
+            withJSONObject: ["windowID": targetWindowID],
+            options: [.sortedKeys]
+        )
+        let result = try operatorRequest(
+            AutomationWindowSnapshotResult.self,
+            credential: credential,
+            method: "POST",
+            path: "/v1/window/snapshot",
+            body: body
+        )
+        guard let pngData = Data(base64Encoded: result.data) else {
+            throw CLIError("Snapshot response was not decodable PNG data.")
+        }
+        let outURL = normalizePath(outPath)
+        try pngData.write(to: outURL, options: [.atomic])
+        print("Wrote \(result.width)x\(result.height) PNG (\(result.byteCount) bytes) to \(outURL.path)")
+        return 0
+    }
+
+    private func operatorRequest<Result>(
+        _ type: Result.Type = Result.self,
+        credential: AutomationOperatorCredential,
+        method: String,
+        path: String,
+        body: Data
+    ) throws -> Result where Result: Codable & Sendable & Equatable {
+        let client = AutomationSocketClient(socketPath: credential.socketPath)
+        let response = try client.request(
+            method: method,
+            path: path,
+            handle: credential.handle,
+            body: body
+        )
+        do {
+            return try AutomationCLIResultPrinter.decodeEnvelope(type, from: response)
+        } catch let error as AutomationServiceError {
+            throw CLIError(
+                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
+            )
+        }
     }
 
     private func loadOperatorCredential() throws -> AutomationOperatorCredential {
@@ -1438,6 +1531,7 @@ private func printHelp() {
           workspaces tile close
           workspaces input write <text> [--submit]
           workspaces window list [--json]
+          workspaces window snapshot --out <path> [--window <id>]
           workspaces help
 
         Launch behavior:

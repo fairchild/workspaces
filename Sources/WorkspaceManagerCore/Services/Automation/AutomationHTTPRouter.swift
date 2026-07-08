@@ -77,6 +77,10 @@ enum AutomationHTTPRouter {
         case ("GET", "/v1/windows"):
             return try await controller.automationWindows(for: handle)
 
+        case ("POST", "/v1/window/snapshot"):
+            let windowID = try decodeWindowID(from: request.body)
+            return try await controller.automationWindowSnapshot(for: handle, windowID: windowID)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -113,6 +117,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/web-surfaces.")
         case (_, "/v1/windows"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/windows.")
+        case (_, "/v1/window/snapshot"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/window/snapshot.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -178,6 +184,32 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.invalidRequest, "Unsupported direction: \(rawDirection).")
         }
         return direction
+    }
+
+    /// The `windowID` from a snapshot request body. Unlike the tile routes, a window id is not a
+    /// caller-supplied *tile* id to reject — it is a global window identity the caller obtained from
+    /// `window.read`, the same way the web-surface snapshot names a source id in its path. So this
+    /// route accepts it directly; the controller still confirms the id names a window the app owns.
+    private static func decodeWindowID(from body: Data) throws -> String {
+        guard !body.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request body must include a windowID.")
+        }
+        let parsed: Any
+        do {
+            parsed = try JSONSerialization.jsonObject(with: body)
+        } catch {
+            throw AutomationServiceError(.malformedJSON, "Request body is not valid JSON.")
+        }
+        guard let object = parsed as? [String: Any] else {
+            throw AutomationServiceError(.invalidRequest, "Request body must be a JSON object.")
+        }
+        guard
+            let windowID = object["windowID"] as? String,
+            !windowID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw AutomationServiceError(.invalidRequest, "Request body must be JSON with a non-empty string windowID.")
+        }
+        return windowID
     }
 
     private static func decodeInputWrite(from body: Data) throws -> AutomationInputWriteRequest {
@@ -295,6 +327,7 @@ extension AutomationHealthResult: CodableSendableEquatable {}
 extension AutomationContextResult: CodableSendableEquatable {}
 extension AutomationSurfacesResult: CodableSendableEquatable {}
 extension AutomationWindowsResult: CodableSendableEquatable {}
+extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}
 extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}
 extension AutomationMutationResult: CodableSendableEquatable {}

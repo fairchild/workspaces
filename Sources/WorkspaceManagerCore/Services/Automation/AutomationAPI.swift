@@ -19,10 +19,10 @@ public enum AutomationAPI {
     /// Kept separate from `v1Capabilities` so default handles never widen.
     public static let inputWriteCapabilities = v1Capabilities + [AutomationCapability.inputWrite]
 
-    /// Capabilities granted to an opt-in operator handle (`[A1]`). Capture-only at first:
-    /// `window.read` lists the app's windows. `window.snapshot` is a follow-on slice and is
-    /// deliberately absent here. Operator handles never carry tile mutation capabilities.
-    public static let operatorCapabilities = [AutomationCapability.windowRead]
+    /// Capabilities granted to an opt-in operator handle (`[A1]`). Capture-only: `window.read`
+    /// lists the app's windows and `window.snapshot` returns a composited PNG of one of them.
+    /// Operator handles never carry tile mutation or `input.write` capabilities.
+    public static let operatorCapabilities = [AutomationCapability.windowRead, .windowSnapshot]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
 
@@ -35,6 +35,13 @@ public enum AutomationAPI {
     public static let webSnapshotMaxWidth = 1600
     public static let webSnapshotMaxRawBytes = 8 * 1_024 * 1_024
     public static let webSnapshotTimeoutSeconds = 5.0
+
+    /// Upper bound for `POST /v1/window/snapshot` (`window.snapshot`, operator scope). A full
+    /// composited window at Retina scale is many times a web viewport's pixel count, so the cap is
+    /// generous; an encoded PNG past it is rejected (`unsupported`) rather than truncated. There is
+    /// no width bound — the snapshot is the window at its true composited resolution, since
+    /// full-fidelity evidence is the whole point of the operator capture lane.
+    public static let windowSnapshotMaxRawBytes = 64 * 1_024 * 1_024
 }
 
 public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equatable {
@@ -46,6 +53,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case inputWrite = "input.write"
     case browserRead = "browser.read"
     case windowRead = "window.read"
+    case windowSnapshot = "window.snapshot"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -319,6 +327,44 @@ public struct AutomationWindowsResult: Codable, Sendable, Equatable {
     }
 }
 
+/// A composited PNG snapshot of one of the app's on-screen windows (`window.snapshot`, operator
+/// scope). `windowID` is the AppKit window number the caller listed via `window.read`; `data` is the
+/// base64-encoded PNG and `byteCount` its raw (pre-base64) size, bounded by
+/// `AutomationAPI.windowSnapshotMaxRawBytes`. `width`/`height` are the PNG's true pixel dimensions
+/// (Retina-scaled, not down-sampled). Produced only for a window the app owns and that is realized
+/// on the active Space; an unknown or non-capturable window fails with a structured error rather
+/// than a fabricated image. The capture is composited (sidebar chrome + the GhosttyKit terminal
+/// surface) and needs no app activation.
+public struct AutomationWindowSnapshotResult: Codable, Sendable, Equatable {
+    public let windowID: String
+    public let encoding: String
+    public let width: Int
+    public let height: Int
+    public let byteCount: Int
+    public let data: String
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        windowID: String,
+        encoding: String = "png",
+        width: Int,
+        height: Int,
+        byteCount: Int,
+        data: String,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.windowID = windowID
+        self.encoding = encoding
+        self.width = width
+        self.height = height
+        self.byteCount = byteCount
+        self.data = data
+        self.system = system
+    }
+}
+
 public struct AutomationMutationResult: Codable, Sendable, Equatable {
     public let changed: Bool
     public let focusedSurfaceID: String?
@@ -489,6 +535,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
     func automationContext(for handle: String) throws -> AutomationContextResult
     func automationSurfaces(for handle: String) throws -> AutomationSurfacesResult
     func automationWindows(for handle: String) throws -> AutomationWindowsResult
+    func automationWindowSnapshot(
+        for handle: String,
+        windowID: String
+    ) async throws -> AutomationWindowSnapshotResult
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult
     func automationWebSurfaceSnapshot(
         for handle: String,
