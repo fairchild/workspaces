@@ -5,6 +5,7 @@
 //  Git operations: status, file tree, branch management
 //
 
+import Darwin
 import Foundation
 
 public actor GitService: GitServiceProtocol {
@@ -182,7 +183,57 @@ public actor GitService: GitServiceProtocol {
             throw GitError.discardUntrackedOnTrackedFile(relativePath: file)
         }
 
-        try FileManager.default.removeItem(at: lexicalTarget)
+        // The lexical checks above race a concurrent swap of an intermediate directory to a
+        // symlink (TOCTOU). Delete via an O_NOFOLLOW descriptor walk so the unlink cannot follow a
+        // symlink that appeared after the containment check and escape the root.
+        try Self.raceSafeUnlink(root: path, relativePath: file)
+    }
+
+    /// Unlink `relativePath` under `rootURL` without following a symlink in any path component:
+    /// walks the directories with `O_NOFOLLOW` and unlinks relative to the parent descriptor. A
+    /// concurrent swap of an intermediate directory to a symlink fails the walk instead of
+    /// escaping the root, and the leaf must still be a regular file at unlink time.
+    static func raceSafeUnlink(root: URL, relativePath: String) throws {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: true).map(
+            String.init)
+        guard let leaf = components.last,
+            components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+        else {
+            throw GitError.invalidRelativePath(relativePath)
+        }
+
+        var directoryFD = root.path.withCString { open($0, O_RDONLY | O_DIRECTORY) }
+        guard directoryFD >= 0 else {
+            throw GitError.untrackedTargetMissing(relativePath: relativePath)
+        }
+        var openFDs = [directoryFD]
+        defer {
+            for fd in openFDs { close(fd) }
+        }
+
+        for component in components.dropLast() {
+            let childFD = component.withCString {
+                openat(directoryFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            }
+            guard childFD >= 0 else {
+                throw GitError.pathEscapesRoot
+            }
+            openFDs.append(childFD)
+            directoryFD = childFD
+        }
+
+        var info = stat()
+        let statResult = leaf.withCString { fstatat(directoryFD, $0, &info, AT_SYMLINK_NOFOLLOW) }
+        guard statResult == 0 else {
+            throw GitError.untrackedTargetMissing(relativePath: relativePath)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw GitError.symlinkRefused
+        }
+
+        guard leaf.withCString({ unlinkat(directoryFD, $0, 0) }) == 0 else {
+            throw GitError.untrackedDeleteFailed(relativePath: relativePath)
+        }
     }
 
     /// Lexical (non-symlink-resolved) URL for `relativePath` under `rootURL`, rejecting absolute
@@ -407,6 +458,7 @@ public enum GitError: LocalizedError, Equatable {
     case symlinkRefused
     case untrackedTargetMissing(relativePath: String)
     case discardUntrackedOnTrackedFile(relativePath: String)
+    case untrackedDeleteFailed(relativePath: String)
 
     public var errorDescription: String? {
         switch self {
@@ -426,6 +478,8 @@ public enum GitError: LocalizedError, Equatable {
             return "There is no untracked file at '\(path)' to delete."
         case .discardUntrackedOnTrackedFile(let path):
             return "Refused to delete '\(path)' because git tracks it; discard its changes instead."
+        case .untrackedDeleteFailed(let path):
+            return "Could not delete the untracked file '\(path)'."
         }
     }
 }

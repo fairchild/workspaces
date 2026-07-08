@@ -2662,9 +2662,13 @@ struct ContentView: View {
         case .saveThenProceed:
             // The dialog dismissal already cleared `pendingCodePreviewNavigation`; the captured
             // `pending` drives the commit. Deliberately do not touch that state again here — a
-            // second navigation raised during the await owns it now.
+            // second navigation raised during the await owns it now. Re-check the live dirty flag
+            // after the await rather than trusting the save's return value: if the user typed more
+            // while the write was in flight the document is dirty again, and navigating would drop
+            // those newer edits.
             Task { @MainActor in
-                if await appCommandState.saveDirtyDocument() {
+                await appCommandState.saveDirtyDocument()
+                if !appCommandState.hasUnsavedDocumentEdits {
                     commitPendingCodePreviewNavigation(pending)
                 }
             }

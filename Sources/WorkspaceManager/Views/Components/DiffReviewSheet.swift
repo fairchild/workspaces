@@ -124,14 +124,14 @@ struct DiffReviewSheet: View {
     private func load() async {
         phase = .loading
         actionError = nil
+        // Optimistic initial value avoids a flash, but always re-resolve from git so a reload after
+        // Stage/Unstage routes discard correctly instead of trusting the now-stale passed-in status.
         resolvedStatus = status
         do {
             async let diffTask = gitService.diff(file: filePath, at: directoryURL)
-            if resolvedStatus == nil {
-                resolvedStatus =
-                    try? await gitService.getStatus(at: directoryURL)
-                    .first(where: { $0.path == filePath })?.status
-            }
+            resolvedStatus =
+                try? await gitService.getStatus(at: directoryURL)
+                .first(where: { $0.path == filePath })?.status
             phase = .loaded(try await diffTask)
         } catch {
             phase = .failed(error.localizedDescription)

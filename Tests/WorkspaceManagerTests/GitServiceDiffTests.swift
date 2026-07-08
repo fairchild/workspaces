@@ -147,6 +147,29 @@ struct GitServiceDiffTests {
         #expect(FileManager.default.fileExists(atPath: repo.url.appendingPathComponent("real-secret.txt").path))
     }
 
+    @Test("discardUntracked refuses a path reaching outside the root through a symlinked directory")
+    func discardUntrackedRefusesSymlinkedParentEscape() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+        try repo.createFile("keep.txt", content: "keep\n")
+        try repo.commit(message: "init")
+
+        // A victim file living outside the repo, reachable only through an in-repo directory symlink.
+        let outsideDir = repo.url.deletingLastPathComponent()
+            .appendingPathComponent("outside-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outsideDir) }
+        let victim = outsideDir.appendingPathComponent("victim.txt")
+        try "precious\n".write(to: victim, atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(
+            at: repo.url.appendingPathComponent("link-dir"), withDestinationURL: outsideDir)
+
+        await #expect(throws: GitError.pathEscapesRoot) {
+            try await GitService.shared.discardUntracked(file: "link-dir/victim.txt", at: repo.url)
+        }
+        #expect(FileManager.default.fileExists(atPath: victim.path), "the outside file must survive")
+    }
+
     @Test("discardUntracked refuses to delete a tracked file even if asked")
     func discardUntrackedRefusesTrackedFile() async throws {
         let repo = try TestGitRepository.create()
