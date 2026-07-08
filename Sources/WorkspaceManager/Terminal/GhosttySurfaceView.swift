@@ -454,6 +454,34 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         _ = performBindingAction("scroll_to_row:\(row)", surface: surface)
     }
 
+    func readPlainScreenText() -> String? {
+        guard let surface else { return nil }
+        var text = ghostty_text_s()
+        let selection = ghostty_selection_s(
+            top_left: ghostty_point_s(
+                tag: GHOSTTY_POINT_SCREEN,
+                coord: GHOSTTY_POINT_COORD_TOP_LEFT,
+                x: 0,
+                y: 0
+            ),
+            bottom_right: ghostty_point_s(
+                tag: GHOSTTY_POINT_SCREEN,
+                coord: GHOSTTY_POINT_COORD_BOTTOM_RIGHT,
+                x: 0,
+                y: 0
+            ),
+            rectangle: false
+        )
+        guard ghostty_surface_read_text(surface, selection, &text) else { return nil }
+        defer { ghostty_surface_free_text(surface, &text) }
+        guard let pointer = text.text else { return "" }
+        let bytes = UnsafeBufferPointer(
+            start: UnsafeRawPointer(pointer).assumingMemoryBound(to: UInt8.self),
+            count: Int(text.text_len)
+        )
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
     // MARK: - Drag and drop
 
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {

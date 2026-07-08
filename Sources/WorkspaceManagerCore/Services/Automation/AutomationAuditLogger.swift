@@ -12,6 +12,9 @@ public actor AutomationAuditLogger {
         public let allowed: Bool
         public let errorCode: AutomationErrorCode?
         public let metadata: [String: String]?
+        public let surfaceID: String?
+        public let requestedLines: Int?
+        public let returnedLines: Int?
 
         public init(
             timestamp: String,
@@ -21,7 +24,10 @@ public actor AutomationAuditLogger {
             operatorHandle: Bool = false,
             allowed: Bool,
             errorCode: AutomationErrorCode?,
-            metadata: [String: String]? = nil
+            metadata: [String: String]? = nil,
+            surfaceID: String? = nil,
+            requestedLines: Int? = nil,
+            returnedLines: Int? = nil
         ) {
             self.timestamp = timestamp
             self.method = method
@@ -31,6 +37,9 @@ public actor AutomationAuditLogger {
             self.allowed = allowed
             self.errorCode = errorCode
             self.metadata = metadata
+            self.surfaceID = surfaceID
+            self.requestedLines = requestedLines
+            self.returnedLines = returnedLines
         }
     }
 
@@ -62,6 +71,11 @@ public actor AutomationAuditLogger {
         operatorHandle: Bool = false
     ) {
         let summary = (try? AutomationJSON.decoder.decode(AuditEnvelopeSummary.self, from: responseBody))
+        let surfaceRead = surfaceReadAuditMetadata(
+            path: path,
+            requestBody: requestBody,
+            responseBody: responseBody
+        )
         let event = Event(
             timestamp: timestampFormatter.string(from: Date()),
             method: method,
@@ -70,7 +84,10 @@ public actor AutomationAuditLogger {
             operatorHandle: operatorHandle,
             allowed: summary?.ok == true,
             errorCode: summary?.error?.code,
-            metadata: Self.routeMetadata(method: method, path: path, body: requestBody)
+            metadata: Self.routeMetadata(method: method, path: path, body: requestBody),
+            surfaceID: surfaceRead?.surfaceID,
+            requestedLines: surfaceRead?.requestedLines,
+            returnedLines: surfaceRead?.returnedLines
         )
         guard let data = try? encoder.encode(event) else { return }
 
@@ -108,9 +125,34 @@ public actor AutomationAuditLogger {
         }
         return metadata.isEmpty ? nil : metadata
     }
+
+    private nonisolated func surfaceReadAuditMetadata(
+        path: String,
+        requestBody: Data,
+        responseBody: Data
+    ) -> SurfaceReadAuditMetadata? {
+        guard path == "/v1/surface/read" else { return nil }
+        let request = try? AutomationJSON.decoder.decode(AutomationSurfaceReadRequest.self, from: requestBody)
+        let response =
+            try? AutomationJSON.decoder.decode(
+                AutomationResponseEnvelope<AutomationSurfaceReadResult>.self,
+                from: responseBody
+            )
+        return SurfaceReadAuditMetadata(
+            surfaceID: response?.result?.surfaceID ?? request?.surfaceID,
+            requestedLines: response?.result?.requestedLines ?? request?.lines,
+            returnedLines: response?.result?.returnedLines
+        )
+    }
 }
 
 private struct AuditEnvelopeSummary: Decodable {
     let ok: Bool
     let error: AutomationErrorResponse?
+}
+
+private struct SurfaceReadAuditMetadata: Sendable, Equatable {
+    let surfaceID: String?
+    let requestedLines: Int?
+    let returnedLines: Int?
 }

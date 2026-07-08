@@ -318,4 +318,136 @@ struct AutomationCreateVerbTests {
         #expect(activeSessionID != staleSession.id)
         #expect(store.sessions.first(where: { $0.id == activeSessionID })?.directoryPath == workspacePath)
     }
+
+    @Test("surface.read is limited to surfaces created by the same operator handle")
+    func surfaceReadRequiresSameOperatorCreationAttribution() async throws {
+        let store = TileTreeStore()
+        let repoID = UUID()
+        let workspaceID = UUID()
+        let otherSession = store.activateSession(
+            key: .repoPath("/tmp/repo"),
+            directory: URL(fileURLWithPath: "/tmp/repo")
+        ).session
+        var createdSurfaceID: UUID?
+        var reads: [UUID] = []
+
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: { _ in nil },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            resolveRepo: { [repoID] in
+                $0 == repoID
+                    ? AutomationGestureVerbs.RepoTarget(repoID: repoID, name: "repo", path: "/tmp/repo")
+                    : nil
+            },
+            performCreation: { _, command in
+                let session = store.activateSession(
+                    key: .hostPath("/tmp/repo/workspaces/\(command.name)"),
+                    directory: URL(fileURLWithPath: "/tmp/repo/workspaces/\(command.name)")
+                ).session
+                createdSurfaceID = session.id
+                return .completed(
+                    AutomationWorkspaceCreateEffect(
+                        repoID: repoID,
+                        workspaceID: workspaceID,
+                        workspaceName: command.name,
+                        workspacePath: session.directoryPath,
+                        selectedWorkspaceID: workspaceID,
+                        attachedSurfaceID: session.id,
+                        attachedTerminal: true
+                    )
+                )
+            }
+        )
+        let registry = AutomationHandleRegistry(makeHandle: { UUID().uuidString })
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let otherOperator = registry.registerOperator(appScopeID: "workspaces.local")
+        let tile = registry.upsert(
+            hostSessionID: otherSession.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "workspaces.local"
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            surfaceTextReader: { _, surfaceID in
+                reads.append(surfaceID)
+                return "one\ntwo\nthree"
+            },
+            gestureVerbs: verbs
+        )
+
+        _ = try await controller.automationCreateWorkspace(
+            for: operatorEntry.handle,
+            request: AutomationWorkspaceCreateRequest(repoID: repoID.uuidString, name: "created")
+        )
+        let surfaceID = try #require(createdSurfaceID)
+
+        let result = try controller.automationReadSurface(
+            for: operatorEntry.handle,
+            request: AutomationSurfaceReadRequest(surfaceID: surfaceID.uuidString, lines: 2)
+        )
+        #expect(result.text == "two\nthree")
+        #expect(result.returnedLines == 2)
+        #expect(reads == [surfaceID])
+
+        await expectFailure(.capabilityDenied) {
+            try controller.automationReadSurface(
+                for: otherOperator.handle,
+                request: AutomationSurfaceReadRequest(surfaceID: surfaceID.uuidString, lines: 2)
+            )
+        }
+        await expectFailure(.capabilityDenied) {
+            try controller.automationReadSurface(
+                for: operatorEntry.handle,
+                request: AutomationSurfaceReadRequest(surfaceID: otherSession.id.uuidString, lines: 2)
+            )
+        }
+        await expectFailure(.capabilityDenied) {
+            try controller.automationReadSurface(
+                for: tile.handle,
+                request: AutomationSurfaceReadRequest(surfaceID: surfaceID.uuidString, lines: 2)
+            )
+        }
+        #expect(reads == [surfaceID])
+    }
+
+    @Test("surface.read clamps over-cap line requests and byte output")
+    func surfaceReadClampsLinesAndBytes() throws {
+        let store = TileTreeStore()
+        let session = store.activateSession(
+            key: .repoPath("/tmp/repo"),
+            directory: URL(fileURLWithPath: "/tmp/repo")
+        ).session
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        registry.recordWorkspaceCreation(operatorHandle: operatorEntry.handle, hostSessionID: session.id)
+        let longLines = (0..<600).map { index in
+            "\(index)-" + String(repeating: "x", count: 1024)
+        }.joined(separator: "\n")
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            surfaceTextReader: { _, _ in longLines }
+        )
+
+        let result = try controller.automationReadSurface(
+            for: operatorEntry.handle,
+            request: AutomationSurfaceReadRequest(surfaceID: session.id.uuidString, lines: 10_000)
+        )
+
+        #expect(result.requestedLines == 10_000)
+        #expect(result.lines == AutomationAPI.surfaceReadMaxLines)
+        #expect(result.returnedLines <= AutomationAPI.surfaceReadMaxLines)
+        #expect(result.byteCount <= AutomationAPI.surfaceReadMaxUTF8Bytes)
+        #expect(result.text.contains("599-"))
+    }
 }

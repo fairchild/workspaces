@@ -193,6 +193,29 @@ the experiment was off, or after it is turned off, fail with
 `capability_denied` — restart WorkSpaces and open a fresh tile after toggling
 it. The audit log records the route and outcome, never the written text.
 
+## Read Created Workspace Terminal Text
+
+`surface/read` is operator-scoped, not tile-scoped. It is for automation that
+creates a workspace through `workspace.create` and then needs a bounded text
+read-back from that newly attached terminal. It does not grant access to
+arbitrary human-owned terminal tiles.
+
+The route body names the `attachedSurfaceID` returned by `workspace.create`:
+
+```json
+{ "surfaceID": "…", "lines": 200 }
+```
+
+Rules:
+
+- Only the same operator handle that created the workspace terminal in this app
+  launch can read it. Other operator handles, tile handles, and unattributed
+  surface IDs fail `capability_denied`.
+- Returned text is plain terminal text, with no ANSI styling.
+- `lines` is clamped to 500; the payload is capped at 256 KiB UTF-8.
+- The audit log records route metadata, surface ID, requested lines, returned
+  lines, and allow/deny outcome, never the terminal text.
+
 ## Shell Alias Ideas
 
 These examples are intentionally small. They stay inside the V1 scope and do
@@ -254,6 +277,7 @@ V1 is intentionally narrow:
 - close the caller tile through normal app behavior
 - write into the caller's own PTY (experimental, double-gated — see
   [Automation Input Write Decision](./decisions/automation-input-write.md))
+- read bounded plain text from operator-created workspace terminals
 
 V1 does not support browser mutation, opening URLs, tab metadata changes,
 writing into other tiles, resize/equalize, or global control across

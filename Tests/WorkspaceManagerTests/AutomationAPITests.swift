@@ -219,6 +219,7 @@ private final class FakeAutomationController: AutomationControlling {
     }
 
     var windowSnapshotCalls: [String] = []
+    var surfaceReadCalls: [AutomationSurfaceReadRequest] = []
 
     func automationWindowSnapshot(
         for handle: String,
@@ -239,6 +240,28 @@ private final class FakeAutomationController: AutomationControlling {
             height: 1,
             byteCount: 4,
             data: "AQID"
+        )
+    }
+
+    func automationReadSurface(
+        for handle: String,
+        request: AutomationSurfaceReadRequest
+    ) throws -> AutomationSurfaceReadResult {
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include surface.read.")
+        }
+        surfaceReadCalls.append(request)
+        let effectiveLines = min(request.lines, AutomationAPI.surfaceReadMaxLines)
+        return AutomationSurfaceReadResult(
+            surfaceID: request.surfaceID,
+            requestedLines: request.lines,
+            lines: effectiveLines,
+            returnedLines: 2,
+            byteCount: 11,
+            text: "hello\nworld"
         )
     }
 
@@ -850,7 +873,9 @@ struct AutomationAPITests {
         #expect(entry.isOperator)
         #expect(entry.tileID == nil)
         #expect(
-            entry.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate])
+            entry.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
+            ])
         // Operator mutation capabilities are reviewed gesture verbs; an operator handle still never
         // carries tile mutation or input.write.
         #expect(!entry.capabilities.contains(.tileClose))
@@ -887,7 +912,7 @@ struct AutomationAPITests {
         #expect(okEnvelope.result?.windows.first?.windowID == "42")
         #expect(
             okEnvelope.result?.system.capabilities == [
-                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
             ])
         #expect(controller.windowCalls == ["operator"])
 
@@ -969,7 +994,7 @@ struct AutomationAPITests {
         #expect(okEnvelope.result?.workspaces.first?.isSelected == true)
         #expect(
             okEnvelope.result?.system.capabilities == [
-                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
             ])
         #expect(controller.workspaceCalls == ["operator"])
 
@@ -1418,6 +1443,90 @@ struct AutomationAPITests {
         #expect(controller.windowSnapshotCalls == ["42"])
     }
 
+    @Test("POST /v1/surface/read routes operator-created read requests and clamps line count")
+    @MainActor
+    func routerSurfaceRead() async throws {
+        let controller = FakeAutomationController()
+        let surfaceID = "99999999-9999-9999-9999-999999999999"
+        let body = try JSONSerialization.data(
+            withJSONObject: ["surfaceID": surfaceID, "lines": 10_000],
+            options: [.sortedKeys]
+        )
+
+        let ok = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/surface/read",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: body
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationSurfaceReadResult>.self,
+            from: ok.body
+        )
+
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.surfaceID == surfaceID)
+        #expect(okEnvelope.result?.requestedLines == 10_000)
+        #expect(okEnvelope.result?.lines == AutomationAPI.surfaceReadMaxLines)
+        #expect(okEnvelope.result?.text == "hello\nworld")
+        #expect(controller.surfaceReadCalls == [AutomationSurfaceReadRequest(surfaceID: surfaceID, lines: 10_000)])
+
+        let denied = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/surface/read",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: body
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: denied.body
+        )
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        let badLines = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/surface/read",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data("{\"surfaceID\":\"\(surfaceID)\",\"lines\":0}".utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let badLinesEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: badLines.body
+        )
+        #expect(badLines.status == 400)
+        #expect(badLinesEnvelope.error?.code == .invalidRequest)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/surface/read",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
     @Test("Operator credential round-trips through the store and is written user-only (0600)")
     func operatorCredentialStoreRoundTrip() throws {
         let url = FileManager.default.temporaryDirectory
@@ -1430,7 +1539,9 @@ struct AutomationAPITests {
         let loaded = AutomationOperatorCredentialStore.load(from: url)
         #expect(loaded == credential)
         #expect(
-            loaded?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate])
+            loaded?.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
+            ])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
@@ -1461,7 +1572,7 @@ struct AutomationAPITests {
         #expect(AutomationOperatorCredentialStore.load(from: url) == mintedCredential)
         #expect(
             registry.resolve(mintedCredential.handle)?.capabilities == [
-                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
             ]
         )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)
@@ -1561,6 +1672,51 @@ struct AutomationAPITests {
         #expect(createEvent.metadata?["workspaceCreate.select"] == "provided")
         #expect(createEvent.metadata?["workspaceCreate.fromRef"] == "provided")
         #expect(!String(describing: createEvent.metadata).contains("origin/main"))
+    }
+
+    @Test("Audit log records surface.read metadata without terminal text")
+    func auditLogSurfaceReadMetadataIsContentFree() async throws {
+        let auditURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-surface-read-audit-\(UUID().uuidString.prefix(8)).jsonl")
+        defer { try? FileManager.default.removeItem(at: auditURL) }
+        let logger = AutomationAuditLogger(auditURL: auditURL)
+        let surfaceID = "99999999-9999-9999-9999-999999999999"
+        let requestBody = try AutomationJSON.encoder.encode(
+            AutomationSurfaceReadRequest(surfaceID: surfaceID, lines: 10_000)
+        )
+        let responseBody = try AutomationJSON.encoder.encode(
+            AutomationResponseEnvelope(
+                result: AutomationSurfaceReadResult(
+                    surfaceID: surfaceID,
+                    requestedLines: 10_000,
+                    lines: AutomationAPI.surfaceReadMaxLines,
+                    returnedLines: 2,
+                    byteCount: 11,
+                    text: "secret\ntext"
+                )
+            )
+        )
+
+        await logger.record(
+            method: "POST",
+            path: "/v1/surface/read",
+            headers: [AutomationAPI.handleHeader: "op"],
+            requestBody: requestBody,
+            responseBody: responseBody,
+            operatorHandle: true
+        )
+
+        let contents = try String(contentsOf: auditURL, encoding: .utf8)
+        #expect(!contents.contains("secret"))
+        let event = try AutomationJSON.decoder.decode(
+            AutomationAuditLogger.Event.self,
+            from: Data(try #require(contents.split(separator: "\n").first).utf8)
+        )
+        #expect(event.surfaceID == surfaceID)
+        #expect(event.requestedLines == 10_000)
+        #expect(event.returnedLines == 2)
+        #expect(event.allowed)
+        #expect(event.errorCode == nil)
     }
 
     @Test("CLI formatter emits result JSON and surfaces envelope errors")
