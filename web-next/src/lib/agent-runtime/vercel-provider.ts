@@ -326,7 +326,8 @@ export async function* mapFullStream(
  * the persistent workspace clone. A fresh session gets a one-time preamble
  * establishing where the working copy lives and how to open a PR; a resumed
  * session already carries that context in its harness conversation, so it
- * receives the user's message alone.
+ * receives the user's message alone. If a warm resume failed but the durable
+ * log has history, the fresh prompt also replays compact prior dialogue.
  */
 function baseBranchLabel(repo: TurnRepo): string {
 	return repo.defaultBranch
@@ -343,6 +344,7 @@ export function buildPrompt(
 	sessionId: string,
 	firstTurn: boolean,
 	repo: TurnRepo,
+	priorContext?: string | null,
 ): string {
 	if (!firstTurn) return userMessage;
 	const branch = sessionBranch(sessionId);
@@ -351,6 +353,23 @@ export function buildPrompt(
 	const baseAssignment = repo.defaultBranch
 		? `BASE_BRANCH=${shellQuote(base)}`
 		: `BASE_BRANCH="${base}"`;
+	const replay = priorContext?.trim();
+	if (replay) {
+		return [
+			`You are working inside a persistent clone of the GitHub repository ${repo.fullName}. The current directory (${WORKSPACE_DIR}) is the repo root, checked out on branch \`${branch}\`, created from ${baseLabel}. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
+			``,
+			`Working notes:`,
+			`- Relative paths and git commands resolve against the repo (you are inside it) — edit and \`git status\`/\`git diff\` normally.`,
+			`- To open or update a pull request: commit, \`git push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token against base ${baseLabel}, e.g. \`${baseAssignment}; curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${repo.fullName}/pulls -d "{\\"title\\":\\"…\\",\\"head\\":\\"${branch}\\",\\"base\\":\\"$BASE_BRANCH\\",\\"body\\":\\"…\\"}"\`. Report the \`html_url\`.`,
+			`- Only open a PR when the request calls for one; otherwise just do the work and summarize it.`,
+			``,
+			`The conversation so far (the sandbox restarted; your working copy was restored from the session branch):`,
+			replay,
+			``,
+			`The user's request:`,
+			userMessage,
+		].join("\n");
+	}
 	return [
 		`You are working inside a persistent clone of the GitHub repository ${repo.fullName}. The current directory (${WORKSPACE_DIR}) is the repo root, checked out on branch \`${branch}\`, created from ${baseLabel}. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
 		``,
@@ -624,6 +643,8 @@ export const vercelProvider: ComputeProvider = {
 		// buildPrompt then sends the user's message alone.
 		let session: Awaited<ReturnType<typeof agent.createSession>> | undefined;
 		let resumed = false;
+		const replayContext = request.priorContext?.trim();
+		let replayStatusEmitted = false;
 		if (request.resume) {
 			yield { type: "status", content: "Resuming session" };
 			try {
@@ -639,9 +660,23 @@ export const vercelProvider: ComputeProvider = {
 					type: "status",
 					content: "Previous sandbox expired — starting fresh",
 				};
+				if (replayContext) {
+					yield {
+						type: "status",
+						content: "Restored conversation context from the session log",
+					};
+					replayStatusEmitted = true;
+				}
 			}
 		}
 		if (!session) {
+			if (replayContext && !replayStatusEmitted) {
+				yield {
+					type: "status",
+					content: "Restored conversation context from the session log",
+				};
+				replayStatusEmitted = true;
+			}
 			yield { type: "status", content: "Booting Claude Code in sandbox" };
 			sandboxSessionId = request.sessionId;
 			try {
@@ -660,7 +695,13 @@ export const vercelProvider: ComputeProvider = {
 		try {
 			const result = await agent.stream({
 				session,
-				prompt: buildPrompt(request.userMessage, request.sessionId, !resumed, repo),
+				prompt: buildPrompt(
+					request.userMessage,
+					request.sessionId,
+					!resumed,
+					repo,
+					!resumed ? replayContext : null,
+				),
 			});
 			let doneChunk: StreamChunk | undefined;
 			// Tracks every real toolCallId this turn so the synthetic Diff rows

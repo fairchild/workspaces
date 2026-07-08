@@ -37,6 +37,12 @@ export interface TurnRequest {
 	/** Prior parked session to resume, or null/undefined for a fresh turn. */
 	resume?: SessionResumeHandle | null;
 	/**
+	 * Compact replay of prior session dialogue for providers that must boot a
+	 * fresh model conversation after their warm resume path fails. Omitted on a
+	 * genuine first turn.
+	 */
+	priorContext?: string | null;
+	/**
 	 * The session's selected Claude model id (see `./models.ts`). Providers
 	 * that drive a real model (vercel) thread it into the harness; providers
 	 * that don't (mock) record it for testability but otherwise ignore it.
