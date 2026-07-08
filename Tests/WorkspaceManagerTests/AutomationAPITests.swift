@@ -910,6 +910,25 @@ struct AutomationAPITests {
         #expect(noBody.status == 400)
         #expect(noBodyEnvelope.error?.code == .invalidRequest)
 
+        // Valid JSON of the wrong top-level shape (an array) → invalid_request, not malformed_json:
+        // it parsed fine, it is just not the object the route expects.
+        let wrongShape = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/window/snapshot",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data("[1,2]".utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongShapeEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongShape.body
+        )
+        #expect(wrongShape.status == 400)
+        #expect(wrongShapeEnvelope.error?.code == .invalidRequest)
+
         // Wrong method on the snapshot path → method_not_allowed.
         let wrongMethod = await AutomationHTTPRouter.route(
             HTTPRequest(

@@ -194,10 +194,14 @@ enum AutomationHTTPRouter {
         guard !body.isEmpty else {
             throw AutomationServiceError(.invalidRequest, "Request body must include a windowID.")
         }
-        guard
-            let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
-        else {
+        let parsed: Any
+        do {
+            parsed = try JSONSerialization.jsonObject(with: body)
+        } catch {
             throw AutomationServiceError(.malformedJSON, "Request body is not valid JSON.")
+        }
+        guard let object = parsed as? [String: Any] else {
+            throw AutomationServiceError(.invalidRequest, "Request body must be a JSON object.")
         }
         guard
             let windowID = object["windowID"] as? String,
