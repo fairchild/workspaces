@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { type DatabaseHandle, openDatabase } from "../db/client";
+import { ensureRepo } from "../db/repos";
 import { createSession, getSession, readEvents } from "../db/sessions";
 import { notifyTurnCompleted } from "../notify/turn-notification";
 import type { ComputeProvider } from "./provider";
@@ -103,10 +104,11 @@ describe("startTurn — auto-title failure isolation", () => {
 describe("startTurn — completion notification", () => {
 	test("fires with a completed payload after the terminal done is durable", async () => {
 		const handle = freshDb();
+		const repo = await ensureRepo(handle, "fairchild/workspaces", "main");
 		const session = await createSession(handle, {
 			id: "complete-session",
 			provider: "mock",
-			repoId: "fairchild/workspaces",
+			repoId: repo.id,
 			title: "Fix notifications",
 		});
 
@@ -120,12 +122,39 @@ describe("startTurn — completion notification", () => {
 				expect.objectContaining({
 					durationMs: expect.any(Number),
 					outcome: "completed",
+					// The payload carries the repo's owner/name, resolved from the
+					// repos row — sessions store only the opaque repo row id.
+					repoFullName: "fairchild/workspaces",
 					session: expect.objectContaining({
 						id: "complete-session",
-						repoId: "fairchild/workspaces",
 						title: "Fix notifications",
 					}),
 				}),
+			);
+		});
+	});
+
+	test("a turn that streams an error chunk but closes normally notifies failed", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "errored-session",
+			provider: "mock",
+		});
+
+		const started = await startTurn(
+			handle,
+			session,
+			"Try anyway",
+			stubProvider([
+				{ type: "error", content: "provider hiccup" },
+				{ type: "done", content: "" },
+			]),
+		);
+		await started.ingest;
+
+		await vi.waitFor(() => {
+			expect(notifyTurnCompletedMock).toHaveBeenCalledWith(
+				expect.objectContaining({ outcome: "failed" }),
 			);
 		});
 	});

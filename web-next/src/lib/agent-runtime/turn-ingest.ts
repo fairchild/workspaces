@@ -23,6 +23,7 @@
  */
 import { EventEmitter } from "node:events";
 import type { DatabaseHandle } from "../db/client";
+import { getRepo } from "../db/repos";
 import {
 	appendEvents,
 	getSession,
@@ -193,7 +194,15 @@ async function emitTurnCompletionNotification(
 ): Promise<void> {
 	try {
 		const currentSession = (await getSession(handle, session.id)) ?? session;
-		await notifyTurnCompleted({ session: currentSession, outcome, durationMs });
+		const repo = currentSession.repoId
+			? await getRepo(handle, currentSession.repoId)
+			: undefined;
+		await notifyTurnCompleted({
+			session: currentSession,
+			repoFullName: repo?.fullName ?? "",
+			outcome,
+			durationMs,
+		});
 	} catch (error) {
 		console.error(
 			`[turn-ingest] turn completion notification failed for ${session.id}`,
@@ -255,6 +264,11 @@ async function ingestTurn(
 	signal: AbortSignal,
 ): Promise<TurnNotificationOutcome> {
 	let closed = false;
+	// An `error` chunk anywhere in the stream marks the turn failed for the
+	// completion notice, even when the provider still closes with its own
+	// `done` — the owner is being told whether the turn needs their attention,
+	// not whether the stream terminated cleanly.
+	let sawError = false;
 	try {
 		const iterator = provider
 			.runTurn({
@@ -278,6 +292,7 @@ async function ingestTurn(
 					: chunk;
 			await appendEvents(handle, session.id, [{ role: "assistant", chunk: stored }]);
 			if (chunk.type === "done") closed = true;
+			if (chunk.type === "error") sawError = true;
 			notify(session.id);
 		}
 		if (!closed) {
@@ -286,9 +301,10 @@ async function ingestTurn(
 			]);
 			notify(session.id);
 		}
-		return "completed";
+		return sawError ? "failed" : "completed";
 	} catch (error) {
-		if (closed) return "completed"; // the run already has its terminal `done` — never a second
+		// The run already has its terminal `done` — never append a second.
+		if (closed) return sawError ? "failed" : "completed";
 		const message = error instanceof Error ? error.message : "the turn failed";
 		await appendEvents(handle, session.id, [
 			{ role: "assistant", chunk: { type: "error", content: message } },

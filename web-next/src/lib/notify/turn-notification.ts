@@ -27,7 +27,10 @@ interface TurnNotificationEnv {
 }
 
 export interface TurnNotificationInput {
-	session: Pick<Session, "id" | "repoId" | "title">;
+	session: Pick<Session, "id" | "title">;
+	/** The repo's `owner/name` — resolved by the caller; sessions store only
+	 * the repo row id, which means nothing in a phone notification. */
+	repoFullName?: string | null;
 	outcome: TurnNotificationOutcome;
 	durationMs: number;
 }
@@ -84,7 +87,7 @@ export function buildTurnNotificationPayload(
 		event: "turn_completed",
 		sessionId: input.session.id,
 		title: input.session.title,
-		repo: input.session.repoId ?? "",
+		repo: input.repoFullName ?? "",
 		outcome: input.outcome,
 		durationMs: input.durationMs,
 		...(env.BETTER_AUTH_URL ? { url: sessionUrl(env.BETTER_AUTH_URL, input.session.id) } : {}),

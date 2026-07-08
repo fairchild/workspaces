@@ -8,9 +8,9 @@ import {
 const input: TurnNotificationInput = {
 	session: {
 		id: "session-1",
-		repoId: "fairchild/workspaces",
 		title: "Fix notifications",
 	},
+	repoFullName: "fairchild/workspaces",
 	outcome: "completed",
 	durationMs: 42,
 };
@@ -36,7 +36,8 @@ describe("buildTurnNotificationPayload", () => {
 		expect(
 			buildTurnNotificationPayload({
 				...input,
-				session: { id: "session-2", repoId: null, title: "" },
+				session: { id: "session-2", title: "" },
+				repoFullName: null,
 			}),
 		).toEqual({
 			event: "turn_completed",
