@@ -509,7 +509,7 @@ struct AutomationControllerTests {
 
         let result = try controller.automationWindows(for: operatorEntry.handle)
         #expect(result.windows == [descriptor])
-        #expect(result.system.capabilities == [.windowRead, .windowSnapshot])
+        #expect(result.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
 
@@ -557,6 +557,97 @@ struct AutomationControllerTests {
         }
     }
 
+    @Test("Operator handle lists workspaces without owning a tile; tile handle is denied")
+    func operatorWorkspacesProjection() throws {
+        // A store with no live session at all — operator scope must not depend on a caller tile.
+        let store = TileTreeStore()
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let repoID = UUID(uuidString: "55555555-5555-5555-5555-555555555555")!
+        let inventory = AutomationWorkspaceInventory(
+            repos: [
+                AutomationRepoDescriptor(
+                    repoID: repoID,
+                    name: "workspaces",
+                    path: "/Users/test/workspaces",
+                    isSelected: true
+                )
+            ],
+            workspaces: [
+                AutomationWorkspaceDescriptor(
+                    workspaceID: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
+                    repoID: repoID,
+                    name: "feature-a",
+                    path: "/Users/test/workspaces/feature-a",
+                    branch: "feature-a",
+                    status: "archived",
+                    isArchived: true,
+                    backend: "lume",
+                    isSelected: false
+                )
+            ]
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            workspaceInventory: { inventory }
+        )
+
+        let result = try controller.automationWorkspaces(for: operatorEntry.handle)
+        #expect(result.repos == inventory.repos)
+        #expect(result.workspaces == inventory.workspaces)
+        #expect(result.workspaces.first?.isArchived == true)
+        #expect(result.workspaces.first?.backend == "lume")
+        #expect(result.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
+        #expect(controller.automationHandleIsOperator(operatorEntry.handle))
+    }
+
+    @Test("Workspaces route fails closed for tile, under-capable, and stale handles")
+    func operatorWorkspacesFailClosed() throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "tile" })
+        // A tile handle carrying the full v1 tile capabilities — but not workspace.read.
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            workspaceInventory: { AutomationWorkspaceInventory() }
+        )
+
+        // Tile handle: has tile capabilities but not workspace.read → capability_denied.
+        do {
+            _ = try controller.automationWorkspaces(for: "tile")
+            Issue.record("Expected a tile handle to be denied workspace.read")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+        #expect(!controller.automationHandleIsOperator("tile"))
+
+        // Unknown/stale handle → stale_handle.
+        do {
+            _ = try controller.automationWorkspaces(for: "not-live")
+            Issue.record("Expected an unknown handle to be stale")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .staleHandle)
+        }
+    }
+
     @Test("Operator handle snapshots a window via the provider; capabilities echo operator scope")
     func operatorWindowSnapshotReturnsCapture() async throws {
         let store = TileTreeStore()
@@ -580,7 +671,7 @@ struct AutomationControllerTests {
         #expect(result.width == 2800)
         #expect(result.height == 1800)
         #expect(Data(base64Encoded: result.data) == png)
-        #expect(result.system.capabilities == [.windowRead, .windowSnapshot])
+        #expect(result.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
         #expect(requestedWindowIDs == ["42"])
     }
 

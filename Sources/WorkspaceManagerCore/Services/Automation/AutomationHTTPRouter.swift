@@ -77,6 +77,9 @@ enum AutomationHTTPRouter {
         case ("GET", "/v1/windows"):
             return try await controller.automationWindows(for: handle)
 
+        case ("GET", "/v1/workspaces"):
+            return try await controller.automationWorkspaces(for: handle)
+
         case ("POST", "/v1/window/snapshot"):
             let windowID = try decodeWindowID(from: request.body)
             return try await controller.automationWindowSnapshot(for: handle, windowID: windowID)
@@ -117,6 +120,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/web-surfaces.")
         case (_, "/v1/windows"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/windows.")
+        case (_, "/v1/workspaces"):
+            throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/workspaces.")
         case (_, "/v1/window/snapshot"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/window/snapshot.")
         case (_, "/v1/tile/focus"):
@@ -327,6 +332,7 @@ extension AutomationHealthResult: CodableSendableEquatable {}
 extension AutomationContextResult: CodableSendableEquatable {}
 extension AutomationSurfacesResult: CodableSendableEquatable {}
 extension AutomationWindowsResult: CodableSendableEquatable {}
+extension AutomationWorkspacesResult: CodableSendableEquatable {}
 extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}
 extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}

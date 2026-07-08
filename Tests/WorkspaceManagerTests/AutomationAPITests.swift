@@ -78,6 +78,43 @@ private final class FakeAutomationController: AutomationControlling {
         )
     }
 
+    var workspaceCalls: [String] = []
+
+    func automationWorkspaces(for handle: String) throws -> AutomationWorkspacesResult {
+        // Only an operator handle carries workspace.read; a tile handle ("live") fails closed, and an
+        // unknown handle is stale — mirrors the real controller's operator-scope projection.
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include workspace.read.")
+        }
+        workspaceCalls.append(handle)
+        return AutomationWorkspacesResult(
+            repos: [
+                AutomationRepoDescriptor(
+                    repoID: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+                    name: "workspaces",
+                    path: "/Users/test/workspaces",
+                    isSelected: true
+                )
+            ],
+            workspaces: [
+                AutomationWorkspaceDescriptor(
+                    workspaceID: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
+                    repoID: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+                    name: "feature-a",
+                    path: "/Users/test/workspaces/feature-a",
+                    branch: "feature-a",
+                    status: "active",
+                    isArchived: false,
+                    backend: "local",
+                    isSelected: true
+                )
+            ]
+        )
+    }
+
     var windowSnapshotCalls: [String] = []
 
     func automationWindowSnapshot(
@@ -709,7 +746,7 @@ struct AutomationAPITests {
         #expect(entry.handle == "op-1")
         #expect(entry.isOperator)
         #expect(entry.tileID == nil)
-        #expect(entry.capabilities == [.windowRead, .windowSnapshot])
+        #expect(entry.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
         // Capture-only: an operator handle never carries tile mutation or input.write.
         #expect(!entry.capabilities.contains(.tileClose))
         #expect(!entry.capabilities.contains(.inputWrite))
@@ -743,7 +780,7 @@ struct AutomationAPITests {
         #expect(ok.status == 200)
         #expect(okEnvelope.result?.windows.count == 1)
         #expect(okEnvelope.result?.windows.first?.windowID == "42")
-        #expect(okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot])
+        #expect(okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
         #expect(controller.windowCalls == ["operator"])
 
         // A tile handle holds the v1 tile capabilities but not window.read → capability_denied.
@@ -780,6 +817,85 @@ struct AutomationAPITests {
             HTTPRequest(
                 method: "POST",
                 path: "/v1/windows",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
+    @Test("GET /v1/workspaces succeeds for an operator handle and denies a tile handle")
+    @MainActor
+    func routerWorkspaces() async throws {
+        let controller = FakeAutomationController()
+
+        let ok = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/workspaces",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspacesResult>.self,
+            from: ok.body
+        )
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.repos.count == 1)
+        #expect(okEnvelope.result?.repos.first?.name == "workspaces")
+        #expect(okEnvelope.result?.repos.first?.isSelected == true)
+        #expect(okEnvelope.result?.workspaces.count == 1)
+        #expect(okEnvelope.result?.workspaces.first?.name == "feature-a")
+        #expect(okEnvelope.result?.workspaces.first?.status == "active")
+        #expect(okEnvelope.result?.workspaces.first?.backend == "local")
+        #expect(okEnvelope.result?.workspaces.first?.isSelected == true)
+        #expect(okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
+        #expect(controller.workspaceCalls == ["operator"])
+
+        // A tile handle holds the v1 tile capabilities but not workspace.read → capability_denied.
+        let denied = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/workspaces",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: denied.body
+        )
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        let missing = await AutomationHTTPRouter.route(
+            HTTPRequest(method: "GET", path: "/v1/workspaces", headers: [:], body: Data()),
+            controller: controller,
+            enabled: true
+        )
+        let missingEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: missing.body
+        )
+        #expect(missing.status == 401)
+        #expect(missingEnvelope.error?.code == .missingHandle)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/workspaces",
                 headers: [AutomationAPI.handleHeader: "operator"],
                 body: Data()
             ),
@@ -961,7 +1077,7 @@ struct AutomationAPITests {
 
         let loaded = AutomationOperatorCredentialStore.load(from: url)
         #expect(loaded == credential)
-        #expect(loaded?.capabilities == [.windowRead, .windowSnapshot])
+        #expect(loaded?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
@@ -990,7 +1106,9 @@ struct AutomationAPITests {
         )
         let mintedCredential = try #require(minted)
         #expect(AutomationOperatorCredentialStore.load(from: url) == mintedCredential)
-        #expect(registry.resolve(mintedCredential.handle)?.capabilities == [.windowRead, .windowSnapshot])
+        #expect(
+            registry.resolve(mintedCredential.handle)?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead]
+        )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)
 
         // A non-opt-in launch mints nothing and clears any stale credential left on disk.

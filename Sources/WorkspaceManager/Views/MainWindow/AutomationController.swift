@@ -12,6 +12,7 @@ final class AutomationController: AutomationControlling {
     private var webSnapshot: @MainActor (UUID) async -> WebSnapshotOutcome
     private var windows: @MainActor () -> [AutomationWindowDescriptor]
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
+    private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
 
     init(
         handleRegistry: AutomationHandleRegistry,
@@ -22,6 +23,9 @@ final class AutomationController: AutomationControlling {
         webSnapshot: @escaping @MainActor (UUID) async -> WebSnapshotOutcome = { _ in .unknownSource },
         windows: @escaping @MainActor () -> [AutomationWindowDescriptor] = { [] },
         windowSnapshot: @escaping @MainActor (String) async -> WindowSnapshotOutcome = { _ in .unknownWindow },
+        workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory = {
+            AutomationWorkspaceInventory()
+        },
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         }
@@ -34,6 +38,7 @@ final class AutomationController: AutomationControlling {
         self.webSnapshot = webSnapshot
         self.windows = windows
         self.windowSnapshot = windowSnapshot
+        self.workspaceInventory = workspaceInventory
         self.isInputWriteEnabled = isInputWriteEnabled
     }
 
@@ -44,7 +49,8 @@ final class AutomationController: AutomationControlling {
         webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil,
         webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil,
         windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil,
-        windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil
+        windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil,
+        workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
@@ -60,6 +66,9 @@ final class AutomationController: AutomationControlling {
         }
         if let windowSnapshot {
             self.windowSnapshot = windowSnapshot
+        }
+        if let workspaceInventory {
+            self.workspaceInventory = workspaceInventory
         }
     }
 
@@ -84,6 +93,19 @@ final class AutomationController: AutomationControlling {
         let entry = try resolveOperator(handle, requiring: .windowRead)
         return AutomationWindowsResult(
             windows: windows(),
+            system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+        )
+    }
+
+    func automationWorkspaces(for handle: String) throws -> AutomationWorkspacesResult {
+        // Operator scope, read-only: like the window list, the caller need not own a terminal tile,
+        // so this resolves without the tile-liveness check — only the workspace.read capability and
+        // operator-scope guard apply. A tile handle lacks workspace.read and fails capability_denied.
+        let entry = try resolveOperator(handle, requiring: .workspaceRead)
+        let inventory = workspaceInventory()
+        return AutomationWorkspacesResult(
+            repos: inventory.repos,
+            workspaces: inventory.workspaces,
             system: AutomationSystemDescriptor(capabilities: entry.capabilities)
         )
     }
