@@ -119,7 +119,7 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 						title="Stop the turn"
 						aria-label="Stop"
 						onClick={onStop}
-						className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[11px] leading-none text-muted transition-colors duration-200 hover:border-del-ink hover:text-del-ink"
+						className="relative z-[1] flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[11px] leading-none text-muted transition-colors duration-200 hover:border-del-ink hover:text-del-ink"
 					>
 						■
 					</button>
@@ -130,7 +130,7 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 						aria-label="Send"
 						disabled={disabled}
 						onClick={submit}
-						className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent disabled:opacity-40 disabled:group-focus-within:border-line-strong disabled:group-focus-within:bg-transparent disabled:group-focus-within:text-muted disabled:hover:border-line-strong disabled:hover:text-muted"
+						className="relative z-[1] flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent disabled:opacity-40 disabled:group-focus-within:border-line-strong disabled:group-focus-within:bg-transparent disabled:group-focus-within:text-muted disabled:hover:border-line-strong disabled:hover:text-muted"
 					>
 						↑
 					</button>

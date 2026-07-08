@@ -49,8 +49,10 @@ export function StatusLine({
 				title="Show status line"
 				aria-label="Show status line"
 				onClick={() => setDismissed(false)}
-				className="absolute right-[18px] bottom-[13px] h-[9px] w-[9px] rounded-full bg-faint opacity-40 transition-[opacity,transform,background-color] duration-200 hover:scale-[1.35] hover:bg-accent hover:opacity-100"
-			/>
+				className="group absolute right-[0.5px] bottom-[-4.5px] flex h-11 w-11 items-center justify-center"
+			>
+				<span className="h-[9px] w-[9px] rounded-full bg-faint opacity-40 transition-[opacity,transform,background-color] duration-200 group-hover:scale-[1.35] group-hover:bg-accent group-hover:opacity-100" />
+			</button>
 		);
 	}
 
@@ -61,7 +63,7 @@ export function StatusLine({
 			data-testid="status-line"
 			className="h-[30px] border-t border-line bg-status-bg font-mono text-stat tracking-[.03em] text-hint"
 		>
-			<div className="mx-auto flex h-full max-w-[680px] items-center px-0.5">
+			<div className="mx-auto flex h-full max-w-[680px] items-center px-5">
 				<span className="font-medium text-muted before:mr-2 before:inline-block before:h-[5px] before:w-[5px] before:rounded-full before:bg-accent before:align-[2px] before:opacity-75 before:content-['']">
 					{picker ? (
 						<select
@@ -93,7 +95,7 @@ export function StatusLine({
 					title="Hide status line"
 					aria-label="Hide status line"
 					onClick={() => setDismissed(true)}
-					className="ml-auto rounded-[5px] px-1.5 py-1 text-stat leading-none text-faint opacity-70 transition-[opacity,color] duration-200 hover:text-ink hover:opacity-100"
+					className="relative ml-auto rounded-[5px] px-1.5 py-1 text-stat leading-none text-faint opacity-70 transition-[opacity,color] duration-200 after:absolute after:top-1/2 after:left-1/2 after:h-11 after:w-11 after:-translate-x-1/2 after:-translate-y-1/2 after:content-[''] hover:text-ink hover:opacity-100"
 				>
 					✕
 				</button>
