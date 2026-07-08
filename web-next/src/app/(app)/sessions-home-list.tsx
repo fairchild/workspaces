@@ -6,7 +6,7 @@
  * controls into URL params and opens the selected session.
  */
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
 	type KeyboardEvent,
 	useCallback,
@@ -103,7 +103,6 @@ export function SessionsHomeList({
 }: SessionsHomeListProps) {
 	const router = useRouter();
 	const pathname = usePathname();
-	const searchParams = useSearchParams();
 	const searchRef = useRef<HTMLInputElement>(null);
 	const [query, setQuery] = useState(initialQuery);
 	const [selectedIndex, setSelectedIndex] = useState(sessions.length > 0 ? 0 : -1);
@@ -124,17 +123,26 @@ export function SessionsHomeList({
 
 	const replaceParams = useCallback(
 		(next: { q?: string; repo?: string; status?: string }) => {
-			const params = new URLSearchParams(searchParams);
-			// Local query state rides along on every change, so a filter picked
+			// Built from the server-passed values + local state, NOT
+			// useSearchParams: reading search params from a client component
+			// opts the page out of static server paint (CSR bailout), which
+			// showed up as a 2x route_home LCP regression in the perf floor.
+			// Local query rides along on every change, so a filter picked
 			// before the search debounce fires can't drop the pending text.
-			for (const [key, value] of Object.entries({ q: query.trim(), ...next })) {
+			const params = new URLSearchParams();
+			const merged = {
+				q: query.trim(),
+				repo: initialRepoId,
+				status: initialStatus,
+				...next,
+			};
+			for (const [key, value] of Object.entries(merged)) {
 				if (value) params.set(key, value);
-				else params.delete(key);
 			}
 			const suffix = params.toString();
 			router.replace(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false });
 		},
-		[pathname, query, router, searchParams],
+		[initialRepoId, initialStatus, pathname, query, router],
 	);
 
 	useEffect(() => {
