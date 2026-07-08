@@ -13,6 +13,10 @@ final class AutomationController: AutomationControlling {
     private var windows: @MainActor () -> [AutomationWindowDescriptor]
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
     private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
+    /// The gesture-verb layer — the single place `workspace.select` (and later mutation verbs) enter
+    /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
+    /// condition: a mutation verb cannot run without a live window, and never falls back.
+    private var gestureVerbs: AutomationGestureVerbs?
 
     init(
         handleRegistry: AutomationHandleRegistry,
@@ -26,6 +30,7 @@ final class AutomationController: AutomationControlling {
         workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory = {
             AutomationWorkspaceInventory()
         },
+        gestureVerbs: AutomationGestureVerbs? = nil,
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         }
@@ -39,6 +44,7 @@ final class AutomationController: AutomationControlling {
         self.windows = windows
         self.windowSnapshot = windowSnapshot
         self.workspaceInventory = workspaceInventory
+        self.gestureVerbs = gestureVerbs
         self.isInputWriteEnabled = isInputWriteEnabled
     }
 
@@ -50,11 +56,13 @@ final class AutomationController: AutomationControlling {
         webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil,
         windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil,
         windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil,
-        workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil
+        workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil,
+        gestureVerbs: AutomationGestureVerbs? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
+        self.gestureVerbs = gestureVerbs
         if let webSurfaces {
             self.webSurfaces = webSurfaces
         }
@@ -108,6 +116,54 @@ final class AutomationController: AutomationControlling {
             workspaces: inventory.workspaces,
             system: AutomationSystemDescriptor(capabilities: entry.capabilities)
         )
+    }
+
+    func automationSelectWorkspace(
+        for handle: String,
+        workspaceID: String
+    ) async throws -> AutomationWorkspaceSelectResult {
+        // Operator scope, the first operator *mutation*: gated on workspace.select (distinct from the
+        // read-only workspace.read), and — like the other operator routes — resolved without the
+        // tile-liveness check. A tile handle lacks workspace.select and fails capability_denied.
+        let entry = try resolveOperator(handle, requiring: .workspaceSelect)
+        guard let uuid = UUID(uuidString: workspaceID) else {
+            throw AutomationServiceError(.invalidRequest, "workspaceID must be a UUID.")
+        }
+        // No gesture layer means no live window is bound to the API. That is precisely the
+        // `unsupported` case: the verb cannot run without a window, and never falls back to a
+        // data-layer write.
+        guard let gestureVerbs else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; workspace.select requires a live window."
+            )
+        }
+        let capabilities = entry.capabilities
+        switch gestureVerbs.selectWorkspace(uuid) {
+        case .completed(let effect):
+            return AutomationWorkspaceSelectResult(
+                workspaceID: workspaceID,
+                outcome: .completed,
+                changed: true,
+                selectedWorkspaceID: effect.selectedWorkspaceID,
+                attachedTerminal: effect.attachedTerminal,
+                attachedSurfaceID: effect.attachedSurfaceID?.uuidString,
+                system: AutomationSystemDescriptor(capabilities: capabilities)
+            )
+        case .confirmationRequired(let message):
+            return AutomationWorkspaceSelectResult(
+                workspaceID: workspaceID,
+                outcome: .confirmationRequired,
+                changed: false,
+                message: message,
+                system: AutomationSystemDescriptor(capabilities: capabilities)
+            )
+        case .unsupported(let message):
+            throw AutomationServiceError(.unsupported, message)
+        case .notFound:
+            throw AutomationServiceError(
+                .invalidRequest, "No workspace with id \(workspaceID) is tracked by the app.")
+        }
     }
 
     func automationWindowSnapshot(

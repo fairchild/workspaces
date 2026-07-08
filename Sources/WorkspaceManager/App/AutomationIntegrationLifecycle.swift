@@ -49,7 +49,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         webSurfaceRecords: @escaping @MainActor () -> [WebSurfaceRecord] = { [] },
         workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory = {
             AutomationWorkspaceInventory()
-        }
+        },
+        gestureVerbs: AutomationGestureVerbs? = nil
     ) async {
         guard isEnabled else {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
@@ -64,7 +65,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 focusTerminal: focusTerminal,
                 requestCloseTerminal: requestCloseTerminal,
                 webSurfaceRecords: webSurfaceRecords,
-                workspaceInventory: workspaceInventory
+                workspaceInventory: workspaceInventory,
+                gestureVerbs: gestureVerbs
             )
             tileTreeStore.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
         } catch {
@@ -81,7 +83,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         webSurfaceRecords: @escaping @MainActor () -> [WebSurfaceRecord] = { [] },
         workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory = {
             AutomationWorkspaceInventory()
-        }
+        },
+        gestureVerbs: AutomationGestureVerbs? = nil
     ) async throws -> String {
         // Compose the read-only web-surface list from the caller's live source records
         // joined with the surface store's live WKWebView state (non-creating peek).
@@ -110,7 +113,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 webSnapshot: webSnapshot,
                 windows: windows,
                 windowSnapshot: windowSnapshot,
-                workspaceInventory: workspaceInventory
+                workspaceInventory: workspaceInventory,
+                gestureVerbs: gestureVerbs
             )
             return socketPath
         }
@@ -124,7 +128,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 webSnapshot: webSnapshot,
                 windows: windows,
                 windowSnapshot: windowSnapshot,
-                workspaceInventory: workspaceInventory
+                workspaceInventory: workspaceInventory,
+                gestureVerbs: gestureVerbs
             )
             guard let socketPath else {
                 throw AutomationListener.ListenerError.socketBindFailed("listener started without a socket path")
@@ -141,7 +146,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             webSnapshot: webSnapshot,
             windows: windows,
             windowSnapshot: windowSnapshot,
-            workspaceInventory: workspaceInventory
+            workspaceInventory: workspaceInventory,
+            gestureVerbs: gestureVerbs
         )
 
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"

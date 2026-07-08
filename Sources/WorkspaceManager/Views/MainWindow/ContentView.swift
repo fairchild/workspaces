@@ -2043,6 +2043,56 @@ struct ContentView: View {
                     selectedWorkspaceID: viewState.selectedWorkspace?.workspaceID,
                     selectedRepoID: viewState.selectedRepoForLandingID
                 )
+            },
+            gestureVerbs: makeAutomationGestureVerbs()
+        )
+    }
+
+    /// The gesture-verb layer backing `workspace.select`. Its `performSelection` writes the exact same
+    /// `selectedWorkspaceBinding` a sidebar click writes — the setter runs `handleWorkspaceSelection`,
+    /// which attaches the terminal and requests focus. Because the verb enters this binding (not a
+    /// service or SwiftData write), an API-driven select produces the identical user-visible reactions
+    /// a click does: sidebar highlight, terminal attach, focus request. The layer holds only these two
+    /// closures — no backend handle — so a verb cannot silently bypass the UI.
+    @MainActor
+    private func makeAutomationGestureVerbs() -> AutomationGestureVerbs {
+        AutomationGestureVerbs(
+            resolveWorkspace: { workspaceID in
+                guard
+                    let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == workspaceID })
+                else {
+                    return nil
+                }
+                return AutomationGestureVerbs.WorkspaceTarget(
+                    workspaceID: workspace.id,
+                    name: workspace.name,
+                    isArchived: workspace.status == .archived
+                )
+            },
+            performSelection: { target in
+                guard
+                    let workspace = repos.flatMap(\.workspaces).first(where: {
+                        $0.id == target.workspaceID
+                    })
+                else {
+                    return AutomationWorkspaceSelectEffect(
+                        selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+                }
+                // Enter the real selection path: write the binding whose setter runs
+                // handleWorkspaceSelection (terminal attach + focus request), exactly as a click does.
+                selectedWorkspaceBinding.wrappedValue = workspace
+                // Read back what the gesture did. Selection landing on the target workspace (not the
+                // archived → repo-overview branch) with a live active session is the terminal attach;
+                // that active session is the surface a following input would land in — the wrong-PTY
+                // guard, observable rather than assumed.
+                let selectedID = currentSelectedWorkspace?.id
+                let activeSessionID = tileTreeStore.activeSessionID
+                let attached = selectedID == workspace.id && activeSessionID != nil
+                return AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: selectedID,
+                    attachedSurfaceID: attached ? activeSessionID : nil,
+                    attachedTerminal: attached
+                )
             }
         )
     }

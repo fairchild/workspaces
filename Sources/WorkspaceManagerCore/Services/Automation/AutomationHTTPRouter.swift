@@ -84,6 +84,10 @@ enum AutomationHTTPRouter {
             let windowID = try decodeWindowID(from: request.body)
             return try await controller.automationWindowSnapshot(for: handle, windowID: windowID)
 
+        case ("POST", "/v1/workspace/select"):
+            let workspaceID = try decodeWorkspaceID(from: request.body)
+            return try await controller.automationSelectWorkspace(for: handle, workspaceID: workspaceID)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -124,6 +128,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/workspaces.")
         case (_, "/v1/window/snapshot"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/window/snapshot.")
+        case (_, "/v1/workspace/select"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/select.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -215,6 +221,34 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.invalidRequest, "Request body must be JSON with a non-empty string windowID.")
         }
         return windowID
+    }
+
+    /// The `workspaceID` from a `workspace.select` body. Like the window id, this is a global stable
+    /// identity the caller obtained from `workspace.read` (a SwiftData model id), not a caller-supplied
+    /// *tile* id to reject — so the route accepts it directly and the controller confirms it names a
+    /// workspace the app tracks. UUID-shape validation is the controller's job so a well-shaped body
+    /// with a non-UUID id reports `invalid_request` rather than a decode failure.
+    private static func decodeWorkspaceID(from body: Data) throws -> String {
+        guard !body.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request body must include a workspaceID.")
+        }
+        let parsed: Any
+        do {
+            parsed = try JSONSerialization.jsonObject(with: body)
+        } catch {
+            throw AutomationServiceError(.malformedJSON, "Request body is not valid JSON.")
+        }
+        guard let object = parsed as? [String: Any] else {
+            throw AutomationServiceError(.invalidRequest, "Request body must be a JSON object.")
+        }
+        guard
+            let workspaceID = object["workspaceID"] as? String,
+            !workspaceID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else {
+            throw AutomationServiceError(
+                .invalidRequest, "Request body must be JSON with a non-empty string workspaceID.")
+        }
+        return workspaceID
     }
 
     private static func decodeInputWrite(from body: Data) throws -> AutomationInputWriteRequest {
@@ -333,6 +367,7 @@ extension AutomationContextResult: CodableSendableEquatable {}
 extension AutomationSurfacesResult: CodableSendableEquatable {}
 extension AutomationWindowsResult: CodableSendableEquatable {}
 extension AutomationWorkspacesResult: CodableSendableEquatable {}
+extension AutomationWorkspaceSelectResult: CodableSendableEquatable {}
 extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}
 extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}

@@ -72,7 +72,8 @@ public final class AutomationHandleRegistry {
         return entry
     }
 
-    /// Registers a per-launch operator handle carrying capture-only capabilities. Unlike `upsert`,
+    /// Registers a per-launch operator handle carrying the operator capabilities (read/capture plus
+    /// the one reviewed mutation, workspace.select). Unlike `upsert`,
     /// this is not keyed by a live terminal session — the entry stands alone under a synthetic host
     /// session id so `remove(hostSessionID:)`/`removeAll` still evict it when the launch ends. Each
     /// call mints a fresh handle; a launch mints exactly one.

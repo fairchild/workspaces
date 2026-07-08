@@ -115,6 +115,50 @@ private final class FakeAutomationController: AutomationControlling {
         )
     }
 
+    var selectCalls: [String] = []
+
+    /// Named ids the fake maps to each projected outcome, so router tests can drive the wire mapping
+    /// without a live app. A well-shaped-but-unknown id and a non-UUID id both project to
+    /// `invalid_request`; the no-window id projects to `unsupported`.
+    static let selectUnknownID = "00000000-0000-0000-0000-000000000000"
+    static let selectNoWindowID = "11111111-1111-1111-1111-111111111111"
+    static let selectAttachedSurfaceID = "22222222-2222-2222-2222-222222222222"
+
+    func automationSelectWorkspace(
+        for handle: String,
+        workspaceID: String
+    ) async throws -> AutomationWorkspaceSelectResult {
+        // Mirrors the operator-scope projection: only an operator handle carries workspace.select; a
+        // tile handle ("live") is capability_denied and any other handle is stale.
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(
+                .capabilityDenied, "The automation handle does not include workspace.select.")
+        }
+        guard UUID(uuidString: workspaceID) != nil else {
+            throw AutomationServiceError(.invalidRequest, "workspaceID must be a UUID.")
+        }
+        if workspaceID == Self.selectUnknownID {
+            throw AutomationServiceError(
+                .invalidRequest, "No workspace with id \(workspaceID) is tracked by the app.")
+        }
+        if workspaceID == Self.selectNoWindowID {
+            throw AutomationServiceError(
+                .unsupported, "No WorkSpaces window is attached; workspace.select requires a live window.")
+        }
+        selectCalls.append(workspaceID)
+        return AutomationWorkspaceSelectResult(
+            workspaceID: workspaceID,
+            outcome: .completed,
+            changed: true,
+            selectedWorkspaceID: UUID(uuidString: workspaceID),
+            attachedTerminal: true,
+            attachedSurfaceID: Self.selectAttachedSurfaceID
+        )
+    }
+
     var windowSnapshotCalls: [String] = []
 
     func automationWindowSnapshot(
@@ -737,7 +781,7 @@ struct AutomationAPITests {
         #expect(deniedEnvelope.error?.code == .capabilityDenied)
     }
 
-    @Test("Registry mints an operator handle carrying only capture-only capabilities")
+    @Test("Registry mints an operator handle carrying read/capture plus workspace.select")
     @MainActor
     func registryRegistersOperatorHandle() {
         let registry = AutomationHandleRegistry(makeHandle: { "op-1" })
@@ -746,8 +790,9 @@ struct AutomationAPITests {
         #expect(entry.handle == "op-1")
         #expect(entry.isOperator)
         #expect(entry.tileID == nil)
-        #expect(entry.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
-        // Capture-only: an operator handle never carries tile mutation or input.write.
+        #expect(entry.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
+        // The one operator mutation is workspace.select (a reviewed exception that drives the real
+        // gesture); an operator handle still never carries tile mutation or input.write.
         #expect(!entry.capabilities.contains(.tileClose))
         #expect(!entry.capabilities.contains(.inputWrite))
         #expect(registry.resolve("op-1")?.isOperator == true)
@@ -780,7 +825,8 @@ struct AutomationAPITests {
         #expect(ok.status == 200)
         #expect(okEnvelope.result?.windows.count == 1)
         #expect(okEnvelope.result?.windows.first?.windowID == "42")
-        #expect(okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
+        #expect(
+            okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
         #expect(controller.windowCalls == ["operator"])
 
         // A tile handle holds the v1 tile capabilities but not window.read → capability_denied.
@@ -859,7 +905,8 @@ struct AutomationAPITests {
         #expect(okEnvelope.result?.workspaces.first?.status == "active")
         #expect(okEnvelope.result?.workspaces.first?.backend == "local")
         #expect(okEnvelope.result?.workspaces.first?.isSelected == true)
-        #expect(okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
+        #expect(
+            okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
         #expect(controller.workspaceCalls == ["operator"])
 
         // A tile handle holds the v1 tile capabilities but not workspace.read → capability_denied.
@@ -963,6 +1010,103 @@ struct AutomationAPITests {
         #expect(code(.unknownWindow) == .invalidRequest)
         #expect(code(.notCapturable) == .unsupported)
         #expect(code(.captureFailed("boom")) == .internalError)
+    }
+
+    @Test("POST /v1/workspace/select projects the gesture outcome and enforces the capability")
+    @MainActor
+    func routerWorkspaceSelect() async throws {
+        let controller = FakeAutomationController()
+        let validID = "77777777-7777-7777-7777-777777777777"
+
+        func post(_ handle: String?, body: Data) async -> AutomationHTTPResult {
+            var headers: [String: String] = [:]
+            if let handle { headers[AutomationAPI.handleHeader] = handle }
+            return await AutomationHTTPRouter.route(
+                HTTPRequest(method: "POST", path: "/v1/workspace/select", headers: headers, body: body),
+                controller: controller,
+                enabled: true
+            )
+        }
+
+        func body(_ id: String) -> Data {
+            Data("{\"workspaceID\":\"\(id)\"}".utf8)
+        }
+
+        // Operator handle + valid id → completed, attached, and the controller was actually driven.
+        let ok = await post("operator", body: body(validID))
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceSelectResult>.self, from: ok.body)
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.outcome == .completed)
+        #expect(okEnvelope.result?.changed == true)
+        #expect(okEnvelope.result?.attachedTerminal == true)
+        #expect(okEnvelope.result?.attachedSurfaceID == FakeAutomationController.selectAttachedSurfaceID)
+        #expect(okEnvelope.result?.system.capabilities.contains(.workspaceSelect) == true)
+        #expect(controller.selectCalls == [validID])
+
+        // A tile handle holds tile mutation but not workspace.select → capability_denied.
+        let denied = await post("live", body: body(validID))
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: denied.body)
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        // Unknown handle is stale; missing handle is missing.
+        let stale = await post("ghost", body: body(validID))
+        #expect(stale.status == 401)
+        let missing = await post(nil, body: body(validID))
+        #expect(missing.status == 401)
+        let missingEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: missing.body)
+        #expect(missingEnvelope.error?.code == .missingHandle)
+
+        // A well-shaped-but-unknown id and a non-UUID id both project to invalid_request.
+        let unknown = await post("operator", body: body(FakeAutomationController.selectUnknownID))
+        #expect(unknown.status == 400)
+        let badUUID = await post("operator", body: body("not-a-uuid"))
+        let badUUIDEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: badUUID.body)
+        #expect(badUUID.status == 400)
+        #expect(badUUIDEnvelope.error?.code == .invalidRequest)
+
+        // No live window → unsupported (the verb never falls back to a data-layer write).
+        let noWindow = await post("operator", body: body(FakeAutomationController.selectNoWindowID))
+        let noWindowEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: noWindow.body)
+        #expect(noWindow.status == 409)
+        #expect(noWindowEnvelope.error?.code == .unsupported)
+
+        // An empty body is invalid_request; GET is method_not_allowed.
+        let empty = await post("operator", body: Data())
+        #expect(empty.status == 400)
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET", path: "/v1/workspace/select",
+                headers: [AutomationAPI.handleHeader: "operator"], body: Data()),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: wrongMethod.body)
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
+    @Test("workspace-select result encodes the structured outcome kind on the wire")
+    func workspaceSelectResultEncoding() throws {
+        let confirmation = AutomationWorkspaceSelectResult(
+            workspaceID: "abc", outcome: .confirmationRequired, changed: false,
+            message: "Confirm?")
+        let data = try AutomationJSON.encoder.encode(AutomationResponseEnvelope(result: confirmation))
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\"outcome\":\"confirmation_required\""))
+        #expect(json.contains("\"message\":\"Confirm?\""))
+
+        let completed = AutomationWorkspaceSelectResult(
+            workspaceID: "abc", outcome: .completed, changed: true, attachedTerminal: true)
+        let completedJSON = try #require(
+            String(data: try AutomationJSON.encoder.encode(completed), encoding: .utf8))
+        #expect(completedJSON.contains("\"outcome\":\"completed\""))
     }
 
     @Test("POST /v1/window/snapshot captures for an operator handle and fails closed otherwise")
@@ -1077,7 +1221,7 @@ struct AutomationAPITests {
 
         let loaded = AutomationOperatorCredentialStore.load(from: url)
         #expect(loaded == credential)
-        #expect(loaded?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead])
+        #expect(loaded?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
@@ -1107,7 +1251,9 @@ struct AutomationAPITests {
         let mintedCredential = try #require(minted)
         #expect(AutomationOperatorCredentialStore.load(from: url) == mintedCredential)
         #expect(
-            registry.resolve(mintedCredential.handle)?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead]
+            registry.resolve(mintedCredential.handle)?.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
+            ]
         )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)
 

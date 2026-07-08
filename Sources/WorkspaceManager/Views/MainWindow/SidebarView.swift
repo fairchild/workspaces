@@ -1296,6 +1296,22 @@ struct SidebarView: View {
             timeout: .seconds(15)
         )
 
+        // API-driven select variant: park the active surface on the repo terminal, then hand the
+        // reselect to an external `workspace.select` verb. The verb enters the same selection binding
+        // this scenario's `selectWorkspace` writes, so it must produce the identical
+        // `terminal_session_attached` milestone — and switch the active PTY off the repo terminal,
+        // which is the wrong-PTY guard proven end to end.
+        if desktopUISmokeAutomation.usesAPISelectDriver {
+            let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
+            onRepoTerminalSelected(repo)
+            _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
+                after: focusBaselineBeforeRepoPark,
+                timeout: .seconds(15)
+            )
+            await desktopUISmokeAutomation.noteAwaitingAPISelect(workspace: workspace)
+            return
+        }
+
         // Flow 2: switch selection to the repo terminal, then back to the
         // workspace. Distinct attached session IDs prove the surface follows
         // selection rather than stranding a stale session.
