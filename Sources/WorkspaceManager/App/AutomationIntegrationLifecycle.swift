@@ -24,6 +24,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var didStart = false
     private var startTask: Task<String, Error>?
     private var operatorCredentialURL: URL?
+    private var appIntentOperatorHandle: String?
+    private let appIntentOperatorHostSessionID = UUID()
 
     /// The app scope id operator handles carry — matched to the value `TileTreeStore` stamps on tile
     /// handles so audit and context read consistently across both handle classes.
@@ -52,6 +54,33 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         },
         gestureVerbs: AutomationGestureVerbs? = nil
     ) async {
+        let webSurfaces = Self.makeWebSurfaces(
+            tileTreeStore: tileTreeStore,
+            webSurfaceRecords: webSurfaceRecords
+        )
+        let webSnapshot = Self.makeWebSnapshot(
+            tileTreeStore: tileTreeStore,
+            webSurfaceRecords: webSurfaceRecords
+        )
+        let windows: @MainActor () -> [AutomationWindowDescriptor] = {
+            AutomationWindowEnumerator.descriptors()
+        }
+        let windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome = { windowID in
+            WindowSnapshotService.snapshot(windowID: windowID)
+        }
+
+        configureController(
+            tileTreeStore: tileTreeStore,
+            focusTerminal: focusTerminal,
+            requestCloseTerminal: requestCloseTerminal,
+            webSurfaces: webSurfaces,
+            webSnapshot: webSnapshot,
+            windows: windows,
+            windowSnapshot: windowSnapshot,
+            workspaceInventory: workspaceInventory,
+            gestureVerbs: gestureVerbs
+        )
+
         guard isEnabled else {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             // Fail closed: an app without the Automation API leaves no operator credential behind.
@@ -66,7 +95,11 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 requestCloseTerminal: requestCloseTerminal,
                 webSurfaceRecords: webSurfaceRecords,
                 workspaceInventory: workspaceInventory,
-                gestureVerbs: gestureVerbs
+                gestureVerbs: gestureVerbs,
+                webSurfaces: webSurfaces,
+                webSnapshot: webSnapshot,
+                windows: windows,
+                windowSnapshot: windowSnapshot
             )
             tileTreeStore.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
         } catch {
@@ -84,24 +117,28 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory = {
             AutomationWorkspaceInventory()
         },
-        gestureVerbs: AutomationGestureVerbs? = nil
+        gestureVerbs: AutomationGestureVerbs? = nil,
+        webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil,
+        webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil,
+        windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil,
+        windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil
     ) async throws -> String {
         // Compose the read-only web-surface list from the caller's live source records
         // joined with the surface store's live WKWebView state (non-creating peek).
-        let webSurfaces = Self.makeWebSurfaces(
-            tileTreeStore: tileTreeStore,
-            webSurfaceRecords: webSurfaceRecords
-        )
-        let webSnapshot = Self.makeWebSnapshot(
-            tileTreeStore: tileTreeStore,
-            webSurfaceRecords: webSurfaceRecords
-        )
-        let windows: @MainActor () -> [AutomationWindowDescriptor] = {
-            AutomationWindowEnumerator.descriptors()
-        }
-        let windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome = { windowID in
-            WindowSnapshotService.snapshot(windowID: windowID)
-        }
+        let webSurfaces =
+            webSurfaces
+            ?? Self.makeWebSurfaces(tileTreeStore: tileTreeStore, webSurfaceRecords: webSurfaceRecords)
+        let webSnapshot =
+            webSnapshot
+            ?? Self.makeWebSnapshot(tileTreeStore: tileTreeStore, webSurfaceRecords: webSurfaceRecords)
+        let windows =
+            windows ?? {
+                AutomationWindowEnumerator.descriptors()
+            }
+        let windowSnapshot =
+            windowSnapshot ?? { windowID in
+                WindowSnapshotService.snapshot(windowID: windowID)
+            }
 
         if let startTask {
             let socketPath = try await startTask.value
@@ -137,8 +174,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             return socketPath
         }
 
-        let controller = AutomationController(
-            handleRegistry: handleRegistry,
+        let controller = configureController(
             tileTreeStore: tileTreeStore,
             focusTerminal: focusTerminal,
             requestCloseTerminal: requestCloseTerminal,
@@ -216,6 +252,49 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         return listener.socketPath
     }
 
+    @discardableResult
+    private func configureController(
+        tileTreeStore: TileTreeStore,
+        focusTerminal: @escaping @MainActor (UUID) -> Void,
+        requestCloseTerminal: @escaping @MainActor (UUID) -> Void,
+        webSurfaces: @escaping @MainActor () -> [AutomationWebSurfaceDescriptor],
+        webSnapshot: @escaping @MainActor (UUID) async -> WebSnapshotOutcome,
+        windows: @escaping @MainActor () -> [AutomationWindowDescriptor],
+        windowSnapshot: @escaping @MainActor (String) async -> WindowSnapshotOutcome,
+        workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory,
+        gestureVerbs: AutomationGestureVerbs?
+    ) -> AutomationController {
+        if let controller {
+            controller.update(
+                tileTreeStore: tileTreeStore,
+                focusTerminal: focusTerminal,
+                requestCloseTerminal: requestCloseTerminal,
+                webSurfaces: webSurfaces,
+                webSnapshot: webSnapshot,
+                windows: windows,
+                windowSnapshot: windowSnapshot,
+                workspaceInventory: workspaceInventory,
+                gestureVerbs: gestureVerbs
+            )
+            return controller
+        }
+
+        let controller = AutomationController(
+            handleRegistry: handleRegistry,
+            tileTreeStore: tileTreeStore,
+            focusTerminal: focusTerminal,
+            requestCloseTerminal: requestCloseTerminal,
+            webSurfaces: webSurfaces,
+            webSnapshot: webSnapshot,
+            windows: windows,
+            windowSnapshot: windowSnapshot,
+            workspaceInventory: workspaceInventory,
+            gestureVerbs: gestureVerbs
+        )
+        self.controller = controller
+        return controller
+    }
+
     private static func makeWebSurfaces(
         tileTreeStore: TileTreeStore,
         webSurfaceRecords: @escaping @MainActor () -> [WebSurfaceRecord]
@@ -256,6 +335,27 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         controller?.detachGestureVerbs()
     }
 
+    func appIntentControllerAndHandle() throws -> (controller: AutomationController, handle: String) {
+        guard let controller else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; open a WorkSpaces window and try again."
+            )
+        }
+        if let appIntentOperatorHandle,
+            handleRegistry.resolve(appIntentOperatorHandle)?.isOperator == true
+        {
+            return (controller, appIntentOperatorHandle)
+        }
+
+        let entry = handleRegistry.registerOperator(
+            appScopeID: Self.appScopeID,
+            hostSessionID: appIntentOperatorHostSessionID
+        )
+        appIntentOperatorHandle = entry.handle
+        return (controller, entry.handle)
+    }
+
     func stop() async {
         startTask?.cancel()
         startTask = nil
@@ -264,6 +364,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         controller = nil
         socketPath = nil
         didStart = false
+        appIntentOperatorHandle = nil
         handleRegistry.removeAll()
         // The operator handle dies with the launch; remove its credential file on the way out so a
         // clean exit leaves nothing readable (a crash can't, which is why stale credentials fail

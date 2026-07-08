@@ -137,6 +137,19 @@ not a gesture outcome — nothing was driven). App Intents and any companion app
 the same verb layer, so "Siri said done" and "the sidebar updated" are the same
 event.
 
+### App Intents veneer
+
+The Shortcuts/Siri/Spotlight surface exposes `workspace.list`, `workspace.select`,
+and `workspace.create` only as an App Intents veneer over this automation spine.
+Entity queries list repos and workspaces through `automationWorkspaces`, and
+mutation intents call `automationSelectWorkspace` / `automationCreateWorkspace`
+on the app-side controller with an in-process operator handle. They do not read
+or write SwiftData directly, do not call workspace services directly, and do not
+carry their own fallback semantics. If the controller reports `unsupported`
+because no live window is attached, the intent surfaces that error; if the verb
+returns `confirmation_required`, the intent maps it to the native App Intents
+confirmation prompt before reporting the outcome.
+
 ## Envelope
 
 Every route returns a versioned JSON envelope:
