@@ -23,18 +23,27 @@ enum DesktopUISmokeSelectDriver: String, Sendable {
     case api
 }
 
+/// Who drives the workspace creation step. `ui` preserves the daily-driver lane; `api` imports the
+/// repo, emits an `awaiting_api_create` milestone, and leaves creation to the operator route.
+enum DesktopUISmokeCreateDriver: String, Sendable {
+    case ui
+    case api
+}
+
 struct DesktopUISmokeAutomationConfiguration: Equatable, Sendable {
     static let modeEnvironmentKey = "WORKSPACES_AUTOMATION_MODE"
     static let repoPathEnvironmentKey = "WORKSPACES_AUTOMATION_REPO_PATH"
     static let workspaceNameEnvironmentKey = "WORKSPACES_AUTOMATION_WORKSPACE_NAME"
     static let eventsPathEnvironmentKey = "WORKSPACES_AUTOMATION_EVENTS_PATH"
     static let selectDriverEnvironmentKey = "WORKSPACES_AUTOMATION_SELECT_DRIVER"
+    static let createDriverEnvironmentKey = "WORKSPACES_AUTOMATION_CREATE_DRIVER"
     static let modeValue = "desktop-ui-smoke"
 
     let repoURL: URL
     let workspaceName: String
     let eventsURL: URL
     let selectDriver: DesktopUISmokeSelectDriver
+    let createDriver: DesktopUISmokeCreateDriver
 
     static func from(environment: [String: String]) -> DesktopUISmokeAutomationConfiguration? {
         guard
@@ -63,12 +72,18 @@ struct DesktopUISmokeAutomationConfiguration: Equatable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         let selectDriver = selectDriverRaw.flatMap(DesktopUISmokeSelectDriver.init(rawValue:)) ?? .ui
+        let createDriverRaw =
+            environment[createDriverEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let createDriver = createDriverRaw.flatMap(DesktopUISmokeCreateDriver.init(rawValue:)) ?? .ui
 
         return DesktopUISmokeAutomationConfiguration(
             repoURL: URL(fileURLWithPath: (repoPath as NSString).expandingTildeInPath),
             workspaceName: workspaceName,
             eventsURL: URL(fileURLWithPath: (eventsPath as NSString).expandingTildeInPath),
-            selectDriver: selectDriver
+            selectDriver: selectDriver,
+            createDriver: createDriver
         )
     }
 }
@@ -89,6 +104,7 @@ private struct DesktopUISmokeEvent: Codable, Sendable {
         case workspaceCreated = "workspace_created"
         case sidebarUpdated = "sidebar_updated"
         case terminalSessionAttached = "terminal_session_attached"
+        case awaitingApiCreate = "awaiting_api_create"
         case awaitingApiSelect = "awaiting_api_select"
         case webSurfaceAttached = "web_surface_attached"
         case surfaceFocused = "surface_focused"
@@ -100,6 +116,7 @@ private struct DesktopUISmokeEvent: Codable, Sendable {
     let type: Kind
     let timestamp: String
     let repoName: String?
+    let repoID: String?
     let repoPath: String?
     let workspaceName: String?
     let workspacePath: String?
@@ -196,6 +213,10 @@ final class DesktopUISmokeAutomationController: ObservableObject {
         configuration?.selectDriver == .api
     }
 
+    var usesAPICreateDriver: Bool {
+        configuration?.createDriver == .api
+    }
+
     /// Signals the scenario has created the workspace, parked the active surface on the repo terminal,
     /// and is now waiting for an external API-driven select to switch back to the workspace. The
     /// api-select smoke script keys its `workspaces workspace select` on this milestone.
@@ -207,6 +228,18 @@ final class DesktopUISmokeAutomationController: ObservableObject {
                 workspaceName: workspace.name,
                 workspacePath: workspace.path,
                 workspaceID: workspace.id.uuidString
+            )
+        )
+    }
+
+    func noteAwaitingAPICreate(repo: Repo) async {
+        guard isEnabled else { return }
+        await emit(
+            makeEvent(
+                type: .awaitingApiCreate,
+                repoName: repo.name,
+                repoID: repo.id.uuidString,
+                repoPath: repo.localURL.standardizedFileURL.resolvingSymlinksInPath().path
             )
         )
     }
@@ -234,7 +267,14 @@ final class DesktopUISmokeAutomationController: ObservableObject {
         let normalizedPath = repo.localURL.standardizedFileURL.resolvingSymlinksInPath().path
         guard emittedRepoPath != normalizedPath else { return }
         emittedRepoPath = normalizedPath
-        await emit(makeEvent(type: .repoReady, repoName: repo.name, repoPath: normalizedPath))
+        await emit(
+            makeEvent(
+                type: .repoReady,
+                repoName: repo.name,
+                repoID: repo.id.uuidString,
+                repoPath: normalizedPath
+            )
+        )
     }
 
     func noteWorkspaceCreationStarted(repo: Repo) async {
@@ -243,6 +283,7 @@ final class DesktopUISmokeAutomationController: ObservableObject {
             makeEvent(
                 type: .workspaceCreationStarted,
                 repoName: repo.name,
+                repoID: repo.id.uuidString,
                 repoPath: repo.localURL.standardizedFileURL.resolvingSymlinksInPath().path
             )
         )
@@ -354,6 +395,7 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     private func makeEvent(
         type: DesktopUISmokeEvent.Kind,
         repoName: String? = nil,
+        repoID: String? = nil,
         repoPath: String? = nil,
         workspaceName: String? = nil,
         workspacePath: String? = nil,
@@ -369,6 +411,7 @@ final class DesktopUISmokeAutomationController: ObservableObject {
             type: type,
             timestamp: Date().ISO8601Format(),
             repoName: repoName,
+            repoID: repoID,
             repoPath: repoPath ?? targetRepoURL?.path,
             workspaceName: workspaceName ?? targetWorkspaceName,
             workspacePath: workspacePath,

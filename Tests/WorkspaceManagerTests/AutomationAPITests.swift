@@ -116,6 +116,7 @@ private final class FakeAutomationController: AutomationControlling {
     }
 
     var selectCalls: [String] = []
+    var createCalls: [AutomationWorkspaceCreateRequest] = []
 
     /// Named ids the fake maps to each projected outcome, so router tests can drive the wire mapping
     /// without a live app. A well-shaped-but-unknown id and a non-UUID id both project to
@@ -123,6 +124,11 @@ private final class FakeAutomationController: AutomationControlling {
     static let selectUnknownID = "00000000-0000-0000-0000-000000000000"
     static let selectNoWindowID = "11111111-1111-1111-1111-111111111111"
     static let selectAttachedSurfaceID = "22222222-2222-2222-2222-222222222222"
+    static let createUnknownRepoID = "33333333-3333-3333-3333-333333333333"
+    static let createNoWindowRepoID = "44444444-4444-4444-4444-444444444444"
+    static let createConfirmationRepoID = "55555555-5555-5555-5555-555555555555"
+    static let createWorkspaceID = "88888888-8888-8888-8888-888888888888"
+    static let createAttachedSurfaceID = "99999999-9999-9999-9999-999999999999"
 
     func automationSelectWorkspace(
         for handle: String,
@@ -156,6 +162,59 @@ private final class FakeAutomationController: AutomationControlling {
             selectedWorkspaceID: UUID(uuidString: workspaceID),
             attachedTerminal: true,
             attachedSurfaceID: Self.selectAttachedSurfaceID
+        )
+    }
+
+    func automationCreateWorkspace(
+        for handle: String,
+        request: AutomationWorkspaceCreateRequest
+    ) async throws -> AutomationWorkspaceCreateResult {
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(
+                .capabilityDenied, "The automation handle does not include workspace.create.")
+        }
+        guard UUID(uuidString: request.repoID) != nil else {
+            throw AutomationServiceError(.invalidRequest, "repoID must be a UUID.")
+        }
+        if request.repoID == Self.createUnknownRepoID {
+            throw AutomationServiceError(
+                .invalidRequest, "No repo with id \(request.repoID) is tracked by the app.")
+        }
+        if request.repoID == Self.createNoWindowRepoID {
+            throw AutomationServiceError(
+                .unsupported, "No WorkSpaces window is attached; workspace.create requires a live window.")
+        }
+        if request.repoID == Self.createConfirmationRepoID {
+            return AutomationWorkspaceCreateResult(
+                repoID: request.repoID,
+                workspaceName: request.name,
+                outcome: .confirmationRequired,
+                changed: false,
+                confirmation: AutomationConfirmationRequirement(
+                    action: "workspace.create",
+                    title: "Set Up Lume",
+                    message: "Create workspace '\(request.name)' requires Lume setup confirmation.",
+                    providerID: "lume",
+                    providerDisplayName: "Lume",
+                    primaryButtonTitle: "Set Up Lume"
+                ),
+                message: "Create workspace '\(request.name)' requires Lume setup confirmation."
+            )
+        }
+        createCalls.append(request)
+        return AutomationWorkspaceCreateResult(
+            repoID: request.repoID,
+            workspaceID: UUID(uuidString: Self.createWorkspaceID),
+            workspaceName: request.name,
+            workspacePath: "/Users/test/workspaces/\(request.name)",
+            outcome: .completed,
+            changed: true,
+            selectedWorkspaceID: UUID(uuidString: Self.createWorkspaceID),
+            attachedTerminal: true,
+            attachedSurfaceID: Self.createAttachedSurfaceID
         )
     }
 
@@ -781,7 +840,7 @@ struct AutomationAPITests {
         #expect(deniedEnvelope.error?.code == .capabilityDenied)
     }
 
-    @Test("Registry mints an operator handle carrying read/capture plus workspace.select")
+    @Test("Registry mints an operator handle carrying read/capture plus workspace gesture verbs")
     @MainActor
     func registryRegistersOperatorHandle() {
         let registry = AutomationHandleRegistry(makeHandle: { "op-1" })
@@ -790,9 +849,10 @@ struct AutomationAPITests {
         #expect(entry.handle == "op-1")
         #expect(entry.isOperator)
         #expect(entry.tileID == nil)
-        #expect(entry.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
-        // The one operator mutation is workspace.select (a reviewed exception that drives the real
-        // gesture); an operator handle still never carries tile mutation or input.write.
+        #expect(
+            entry.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate])
+        // Operator mutation capabilities are reviewed gesture verbs; an operator handle still never
+        // carries tile mutation or input.write.
         #expect(!entry.capabilities.contains(.tileClose))
         #expect(!entry.capabilities.contains(.inputWrite))
         #expect(registry.resolve("op-1")?.isOperator == true)
@@ -826,7 +886,9 @@ struct AutomationAPITests {
         #expect(okEnvelope.result?.windows.count == 1)
         #expect(okEnvelope.result?.windows.first?.windowID == "42")
         #expect(
-            okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
+            okEnvelope.result?.system.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+            ])
         #expect(controller.windowCalls == ["operator"])
 
         // A tile handle holds the v1 tile capabilities but not window.read → capability_denied.
@@ -906,7 +968,9 @@ struct AutomationAPITests {
         #expect(okEnvelope.result?.workspaces.first?.backend == "local")
         #expect(okEnvelope.result?.workspaces.first?.isSelected == true)
         #expect(
-            okEnvelope.result?.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
+            okEnvelope.result?.system.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+            ])
         #expect(controller.workspaceCalls == ["operator"])
 
         // A tile handle holds the v1 tile capabilities but not workspace.read → capability_denied.
@@ -1109,6 +1173,113 @@ struct AutomationAPITests {
         #expect(completedJSON.contains("\"outcome\":\"completed\""))
     }
 
+    @Test("POST /v1/workspace/create projects completed and confirmation outcomes")
+    @MainActor
+    func routerWorkspaceCreate() async throws {
+        let controller = FakeAutomationController()
+        let validRepoID = "77777777-7777-7777-7777-777777777777"
+
+        func post(_ handle: String?, body: Data) async -> AutomationHTTPResult {
+            var headers: [String: String] = [:]
+            if let handle { headers[AutomationAPI.handleHeader] = handle }
+            return await AutomationHTTPRouter.route(
+                HTTPRequest(method: "POST", path: "/v1/workspace/create", headers: headers, body: body),
+                controller: controller,
+                enabled: true
+            )
+        }
+
+        func body(repoID: String, name: String = "created") throws -> Data {
+            try AutomationJSON.encoder.encode(
+                AutomationWorkspaceCreateRequest(repoID: repoID, name: name)
+            )
+        }
+
+        let ok = await post("operator", body: try body(repoID: validRepoID))
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceCreateResult>.self, from: ok.body)
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.outcome == .completed)
+        #expect(okEnvelope.result?.changed == true)
+        #expect(okEnvelope.result?.workspaceID?.uuidString == FakeAutomationController.createWorkspaceID)
+        #expect(okEnvelope.result?.attachedTerminal == true)
+        #expect(okEnvelope.result?.attachedSurfaceID == FakeAutomationController.createAttachedSurfaceID)
+        #expect(okEnvelope.result?.system.capabilities.contains(.workspaceCreate) == true)
+        #expect(controller.createCalls == [AutomationWorkspaceCreateRequest(repoID: validRepoID, name: "created")])
+
+        let confirmation = await post(
+            "operator",
+            body: try body(repoID: FakeAutomationController.createConfirmationRepoID, name: "needs-lume")
+        )
+        let confirmationEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceCreateResult>.self, from: confirmation.body)
+        #expect(confirmation.status == 200)
+        #expect(confirmationEnvelope.result?.outcome == .confirmationRequired)
+        #expect(confirmationEnvelope.result?.changed == false)
+        #expect(confirmationEnvelope.result?.confirmation?.action == "workspace.create")
+        #expect(confirmationEnvelope.result?.confirmation?.providerID == "lume")
+        #expect(confirmationEnvelope.result?.message?.contains("Lume setup confirmation") == true)
+
+        let denied = await post("live", body: try body(repoID: validRepoID))
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: denied.body)
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        let unknown = await post("operator", body: try body(repoID: FakeAutomationController.createUnknownRepoID))
+        #expect(unknown.status == 400)
+        let badUUID = await post("operator", body: try body(repoID: "not-a-uuid"))
+        let badUUIDEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: badUUID.body)
+        #expect(badUUID.status == 400)
+        #expect(badUUIDEnvelope.error?.code == .invalidRequest)
+
+        let noWindow = await post("operator", body: try body(repoID: FakeAutomationController.createNoWindowRepoID))
+        let noWindowEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: noWindow.body)
+        #expect(noWindow.status == 409)
+        #expect(noWindowEnvelope.error?.code == .unsupported)
+
+        let empty = await post("operator", body: Data())
+        #expect(empty.status == 400)
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET", path: "/v1/workspace/create",
+                headers: [AutomationAPI.handleHeader: "operator"], body: Data()),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: wrongMethod.body)
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
+    @Test("workspace-create result encodes the structured confirmation payload")
+    func workspaceCreateResultEncoding() throws {
+        let confirmation = AutomationWorkspaceCreateResult(
+            repoID: "repo",
+            workspaceName: "ws",
+            outcome: .confirmationRequired,
+            changed: false,
+            confirmation: AutomationConfirmationRequirement(
+                action: "workspace.create",
+                title: "Set Up Lume",
+                message: "Create workspace requires setup.",
+                providerID: "lume",
+                providerDisplayName: "Lume",
+                primaryButtonTitle: "Set Up"
+            ),
+            message: "Create workspace requires setup."
+        )
+        let data = try AutomationJSON.encoder.encode(AutomationResponseEnvelope(result: confirmation))
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\"outcome\":\"confirmation_required\""))
+        #expect(json.contains("\"confirmation\""))
+        #expect(json.contains("\"action\":\"workspace.create\""))
+        #expect(json.contains("\"providerID\":\"lume\""))
+    }
+
     @Test("POST /v1/window/snapshot captures for an operator handle and fails closed otherwise")
     @MainActor
     func routerWindowSnapshot() async throws {
@@ -1221,7 +1392,8 @@ struct AutomationAPITests {
 
         let loaded = AutomationOperatorCredentialStore.load(from: url)
         #expect(loaded == credential)
-        #expect(loaded?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
+        #expect(
+            loaded?.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
         let permissions = (attributes[.posixPermissions] as? NSNumber)?.intValue
@@ -1252,7 +1424,7 @@ struct AutomationAPITests {
         #expect(AutomationOperatorCredentialStore.load(from: url) == mintedCredential)
         #expect(
             registry.resolve(mintedCredential.handle)?.capabilities == [
-                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
             ]
         )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)

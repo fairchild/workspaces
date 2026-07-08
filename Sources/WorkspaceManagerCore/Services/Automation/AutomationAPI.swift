@@ -21,11 +21,11 @@ public enum AutomationAPI {
 
     /// Capabilities granted to an opt-in operator handle. Capture and read (`window.read`,
     /// `window.snapshot` — composited PNGs; `workspace.read` — the repo/workspace inventory)
-    /// plus the first operator *mutation* capability, `workspace.select`: a reviewed
-    /// exception that drives the real selection gesture, never a data-layer write. Operator handles
-    /// still never carry tile mutation or `input.write`.
+    /// plus operator mutation capabilities that drive real UI gestures, never data-layer writes.
+    /// Operator handles still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
         AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
+        .workspaceCreate,
     ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
@@ -60,6 +60,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case windowSnapshot = "window.snapshot"
     case workspaceRead = "workspace.read"
     case workspaceSelect = "workspace.select"
+    case workspaceCreate = "workspace.create"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -446,8 +447,8 @@ public struct AutomationWorkspaceInventory: Sendable, Equatable {
 }
 
 /// Response for `GET /v1/workspaces` (`workspace.read`, operator scope): the app's repos and
-/// workspaces with stable model ids, names, and enough state to target. Read-only — no mutation
-/// rides this route; orchestration verbs arrive in later `[A2]` slices.
+/// workspaces with stable model ids, names, and enough state to target. Read-only — mutation verbs
+/// use these stable ids when they enter the real UI path.
 public struct AutomationWorkspacesResult: Codable, Sendable, Equatable {
     public let repos: [AutomationRepoDescriptor]
     public let workspaces: [AutomationWorkspaceDescriptor]
@@ -476,6 +477,34 @@ public struct AutomationWorkspacesResult: Codable, Sendable, Equatable {
 public enum AutomationGestureOutcomeKind: String, Codable, Sendable, Equatable {
     case completed
     case confirmationRequired = "confirmation_required"
+}
+
+/// Structured payload for a gesture that reached UI requiring explicit user confirmation. The
+/// payload names the action and the visible confirmation surface so automation callers can report
+/// or retry intentionally instead of hanging on a modal.
+public struct AutomationConfirmationRequirement: Codable, Sendable, Equatable {
+    public let action: String
+    public let title: String
+    public let message: String
+    public let providerID: String?
+    public let providerDisplayName: String?
+    public let primaryButtonTitle: String?
+
+    public init(
+        action: String,
+        title: String,
+        message: String,
+        providerID: String? = nil,
+        providerDisplayName: String? = nil,
+        primaryButtonTitle: String? = nil
+    ) {
+        self.action = action
+        self.title = title
+        self.message = message
+        self.providerID = providerID
+        self.providerDisplayName = providerDisplayName
+        self.primaryButtonTitle = primaryButtonTitle
+    }
 }
 
 /// What driving the real selection gesture produced. `attachedTerminal` is the observable proof the
@@ -532,6 +561,124 @@ public struct AutomationWorkspaceSelectResult: Codable, Sendable, Equatable {
         self.selectedWorkspaceID = selectedWorkspaceID
         self.attachedTerminal = attachedTerminal
         self.attachedSurfaceID = attachedSurfaceID
+        self.message = message
+        self.system = system
+    }
+}
+
+public struct AutomationWorkspaceCreateRequest: Codable, Sendable, Equatable {
+    public let repoID: String
+    public let name: String
+    public let providerID: String?
+    public let guestOS: WorkspaceGuestOS?
+
+    public init(
+        repoID: String,
+        name: String,
+        providerID: String? = nil,
+        guestOS: WorkspaceGuestOS? = nil
+    ) {
+        self.repoID = repoID
+        self.name = name
+        self.providerID = providerID
+        self.guestOS = guestOS
+    }
+}
+
+public struct AutomationWorkspaceCreateCommand: Sendable, Equatable {
+    public let repoID: UUID
+    public let name: String
+    public let providerID: String
+    public let guestOS: WorkspaceGuestOS?
+
+    public init(
+        repoID: UUID,
+        name: String,
+        providerID: String,
+        guestOS: WorkspaceGuestOS? = nil
+    ) {
+        self.repoID = repoID
+        self.name = name
+        self.providerID = providerID
+        self.guestOS = guestOS
+    }
+}
+
+/// What driving the real workspace-create gesture produced. A completed create must report the
+/// created workspace, the selected workspace, and the attached terminal surface so callers can prove
+/// the next input will land in the newly created PTY.
+public struct AutomationWorkspaceCreateEffect: Sendable, Equatable {
+    public let repoID: UUID
+    public let workspaceID: UUID
+    public let workspaceName: String
+    public let workspacePath: String
+    public let selectedWorkspaceID: UUID?
+    public let attachedSurfaceID: UUID?
+    public let attachedTerminal: Bool
+
+    public init(
+        repoID: UUID,
+        workspaceID: UUID,
+        workspaceName: String,
+        workspacePath: String,
+        selectedWorkspaceID: UUID?,
+        attachedSurfaceID: UUID?,
+        attachedTerminal: Bool
+    ) {
+        self.repoID = repoID
+        self.workspaceID = workspaceID
+        self.workspaceName = workspaceName
+        self.workspacePath = workspacePath
+        self.selectedWorkspaceID = selectedWorkspaceID
+        self.attachedSurfaceID = attachedSurfaceID
+        self.attachedTerminal = attachedTerminal
+    }
+}
+
+/// Response for `POST /v1/workspace/create` (`workspace.create`, operator scope). On completion the
+/// result mirrors the sidebar create path: the new workspace is selected and its terminal is attached.
+/// If the path reaches a setup sheet or other modal UI, the success envelope reports
+/// `confirmation_required` with a structured payload naming what needs user confirmation.
+public struct AutomationWorkspaceCreateResult: Codable, Sendable, Equatable {
+    public let repoID: String
+    public let workspaceID: UUID?
+    public let workspaceName: String
+    public let workspacePath: String?
+    public let outcome: AutomationGestureOutcomeKind
+    public let changed: Bool
+    public let selectedWorkspaceID: UUID?
+    public let attachedTerminal: Bool
+    public let attachedSurfaceID: String?
+    public let confirmation: AutomationConfirmationRequirement?
+    public let message: String?
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        repoID: String,
+        workspaceID: UUID? = nil,
+        workspaceName: String,
+        workspacePath: String? = nil,
+        outcome: AutomationGestureOutcomeKind,
+        changed: Bool,
+        selectedWorkspaceID: UUID? = nil,
+        attachedTerminal: Bool = false,
+        attachedSurfaceID: String? = nil,
+        confirmation: AutomationConfirmationRequirement? = nil,
+        message: String? = nil,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.repoID = repoID
+        self.workspaceID = workspaceID
+        self.workspaceName = workspaceName
+        self.workspacePath = workspacePath
+        self.outcome = outcome
+        self.changed = changed
+        self.selectedWorkspaceID = selectedWorkspaceID
+        self.attachedTerminal = attachedTerminal
+        self.attachedSurfaceID = attachedSurfaceID
+        self.confirmation = confirmation
         self.message = message
         self.system = system
     }
@@ -712,6 +859,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
         for handle: String,
         workspaceID: String
     ) async throws -> AutomationWorkspaceSelectResult
+    func automationCreateWorkspace(
+        for handle: String,
+        request: AutomationWorkspaceCreateRequest
+    ) async throws -> AutomationWorkspaceCreateResult
     func automationWindowSnapshot(
         for handle: String,
         windowID: String

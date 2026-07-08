@@ -509,7 +509,10 @@ struct AutomationControllerTests {
 
         let result = try controller.automationWindows(for: operatorEntry.handle)
         #expect(result.windows == [descriptor])
-        #expect(result.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
+        #expect(
+            result.system.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+            ])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
 
@@ -600,7 +603,10 @@ struct AutomationControllerTests {
         #expect(result.workspaces == inventory.workspaces)
         #expect(result.workspaces.first?.isArchived == true)
         #expect(result.workspaces.first?.backend == "lume")
-        #expect(result.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
+        #expect(
+            result.system.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+            ])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
 
@@ -671,7 +677,10 @@ struct AutomationControllerTests {
         #expect(result.width == 2800)
         #expect(result.height == 1800)
         #expect(Data(base64Encoded: result.data) == png)
-        #expect(result.system.capabilities == [.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect])
+        #expect(
+            result.system.capabilities == [
+                .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate,
+            ])
         #expect(requestedWindowIDs == ["42"])
     }
 

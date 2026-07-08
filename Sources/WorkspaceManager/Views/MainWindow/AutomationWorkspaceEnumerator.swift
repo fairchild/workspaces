@@ -4,7 +4,7 @@
 //
 //  Projects the app's live SwiftData repos and workspaces into the read-only descriptors the
 //  operator-scope `GET /v1/workspaces` route returns. Keyed by the stable SwiftData model ids so
-//  later `[A2]` orchestration verbs can target the same repo/workspace an operator listed here.
+//  mutation verbs can target the same repo/workspace an operator listed here.
 //
 
 import Foundation
