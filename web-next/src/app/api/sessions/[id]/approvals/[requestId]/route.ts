@@ -58,6 +58,15 @@ export async function POST(
 		return Response.json({ error: "unknown approval request" }, { status: 404 });
 	}
 	if (result.status === "already-decided") {
+		// A retried identical decision is idempotent success (a lost response +
+		// browser retry must not surface as an error); only a conflict is a 409.
+		if (result.resolution.decision === decision) {
+			return Response.json({
+				requestId,
+				decision: result.resolution.decision,
+				resolvedBy: result.resolution.resolvedBy,
+			});
+		}
 		return Response.json(
 			{ error: "approval request already decided" },
 			{ status: 409 },

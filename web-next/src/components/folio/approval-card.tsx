@@ -58,6 +58,17 @@ export function ApprovalCard({ approval, onDecision }: ApprovalCardProps) {
 		);
 	}
 
+	if (approval.state === "cancelled") {
+		return (
+			<div
+				data-testid="approval-receipt"
+				className="my-5 font-mono text-stat tracking-[.04em] text-hint"
+			>
+				{approval.toolName} approval cancelled with the turn.
+			</div>
+		);
+	}
+
 	const remaining = Date.parse(approval.expiresAt) - now;
 	const expired = remaining <= 0;
 	const disabled = expired || submitting !== null || onDecision === undefined;

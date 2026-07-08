@@ -342,6 +342,7 @@ const spentErrorTriggers = new Set<string>();
 
 export const mockProvider: ComputeProvider = {
 	id: "mock",
+	supportsApprovals: true,
 	runTurn: (request: TurnRequest) => {
 		let userMessage = request.userMessage;
 		for (const trigger of ERROR_TRIGGERS) {

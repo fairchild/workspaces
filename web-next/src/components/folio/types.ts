@@ -89,6 +89,14 @@ export type ApprovalPartData =
 			expiresAt?: string;
 			decision: ApprovalDecision;
 			resolvedBy: ApprovalResolvedBy;
+	  }
+	| {
+			/** The turn ended (stop, crash, error) with the request unanswered. */
+			state: "cancelled";
+			requestId: string;
+			summary: string;
+			toolName: string;
+			inputSummary: string;
 	  };
 
 export type FolioDataParts = {

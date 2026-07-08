@@ -72,6 +72,12 @@ export interface TurnRequest {
 export interface ComputeProvider {
 	/** Provider id as stored in sessions.provider ("mock" | "vercel" | …). */
 	readonly id: string;
+	/**
+	 * Whether runTurn honors approvalPolicy/requestApproval. A session with a
+	 * non-auto policy on a provider without this flag is refused up front
+	 * (run-turn), never silently run unguarded.
+	 */
+	readonly supportsApprovals?: boolean;
 	/** Runs one agent turn, yielding chunks as they are produced. */
 	runTurn(request: TurnRequest): AsyncIterable<StreamChunk>;
 }

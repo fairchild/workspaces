@@ -405,6 +405,31 @@ describe("POST /api/sessions/[id]/approvals/[requestId]", () => {
 		expect((await res.json()).error).toMatch(/already decided/);
 	});
 
+	test("a retried identical decision is idempotent success, not 409 (review finding)", async () => {
+		const id = await freshSession();
+		const pending = await beginApprovalRequest(getDatabase(), {
+			sessionId: id,
+			requestId: "approval-retried",
+			toolName: "Edit",
+			inputSummary: "Edit src/lib/session.ts",
+			timeoutMs: 60_000,
+			pollIntervalMs: 20,
+		});
+		expect(
+			(await postApproval(id, "approval-retried", { decision: "allow" })).status,
+		).toBe(200);
+		await pending.resolution;
+
+		// A lost response + browser retry of the same decision must read as success.
+		const retry = await postApproval(id, "approval-retried", { decision: "allow" });
+		expect(retry.status).toBe(200);
+		expect(await retry.json()).toMatchObject({
+			requestId: "approval-retried",
+			decision: "allow",
+			resolvedBy: "user",
+		});
+	});
+
 	test("409s when the approval is expired but not yet decided", async () => {
 		const id = await freshSession();
 		await getDatabase()

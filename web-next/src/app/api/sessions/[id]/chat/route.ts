@@ -8,7 +8,11 @@
 import { createUIMessageStreamResponse } from "ai";
 import { after } from "next/server";
 import { getAuthState } from "@/lib/auth/auth-state";
-import { runSessionTurn, TurnConflictError } from "@/lib/agent-runtime/run-turn";
+import {
+	ApprovalPolicyUnsupportedError,
+	runSessionTurn,
+	TurnConflictError,
+} from "@/lib/agent-runtime/run-turn";
 import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
@@ -56,6 +60,9 @@ export async function POST(
 		// client can retry after the turn; a session naming an unregistered
 		// provider is a 500 with the reason.
 		if (error instanceof TurnConflictError) {
+			return Response.json({ error: error.message }, { status: 409 });
+		}
+		if (error instanceof ApprovalPolicyUnsupportedError) {
 			return Response.json({ error: error.message }, { status: 409 });
 		}
 		const message = error instanceof Error ? error.message : "failed to start the turn";

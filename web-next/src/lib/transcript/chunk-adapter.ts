@@ -225,6 +225,7 @@ export async function* toUIMessageChunks(
 					break;
 				}
 				const request = approvals.get(requestId);
+				approvals.delete(requestId);
 				yield {
 					type: "data-approval",
 					id: requestId,
@@ -264,6 +265,26 @@ export async function* toUIMessageChunks(
 
 	yield* closeText();
 	yield* closeReasoning();
+	// A request a TERMINATED turn never resolved (stop, crash, provider error)
+	// must not project as an actionable card into a dead turn: close it as
+	// cancelled. A source that ends without `done` is a live turn's replay
+	// slice — its pending card stays actionable.
+	if (finished) {
+		for (const [requestId, request] of approvals) {
+			yield {
+				type: "data-approval",
+				id: requestId,
+				data: {
+					state: "cancelled",
+					requestId,
+					summary: request.summary,
+					toolName: request.toolName,
+					inputSummary: request.inputSummary,
+				},
+			};
+		}
+		approvals.clear();
+	}
 	yield {
 		type: "finish",
 		messageMetadata: options.messageMetadata?.(consumed),

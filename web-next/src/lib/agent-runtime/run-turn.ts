@@ -34,6 +34,16 @@ export class TurnConflictError extends Error {
 	}
 }
 
+/** A non-auto approval policy on a provider that can't enforce it (route → 409). */
+export class ApprovalPolicyUnsupportedError extends Error {
+	constructor(sessionId: string, provider: string, policy: string) {
+		super(
+			`session ${sessionId} requires approval policy "${policy}" but provider "${provider}" does not support approvals`,
+		);
+		this.name = "ApprovalPolicyUnsupportedError";
+	}
+}
+
 /**
  * Appends the user's message, launches the detached turn, and returns a tail
  * over its log plus the ingest promise. The provider is resolved eagerly so an
@@ -53,6 +63,15 @@ export async function runSessionTurn(
 	userText: string,
 	provider: ComputeProvider = getProvider(session.provider),
 ): Promise<SessionTurn> {
+	// Refuse, don't silently bypass: an ask-* session must never run on a
+	// provider that would execute tools without consulting the broker.
+	if (session.approvalPolicy !== "auto" && !provider.supportsApprovals) {
+		throw new ApprovalPolicyUnsupportedError(
+			session.id,
+			provider.id,
+			session.approvalPolicy,
+		);
+	}
 	const current = await resolveTurn(handle, session.id);
 	if (current.status === "running") throw new TurnConflictError(session.id);
 	// A stale predecessor (runner died before its `done`) is closed durably
