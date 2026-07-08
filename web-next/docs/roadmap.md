@@ -23,8 +23,16 @@ GitHub milestones, not aspiration — keep it in sync as milestones close.
 > record of how the arc sequenced; #820 (PR-from-session) remains the open
 > follow-up.
 >
-> **Next arcs (2026-07-08).** [W5](https://github.com/fairchild/workspaces/milestone/18)
-> (continuity as a daily driver) is in flight; [W6](https://github.com/fairchild/workspaces/milestone/19)
+> **W5 complete (2026-07-08).** [W5](https://github.com/fairchild/workspaces/milestone/18)
+> (continuity as a daily driver) closed same-day, 8/8: repo threading (#975),
+> turn notifications (#974), auth hardening (#977), sign-out (#978),
+> checkpoint push every turn (#980), context replay on expired resume (#997),
+> adaptive sandbox idle-stop with settled-turn guard (#1001), and the
+> subscription-billing investigation decided-and-parked
+> (`docs/decisions/web-next-subscription-compute.md`). Open follow-up: #999
+> (cron sweeper for idle sandboxes when no client polls).
+>
+> **Next arc.** [W6](https://github.com/fairchild/workspaces/milestone/19)
 > (daily driver — host compute + workflow depth) is planned, founded on
 > [`decisions/host-compute-daily-driver.md`](decisions/host-compute-daily-driver.md).
 > New web-next ADRs live in `web-next/docs/decisions/` from here on.
