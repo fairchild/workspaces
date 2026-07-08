@@ -330,6 +330,7 @@ async function ingestTurn(
 			repo,
 			resume,
 			model: session.model,
+			signal,
 		};
 		if (priorContext) request.priorContext = priorContext;
 		const iterator = provider

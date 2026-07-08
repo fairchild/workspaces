@@ -22,8 +22,8 @@ export function isValidRepoFullName(value: string): boolean {
 
 /**
  * Which compute provider new sessions run on. Defaults to the mock; set
- * `WEB_NEXT_COMPUTE_PROVIDER=vercel` to route new sessions to the real
- * harness-backed sandbox runtime.
+ * `WEB_NEXT_COMPUTE_PROVIDER=vercel` or `WEB_NEXT_COMPUTE_PROVIDER=host` to
+ * route new sessions to a real runtime.
  */
 export function defaultComputeProvider(): string {
 	return process.env.WEB_NEXT_COMPUTE_PROVIDER ?? "mock";
