@@ -160,7 +160,9 @@ link_env_from_main() {
   git_dir="$(git rev-parse --git-dir 2>/dev/null)" || return 0
   [[ "$git_common" != "$git_dir" ]] || return 0  # not a worktree
 
-  for envfile in .env .env.local; do
+  # Root env files plus each app's local env: a worktree without
+  # web-next/.env.local silently falls back to bypass-only auth.
+  for envfile in .env .env.local web-next/.env.local web/.env.local; do
     if [[ -L "$REPO_ROOT/$envfile" && ! -e "$REPO_ROOT/$envfile" ]]; then
       echo "=> Replacing broken $envfile symlink"
       rm "$REPO_ROOT/$envfile"
