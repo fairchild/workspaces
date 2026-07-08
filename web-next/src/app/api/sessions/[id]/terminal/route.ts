@@ -10,6 +10,7 @@
  */
 import { getAuthState } from "@/lib/auth/auth-state";
 import { authBypassEnabled } from "@/lib/auth/config";
+import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
 import {
@@ -39,6 +40,8 @@ export async function POST(
 	if (!session) {
 		return Response.json({ error: "unknown session" }, { status: 404 });
 	}
+	const ownerScope = sessionOwnerScopeResponse(session, auth.user.login);
+	if (ownerScope) return ownerScope;
 
 	if (authBypassEnabled()) {
 		const ticket = await issueTerminalTicket(handle, {

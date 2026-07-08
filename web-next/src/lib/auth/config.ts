@@ -39,17 +39,20 @@ export function realAuthConfigured(env: Env = process.env): boolean {
 
 /**
  * Test/dev auth bypass: cookie-driven identity instead of GitHub OAuth, so
- * e2e, evidence, and perf runs work headlessly. Double-locked:
+ * e2e, evidence, and perf runs work headlessly. Triple-locked:
  *
  * 1. `AUTH_BYPASS=1` must be set explicitly (never set it in production).
  * 2. It is inert whenever a real OAuth app is configured — production sets
  *    GITHUB_OAUTH_CLIENT_ID, so even a leaked AUTH_BYPASS=1 cannot open it.
+ * 3. It is inert on Vercel runtime (`VERCEL` is present there), so a deploy
+ *    that accidentally carries AUTH_BYPASS=1 but omits OAuth config still
+ *    refuses the unsigned test cookie.
  *
  * When active, the absence of TEST_AUTH_COOKIE is still "signed out": the
  * unauth redirect and the allowlist rejection stay testable per request.
  */
 export function authBypassEnabled(env: Env = process.env): boolean {
-	return env.AUTH_BYPASS === "1" && !realAuthConfigured(env);
+	return env.AUTH_BYPASS === "1" && !realAuthConfigured(env) && !env.VERCEL;
 }
 
 /**

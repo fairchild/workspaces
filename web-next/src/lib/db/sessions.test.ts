@@ -55,6 +55,7 @@ describe("session store", () => {
 			"0003_session_resume_state",
 			"0004_session_model",
 			"0005_terminal_tickets",
+			"0006_session_owner_login",
 		]);
 	});
 
@@ -63,12 +64,14 @@ describe("session store", () => {
 		const created = await createSession(handle, {
 			id: "s1",
 			repoId: "owner/name",
+			ownerLogin: "FairChild",
 			title: "Fix the bug",
 			provider: "mock",
 		});
 		expect(created).toMatchObject({
 			id: "s1",
 			repoId: "owner/name",
+			ownerLogin: "fairchild",
 			title: "Fix the bug",
 			provider: "mock",
 			status: "active",

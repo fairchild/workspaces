@@ -11,6 +11,7 @@
 import { stopActiveTurn, TURN_STOPPED_MESSAGE } from "@/lib/agent-runtime/turn-ingest";
 import { closeAbandonedTurn, resolveTurn } from "@/lib/agent-runtime/turn-tail";
 import { getAuthState } from "@/lib/auth/auth-state";
+import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
 
@@ -34,6 +35,8 @@ export async function POST(
 	if (!session) {
 		return Response.json({ error: "unknown session" }, { status: 404 });
 	}
+	const ownerScope = sessionOwnerScopeResponse(session, auth.user.login);
+	if (ownerScope) return ownerScope;
 
 	if (stopActiveTurn(id)) {
 		return Response.json({ stopped: true, message: TURN_STOPPED_MESSAGE });

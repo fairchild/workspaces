@@ -11,12 +11,13 @@ import {
 	stopSessionSandbox,
 } from "@/lib/agent-runtime/sandbox-state";
 import { getAuthState } from "@/lib/auth/auth-state";
+import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
 
 export const runtime = "nodejs";
 
-async function gate(id: string) {
+async function gate(id: string, options: { ownerScoped?: boolean } = {}) {
 	const auth = await getAuthState();
 	if (auth.kind !== "authorized") {
 		return {
@@ -31,6 +32,10 @@ async function gate(id: string) {
 		return {
 			response: Response.json({ error: "unknown session" }, { status: 404 }),
 		};
+	}
+	if (options.ownerScoped) {
+		const ownerScope = sessionOwnerScopeResponse(session, auth.user.login);
+		if (ownerScope) return { response: ownerScope };
 	}
 	return { session };
 }
@@ -50,7 +55,7 @@ export async function DELETE(
 	{ params }: { params: Promise<{ id: string }> },
 ) {
 	const { id } = await params;
-	const gated = await gate(id);
+	const gated = await gate(id, { ownerScoped: true });
 	if (gated.response) return gated.response;
 	try {
 		return Response.json(await stopSessionSandbox(gated.session));

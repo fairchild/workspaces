@@ -40,6 +40,7 @@ export function defaultComputeProvider(): string {
 export async function startSession(
 	handle: DatabaseHandle,
 	repoFullName: string,
+	ownerLogin?: string | null,
 ): Promise<Session> {
 	const trimmed = repoFullName.trim();
 	if (!isValidRepoFullName(trimmed)) {
@@ -50,6 +51,7 @@ export async function startSession(
 	return createSession(handle, {
 		id: crypto.randomUUID(),
 		repoId: repo.id,
+		ownerLogin,
 		provider: defaultComputeProvider(),
 	});
 }

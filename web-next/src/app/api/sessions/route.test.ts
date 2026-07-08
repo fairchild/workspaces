@@ -63,6 +63,7 @@ describe("POST /api/sessions", () => {
 		const row = await getSession(getDatabase(), body.id);
 		expect(row?.model).toBe(DEFAULT_MODEL);
 		expect(row?.repoId).toBeNull();
+		expect(row?.ownerLogin).toBe("fairchild");
 	});
 
 	test("defaults: empty title, the configured default provider", async () => {
