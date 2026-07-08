@@ -57,6 +57,17 @@ app can't launch, when operator scope is missing (no credential minted), when th
 snapshot fails, or when `EVIDENCE_UPLOAD_TOKEN` is absent. Readiness waits are
 bounded (`--timeout`, default 45s).
 
+**Content gate (permanent contract).** The operator credential proves the automation
+listener is up, not that the window has painted its first frame — so the lane retries
+the snapshot until the PNG carries rendered content (a bounded luminance-spread check),
+and fails with `window never rendered non-blank content` rather than uploading a blank.
+This is what catches the locked-screen case below: on a locked screen
+`ghostty_surface_new` (Metal) and the composited `CGWindowList` path both fail to
+render, so the gate refuses and you fall back to the VM / `tart-ui` lane (per
+[#915](https://github.com/fairchild/workspaces/issues/915)). This gate exists because a
+real blank frame once passed a naive file-exists/dimensions check — never smoke-test a
+capture by size alone.
+
 ### Fallback hierarchy
 
 Reach for a fallback only when the lane above cannot apply, in this order:
