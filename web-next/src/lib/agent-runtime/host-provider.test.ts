@@ -15,6 +15,7 @@ import type { StreamChunk } from "./stream-chunk";
 import {
 	buildClaudeArgs,
 	buildHostCloneArgs,
+	curatedClaudeEnv,
 	HOST_ALLOWED_TOOLS,
 	hostProvider,
 } from "./host-provider";
@@ -120,6 +121,7 @@ process.stdin.on("end", () => {
 		vi.stubEnv("WEB_NEXT_HOST_WORKSPACE_ROOT", root);
 		vi.stubEnv("WEB_NEXT_HOST_CLAUDE_BIN", bin);
 		vi.stubEnv("HOST_PROVIDER_SENTINEL_SECRET", "must-not-leak");
+		vi.stubEnv("ANTHROPIC_API_KEY", "sk-server-side-key");
 
 		const chunks = await collect(
 			hostProvider.runTurn({
@@ -175,6 +177,9 @@ process.stdin.on("end", () => {
 		expectRestrictedLaunch(record.argv);
 		expect(record.env.HOST_PROVIDER_SENTINEL_SECRET).toBeUndefined();
 		expect(record.env.WEB_NEXT_HOST_WORKSPACE_ROOT).toBeUndefined();
+		// The server's API key must not reach the binary: it would silently
+		// flip host turns from subscription to API-key billing (ADR).
+		expect(record.env.ANTHROPIC_API_KEY).toBeUndefined();
 		expect(record.stdin).toContain(
 			"persistent host clone of the GitHub repository fairchild/workspaces",
 		);
@@ -316,6 +321,29 @@ process.stdin.on("end", () => {
 });
 
 describe("host provider helpers", () => {
+	test("API-key env reaches the child only on explicit opt-in (billing guard)", () => {
+		const source: NodeJS.ProcessEnv = {
+			NODE_ENV: "test",
+			HOME: "/Users/owner",
+			ANTHROPIC_API_KEY: "sk-server",
+			ANTHROPIC_AUTH_TOKEN: "tok-server",
+			CLAUDE_CODE_OAUTH_TOKEN: "subscription-ci-token",
+		};
+		const defaults = curatedClaudeEnv(source);
+		expect(defaults.ANTHROPIC_API_KEY).toBeUndefined();
+		expect(defaults.ANTHROPIC_AUTH_TOKEN).toBeUndefined();
+		// The subscription paths stay available without opt-in.
+		expect(defaults.CLAUDE_CODE_OAUTH_TOKEN).toBe("subscription-ci-token");
+		expect(defaults.HOME).toBe("/Users/owner");
+
+		const optedIn = curatedClaudeEnv({
+			...source,
+			WEB_NEXT_HOST_PASS_API_KEY: "1",
+		});
+		expect(optedIn.ANTHROPIC_API_KEY).toBe("sk-server");
+		expect(optedIn.ANTHROPIC_AUTH_TOKEN).toBe("tok-server");
+	});
+
 	test("builds shallow clone args with the session repo default branch", () => {
 		expect(
 			buildHostCloneArgs(

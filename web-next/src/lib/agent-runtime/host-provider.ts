@@ -71,14 +71,24 @@ const CURATED_ENV_KEYS = new Set([
 	"XDG_CONFIG_HOME",
 	"XDG_CACHE_HOME",
 	"XDG_DATA_HOME",
-	"ANTHROPIC_API_KEY",
-	"ANTHROPIC_AUTH_TOKEN",
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_CUSTOM_HEADERS",
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	"CLAUDE_CODE_API_KEY_HELPER",
 	"CLAUDE_CONFIG_DIR",
 ]);
+
+/*
+ * API-key credentials are NOT curated through by default: the server sets
+ * ANTHROPIC_API_KEY for the vercel provider, and letting it reach the local
+ * claude binary silently flips host turns from subscription billing to
+ * API-key billing — the opposite of this provider's purpose (see
+ * docs/decisions/host-compute-daily-driver.md). The binary's own login
+ * (keychain via HOME) or CLAUDE_CODE_OAUTH_TOKEN are the sanctioned paths.
+ * Set WEB_NEXT_HOST_PASS_API_KEY=1 to opt in deliberately.
+ */
+const API_KEY_ENV_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] as const;
+const HOST_PASS_API_KEY_ENV = "WEB_NEXT_HOST_PASS_API_KEY";
 
 type ProviderFailureCode =
 	| "host_workspace_root_unset"
@@ -210,6 +220,12 @@ export function curatedClaudeEnv(
 	for (const key of CURATED_ENV_KEYS) {
 		const value = source[key];
 		if (value !== undefined) env[key] = value;
+	}
+	if (source[HOST_PASS_API_KEY_ENV] === "1") {
+		for (const key of API_KEY_ENV_KEYS) {
+			const value = source[key];
+			if (value !== undefined) env[key] = value;
+		}
 	}
 	return env;
 }
