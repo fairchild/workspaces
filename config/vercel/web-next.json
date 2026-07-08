@@ -8,15 +8,18 @@
     "GITHUB_APP_PRIVATE_KEY",
     "GITHUB_OAUTH_CLIENT_SECRET",
     "SESSIONS_DATABASE_AUTH_TOKEN",
-    "SESSIONS_DATABASE_URL"
+    "SESSIONS_DATABASE_URL",
+    "VERCEL_TOKEN"
   ],
   "project": "web-next",
   "scope": "cloudcompute",
   "values": {
-    "ALLOWED_LOGINS": "fairchild",
-    "BETTER_AUTH_URL": "https://web-next-ivory-six.vercel.app",
-    "GITHUB_OAUTH_CLIENT_ID": "Ov23liLrhAxZKk9Ob8HX",
+    "ALLOWED_LOGINS": "fairchild,workspaces-validator",
+    "BETTER_AUTH_URL": "https://folio.cloudcompute.com",
+    "GITHUB_OAUTH_CLIENT_ID": "Iv23liSWNRsPl1YzIdyK",
     "GITHUB_WEB_WORKSPACES_APP_ID": "3158670",
+    "VERCEL_PROJECT_ID": "prj_ucOY3JKR5BCrbtbfz8DTSFJe5U9m",
+    "VERCEL_TEAM_ID": "team_oGt9u60VkiPutA2CiKDDGQKV",
     "WEB_NEXT_COMPUTE_PROVIDER": "vercel"
   }
 }

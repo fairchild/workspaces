@@ -12,12 +12,23 @@ foundation is [`schema.md`](schema.md); the environment matrix is
 [`deploy.md`](deploy.md). This file is grounded in the current tree and the live
 GitHub milestones, not aspiration — keep it in sync as milestones close.
 
+> **Arc complete (2026-07-08).** All four W milestones are closed
+> ([#11]→[#14]→[#13]→[#12], executed in phase order). web-next ships at
+> **https://folio.cloudcompute.com** — the owner decision on #754 was *no
+> cutover*: the old `web/` dashboard stays up in maintenance mode and web-next
+> lives at its own domain. Sign-in runs through the `web-workspaces` GitHub App
+> (folio + vercel.app callbacks); daily validation
+> (`.github/workflows/web-next-validate.yml`) targets folio and is fully green
+> including a real agentic turn (9/9). The phase plan below is kept as the
+> record of how the arc sequenced; #820 (PR-from-session) remains the open
+> follow-up.
+
 ## Definition of "totally usable"
 
 The bar this roadmap is held to. A signed-in, allowlisted user, on the deployed
 app, can:
 
-1. **Sign in** with GitHub (real OAuth + allowlist) — *live: production serves real OAuth, the test bypass is inert, unauthed API leaks nothing (verified 2026-07-06 against web-next-ivory-six.vercel.app).*
+1. **Sign in** with GitHub (real OAuth + allowlist) — *live at folio.cloudcompute.com via the `web-workspaces` GitHub App; test bypass inert, unauthed API answers 401 JSON (verified 2026-07-08).*
 2. **Start a session on a real repo** — pick from their actual GitHub repos, validated, default branch known. *Gap: freetext today (#825).*
 3. **Run a real coding turn** — watch it stream, it edits code in a sandbox, and follow-up turns continue the same conversation and working copy. *Landed (#822 + #831, opt-in `WEB_NEXT_COMPUTE_PROVIDER=vercel`); model **selection** (#824) still open.*
 4. **Identify and resume** the session — it has a title, survives disconnect/reload, and stays correct across serverless instances. *Gaps: titling (#823), the resume-liveness bug (#810), turn concurrency (#811).*
@@ -30,7 +41,9 @@ app, can:
    is a single-user tool for now; #829 is parked (`idea`) until a real second
    login is wanted. Bars 1–8 + 10 are the live target; this bar returns when
    sharing is actually on the table.*
-10. It is **the primary surface**, old chat/terminal demoted. *#754.*
+10. It is **the primary surface**, old chat/terminal demoted. *Reshaped and met
+    (#754, closed 2026-07-08): no cutover — web-next ships at
+    folio.cloudcompute.com while the old dashboard stays in maintenance mode.*
 
 > **Posture (2026-07-07 grooming).** web-next is the **web lane** of a two-lane
 > product — it runs in parallel with the desktop app, one active milestone per
@@ -86,12 +99,14 @@ in-app path. #750 and #826 are closed. The mock remains the default provider.
 
 ## The milestones
 
-| Milestone | What it delivers |
+All four closed 2026-07-08:
+
+| Milestone | What it delivered |
 |---|---|
-| [#11 Sessions-first web](https://github.com/fairchild/workspaces/milestone/11) | The build-out: ~~#750/#826~~ real runtime (**landed**: #822 + #831), **#752** terminal drawer, **#753** lifecycle + error states + mobile, **#754** cutover, **#790** edit→diff, **#780** build/404 flake. |
-| [#12 Refinement pass 1](https://github.com/fairchild/workspaces/milestone/12) | a11y, resilience & polish: **#804–#809** a11y/UX, **#810** resume liveness, **#811** turn concurrency, **#812** font-doc drift, **#828** API 401 JSON. |
-| [#13 Self-validation](https://github.com/fairchild/workspaces/milestone/13) | Environment-targetable validation harness: **#813–#819** (local → preview → staging → prod). |
-| [#14 Usability completeness](https://github.com/fairchild/workspaces/milestone/14) | The start-and-identify loop: **#823** titles, **#824** model selection, **#825** real repo picker. *(**#829** owner-scoped sessions parked `idea` 2026-07-07 — single-user tool; returns when sharing is wanted.)* |
+| [#11 Sessions-first web](https://github.com/fairchild/workspaces/milestone/11) — **closed** | The build-out: real runtime (#822 + #831), **#752** terminal drawer, **#753** lifecycle + error states + mobile, **#754** ship at folio (reshaped from cutover), **#790** edit→diff, **#780** build/404 flake. |
+| [#12 Refinement pass 1](https://github.com/fairchild/workspaces/milestone/12) — **closed** | a11y, resilience & polish: **#805/#806/#807** keyboard/contrast/compose, **#808** visible failures, **#810** resume liveness, **#811** turn concurrency, **#812** font-doc drift, **#828** API 401 JSON, **#901/#932** e2e determinism. (#804/#809 deferred pending an audience.) |
+| [#13 Self-validation](https://github.com/fairchild/workspaces/milestone/13) — **closed** | Environment-targetable validation harness **#813–#819**: posture → authed → model sweep → deployed e2e → real agentic turn, daily cron vs folio. |
+| [#14 Usability completeness](https://github.com/fairchild/workspaces/milestone/14) — **closed** | The start-and-identify loop: **#823** titles, **#824** model selection, **#825** real repo picker. *(**#829** owner-scoped sessions parked `idea` — single-user tool; returns when sharing is wanted.)* |
 | _followup_ | **#820** agent opens a GitHub PR from a session — mechanics proven by #821; the open design is the product surface. |
 
 ## Phased sequence
