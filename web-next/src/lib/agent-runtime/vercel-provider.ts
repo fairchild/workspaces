@@ -354,33 +354,23 @@ export function buildPrompt(
 		? `BASE_BRANCH=${shellQuote(base)}`
 		: `BASE_BRANCH="${base}"`;
 	const replay = priorContext?.trim();
-	if (replay) {
-		return [
-			`You are working inside a persistent clone of the GitHub repository ${repo.fullName}. The current directory (${WORKSPACE_DIR}) is the repo root, checked out on branch \`${branch}\`, created from ${baseLabel}. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
-			``,
-			`Working notes:`,
-			`- Relative paths and git commands resolve against the repo (you are inside it) — edit and \`git status\`/\`git diff\` normally.`,
-			`- To open or update a pull request: commit, \`git push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token against base ${baseLabel}, e.g. \`${baseAssignment}; curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${repo.fullName}/pulls -d "{\\"title\\":\\"…\\",\\"head\\":\\"${branch}\\",\\"base\\":\\"$BASE_BRANCH\\",\\"body\\":\\"…\\"}"\`. Report the \`html_url\`.`,
-			`- Only open a PR when the request calls for one; otherwise just do the work and summarize it.`,
-			``,
-			`The conversation so far (the sandbox restarted; your working copy was restored from the session branch):`,
-			replay,
-			``,
-			`The user's request:`,
-			userMessage,
-		].join("\n");
-	}
-	return [
+	const lines = [
 		`You are working inside a persistent clone of the GitHub repository ${repo.fullName}. The current directory (${WORKSPACE_DIR}) is the repo root, checked out on branch \`${branch}\`, created from ${baseLabel}. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
 		``,
 		`Working notes:`,
 		`- Relative paths and git commands resolve against the repo (you are inside it) — edit and \`git status\`/\`git diff\` normally.`,
 		`- To open or update a pull request: commit, \`git push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token against base ${baseLabel}, e.g. \`${baseAssignment}; curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${repo.fullName}/pulls -d "{\\"title\\":\\"…\\",\\"head\\":\\"${branch}\\",\\"base\\":\\"$BASE_BRANCH\\",\\"body\\":\\"…\\"}"\`. Report the \`html_url\`.`,
 		`- Only open a PR when the request calls for one; otherwise just do the work and summarize it.`,
-		``,
-		`The user's request:`,
-		userMessage,
-	].join("\n");
+	];
+	if (replay) {
+		lines.push(
+			``,
+			`The conversation so far (the sandbox restarted; your working copy was restored from the session branch):`,
+			replay,
+		);
+	}
+	lines.push(``, `The user's request:`, userMessage);
+	return lines.join("\n");
 }
 
 /**
