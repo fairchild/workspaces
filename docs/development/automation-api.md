@@ -65,10 +65,10 @@ WorkSpaces terminal tile. See
   behind by a crashed launch fails closed — its handle no longer resolves
   against the fresh registry (`stale_handle`).
 - **Capture, read, and the first mutation.** The operator capability set is
-  `window.read` (list windows) and `window.snapshot` (composited PNG of a listed
-  window) from `[A1]`, `workspace.read` (list repos and workspaces) from `[A2]`,
-  and — the one operator *mutation* — `workspace.select` (`[A2]`), a reviewed
-  exception that drives the real selection gesture rather than a data-layer write
+  `window.read` (list windows), `window.snapshot` (composited PNG of a listed
+  window), and `workspace.read` (list repos and workspaces), plus — the one
+  operator *mutation* — `workspace.select`, a reviewed exception that drives
+  the real selection gesture rather than a data-layer write
   (see [Verb contract](#verb-contract-verbs--clicks)). Operator handles still
   never carry tile mutation or `input.write`.
 
@@ -165,7 +165,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/windows` | **Operator scope.** Returns the app's on-screen windows with stable identifiers (`window.read`). Keyed by the AppKit window number — the same identity `CGWindowList`/ScreenCaptureKit address. Requires an operator handle; a tile handle lacks `window.read` and fails `capability_denied`. |
 | `POST /v1/window/snapshot` | **Operator scope.** Returns a composited PNG of the app window named by the body's `windowID` (a `window.read` id). The capture includes the full window — sidebar chrome *and* the GhosttyKit terminal surface — and works with the app backgrounded (no activation). Requires `window.snapshot`; own-window only, so an id the app does not own fails `invalid_request`. See [Window snapshot](#window-snapshot). |
 | `GET /v1/workspaces` | **Operator scope.** Returns the app's tracked repos and workspaces with stable SwiftData model ids, names, and enough state to target: per workspace, its `status`, `isArchived`, `backend`, and whether it `isSelected`; per repo, whether it `isSelected`. Read-only — the stable-target list later `[A2]` orchestration verbs act on. Requires `workspace.read`; a tile handle lacks it and fails `capability_denied`. See [Workspace list](#workspace-list). |
-| `POST /v1/workspace/select` | **Operator scope, mutation (`[A2]`).** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
+| `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -197,7 +197,7 @@ handle.
 | `window.read` | `GET /v1/windows` (list the app's windows); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `window.snapshot` | `POST /v1/window/snapshot` (composited PNG of a listed window); granted only to operator handles, never to tile handles |
 | `workspace.read` | `GET /v1/workspaces` (list the app's repos and workspaces); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
-| `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); the first operator *mutation* capability (`[A2]`), granted only to operator handles, never to tile handles — distinct from `workspace.read` so the read/write split stays legible |
+| `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); the first operator *mutation* capability, granted only to operator handles, never to tile handles — distinct from `workspace.read` so the read/write split stays legible |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -478,7 +478,7 @@ review before they can be added. Read-only global reads are the reviewed
 operator-scope exceptions — window capture (`window.read` listing and
 `window.snapshot` composited snapshots) and the repo/workspace inventory
 (`workspace.read`) — gated behind the opt-in operator scope above, never granted to
-tile handles. The one operator *mutation* is `workspace.select` (`[A2]`), a
+tile handles. The one operator *mutation* is `workspace.select`, a
 reviewed exception that drives the real selection gesture under the verbs-=-clicks
 contract, never a data-layer write. Two reviewed exceptions widen the read/write surface
 deliberately: caller-scoped input injection ships as the experimental,

@@ -3,7 +3,7 @@
 # api-select-smoke.sh - API-driven workspace.select smoke for the debug app
 # ==========================================================================
 #
-# Proves the [A2] verbs-=-clicks contract end to end, through the real socket:
+# Proves the verbs-=-clicks contract end to end, through the real socket:
 #
 #   1. The app (desktop-ui-smoke mode, WORKSPACES_AUTOMATION_SELECT_DRIVER=api)
 #      creates a local workspace, then parks the active surface on the repo

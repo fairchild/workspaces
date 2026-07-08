@@ -2,7 +2,7 @@
 //  AutomationGestureVerbs.swift
 //  WorkspaceManagerCore
 //
-//  The gesture-verb layer — the single place the "verbs = clicks" rule is enforced (`[A2]`).
+//  The gesture-verb layer — the single place the "verbs = clicks" rule is enforced.
 //
 //  Every mutation verb enters the same UI gesture the equivalent user action does. This layer is
 //  constructed with *only* gesture closures — the app's real UI entry points (for `workspace.select`,

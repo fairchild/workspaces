@@ -20,8 +20,8 @@ public enum AutomationAPI {
     public static let inputWriteCapabilities = v1Capabilities + [AutomationCapability.inputWrite]
 
     /// Capabilities granted to an opt-in operator handle. Capture and read (`window.read`,
-    /// `window.snapshot` — composited PNGs, `[A1]`; `workspace.read` — the repo/workspace inventory,
-    /// `[A2]`) plus the first operator *mutation* capability, `workspace.select` (`[A2]`): a reviewed
+    /// `window.snapshot` — composited PNGs; `workspace.read` — the repo/workspace inventory)
+    /// plus the first operator *mutation* capability, `workspace.select`: a reviewed
     /// exception that drives the real selection gesture, never a data-layer write. Operator handles
     /// still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
@@ -466,7 +466,7 @@ public struct AutomationWorkspacesResult: Codable, Sendable, Equatable {
     }
 }
 
-/// The structured outcome shared by every gesture verb (`[A2]`). A verb either `completed` (the
+/// The structured outcome shared by every gesture verb. A verb either `completed` (the
 /// gesture ran through the real UI path), needs `confirmationRequired` (a modal the user would see,
 /// surfaced as data instead of blocking on UI), or is `unsupported` (it cannot run — most often no
 /// live window). `notFound` is the id-does-not-resolve case, mapped to `invalid_request` at the wire.
