@@ -96,6 +96,10 @@ enum AutomationHTTPRouter {
             let read = try decodeSurfaceRead(from: request.body)
             return try await controller.automationReadSurface(for: handle, request: read)
 
+        case ("POST", "/v1/workspace/archive"):
+            let workspaceID = try decodeWorkspaceID(from: request.body)
+            return try await controller.automationArchiveWorkspace(for: handle, workspaceID: workspaceID)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -142,6 +146,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/create.")
         case (_, "/v1/surface/read"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/surface/read.")
+        case (_, "/v1/workspace/archive"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/archive.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -436,6 +442,7 @@ extension AutomationWindowsResult: CodableSendableEquatable {}
 extension AutomationWorkspacesResult: CodableSendableEquatable {}
 extension AutomationWorkspaceSelectResult: CodableSendableEquatable {}
 extension AutomationWorkspaceCreateResult: CodableSendableEquatable {}
+extension AutomationWorkspaceArchiveResult: CodableSendableEquatable {}
 extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
 extension AutomationSurfaceReadResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}
