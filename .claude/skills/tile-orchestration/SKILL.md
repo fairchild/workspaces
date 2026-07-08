@@ -38,10 +38,10 @@ gating, and merge flow are `codex-execution` unchanged.
 
 ## Spawn a worker
 
-Use [scripts/ws-op.py](scripts/ws-op.py) for operator calls:
+Use [scripts/ws-op.py](scripts/ws-op.py) (single-file uv script) for operator calls:
 
 ```bash
-python3 scripts/ws-op.py POST /v1/workspace/create \
+uv run --script scripts/ws-op.py POST /v1/workspace/create \
   '{"repoID":"<from GET /v1/workspaces>","name":"codex-<issue>-<slug>","providerID":"local"}'
 ```
 

@@ -1,13 +1,17 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
 """Operator-scope helper for the WorkSpaces Automation API.
 
 Reads the per-launch operator credential the app mints
 (automation-operator.json, 0600, next to automation.sock) and issues one
 request over the unix socket with the handle header. Usage:
 
-    ws-op.py GET  /v1/workspaces
-    ws-op.py POST /v1/workspace/create '{"repoID":"…","name":"…","providerID":"local"}'
-    ws-op.py POST /v1/window/snapshot '{"windowID":"12345"}' --png out.png
+    uv run --script ws-op.py GET  /v1/workspaces
+    uv run --script ws-op.py POST /v1/workspace/create '{"repoID":"…","name":"…","providerID":"local"}'
+    uv run --script ws-op.py POST /v1/window/snapshot '{"windowID":"12345"}' --png out.png
 
 The snapshot payload's PNG is base64 under `data`; `--png` decodes it to a
 file and prints the remaining metadata. windowID must be a JSON string (#995).
