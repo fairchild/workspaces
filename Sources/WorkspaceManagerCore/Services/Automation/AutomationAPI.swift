@@ -104,10 +104,73 @@ public struct AutomationSystemDescriptor: Codable, Sendable, Equatable {
 public struct AutomationHealthResult: Codable, Sendable, Equatable {
     public let status: String
     public let system: AutomationSystemDescriptor
+    public let server: AutomationServerDescriptor?
 
-    public init(status: String = "ok", system: AutomationSystemDescriptor = AutomationSystemDescriptor()) {
+    public init(
+        status: String = "ok",
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(),
+        server: AutomationServerDescriptor? = nil
+    ) {
         self.status = status
         self.system = system
+        self.server = server
+    }
+}
+
+public struct AutomationServerDescriptor: Codable, Sendable, Equatable {
+    public let pid: Int32
+    public let launchedAt: String
+    public let appVersion: String
+    public let build: String
+    public let experiments: [String]
+    public let protocolVersion: Int
+
+    public init(
+        pid: Int32,
+        launchedAt: String,
+        appVersion: String,
+        build: String,
+        experiments: [String],
+        protocolVersion: Int = AutomationAPI.version
+    ) {
+        self.pid = pid
+        self.launchedAt = launchedAt
+        self.appVersion = appVersion
+        self.build = build
+        self.experiments = experiments
+        self.protocolVersion = protocolVersion
+    }
+
+    public static func current(
+        launchedAt: Date,
+        experiments: [String],
+        bundle: Bundle = .main,
+        processInfo: ProcessInfo = .processInfo
+    ) -> AutomationServerDescriptor {
+        let appVersion =
+            bundle.infoDictionary?["CFBundleShortVersionString"] as? String
+            ?? bundle.infoDictionary?["CFBundleVersion"] as? String
+            ?? "dev"
+        return AutomationServerDescriptor(
+            pid: processInfo.processIdentifier,
+            launchedAt: Self.iso8601String(from: launchedAt),
+            appVersion: appVersion,
+            build: Self.buildConfiguration,
+            experiments: experiments.sorted(),
+            protocolVersion: AutomationAPI.version
+        )
+    }
+
+    private static func iso8601String(from date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    private static var buildConfiguration: String {
+        #if DEBUG
+            "debug"
+        #else
+            "release"
+        #endif
     }
 }
 

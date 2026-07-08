@@ -704,15 +704,11 @@ private final class CLIApp {
 
         switch subcommand {
         case "health":
-            let result: AutomationHealthResult = try performAutomationRequest(
-                method: "GET",
-                path: "/v1/health",
-                requiresHandle: false
-            )
+            let result = try performAutomationHealthRequest()
             if arguments.dropFirst().contains("--json") {
                 print(try AutomationCLIResultPrinter.resultJSON(result))
             } else {
-                print(result.status.uppercased())
+                print(Self.healthLine(result))
             }
             return 0
 
@@ -1280,6 +1276,45 @@ private final class CLIApp {
                 "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
             )
         }
+    }
+
+    private func performAutomationHealthRequest() throws -> AutomationHealthResult {
+        let response = try automationClient().request(
+            method: "GET",
+            path: "/v1/health",
+            handle: nil,
+            body: Data()
+        )
+        do {
+            return try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: response,
+                bundledCLIPath: Self.bundledCLIPath()
+            )
+        } catch let error as AutomationCLIResponseError {
+            throw CLIError(error.localizedDescription)
+        } catch let error as AutomationServiceError {
+            throw CLIError(
+                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
+            )
+        }
+    }
+
+    private static func healthLine(_ result: AutomationHealthResult) -> String {
+        guard let server = result.server else {
+            return result.status.uppercased()
+        }
+        let experiments = server.experiments.isEmpty ? "-" : server.experiments.joined(separator: ",")
+        return "\(result.status.uppercased()) pid=\(server.pid) launchedAt=\(server.launchedAt) "
+            + "protocol=\(server.protocolVersion) experiments=\(experiments)"
+    }
+
+    private static func bundledCLIPath() -> String {
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: appBundleIdentifier) {
+            return appURL.appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("MacOS", isDirectory: true)
+                .appendingPathComponent("workspaces", isDirectory: false).path
+        }
+        return Bundle.main.executablePath ?? "workspaces"
     }
 
     private func automationClient() throws -> AutomationSocketClient {

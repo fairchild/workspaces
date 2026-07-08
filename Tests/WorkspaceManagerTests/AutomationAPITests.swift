@@ -440,10 +440,19 @@ struct AutomationAPITests {
     @MainActor
     func routerHealthAndDisabled() async throws {
         let controller = FakeAutomationController()
+        let server = AutomationServerDescriptor(
+            pid: 7301,
+            launchedAt: "2026-07-08T08:35:44Z",
+            appVersion: "1.2.3",
+            build: "debug",
+            experiments: ["automationAPI", "automationInputWrite", "automationOperator"],
+            protocolVersion: AutomationAPI.version
+        )
         let health = await AutomationHTTPRouter.route(
             HTTPRequest(method: "GET", path: "/v1/health", headers: [:], body: Data()),
             controller: controller,
-            enabled: false
+            enabled: false,
+            healthServer: server
         )
         let healthEnvelope = try AutomationJSON.decoder.decode(
             AutomationResponseEnvelope<AutomationHealthResult>.self,
@@ -451,6 +460,8 @@ struct AutomationAPITests {
         )
         #expect(health.status == 200)
         #expect(healthEnvelope.ok)
+        #expect(healthEnvelope.result?.server == server)
+        #expect(healthEnvelope.result?.server?.protocolVersion == AutomationAPI.version)
 
         let context = await AutomationHTTPRouter.route(
             HTTPRequest(
@@ -1912,6 +1923,53 @@ struct AutomationAPITests {
         } catch let error as AutomationServiceError {
             #expect(error.response.code == .staleHandle)
         }
+
+        let health = AutomationHealthResult(
+            server: AutomationServerDescriptor(
+                pid: 7301,
+                launchedAt: "2026-07-08T08:35:44Z",
+                appVersion: "1.2.3",
+                build: "debug",
+                experiments: ["automationAPI"],
+                protocolVersion: AutomationAPI.version
+            )
+        )
+        let healthResponse = AutomationSocketClient.Response(
+            statusCode: 200,
+            body: try AutomationJSON.encoder.encode(AutomationResponseEnvelope(result: health))
+        )
+        #expect(
+            try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: healthResponse,
+                bundledCLIPath: "/Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            ) == health)
+
+        let skewed = Data(
+            #"{"ok":true,"result":{"server":{"protocolVersion":2}},"v":1}"#.utf8
+        )
+        do {
+            _ = try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: AutomationSocketClient.Response(statusCode: 200, body: skewed),
+                bundledCLIPath: "/Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            )
+            Issue.record("Expected protocol version mismatch")
+        } catch let error as AutomationCLIResponseError {
+            #expect(
+                error.localizedDescription
+                    == "CLI v1 vs app v2 — use the bundled CLI at /Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            )
+        }
+
+        let raw = #"{"ok":true,"result":{"status":123}}"#
+        do {
+            _ = try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: AutomationSocketClient.Response(statusCode: 200, body: Data(raw.utf8)),
+                bundledCLIPath: "/Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            )
+            Issue.record("Expected raw-body decode fallback")
+        } catch let error as AutomationCLIResponseError {
+            #expect(error.localizedDescription.contains(raw))
+        }
     }
 
     @Test("A second listener fails instead of becoming a dormant handle issuer")
@@ -1972,6 +2030,8 @@ struct AutomationListenerTests {
         #expect(response.statusCode == 200)
         #expect(envelope.ok)
         #expect(envelope.result?.status == "ok")
+        #expect(envelope.result?.server?.pid == ProcessInfo.processInfo.processIdentifier)
+        #expect(envelope.result?.server?.protocolVersion == AutomationAPI.version)
         await listener.stop()
     }
 }

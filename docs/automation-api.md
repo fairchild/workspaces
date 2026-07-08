@@ -48,7 +48,10 @@ echo "$WORKSPACES_AUTOMATION_HANDLE"
 Both values should be present. The handle is an opaque capability. Do not copy
 it into another terminal, save it in dotfiles, or treat it as a tile ID.
 
-`workspaces automation health` checks only that a local listener is reachable:
+`workspaces automation health` checks only that a local listener is reachable.
+When the running app supports health metadata, plain output also includes the
+listener pid, listener start time, protocol version, and active automation
+experiments; `--json` includes the same values under `server`.
 
 ```bash
 workspaces automation health

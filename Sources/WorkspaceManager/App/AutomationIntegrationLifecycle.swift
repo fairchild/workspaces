@@ -194,7 +194,13 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             bundleIdentifier: bundleID,
             controller: controller,
             auditLogger: auditLogger,
-            isEnabled: { ExperimentalFeatures.isEnabled(.automationAPI) }
+            isEnabled: { ExperimentalFeatures.isEnabled(.automationAPI) },
+            makeHealthServer: { launchedAt in
+                AutomationServerDescriptor.current(
+                    launchedAt: launchedAt,
+                    experiments: Self.activeAutomationExperimentKeys()
+                )
+            }
         )
 
         let startTask = Task<String, Error> {
@@ -307,6 +313,16 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 }
             )
         }
+    }
+
+    private nonisolated static func activeAutomationExperimentKeys() -> [String] {
+        [
+            ExperimentalFeature.automationAPI,
+            .automationOperator,
+            .automationInputWrite,
+        ]
+        .filter { ExperimentalFeatures.isEnabled($0) }
+        .map(\.rawValue)
     }
 
     /// Resolves a snapshot request against the caller's live source records and the surface

@@ -183,7 +183,25 @@ Every route returns a versioned JSON envelope:
 ## Routes
 
 `GET /v1/health` is the only unauthenticated route. It reports listener
-liveness only and does not prove that a terminal handle is valid.
+liveness plus server metadata (`pid`, listener `launchedAt`, `appVersion`,
+`build`, active automation experiment keys, and `protocolVersion`) so callers
+can distinguish coexisting app instances. It does not prove that a terminal
+handle is valid.
+
+```json
+{
+  "status": "ok",
+  "server": {
+    "pid": 7301,
+    "launchedAt": "2026-07-08T08:35:44Z",
+    "appVersion": "dev",
+    "build": "debug",
+    "experiments": ["automationAPI", "automationInputWrite", "automationOperator"],
+    "protocolVersion": 1
+  },
+  "system": { "capabilities": [ … ] }
+}
+```
 
 Scoped routes require `x-workspaces-automation-handle`:
 

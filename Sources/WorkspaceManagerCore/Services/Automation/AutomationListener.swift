@@ -19,11 +19,13 @@ public actor AutomationListener {
     private let lockURL: URL
     private let controller: any AutomationControlling
     private let isEnabled: @Sendable () -> Bool
+    private let makeHealthServer: @Sendable (Date) -> AutomationServerDescriptor
     private let auditLogger: AutomationAuditLogger?
     private let logger: @Sendable (String) -> Void
     private var listener: NWListener?
     private var lockFileDescriptor: Int32?
     private var statistics = Statistics()
+    private var healthServer: AutomationServerDescriptor?
 
     public init(
         bundleIdentifier: String,
@@ -31,11 +33,15 @@ public actor AutomationListener {
         socketURLOverride: URL? = nil,
         auditLogger: AutomationAuditLogger? = nil,
         isEnabled: @escaping @Sendable () -> Bool = { true },
+        makeHealthServer: @escaping @Sendable (Date) -> AutomationServerDescriptor = {
+            AutomationServerDescriptor.current(launchedAt: $0, experiments: [])
+        },
         logger: @escaping @Sendable (String) -> Void = { NSLog("[AutomationListener] %@", $0) }
     ) {
         self.controller = controller
         self.auditLogger = auditLogger
         self.isEnabled = isEnabled
+        self.makeHealthServer = makeHealthServer
         self.logger = logger
         if let socketURLOverride {
             self.socketURL = socketURLOverride
@@ -92,6 +98,7 @@ public actor AutomationListener {
         }
         listener.start(queue: .global(qos: .userInitiated))
         self.listener = listener
+        self.healthServer = makeHealthServer(Date())
         hardenSocketFileIfPresent()
         logger("listener started at \(socketURL.path)")
     }
@@ -100,6 +107,7 @@ public actor AutomationListener {
         let hadListener = listener != nil
         listener?.cancel()
         listener = nil
+        healthServer = nil
         if hadListener {
             try? FileManager.default.removeItem(at: socketURL)
             logger("listener stopped; socket file removed at \(socketURL.path)")
@@ -164,7 +172,8 @@ public actor AutomationListener {
         let result = await AutomationHTTPRouter.route(
             request,
             controller: controller,
-            enabled: isEnabled()
+            enabled: isEnabled(),
+            healthServer: healthServer
         )
         statistics.requestCount += 1
         if result.status == 404 {
