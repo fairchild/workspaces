@@ -57,6 +57,52 @@ struct AppCommandStateTests {
         #expect(emissions == 2)
     }
 
+    @Test("document edits state publishes dirty transitions and forwards the save hook")
+    func documentEditsStatePublishesAndSaves() async {
+        let state = AppCommandState()
+        var emissions = 0
+        let cancellable = state.objectWillChange.sink { _ in
+            emissions += 1
+        }
+        defer { cancellable.cancel() }
+
+        #expect(!state.hasUnsavedDocumentEdits)
+
+        var saveCount = 0
+        state.setDocumentEditsState(
+            isDirty: true,
+            save: {
+                saveCount += 1
+                return true
+            })
+        #expect(state.hasUnsavedDocumentEdits)
+        #expect(emissions == 1)
+
+        // Re-registering with the same dirty value re-binds the hook without a redundant emission.
+        state.setDocumentEditsState(
+            isDirty: true,
+            save: {
+                saveCount += 1
+                return true
+            })
+        #expect(emissions == 1)
+
+        let didSave = await state.saveDirtyDocument()
+        #expect(didSave)
+        #expect(saveCount == 1)
+
+        state.clearDocumentEditsState()
+        #expect(!state.hasUnsavedDocumentEdits)
+        #expect(emissions == 2)
+    }
+
+    @Test("saveDirtyDocument reports success when no hook is registered")
+    func saveDirtyDocumentDefaultsToSuccess() async {
+        let state = AppCommandState()
+        let didSave = await state.saveDirtyDocument()
+        #expect(didSave)
+    }
+
     @Test("main window actions only publish when availability changes")
     func mainWindowActionsOnlyPublishWhenAvailabilityChanges() {
         let state = AppCommandState()

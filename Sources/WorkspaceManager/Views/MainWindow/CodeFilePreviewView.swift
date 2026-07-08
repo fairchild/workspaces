@@ -214,10 +214,12 @@ struct CodeFilePreviewView: View {
         }
         .onDisappear {
             appCommandState.clearSaveDocumentAction()
+            appCommandState.clearDocumentEditsState()
         }
         .onChange(of: selection.id) { _, _ in
             saveErrorMessage = nil
             appCommandState.clearSaveDocumentAction()
+            appCommandState.clearDocumentEditsState()
         }
         .onChange(of: isDirty) { _, _ in
             syncSaveCommand()
@@ -229,6 +231,7 @@ struct CodeFilePreviewView: View {
             DiffReviewSheet(
                 filePath: selection.relativePath,
                 directoryURL: selection.rootURL,
+                onChanged: { onSaved() },
                 onClose: { isShowingDiffReview = false }
             )
         }
@@ -318,8 +321,9 @@ struct CodeFilePreviewView: View {
     }
 
     @MainActor
-    private func saveCurrentDocument() async {
-        guard canSaveDocument, case .loaded(let document) = state else { return }
+    @discardableResult
+    private func saveCurrentDocument() async -> Bool {
+        guard canSaveDocument, case .loaded(let document) = state else { return false }
         let savedText = document.currentText
 
         isSaving = true
@@ -352,6 +356,7 @@ struct CodeFilePreviewView: View {
         if didSave {
             onSaved()
         }
+        return didSave
     }
 
     @MainActor
@@ -361,6 +366,21 @@ struct CodeFilePreviewView: View {
         } else {
             appCommandState.setSaveDocumentAction(nil, isEnabled: false)
         }
+        syncDocumentEditsState()
+    }
+
+    /// Publish the document's dirty state and the Save / Discard hooks the navigation guard uses
+    /// so a dirty file switch or preview close can veto the loss (#704 Phase 4).
+    @MainActor
+    private func syncDocumentEditsState() {
+        guard isDirty else {
+            appCommandState.clearDocumentEditsState()
+            return
+        }
+        appCommandState.setDocumentEditsState(
+            isDirty: true,
+            save: { await saveCurrentDocument() }
+        )
     }
 }
 

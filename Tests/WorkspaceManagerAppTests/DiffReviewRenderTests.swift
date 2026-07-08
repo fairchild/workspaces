@@ -51,4 +51,48 @@ struct DiffReviewRenderTests {
         let url = URL(fileURLWithPath: dir).appendingPathComponent("diff-review.png")
         try png.write(to: url)
     }
+
+    /// Renders the stage / unstage / discard action bar in its tracked and untracked variants
+    /// (the untracked one reads "Delete") to a non-empty image, writing a PNG for PR evidence when
+    /// `WORKSPACES_EVIDENCE_DIR` is set.
+    @Test("Diff review action bar renders tracked and untracked control sets")
+    func rendersActionBar() throws {
+        let view = VStack(spacing: 12) {
+            DiffReviewActionBar(
+                isUntracked: false,
+                isBusy: false,
+                errorMessage: nil,
+                onStage: {},
+                onUnstage: {},
+                onDiscardRequested: {}
+            )
+            DiffReviewActionBar(
+                isUntracked: true,
+                isBusy: false,
+                errorMessage: "Refused because the selected file is a symbolic link.",
+                onStage: {},
+                onUnstage: {},
+                onDiscardRequested: {}
+            )
+        }
+        .frame(width: 460)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .environment(\.colorScheme, .light)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2
+        let image = try #require(renderer.nsImage)
+        #expect(image.size.width > 0)
+        #expect(image.size.height > 0)
+
+        guard let dir = ProcessInfo.processInfo.environment["WORKSPACES_EVIDENCE_DIR"],
+            let tiff = image.tiffRepresentation,
+            let bitmap = NSBitmapImageRep(data: tiff),
+            let png = bitmap.representation(using: .png, properties: [:])
+        else {
+            return
+        }
+        let url = URL(fileURLWithPath: dir).appendingPathComponent("diff-review-action-bar.png")
+        try png.write(to: url)
+    }
 }

@@ -68,6 +68,8 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
     var stageCalls: [(file: String, path: URL)] = []
     var unstageCalls: [(file: String, path: URL)] = []
     var discardCalls: [(file: String, path: URL)] = []
+    var discardUntrackedCalls: [(file: String, path: URL)] = []
+    var discardUntrackedError: Error? = nil
 
     func diff(file: String, at path: URL) async throws -> UnifiedDiff {
         diffResult
@@ -83,6 +85,13 @@ final class MockGitService: GitServiceProtocol, @unchecked Sendable {
 
     func discard(file: String, at path: URL) async throws {
         discardCalls.append((file: file, path: path))
+    }
+
+    func discardUntracked(file: String, at path: URL) async throws {
+        discardUntrackedCalls.append((file: file, path: path))
+        if let error = discardUntrackedError {
+            throw error
+        }
     }
 
     // MARK: - Branches (M8 prep)

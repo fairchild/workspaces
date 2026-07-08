@@ -5,6 +5,7 @@
 //  Git operations: status, file tree, branch management
 //
 
+import Darwin
 import Foundation
 
 public actor GitService: GitServiceProtocol {
@@ -142,10 +143,122 @@ public actor GitService: GitServiceProtocol {
         _ = try await runGit(["reset", "HEAD", "--", file], at: path)
     }
 
-    /// Discard working-tree changes for `file`, restoring HEAD contents.
-    /// Destructive: unstaged edits are lost without recovery.
+    /// Discard working-tree changes for a tracked `file`, restoring its index/HEAD contents.
+    /// Destructive: unstaged edits are lost without recovery. Untracked files are inert here
+    /// (`git checkout --` ignores them) — use `discardUntracked` for those so a "discard" of a
+    /// new file is never a silent no-op.
     public func discard(file: String, at path: URL) async throws {
         _ = try await runGit(["checkout", "--", file], at: path)
+    }
+
+    /// Remove a single untracked `file`. Destructive and unrecoverable: untracked files are not
+    /// in git history, so this is the only "discard" path that deletes real content. Kept as
+    /// narrow as possible — it deletes exactly the one resolved path via the filesystem (never
+    /// `git clean`, which could sweep siblings), and only after confirming the path stays inside
+    /// `path` and is a regular file rather than a symlink. Callers must confirm-gate it in the UI.
+    public func discardUntracked(file: String, at path: URL) async throws {
+        let lexicalTarget = try Self.lexicalFileURL(rootURL: path, relativePath: file)
+
+        guard (try? FileManager.default.destinationOfSymbolicLink(atPath: lexicalTarget.path)) == nil
+        else {
+            throw GitError.symlinkRefused
+        }
+
+        // Containment is checked on the symlink-resolved path so an intermediate symlink cannot
+        // escape the root; deletion targets the lexical path git reported.
+        _ = try Self.containedFileURL(rootURL: path, relativePath: file)
+
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: lexicalTarget.path, isDirectory: &isDirectory),
+            !isDirectory.boolValue
+        else {
+            throw GitError.untrackedTargetMissing(relativePath: file)
+        }
+
+        // Defense in depth against a stale caller status: confirm git does not track this path
+        // before deleting it. `ls-files --error-unmatch` exits 0 only for a tracked path; a tracked
+        // file must go through `discard` (recoverable) rather than an unrecoverable delete.
+        let tracked = try await runGitResult(["ls-files", "--error-unmatch", "--", file], at: path)
+        guard tracked.exitCode != 0 else {
+            throw GitError.discardUntrackedOnTrackedFile(relativePath: file)
+        }
+
+        // The lexical checks above race a concurrent swap of an intermediate directory to a
+        // symlink (TOCTOU). Delete via an O_NOFOLLOW descriptor walk so the unlink cannot follow a
+        // symlink that appeared after the containment check and escape the root.
+        try Self.raceSafeUnlink(root: path, relativePath: file)
+    }
+
+    /// Unlink `relativePath` under `rootURL` without following a symlink in any path component:
+    /// walks the directories with `O_NOFOLLOW` and unlinks relative to the parent descriptor. A
+    /// concurrent swap of an intermediate directory to a symlink fails the walk instead of
+    /// escaping the root, and the leaf must still be a regular file at unlink time.
+    static func raceSafeUnlink(root: URL, relativePath: String) throws {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: true).map(
+            String.init)
+        guard let leaf = components.last,
+            components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+        else {
+            throw GitError.invalidRelativePath(relativePath)
+        }
+
+        var directoryFD = root.path.withCString { open($0, O_RDONLY | O_DIRECTORY) }
+        guard directoryFD >= 0 else {
+            throw GitError.untrackedTargetMissing(relativePath: relativePath)
+        }
+        var openFDs = [directoryFD]
+        defer {
+            for fd in openFDs { close(fd) }
+        }
+
+        for component in components.dropLast() {
+            let childFD = component.withCString {
+                openat(directoryFD, $0, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            }
+            guard childFD >= 0 else {
+                throw GitError.pathEscapesRoot
+            }
+            openFDs.append(childFD)
+            directoryFD = childFD
+        }
+
+        var info = stat()
+        let statResult = leaf.withCString { fstatat(directoryFD, $0, &info, AT_SYMLINK_NOFOLLOW) }
+        guard statResult == 0 else {
+            throw GitError.untrackedTargetMissing(relativePath: relativePath)
+        }
+        guard (info.st_mode & S_IFMT) == S_IFREG else {
+            throw GitError.symlinkRefused
+        }
+
+        guard leaf.withCString({ unlinkat(directoryFD, $0, 0) }) == 0 else {
+            throw GitError.untrackedDeleteFailed(relativePath: relativePath)
+        }
+    }
+
+    /// Lexical (non-symlink-resolved) URL for `relativePath` under `rootURL`, rejecting absolute
+    /// paths and `.`/`..` traversal components before any filesystem touch.
+    static func lexicalFileURL(rootURL: URL, relativePath: String) throws -> URL {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard !relativePath.isEmpty,
+            !relativePath.hasPrefix("/"),
+            components.allSatisfy({ !$0.isEmpty && $0 != ".." && $0 != "." })
+        else {
+            throw GitError.invalidRelativePath(relativePath)
+        }
+        return rootURL.appendingPathComponent(relativePath).standardizedFileURL
+    }
+
+    /// Symlink-resolved URL for `relativePath`, throwing `pathEscapesRoot` if it lands outside
+    /// the resolved `rootURL`.
+    static func containedFileURL(rootURL: URL, relativePath: String) throws -> URL {
+        let lexicalTarget = try lexicalFileURL(rootURL: rootURL, relativePath: relativePath)
+        let root = rootURL.standardizedFileURL.resolvingSymlinksInPath()
+        let target = lexicalTarget.resolvingSymlinksInPath()
+        guard target.path == root.path || target.path.hasPrefix(root.path + "/") else {
+            throw GitError.pathEscapesRoot
+        }
+        return target
     }
 
     // MARK: - File Tree
@@ -336,10 +449,16 @@ extension String {
 
 // MARK: - Errors
 
-public enum GitError: LocalizedError {
+public enum GitError: LocalizedError, Equatable {
     case commandFailed(args: [String], stderr: String)
     case notARepository
     case branchAlreadyExists(name: String)
+    case invalidRelativePath(String)
+    case pathEscapesRoot
+    case symlinkRefused
+    case untrackedTargetMissing(relativePath: String)
+    case discardUntrackedOnTrackedFile(relativePath: String)
+    case untrackedDeleteFailed(relativePath: String)
 
     public var errorDescription: String? {
         switch self {
@@ -349,6 +468,18 @@ public enum GitError: LocalizedError {
             return "Not a git repository"
         case .branchAlreadyExists(let name):
             return "A branch named '\(name)' already exists"
+        case .invalidRelativePath(let path):
+            return "Refused because '\(path)' is not a valid relative file path."
+        case .pathEscapesRoot:
+            return "Refused because the selected path resolves outside the repository root."
+        case .symlinkRefused:
+            return "Refused because the selected file is a symbolic link."
+        case .untrackedTargetMissing(let path):
+            return "There is no untracked file at '\(path)' to delete."
+        case .discardUntrackedOnTrackedFile(let path):
+            return "Refused to delete '\(path)' because git tracks it; discard its changes instead."
+        case .untrackedDeleteFailed(let path):
+            return "Could not delete the untracked file '\(path)'."
         }
     }
 }

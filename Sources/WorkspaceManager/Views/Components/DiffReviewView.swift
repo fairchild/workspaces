@@ -2,10 +2,10 @@
 //  DiffReviewView.swift
 //  WorkspaceManager
 //
-//  Native, read-only diff review surface: renders a parsed `UnifiedDiff` as coloured
-//  addition / removal / context rows with old|new line-number gutters. Staging, unstaging,
-//  and discard controls are intentionally absent in this slice — they land beside the review
-//  in a later slice (see #704 Phase 3).
+//  Native, read-only diff render: turns a parsed `UnifiedDiff` into coloured addition /
+//  removal / context rows with old|new line-number gutters. This view stays a pure renderer;
+//  the stage / unstage / discard controls live in the presenting `DiffReviewSheet` beside the
+//  review, not in the diff body (see #704 Phase 3).
 //
 //  The view lays out header + all rows in a plain stack; the presenting container provides
 //  scrolling (a `ScrollView`), which keeps this renderable under `ImageRenderer` for evidence.
