@@ -44,6 +44,43 @@ app_capture_debug_binary_pattern() {
     printf '%s' "${path//./\\.}"
 }
 
+# app_capture_png_has_content <png> — exit 0 if the PNG carries rendered content,
+# non-zero if it is (near-)uniform blank. The operator credential proves the API is
+# up, not that the window painted its first frame, so a snapshot fired too early
+# captures a blank white pre-composite frame. This downsamples to 32x32 and checks
+# the luminance spread: a real frame (dark terminal surface + light chrome) spreads
+# wide; a blank frame is flat. Uses ImageIO only — no extra dependency.
+app_capture_png_has_content() {
+    swift - "$1" <<'SWIFT'
+import CoreGraphics
+import Foundation
+import ImageIO
+
+guard CommandLine.arguments.count > 1 else { exit(2) }
+let url = URL(fileURLWithPath: CommandLine.arguments[1])
+guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+    let img = CGImageSourceCreateImageAtIndex(src, 0, nil)
+else { exit(2) }
+let w = 32, h = 32
+let cs = CGColorSpaceCreateDeviceRGB()
+var buf = [UInt8](repeating: 0, count: w * h * 4)
+guard
+    let ctx = CGContext(
+        data: &buf, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+        space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+else { exit(2) }
+ctx.interpolationQuality = .low
+ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+var minV = 255, maxV = 0
+for i in stride(from: 0, to: buf.count, by: 4) {
+    let lum = (Int(buf[i]) * 30 + Int(buf[i + 1]) * 59 + Int(buf[i + 2]) * 11) / 100
+    if lum < minV { minV = lum }
+    if lum > maxV { maxV = lum }
+}
+exit((maxV - minV) >= 24 ? 0 : 1)  // exit 0 == rendered content
+SWIFT
+}
+
 # app_capture_stop — stop the launched debug app and clear its credential.
 # Idempotent; safe to wire to an EXIT trap so the app never outlives the lane.
 # No-op until a launch was actually attempted, so a pre-launch validation
@@ -131,16 +168,35 @@ app_capture_window() {
         return 1
     fi
 
-    echo "→ snapshotting main window via operator scope (CGWindowList, no focus steal)…" >&2
-    if ! "$cli_binary" window snapshot --out "$out_png" >&2; then
-        echo "error: window snapshot failed (see the CLI message above)." >&2
-        return 1
-    fi
-    if [[ ! -f "$out_png" ]]; then
-        echo "error: snapshot reported success but no PNG was written to $out_png." >&2
-        return 1
-    fi
+    # Snapshot, then gate on rendered content. The credential appears the moment
+    # the automation listener is up, which can precede the window painting its first
+    # frame — so a single snapshot can capture a blank pre-composite frame. Retry
+    # until the PNG carries real pixels, bounded by a deadline (no fixed sleep alone).
+    echo "→ snapshotting main window via operator scope (retry until content composited)…" >&2
+    local content_deadline=$(( timeout_seconds > 20 ? timeout_seconds : 20 ))
+    local content_waited=0
+    while :; do
+        if ! "$cli_binary" window snapshot --out "$out_png" >&2; then
+            echo "error: window snapshot failed (see the CLI message above)." >&2
+            return 1
+        fi
+        if [[ ! -f "$out_png" ]]; then
+            echo "error: snapshot reported success but no PNG was written to $out_png." >&2
+            return 1
+        fi
+        if app_capture_png_has_content "$out_png"; then
+            break
+        fi
+        if (( content_waited >= content_deadline )); then
+            echo "error: window never rendered non-blank content within ${content_deadline}s" >&2
+            echo "       (every snapshot came back blank — the window is up but not painting)." >&2
+            return 1
+        fi
+        echo "  · blank frame; window still compositing, retrying…" >&2
+        sleep 1
+        content_waited=$((content_waited + 1))
+    done
 
-    echo "→ captured $out_png" >&2
+    echo "→ captured $out_png (rendered content verified)" >&2
     return 0
 }
