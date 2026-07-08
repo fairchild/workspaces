@@ -79,6 +79,42 @@ test("mobile status chrome keeps compose gutter and 44px hit areas", async ({
 	expect(handleBox, "status handle box").not.toBeNull();
 	expect(handleBox?.width, "status handle width").toBeGreaterThanOrEqual(44);
 	expect(handleBox?.height, "status handle height").toBeGreaterThanOrEqual(44);
+
+	// Hit-test the real stacking, not just declared geometry: the handle's
+	// invisible halo overlaps the send button's lower-right corner, and live
+	// controls must win those pixels while the halo keeps the dead strip.
+	const hitAt = (x: number, y: number) =>
+		page.evaluate(
+			([px, py]) => {
+				const el = document.elementFromPoint(px, py);
+				const target = el?.closest("button, a");
+				return (
+					target?.getAttribute("data-testid") ??
+					target?.getAttribute("aria-label") ??
+					null
+				);
+			},
+			[x, y],
+		);
+	const sendBox = await page
+		.getByRole("button", { name: "Send" })
+		.boundingBox();
+	expect(sendBox, "send button box").not.toBeNull();
+	if (sendBox && handleBox) {
+		const corner = await hitAt(
+			sendBox.x + sendBox.width - 2,
+			sendBox.y + sendBox.height - 2,
+		);
+		expect(corner, "send button owns its own corner").toBe("Send");
+		const halo = await hitAt(
+			handleBox.x + handleBox.width - 4,
+			handleBox.y + handleBox.height / 2,
+		);
+		expect(halo, "handle owns the dead strip").toBe("status-line-handle");
+	}
+	// The dot itself still reopens the status line.
+	await handle.click();
+	await expect(statusLine).toBeVisible();
 });
 
 test("transcript + compose hold up at 375px through a full turn, with no horizontal scroll", async ({
