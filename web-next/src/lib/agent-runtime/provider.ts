@@ -7,6 +7,7 @@
  */
 import { mockProvider } from "./mock-provider";
 import type { StreamChunk } from "./stream-chunk";
+import { hostProvider } from "./host-provider";
 import { vercelProvider } from "./vercel-provider";
 
 /**
@@ -48,6 +49,11 @@ export interface TurnRequest {
 	 * that don't (mock) record it for testability but otherwise ignore it.
 	 */
 	model?: string;
+	/**
+	 * The detached ingest loop's stop signal for this turn. Providers with
+	 * process ownership use it to tear down work; HTTP readers closing do not.
+	 */
+	signal?: AbortSignal;
 }
 
 export interface ComputeProvider {
@@ -59,6 +65,7 @@ export interface ComputeProvider {
 
 const providers: Record<string, ComputeProvider> = {
 	[mockProvider.id]: mockProvider,
+	[hostProvider.id]: hostProvider,
 	[vercelProvider.id]: vercelProvider,
 };
 
