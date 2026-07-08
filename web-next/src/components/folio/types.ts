@@ -7,6 +7,10 @@
  * data part here.
  */
 import type { UIMessage } from "ai";
+import type {
+	ApprovalDecision,
+	ApprovalResolvedBy,
+} from "@/lib/agent-runtime/stream-chunk";
 
 /**
  * End-of-turn receipt numbers ("3 tools · 1 file · +3 −1 · 4 tests · 6.2s").
@@ -67,9 +71,31 @@ export interface DiffCardData {
 	lines: DiffLine[];
 }
 
+export type ApprovalPartData =
+	| {
+			state: "pending";
+			requestId: string;
+			summary: string;
+			toolName: string;
+			inputSummary: string;
+			expiresAt: string;
+	  }
+	| {
+			state: "resolved";
+			requestId: string;
+			summary: string;
+			toolName: string;
+			inputSummary: string;
+			expiresAt?: string;
+			decision: ApprovalDecision;
+			resolvedBy: ApprovalResolvedBy;
+	  };
+
 export type FolioDataParts = {
 	/** Transient provider status ("Cloning repo") — surfaced via onData, never a part. */
 	status: { message: string };
+	/** Durable permission request/receipt rendered in the transcript (#982). */
+	approval: ApprovalPartData;
 };
 
 export type FolioMessage = UIMessage<FolioMetadata, FolioDataParts>;

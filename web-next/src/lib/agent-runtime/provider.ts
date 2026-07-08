@@ -6,6 +6,8 @@
  * the same StreamChunk protocol shared with the legacy web/ runtime.
  */
 import { mockProvider } from "./mock-provider";
+import type { PendingApprovalRequest } from "./approval-broker";
+import type { ApprovalPolicy } from "./approval-policy";
 import type { StreamChunk } from "./stream-chunk";
 import { hostProvider } from "./host-provider";
 import { vercelProvider } from "./vercel-provider";
@@ -54,6 +56,17 @@ export interface TurnRequest {
 	 * process ownership use it to tear down work; HTTP readers closing do not.
 	 */
 	signal?: AbortSignal;
+	/** Session-level policy knob for providers that classify tool calls. */
+	approvalPolicy?: ApprovalPolicy;
+	/**
+	 * Opens a durable approval request for this turn. Providers emit the
+	 * returned request as an approval_request chunk, then await `resolution`.
+	 */
+	requestApproval?: (input: {
+		toolName: string;
+		inputSummary: string;
+		timeoutMs: number;
+	}) => Promise<PendingApprovalRequest>;
 }
 
 export interface ComputeProvider {

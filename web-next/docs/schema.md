@@ -50,6 +50,7 @@ that log, never stored here.
 | `claude_session_id` | text? | Harness/Claude session id for resume; null until a real turn parks one. |
 | `resume_state` | text? | JSON harness resume payload from the last turn's `detach()` (migration `0003_session_resume_state`); null until a real turn parks, cleared when the parked sandbox expires. Session-row state, deliberately not in the event log. |
 | `model` | text | Claude model id this session's turns run on (migration `0004_session_model`, #824); NOT NULL, defaulting to `DEFAULT_MODEL` (`src/lib/agent-runtime/models.ts` — the single source of truth for the selectable set). Threaded into `TurnRequest.model` on every turn; changed via the status line's picker (`PATCH /api/sessions/[id]`). |
+| `approval_policy` | text | Tool approval posture for provider turns (migration `0007_turn_approvals`, #982): `auto` (default), `ask-writes`, or `ask-all`. Providers use `src/lib/agent-runtime/approval-policy.ts` to classify tool names; the mock approval scenario opens a real broker request regardless of this default so the round trip is testable without credentials. |
 | `created_at` | text | ISO-8601. |
 | `last_activity_at` | text | ISO-8601; bumped on every event append. |
 
@@ -76,6 +77,28 @@ the monotonic cursor **and** lets the resume/tail query
 `WHERE session_id = ? AND seq > ? ORDER BY seq` seek the index instead of
 scanning the table — the Turso row-read lesson carried over from `web/`.
 `seq` is the resume cursor #749's tail route reads.
+
+### `turn_approvals`
+
+The bidirectional approval rendezvous (#982). The transcript still records
+approval requests and resolutions as provider-native `StreamChunk`s in
+`session_events`; this side table is the mutable answer surface providers await
+and answer routes update. The answer endpoint never appends to `session_events`.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `session_id` | text | Owning session. |
+| `request_id` | text | Provider-generated approval id; unique within the session. |
+| `tool_name` | text | Tool that wants permission, e.g. `Edit` or `Bash`. |
+| `input_summary` | text | Human-readable summary of the proposed tool input. |
+| `requested_at` | text | ISO-8601 time the broker row was opened. |
+| `expires_at` | text | ISO-8601 deadline; unanswered requests deny on timeout. |
+| `decision` | text? | `allow` or `deny`; null while pending. |
+| `decided_at` | text? | ISO-8601 answer time; null while pending. |
+| `decided_by` | text? | `user`, `timeout`, or `abort`; null while pending. |
+
+Primary key `(session_id, request_id)`. Index
+`idx_turn_approvals_pending_expiry` covers per-session pending/expiry checks.
 
 ### Better Auth tables (`user`, `session`, `account`, `verification`)
 

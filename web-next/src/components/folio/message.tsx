@@ -8,6 +8,8 @@
  */
 import { isDynamicToolUIPart, type DynamicToolUIPart } from "ai";
 import type { CSSProperties, ReactNode } from "react";
+import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
+import { ApprovalCard } from "./approval-card";
 import { DiffHunk } from "./diff-card";
 import { InlineMarkdown } from "./inline-markdown";
 import {
@@ -86,7 +88,18 @@ export function MessageArticle({
 type Segment =
 	| { kind: "text"; key: string; text: string }
 	| { kind: "reasoning"; key: string; text: string; streaming: boolean }
-	| { kind: "tools"; key: string; parts: DynamicToolUIPart[] };
+	| { kind: "tools"; key: string; parts: DynamicToolUIPart[] }
+	| {
+			kind: "approval";
+			key: string;
+			part: Extract<FolioMessage["parts"][number], { type: "data-approval" }>;
+	  };
+
+function isApprovalPart(
+	part: FolioMessage["parts"][number],
+): part is Extract<FolioMessage["parts"][number], { type: "data-approval" }> {
+	return part.type === "data-approval";
+}
 
 /** Contiguous tool parts collapse into one workings block. */
 function groupParts(parts: FolioMessage["parts"]): Segment[] {
@@ -105,6 +118,8 @@ function groupParts(parts: FolioMessage["parts"]): Segment[] {
 			const last = segments.at(-1);
 			if (last?.kind === "tools") last.parts.push(part);
 			else segments.push({ kind: "tools", key: `part-${index}`, parts: [part] });
+		} else if (isApprovalPart(part)) {
+			segments.push({ kind: "approval", key: `part-${index}`, part });
 		}
 	});
 	return segments;
@@ -183,6 +198,10 @@ export interface MessageProps {
 	onRetry?: () => void;
 	/** Holds retry while another turn on this session is already running. */
 	retryDisabled?: boolean;
+	onApprovalDecision?: (
+		requestId: string,
+		decision: ApprovalDecision,
+	) => Promise<void>;
 }
 
 export function Message({
@@ -191,6 +210,7 @@ export function Message({
 	animationDelay,
 	onRetry,
 	retryDisabled,
+	onApprovalDecision,
 }: MessageProps) {
 	const isUser = message.role === "user";
 	const meta = message.metadata;
@@ -246,6 +266,14 @@ export function Message({
 							parts={segment.parts}
 							openToolCallIds={openToolCallIds}
 							contextualToolCallId={contextualToolCallId}
+						/>
+					);
+				if (segment.kind === "approval")
+					return (
+						<ApprovalCard
+							key={segment.key}
+							approval={segment.part.data}
+							onDecision={onApprovalDecision}
 						/>
 					);
 				return segment.text.split(/\n{2,}/).map((paragraph, i) => (

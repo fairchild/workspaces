@@ -4,7 +4,11 @@
  * message parts (text blocks, dynamic tool cards, transient status).
  */
 import type { UIMessageChunk } from "ai";
-import type { StreamChunk } from "../agent-runtime/stream-chunk";
+import type {
+	ApprovalRequestMetadata,
+	ApprovalResolvedMetadata,
+	StreamChunk,
+} from "../agent-runtime/stream-chunk";
 
 export interface AdapterOptions {
 	messageId?: string;
@@ -68,6 +72,15 @@ export async function* toUIMessageChunks(
 	let finished = false;
 	const unresolvedToolIds: string[] = [];
 	const consumed: StreamChunk[] = [];
+	const approvals = new Map<
+		string,
+		{
+			summary: string;
+			toolName: string;
+			inputSummary: string;
+			expiresAt: string;
+		}
+	>();
 
 	function closeText(): UIMessageChunk[] {
 		if (openTextId === null) return [];
@@ -158,6 +171,74 @@ export async function* toUIMessageChunks(
 					...(chunk.metadata?.isError ? { errorText: chunk.content } : { output }),
 					dynamic: true,
 				} as UIMessageChunk;
+				break;
+			}
+			case "approval_request": {
+				yield* closeText();
+				yield* closeReasoning();
+				const metadata = chunk.metadata as
+					| Partial<ApprovalRequestMetadata>
+					| undefined;
+				const requestId = asString(metadata?.requestId);
+				const expiresAt = asString(metadata?.expiresAt);
+				if (!requestId || !expiresAt) break;
+				const toolName = asString(metadata?.toolName) ?? "tool";
+				const inputSummary = asString(metadata?.inputSummary) ?? "";
+				approvals.set(requestId, {
+					summary: chunk.content,
+					toolName,
+					inputSummary,
+					expiresAt,
+				});
+				yield {
+					type: "data-approval",
+					id: requestId,
+					data: {
+						state: "pending",
+						requestId,
+						summary: chunk.content,
+						toolName,
+						inputSummary,
+						expiresAt,
+					},
+				};
+				break;
+			}
+			case "approval_resolved": {
+				yield* closeText();
+				yield* closeReasoning();
+				const metadata = chunk.metadata as
+					| Partial<ApprovalResolvedMetadata>
+					| undefined;
+				const requestId = asString(metadata?.requestId);
+				const decision = metadata?.decision;
+				const resolvedBy = metadata?.resolvedBy;
+				if (
+					!requestId ||
+					!(decision === "allow" || decision === "deny") ||
+					!(
+						resolvedBy === "user" ||
+						resolvedBy === "timeout" ||
+						resolvedBy === "abort"
+					)
+				) {
+					break;
+				}
+				const request = approvals.get(requestId);
+				yield {
+					type: "data-approval",
+					id: requestId,
+					data: {
+						state: "resolved",
+						requestId,
+						summary: request?.summary ?? "",
+						toolName: request?.toolName ?? "tool",
+						inputSummary: request?.inputSummary ?? "",
+						expiresAt: request?.expiresAt,
+						decision,
+						resolvedBy,
+					},
+				};
 				break;
 			}
 			case "status": {

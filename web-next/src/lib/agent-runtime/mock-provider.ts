@@ -8,6 +8,12 @@
  * call or clone here) on the terminal `done` chunk, so routing is
  * unit-testable against this provider without a sandbox.
  *
+ * A user message containing `MOCK_APPROVAL_TRIGGER` runs the approval scenario
+ * (#982): the mock emits a real approval_request, waits on the turn's broker
+ * callback, emits approval_resolved, then either continues (allow) or stops
+ * quietly (deny/timeout/abort). That keeps the end-to-end surface testable
+ * without credentials or host filesystem access.
+ *
  * A user message containing `MOCK_TURN_ERROR_TRIGGER` (#808) throws instead of
  * running the script — a deterministic, hermetic way to exercise a whole-turn
  * failure (turn-ingest.ts's catch appends the `error` + aborted `done` a real
@@ -38,6 +44,8 @@ const EDITED_FILE = "src/lib/session.ts";
 
 /** A user message containing this text makes the mock turn fail (#808). */
 export const MOCK_TURN_ERROR_TRIGGER = "__mock_turn_error__";
+/** A user message containing this text runs the approval round-trip (#982). */
+export const MOCK_APPROVAL_TRIGGER = "__mock_approval__";
 
 /**
  * The #753 error-class seams, one per first-class failure surface. Same
@@ -120,6 +128,7 @@ export async function* mockCodingTurn(
 	sleep: Sleep = defaultSleep,
 	model: string = DEFAULT_MODEL,
 	repo?: TurnRepo | null,
+	requestApproval?: TurnRequest["requestApproval"],
 ): AsyncGenerator<StreamChunk> {
 	const startedAt = Date.now();
 	let proseChars = 0;
@@ -153,6 +162,53 @@ export async function* mockCodingTurn(
 
 	yield { type: "status", content: "Cloning repo" };
 	await sleep(300);
+
+	if (userMessage.includes(MOCK_APPROVAL_TRIGGER)) {
+		if (!requestApproval) {
+			throw new Error("approval broker unavailable for mock approval scenario");
+		}
+		const pending = await requestApproval({
+			toolName: "Edit",
+			inputSummary: "Edit src/lib/session.ts to add a missing SessionNotFoundError guard.",
+			timeoutMs: 30_000,
+		});
+		yield {
+			type: "approval_request",
+			content: "Claude wants to edit src/lib/session.ts.",
+			metadata: {
+				requestId: pending.requestId,
+				toolName: pending.toolName,
+				inputSummary: pending.inputSummary,
+				expiresAt: pending.expiresAt,
+			},
+		};
+		const resolution = await pending.resolution;
+		yield {
+			type: "approval_resolved",
+			content: resolution.decision,
+			metadata: {
+				requestId: resolution.requestId,
+				decision: resolution.decision,
+				resolvedBy: resolution.resolvedBy,
+			},
+		};
+		if (resolution.decision === "deny") {
+			yield* prose("Permission was denied, so I stopped before changing files.");
+			yield {
+				type: "done",
+				content: "",
+				metadata: {
+					durationMs: Date.now() - startedAt,
+					tokenCount: Math.ceil(proseChars / 4),
+					contextTokens: Math.ceil((userMessage.length + proseChars) / 3.2),
+					model,
+					...(repo !== undefined ? { repo } : {}),
+				},
+			};
+			return;
+		}
+		yield* prose("Approved — continuing with the edit path.");
+	}
 
 	yield* reasoning(REASONING_TRACE);
 
@@ -301,6 +357,12 @@ export const mockProvider: ComputeProvider = {
 				spentErrorTriggers.add(spendKey);
 			}
 		}
-		return mockCodingTurn(userMessage, undefined, request.model, request.repo);
+		return mockCodingTurn(
+			userMessage,
+			undefined,
+			request.model,
+			request.repo,
+			request.requestApproval,
+		);
 	},
 };
