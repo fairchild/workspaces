@@ -29,6 +29,9 @@ Think of it as **a terminal session manager for your code portfolio, with worksp
 - **Two-Pane Split Control**: Ghostty split actions can create, focus, resize, and equalize the current two-pane stack
 - **Ghostty-First Shortcut Routing**: Terminal keybindings should default to Ghostty behavior; app-level shortcuts are for non-overlapping chrome actions
 - **File/Changes Pane**: Collapsible right pane showing file tree and git status
+- **Native Diff Review**: Open a changed file's diff in-app — colored add/remove/context rows with old|new line-number gutters — from the Changes tab or the code editor
+- **Session Activity at a Glance**: The session switcher shows a live status snippet per session (running tool and detail, waiting-for-permission, or the error); hovering a Claude Code session in the sidebar shows its last assistant message
+- **Local Automation API**: An opt-in local socket (`automation.sock`) exposes capability-gated read routes for scripting against the running app — context, visible terminal surfaces, and (`browser.read`) embedded web surfaces including a bounded snapshot of a live one
 - **Configurable Location**: Choose where workspaces are stored (default: `~/workspaces`)
 
 ## Sidebar Structure

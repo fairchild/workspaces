@@ -145,6 +145,11 @@ Tester prerelease. Headline: the Tile Tree + Surface abstraction epic (#627) is 
 
 ## [Unreleased]
 
+### Added
+- Native diff review: open a changed file's diff in-app (add/remove/context coloring, old|new gutters) from the Changes tab or the code editor (#704).
+- Session cards show live activity: a status-derived snippet on session switcher rows (running tool + detail, "waiting for permission," or the error), and the sidebar hover card surfaces the last assistant message from a Claude Code session's transcript (#680).
+- Automation API: read-only `browser.read` capability exposes embedded web surfaces to local scripting — `GET /v1/web-surfaces` lists them (live URL/title only when a view is open) and `GET /v1/web-surfaces/{id}/snapshot` returns a bounded PNG of a live surface (#679).
+
 ### Fixed
 - Write machine-agnostic Claude Code hook and status-line commands: both forwarders extract to a stable, space-free dir (`~/.local/share/workspaces/hook-forwarders/`) and `settings.json` carries a tilde-relative, unquoted path identical on every machine. This keeps the committed dotclaude config matching runtime so `~/.claude` stops going dirty and the auto-deploy no longer silently skips. Opted-in users migrate off the older `Application Support` / `.build` bundle paths on next launch. See `docs/decisions/hook-forwarder-command-shape.md`.
 
