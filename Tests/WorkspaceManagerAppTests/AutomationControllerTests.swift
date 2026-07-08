@@ -481,6 +481,82 @@ struct AutomationControllerTests {
         #expect(fixture.closedSessionIDs == [fixture.primary.id])
     }
 
+    @Test("Operator handle lists windows without owning a tile; tile handle is denied")
+    func operatorWindowsProjection() throws {
+        // A store with no live session at all — operator scope must not depend on a caller tile.
+        let store = TileTreeStore()
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let descriptor = AutomationWindowDescriptor(
+            windowID: "7",
+            title: "WorkSpaces",
+            subtitle: nil,
+            isMain: true,
+            isKey: false,
+            isVisible: true,
+            x: 0,
+            y: 0,
+            width: 1200,
+            height: 800
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            windows: { [descriptor] }
+        )
+
+        let result = try controller.automationWindows(for: operatorEntry.handle)
+        #expect(result.windows == [descriptor])
+        #expect(result.system.capabilities == [.windowRead])
+        #expect(controller.automationHandleIsOperator(operatorEntry.handle))
+    }
+
+    @Test("Windows route fails closed for tile, under-capable, and stale handles")
+    func operatorWindowsFailClosed() throws {
+        let store = TileTreeStore()
+        let primary =
+            store.activateSession(
+                key: .repoPath("/Users/test/repo"),
+                directory: URL(fileURLWithPath: "/Users/test/repo")
+            ).session
+        let registry = AutomationHandleRegistry(makeHandle: { "tile" })
+        // A tile handle carrying the full v1 tile capabilities — but not window.read.
+        _ = registry.upsert(
+            hostSessionID: primary.id,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "app",
+            capabilities: AutomationAPI.v1Capabilities
+        )
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            windows: { [] }
+        )
+
+        // Tile handle: has tile capabilities but not window.read → capability_denied.
+        do {
+            _ = try controller.automationWindows(for: "tile")
+            Issue.record("Expected a tile handle to be denied window.read")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+        #expect(!controller.automationHandleIsOperator("tile"))
+
+        // Unknown/stale handle → stale_handle.
+        do {
+            _ = try controller.automationWindows(for: "not-live")
+            Issue.record("Expected an unknown handle to be stale")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .staleHandle)
+        }
+    }
+
     @MainActor
     private final class Fixture {
         let store: TileTreeStore

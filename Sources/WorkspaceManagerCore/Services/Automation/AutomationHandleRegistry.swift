@@ -2,6 +2,10 @@ import Foundation
 
 @MainActor
 public final class AutomationHandleRegistry {
+    /// The synthetic window scope carried by operator entries. Operator scope is not window-bound
+    /// (it lists every app window), so this is a marker, not a live SwiftUI window identity.
+    public static let operatorWindowScopeID = "operator"
+
     public struct Entry: Sendable, Equatable {
         public let handle: String
         public let hostSessionID: UUID
@@ -10,6 +14,9 @@ public final class AutomationHandleRegistry {
         public let windowScopeID: String
         public let appScopeID: String
         public let capabilities: [AutomationCapability]
+        /// True for an opt-in operator handle (trusted caller outside any tile). Operator entries do
+        /// not resolve to a terminal tile, so callers must skip tile-liveness checks for them.
+        public let isOperator: Bool
 
         public init(
             handle: String,
@@ -18,7 +25,8 @@ public final class AutomationHandleRegistry {
             surfaceKind: AutomationSurfaceKind,
             windowScopeID: String,
             appScopeID: String,
-            capabilities: [AutomationCapability] = AutomationAPI.v1Capabilities
+            capabilities: [AutomationCapability] = AutomationAPI.v1Capabilities,
+            isOperator: Bool = false
         ) {
             self.handle = handle
             self.hostSessionID = hostSessionID
@@ -27,6 +35,7 @@ public final class AutomationHandleRegistry {
             self.windowScopeID = windowScopeID
             self.appScopeID = appScopeID
             self.capabilities = capabilities
+            self.isOperator = isOperator
         }
     }
 
@@ -58,6 +67,32 @@ public final class AutomationHandleRegistry {
             windowScopeID: windowScopeID,
             appScopeID: appScopeID,
             capabilities: capabilities
+        )
+        entriesByHandle[handle] = entry
+        return entry
+    }
+
+    /// Registers a per-launch operator handle carrying capture-only capabilities. Unlike `upsert`,
+    /// this is not keyed by a live terminal session — the entry stands alone under a synthetic host
+    /// session id so `remove(hostSessionID:)`/`removeAll` still evict it when the launch ends. Each
+    /// call mints a fresh handle; a launch mints exactly one.
+    @discardableResult
+    public func registerOperator(
+        appScopeID: String,
+        capabilities: [AutomationCapability] = AutomationAPI.operatorCapabilities,
+        hostSessionID: UUID = UUID()
+    ) -> Entry {
+        let handle = makeUniqueHandle()
+        handleByHostSessionID[hostSessionID] = handle
+        let entry = Entry(
+            handle: handle,
+            hostSessionID: hostSessionID,
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: Self.operatorWindowScopeID,
+            appScopeID: appScopeID,
+            capabilities: capabilities,
+            isOperator: true
         )
         entriesByHandle[handle] = entry
         return entry

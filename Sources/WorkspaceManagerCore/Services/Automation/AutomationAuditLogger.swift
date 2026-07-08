@@ -6,6 +6,9 @@ public actor AutomationAuditLogger {
         public let method: String
         public let path: String
         public let handlePresent: Bool
+        /// True when the request's handle resolved to a live operator entry, so operator calls are
+        /// distinguishable from tile calls in the audit log (`[A1]`).
+        public let operatorHandle: Bool
         public let allowed: Bool
         public let errorCode: AutomationErrorCode?
 
@@ -14,6 +17,7 @@ public actor AutomationAuditLogger {
             method: String,
             path: String,
             handlePresent: Bool,
+            operatorHandle: Bool = false,
             allowed: Bool,
             errorCode: AutomationErrorCode?
         ) {
@@ -21,6 +25,7 @@ public actor AutomationAuditLogger {
             self.method = method
             self.path = path
             self.handlePresent = handlePresent
+            self.operatorHandle = operatorHandle
             self.allowed = allowed
             self.errorCode = errorCode
         }
@@ -45,13 +50,20 @@ public actor AutomationAuditLogger {
         return dir.appendingPathComponent("automation-audit.jsonl", isDirectory: false)
     }
 
-    public func record(method: String, path: String, headers: [String: String], responseBody: Data) {
+    public func record(
+        method: String,
+        path: String,
+        headers: [String: String],
+        responseBody: Data,
+        operatorHandle: Bool = false
+    ) {
         let summary = (try? AutomationJSON.decoder.decode(AuditEnvelopeSummary.self, from: responseBody))
         let event = Event(
             timestamp: timestampFormatter.string(from: Date()),
             method: method,
             path: path,
             handlePresent: headers[AutomationAPI.handleHeader]?.isEmpty == false,
+            operatorHandle: operatorHandle,
             allowed: summary?.ok == true,
             errorCode: summary?.error?.code
         )

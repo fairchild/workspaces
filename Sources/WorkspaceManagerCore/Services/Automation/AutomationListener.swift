@@ -175,11 +175,20 @@ public actor AutomationListener {
         }
 
         let response = Self.httpResponse(status: result.status, body: result.body)
+        // Classify the caller's handle against the live registry so the audit event can tell an
+        // operator call from a tile call; a missing/unresolvable handle is not an operator handle.
+        let operatorHandle: Bool
+        if let handleValue = request.headers[AutomationAPI.handleHeader], !handleValue.isEmpty {
+            operatorHandle = await controller.automationHandleIsOperator(handleValue)
+        } else {
+            operatorHandle = false
+        }
         await auditLogger?.record(
             method: request.method,
             path: request.path,
             headers: request.headers,
-            responseBody: result.body
+            responseBody: result.body,
+            operatorHandle: operatorHandle
         )
         connection.send(
             content: response,

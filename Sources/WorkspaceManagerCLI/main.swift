@@ -40,6 +40,7 @@ private final class CLIApp {
         "surface",
         "tile",
         "input",
+        "window",
     ]
 
     private let stateStore = CLIStateStore()
@@ -86,6 +87,8 @@ private final class CLIApp {
             return try runTile(arguments: tail)
         case "input":
             return try runInput(arguments: tail)
+        case "window":
+            return try runWindow(arguments: tail)
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -837,6 +840,71 @@ private final class CLIApp {
         return 0
     }
 
+    /// `workspaces window list [--json]` — the operator-scope command. Unlike the tile-scoped
+    /// commands, it reads the per-launch operator credential file (minted next to the socket by an
+    /// opted-in launch) rather than the `WORKSPACES_AUTOMATION_HANDLE` env, so it works from any
+    /// same-user shell outside a WorkSpaces tile. Absent the credential it fails closed with guidance.
+    private func runWindow(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces window list [--json]"
+        guard arguments.first == "list" else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        var json = false
+        for argument in arguments.dropFirst() {
+            switch argument {
+            case "--json":
+                json = true
+            default:
+                throw CLIError("Usage: \(usage)")
+            }
+        }
+
+        let credential = try loadOperatorCredential()
+        let client = AutomationSocketClient(socketPath: credential.socketPath)
+        let response = try client.request(
+            method: "GET",
+            path: "/v1/windows",
+            handle: credential.handle,
+            body: Data()
+        )
+        let result: AutomationWindowsResult
+        do {
+            result = try AutomationCLIResultPrinter.decodeEnvelope(AutomationWindowsResult.self, from: response)
+        } catch let error as AutomationServiceError {
+            throw CLIError(
+                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
+            )
+        }
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        if result.windows.isEmpty {
+            print("No windows.")
+            return 0
+        }
+        for window in result.windows {
+            let title = window.title.isEmpty ? "(untitled)" : window.title
+            let size = "\(Int(window.width))x\(Int(window.height))"
+            print("\(window.windowID)\t\(size)\t\(title)")
+        }
+        return 0
+    }
+
+    private func loadOperatorCredential() throws -> AutomationOperatorCredential {
+        let url = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: Self.appBundleIdentifier)
+        guard let credential = AutomationOperatorCredentialStore.load(from: url) else {
+            throw CLIError(
+                "Operator credential not found at \(url.path). Launch WorkSpaces with the Automation "
+                    + "Operator experiment enabled (or WORKSPACES_AUTOMATION_OPERATOR=1) and try again."
+            )
+        }
+        return credential
+    }
+
     private func performAutomationRequest<Result>(
         _ type: Result.Type = Result.self,
         method: String,
@@ -1369,6 +1437,7 @@ private func printHelp() {
           workspaces tile split --left|--right|--up|--down
           workspaces tile close
           workspaces input write <text> [--submit]
+          workspaces window list [--json]
           workspaces help
 
         Launch behavior:

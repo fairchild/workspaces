@@ -9,6 +9,7 @@ import SwiftUI
 enum ExperimentalFeature: String, CaseIterable, Identifiable {
     case automationAPI = "automationAPI"
     case automationInputWrite = "automationInputWrite"
+    case automationOperator = "automationOperator"
     case minimalToolbar = "minimalToolbar"
     case restoreSessionsOnLaunch = "restoreSessionsOnLaunch"
 
@@ -20,6 +21,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "Automation API"
         case .automationInputWrite:
             return "Automation Input Write"
+        case .automationOperator:
+            return "Automation Operator Scope"
         case .minimalToolbar:
             return "Minimal Toolbar"
         case .restoreSessionsOnLaunch:
@@ -33,6 +36,10 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "Expose a local same-user socket so terminal tiles can inspect and arrange their WorkSpaces shell."
         case .automationInputWrite:
             return "Let automation clients type into their own terminal tile. Requires the Automation API experiment."
+        case .automationOperator:
+            return "Mint a per-launch operator credential next to the automation socket so trusted "
+                + "same-user tools outside any tile can list the app's windows. Requires the "
+                + "Automation API experiment."
         case .minimalToolbar:
             return "Hide secondary toolbar controls so terminal surfaces stay closer to the canvas."
         case .restoreSessionsOnLaunch:
@@ -54,6 +61,8 @@ enum ExperimentalFeature: String, CaseIterable, Identifiable {
             return "WORKSPACES_AUTOMATION_API"
         case .automationInputWrite:
             return "WORKSPACES_AUTOMATION_INPUT_WRITE"
+        case .automationOperator:
+            return "WORKSPACES_AUTOMATION_OPERATOR"
         case .minimalToolbar:
             return "WORKSPACES_PERF_MINIMAL_TOOLBAR"
         case .restoreSessionsOnLaunch:
