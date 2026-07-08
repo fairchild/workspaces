@@ -247,6 +247,23 @@ struct GhosttyTerminalConfigTests {
         #expect(config.environmentVariables["WORKSPACES_HOST_SESSION_ID"] == hostSessionID.uuidString)
     }
 
+    @Test("Automation context is omitted when no automation environment is provided")
+    func omitsAutomationContextWhenUnavailable() {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+            ],
+            terminalMultiplexingMode: .ghosttyManagedSplits,
+            isTmuxAvailableOverride: true,
+            automationEnvironment: nil
+        )
+
+        #expect(config.environmentVariables[AutomationAPI.socketEnvironmentKey] == nil)
+        #expect(config.environmentVariables[AutomationAPI.handleEnvironmentKey] == nil)
+    }
+
     @Test("custom command config preserves explicit command without hook environment")
     func customCommandConfigPreservesExplicitCommandWithoutHookEnvironment() {
         let config = GhosttyTerminalConfig(customCommand: "/usr/local/bin/lume ssh vm-123")

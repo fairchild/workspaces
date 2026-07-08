@@ -962,7 +962,17 @@ final class TileTreeStore: ObservableObject {
     }
 
     func automationEnvironment(for session: HostTerminalSession) -> AutomationTerminalEnvironment? {
-        guard let automationHandleRegistry, let automationSocketPath else { return nil }
+        guard let automationHandleRegistry, let automationSocketPath else {
+            if ExperimentalFeatures.isEnabled(.automationAPI) {
+                NSLog(
+                    "[TileTreeStore] automation environment unavailable for session %@ while Automation API is enabled (handleRegistry=%@ socketPath=%@)",
+                    session.id.uuidString,
+                    automationHandleRegistry == nil ? "nil" : "configured",
+                    automationSocketPath == nil ? "nil" : "configured"
+                )
+            }
+            return nil
+        }
         let entry = automationHandleRegistry.upsert(
             hostSessionID: session.id,
             tileID: automationTileID(for: session.id),

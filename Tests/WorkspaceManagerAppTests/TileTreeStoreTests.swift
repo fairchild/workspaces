@@ -90,6 +90,56 @@ struct TileTreeStoreTests {
         #expect(store.tabTitleOverride(for: session.id) == nil)
     }
 
+    @Test("Automation environment remains nil before automation is configured")
+    func automationEnvironmentIsNilBeforeConfigure() {
+        let store = TileTreeStore()
+        let session = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+
+        #expect(store.automationEnvironment(for: session) == nil)
+    }
+
+    @Test("Automation environment is minted for multiple sessions after one configuration")
+    func automationEnvironmentIsMintedForMultipleSessionsAfterOneConfiguration() throws {
+        let store = TileTreeStore()
+        let socketPath = "/tmp/workspaces-automation.sock"
+        var nextHandle = 0
+        let registry = AutomationHandleRegistry {
+            nextHandle += 1
+            return "handle-\(nextHandle)"
+        }
+        store.configureAutomation(handleRegistry: registry, socketPath: socketPath)
+
+        let first = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+        let second = try #require(store.createTab())
+        let third = store.activateSession(
+            key: .repoPath("/Users/test/code/repo"),
+            directory: URL(fileURLWithPath: "/Users/test/code/repo")
+        ).session
+
+        let firstEnvironment = try #require(store.automationEnvironment(for: first))
+        let secondEnvironment = try #require(store.automationEnvironment(for: second))
+        let thirdEnvironment = try #require(store.automationEnvironment(for: third))
+        let environments = [firstEnvironment, secondEnvironment, thirdEnvironment]
+        let sessions = [first, second, third]
+
+        #expect(environments.allSatisfy { $0.socketPath == socketPath })
+        #expect(Set(environments.map(\.handle)).count == environments.count)
+        #expect(environments.map(\.handle) == ["handle-1", "handle-2", "handle-3"])
+
+        for (environment, session) in zip(environments, sessions) {
+            let entry = try #require(registry.resolve(environment.handle))
+            #expect(entry.hostSessionID == session.id)
+            #expect(entry.tileID?.rawValue.uuidString == store.automationTileIDString(for: session.id))
+            #expect(entry.surfaceKind == .terminal)
+        }
+    }
+
     @Test("Surface title changes publish host terminal state updates")
     func surfaceTitleChangesPublishHostTerminalStateUpdates() {
         let store = TileTreeStore()
