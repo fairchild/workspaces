@@ -12,15 +12,21 @@ import {
 	mockProvider,
 } from "./mock-provider";
 import { DEFAULT_MODEL } from "./models";
+import type { TurnRepo } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 
 /** The whole scripted turn, without waiting out the streaming pace. */
-async function fullTurn(userMessage: string, model?: string): Promise<StreamChunk[]> {
+async function fullTurn(
+	userMessage: string,
+	model?: string,
+	repo?: TurnRepo | null,
+): Promise<StreamChunk[]> {
 	const chunks: StreamChunk[] = [];
 	for await (const chunk of mockCodingTurn(
 		userMessage,
 		() => Promise.resolve(),
 		model,
+		repo,
 	)) {
 		chunks.push(chunk);
 	}
@@ -122,6 +128,16 @@ describe("mockCodingTurn", () => {
 		const chunks = await fullTurn("go", "claude-haiku-4-5");
 		const done = chunks.find((chunk) => chunk.type === "done");
 		expect(done?.metadata?.model).toBe("claude-haiku-4-5");
+	});
+
+	test("records the requested repo on the terminal done chunk (#967)", async () => {
+		const repo = {
+			fullName: "fairchild/web-next-fixtures",
+			defaultBranch: "trunk",
+		};
+		const chunks = await fullTurn("go", undefined, repo);
+		const done = chunks.find((chunk) => chunk.type === "done");
+		expect(done?.metadata?.repo).toEqual(repo);
 	});
 
 	test("also records a plausible contextTokens figure alongside tokenCount", async () => {

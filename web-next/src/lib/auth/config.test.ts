@@ -34,7 +34,7 @@ describe("isLoginAllowed", () => {
 	});
 });
 
-describe("authBypassEnabled (double lock)", () => {
+describe("authBypassEnabled (triple lock)", () => {
 	it("requires the explicit env var", () => {
 		expect(authBypassEnabled({})).toBe(false);
 		expect(authBypassEnabled({ AUTH_BYPASS: "0" })).toBe(false);
@@ -46,6 +46,15 @@ describe("authBypassEnabled (double lock)", () => {
 			authBypassEnabled({
 				AUTH_BYPASS: "1",
 				GITHUB_OAUTH_CLIENT_ID: "Iv1.real",
+			}),
+		).toBe(false);
+	});
+
+	it("is inert on Vercel even without OAuth config", () => {
+		expect(
+			authBypassEnabled({
+				AUTH_BYPASS: "1",
+				VERCEL: "1",
 			}),
 		).toBe(false);
 	});

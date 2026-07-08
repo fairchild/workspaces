@@ -12,6 +12,25 @@ description: >
 Only what's specific to this repo — general delegation practice is assumed.
 Source: the 2026-07-02 cycle (PRs #723–#732, six first-try gate passes).
 
+## Before dispatching to a new execution agent
+
+An agent that cannot run this repo's verification loop cannot ship here,
+regardless of model quality — every merge gate is verification (`swift
+build`/`swift test`, lint, evidence, smoke lanes). Proven 2026-07-08: a
+pi-vs-codex race on the same brief produced a plausible ~1,000-line
+implementation from pi that died unverifiable (its sandbox blocked `swift`),
+while codex shipped a reviewed PR in under an hour. So on an agent's first
+dispatch:
+
+- Confirm its sandbox/harness can execute `swift build` (or `mise run
+  web:check` for web work) before handing it a slice.
+- Spot-check context absorption with a short quiz (issue tracker? evidence
+  gate? PR label vocabulary?) — agents differ in how strongly they weight
+  `AGENTS.md`; a wrong answer means the brief must carry that context
+  explicitly.
+- Fresh worktrees need `Frameworks/GhosttyKit.xcframework` rsynced from the
+  main checkout before `swift build` works at all.
+
 ## The brief must include
 
 - Bootstrap: `git fetch origin main && git checkout -B claude/<slug> origin/main`.

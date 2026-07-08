@@ -179,6 +179,9 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     private var emittedRepoPath: String?
     private var hasStartedScenario = false
     private var lastFailureSignature: String?
+    private var pendingAPISelectWorkspacePath: String?
+    private var apiSelectCompletionTask: Task<Void, Never>?
+    private var emittedScenarioComplete = false
 
     /// Monotonic counter bumped each time a terminal surface reports focus.
     /// The scenario captures it before a selection action and waits for it to
@@ -222,6 +225,8 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     /// api-select smoke script keys its `workspaces workspace select` on this milestone.
     func noteAwaitingAPISelect(workspace: Workspace) async {
         guard isEnabled else { return }
+        pendingAPISelectWorkspacePath = normalizedPath(workspace.path)
+        apiSelectCompletionTask?.cancel()
         await emit(
             makeEvent(
                 type: .awaitingApiSelect,
@@ -330,6 +335,23 @@ final class DesktopUISmokeAutomationController: ObservableObject {
                 sessionScope: scopePath
             )
         )
+
+        guard
+            configuration?.selectDriver == .api,
+            kind == .workspace,
+            pendingAPISelectWorkspacePath == normalizedPath(scopePath)
+        else {
+            return
+        }
+
+        pendingAPISelectWorkspacePath = nil
+        let focusBaseline = surfaceFocusCount
+        apiSelectCompletionTask?.cancel()
+        apiSelectCompletionTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            _ = await self.waitForSurfaceFocus(after: focusBaseline, timeout: .seconds(15))
+            await self.noteScenarioComplete()
+        }
     }
 
     func noteSurfaceFocused(sessionID: UUID) async {
@@ -346,7 +368,8 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     }
 
     func noteScenarioComplete() async {
-        guard isEnabled else { return }
+        guard isEnabled, !emittedScenarioComplete else { return }
+        emittedScenarioComplete = true
         await emit(makeEvent(type: .scenarioComplete))
     }
 
@@ -390,6 +413,10 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     private func emit(_ event: DesktopUISmokeEvent) async {
         guard let writer else { return }
         await writer.emit(event)
+    }
+
+    private func normalizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
     }
 
     private func makeEvent(

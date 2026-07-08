@@ -13,6 +13,7 @@ import { isSelectableModel } from "@/lib/agent-runtime/models";
 import { releaseParkedSandbox } from "@/lib/agent-runtime/sandbox-release";
 import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
 import { getAuthState } from "@/lib/auth/auth-state";
+import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
 import {
 	deleteSession,
@@ -93,6 +94,8 @@ export async function DELETE(
 	if (!session) {
 		return Response.json({ error: "unknown session" }, { status: 404 });
 	}
+	const ownerScope = sessionOwnerScopeResponse(session, auth.user.login);
+	if (ownerScope) return ownerScope;
 
 	// A running turn's detached ingest keeps appending to this session;
 	// deleting now would orphan those writes and lose the resume handle the
@@ -146,6 +149,8 @@ export async function PATCH(
 	if (!session) {
 		return Response.json({ error: "unknown session" }, { status: 404 });
 	}
+	const ownerScope = sessionOwnerScopeResponse(session, auth.user.login);
+	if (ownerScope) return ownerScope;
 
 	const body: unknown = await request.json().catch(() => undefined);
 	if (typeof body !== "object" || body === null) {

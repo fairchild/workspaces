@@ -349,9 +349,13 @@ if not (
 ):
     fail("creation milestones are out of order")
 
-attaches = [e for e in events if e.get("type") == "terminal_session_attached"]
-workspace_attaches = [a for a in attaches if a.get("selectionKind") == "workspace"]
-repo_attaches = [a for a in attaches if a.get("selectionKind") == "repo"]
+attaches = [
+    (i, e)
+    for i, e in enumerate(events)
+    if e.get("type") == "terminal_session_attached"
+]
+workspace_attaches = [(i, a) for i, a in attaches if a.get("selectionKind") == "workspace"]
+repo_attaches = [(i, a) for i, a in attaches if a.get("selectionKind") == "repo"]
 
 if not workspace_attaches:
     fail("no workspace terminal session was attached")
@@ -361,16 +365,16 @@ if not repo_attaches:
 # Flow 2: prove the surface follows selection. The first workspace attach, a
 # repo attach, then a workspace attach again, with the repo session distinct
 # from the workspace session and the workspace session reused on return.
-first_workspace = workspace_attaches[0]
-first_repo = repo_attaches[0]
+_, first_workspace = workspace_attaches[0]
+first_repo_index, first_repo = repo_attaches[0]
 
 if first_repo.get("sessionID") == first_workspace.get("sessionID"):
     fail("repo terminal reused the workspace session — selection did not switch")
 
 later_workspace = [
     a
-    for a in workspace_attaches
-    if events.index(a) > events.index(first_repo)
+    for i, a in workspace_attaches
+    if i > first_repo_index
 ]
 if not later_workspace:
     fail("workspace terminal did not re-attach after switching back")
@@ -384,10 +388,11 @@ if restored.get("sessionScope") != first_workspace.get("sessionScope"):
 # routing after the web swap; surface remount/focus stays best-effort
 # (surface_focused), matching Flows 1-2.
 web_attaches = [e for e in events if e.get("type") == "web_surface_attached"]
+web_attach_index = next(i for i, e in enumerate(events) if e.get("type") == "web_surface_attached")
 post_web_workspace = [
     a
-    for a in workspace_attaches
-    if events.index(a) > events.index(web_attaches[0])
+    for i, a in workspace_attaches
+    if i > web_attach_index
 ]
 if not post_web_workspace:
     fail("no workspace terminal session attached after the web pane")

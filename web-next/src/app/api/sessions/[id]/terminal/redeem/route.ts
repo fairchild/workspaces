@@ -7,6 +7,7 @@
  * WebSocket URL; "mock" tickets (AUTH_BYPASS) just confirm the mode.
  */
 import { getAuthState } from "@/lib/auth/auth-state";
+import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
 import {
@@ -44,6 +45,8 @@ export async function POST(
 	if (!session) {
 		return Response.json({ error: "unknown session" }, { status: 404 });
 	}
+	const ownerScope = sessionOwnerScopeResponse(session, auth.user.login);
+	if (ownerScope) return ownerScope;
 
 	const body: unknown = await request.json().catch(() => undefined);
 	const ticket =

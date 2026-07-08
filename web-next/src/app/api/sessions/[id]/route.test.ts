@@ -56,9 +56,9 @@ async function patch(id: string, body: unknown) {
 
 let seq = 0;
 /** A fresh session id per test — one shared DB, no cross-test collisions. */
-async function freshSession(): Promise<string> {
+async function freshSession(ownerLogin?: string | null): Promise<string> {
 	const id = `s-${++seq}`;
-	await createSession(getDatabase(), { id, provider: "mock" });
+	await createSession(getDatabase(), { id, ownerLogin, provider: "mock" });
 	return id;
 }
 
@@ -80,6 +80,18 @@ describe("PATCH /api/sessions/[id]", () => {
 	test("404s for an unknown session", async () => {
 		const res = await patch("does-not-exist", { title: "New title" });
 		expect(res.status).toBe(404);
+	});
+
+	test("403s for a foreign owner and allows a legacy null owner", async () => {
+		const foreign = await freshSession("octocat");
+		const denied = await patch(foreign, { title: "Nope" });
+		expect(denied.status).toBe(403);
+		expect((await getSession(getDatabase(), foreign))?.title).toBe("");
+
+		const legacy = await freshSession(null);
+		const allowed = await patch(legacy, { title: "Grandfathered" });
+		expect(allowed.status).toBe(200);
+		expect((await getSession(getDatabase(), legacy))?.title).toBe("Grandfathered");
 	});
 
 	test("rejects a field outside {model, title}", async () => {

@@ -3,9 +3,10 @@
  * the UI's server action (actions.ts). Exists for API clients that need a
  * throwaway session with an explicit title and provider — the #818 real-turn
  * validation probe is the first — so it skips the action's GitHub repo
- * resolution (repoId stays null; the vercel provider clones its configured
- * AGENT_TARGET_REPO regardless). Auth-gated like every session route; model
- * always starts at the DEFAULT_MODEL, same as the UI path.
+ * resolution (repoId stays null; the vercel provider falls back to its
+ * configured AGENT_TARGET_REPO only for these repo-less sessions). Auth-gated
+ * like every session route; model always starts at the DEFAULT_MODEL, same as
+ * the UI path.
  */
 import { getProvider } from "@/lib/agent-runtime/provider";
 import { getAuthState } from "@/lib/auth/auth-state";
@@ -70,6 +71,7 @@ export async function POST(request: Request) {
 
 	const session = await createSession(getDatabase(), {
 		id: crypto.randomUUID(),
+		ownerLogin: auth.user.login,
 		title,
 		provider,
 	});

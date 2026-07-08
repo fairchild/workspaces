@@ -16,7 +16,33 @@ expects in production. Single-user product: GitHub OAuth + a login allowlist.
 | `SESSIONS_DATABASE_AUTH_TOKEN` | Turso auth token, when `SESSIONS_DATABASE_URL` is a remote URL. |
 
 The GitHub OAuth app's authorization callback URL is
-`<BETTER_AUTH_URL>/api/auth/callback/github`.
+`<BETTER_AUTH_URL>/api/auth/callback/github`. Production uses the
+`web-workspaces` **GitHub App** as the OAuth client (client id `Iv23…`) rather
+than a standalone OAuth App: GitHub Apps accept multiple callback URLs, so the
+canonical domain (`https://folio.cloudcompute.com`) and the vercel.app origin
+are both registered. `BETTER_AUTH_URL` decides which one every sign-in
+actually uses — Better Auth builds `redirect_uri` from it regardless of which
+origin the user started on, so a `BETTER_AUTH_URL` value whose callback isn't
+registered breaks sign-in on *all* origins at once.
+
+## Shipping env-only changes (Vercel)
+
+The project's ignored-build-step (`git diff --quiet HEAD^ HEAD -- .`, rooted at
+`web-next/`) cancels any git-sourced deployment whose HEAD commit doesn't touch
+`web-next/` — which is exactly the situation after changing only env vars. Two
+working paths:
+
+- **Redeploy-from-existing** (env-only): `POST /v13/deployments` with
+  `{"deploymentId": <last READY prod deployment>, "target": "production"}` —
+  copies the build, applies current env, skips the ignore step.
+- **Fresh build when HEAD doesn't touch web-next**: same endpoint with
+  `gitSource` plus `"projectSettings": {"commandForIgnoringBuildStep": ""}` to
+  override the ignore step for that one deployment.
+
+A CANCELED deployment leaves the previous build serving — env changes silently
+don't apply, which presents as stale behavior (e.g. an old `BETTER_AUTH_URL`
+generating the wrong `redirect_uri`). Check `readyState` of the deployment you
+created, not just the alias.
 
 Database tables (session store + Better Auth's `user`/`session`/`account`/
 `verification`) are created by the app's own migrations on first request —

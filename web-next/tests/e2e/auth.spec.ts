@@ -118,3 +118,25 @@ test("a signed-in user visiting sign-in is sent home", async ({ page }) => {
 	await page.goto("/sign-in");
 	await expect(page).toHaveURL("/");
 });
+
+test("a signed-in user can sign out from the sessions masthead and sign in again", async ({
+	page,
+}) => {
+	await page.goto("/");
+	const signOut = page.getByRole("button", { name: "sign out" });
+	await expect(signOut).toBeVisible();
+
+	await page.keyboard.press("Tab");
+	await expect(signOut).toBeFocused();
+	await page.keyboard.press("Enter");
+	await expect(page).toHaveURL("/sign-in");
+
+	await page.goto("/");
+	await expect(page).toHaveURL("/sign-in");
+
+	await page
+		.getByRole("button", { name: `continue as ${E2E_LOGIN} (test bypass)` })
+		.click();
+	await expect(page).toHaveURL("/");
+	await expect(page.getByRole("banner").getByText("Spaces")).toBeVisible();
+});
