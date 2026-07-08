@@ -9,6 +9,12 @@
 export const TARGETS = {
 	build: [".next"],
 	data: [".data"],
+	"e2e-data": [
+		".data/e2e.db",
+		".data/e2e.db-shm",
+		".data/e2e.db-wal",
+		".data/sessions-spec.lock",
+	],
 	artifacts: [
 		"output",
 		"playwright-report",
@@ -25,7 +31,7 @@ export const TARGETS = {
 export const DEFAULT_TARGETS = ["build", "data", "artifacts"];
 
 export const USAGE =
-	"usage: pnpm run clean [build|data|artifacts|deps|all]... [--dry-run]";
+	"usage: pnpm run clean [build|data|e2e-data|artifacts|deps|all]... [--dry-run]";
 
 /**
  * Expands target names into a deduplicated list of web-next-relative paths.
