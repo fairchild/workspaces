@@ -13,6 +13,8 @@ struct DesktopUISmokeAutomationTests {
             DesktopUISmokeAutomationConfiguration.repoPathEnvironmentKey: "/tmp/repo",
             DesktopUISmokeAutomationConfiguration.workspaceNameEnvironmentKey: "ui-smoke-v1",
             DesktopUISmokeAutomationConfiguration.eventsPathEnvironmentKey: "/tmp/events.jsonl",
+            DesktopUISmokeAutomationConfiguration.selectDriverEnvironmentKey: "api",
+            DesktopUISmokeAutomationConfiguration.createDriverEnvironmentKey: "api",
         ]
 
         let configuration = DesktopUISmokeAutomationConfiguration.from(environment: environment)
@@ -20,6 +22,8 @@ struct DesktopUISmokeAutomationTests {
         #expect(configuration?.repoURL.path == "/tmp/repo")
         #expect(configuration?.workspaceName == "ui-smoke-v1")
         #expect(configuration?.eventsURL.path == "/tmp/events.jsonl")
+        #expect(configuration?.selectDriver == .api)
+        #expect(configuration?.createDriver == .api)
     }
 
     @Test("Configuration ignores other automation modes")
@@ -150,13 +154,50 @@ struct DesktopUISmokeAutomationTests {
         #expect(events.filter { $0 == "launch_ready" }.count == 1)
     }
 
-    private static func environment(eventsURL: URL) -> [String: String] {
-        [
+    @Test("API select handoff completes scenario after selected workspace focuses")
+    @MainActor
+    func apiSelectHandoffCompletesScenarioAfterFocus() async throws {
+        let eventsURL = Self.temporaryEventsURL()
+        defer { try? FileManager.default.removeItem(at: eventsURL) }
+
+        let controller = DesktopUISmokeAutomationController(
+            environment: Self.environment(
+                eventsURL: eventsURL,
+                extra: [DesktopUISmokeAutomationConfiguration.selectDriverEnvironmentKey: "api"]
+            )
+        )
+        let repo = Repo(name: "repo", localPath: URL(fileURLWithPath: "/tmp/repo"))
+        let workspace = Workspace(
+            name: "ui-smoke-v1",
+            path: URL(fileURLWithPath: "/tmp/repo-workspace"),
+            sourceRepo: repo
+        )
+
+        await controller.noteAwaitingAPISelect(workspace: workspace)
+        let sessionID = UUID()
+        await controller.noteTerminalSessionAttached(
+            kind: .workspace,
+            sessionID: sessionID,
+            scopePath: "/tmp/repo-workspace"
+        )
+        await controller.noteSurfaceFocused(sessionID: sessionID)
+
+        let events = try Self.readEventTypes(at: eventsURL, waitingFor: "scenario_complete")
+        #expect(events.contains("awaiting_api_select"))
+        #expect(events.contains("terminal_session_attached"))
+        #expect(events.contains("surface_focused"))
+        #expect(events.last == "scenario_complete")
+    }
+
+    private static func environment(eventsURL: URL, extra: [String: String] = [:]) -> [String: String] {
+        var environment = [
             DesktopUISmokeAutomationConfiguration.modeEnvironmentKey: "desktop-ui-smoke",
             DesktopUISmokeAutomationConfiguration.repoPathEnvironmentKey: "/tmp/repo",
             DesktopUISmokeAutomationConfiguration.workspaceNameEnvironmentKey: "ui-smoke-v1",
             DesktopUISmokeAutomationConfiguration.eventsPathEnvironmentKey: eventsURL.path,
         ]
+        environment.merge(extra) { _, new in new }
+        return environment
     }
 
     private static func temporaryEventsURL() -> URL {
@@ -164,16 +205,24 @@ struct DesktopUISmokeAutomationTests {
             .appendingPathComponent("desktop-ui-smoke-\(UUID().uuidString).jsonl")
     }
 
-    private static func readEvents(at url: URL) throws -> [[String: Any]] {
+    private static func readEvents(at url: URL, waitingFor eventType: String? = nil) throws -> [[String: Any]] {
         // Events are written by a background actor; allow a brief settle.
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {
-            if let data = try? Data(contentsOf: url), !data.isEmpty {
+            if let events = try? parseEvents(at: url), !events.isEmpty {
+                if let eventType, !events.contains(where: { $0["type"] as? String == eventType }) {
+                    Thread.sleep(forTimeInterval: 0.02)
+                    continue
+                }
                 break
             }
             Thread.sleep(forTimeInterval: 0.02)
         }
 
+        return try parseEvents(at: url)
+    }
+
+    private static func parseEvents(at url: URL) throws -> [[String: Any]] {
         let contents = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
         return
             contents
@@ -184,7 +233,7 @@ struct DesktopUISmokeAutomationTests {
             }
     }
 
-    private static func readEventTypes(at url: URL) throws -> [String] {
-        try readEvents(at: url).compactMap { $0["type"] as? String }
+    private static func readEventTypes(at url: URL, waitingFor eventType: String? = nil) throws -> [String] {
+        try readEvents(at: url, waitingFor: eventType).compactMap { $0["type"] as? String }
     }
 }
