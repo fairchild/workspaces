@@ -25,7 +25,7 @@ function SessionRow({ session, index }: { session: SessionListItem; index: numbe
 						{session.title}
 					</span>
 				) : (
-					<span className="font-serif text-body text-faint italic transition-colors group-hover:text-accent">
+					<span className="font-serif text-body text-hint italic transition-colors group-hover:text-accent">
 						Untitled session
 					</span>
 				)}
@@ -36,7 +36,7 @@ function SessionRow({ session, index }: { session: SessionListItem; index: numbe
 					{session.status !== "active" && (
 						<>
 							<span className="text-faint">·</span>
-							<span className="text-faint">{session.status}</span>
+							<span className="text-hint">{session.status}</span>
 						</>
 					)}
 				</span>
@@ -65,7 +65,7 @@ export default async function SessionsHome() {
 						<p className="font-serif text-body text-muted italic">
 							No sessions yet.
 						</p>
-						<p className="mt-2 mb-10 font-mono text-caption text-faint">
+						<p className="mt-2 mb-10 font-mono text-caption text-hint">
 							Start one on a repository.
 						</p>
 						<div className="w-full max-w-[380px]">
@@ -74,7 +74,7 @@ export default async function SessionsHome() {
 					</div>
 				) : (
 					<>
-						<h1 className="mb-2 px-2.5 font-mono text-label font-medium tracking-[.16em] text-faint uppercase">
+						<h1 className="mb-2 px-2.5 font-mono text-label font-medium tracking-[.16em] text-hint uppercase">
 							Sessions
 						</h1>
 						<ul>

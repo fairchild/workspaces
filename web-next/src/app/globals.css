@@ -15,8 +15,16 @@
 	--paper: #f7f4ed;
 	--raised: #fdfbf6;
 	--ink: #26221a;
-	--muted: #7a7261;
-	--faint: #aca492;
+	--muted: #736b5b;
+	/* Decorative-only: hairlines, separators, icon-glyph buttons. Needs only
+	   the 3:1 WCAG floor for graphical objects (1.4.11), never carries
+	   readable words — see --hint below for that (#806). */
+	--faint: #908a7b;
+	/* Readable small text that used to ride on --faint (captions, hints,
+	   timestamps, placeholders, ledger verbs/meta): #806 split this out so it
+	   can hit the 4.5:1 AA floor for text without flattening the decorative
+	   marks that shared the old --faint value. */
+	--hint: #726c60;
 	--line: #e7e1d2;
 	--line-strong: #dcd3bf;
 	--accent: #a15c31;
@@ -55,6 +63,11 @@
 	--ink: #eae4d6;
 	--muted: #a79e8c;
 	--faint: #837a69;
+	/* Text token (#806): dark --faint was already ~4.3:1 (close but not
+	   quite AA for small text) — --hint lightens further so readable text
+	   clears 4.5:1 while --faint stays put for hairlines/marks (unchanged,
+	   still comfortably ≥3:1). */
+	--hint: #8f8778;
 	--line: rgba(234, 222, 196, 0.1);
 	--line-strong: rgba(234, 222, 196, 0.2);
 	--accent: #d89a62;
@@ -92,6 +105,7 @@
 	--color-ink: var(--ink);
 	--color-muted: var(--muted);
 	--color-faint: var(--faint);
+	--color-hint: var(--hint);
 	--color-line: var(--line);
 	--color-line-strong: var(--line-strong);
 	--color-accent: var(--accent);

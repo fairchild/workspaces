@@ -129,7 +129,7 @@ export function SessionView({
 						<p className="font-serif text-body text-muted italic">
 							{session.empty.title}
 						</p>
-						<p className="font-mono text-caption text-faint">
+						<p className="font-mono text-caption text-hint">
 							{session.empty.hint}
 						</p>
 					</div>

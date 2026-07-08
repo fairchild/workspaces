@@ -62,7 +62,7 @@ export function MessageArticle({
 					: undefined
 			}
 		>
-			<div className="mb-3.5 flex items-baseline gap-3 font-mono text-label font-medium tracking-[.16em] uppercase text-faint">
+			<div className="mb-3.5 flex items-baseline gap-3 font-mono text-label font-medium tracking-[.16em] uppercase text-hint">
 				{role === "user" && (
 					<span aria-hidden className="h-px w-3.5 self-center bg-faint" />
 				)}

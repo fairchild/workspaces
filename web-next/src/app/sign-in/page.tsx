@@ -22,7 +22,7 @@ export default async function SignInPage() {
 		<main className="animate-rise flex min-h-screen flex-col items-center justify-center gap-8 px-5">
 			<div className="flex flex-col items-center gap-2 text-center">
 				<h1 className="font-serif text-5xl text-ink italic">Spaces</h1>
-				<p className="font-mono text-[12px] tracking-[.04em] text-faint">
+				<p className="font-mono text-[12px] tracking-[.04em] text-hint">
 					coding sessions in the browser
 				</p>
 			</div>
@@ -32,7 +32,7 @@ export default async function SignInPage() {
 					<form action={testSignInAction}>
 						<button
 							type="submit"
-							className="font-mono text-[12px] text-faint underline decoration-line-strong underline-offset-4 transition-colors hover:text-accent"
+							className="font-mono text-[12px] text-hint underline decoration-line-strong underline-offset-4 transition-colors hover:text-accent"
 						>
 							continue as {bypassLogin} (test bypass)
 						</button>

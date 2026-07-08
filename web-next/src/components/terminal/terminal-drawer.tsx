@@ -269,7 +269,7 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 			>
 				{/* A div, not <header>: the drawer bar is chrome, not a landmark —
 				    and the page's one banner stays the masthead. */}
-				<div className="flex h-[30px] items-center gap-2 border-b border-line px-3 font-mono text-stat tracking-[.03em] text-faint">
+				<div className="flex h-[30px] items-center gap-2 border-b border-line px-3 font-mono text-stat tracking-[.03em] text-hint">
 					<span className="text-muted">terminal</span>
 					{phase !== "idle" && (
 						<span data-testid="terminal-status">— {statusLabel[phase]}</span>
@@ -278,7 +278,7 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 						<button
 							type="button"
 							onClick={() => void connect()}
-							className="rounded-[5px] px-1.5 py-0.5 text-faint underline decoration-dotted underline-offset-2 hover:text-ink"
+							className="rounded-[5px] px-1.5 py-0.5 text-hint underline decoration-dotted underline-offset-2 hover:text-ink"
 						>
 							{phase === "disconnected" ? "reconnect" : "check again"}
 						</button>
@@ -303,7 +303,7 @@ export function TerminalDrawer({ sessionId }: { sessionId: string }) {
 							<p className="font-serif text-body text-muted italic">
 								{phase === "no-sandbox" ? "No live sandbox." : "Terminal unavailable."}
 							</p>
-							<p className="max-w-[52ch] font-mono text-caption text-faint">
+							<p className="max-w-[52ch] font-mono text-caption text-hint">
 								{note}
 								{phase === "no-sandbox" &&
 									" — start a turn and the terminal attaches to the same sandbox it runs in."}
