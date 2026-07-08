@@ -196,7 +196,6 @@ describe("startTurn — completion notification", () => {
 		const session = await createSession(handle, {
 			id: "failed-session",
 			provider: "mock",
-			repoId: "fairchild/workspaces",
 			title: "Broken turn",
 		});
 
@@ -228,7 +227,6 @@ describe("startTurn — completion notification", () => {
 		const session = await createSession(handle, {
 			id: "stopped-session",
 			provider: "mock",
-			repoId: "fairchild/workspaces",
 			title: "Stopped turn",
 		});
 
