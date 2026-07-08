@@ -25,10 +25,15 @@ import { EventEmitter } from "node:events";
 import type { DatabaseHandle } from "../db/client";
 import {
 	appendEvents,
+	getSession,
 	type Session,
 	titleSessionIfEmpty,
 	updateSession,
 } from "../db/sessions";
+import {
+	notifyTurnCompleted,
+	type TurnNotificationOutcome,
+} from "../notify/turn-notification";
 import { deriveSessionTitle } from "../session-title";
 import {
 	type ComputeProvider,
@@ -145,16 +150,56 @@ export async function startTurn(
 	}
 	const fromSeq = userSeq + 1;
 	const controller = new AbortController();
-	const ingest = ingestTurn(handle, session, userText, provider, controller.signal);
-	activeTurns.set(session.id, { fromSeq, startedAt: Date.now(), controller });
-	// Deregister once this turn settles — but only if a newer turn hasn't
-	// already taken the slot (guards a fast resend replacing the entry).
-	void ingest.finally(() => {
-		if (activeTurns.get(session.id)?.fromSeq === fromSeq) {
-			activeTurns.delete(session.id);
-		}
-	});
+	const startedAt = Date.now();
+	const ingest = ingestTurn(handle, session, userText, provider, controller.signal).then(
+		(outcome) => {
+			// Deregister once this turn settles — but only if a newer turn hasn't
+			// already taken the slot (guards a fast resend replacing the entry).
+			if (activeTurns.get(session.id)?.fromSeq === fromSeq) {
+				activeTurns.delete(session.id);
+			}
+			// Fire after durability and active-turn cleanup; never let delivery
+			// affect the turn's own promise or persisted transcript.
+			try {
+				void emitTurnCompletionNotification(
+					handle,
+					session,
+					outcome,
+					Date.now() - startedAt,
+				);
+			} catch (error) {
+				console.error(
+					`[turn-ingest] turn completion notification failed for ${session.id}`,
+					error,
+				);
+			}
+		},
+		(error) => {
+			if (activeTurns.get(session.id)?.fromSeq === fromSeq) {
+				activeTurns.delete(session.id);
+			}
+			throw error;
+		},
+	);
+	activeTurns.set(session.id, { fromSeq, startedAt, controller });
 	return { fromSeq, ingest };
+}
+
+async function emitTurnCompletionNotification(
+	handle: DatabaseHandle,
+	session: Session,
+	outcome: TurnNotificationOutcome,
+	durationMs: number,
+): Promise<void> {
+	try {
+		const currentSession = (await getSession(handle, session.id)) ?? session;
+		await notifyTurnCompleted({ session: currentSession, outcome, durationMs });
+	} catch (error) {
+		console.error(
+			`[turn-ingest] turn completion notification failed for ${session.id}`,
+			error,
+		);
+	}
 }
 
 /** The abort-race verdict: the source yielded (or finished), or the stop won. */
@@ -208,7 +253,7 @@ async function ingestTurn(
 	userText: string,
 	provider: ComputeProvider,
 	signal: AbortSignal,
-): Promise<void> {
+): Promise<TurnNotificationOutcome> {
 	let closed = false;
 	try {
 		const iterator = provider
@@ -241,14 +286,16 @@ async function ingestTurn(
 			]);
 			notify(session.id);
 		}
+		return "completed";
 	} catch (error) {
-		if (closed) return; // the run already has its terminal `done` — never a second
+		if (closed) return "completed"; // the run already has its terminal `done` — never a second
 		const message = error instanceof Error ? error.message : "the turn failed";
 		await appendEvents(handle, session.id, [
 			{ role: "assistant", chunk: { type: "error", content: message } },
 			{ role: "assistant", chunk: { type: "done", content: "", metadata: { aborted: true } } },
 		]);
 		notify(session.id);
+		return error instanceof TurnStoppedError ? "stopped" : "failed";
 	}
 }
 
