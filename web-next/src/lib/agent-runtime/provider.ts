@@ -20,9 +20,20 @@ export interface SessionResumeHandle {
 	resumeState: string;
 }
 
+export interface TurnRepo {
+	fullName: string;
+	defaultBranch: string | null;
+}
+
 export interface TurnRequest {
 	sessionId: string;
 	userMessage: string;
+	/**
+	 * The repo selected when the session was created. Repo-less sessions (for
+	 * example POST /api/sessions probes) leave this null/undefined and let the
+	 * provider use its configured fallback.
+	 */
+	repo?: TurnRepo | null;
 	/** Prior parked session to resume, or null/undefined for a fresh turn. */
 	resume?: SessionResumeHandle | null;
 	/**

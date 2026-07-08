@@ -21,6 +21,7 @@ import { TERMINAL_INSTALL_SCRIPT } from "../terminal/install";
 import type {
 	ComputeProvider,
 	SessionResumeHandle,
+	TurnRepo,
 	TurnRequest,
 } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
@@ -32,8 +33,9 @@ type CreateClaudeCode =
 type CreateVercelSandbox =
 	typeof import("@ai-sdk/sandbox-vercel")["createVercelSandbox"];
 
-/** Repo the agent clones into its workspace and opens its PR against. */
-const TARGET_REPO = process.env.AGENT_TARGET_REPO ?? "fairchild/workspaces";
+/** Fallback repo for repo-less API-created sessions. */
+const FALLBACK_TARGET_REPO =
+	process.env.AGENT_TARGET_REPO ?? "fairchild/workspaces";
 /** Port the in-sandbox harness bridge binds; must be declared on the sandbox. */
 const BRIDGE_PORT = 4000;
 /**
@@ -69,6 +71,43 @@ const TEMPLATE_NAME = "web-next-claude-code";
  */
 const BOOTSTRAP_HASH = "claude-code-cli-v2-terminal";
 
+// GitHub owner/name shape only. Session creation performs existence/access
+// validation; the provider repeats this cheap shape guard before interpolating
+// into the setup script.
+const REPO_FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
+
+type TargetRepoResolution =
+	| { ok: true; repo: TurnRepo }
+	| { ok: false; error: string };
+
+export function resolveTargetRepo(
+	request: Pick<TurnRequest, "repo">,
+): TargetRepoResolution {
+	const candidate = request.repo ?? {
+		fullName: FALLBACK_TARGET_REPO,
+		defaultBranch: null,
+	};
+	if (
+		typeof candidate.fullName !== "string" ||
+		!REPO_FULL_NAME.test(candidate.fullName)
+	) {
+		return {
+			ok: false,
+			error: `invalid repository full name for agent runtime: ${JSON.stringify(candidate.fullName)}`,
+		};
+	}
+	return {
+		ok: true,
+		repo: {
+			fullName: candidate.fullName,
+			defaultBranch:
+				typeof candidate.defaultBranch === "string"
+					? candidate.defaultBranch
+					: null,
+		},
+	};
+}
+
 /** A stable per-session branch the agent commits and opens its PR from. */
 function sessionBranch(sessionId: string): string {
 	return `agent/session-${sessionId.slice(0, 8)}`;
@@ -82,7 +121,10 @@ function sessionBranch(sessionId: string): string {
  * creates the session branch — all idempotent, so a resumed sandbox with the
  * clone already present is a no-op and a fresh fallback sandbox re-clones.
  */
-function buildSessionSetupScript(sessionId: string): string {
+export function buildSessionSetupScript(
+	sessionId: string,
+	repo: TurnRepo,
+): string {
 	const branch = sessionBranch(sessionId);
 	return [
 		"set -e",
@@ -93,9 +135,17 @@ function buildSessionSetupScript(sessionId: string): string {
 		"git config --global user.email 'agent@users.noreply.github.com'",
 		'printf "%s" "$GH_TOKEN" > /tmp/gh_token',
 		`if [ ! -d ${WORKSPACE_DIR}/.git ]; then`,
-		`  git clone --depth 50 https://github.com/${TARGET_REPO}.git ${WORKSPACE_DIR}`,
+		`  if [ -n "$DEFAULT_BRANCH" ]; then`,
+		`    git clone --depth 50 --branch "$DEFAULT_BRANCH" https://github.com/${repo.fullName}.git ${WORKSPACE_DIR}`,
+		"  else",
+		`    git clone --depth 50 https://github.com/${repo.fullName}.git ${WORKSPACE_DIR}`,
+		"  fi",
 		`  git -C ${WORKSPACE_DIR} checkout -b ${branch}`,
 		"fi",
+		`if [ -z "$DEFAULT_BRANCH" ]; then`,
+		`  DEFAULT_BRANCH="$(git -C ${WORKSPACE_DIR} symbolic-ref --quiet --short refs/remotes/origin/HEAD | sed 's#^origin/##' || true)"`,
+		"fi",
+		'printf "%s" "$DEFAULT_BRANCH" > /tmp/default_branch',
 		"",
 	].join("\n");
 }
@@ -263,19 +313,39 @@ export async function* mapFullStream(
  * session already carries that context in its harness conversation, so it
  * receives the user's message alone.
  */
-function buildPrompt(
+function baseBranchLabel(repo: TurnRepo): string {
+	return repo.defaultBranch
+		? `\`${repo.defaultBranch}\``
+		: "the clone's default HEAD (`cat /tmp/default_branch`)";
+}
+
+function promptCurlBase(repo: TurnRepo): string {
+	return repo.defaultBranch ?? "$(cat /tmp/default_branch)";
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
+export function buildPrompt(
 	userMessage: string,
 	sessionId: string,
 	firstTurn: boolean,
+	repo: TurnRepo,
 ): string {
 	if (!firstTurn) return userMessage;
 	const branch = sessionBranch(sessionId);
+	const base = promptCurlBase(repo);
+	const baseLabel = baseBranchLabel(repo);
+	const baseAssignment = repo.defaultBranch
+		? `BASE_BRANCH=${shellQuote(base)}`
+		: `BASE_BRANCH="${base}"`;
 	return [
-		`You are working inside a persistent clone of the GitHub repository ${TARGET_REPO}. The current directory (${WORKSPACE_DIR}) is the repo root, checked out on branch \`${branch}\`. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
+		`You are working inside a persistent clone of the GitHub repository ${repo.fullName}. The current directory (${WORKSPACE_DIR}) is the repo root, checked out on branch \`${branch}\`, created from ${baseLabel}. This workspace and our conversation persist across turns — later messages continue in the same working copy.`,
 		``,
 		`Working notes:`,
 		`- Relative paths and git commands resolve against the repo (you are inside it) — edit and \`git status\`/\`git diff\` normally.`,
-		`- To open or update a pull request: commit, \`git push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token, e.g. \`curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${TARGET_REPO}/pulls -d '{"title":"…","head":"${branch}","base":"main","body":"…"}'\`. Report the \`html_url\`.`,
+		`- To open or update a pull request: commit, \`git push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token against base ${baseLabel}, e.g. \`${baseAssignment}; curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${repo.fullName}/pulls -d "{\\"title\\":\\"…\\",\\"head\\":\\"${branch}\\",\\"base\\":\\"$BASE_BRANCH\\",\\"body\\":\\"…\\"}"\`. Report the \`html_url\`.`,
 		`- Only open a PR when the request calls for one; otherwise just do the work and summarize it.`,
 		``,
 		`The user's request:`,
@@ -448,9 +518,24 @@ export const vercelProvider: ComputeProvider = {
 	id: "vercel",
 	async *runTurn(request: TurnRequest): AsyncIterable<StreamChunk> {
 		const startedAt = Date.now();
+		const targetRepo = resolveTargetRepo(request);
+		if (!targetRepo.ok) {
+			yield {
+				type: "error",
+				content: targetRepo.error,
+				metadata: { code: "invalid_repo" },
+			};
+			yield {
+				type: "done",
+				content: "",
+				metadata: { durationMs: Date.now() - startedAt, aborted: true },
+			};
+			return;
+		}
+		const repo = targetRepo.repo;
 
 		yield { type: "status", content: "Minting GitHub credential" };
-		const { token } = await mintInstallationToken(TARGET_REPO);
+		const { token } = await mintInstallationToken(repo.fullName);
 
 		yield { type: "status", content: "Preparing sandbox runtime" };
 		const [{ HarnessAgent }, { createClaudeCode }, { createVercelSandbox }] =
@@ -485,11 +570,14 @@ export const vercelProvider: ComputeProvider = {
 					sandbox = session as RunnableSandbox;
 					await session.writeTextFile({
 						path: "/tmp/session-setup.sh",
-						content: buildSessionSetupScript(request.sessionId),
+						content: buildSessionSetupScript(request.sessionId, repo),
 					});
 					const res = await session.run({
 						command: "bash /tmp/session-setup.sh",
-						env: { GH_TOKEN: token },
+						env: {
+							GH_TOKEN: token,
+							DEFAULT_BRANCH: repo.defaultBranch ?? "",
+						},
 					});
 					if (res.exitCode !== 0)
 						throw new Error(
@@ -561,7 +649,7 @@ export const vercelProvider: ComputeProvider = {
 		try {
 			const result = await agent.stream({
 				session,
-				prompt: buildPrompt(request.userMessage, request.sessionId, !resumed),
+				prompt: buildPrompt(request.userMessage, request.sessionId, !resumed, repo),
 			});
 			let doneChunk: StreamChunk | undefined;
 			// Tracks every real toolCallId this turn so the synthetic Diff rows

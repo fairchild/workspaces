@@ -1,12 +1,16 @@
 import { describe, expect, test } from "vitest";
 import {
+	buildPrompt,
+	buildSessionSetupScript,
 	canonicalToolName,
 	createHarness,
 	errorText,
 	mapFullStream,
 	parseGitDiff,
+	resolveTargetRepo,
 	toolResultContent,
 	uniqueDiffToolCallId,
+	vercelProvider,
 } from "./vercel-provider";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -20,6 +24,95 @@ async function collect(parts: Part[]): Promise<StreamChunk[]> {
 	for await (const chunk of mapFullStream(source(), 0)) out.push(chunk);
 	return out;
 }
+
+describe("repo targeting", () => {
+	test("resolves the repo carried on the turn request", () => {
+		expect(
+			resolveTargetRepo({
+				repo: {
+					fullName: "fairchild/web-next-fixtures",
+					defaultBranch: "trunk",
+				},
+			}),
+		).toEqual({
+			ok: true,
+			repo: {
+				fullName: "fairchild/web-next-fixtures",
+				defaultBranch: "trunk",
+			},
+		});
+	});
+
+	test("builds setup and first-turn prompt from the request repo", () => {
+		const repo = {
+			fullName: "fairchild/web-next-fixtures",
+			defaultBranch: "trunk",
+		};
+
+		const script = buildSessionSetupScript("abcdef123456", repo);
+		expect(script).toContain(
+			"git clone --depth 50 --branch \"$DEFAULT_BRANCH\" https://github.com/fairchild/web-next-fixtures.git",
+		);
+		expect(script).toContain(
+			'printf "%s" "$DEFAULT_BRANCH" > /tmp/default_branch',
+		);
+
+		const prompt = buildPrompt("Fix the failing test", "abcdef123456", true, repo);
+		expect(prompt).toContain(
+			"persistent clone of the GitHub repository fairchild/web-next-fixtures",
+		);
+		expect(prompt).toContain(
+			"https://api.github.com/repos/fairchild/web-next-fixtures/pulls",
+		);
+		expect(prompt).toContain("BASE_BRANCH='trunk'");
+		expect(prompt).toContain('\\"base\\":\\"$BASE_BRANCH\\"');
+		expect(prompt).not.toContain("fairchild/workspaces");
+		expect(prompt).not.toContain('"base":"main"');
+	});
+
+	test("uses the clone default HEAD fallback when the repo row has no default branch", () => {
+		const repo = {
+			fullName: "fairchild/web-next-fixtures",
+			defaultBranch: null,
+		};
+
+		const script = buildSessionSetupScript("abcdef123456", repo);
+		expect(script).toContain(
+			"git clone --depth 50 https://github.com/fairchild/web-next-fixtures.git",
+		);
+		expect(script).toContain("symbolic-ref --quiet --short refs/remotes/origin/HEAD");
+
+		const prompt = buildPrompt("Fix the failing test", "abcdef123456", true, repo);
+		expect(prompt).toContain("the clone's default HEAD");
+		expect(prompt).toContain('BASE_BRANCH="$(cat /tmp/default_branch)"');
+	});
+
+	test("rejects invalid repo full names with structured chunks before setup", async () => {
+		const chunks: StreamChunk[] = [];
+		for await (const chunk of vercelProvider.runTurn({
+			sessionId: "s-bad-repo",
+			userMessage: "go",
+			repo: {
+				fullName: "fairchild/workspaces;rm -rf /",
+				defaultBranch: null,
+			},
+		})) {
+			chunks.push(chunk);
+		}
+
+		expect(chunks.map((chunk) => chunk.type)).toEqual(["error", "done"]);
+		expect(chunks[0]).toMatchObject({
+			type: "error",
+			content:
+				'invalid repository full name for agent runtime: "fairchild/workspaces;rm -rf /"',
+			metadata: { code: "invalid_repo" },
+		});
+		expect(chunks[1]).toMatchObject({
+			type: "done",
+			metadata: { aborted: true },
+		});
+	});
+});
 
 describe("mapFullStream", () => {
 	test("maps deltas and tool parts onto StreamChunks", async () => {

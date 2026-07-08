@@ -40,6 +40,7 @@ import {
 	type ComputeProvider,
 	getProvider,
 	type SessionResumeHandle,
+	type TurnRepo,
 } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 
@@ -129,6 +130,7 @@ export async function startTurn(
 	userText: string,
 	provider: ComputeProvider = getProvider(session.provider),
 ): Promise<StartedTurn> {
+	const repo = await resolveTurnRepo(handle, session);
 	const userSeq = await appendEvents(handle, session.id, [
 		{ role: "user", chunk: { type: "text", content: userText } },
 	]);
@@ -152,7 +154,7 @@ export async function startTurn(
 	const fromSeq = userSeq + 1;
 	const controller = new AbortController();
 	const startedAt = Date.now();
-	const ingest = ingestTurn(handle, session, userText, provider, controller.signal).then(
+	const ingest = ingestTurn(handle, session, userText, provider, controller.signal, repo).then(
 		(outcome) => {
 			// Deregister once this turn settles — but only if a newer turn hasn't
 			// already taken the slot (guards a fast resend replacing the entry).
@@ -211,6 +213,16 @@ async function emitTurnCompletionNotification(
 	}
 }
 
+async function resolveTurnRepo(
+	handle: DatabaseHandle,
+	session: Session,
+): Promise<TurnRepo | null> {
+	if (!session.repoId) return null;
+	const repo = await getRepo(handle, session.repoId);
+	if (!repo) throw new Error(`session repo not found: ${session.repoId}`);
+	return { fullName: repo.fullName, defaultBranch: repo.defaultBranch };
+}
+
 /** The abort-race verdict: the source yielded (or finished), or the stop won. */
 type NextOrAborted<T> = { aborted: true } | { aborted: false; result: IteratorResult<T> };
 
@@ -262,6 +274,7 @@ async function ingestTurn(
 	userText: string,
 	provider: ComputeProvider,
 	signal: AbortSignal,
+	repo: TurnRepo | null,
 ): Promise<TurnNotificationOutcome> {
 	let closed = false;
 	// An `error` chunk anywhere in the stream marks the turn failed for the
@@ -274,6 +287,7 @@ async function ingestTurn(
 			.runTurn({
 				sessionId: session.id,
 				userMessage: userText,
+				repo,
 				resume: resumeHandle(session),
 				model: session.model,
 			})
