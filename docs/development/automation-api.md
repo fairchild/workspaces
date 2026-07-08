@@ -85,6 +85,9 @@ WorkSpaces terminal tile. See
 - Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
 - Mutation verbs enter the same UI gesture the equivalent user action does — they
   never write the data layer directly. See [Verb contract](#verb-contract-verbs--clicks).
+- App Intents are in-process, user-initiated, OS-mediated veneers; they do not
+  require the Automation API or Operator Scope experiments and do not expose a
+  socket or process-readable operator credential.
 - Browser **read** (listing WorkSpaces-owned web surfaces) is supported; browser
   **mutation** (navigating, clicking, evaluating JS), resize/equalize, and global
   control remain out of V1.
@@ -136,6 +139,25 @@ An id that resolves to no tracked repo or workspace fails `invalid_request` (it 
 not a gesture outcome — nothing was driven). App Intents and any companion app call
 the same verb layer, so "Siri said done" and "the sidebar updated" are the same
 event.
+
+### App Intents veneer
+
+The Shortcuts/Siri/Spotlight surface exposes `workspace.list`, `workspace.select`,
+and `workspace.create` only as an App Intents veneer over this automation spine.
+Entity queries list repos and workspaces through `automationWorkspaces`, and
+mutation intents call `automationSelectWorkspace` / `automationCreateWorkspace`
+on the app-side controller with an in-process operator handle. They do not read
+or write SwiftData directly, do not call workspace services directly, and do not
+carry their own fallback semantics. If the controller reports `unsupported`
+because no live window is attached, the intent surfaces that error; if the verb
+returns `confirmation_required`, the intent maps it to the native App Intents
+confirmation prompt before reporting the outcome.
+
+App Intents intentionally work independently of the Automation API and Operator
+Scope experiments. They are user-initiated by Shortcuts/Siri/Spotlight and run
+in process, so their handle is registered only in memory and never leaves the
+app or exposes a socket. The experiments continue to gate the external socket
+surface and the process-readable operator credential used by CLI/dev/CI callers.
 
 ## Envelope
 
