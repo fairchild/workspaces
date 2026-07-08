@@ -101,11 +101,14 @@ test("mobile status chrome keeps compose gutter and 44px hit areas", async ({
 		.boundingBox();
 	expect(sendBox, "send button box").not.toBeNull();
 	if (sendBox && handleBox) {
+		// Inside the halo/send overlap but clear of the button's 10px corner
+		// radius — hit-testing honors border-radius, so true corner-arc pixels
+		// belong to no button.
 		const corner = await hitAt(
-			sendBox.x + sendBox.width - 2,
+			sendBox.x + sendBox.width - 12,
 			sendBox.y + sendBox.height - 2,
 		);
-		expect(corner, "send button owns its own corner").toBe("Send");
+		expect(corner, "send button owns its overlapped edge").toBe("Send");
 		const halo = await hitAt(
 			handleBox.x + handleBox.width - 4,
 			handleBox.y + handleBox.height / 2,
