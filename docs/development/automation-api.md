@@ -64,9 +64,10 @@ WorkSpaces terminal tile. See
   exits, and the credential file is removed on a clean exit. A credential left
   behind by a crashed launch fails closed — its handle no longer resolves
   against the fresh registry (`stale_handle`).
-- **Capture-only.** The operator capability set is `window.read` (list windows)
-  and `window.snapshot` (composited PNG of a listed window). Operator handles
-  never carry tile mutation or `input.write`.
+- **Capture-plus-read.** The operator capability set is `window.read` (list
+  windows) and `window.snapshot` (composited PNG of a listed window) from `[A1]`,
+  plus `workspace.read` (list repos and workspaces) from `[A2]`. All read-only —
+  operator handles never carry tile mutation or `input.write`.
 
 ## Invariants
 
@@ -115,6 +116,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/surfaces` | Returns visible terminal surfaces in the caller's window/app scope. |
 | `GET /v1/windows` | **Operator scope.** Returns the app's on-screen windows with stable identifiers (`window.read`). Keyed by the AppKit window number — the same identity `CGWindowList`/ScreenCaptureKit address. Requires an operator handle; a tile handle lacks `window.read` and fails `capability_denied`. |
 | `POST /v1/window/snapshot` | **Operator scope.** Returns a composited PNG of the app window named by the body's `windowID` (a `window.read` id). The capture includes the full window — sidebar chrome *and* the GhosttyKit terminal surface — and works with the app backgrounded (no activation). Requires `window.snapshot`; own-window only, so an id the app does not own fails `invalid_request`. See [Window snapshot](#window-snapshot). |
+| `GET /v1/workspaces` | **Operator scope.** Returns the app's tracked repos and workspaces with stable SwiftData model ids, names, and enough state to target: per workspace, its `status`, `isArchived`, `backend`, and whether it `isSelected`; per repo, whether it `isSelected`. Read-only — the stable-target list later `[A2]` orchestration verbs act on. Requires `workspace.read`; a tile handle lacks it and fails `capability_denied`. See [Workspace list](#workspace-list). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -145,6 +147,7 @@ handle.
 | `browser.read` | `GET /v1/web-surfaces` (read-only listing) and `GET /v1/web-surfaces/{id}/snapshot` (bounded PNG of a live surface); granted to default handles under the Automation API experiment |
 | `window.read` | `GET /v1/windows` (list the app's windows); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `window.snapshot` | `POST /v1/window/snapshot` (composited PNG of a listed window); granted only to operator handles, never to tile handles |
+| `workspace.read` | `GET /v1/workspaces` (list the app's repos and workspaces); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -229,6 +232,38 @@ that is not compositing (minimized, off the active Space, or locked screen) →
 (every composited path fails when the session is locked); that evidence keeps the
 VM / `tart-ui` fallback lane.
 
+## Workspace list
+
+`GET /v1/workspaces` (operator scope, `workspace.read`) returns the app's tracked
+repos and workspaces so later `[A2]` orchestration verbs have stable targets. It is
+read-only: no mutation rides this route.
+
+```json
+{
+  "repos": [
+    { "repoID": "…", "name": "workspaces", "path": "/Users/me/code/workspaces", "isSelected": true }
+  ],
+  "workspaces": [
+    { "workspaceID": "…", "repoID": "…", "name": "feature-a",
+      "path": "/Users/me/.workspaces/workspaces/feature-a", "branch": "feature-a",
+      "status": "active", "isArchived": false, "backend": "local", "isSelected": true }
+  ],
+  "system": { "capabilities": ["window.read", "window.snapshot", "workspace.read"] }
+}
+```
+
+- **Stable identity.** `repoID` and `workspaceID` are the SwiftData model ids —
+  stable across launches, the identity later verbs target. `workspaces[].repoID`
+  ties a workspace back to its source repo.
+- **Enough state to target.** Each workspace carries `status` (raw
+  `WorkspaceStatus`: `provisioning`/`active`/`stopped`/`archived`), `isArchived`,
+  `backend` (the backend identifier, e.g. `local`/`lume`), and `isSelected`
+  (whether it is the workspace currently selected in the app). Each repo carries
+  `isSelected` (whether it is the repo selected for its landing view).
+- **Live app state.** The listing reflects what the *running app* currently has,
+  read from the live SwiftData models and selection state — distinct from the
+  CLI's own local-state store (`workspaces ws list`).
+
 ## Error Codes
 
 | Code | Meaning |
@@ -269,18 +304,26 @@ workspaces input write 'echo hi'
 workspaces input write 'echo hi' --submit
 ```
 
-`workspaces window list` and `workspaces window snapshot` are the operator-scope
-commands. Unlike the tile-scoped commands, they read the per-launch operator
-credential file (minted next to the socket by an opt-in launch) rather than the
-injected terminal environment, so they work from any same-user shell outside a
-WorkSpaces tile. Absent the credential they fail closed with guidance.
+`workspaces window list`, `workspaces window snapshot`, and `workspaces workspace
+list` are the operator-scope commands. Unlike the tile-scoped commands, they read
+the per-launch operator credential file (minted next to the socket by an opt-in
+launch) rather than the injected terminal environment, so they work from any
+same-user shell outside a WorkSpaces tile. Absent the credential they fail closed
+with guidance.
 
 ```bash
 workspaces window list
 workspaces window list --json
 workspaces window snapshot --out shot.png            # main window, or first if none is main
 workspaces window snapshot --out shot.png --window 42 # a specific window.read id
+workspaces workspace list                            # repos + workspaces, human-readable
+workspaces workspace list --json                     # same, as the raw result envelope
 ```
+
+`workspace list` reads the running app's repos and workspaces (`workspace.read`),
+marking the currently-selected repo and workspace with a leading `*`. It is
+distinct from `workspaces ws list`, which lists the CLI's own local-state
+workspaces rather than what the app currently has.
 
 `window snapshot` writes the PNG to `--out` and, with no `--window`, targets the
 main window (falling back to the first listed) so the common "snapshot the app"
@@ -298,6 +341,7 @@ focus steal.
 | Window snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WindowSnapshotEncoder.swift` |
 | Operator credential store + provisioner | `Sources/WorkspaceManagerCore/Services/Automation/AutomationOperatorCredentialStore.swift` |
 | Window enumeration (AppKit → descriptors) | `Sources/WorkspaceManager/Views/MainWindow/AutomationWindowEnumerator.swift` |
+| Workspace inventory (SwiftData → descriptors) | `Sources/WorkspaceManager/Views/MainWindow/AutomationWorkspaceEnumerator.swift` |
 | Window snapshot capture (`CGWindowList`, MainActor) | `Sources/WorkspaceManager/Views/MainWindow/WindowSnapshotService.swift` |
 | Web-surface snapshot capture (MainActor) | `Sources/WorkspaceManager/Web/WebSurfaceSnapshotCapture.swift` |
 | CLI socket client | `Sources/WorkspaceManagerCore/Services/Automation/AutomationSocketClient.swift` |
@@ -328,10 +372,10 @@ V1 does not support browser mutation (navigating, clicking, filling, or
 evaluating JavaScript in a web surface), opening web URLs, tab title or metadata
 changes, writing into other tiles, resize/equalize, or global cross-workspace
 *mutation*. Those capabilities require separate product and safety review before
-they can be added. Read-only global window capture is the one reviewed
-exception — listing (`window.read`) and composited snapshots
-(`window.snapshot`) — gated behind the opt-in operator scope above, never
-granted to tile handles. Two reviewed exceptions widen the read/write surface
+they can be added. Read-only global reads are the reviewed operator-scope
+exceptions — window capture (`window.read` listing and `window.snapshot`
+composited snapshots) and the repo/workspace inventory (`workspace.read`) — gated
+behind the opt-in operator scope above, never granted to tile handles. Two reviewed exceptions widen the read/write surface
 deliberately: caller-scoped input injection ships as the experimental,
 double-gated `input.write` capability (see
 [Automation Input Write Decision](../decisions/automation-input-write.md)), and

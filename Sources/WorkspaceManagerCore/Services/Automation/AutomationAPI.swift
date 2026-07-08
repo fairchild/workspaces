@@ -19,10 +19,12 @@ public enum AutomationAPI {
     /// Kept separate from `v1Capabilities` so default handles never widen.
     public static let inputWriteCapabilities = v1Capabilities + [AutomationCapability.inputWrite]
 
-    /// Capabilities granted to an opt-in operator handle (`[A1]`). Capture-only: `window.read`
-    /// lists the app's windows and `window.snapshot` returns a composited PNG of one of them.
-    /// Operator handles never carry tile mutation or `input.write` capabilities.
-    public static let operatorCapabilities = [AutomationCapability.windowRead, .windowSnapshot]
+    /// Capabilities granted to an opt-in operator handle. Capture-only plus read-only inventory:
+    /// `window.read` lists the app's windows, `window.snapshot` returns a composited PNG of one of
+    /// them (`[A1]`), and `workspace.read` lists the app's repos and workspaces so later
+    /// orchestration verbs have stable targets (`[A2]`). Operator handles never carry tile mutation
+    /// or `input.write` capabilities.
+    public static let operatorCapabilities = [AutomationCapability.windowRead, .windowSnapshot, .workspaceRead]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
 
@@ -54,6 +56,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case browserRead = "browser.read"
     case windowRead = "window.read"
     case windowSnapshot = "window.snapshot"
+    case workspaceRead = "workspace.read"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -365,6 +368,101 @@ public struct AutomationWindowSnapshotResult: Codable, Sendable, Equatable {
     }
 }
 
+/// Read-only descriptor for one of the app's tracked repos (`workspace.read`, operator scope).
+/// `repoID` is the SwiftData model id — stable across launches, the identity later orchestration
+/// verbs target. `isSelected` reflects whether the repo is the one currently selected for its
+/// landing view in the sidebar.
+public struct AutomationRepoDescriptor: Codable, Sendable, Equatable {
+    public let repoID: UUID
+    public let name: String
+    public let path: String
+    public let isSelected: Bool
+
+    public init(repoID: UUID, name: String, path: String, isSelected: Bool) {
+        self.repoID = repoID
+        self.name = name
+        self.path = path
+        self.isSelected = isSelected
+    }
+}
+
+/// Read-only descriptor for one of the app's workspaces (`workspace.read`, operator scope).
+/// `workspaceID` is the SwiftData model id — the stable identity later verbs target. `repoID` ties
+/// it back to its source repo. Enough state rides along to target it: `status` (raw
+/// `WorkspaceStatus`), `isArchived`, and `backend` (the backend identifier, e.g. `local`/`lume`).
+/// `isSelected` reflects whether this is the workspace currently selected in the app.
+public struct AutomationWorkspaceDescriptor: Codable, Sendable, Equatable {
+    public let workspaceID: UUID
+    public let repoID: UUID?
+    public let name: String
+    public let path: String
+    public let branch: String?
+    public let status: String
+    public let isArchived: Bool
+    public let backend: String
+    public let isSelected: Bool
+
+    public init(
+        workspaceID: UUID,
+        repoID: UUID?,
+        name: String,
+        path: String,
+        branch: String?,
+        status: String,
+        isArchived: Bool,
+        backend: String,
+        isSelected: Bool
+    ) {
+        self.workspaceID = workspaceID
+        self.repoID = repoID
+        self.name = name
+        self.path = path
+        self.branch = branch
+        self.status = status
+        self.isArchived = isArchived
+        self.backend = backend
+        self.isSelected = isSelected
+    }
+}
+
+/// The projected repo + workspace lists an operator handle reads via `GET /v1/workspaces`. A plain
+/// value the app produces on the MainActor (reading the live SwiftData models and selection state)
+/// and the controller wraps into `AutomationWorkspacesResult` with the resolved handle's
+/// capabilities — the same split the window list uses between its enumerator and result.
+public struct AutomationWorkspaceInventory: Sendable, Equatable {
+    public let repos: [AutomationRepoDescriptor]
+    public let workspaces: [AutomationWorkspaceDescriptor]
+
+    public init(
+        repos: [AutomationRepoDescriptor] = [],
+        workspaces: [AutomationWorkspaceDescriptor] = []
+    ) {
+        self.repos = repos
+        self.workspaces = workspaces
+    }
+}
+
+/// Response for `GET /v1/workspaces` (`workspace.read`, operator scope): the app's repos and
+/// workspaces with stable model ids, names, and enough state to target. Read-only — no mutation
+/// rides this route; orchestration verbs arrive in later `[A2]` slices.
+public struct AutomationWorkspacesResult: Codable, Sendable, Equatable {
+    public let repos: [AutomationRepoDescriptor]
+    public let workspaces: [AutomationWorkspaceDescriptor]
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        repos: [AutomationRepoDescriptor],
+        workspaces: [AutomationWorkspaceDescriptor],
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.repos = repos
+        self.workspaces = workspaces
+        self.system = system
+    }
+}
+
 public struct AutomationMutationResult: Codable, Sendable, Equatable {
     public let changed: Bool
     public let focusedSurfaceID: String?
@@ -535,6 +633,7 @@ public protocol AutomationControlling: AnyObject, Sendable {
     func automationContext(for handle: String) throws -> AutomationContextResult
     func automationSurfaces(for handle: String) throws -> AutomationSurfacesResult
     func automationWindows(for handle: String) throws -> AutomationWindowsResult
+    func automationWorkspaces(for handle: String) throws -> AutomationWorkspacesResult
     func automationWindowSnapshot(
         for handle: String,
         windowID: String

@@ -2036,7 +2036,14 @@ struct ContentView: View {
             requestCloseTerminal: { sessionID in
                 requestCloseTerminalTabs([sessionID])
             },
-            webSurfaceRecords: { webSources.map(WebSurfaceRecord.init(from:)) }
+            webSurfaceRecords: { webSources.map(WebSurfaceRecord.init(from:)) },
+            workspaceInventory: {
+                AutomationWorkspaceEnumerator.inventory(
+                    repos: repos,
+                    selectedWorkspaceID: viewState.selectedWorkspace?.workspaceID,
+                    selectedRepoID: viewState.selectedRepoForLandingID
+                )
+            }
         )
     }
 

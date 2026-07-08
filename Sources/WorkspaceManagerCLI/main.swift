@@ -41,6 +41,7 @@ private final class CLIApp {
         "tile",
         "input",
         "window",
+        "workspace",
     ]
 
     private let stateStore = CLIStateStore()
@@ -89,6 +90,8 @@ private final class CLIApp {
             return try runInput(arguments: tail)
         case "window":
             return try runWindow(arguments: tail)
+        case "workspace":
+            return try runWorkspaceOperator(arguments: tail)
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -964,6 +967,70 @@ private final class CLIApp {
         return 0
     }
 
+    /// `workspaces workspace list [--json]` — the operator-scope read of the app's repos and
+    /// workspaces (`workspace.read`). Like `window list`, it reads the per-launch operator credential
+    /// file (minted next to the socket by an opted-in launch) rather than the injected terminal
+    /// environment, so it works from any same-user shell outside a WorkSpaces tile. Absent the
+    /// credential it fails closed with guidance. Distinct from `ws list`, which lists the CLI's own
+    /// local-state workspaces; this reflects what the running app currently has.
+    private func runWorkspaceOperator(arguments: [String]) throws -> Int32 {
+        guard arguments.first == "list" else {
+            throw CLIError("Usage: workspaces workspace list [--json]")
+        }
+        let usage = "workspaces workspace list [--json]"
+        var json = false
+        for argument in arguments.dropFirst() {
+            switch argument {
+            case "--json":
+                json = true
+            default:
+                throw CLIError("Usage: \(usage)")
+            }
+        }
+
+        let credential = try loadOperatorCredential()
+        let result = try operatorRequest(
+            AutomationWorkspacesResult.self,
+            credential: credential,
+            method: "GET",
+            path: "/v1/workspaces",
+            body: Data()
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        if result.repos.isEmpty && result.workspaces.isEmpty {
+            print("No repos or workspaces.")
+            return 0
+        }
+
+        if !result.repos.isEmpty {
+            print("Repos:")
+            for repo in result.repos {
+                let marker = repo.isSelected ? "*" : " "
+                print("\(marker) \(repo.repoID)\t\(repo.name)\t\(repo.path)")
+            }
+        }
+        if !result.workspaces.isEmpty {
+            if !result.repos.isEmpty {
+                print("")
+            }
+            print("Workspaces:")
+            for workspace in result.workspaces {
+                let marker = workspace.isSelected ? "*" : " "
+                let branch = workspace.branch ?? "-"
+                print(
+                    "\(marker) \(workspace.workspaceID)\t\(workspace.name)\t"
+                        + "\(workspace.status)\t\(workspace.backend)\t\(branch)"
+                )
+            }
+        }
+        return 0
+    }
+
     private func operatorRequest<Result>(
         _ type: Result.Type = Result.self,
         credential: AutomationOperatorCredential,
@@ -1532,6 +1599,7 @@ private func printHelp() {
           workspaces input write <text> [--submit]
           workspaces window list [--json]
           workspaces window snapshot --out <path> [--window <id>]
+          workspaces workspace list [--json]
           workspaces help
 
         Launch behavior:
