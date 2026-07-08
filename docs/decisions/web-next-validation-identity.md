@@ -34,6 +34,19 @@ never a silent pass.
    `skipped: validation session expired — re-seed`, so a stale secret degrades
    the report, never fakes it. Rotation = repeat the sign-in.
 
+   **Re-seed mechanics (learned 2026-07-08).** Store the **raw token value
+   only** — `authedCookie()` in `validate-core.mjs` prepends the cookie name
+   itself, so a stored `name=value` string silently becomes `name=name=value`
+   and reads as "expired". Sign-in runs through the **`web-workspaces` GitHub
+   App** (client `Iv23liSWNRsPl1YzIdyK`; GitHub Apps take multiple callback
+   URLs — folio and the vercel.app origin are both registered), not a separate
+   OAuth App. When minting headless, GitHub's consent page never enables its
+   Authorize button (the enable check needs window focus); the disable is
+   client-side only, so force-enable and submit via `page.evaluate` — consent
+   is once per account, later mints skip it. Sessions are DB-backed bearer
+   tokens: a session minted on one origin authenticates API calls on any
+   origin the deployment serves.
+
 3. **Vercel Protection Bypass for Automation — `VERCEL_AUTOMATION_BYPASS_SECRET`**
    (project setting, one toggle). Lets the harness reach *preview*
    deployments behind Vercel's deployment protection; production is publicly
