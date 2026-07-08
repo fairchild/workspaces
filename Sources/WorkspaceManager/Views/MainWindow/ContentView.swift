@@ -80,6 +80,9 @@ struct ContentView: View {
     /// A code-preview navigation (open another file / close the preview) held back because the
     /// open editor has unsaved edits, pending the Save / Discard / Cancel prompt (#704 Phase 4).
     @State private var pendingCodePreviewNavigation: PendingCodePreviewNavigation?
+    /// Monotonic token bumped each time a new pending navigation is raised, so a Save that awaits
+    /// across a newer navigation can detect it was superseded and decline to commit its stale target.
+    @State private var codePreviewNavigationGeneration = 0
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
     /// Seam store for the web main-content pane: a one-tile `SurfaceStore` domain. Source switches
     /// rebind `webDetailTileID` to a new `WebSurface` (identity-guarded); per-source `WebSurfaceStore`s
@@ -2586,10 +2589,17 @@ struct ContentView: View {
             let current = viewState.selectedCodePreview,
             current.id != selection.id
         {
-            pendingCodePreviewNavigation = .open(selection)
+            raisePendingCodePreviewNavigation(.open(selection))
             return
         }
         commitCodePreviewSelection(selection)
+    }
+
+    /// Set a new pending navigation and bump the generation token so an in-flight Save resolving an
+    /// older intent can see it was superseded.
+    private func raisePendingCodePreviewNavigation(_ pending: PendingCodePreviewNavigation) {
+        codePreviewNavigationGeneration &+= 1
+        pendingCodePreviewNavigation = pending
     }
 
     private func commitCodePreviewSelection(_ selection: CodePreviewSelection) {
@@ -2639,7 +2649,7 @@ struct ContentView: View {
         if DirtyNavigationGuard.requiresPrompt(isDirty: appCommandState.hasUnsavedDocumentEdits),
             viewState.selectedCodePreview != nil
         {
-            pendingCodePreviewNavigation = .close
+            raisePendingCodePreviewNavigation(.close)
             return
         }
         commitClearCodePreview()
@@ -2660,15 +2670,18 @@ struct ContentView: View {
             pendingCodePreviewNavigation = nil
             commitPendingCodePreviewNavigation(pending)
         case .saveThenProceed:
-            // The dialog dismissal already cleared `pendingCodePreviewNavigation`; the captured
-            // `pending` drives the commit. Deliberately do not touch that state again here — a
-            // second navigation raised during the await owns it now. Re-check the live dirty flag
-            // after the await rather than trusting the save's return value: if the user typed more
-            // while the write was in flight the document is dirty again, and navigating would drop
-            // those newer edits.
+            // Capture the generation now; a newer navigation raised during the await bumps it and
+            // must win. After the save, only commit this (captured) target if nothing superseded it
+            // and the document is genuinely clean — the user may have typed more while the write was
+            // in flight, which would leave it dirty again.
+            let capturedGeneration = codePreviewNavigationGeneration
             Task { @MainActor in
                 await appCommandState.saveDirtyDocument()
-                if !appCommandState.hasUnsavedDocumentEdits {
+                if DirtyNavigationGuard.shouldCommitDeferredNavigation(
+                    capturedGeneration: capturedGeneration,
+                    currentGeneration: codePreviewNavigationGeneration,
+                    hasUnsavedEdits: appCommandState.hasUnsavedDocumentEdits
+                ) {
                     commitPendingCodePreviewNavigation(pending)
                 }
             }

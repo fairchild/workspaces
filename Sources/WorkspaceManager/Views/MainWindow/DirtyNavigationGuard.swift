@@ -41,4 +41,17 @@ enum DirtyNavigationGuard {
             return .veto
         }
     }
+
+    /// Whether a Save-then-navigate deferred across an async save may still commit its captured
+    /// navigation. It must not if (a) a newer navigation superseded it while the save was in
+    /// flight — detected by the generation token changing — or (b) the document is dirty again
+    /// because the user typed more during the save. Either case would strand the user on the
+    /// wrong file or drop the newer edits.
+    static func shouldCommitDeferredNavigation(
+        capturedGeneration: Int,
+        currentGeneration: Int,
+        hasUnsavedEdits: Bool
+    ) -> Bool {
+        capturedGeneration == currentGeneration && !hasUnsavedEdits
+    }
 }
