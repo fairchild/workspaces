@@ -285,12 +285,15 @@ repair_ghostty_archive_if_needed() {
   # on an arm64 host), not just the target slice — sweeping every *.o
   # unfiltered produces a needlessly fat archive (both arches present, though
   # harmless since the linker only pulls the matching slice). Keep only
-  # objects matching the host arch, using the same `file`-output convention
-  # as zig_binary_matches_host_arch.
+  # objects matching the host arch: `file -b` drops the path prefix (an
+  # unanchored match against the full `file` line, path included, could keep
+  # or drop an object based on its filename rather than its actual
+  # architecture), and `-w` requires a whole-word match so "arm64" doesn't
+  # also match "arm64e".
   local host_arch object
   host_arch="$(uname -m)"
   while IFS= read -r object; do
-    if ! file "$object" 2>/dev/null | grep -q "$host_arch"; then
+    if ! file -b "$object" 2>/dev/null | grep -qw "$host_arch"; then
       rm -f "$object"
     fi
   done < <(find "$tmp_dir/objects" -type f -name "*.o")
