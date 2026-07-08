@@ -22,6 +22,12 @@ GitHub milestones, not aspiration — keep it in sync as milestones close.
 > including a real agentic turn (9/9). The phase plan below is kept as the
 > record of how the arc sequenced; #820 (PR-from-session) remains the open
 > follow-up.
+>
+> **Next arcs (2026-07-08).** [W5](https://github.com/fairchild/workspaces/milestone/18)
+> (continuity as a daily driver) is in flight; [W6](https://github.com/fairchild/workspaces/milestone/19)
+> (daily driver — host compute + workflow depth) is planned, founded on
+> [`decisions/host-compute-daily-driver.md`](decisions/host-compute-daily-driver.md).
+> New web-next ADRs live in `web-next/docs/decisions/` from here on.
 
 ## Definition of "totally usable"
 
