@@ -9,6 +9,7 @@ import { getDatabase } from "@/lib/db/client";
 import { listSessions, type SessionListItem } from "@/lib/db/sessions";
 import { formatRelativeTime } from "@/lib/relative-time";
 import { NewSession } from "./new-session";
+import { SignOutButton } from "./sign-out-button";
 
 function SessionRow({ session, index }: { session: SessionListItem; index: number }) {
 	return (
@@ -54,8 +55,9 @@ export default async function SessionsHome() {
 		<>
 			<header className="sticky top-0 z-20 flex h-[52px] items-center justify-between border-b border-line bg-mast-bg px-8 backdrop-blur-[10px] backdrop-saturate-[1.1]">
 				<span className="font-serif text-[17px] text-ink italic">Spaces</span>
-				<span className="flex items-center font-mono text-masthead tracking-[.02em] text-muted">
+				<span className="flex items-center gap-3 font-mono text-masthead tracking-[.02em] text-muted">
 					sessions
+					<SignOutButton variant="masthead" />
 					<ThemeToggle />
 				</span>
 			</header>
