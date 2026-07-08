@@ -11,19 +11,20 @@ import { SessionsHomeList } from "./sessions-home-list";
 import { SignOutButton } from "./sign-out-button";
 
 interface SessionsHomeProps {
-	searchParams?: Promise<{
-		q?: string;
-		repo?: string;
-		status?: string;
-	}>;
+	searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}
+
+/** Next hands repeated params (`?q=a&q=b`) through as arrays; take the first. */
+function firstParam(value: string | string[] | undefined): string {
+	return (Array.isArray(value) ? value[0] : value) ?? "";
 }
 
 export default async function SessionsHome({ searchParams }: SessionsHomeProps) {
 	const handle = getDatabase();
 	const params = (await searchParams) ?? {};
-	const query = params.q?.trim() ?? "";
-	const repoId = params.repo ?? "";
-	const status = params.status ?? "";
+	const query = firstParam(params.q).trim();
+	const repoId = firstParam(params.repo);
+	const status = firstParam(params.status);
 	const [sessions, filters] = await Promise.all([
 		listSessions(handle, { query, repoId, status }),
 		listSessionFilterOptions(handle),

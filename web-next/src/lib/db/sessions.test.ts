@@ -296,6 +296,26 @@ describe("session store", () => {
 		]);
 	});
 
+	test("listSessions treats LIKE wildcards in the query as literals", async () => {
+		const handle = freshDb();
+		await ensureSchema(handle);
+		await createSession(handle, {
+			id: "percent",
+			title: "Migration 50% done",
+			provider: "mock",
+		});
+		await createSession(handle, {
+			id: "plain",
+			title: "Migration 50x done",
+			provider: "mock",
+		});
+		// An unescaped `50%` would match both titles; a literal match is one.
+		expect((await listSessions(handle, { query: "50%" })).map((s) => s.id)).toEqual([
+			"percent",
+		]);
+		expect(await listSessions(handle, { query: "_igration" })).toEqual([]);
+	});
+
 	test("listSessionFilterOptions returns cheap repo and status facets", async () => {
 		const handle = freshDb();
 		await ensureSchema(handle);

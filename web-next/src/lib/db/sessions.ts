@@ -211,7 +211,10 @@ export async function listSessions(
 	const filters =
 		typeof filtersOrLimit === "number" ? { limit: filtersOrLimit } : filtersOrLimit;
 	const query = filters.query?.trim();
-	const likeQuery = query ? `%${query}%` : undefined;
+	// Literal % and _ in a search must not act as LIKE wildcards.
+	const likeQuery = query
+		? `%${query.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+		: undefined;
 	let builder = handle.db
 		.selectFrom("sessions")
 		.leftJoin("repos", "repos.id", "sessions.repo_id")
@@ -221,8 +224,8 @@ export async function listSessions(
 	if (likeQuery) {
 		builder = builder.where((eb) =>
 			eb.or([
-				eb("sessions.title", "like", likeQuery),
-				eb("sessions.first_user_message", "like", likeQuery),
+				sql<boolean>`sessions.title like ${likeQuery} escape '\\'`,
+				sql<boolean>`sessions.first_user_message like ${likeQuery} escape '\\'`,
 			]),
 		);
 	}

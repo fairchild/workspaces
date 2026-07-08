@@ -41,6 +41,12 @@ function isTextInput(target: EventTarget | null): boolean {
 	);
 }
 
+/** Enter must stay with a focused control (button, link, …), not open a row. */
+function isInteractive(target: EventTarget | null): boolean {
+	if (!(target instanceof HTMLElement)) return false;
+	return target.closest("a, button, [role='button'], summary") !== null;
+}
+
 function SessionRow({
 	session,
 	index,
@@ -59,7 +65,6 @@ function SessionRow({
 		>
 			<Link
 				href={`/sessions/${session.id}`}
-				aria-current={selected ? "page" : undefined}
 				data-selected={selected ? "true" : undefined}
 				onMouseEnter={onSelect}
 				className="group block rounded-md px-2.5 py-[16px] outline-none transition-colors hover:bg-hover-bg focus-visible:bg-selected-bg data-[selected=true]:bg-selected-bg"
@@ -103,7 +108,12 @@ export function SessionsHomeList({
 	const [query, setQuery] = useState(initialQuery);
 	const [selectedIndex, setSelectedIndex] = useState(sessions.length > 0 ? 0 : -1);
 
-	useEffect(() => setQuery(initialQuery), [initialQuery]);
+	// Sync from the URL only while the user isn't mid-keystroke: an older
+	// debounced replace's RSC payload must not clobber newer typed input.
+	useEffect(() => {
+		if (document.activeElement === searchRef.current) return;
+		setQuery(initialQuery);
+	}, [initialQuery]);
 	useEffect(() => {
 		setSelectedIndex((current) => {
 			if (sessions.length === 0) return -1;
@@ -115,14 +125,16 @@ export function SessionsHomeList({
 	const replaceParams = useCallback(
 		(next: { q?: string; repo?: string; status?: string }) => {
 			const params = new URLSearchParams(searchParams);
-			for (const [key, value] of Object.entries(next)) {
+			// Local query state rides along on every change, so a filter picked
+			// before the search debounce fires can't drop the pending text.
+			for (const [key, value] of Object.entries({ q: query.trim(), ...next })) {
 				if (value) params.set(key, value);
 				else params.delete(key);
 			}
 			const suffix = params.toString();
 			router.replace(suffix ? `${pathname}?${suffix}` : pathname, { scroll: false });
 		},
-		[pathname, router, searchParams],
+		[pathname, query, router, searchParams],
 	);
 
 	useEffect(() => {
@@ -156,7 +168,7 @@ export function SessionsHomeList({
 				setSelectedIndex((current) => Math.max(current - 1, 0));
 				return;
 			}
-			if (event.key === "Enter") {
+			if (event.key === "Enter" && !isInteractive(event.target)) {
 				openSelected();
 			}
 		};
