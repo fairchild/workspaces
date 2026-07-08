@@ -4,9 +4,9 @@
  * diff → done with usage figures) that exercises the whole Folio apparatus —
  * including the thinking block and the error tool path — without a sandbox.
  * Paced with small delays so streaming behavior is observable and measurable.
- * The requested model is recorded (not used — there's no real model call
- * here) on the terminal `done` chunk, so #824's routing is unit-testable
- * against this provider without a sandbox.
+ * The requested model and repo are recorded (not used — there's no real model
+ * call or clone here) on the terminal `done` chunk, so routing is
+ * unit-testable against this provider without a sandbox.
  *
  * A user message containing `MOCK_TURN_ERROR_TRIGGER` (#808) throws instead of
  * running the script — a deterministic, hermetic way to exercise a whole-turn
@@ -27,7 +27,7 @@
  * e2e spec drive a real "retry succeeds" turn without a second magic string.
  */
 import { DEFAULT_MODEL } from "./models";
-import type { ComputeProvider, TurnRequest } from "./provider";
+import type { ComputeProvider, TurnRepo, TurnRequest } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 
 type Sleep = (ms: number) => Promise<void>;
@@ -119,6 +119,7 @@ export async function* mockCodingTurn(
 	userMessage: string,
 	sleep: Sleep = defaultSleep,
 	model: string = DEFAULT_MODEL,
+	repo?: TurnRepo | null,
 ): AsyncGenerator<StreamChunk> {
 	const startedAt = Date.now();
 	let proseChars = 0;
@@ -272,6 +273,7 @@ export async function* mockCodingTurn(
 			// is testable without a sandbox call.
 			contextTokens: Math.ceil((userMessage.length + proseChars) / 3.2),
 			model,
+			...(repo !== undefined ? { repo } : {}),
 		},
 	};
 }
@@ -299,6 +301,6 @@ export const mockProvider: ComputeProvider = {
 				spentErrorTriggers.add(spendKey);
 			}
 		}
-		return mockCodingTurn(userMessage, undefined, request.model);
+		return mockCodingTurn(userMessage, undefined, request.model, request.repo);
 	},
 };

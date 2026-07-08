@@ -50,6 +50,7 @@ afterEach(async () => {
 	open = undefined;
 	if (dir) rmSync(dir, { recursive: true, force: true });
 	dir = undefined;
+	vi.unstubAllEnvs();
 });
 
 function stubProvider(chunks: StreamChunk[] = [{ type: "done", content: "" }]): ComputeProvider {
@@ -98,6 +99,37 @@ describe("startTurn — auto-title failure isolation", () => {
 		// The (mocked) title write failed — the session stays untitled, but
 		// nothing else about the turn was lost or blocked.
 		expect((await getSession(handle, "s1"))?.title).toBe("");
+	});
+
+	test("threads the session repo into the provider request instead of the global fallback", async () => {
+		vi.stubEnv("AGENT_TARGET_REPO", "fairchild/workspaces");
+		const handle = freshDb();
+		const repo = await ensureRepo(handle, "fairchild/web-next-fixtures", "trunk");
+		const session = await createSession(handle, {
+			id: "s-repo",
+			provider: "mock",
+			repoId: repo.id,
+		});
+		let seenRequest: unknown;
+		const provider: ComputeProvider = {
+			id: "stub",
+			runTurn: async function* (request) {
+				seenRequest = request;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+
+		const started = await startTurn(handle, session, "Fix the failing test", provider);
+		await started.ingest;
+
+		expect(
+			(seenRequest as {
+				repo?: { fullName: string; defaultBranch: string | null } | null;
+			}).repo,
+		).toEqual({
+			fullName: "fairchild/web-next-fixtures",
+			defaultBranch: "trunk",
+		});
 	});
 });
 
@@ -164,7 +196,6 @@ describe("startTurn — completion notification", () => {
 		const session = await createSession(handle, {
 			id: "failed-session",
 			provider: "mock",
-			repoId: "fairchild/workspaces",
 			title: "Broken turn",
 		});
 
@@ -196,7 +227,6 @@ describe("startTurn — completion notification", () => {
 		const session = await createSession(handle, {
 			id: "stopped-session",
 			provider: "mock",
-			repoId: "fairchild/workspaces",
 			title: "Stopped turn",
 		});
 
