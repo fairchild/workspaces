@@ -25,7 +25,7 @@ public enum AutomationAPI {
     /// Operator handles still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
         AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
-        .workspaceCreate, .surfaceRead,
+        .workspaceCreate, .surfaceRead, .workspaceArchive,
     ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
@@ -69,6 +69,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case workspaceSelect = "workspace.select"
     case workspaceCreate = "workspace.create"
     case surfaceRead = "surface.read"
+    case workspaceArchive = "workspace.archive"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -103,10 +104,73 @@ public struct AutomationSystemDescriptor: Codable, Sendable, Equatable {
 public struct AutomationHealthResult: Codable, Sendable, Equatable {
     public let status: String
     public let system: AutomationSystemDescriptor
+    public let server: AutomationServerDescriptor?
 
-    public init(status: String = "ok", system: AutomationSystemDescriptor = AutomationSystemDescriptor()) {
+    public init(
+        status: String = "ok",
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(),
+        server: AutomationServerDescriptor? = nil
+    ) {
         self.status = status
         self.system = system
+        self.server = server
+    }
+}
+
+public struct AutomationServerDescriptor: Codable, Sendable, Equatable {
+    public let pid: Int32
+    public let launchedAt: String
+    public let appVersion: String
+    public let build: String
+    public let experiments: [String]
+    public let protocolVersion: Int
+
+    public init(
+        pid: Int32,
+        launchedAt: String,
+        appVersion: String,
+        build: String,
+        experiments: [String],
+        protocolVersion: Int = AutomationAPI.version
+    ) {
+        self.pid = pid
+        self.launchedAt = launchedAt
+        self.appVersion = appVersion
+        self.build = build
+        self.experiments = experiments
+        self.protocolVersion = protocolVersion
+    }
+
+    public static func current(
+        launchedAt: Date,
+        experiments: [String],
+        bundle: Bundle = .main,
+        processInfo: ProcessInfo = .processInfo
+    ) -> AutomationServerDescriptor {
+        let appVersion =
+            bundle.infoDictionary?["CFBundleShortVersionString"] as? String
+            ?? bundle.infoDictionary?["CFBundleVersion"] as? String
+            ?? "dev"
+        return AutomationServerDescriptor(
+            pid: processInfo.processIdentifier,
+            launchedAt: Self.iso8601String(from: launchedAt),
+            appVersion: appVersion,
+            build: Self.buildConfiguration,
+            experiments: experiments.sorted(),
+            protocolVersion: AutomationAPI.version
+        )
+    }
+
+    private static func iso8601String(from date: Date) -> String {
+        ISO8601DateFormatter().string(from: date)
+    }
+
+    private static var buildConfiguration: String {
+        #if DEBUG
+            "debug"
+        #else
+            "release"
+        #endif
     }
 }
 
@@ -599,6 +663,14 @@ public struct AutomationWorkspaceCreateRequest: Codable, Sendable, Equatable {
     }
 }
 
+public struct AutomationWorkspaceArchiveRequest: Codable, Sendable, Equatable {
+    public let workspaceID: String
+
+    public init(workspaceID: String) {
+        self.workspaceID = workspaceID
+    }
+}
+
 public struct AutomationWorkspaceCreateCommand: Sendable, Equatable {
     public let repoID: UUID
     public let name: String
@@ -653,6 +725,18 @@ public struct AutomationWorkspaceCreateEffect: Sendable, Equatable {
         self.selectedWorkspaceID = selectedWorkspaceID
         self.attachedSurfaceID = attachedSurfaceID
         self.attachedTerminal = attachedTerminal
+    }
+}
+
+/// What driving the real workspace-archive gesture produced. `selectedWorkspaceID` is read after
+/// the gesture so callers can observe the same selection fallback a sidebar archive click produced.
+public struct AutomationWorkspaceArchiveEffect: Sendable, Equatable {
+    public let workspaceID: UUID
+    public let selectedWorkspaceID: UUID?
+
+    public init(workspaceID: UUID, selectedWorkspaceID: UUID?) {
+        self.workspaceID = workspaceID
+        self.selectedWorkspaceID = selectedWorkspaceID
     }
 }
 
@@ -745,6 +829,43 @@ public struct AutomationSurfaceReadResult: Codable, Sendable, Equatable {
         self.returnedLines = returnedLines
         self.byteCount = byteCount
         self.text = text
+        self.system = system
+    }
+}
+
+/// Response for `POST /v1/workspace/archive` (`workspace.archive`, operator scope). On completion
+/// the result mirrors the sidebar archive gesture: the workspace moves into the archived state and
+/// `selectedWorkspaceID` reports the selection state the click path left behind. If the path reaches
+/// modal UI, the success envelope reports `confirmation_required` with a structured payload.
+public struct AutomationWorkspaceArchiveResult: Codable, Sendable, Equatable {
+    public let workspaceID: String
+    public let outcome: AutomationGestureOutcomeKind
+    public let changed: Bool
+    public let archivedWorkspaceID: UUID?
+    public let selectedWorkspaceID: UUID?
+    public let confirmation: AutomationConfirmationRequirement?
+    public let message: String?
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        workspaceID: String,
+        outcome: AutomationGestureOutcomeKind,
+        changed: Bool,
+        archivedWorkspaceID: UUID? = nil,
+        selectedWorkspaceID: UUID? = nil,
+        confirmation: AutomationConfirmationRequirement? = nil,
+        message: String? = nil,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.workspaceID = workspaceID
+        self.outcome = outcome
+        self.changed = changed
+        self.archivedWorkspaceID = archivedWorkspaceID
+        self.selectedWorkspaceID = selectedWorkspaceID
+        self.confirmation = confirmation
+        self.message = message
         self.system = system
     }
 }
@@ -928,6 +1049,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
         for handle: String,
         request: AutomationWorkspaceCreateRequest
     ) async throws -> AutomationWorkspaceCreateResult
+    func automationArchiveWorkspace(
+        for handle: String,
+        workspaceID: String
+    ) async throws -> AutomationWorkspaceArchiveResult
     func automationWindowSnapshot(
         for handle: String,
         windowID: String

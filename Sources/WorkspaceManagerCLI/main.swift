@@ -704,15 +704,11 @@ private final class CLIApp {
 
         switch subcommand {
         case "health":
-            let result: AutomationHealthResult = try performAutomationRequest(
-                method: "GET",
-                path: "/v1/health",
-                requiresHandle: false
-            )
+            let result = try performAutomationHealthRequest()
             if arguments.dropFirst().contains("--json") {
                 print(try AutomationCLIResultPrinter.resultJSON(result))
             } else {
-                print(result.status.uppercased())
+                print(Self.healthLine(result))
             }
             return 0
 
@@ -981,9 +977,11 @@ private final class CLIApp {
             return try runWorkspaceSelect(arguments: Array(arguments.dropFirst()))
         case "create":
             return try runWorkspaceCreate(arguments: Array(arguments.dropFirst()))
+        case "archive":
+            return try runWorkspaceArchive(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError(
-                "Usage: workspaces workspace list [--json] | workspace select <id> [--json] | workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]"
+                "Usage: workspaces workspace list [--json] | workspace select <id> [--json] | workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | workspace archive <id> [--json]"
             )
         }
     }
@@ -1177,6 +1175,51 @@ private final class CLIApp {
         return 0
     }
 
+    /// `workspaces workspace archive <id> [--json]` — an operator mutation verb. Drives the
+    /// running app's real sidebar archive gesture, so the row leaves the active list exactly as it
+    /// would from the sidebar menu. `<id>` is a stable workspace id from `workspace list`.
+    private func runWorkspaceArchive(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces workspace archive <id> [--json]"
+        var json = false
+        var workspaceID: String?
+        for argument in arguments {
+            switch argument {
+            case "--json":
+                json = true
+            default:
+                guard workspaceID == nil else { throw CLIError("Usage: \(usage)") }
+                workspaceID = argument
+            }
+        }
+        guard let workspaceID, !workspaceID.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let credential = try loadOperatorCredential()
+        let body = try JSONSerialization.data(withJSONObject: ["workspaceID": workspaceID])
+        let result = try operatorRequest(
+            AutomationWorkspaceArchiveResult.self,
+            credential: credential,
+            method: "POST",
+            path: "/v1/workspace/archive",
+            body: body
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        switch result.outcome {
+        case .completed:
+            let selected = result.selectedWorkspaceID?.uuidString ?? "-"
+            print("Archived \(result.workspaceID) — selected workspace \(selected).")
+        case .confirmationRequired:
+            print("Confirmation required: \(result.message ?? "the app needs confirmation to proceed.")")
+        }
+        return 0
+    }
+
     private func operatorRequest<Result>(
         _ type: Result.Type = Result.self,
         credential: AutomationOperatorCredential,
@@ -1233,6 +1276,45 @@ private final class CLIApp {
                 "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
             )
         }
+    }
+
+    private func performAutomationHealthRequest() throws -> AutomationHealthResult {
+        let response = try automationClient().request(
+            method: "GET",
+            path: "/v1/health",
+            handle: nil,
+            body: Data()
+        )
+        do {
+            return try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: response,
+                bundledCLIPath: Self.bundledCLIPath()
+            )
+        } catch let error as AutomationCLIResponseError {
+            throw CLIError(error.localizedDescription)
+        } catch let error as AutomationServiceError {
+            throw CLIError(
+                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
+            )
+        }
+    }
+
+    private static func healthLine(_ result: AutomationHealthResult) -> String {
+        guard let server = result.server else {
+            return result.status.uppercased()
+        }
+        let experiments = server.experiments.isEmpty ? "-" : server.experiments.joined(separator: ",")
+        return "\(result.status.uppercased()) pid=\(server.pid) launchedAt=\(server.launchedAt) "
+            + "protocol=\(server.protocolVersion) experiments=\(experiments)"
+    }
+
+    private static func bundledCLIPath() -> String {
+        if let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: appBundleIdentifier) {
+            return appURL.appendingPathComponent("Contents", isDirectory: true)
+                .appendingPathComponent("MacOS", isDirectory: true)
+                .appendingPathComponent("workspaces", isDirectory: false).path
+        }
+        return Bundle.main.executablePath ?? "workspaces"
     }
 
     private func automationClient() throws -> AutomationSocketClient {
@@ -1748,6 +1830,7 @@ private func printHelp() {
           workspaces workspace list [--json]
           workspaces workspace select <workspace-id> [--json]
           workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
+          workspaces workspace archive <workspace-id> [--json]
           workspaces help
 
         Launch behavior:

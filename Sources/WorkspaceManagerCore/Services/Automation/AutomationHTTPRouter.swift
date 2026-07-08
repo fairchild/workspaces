@@ -10,10 +10,16 @@ enum AutomationHTTPRouter {
         _ request: HTTPRequest,
         controller: any AutomationControlling,
         enabled: Bool,
+        healthServer: AutomationServerDescriptor? = nil,
         encoder: JSONEncoder = AutomationJSON.encoder
     ) async -> AutomationHTTPResult {
         do {
-            let result = try await routeResult(request, controller: controller, enabled: enabled)
+            let result = try await routeResult(
+                request,
+                controller: controller,
+                enabled: enabled,
+                healthServer: healthServer
+            )
             return try success(result, encoder: encoder)
         } catch let error as AutomationServiceError {
             return failure(error.response, status: httpStatus(for: error.response.code), encoder: encoder)
@@ -29,12 +35,13 @@ enum AutomationHTTPRouter {
     private static func routeResult(
         _ request: HTTPRequest,
         controller: any AutomationControlling,
-        enabled: Bool
+        enabled: Bool,
+        healthServer: AutomationServerDescriptor?
     ) async throws -> any CodableSendableEquatable {
         let method = request.method.uppercased()
         switch (method, request.path) {
         case ("GET", "/v1/health"):
-            return AutomationHealthResult()
+            return AutomationHealthResult(server: healthServer)
 
         case (_, "/v1/health"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/health.")
@@ -96,6 +103,10 @@ enum AutomationHTTPRouter {
             let read = try decodeSurfaceRead(from: request.body)
             return try await controller.automationReadSurface(for: handle, request: read)
 
+        case ("POST", "/v1/workspace/archive"):
+            let workspaceID = try decodeWorkspaceID(from: request.body)
+            return try await controller.automationArchiveWorkspace(for: handle, workspaceID: workspaceID)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -142,6 +153,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/create.")
         case (_, "/v1/surface/read"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/surface/read.")
+        case (_, "/v1/workspace/archive"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/archive.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -436,6 +449,7 @@ extension AutomationWindowsResult: CodableSendableEquatable {}
 extension AutomationWorkspacesResult: CodableSendableEquatable {}
 extension AutomationWorkspaceSelectResult: CodableSendableEquatable {}
 extension AutomationWorkspaceCreateResult: CodableSendableEquatable {}
+extension AutomationWorkspaceArchiveResult: CodableSendableEquatable {}
 extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
 extension AutomationSurfaceReadResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}

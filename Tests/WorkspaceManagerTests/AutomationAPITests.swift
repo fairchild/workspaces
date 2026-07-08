@@ -79,6 +79,9 @@ private final class FakeAutomationController: AutomationControlling {
     }
 
     var workspaceCalls: [String] = []
+    var archivedWorkspaceIDs: Set<String> = []
+    static let inventoryRepoID = "55555555-5555-5555-5555-555555555555"
+    static let inventoryWorkspaceID = "66666666-6666-6666-6666-666666666666"
 
     func automationWorkspaces(for handle: String) throws -> AutomationWorkspacesResult {
         // Only an operator handle carries workspace.read; a tile handle ("live") fails closed, and an
@@ -90,10 +93,12 @@ private final class FakeAutomationController: AutomationControlling {
             throw AutomationServiceError(.capabilityDenied, "The automation handle does not include workspace.read.")
         }
         workspaceCalls.append(handle)
+        let workspaceID = Self.inventoryWorkspaceID
+        let archived = archivedWorkspaceIDs.contains(workspaceID)
         return AutomationWorkspacesResult(
             repos: [
                 AutomationRepoDescriptor(
-                    repoID: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+                    repoID: UUID(uuidString: Self.inventoryRepoID)!,
                     name: "workspaces",
                     path: "/Users/test/workspaces",
                     isSelected: true
@@ -101,13 +106,13 @@ private final class FakeAutomationController: AutomationControlling {
             ],
             workspaces: [
                 AutomationWorkspaceDescriptor(
-                    workspaceID: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
-                    repoID: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
+                    workspaceID: UUID(uuidString: workspaceID)!,
+                    repoID: UUID(uuidString: Self.inventoryRepoID)!,
                     name: "feature-a",
                     path: "/Users/test/workspaces/feature-a",
                     branch: "feature-a",
-                    status: "active",
-                    isArchived: false,
+                    status: archived ? "archived" : "active",
+                    isArchived: archived,
                     backend: "local",
                     isSelected: true
                 )
@@ -117,6 +122,7 @@ private final class FakeAutomationController: AutomationControlling {
 
     var selectCalls: [String] = []
     var createCalls: [AutomationWorkspaceCreateRequest] = []
+    var archiveCalls: [String] = []
 
     /// Named ids the fake maps to each projected outcome, so router tests can drive the wire mapping
     /// without a live app. A well-shaped-but-unknown id and a non-UUID id both project to
@@ -129,6 +135,9 @@ private final class FakeAutomationController: AutomationControlling {
     static let createConfirmationRepoID = "55555555-5555-5555-5555-555555555555"
     static let createWorkspaceID = "88888888-8888-8888-8888-888888888888"
     static let createAttachedSurfaceID = "99999999-9999-9999-9999-999999999999"
+    static let archiveUnknownID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    static let archiveNoWindowID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    static let archiveSelectedWorkspaceID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
 
     func automationSelectWorkspace(
         for handle: String,
@@ -215,6 +224,39 @@ private final class FakeAutomationController: AutomationControlling {
             selectedWorkspaceID: UUID(uuidString: Self.createWorkspaceID),
             attachedTerminal: true,
             attachedSurfaceID: Self.createAttachedSurfaceID
+        )
+    }
+
+    func automationArchiveWorkspace(
+        for handle: String,
+        workspaceID: String
+    ) async throws -> AutomationWorkspaceArchiveResult {
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(
+                .capabilityDenied, "The automation handle does not include workspace.archive.")
+        }
+        guard UUID(uuidString: workspaceID) != nil else {
+            throw AutomationServiceError(.invalidRequest, "workspaceID must be a UUID.")
+        }
+        if workspaceID == Self.archiveUnknownID {
+            throw AutomationServiceError(
+                .invalidRequest, "No workspace with id \(workspaceID) is tracked by the app.")
+        }
+        if workspaceID == Self.archiveNoWindowID {
+            throw AutomationServiceError(
+                .unsupported, "No WorkSpaces window is attached; workspace.archive requires a live window.")
+        }
+        archiveCalls.append(workspaceID)
+        archivedWorkspaceIDs.insert(workspaceID)
+        return AutomationWorkspaceArchiveResult(
+            workspaceID: workspaceID,
+            outcome: .completed,
+            changed: true,
+            archivedWorkspaceID: UUID(uuidString: workspaceID),
+            selectedWorkspaceID: UUID(uuidString: Self.archiveSelectedWorkspaceID)
         )
     }
 
@@ -398,10 +440,19 @@ struct AutomationAPITests {
     @MainActor
     func routerHealthAndDisabled() async throws {
         let controller = FakeAutomationController()
+        let server = AutomationServerDescriptor(
+            pid: 7301,
+            launchedAt: "2026-07-08T08:35:44Z",
+            appVersion: "1.2.3",
+            build: "debug",
+            experiments: ["automationAPI", "automationInputWrite", "automationOperator"],
+            protocolVersion: AutomationAPI.version
+        )
         let health = await AutomationHTTPRouter.route(
             HTTPRequest(method: "GET", path: "/v1/health", headers: [:], body: Data()),
             controller: controller,
-            enabled: false
+            enabled: false,
+            healthServer: server
         )
         let healthEnvelope = try AutomationJSON.decoder.decode(
             AutomationResponseEnvelope<AutomationHealthResult>.self,
@@ -409,6 +460,8 @@ struct AutomationAPITests {
         )
         #expect(health.status == 200)
         #expect(healthEnvelope.ok)
+        #expect(healthEnvelope.result?.server == server)
+        #expect(healthEnvelope.result?.server?.protocolVersion == AutomationAPI.version)
 
         let context = await AutomationHTTPRouter.route(
             HTTPRequest(
@@ -875,6 +928,7 @@ struct AutomationAPITests {
         #expect(
             entry.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
+                .workspaceArchive,
             ])
         // Operator mutation capabilities are reviewed gesture verbs; an operator handle still never
         // carries tile mutation or input.write.
@@ -913,6 +967,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
+                .workspaceArchive,
             ])
         #expect(controller.windowCalls == ["operator"])
 
@@ -995,6 +1050,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
+                .workspaceArchive,
             ])
         #expect(controller.workspaceCalls == ["operator"])
 
@@ -1342,6 +1398,119 @@ struct AutomationAPITests {
         #expect(json.contains("\"providerID\":\"lume\""))
     }
 
+    @Test("POST /v1/workspace/archive projects the gesture outcome and enforces the capability")
+    @MainActor
+    func routerWorkspaceArchive() async throws {
+        let controller = FakeAutomationController()
+        let validID = FakeAutomationController.inventoryWorkspaceID
+
+        func post(_ handle: String?, body: Data) async -> AutomationHTTPResult {
+            var headers: [String: String] = [:]
+            if let handle { headers[AutomationAPI.handleHeader] = handle }
+            return await AutomationHTTPRouter.route(
+                HTTPRequest(method: "POST", path: "/v1/workspace/archive", headers: headers, body: body),
+                controller: controller,
+                enabled: true
+            )
+        }
+
+        func body(_ id: String) -> Data {
+            Data("{\"workspaceID\":\"\(id)\"}".utf8)
+        }
+
+        let ok = await post("operator", body: body(validID))
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceArchiveResult>.self, from: ok.body)
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.outcome == .completed)
+        #expect(okEnvelope.result?.changed == true)
+        #expect(okEnvelope.result?.archivedWorkspaceID?.uuidString == validID)
+        let expectedSelectedWorkspaceID = UUID(uuidString: FakeAutomationController.archiveSelectedWorkspaceID)
+        #expect(okEnvelope.result?.selectedWorkspaceID == expectedSelectedWorkspaceID)
+        #expect(okEnvelope.result?.system.capabilities.contains(.workspaceArchive) == true)
+        #expect(controller.archiveCalls == [validID])
+
+        let listed = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/workspaces",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let listedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspacesResult>.self, from: listed.body)
+        #expect(listed.status == 200)
+        #expect(listedEnvelope.result?.workspaces.first?.workspaceID.uuidString == validID)
+        #expect(listedEnvelope.result?.workspaces.first?.isArchived == true)
+        #expect(listedEnvelope.result?.workspaces.first?.status == "archived")
+
+        let denied = await post("live", body: body(validID))
+        let deniedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: denied.body)
+        #expect(denied.status == 403)
+        #expect(deniedEnvelope.error?.code == .capabilityDenied)
+
+        let stale = await post("ghost", body: body(validID))
+        #expect(stale.status == 401)
+        let missing = await post(nil, body: body(validID))
+        let missingEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: missing.body)
+        #expect(missing.status == 401)
+        #expect(missingEnvelope.error?.code == .missingHandle)
+
+        let unknown = await post("operator", body: body(FakeAutomationController.archiveUnknownID))
+        #expect(unknown.status == 400)
+        let badUUID = await post("operator", body: body("not-a-uuid"))
+        let badUUIDEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: badUUID.body)
+        #expect(badUUID.status == 400)
+        #expect(badUUIDEnvelope.error?.code == .invalidRequest)
+
+        let noWindow = await post("operator", body: body(FakeAutomationController.archiveNoWindowID))
+        let noWindowEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: noWindow.body)
+        #expect(noWindow.status == 409)
+        #expect(noWindowEnvelope.error?.code == .unsupported)
+
+        let empty = await post("operator", body: Data())
+        #expect(empty.status == 400)
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET", path: "/v1/workspace/archive",
+                headers: [AutomationAPI.handleHeader: "operator"], body: Data()),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: wrongMethod.body)
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
+    @Test("workspace-archive result encodes the structured confirmation payload")
+    func workspaceArchiveResultEncoding() throws {
+        let confirmation = AutomationWorkspaceArchiveResult(
+            workspaceID: "ws",
+            outcome: .confirmationRequired,
+            changed: false,
+            confirmation: AutomationConfirmationRequirement(
+                action: "workspace.archive",
+                title: "Archive Workspace",
+                message: "Archive workspace?",
+                primaryButtonTitle: "Archive"
+            ),
+            message: "Archive workspace?"
+        )
+        let data = try AutomationJSON.encoder.encode(AutomationResponseEnvelope(result: confirmation))
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\"outcome\":\"confirmation_required\""))
+        #expect(json.contains("\"confirmation\""))
+        #expect(json.contains("\"action\":\"workspace.archive\""))
+    }
+
     @Test("POST /v1/window/snapshot captures for an operator handle and fails closed otherwise")
     @MainActor
     func routerWindowSnapshot() async throws {
@@ -1541,6 +1710,7 @@ struct AutomationAPITests {
         #expect(
             loaded?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
+                .workspaceArchive,
             ])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -1573,6 +1743,7 @@ struct AutomationAPITests {
         #expect(
             registry.resolve(mintedCredential.handle)?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
+                .workspaceArchive,
             ]
         )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)
@@ -1752,6 +1923,53 @@ struct AutomationAPITests {
         } catch let error as AutomationServiceError {
             #expect(error.response.code == .staleHandle)
         }
+
+        let health = AutomationHealthResult(
+            server: AutomationServerDescriptor(
+                pid: 7301,
+                launchedAt: "2026-07-08T08:35:44Z",
+                appVersion: "1.2.3",
+                build: "debug",
+                experiments: ["automationAPI"],
+                protocolVersion: AutomationAPI.version
+            )
+        )
+        let healthResponse = AutomationSocketClient.Response(
+            statusCode: 200,
+            body: try AutomationJSON.encoder.encode(AutomationResponseEnvelope(result: health))
+        )
+        #expect(
+            try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: healthResponse,
+                bundledCLIPath: "/Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            ) == health)
+
+        let skewed = Data(
+            #"{"ok":true,"result":{"server":{"protocolVersion":2}},"v":1}"#.utf8
+        )
+        do {
+            _ = try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: AutomationSocketClient.Response(statusCode: 200, body: skewed),
+                bundledCLIPath: "/Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            )
+            Issue.record("Expected protocol version mismatch")
+        } catch let error as AutomationCLIResponseError {
+            #expect(
+                error.localizedDescription
+                    == "CLI v1 vs app v2 — use the bundled CLI at /Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            )
+        }
+
+        let raw = #"{"ok":true,"result":{"status":123}}"#
+        do {
+            _ = try AutomationCLIResultPrinter.decodeHealthEnvelope(
+                from: AutomationSocketClient.Response(statusCode: 200, body: Data(raw.utf8)),
+                bundledCLIPath: "/Applications/WorkSpaces.app/Contents/MacOS/workspaces"
+            )
+            Issue.record("Expected raw-body decode fallback")
+        } catch let error as AutomationCLIResponseError {
+            #expect(error.localizedDescription.contains(raw))
+        }
     }
 
     @Test("A second listener fails instead of becoming a dormant handle issuer")
@@ -1812,6 +2030,8 @@ struct AutomationListenerTests {
         #expect(response.statusCode == 200)
         #expect(envelope.ok)
         #expect(envelope.result?.status == "ok")
+        #expect(envelope.result?.server?.pid == ProcessInfo.processInfo.processIdentifier)
+        #expect(envelope.result?.server?.protocolVersion == AutomationAPI.version)
         await listener.stop()
     }
 }

@@ -183,7 +183,25 @@ Every route returns a versioned JSON envelope:
 ## Routes
 
 `GET /v1/health` is the only unauthenticated route. It reports listener
-liveness only and does not prove that a terminal handle is valid.
+liveness plus server metadata (`pid`, listener `launchedAt`, `appVersion`,
+`build`, active automation experiment keys, and `protocolVersion`) so callers
+can distinguish coexisting app instances. It does not prove that a terminal
+handle is valid.
+
+```json
+{
+  "status": "ok",
+  "server": {
+    "pid": 7301,
+    "launchedAt": "2026-07-08T08:35:44Z",
+    "appVersion": "dev",
+    "build": "debug",
+    "experiments": ["automationAPI", "automationInputWrite", "automationOperator"],
+    "protocolVersion": 1
+  },
+  "system": { "capabilities": [ … ] }
+}
+```
 
 Scoped routes require `x-workspaces-automation-handle`:
 
@@ -197,6 +215,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null,"select":true,"fromRef":"origin/main"}`; `providerID` defaults to `local`, `select` defaults to `true`, and `fromRef` is omitted by default. Returns `completed` with the created workspace and, when selected, the attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
 | `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from a terminal surface created by the same operator handle through `workspace.create` this launch. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is the `attachedSurfaceID` from that create result. Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles and non-created/unattributed surfaces fail `capability_denied`. See [Surface read](#surface-read). |
+| `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. Returns `completed` with the archived workspace id and post-gesture selection state, or `confirmation_required` if the UI path ever reaches a modal. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -231,6 +250,7 @@ handle.
 | `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); granted only to operator handles, never to tile handles |
 | `workspace.create` | `POST /v1/workspace/create` (drive the real sidebar create helper for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.read` and `workspace.select` so the read/write split stays legible |
 | `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for surfaces created by the same operator handle through `workspace.create` this launch); granted only to operator handles, never to tile handles |
+| `workspace.archive` | `POST /v1/workspace/archive` (drive the real sidebar archive action for a workspace); granted only to operator handles, never to tile handles |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -334,7 +354,7 @@ mutation rides this route.
   "system": {
     "capabilities": [
       "window.read", "window.snapshot", "workspace.read",
-      "workspace.select", "workspace.create", "surface.read"
+      "workspace.select", "workspace.create", "surface.read", "workspace.archive"
     ]
   }
 }
@@ -520,6 +540,52 @@ did:
   `workspace.read`. A tile handle lacks it and fails `capability_denied`. The call is operator-tagged in
   `automation-audit.jsonl` like every operator route.
 
+## Workspace archive
+
+`POST /v1/workspace/archive` (operator scope, `workspace.archive`) archives a
+workspace by driving the same sidebar archive action exposed from the workspace
+row menu. The body names the target by a `workspaceID` obtained from
+`workspace.read`:
+
+```json
+{ "workspaceID": "…" }
+```
+
+The success envelope reports the structured gesture outcome and the selection
+state left behind by the real archive gesture:
+
+```json
+{
+  "workspaceID": "…",
+  "outcome": "completed",
+  "changed": true,
+  "archivedWorkspaceID": "…",
+  "selectedWorkspaceID": "…",
+  "system": { "capabilities": [ … ] }
+}
+```
+
+After completion, `GET /v1/workspaces` reports the same workspace with
+`isArchived: true` and status `archived`; the row leaves the active workspace
+list exactly as it does after using the sidebar. If the archived workspace was
+selected, the API does not invent a separate fallback — `selectedWorkspaceID`
+is whatever the sidebar gesture left selected.
+
+- **Same path as the UI.** The verb enters `SidebarWorkspaceController.archive`
+  through the window-bound gesture layer, not `WorkspaceService` or SwiftData
+  directly.
+- **Structured outcome.** `outcome` is `completed` or
+  `confirmation_required`. The archive action has no confirmation dialog today,
+  but if the UI path gains one the route returns the same structured
+  confirmation payload shape as `workspace.create`.
+- **Failure mapping.** A live-window-less app fails `unsupported` (never a
+  data-layer fallback), and an unknown or non-UUID `workspaceID` fails
+  `invalid_request`.
+- **Operator mutation.** Requires `workspace.archive`, distinct from
+  `workspace.read`, `workspace.select`, and `workspace.create`. A tile handle
+  lacks it and fails `capability_denied`. The call is operator-tagged in
+  `automation-audit.jsonl` like every operator route.
+
 ## Error Codes
 
 | Code | Meaning |
@@ -579,6 +645,8 @@ workspaces workspace select <id> --json              # same, as the raw result e
 workspaces workspace create <repo-id> feature-a      # create local workspace through the UI path
 workspaces workspace create <repo-id> feature-a --json
 workspaces workspace create <repo-id> feature-a --provider lume --guest-os macos
+workspaces workspace archive <id>                   # archive through the sidebar action path
+workspaces workspace archive <id> --json
 ```
 
 `workspace list` reads the running app's repos and workspaces (`workspace.read`),

@@ -47,6 +47,18 @@ public enum AutomationWorkspaceCreateOutcome: Sendable, Equatable {
     case invalidRequest(String)
 }
 
+public enum AutomationWorkspaceArchiveOutcome: Sendable, Equatable {
+    /// The archive gesture ran through the real UI path and persisted the archive state.
+    case completed(AutomationWorkspaceArchiveEffect)
+    /// The gesture reached a modal or setup confirmation. The caller gets the confirmation details
+    /// as data instead of waiting on UI it cannot answer.
+    case confirmationRequired(AutomationConfirmationRequirement)
+    /// The verb cannot run in the current context, most often because no live window/sidebar is bound.
+    case unsupported(String)
+    /// The workspace id resolves to nothing the app tracks. Mapped to `invalid_request` at the wire.
+    case notFound
+}
+
 @MainActor
 public final class AutomationGestureVerbs {
     /// The minimum a verb needs to target and describe a workspace, projected out of the live
@@ -92,6 +104,8 @@ public final class AutomationGestureVerbs {
     /// Drive the real sidebar create gesture for `command` and report what the UI did.
     private let performCreation:
         (@MainActor (RepoTarget, AutomationWorkspaceCreateCommand) async -> AutomationWorkspaceCreateOutcome)?
+    /// Drive the real sidebar archive gesture for `target` and report what the UI did.
+    private let performArchive: (@MainActor (WorkspaceTarget) async -> AutomationWorkspaceArchiveOutcome)?
 
     public init(
         resolveWorkspace: @escaping @MainActor (UUID) -> WorkspaceTarget?,
@@ -99,12 +113,14 @@ public final class AutomationGestureVerbs {
         resolveRepo: (@MainActor (UUID) -> RepoTarget?)? = nil,
         performCreation: (
             @MainActor (RepoTarget, AutomationWorkspaceCreateCommand) async -> AutomationWorkspaceCreateOutcome
-        )? = nil
+        )? = nil,
+        performArchive: (@MainActor (WorkspaceTarget) async -> AutomationWorkspaceArchiveOutcome)? = nil
     ) {
         self.resolveWorkspace = resolveWorkspace
         self.performSelection = performSelection
         self.resolveRepo = resolveRepo
         self.performCreation = performCreation
+        self.performArchive = performArchive
     }
 
     /// `workspace.select`: enter the same selection path a sidebar click takes. Resolves the id, then
@@ -132,5 +148,18 @@ public final class AutomationGestureVerbs {
             return .notFound
         }
         return await performCreation(target, command)
+    }
+
+    /// `workspace.archive`: enter the same sidebar archive action the row menu uses. Resolves the
+    /// workspace id, then drives only the supplied gesture closure. A missing archive closure means
+    /// the live window did not install an archive path, so the verb fails closed.
+    public func archiveWorkspace(_ workspaceID: UUID) async -> AutomationWorkspaceArchiveOutcome {
+        guard let performArchive else {
+            return .unsupported("No WorkSpaces sidebar is attached; workspace.archive requires a live window.")
+        }
+        guard let target = resolveWorkspace(workspaceID) else {
+            return .notFound
+        }
+        return await performArchive(target)
     }
 }

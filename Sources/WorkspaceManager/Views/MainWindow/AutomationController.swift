@@ -267,6 +267,50 @@ final class AutomationController: AutomationControlling {
         }
     }
 
+    func automationArchiveWorkspace(
+        for handle: String,
+        workspaceID: String
+    ) async throws -> AutomationWorkspaceArchiveResult {
+        let entry = try resolveOperator(handle, requiring: .workspaceArchive)
+        guard let uuid = UUID(uuidString: workspaceID) else {
+            throw AutomationServiceError(.invalidRequest, "workspaceID must be a UUID.")
+        }
+
+        guard let gestureVerbs else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; workspace.archive requires a live window."
+            )
+        }
+
+        let capabilities = entry.capabilities
+        switch await gestureVerbs.archiveWorkspace(uuid) {
+        case .completed(let effect):
+            return AutomationWorkspaceArchiveResult(
+                workspaceID: workspaceID,
+                outcome: .completed,
+                changed: true,
+                archivedWorkspaceID: effect.workspaceID,
+                selectedWorkspaceID: effect.selectedWorkspaceID,
+                system: AutomationSystemDescriptor(capabilities: capabilities)
+            )
+        case .confirmationRequired(let confirmation):
+            return AutomationWorkspaceArchiveResult(
+                workspaceID: workspaceID,
+                outcome: .confirmationRequired,
+                changed: false,
+                confirmation: confirmation,
+                message: confirmation.message,
+                system: AutomationSystemDescriptor(capabilities: capabilities)
+            )
+        case .unsupported(let message):
+            throw AutomationServiceError(.unsupported, message)
+        case .notFound:
+            throw AutomationServiceError(
+                .invalidRequest, "No workspace with id \(workspaceID) is tracked by the app.")
+        }
+    }
+
     func automationWindowSnapshot(
         for handle: String,
         windowID: String

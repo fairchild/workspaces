@@ -2204,6 +2204,34 @@ struct ContentView: View {
                         attachedTerminal: attached
                     )
                 )
+            },
+            performArchive: { target in
+                guard
+                    let workspace = repos.flatMap(\.workspaces).first(where: {
+                        $0.id == target.workspaceID
+                    })
+                else {
+                    return .notFound
+                }
+                let controller = SidebarWorkspaceController(
+                    modelContext: modelContext,
+                    workspaceService: workspaceService,
+                    workspaceProviderRegistry: workspaceProviderRegistry,
+                    retireTerminalSessions: { key in
+                        try await retireTerminalSessions(inScope: key)
+                    }
+                )
+                do {
+                    try await controller.archive(workspace)
+                    return .completed(
+                        AutomationWorkspaceArchiveEffect(
+                            workspaceID: workspace.id,
+                            selectedWorkspaceID: currentSelectedWorkspace?.id
+                        )
+                    )
+                } catch {
+                    return .unsupported("Failed to archive workspace: \(error.localizedDescription)")
+                }
             }
         )
     }

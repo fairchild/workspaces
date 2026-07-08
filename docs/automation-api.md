@@ -48,7 +48,10 @@ echo "$WORKSPACES_AUTOMATION_HANDLE"
 Both values should be present. The handle is an opaque capability. Do not copy
 it into another terminal, save it in dotfiles, or treat it as a tile ID.
 
-`workspaces automation health` checks only that a local listener is reachable:
+`workspaces automation health` checks only that a local listener is reachable.
+When the running app supports health metadata, plain output also includes the
+listener pid, listener start time, protocol version, and active automation
+experiments; `--json` includes the same values under `server`.
 
 ```bash
 workspaces automation health
@@ -216,6 +219,24 @@ Rules:
 - The audit log records route metadata, surface ID, requested lines, returned
   lines, and allow/deny outcome, never the terminal text.
 
+## Operator Workspace Commands
+
+Operator commands use the per-launch operator credential minted by an app
+started with Automation Operator Scope enabled. They work from any same-user
+shell, not just inside a WorkSpaces terminal tile:
+
+```bash
+WORKSPACES_AUTOMATION_API=1 WORKSPACES_AUTOMATION_OPERATOR=1 ./scripts/launch-dev.sh --no-build
+workspaces workspace list
+workspaces workspace create <repo-id> feature-a
+workspaces workspace select <workspace-id>
+workspaces workspace archive <workspace-id>
+```
+
+`workspace archive` drives the same sidebar archive action as the row menu. On
+success, the workspace leaves the active list and `workspace list --json`
+reports it with `isArchived: true`.
+
 ## Shell Alias Ideas
 
 These examples are intentionally small. They stay inside the V1 scope and do
@@ -275,6 +296,8 @@ V1 is intentionally narrow:
 - focus a neighboring tile
 - split from a primary tile
 - close the caller tile through normal app behavior
+- operator workspace list/create/select/archive verbs when Automation Operator
+  Scope is enabled
 - write into the caller's own PTY (experimental, double-gated — see
   [Automation Input Write Decision](./decisions/automation-input-write.md))
 - read bounded plain text from operator-created workspace terminals
