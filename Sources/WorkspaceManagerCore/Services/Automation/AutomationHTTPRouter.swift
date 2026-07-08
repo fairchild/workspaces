@@ -265,7 +265,7 @@ enum AutomationHTTPRouter {
         } catch {
             throw AutomationServiceError(
                 .invalidRequest,
-                "Request body must be JSON with string 'repoID', string 'name', optional string 'providerID', and optional 'guestOS'."
+                "Request body must be JSON with string 'repoID', string 'name', optional string 'providerID', optional 'guestOS', optional boolean 'select', and optional string 'fromRef'."
             )
         }
         guard !request.repoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -278,6 +278,14 @@ enum AutomationHTTPRouter {
             providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         {
             throw AutomationServiceError(.invalidRequest, "Request 'providerID' must be non-empty when provided.")
+        }
+        if let fromRef = request.fromRef {
+            switch WorkspaceCreationRefValidator.normalize(fromRef) {
+            case .success:
+                break
+            case .failure(let error):
+                throw AutomationServiceError(.invalidRequest, error.message)
+            }
         }
         return request
     }

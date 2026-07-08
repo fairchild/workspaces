@@ -978,6 +978,7 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         let repoName: String
         let repoLocalURL: URL
         let name: String
+        let fromRef: String?
     }
 
     var workspacesRootValue = URL(fileURLWithPath: "/tmp/workspaces")
@@ -998,11 +999,12 @@ private final class MockWorkspaceService: WorkspaceServiceProtocol, @unchecked S
         repoName: String,
         repoLocalURL: URL,
         name: String,
+        fromRef: String?,
         progress: WorkspaceCreationProgressHandler?
     ) async throws -> NewWorkspaceInfo {
         await MainActor.run {
             createWorkspaceCalls.append(
-                CreateWorkspaceCall(repoName: repoName, repoLocalURL: repoLocalURL, name: name)
+                CreateWorkspaceCall(repoName: repoName, repoLocalURL: repoLocalURL, name: name, fromRef: fromRef)
             )
         }
         await createWorkspaceDelay()

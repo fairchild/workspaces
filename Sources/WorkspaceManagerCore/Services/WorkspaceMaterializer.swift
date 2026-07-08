@@ -19,7 +19,8 @@ protocol WorkspaceMaterializer: Sendable {
     func materializeWorkspace(
         named sanitizedName: String,
         at destination: URL,
-        from sourceRepository: URL
+        from sourceRepository: URL,
+        fromRef: String?
     ) async throws -> MaterializedWorkspace
 
     func removeWorkspace(at workspaceURL: URL) async throws
@@ -45,13 +46,18 @@ struct GitWorktreeWorkspaceMaterializer: WorkspaceMaterializer {
     func materializeWorkspace(
         named sanitizedName: String,
         at destination: URL,
-        from sourceRepository: URL
+        from sourceRepository: URL,
+        fromRef: String? = nil
     ) async throws -> MaterializedWorkspace {
         let branchName = "workspace/\(sanitizedName)"
+        if fromRef != nil {
+            try await gitService.fetchAll(at: sourceRepository)
+        }
         try await gitService.createWorktree(
             branchName: branchName,
             at: destination,
-            from: sourceRepository
+            from: sourceRepository,
+            startPoint: fromRef
         )
 
         let currentBranch = try? await gitService.getCurrentBranch(at: destination)
@@ -73,8 +79,13 @@ struct GitCloneWorkspaceMaterializer: WorkspaceMaterializer {
     func materializeWorkspace(
         named sanitizedName: String,
         at destination: URL,
-        from sourceRepository: URL
+        from sourceRepository: URL,
+        fromRef: String? = nil
     ) async throws -> MaterializedWorkspace {
+        if fromRef != nil {
+            try await gitService.fetchAll(at: sourceRepository)
+        }
+
         let cloneArguments = [
             "clone",
             "--local",
@@ -95,6 +106,19 @@ struct GitCloneWorkspaceMaterializer: WorkspaceMaterializer {
 
         let branchName = "workspace/\(sanitizedName)"
         try await gitService.createBranch(branchName, at: destination)
+        if let fromRef {
+            let checkoutArguments = ["reset", "--hard", fromRef]
+            let checkoutResult = try await ProcessRunner.run(
+                executable: "/usr/bin/git",
+                arguments: checkoutArguments,
+                currentDirectory: destination,
+                timeout: 30
+            )
+            guard checkoutResult.success else {
+                let reason = checkoutResult.stderr.isEmpty ? "Unknown error" : checkoutResult.stderr
+                throw GitError.commandFailed(args: checkoutArguments, stderr: reason)
+            }
+        }
         let currentBranch = try? await gitService.getCurrentBranch(at: destination)
 
         return MaterializedWorkspace(gitBranch: currentBranch ?? branchName)

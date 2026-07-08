@@ -26,6 +26,12 @@ For development launches, you can force the feature on for that process:
 WORKSPACES_AUTOMATION_API=1 ./scripts/launch-dev.sh --no-build
 ```
 
+Trusted operator launches can also enable operator-scope workspace verbs:
+
+```bash
+WORKSPACES_AUTOMATION_API=1 WORKSPACES_AUTOMATION_OPERATOR=1 ./scripts/launch-dev.sh --no-build --no-activate
+```
+
 Terminal processes receive automation environment only when their surface is
 created. If you turn the experiment on or off, restart WorkSpaces and create a
 fresh terminal tile before testing.
@@ -81,6 +87,42 @@ workspaces surface list --json
 
 Each entry reports a stable surface ID, surface kind, title, working directory,
 visibility, active state, and whether it is the caller.
+
+## Create A Workspace (Operator Scope)
+
+`workspace.create` drives the app's real sidebar create helper. It requires an
+operator handle, not a tile handle.
+
+The default body preserves the original behavior exactly: branch from the base
+repo clone's local `HEAD`, create the workspace, select it, and attach/activate
+its terminal.
+
+```json
+{ "repoID": "...", "name": "feature-a", "providerID": "local", "guestOS": null }
+```
+
+Two optional fields are available:
+
+- `select`: boolean, default `true`. Set `false` to create the workspace without
+  changing the owner's current sidebar selection or focus.
+- `fromRef`: string, omitted by default. Set values such as `"origin/main"` to
+  fetch before creation and branch the workspace from that fetched ref instead
+  of stale local `HEAD`.
+
+```json
+{
+  "repoID": "...",
+  "name": "feature-a",
+  "providerID": "local",
+  "select": false,
+  "fromRef": "origin/main"
+}
+```
+
+`fromRef` must be a plausible git ref name; empty, whitespace-padded,
+option-like, or shell-metacharacter-shaped values fail `invalid_request`. The
+route does not support `startCommand`; that option is intentionally blocked by
+the open libghostty issue tracked as #889.
 
 ## Focus A Neighboring Tile
 

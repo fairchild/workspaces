@@ -46,7 +46,7 @@ struct WorkspaceServiceTests {
     }
 
     final class RecordingWorkspaceMaterializer: WorkspaceMaterializer, @unchecked Sendable {
-        var materializeCalls: [(sanitizedName: String, destination: URL, source: URL)] = []
+        var materializeCalls: [(sanitizedName: String, destination: URL, source: URL, fromRef: String?)] = []
         var removeCalls: [URL] = []
         var materializeError: Error?
         var removeError: Error?
@@ -60,9 +60,16 @@ struct WorkspaceServiceTests {
         func materializeWorkspace(
             named sanitizedName: String,
             at destination: URL,
-            from sourceRepository: URL
+            from sourceRepository: URL,
+            fromRef: String?
         ) async throws -> MaterializedWorkspace {
-            materializeCalls.append((sanitizedName: sanitizedName, destination: destination, source: sourceRepository))
+            materializeCalls.append(
+                (
+                    sanitizedName: sanitizedName,
+                    destination: destination,
+                    source: sourceRepository,
+                    fromRef: fromRef
+                ))
             if createsDestination {
                 try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
             }
@@ -351,6 +358,51 @@ struct WorkspaceServiceTests {
         #expect(mockGit.createWorktreeCalls[0].branchName == "workspace/my-feature")
         #expect(mockGit.createWorktreeCalls[0].destination == workspaceDir)
         #expect(mockGit.createWorktreeCalls[0].source == repoDir)
+        #expect(mockGit.createWorktreeCalls[0].startPoint == nil)
+        #expect(mockGit.fetchAllCalls.isEmpty)
+    }
+
+    @Test("default materializer fetches and branches from requested ref")
+    func defaultMaterializerUsesRequestedRef() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        _ = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "my-feature",
+            fromRef: "origin/main"
+        )
+
+        #expect(mockGit.fetchAllCalls == [repoDir])
+        #expect(mockGit.createWorktreeCalls.count == 1)
+        #expect(mockGit.createWorktreeCalls[0].startPoint == "origin/main")
+    }
+
+    @Test("createWorkspace rejects unsafe fromRef values before git")
+    func createWorkspaceRejectsUnsafeFromRef() async throws {
+        let mockGit = MockGitService()
+        let service = WorkspaceService(gitService: mockGit)
+        let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        await #expect(throws: WorkspaceError.self) {
+            _ = try await service.createWorkspace(
+                repoName: "test-repo",
+                repoLocalURL: repoDir,
+                name: "my-feature",
+                fromRef: "origin/main; rm -rf /"
+            )
+        }
+
+        #expect(mockGit.fetchAllCalls.isEmpty)
+        #expect(mockGit.createWorktreeCalls.isEmpty)
     }
 
     @Test("sequential race fan-out keeps earlier workspaces when a later one fails")
@@ -578,6 +630,55 @@ struct WorkspaceServiceTests {
 
         let worktreeList = try runGit(["worktree", "list", "--porcelain"], at: repoDir)
         #expect(self.worktreeList(worktreeList, contains: info.path))
+    }
+
+    @Test("createWorkspace with fromRef materializes from fetched origin ref")
+    func createWorkspaceMaterializesFromFetchedRef() async throws {
+        let service = WorkspaceService()
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let seedDir = testRoot.appendingPathComponent("seed", isDirectory: true)
+        let remoteDir = testRoot.appendingPathComponent("origin.git", isDirectory: true)
+        let repoDir = testRoot.appendingPathComponent("repos/test-repo", isDirectory: true)
+        let wsRoot = testRoot.appendingPathComponent("workspaces", isDirectory: true)
+        try FileManager.default.createDirectory(at: seedDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: wsRoot, withIntermediateDirectories: true)
+
+        _ = try runGit(["init", "-b", "main"], at: seedDir)
+        _ = try runGit(["config", "user.email", "test@example.com"], at: seedDir)
+        _ = try runGit(["config", "user.name", "Test User"], at: seedDir)
+        try "stale\n".write(to: seedDir.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        _ = try runGit(["add", "-A"], at: seedDir)
+        _ = try runGit(["commit", "-m", "initial"], at: seedDir)
+        _ = try runGit(["init", "--bare", remoteDir.path], at: testRoot)
+        _ = try runGit(["remote", "add", "origin", remoteDir.path], at: seedDir)
+        _ = try runGit(["push", "-u", "origin", "main"], at: seedDir)
+        _ = try runGit(["clone", remoteDir.path, repoDir.path], at: testRoot)
+        let staleHead = try runGit(["rev-parse", "HEAD"], at: repoDir)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        try "fresh\n".write(to: seedDir.appendingPathComponent("README.md"), atomically: true, encoding: .utf8)
+        _ = try runGit(["add", "-A"], at: seedDir)
+        _ = try runGit(["commit", "-m", "fresh"], at: seedDir)
+        _ = try runGit(["push", "origin", "main"], at: seedDir)
+        let fetchedHead = try runGit(["rev-parse", "HEAD"], at: seedDir)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(fetchedHead != staleHead)
+
+        let originalRoot = setWorkspacesRoot(wsRoot)
+        defer { restoreWorkspacesRoot(originalRoot) }
+
+        let info = try await service.createWorkspace(
+            repoName: "test-repo",
+            repoLocalURL: repoDir,
+            name: "fresh-ref",
+            fromRef: "origin/main"
+        )
+
+        let workspaceHead = try runGit(["rev-parse", "HEAD"], at: info.path)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(workspaceHead == fetchedHead)
+        #expect(workspaceHead != staleHead)
     }
 
     @Test("createWorkspace can materialize with repository copy adapter")

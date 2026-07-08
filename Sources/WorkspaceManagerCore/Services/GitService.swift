@@ -69,16 +69,25 @@ public actor GitService: GitServiceProtocol {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    public func fetchAll(at path: URL) async throws {
+        _ = try await runGit(["fetch", "--all", "--prune"], at: path)
+    }
+
     public func createBranch(_ name: String, at path: URL) async throws {
         _ = try await runGit(["checkout", "-b", name], at: path)
     }
 
-    public func createWorktree(branchName: String, at destination: URL, from source: URL) async throws {
+    public func createWorktree(
+        branchName: String,
+        at destination: URL,
+        from source: URL,
+        startPoint: String? = nil
+    ) async throws {
         if try await localBranchExists(branchName, at: source) {
             throw GitError.branchAlreadyExists(name: branchName)
         }
 
-        let args = ["worktree", "add", "-b", branchName, destination.path, "HEAD"]
+        let args = ["worktree", "add", "-b", branchName, destination.path, startPoint ?? "HEAD"]
         let result = try await runGitResult(args, at: source)
         guard result.success else {
             try? await deleteLocalBranchIfExists(branchName, at: source)

@@ -11,6 +11,7 @@ public actor AutomationAuditLogger {
         public let operatorHandle: Bool
         public let allowed: Bool
         public let errorCode: AutomationErrorCode?
+        public let metadata: [String: String]?
 
         public init(
             timestamp: String,
@@ -19,7 +20,8 @@ public actor AutomationAuditLogger {
             handlePresent: Bool,
             operatorHandle: Bool = false,
             allowed: Bool,
-            errorCode: AutomationErrorCode?
+            errorCode: AutomationErrorCode?,
+            metadata: [String: String]? = nil
         ) {
             self.timestamp = timestamp
             self.method = method
@@ -28,6 +30,7 @@ public actor AutomationAuditLogger {
             self.operatorHandle = operatorHandle
             self.allowed = allowed
             self.errorCode = errorCode
+            self.metadata = metadata
         }
     }
 
@@ -54,6 +57,7 @@ public actor AutomationAuditLogger {
         method: String,
         path: String,
         headers: [String: String],
+        requestBody: Data = Data(),
         responseBody: Data,
         operatorHandle: Bool = false
     ) {
@@ -65,7 +69,8 @@ public actor AutomationAuditLogger {
             handlePresent: headers[AutomationAPI.handleHeader]?.isEmpty == false,
             operatorHandle: operatorHandle,
             allowed: summary?.ok == true,
-            errorCode: summary?.error?.code
+            errorCode: summary?.error?.code,
+            metadata: Self.routeMetadata(method: method, path: path, body: requestBody)
         )
         guard let data = try? encoder.encode(event) else { return }
 
@@ -85,6 +90,23 @@ public actor AutomationAuditLogger {
         } catch {
             NSLog("[AutomationAudit] append failed: %@", "\(error)")
         }
+    }
+
+    private nonisolated static func routeMetadata(method: String, path: String, body: Data) -> [String: String]? {
+        guard method.uppercased() == "POST", path == "/v1/workspace/create", !body.isEmpty,
+            let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+        else {
+            return nil
+        }
+
+        var metadata: [String: String] = [:]
+        if object.keys.contains("select") {
+            metadata["workspaceCreate.select"] = "provided"
+        }
+        if object.keys.contains("fromRef") {
+            metadata["workspaceCreate.fromRef"] = "provided"
+        }
+        return metadata.isEmpty ? nil : metadata
     }
 }
 

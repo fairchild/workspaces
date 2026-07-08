@@ -113,19 +113,22 @@ public struct WorkspaceProviderCreationRequest: Sendable {
     public let repoRemoteURL: String?
     public let workspaceName: String
     public let guestOS: WorkspaceGuestOS?
+    public let fromRef: String?
 
     public init(
         repoName: String,
         repoLocalURL: URL,
         repoRemoteURL: String?,
         workspaceName: String,
-        guestOS: WorkspaceGuestOS? = nil
+        guestOS: WorkspaceGuestOS? = nil,
+        fromRef: String? = nil
     ) {
         self.repoName = repoName
         self.repoLocalURL = repoLocalURL
         self.repoRemoteURL = repoRemoteURL
         self.workspaceName = workspaceName
         self.guestOS = guestOS
+        self.fromRef = fromRef
     }
 }
 

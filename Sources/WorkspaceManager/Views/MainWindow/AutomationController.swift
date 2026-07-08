@@ -194,6 +194,13 @@ final class AutomationController: AutomationControlling {
         guard !providerID.isEmpty else {
             throw AutomationServiceError(.invalidRequest, "providerID must be non-empty when provided.")
         }
+        let fromRef: String?
+        switch WorkspaceCreationRefValidator.normalize(request.fromRef) {
+        case .success(let normalized):
+            fromRef = normalized
+        case .failure(let error):
+            throw AutomationServiceError(.invalidRequest, error.message)
+        }
 
         guard let gestureVerbs else {
             throw AutomationServiceError(
@@ -206,7 +213,9 @@ final class AutomationController: AutomationControlling {
             repoID: repoID,
             name: name,
             providerID: providerID,
-            guestOS: request.guestOS
+            guestOS: request.guestOS,
+            shouldSelect: request.select ?? true,
+            fromRef: fromRef
         )
         let capabilities = entry.capabilities
         switch await gestureVerbs.createWorkspace(command) {

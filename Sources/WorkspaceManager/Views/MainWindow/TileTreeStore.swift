@@ -240,6 +240,24 @@ final class TileTreeStore: ObservableObject {
     }
 
     @discardableResult
+    func ensureSession(
+        key: HostTerminalSessionKey,
+        directory: URL,
+        customCommand: String? = nil,
+        initialCommand: String? = nil
+    ) -> HostTerminalSessionActivationResult {
+        let result = coordinator.ensureSession(
+            key: key,
+            directory: directory,
+            customCommand: customCommand,
+            initialCommand: initialCommand
+        )
+        _ = renderTileID(for: result.session.id)
+        publishSnapshot()
+        return result
+    }
+
+    @discardableResult
     func activateExistingSession(sessionID: UUID) -> Bool {
         guard coordinator.activate(sessionID: sessionID) != nil else { return false }
         publishSnapshot()

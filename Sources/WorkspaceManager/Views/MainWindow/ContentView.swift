@@ -1540,6 +1540,20 @@ struct ContentView: View {
     }
 
     @MainActor
+    private func attachWorkspaceSessionWithoutSelection(_ workspace: Workspace) -> UUID? {
+        guard workspace.status == .active else { return nil }
+        guard workspace.backend == .local else { return nil }
+
+        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+        let session = tileTreeStore.ensureSession(
+            key: .hostPath(workspaceDirectory.path),
+            directory: workspaceDirectory
+        ).session
+        _ = tileTreeStore.terminalSurfaceView(for: session)
+        return session.id
+    }
+
+    @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
         handleWorkspaceSelection(workspace, preferredDirectory: nil)
     }
@@ -2149,10 +2163,22 @@ struct ContentView: View {
                 guard case .completed(let effect) = outcome else {
                     return outcome
                 }
+                var attachedSurfaceID: UUID?
+                var attached = false
+                if !command.shouldSelect,
+                    let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == effect.workspaceID })
+                {
+                    attachedSurfaceID = attachWorkspaceSessionWithoutSelection(workspace)
+                    attached = attachedSurfaceID != nil
+                }
                 let selectedID = currentSelectedWorkspace?.id
                 let activeSessionID = tileTreeStore.activeSessionID
-                let attached = selectedID == effect.workspaceID && activeSessionID != nil
-                if desktopUISmokeAutomation.usesAPICreateDriver,
+                if command.shouldSelect {
+                    attached = selectedID == effect.workspaceID && activeSessionID != nil
+                    attachedSurfaceID = attached ? activeSessionID : nil
+                }
+                if command.shouldSelect,
+                    desktopUISmokeAutomation.usesAPICreateDriver,
                     desktopUISmokeAutomation.usesAPISelectDriver,
                     let repo = repos.first(where: { $0.id == effect.repoID }),
                     let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == effect.workspaceID })
@@ -2174,7 +2200,7 @@ struct ContentView: View {
                         workspaceName: effect.workspaceName,
                         workspacePath: effect.workspacePath,
                         selectedWorkspaceID: selectedID,
-                        attachedSurfaceID: attached ? activeSessionID : nil,
+                        attachedSurfaceID: attachedSurfaceID,
                         attachedTerminal: attached
                     )
                 )

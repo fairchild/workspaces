@@ -62,7 +62,9 @@ struct AutomationCreateVerbTests {
                     : nil
             },
             performCreation: { _, command in
-                .completed(
+                #expect(command.shouldSelect)
+                #expect(command.fromRef == nil)
+                return .completed(
                     AutomationWorkspaceCreateEffect(
                         repoID: repoID,
                         workspaceID: workspaceID,
@@ -89,6 +91,73 @@ struct AutomationCreateVerbTests {
         #expect(result.attachedSurfaceID == surfaceID.uuidString)
         #expect(result.selectedWorkspaceID == workspaceID)
         #expect(result.system.capabilities.contains(.workspaceCreate))
+    }
+
+    @Test("select false creates without changing the active surface")
+    func selectFalsePreservesActiveSurface() async throws {
+        let store = TileTreeStore()
+        let repoID = UUID()
+        let workspaceID = UUID()
+        let staleSession = store.activateSession(
+            key: .repoPath("/tmp/repo"),
+            directory: URL(fileURLWithPath: "/tmp/repo")
+        ).session
+        var observedCommand: AutomationWorkspaceCreateCommand?
+
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: { _ in nil },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            resolveRepo: { [repoID] in
+                $0 == repoID
+                    ? AutomationGestureVerbs.RepoTarget(repoID: repoID, name: "repo", path: "/tmp/repo")
+                    : nil
+            },
+            performCreation: { _, command in
+                observedCommand = command
+                return .completed(
+                    AutomationWorkspaceCreateEffect(
+                        repoID: repoID,
+                        workspaceID: workspaceID,
+                        workspaceName: command.name,
+                        workspacePath: "/tmp/repo/\(command.name)",
+                        selectedWorkspaceID: nil,
+                        attachedSurfaceID: nil,
+                        attachedTerminal: false
+                    )
+                )
+            }
+        )
+        let registry = AutomationHandleRegistry(makeHandle: { UUID().uuidString })
+        let entry = registry.registerOperator(appScopeID: "workspaces.local")
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            gestureVerbs: verbs
+        )
+
+        let result = try await controller.automationCreateWorkspace(
+            for: entry.handle,
+            request: AutomationWorkspaceCreateRequest(
+                repoID: repoID.uuidString,
+                name: "created",
+                select: false,
+                fromRef: "origin/main"
+            )
+        )
+
+        #expect(observedCommand?.shouldSelect == false)
+        #expect(observedCommand?.fromRef == "origin/main")
+        #expect(result.outcome == .completed)
+        #expect(result.workspaceID == workspaceID)
+        #expect(result.selectedWorkspaceID == nil)
+        #expect(!result.attachedTerminal)
+        #expect(result.attachedSurfaceID == nil)
+        #expect(store.activeSessionID == staleSession.id)
     }
 
     @Test("a tile handle lacks workspace.create and is denied")

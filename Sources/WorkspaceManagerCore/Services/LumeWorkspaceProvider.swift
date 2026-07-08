@@ -129,6 +129,7 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
                 repoName: request.repoName,
                 repoLocalURL: request.repoLocalURL,
                 name: request.workspaceName,
+                fromRef: request.fromRef,
                 progress: { phase in
                     await progress?(LocalWorkspaceProvider.progressMessage(for: phase))
                 }

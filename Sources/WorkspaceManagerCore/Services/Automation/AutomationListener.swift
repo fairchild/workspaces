@@ -187,6 +187,7 @@ public actor AutomationListener {
             method: request.method,
             path: request.path,
             headers: request.headers,
+            requestBody: request.body,
             responseBody: result.body,
             operatorHandle: operatorHandle
         )

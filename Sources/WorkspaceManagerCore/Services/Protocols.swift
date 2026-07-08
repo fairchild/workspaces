@@ -86,8 +86,14 @@ public protocol GitServiceProtocol: Sendable {
     func getStatus(at path: URL) async throws -> [FileChange]
     func getRemoteURL(at path: URL) async throws -> String?
     func getCurrentBranch(at path: URL) async throws -> String?
+    func fetchAll(at path: URL) async throws
     func createBranch(_ name: String, at path: URL) async throws
-    func createWorktree(branchName: String, at destination: URL, from source: URL) async throws
+    func createWorktree(
+        branchName: String,
+        at destination: URL,
+        from source: URL,
+        startPoint: String?
+    ) async throws
     func checkoutBranch(_ name: String, at path: URL) async throws
     func getFileTree(at path: URL, maxDepth: Int) async throws -> FileNode
     func diff(file: String, at path: URL) async throws -> UnifiedDiff
@@ -99,6 +105,12 @@ public protocol GitServiceProtocol: Sendable {
 }
 
 extension GitServiceProtocol {
+    public func fetchAll(at path: URL) async throws {}
+
+    public func createWorktree(branchName: String, at destination: URL, from source: URL) async throws {
+        try await createWorktree(branchName: branchName, at: destination, from: source, startPoint: nil)
+    }
+
     public func getFileTree(at path: URL) async throws -> FileNode {
         try await getFileTree(at: path, maxDepth: 4)
     }
@@ -110,6 +122,7 @@ public protocol WorkspaceServiceProtocol: Sendable {
         repoName: String,
         repoLocalURL: URL,
         name: String,
+        fromRef: String?,
         progress: WorkspaceCreationProgressHandler?
     ) async throws -> NewWorkspaceInfo
     @discardableResult
@@ -132,7 +145,23 @@ extension WorkspaceServiceProtocol {
             repoName: repoName,
             repoLocalURL: repoLocalURL,
             name: name,
+            fromRef: nil,
             progress: nil
+        )
+    }
+
+    public func createWorkspace(
+        repoName: String,
+        repoLocalURL: URL,
+        name: String,
+        progress: WorkspaceCreationProgressHandler?
+    ) async throws -> NewWorkspaceInfo {
+        try await createWorkspace(
+            repoName: repoName,
+            repoLocalURL: repoLocalURL,
+            name: name,
+            fromRef: nil,
+            progress: progress
         )
     }
 }
