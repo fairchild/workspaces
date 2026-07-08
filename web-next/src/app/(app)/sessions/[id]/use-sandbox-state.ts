@@ -110,6 +110,11 @@ export function useSandboxState(sessionId: string, turnInFlight: boolean) {
 export function sandboxStateLabel(sandbox: SandboxState | null): string {
 	if (!sandbox) return "";
 	if (sandbox.state === "live") return "sandbox live";
-	if (sandbox.state === "parked") return "sandbox parked";
+	if (sandbox.state === "parked") {
+		if (sandbox.detail === "stopped") {
+			return "sandbox stopped; resumes next message";
+		}
+		return "sandbox parking";
+	}
 	return "no sandbox";
 }

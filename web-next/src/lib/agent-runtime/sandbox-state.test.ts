@@ -7,16 +7,20 @@
  */
 import { describe, expect, test, vi } from "vitest";
 import {
+	ADAPTIVE_IDLE_STOP_MS,
+	isCurrentTurnSettled,
 	type LifecycleSandbox,
 	resolveSandboxState,
 	stopSessionSandbox,
 } from "./sandbox-state";
+import type { StreamChunk } from "./stream-chunk";
 import { sessionSandboxName } from "./vercel-provider";
 
 const PARKED_SESSION = {
 	claudeSessionId: "harness-1",
 	resumeState: '{"parked":true}',
 };
+const NOW = new Date("2026-07-08T17:00:00.000Z");
 
 function sandboxWith(status: string): LifecycleSandbox & { stop: ReturnType<typeof vi.fn> } {
 	return {
@@ -24,6 +28,14 @@ function sandboxWith(status: string): LifecycleSandbox & { stop: ReturnType<type
 		status,
 		stop: vi.fn(async () => ({})),
 	};
+}
+
+function event(
+	seq: number,
+	role: "user" | "assistant",
+	chunk: StreamChunk,
+): { seq: number; role: "user" | "assistant"; chunk: StreamChunk } {
+	return { seq, role, chunk };
 }
 
 describe("resolveSandboxState", () => {
@@ -55,6 +67,94 @@ describe("resolveSandboxState", () => {
 			sandboxWith(status),
 		);
 		expect(state).toEqual({ state: "live" });
+	});
+
+	test("a live sandbox inside the adaptive idle window stays warm", async () => {
+		const sandbox = sandboxWith("running");
+		const state = await resolveSandboxState(
+			{
+				...PARKED_SESSION,
+				lastActivityAt: new Date(
+					NOW.getTime() - ADAPTIVE_IDLE_STOP_MS + 1_000,
+				).toISOString(),
+			},
+			async () => sandbox,
+			{ now: NOW },
+		);
+
+		expect(sandbox.stop).not.toHaveBeenCalled();
+		expect(state).toEqual({ state: "live" });
+	});
+
+	test("a live sandbox past the adaptive idle window is stopped and reported parked", async () => {
+		const sandbox = sandboxWith("running");
+		const currentTurnSettled = isCurrentTurnSettled([
+			event(1, "user", { type: "text", content: "build it" }),
+			event(2, "assistant", { type: "done", content: "" }),
+		]);
+		const state = await resolveSandboxState(
+			{
+				...PARKED_SESSION,
+				lastActivityAt: new Date(
+					NOW.getTime() - ADAPTIVE_IDLE_STOP_MS - 1_000,
+				).toISOString(),
+			},
+			async () => sandbox,
+			{ now: NOW, currentTurnSettled },
+		);
+
+		expect(sandbox.stop).toHaveBeenCalledTimes(1);
+		expect(state).toEqual({ state: "parked", detail: "stopped" });
+	});
+
+	test("a live sandbox past the adaptive idle window stays live while the current turn is unsettled", async () => {
+		const sandbox = sandboxWith("running");
+		const currentTurnSettled = isCurrentTurnSettled([
+			event(1, "user", { type: "text", content: "run the long build" }),
+			event(2, "assistant", {
+				type: "tool_use",
+				content: "pnpm build",
+			}),
+		]);
+
+		const state = await resolveSandboxState(
+			{
+				...PARKED_SESSION,
+				lastActivityAt: new Date(
+					NOW.getTime() - ADAPTIVE_IDLE_STOP_MS - 1_000,
+				).toISOString(),
+			},
+			async () => sandbox,
+			{ now: NOW, currentTurnSettled },
+		);
+
+		expect(currentTurnSettled).toBe(false);
+		expect(sandbox.stop).not.toHaveBeenCalled();
+		expect(state).toEqual({ state: "live" });
+	});
+
+	test("adaptive idle-stop failures leave the sandbox live and do not throw", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const sandbox = sandboxWith("running");
+		sandbox.stop.mockRejectedValueOnce(new Error("api timeout"));
+
+		const state = await resolveSandboxState(
+			{
+				...PARKED_SESSION,
+				lastActivityAt: new Date(
+					NOW.getTime() - ADAPTIVE_IDLE_STOP_MS - 1_000,
+				).toISOString(),
+			},
+			async () => sandbox,
+			{ now: NOW, currentTurnSettled: true },
+		);
+
+		expect(sandbox.stop).toHaveBeenCalledTimes(1);
+		expect(state).toEqual({ state: "live" });
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("adaptive idle-stop failed"),
+		);
+		warn.mockRestore();
 	});
 
 	test.each(["stopping", "stopped", "snapshotting"])(
