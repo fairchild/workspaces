@@ -24,6 +24,13 @@ struct WorkspaceCreationStatus {
     let message: String
 }
 
+private enum SidebarWorkspaceCreationResult {
+    case created(Workspace)
+    case confirmationRequired(AutomationConfirmationRequirement)
+    case invalidRequest(String)
+    case failed(String)
+}
+
 private struct NewWorkspaceSheetContext: Identifiable {
     let repo: Repo
 
@@ -61,6 +68,7 @@ struct SidebarView: View {
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
     let desktopUISmokeAutomation: DesktopUISmokeAutomationController
+    let automationWorkspaceCreateBridge: AutomationWorkspaceCreateGestureBridge
 
     @AppStorage(SidebarRepoSortMode.storageKey)
     private var repoSortModeRawValue: String = SidebarRepoSortMode.alphabetical.rawValue
@@ -237,6 +245,10 @@ struct SidebarView: View {
         }
         .onDisappear {
             clearAppCommands()
+            automationWorkspaceCreateBridge.clear()
+        }
+        .onAppear {
+            installAutomationWorkspaceCreateGesture()
         }
         .onChange(of: selectedWorkspace?.id) { _, _ in
             expandRepoForSelectedWorkspace()
@@ -253,11 +265,13 @@ struct SidebarView: View {
             Task { @MainActor in
                 await maybeDriveDesktopUISmokeAutomation()
             }
+            installAutomationWorkspaceCreateGesture()
         }
         .onChange(of: repoSortModeRawValue) { _, _ in
             syncRepoSortSnapshot(forceRefresh: true)
         }
         .onAppear {
+            installAutomationWorkspaceCreateGesture()
             initializeExpandedReposIfNeeded()
             expandContainersForSelectedWebSource()
             syncRepoSortSnapshot(forceRefresh: false)
@@ -809,25 +823,116 @@ struct SidebarView: View {
     }
 
     @MainActor
+    private func installAutomationWorkspaceCreateGesture() {
+        automationWorkspaceCreateBridge.install { command in
+            await performAutomationWorkspaceCreate(command)
+        }
+    }
+
+    @MainActor
+    private func performAutomationWorkspaceCreate(
+        _ command: AutomationWorkspaceCreateCommand
+    ) async -> AutomationWorkspaceCreateOutcome {
+        guard newWorkspaceSheetContext == nil else {
+            return .confirmationRequired(
+                AutomationConfirmationRequirement(
+                    action: "workspace.create",
+                    title: "New Workspace",
+                    message:
+                        "A New Workspace sheet is already open; confirm or dismiss it before creating another workspace."
+                )
+            )
+        }
+        if let confirmation = workspaceProviderSetupCoordinator.confirmationRequest {
+            return .confirmationRequired(automationConfirmation(from: confirmation))
+        }
+        if let progress = workspaceProviderSetupCoordinator.progressPresentation {
+            return .confirmationRequired(
+                AutomationConfirmationRequirement(
+                    action: "workspace.create",
+                    title: progress.title,
+                    message:
+                        "\(progress.providerDisplayName) setup is already in progress for \(progress.action.summary).",
+                    providerID: progress.providerID,
+                    providerDisplayName: progress.providerDisplayName
+                )
+            )
+        }
+
+        guard let repo = repos.first(where: { $0.id == command.repoID }) else {
+            return .notFound
+        }
+
+        let result = await createWorkspace(
+            from: repo,
+            name: command.name,
+            nameSource: .manual,
+            providerID: command.providerID,
+            guestOS: command.guestOS
+        )
+
+        switch result {
+        case .created(let workspace):
+            await desktopUISmokeAutomation.noteWorkspaceCreated(workspace)
+            await emitDesktopUISmokeSidebarUpdate(for: workspace)
+            return .completed(
+                AutomationWorkspaceCreateEffect(
+                    repoID: repo.id,
+                    workspaceID: workspace.id,
+                    workspaceName: workspace.name,
+                    workspacePath: workspace.path,
+                    selectedWorkspaceID: workspace.id,
+                    attachedSurfaceID: nil,
+                    attachedTerminal: false
+                )
+            )
+        case .confirmationRequired(let confirmation):
+            workspaceProviderSetupCoordinator.cancelPendingAction()
+            return .confirmationRequired(confirmation)
+        case .invalidRequest(let message):
+            return .invalidRequest(message)
+        case .failed(let message):
+            return .unsupported(message)
+        }
+    }
+
+    private func automationConfirmation(
+        from request: WorkspaceProviderSetupConfirmationRequest
+    ) -> AutomationConfirmationRequirement {
+        let message = "\(request.action.summary) requires \(request.providerDisplayName) setup confirmation."
+        return AutomationConfirmationRequirement(
+            action: "workspace.create",
+            title: request.title,
+            message: message,
+            providerID: request.providerID,
+            providerDisplayName: request.providerDisplayName,
+            primaryButtonTitle: request.primaryButtonTitle
+        )
+    }
+
+    @MainActor
+    @discardableResult
     private func createWorkspace(
         from repo: Repo,
         name: String,
         nameSource: WorkspaceNameSource,
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil
-    ) async {
+    ) async -> SidebarWorkspaceCreationResult {
         guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
-            presentSidebarError("Workspace provider '\(providerID)' is not registered.")
-            return
+            let message = "Workspace provider '\(providerID)' is not registered."
+            presentSidebarError(message)
+            return .invalidRequest(message)
         }
 
         do {
-            try await workspaceProviderSetupActionRunner.run(
+            var createdWorkspace: Workspace?
+            let intercepted = try await workspaceProviderSetupActionRunner.run(
                 provider: provider,
                 action: .createWorkspace(name: name, guestOS: guestOS)
             ) {
                 await refreshWorkspaceEnvironmentState(trigger: "workspace_create_after_setup")
-                await createWorkspaceAfterSetup(
+                createdWorkspace = await createWorkspaceAfterSetup(
                     from: repo,
                     name: name,
                     nameSource: nameSource,
@@ -835,7 +940,7 @@ struct SidebarView: View {
                     guestOS: guestOS
                 )
             } perform: {
-                await createWorkspaceAfterSetup(
+                createdWorkspace = await createWorkspaceAfterSetup(
                     from: repo,
                     name: name,
                     nameSource: nameSource,
@@ -843,21 +948,44 @@ struct SidebarView: View {
                     guestOS: guestOS
                 )
             }
+            if intercepted {
+                if let confirmation = workspaceProviderSetupCoordinator.confirmationRequest {
+                    return .confirmationRequired(automationConfirmation(from: confirmation))
+                }
+                let message = "Workspace provider setup is already in progress."
+                return .confirmationRequired(
+                    AutomationConfirmationRequirement(
+                        action: "workspace.create",
+                        title: "Workspace Provider Setup",
+                        message: message,
+                        providerID: providerID,
+                        providerDisplayName: provider.descriptor.displayName
+                    )
+                )
+            }
+            guard let createdWorkspace else {
+                let message = "Workspace creation did not produce a workspace."
+                return .failed(message)
+            }
+            return .created(createdWorkspace)
         } catch {
-            presentSidebarError(error.localizedDescription)
+            let message = error.localizedDescription
+            presentSidebarError(message)
+            return .failed(message)
         }
     }
 
     @MainActor
+    @discardableResult
     private func createWorkspaceAfterSetup(
         from repo: Repo,
         name: String,
         nameSource: WorkspaceNameSource,
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil
-    ) async {
+    ) async -> Workspace? {
         let repoID = repo.id
-        guard !isCreatingWorkspace(for: repoID) else { return }
+        guard !isCreatingWorkspace(for: repoID) else { return nil }
         expansionController.expandRepo(repoID)
         workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
             message: initialCreationMessage(for: providerID)
@@ -908,6 +1036,7 @@ struct SidebarView: View {
             await hostLumeSmokeAutomation.noteWorkspaceActive(
                 HostLumeSmokeWorkspaceRecord(workspace: workspace)
             )
+            return workspace
         } catch {
             creationLog.error(
                 "createWorkspaceAfterSetup: failed: \(error.localizedDescription)"
@@ -915,6 +1044,7 @@ struct SidebarView: View {
             workspaceCreationStatusByRepoID.removeValue(forKey: repoID)
             let providerName = providerDisplayName(for: providerID)
             presentSidebarError("Failed to create \(providerName) workspace: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -1263,6 +1393,16 @@ struct SidebarView: View {
 
         await desktopUISmokeAutomation.noteRepoReady(repo)
         guard desktopUISmokeAutomation.shouldStartScenario() else { return }
+        if desktopUISmokeAutomation.usesAPICreateDriver {
+            let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
+            onRepoTerminalSelected(repo)
+            _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
+                after: focusBaselineBeforeRepoPark,
+                timeout: .seconds(15)
+            )
+            await desktopUISmokeAutomation.noteAwaitingAPICreate(repo: repo)
+            return
+        }
         await runDesktopUISmokeScenario(repo: repo)
     }
 

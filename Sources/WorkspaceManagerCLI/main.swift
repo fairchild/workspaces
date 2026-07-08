@@ -979,8 +979,12 @@ private final class CLIApp {
             return try runWorkspaceList(arguments: arguments)
         case "select":
             return try runWorkspaceSelect(arguments: Array(arguments.dropFirst()))
+        case "create":
+            return try runWorkspaceCreate(arguments: Array(arguments.dropFirst()))
         default:
-            throw CLIError("Usage: workspaces workspace list [--json] | workspace select <id> [--json]")
+            throw CLIError(
+                "Usage: workspaces workspace list [--json] | workspace select <id> [--json] | workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]"
+            )
         }
     }
 
@@ -1039,7 +1043,90 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces workspace select <id> [--json]` — the first operator mutation verb. Drives the
+    /// `workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]`
+    /// drives the running app's real sidebar create helper via the operator socket. A completed
+    /// response means the app created the workspace, selected it, and attached its terminal; setup
+    /// sheets return `confirmation_required` with the confirmation payload instead of blocking.
+    private func runWorkspaceCreate(arguments: [String]) throws -> Int32 {
+        let usage =
+            "workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]"
+        var json = false
+        var repoID: String?
+        var name: String?
+        var providerID: String?
+        var guestOS: WorkspaceGuestOS?
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--json":
+                json = true
+                index += 1
+            case "--provider":
+                guard index + 1 < arguments.count else { throw CLIError("Usage: \(usage)") }
+                providerID = arguments[index + 1]
+                index += 2
+            case "--guest-os":
+                guard index + 1 < arguments.count else { throw CLIError("Usage: \(usage)") }
+                guard let parsed = WorkspaceGuestOS(rawValue: arguments[index + 1]) else {
+                    throw CLIError("Unsupported guest OS '\(arguments[index + 1])'. Use linux or macos.")
+                }
+                guestOS = parsed
+                index += 2
+            default:
+                if repoID == nil {
+                    repoID = argument
+                } else if name == nil {
+                    name = argument
+                } else {
+                    throw CLIError("Usage: \(usage)")
+                }
+                index += 1
+            }
+        }
+
+        guard let repoID, !repoID.isEmpty, let name, !name.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let credential = try loadOperatorCredential()
+        let request = AutomationWorkspaceCreateRequest(
+            repoID: repoID,
+            name: name,
+            providerID: providerID,
+            guestOS: guestOS
+        )
+        let body = try JSONEncoder().encode(request)
+        let result = try operatorRequest(
+            AutomationWorkspaceCreateResult.self,
+            credential: credential,
+            method: "POST",
+            path: "/v1/workspace/create",
+            body: body
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        switch result.outcome {
+        case .completed:
+            let id = result.workspaceID?.uuidString ?? "-"
+            if result.attachedTerminal {
+                let surface = result.attachedSurfaceID ?? "-"
+                print("Created \(result.workspaceName) (\(id)) — terminal attached (surface \(surface)).")
+            } else {
+                print("Created \(result.workspaceName) (\(id)) — no terminal attached.")
+            }
+        case .confirmationRequired:
+            print("Confirmation required: \(result.message ?? "the app needs confirmation to proceed.")")
+        }
+        return 0
+    }
+
+    /// `workspaces workspace select <id> [--json]` — an operator mutation verb. Drives the
     /// running app's real selection gesture (the same path a sidebar click takes) via the socket, so
     /// the app highlights the workspace, attaches its terminal, and requests focus. `<id>` is a stable
     /// workspace id from `workspace list`. Operator scope: reads the per-launch credential, so it works
@@ -1659,6 +1746,8 @@ private func printHelp() {
           workspaces window list [--json]
           workspaces window snapshot --out <path> [--window <id>]
           workspaces workspace list [--json]
+          workspaces workspace select <workspace-id> [--json]
+          workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
           workspaces help
 
         Launch behavior:

@@ -72,6 +72,7 @@ struct ContentView: View {
     @State private var accessRecorder = MainWindowAccessRecorder()
     @State private var presentedSessionSwitcherSnapshot: SessionSwitcherSnapshot?
     @StateObject private var rightPaneStateStore = RightPaneStateStore()
+    @StateObject private var automationWorkspaceCreateBridge = AutomationWorkspaceCreateGestureBridge()
     /// Seam store for the web main-content pane: a one-tile `SurfaceStore` domain. Source switches
     /// rebind `webDetailTileID` to a new `WebSurface` (identity-guarded); per-source `WebSurfaceStore`s
     /// inside keep each source's page alive through the deferred-release window.
@@ -619,7 +620,8 @@ struct ContentView: View {
                 },
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
                 hostLumeSmokeAutomation: hostLumeSmokeAutomation,
-                desktopUISmokeAutomation: desktopUISmokeAutomation
+                desktopUISmokeAutomation: desktopUISmokeAutomation,
+                automationWorkspaceCreateBridge: automationWorkspaceCreateBridge
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
@@ -2096,6 +2098,36 @@ struct ContentView: View {
                     selectedWorkspaceID: selectedID,
                     attachedSurfaceID: attached ? activeSessionID : nil,
                     attachedTerminal: attached
+                )
+            },
+            resolveRepo: { repoID in
+                guard let repo = repos.first(where: { $0.id == repoID }) else {
+                    return nil
+                }
+                return AutomationGestureVerbs.RepoTarget(
+                    repoID: repo.id,
+                    name: repo.name,
+                    path: repo.localPath
+                )
+            },
+            performCreation: { _, command in
+                let outcome = await automationWorkspaceCreateBridge.createWorkspace(command)
+                guard case .completed(let effect) = outcome else {
+                    return outcome
+                }
+                let selectedID = currentSelectedWorkspace?.id
+                let activeSessionID = tileTreeStore.activeSessionID
+                let attached = selectedID == effect.workspaceID && activeSessionID != nil
+                return .completed(
+                    AutomationWorkspaceCreateEffect(
+                        repoID: effect.repoID,
+                        workspaceID: effect.workspaceID,
+                        workspaceName: effect.workspaceName,
+                        workspacePath: effect.workspacePath,
+                        selectedWorkspaceID: selectedID,
+                        attachedSurfaceID: attached ? activeSessionID : nil,
+                        attachedTerminal: attached
+                    )
                 )
             }
         )

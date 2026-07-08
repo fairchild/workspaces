@@ -88,6 +88,10 @@ enum AutomationHTTPRouter {
             let workspaceID = try decodeWorkspaceID(from: request.body)
             return try await controller.automationSelectWorkspace(for: handle, workspaceID: workspaceID)
 
+        case ("POST", "/v1/workspace/create"):
+            let create = try decodeWorkspaceCreate(from: request.body)
+            return try await controller.automationCreateWorkspace(for: handle, request: create)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -130,6 +134,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/window/snapshot.")
         case (_, "/v1/workspace/select"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/select.")
+        case (_, "/v1/workspace/create"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/create.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -251,6 +257,31 @@ enum AutomationHTTPRouter {
         return workspaceID
     }
 
+    private static func decodeWorkspaceCreate(from body: Data) throws -> AutomationWorkspaceCreateRequest {
+        try rejectCallerSuppliedTargetIDs(in: body, allowEmptyBody: false)
+        let request: AutomationWorkspaceCreateRequest
+        do {
+            request = try AutomationJSON.decoder.decode(AutomationWorkspaceCreateRequest.self, from: body)
+        } catch {
+            throw AutomationServiceError(
+                .invalidRequest,
+                "Request body must be JSON with string 'repoID', string 'name', optional string 'providerID', and optional 'guestOS'."
+            )
+        }
+        guard !request.repoID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request 'repoID' must be a non-empty string.")
+        }
+        guard !request.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request 'name' must be a non-empty string.")
+        }
+        if let providerID = request.providerID,
+            providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            throw AutomationServiceError(.invalidRequest, "Request 'providerID' must be non-empty when provided.")
+        }
+        return request
+    }
+
     private static func decodeInputWrite(from body: Data) throws -> AutomationInputWriteRequest {
         try rejectCallerSuppliedTargetIDs(in: body, allowEmptyBody: false)
         let request: AutomationInputWriteRequest
@@ -368,6 +399,7 @@ extension AutomationSurfacesResult: CodableSendableEquatable {}
 extension AutomationWindowsResult: CodableSendableEquatable {}
 extension AutomationWorkspacesResult: CodableSendableEquatable {}
 extension AutomationWorkspaceSelectResult: CodableSendableEquatable {}
+extension AutomationWorkspaceCreateResult: CodableSendableEquatable {}
 extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}
 extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}

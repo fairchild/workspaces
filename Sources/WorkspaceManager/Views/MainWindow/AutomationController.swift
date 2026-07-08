@@ -13,7 +13,7 @@ final class AutomationController: AutomationControlling {
     private var windows: @MainActor () -> [AutomationWindowDescriptor]
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
     private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
-    /// The gesture-verb layer — the single place `workspace.select` (and later mutation verbs) enter
+    /// The gesture-verb layer — the single place workspace mutation verbs enter
     /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
     /// condition: a mutation verb cannot run without a live window, and never falls back.
     private var gestureVerbs: AutomationGestureVerbs?
@@ -131,7 +131,7 @@ final class AutomationController: AutomationControlling {
         for handle: String,
         workspaceID: String
     ) async throws -> AutomationWorkspaceSelectResult {
-        // Operator scope, the first operator *mutation*: gated on workspace.select (distinct from the
+        // Operator scope mutation: gated on workspace.select (distinct from the
         // read-only workspace.read), and — like the other operator routes — resolved without the
         // tile-liveness check. A tile handle lacks workspace.select and fails capability_denied.
         let entry = try resolveOperator(handle, requiring: .workspaceSelect)
@@ -172,6 +172,74 @@ final class AutomationController: AutomationControlling {
         case .notFound:
             throw AutomationServiceError(
                 .invalidRequest, "No workspace with id \(workspaceID) is tracked by the app.")
+        }
+    }
+
+    func automationCreateWorkspace(
+        for handle: String,
+        request: AutomationWorkspaceCreateRequest
+    ) async throws -> AutomationWorkspaceCreateResult {
+        let entry = try resolveOperator(handle, requiring: .workspaceCreate)
+        let repoIDText = request.repoID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let repoID = UUID(uuidString: repoIDText) else {
+            throw AutomationServiceError(.invalidRequest, "repoID must be a UUID.")
+        }
+        let name = request.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Workspace name must be non-empty.")
+        }
+        let providerID =
+            request.providerID?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? LocalWorkspaceProvider.identifier
+        guard !providerID.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "providerID must be non-empty when provided.")
+        }
+
+        guard let gestureVerbs else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; workspace.create requires a live window."
+            )
+        }
+
+        let command = AutomationWorkspaceCreateCommand(
+            repoID: repoID,
+            name: name,
+            providerID: providerID,
+            guestOS: request.guestOS
+        )
+        let capabilities = entry.capabilities
+        switch await gestureVerbs.createWorkspace(command) {
+        case .completed(let effect):
+            return AutomationWorkspaceCreateResult(
+                repoID: repoIDText,
+                workspaceID: effect.workspaceID,
+                workspaceName: effect.workspaceName,
+                workspacePath: effect.workspacePath,
+                outcome: .completed,
+                changed: true,
+                selectedWorkspaceID: effect.selectedWorkspaceID,
+                attachedTerminal: effect.attachedTerminal,
+                attachedSurfaceID: effect.attachedSurfaceID?.uuidString,
+                system: AutomationSystemDescriptor(capabilities: capabilities)
+            )
+        case .confirmationRequired(let confirmation):
+            return AutomationWorkspaceCreateResult(
+                repoID: repoIDText,
+                workspaceName: name,
+                outcome: .confirmationRequired,
+                changed: false,
+                confirmation: confirmation,
+                message: confirmation.message,
+                system: AutomationSystemDescriptor(capabilities: capabilities)
+            )
+        case .unsupported(let message):
+            throw AutomationServiceError(.unsupported, message)
+        case .notFound:
+            throw AutomationServiceError(
+                .invalidRequest, "No repo with id \(repoIDText) is tracked by the app.")
+        case .invalidRequest(let message):
+            throw AutomationServiceError(.invalidRequest, message)
         }
     }
 

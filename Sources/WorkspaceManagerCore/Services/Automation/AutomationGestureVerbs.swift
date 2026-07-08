@@ -33,6 +33,20 @@ public enum AutomationWorkspaceSelectOutcome: Sendable, Equatable {
     case notFound
 }
 
+public enum AutomationWorkspaceCreateOutcome: Sendable, Equatable {
+    /// The create gesture ran through the real UI path and produced a selected, attached workspace.
+    case completed(AutomationWorkspaceCreateEffect)
+    /// The gesture reached a modal or setup confirmation. The caller gets the confirmation details
+    /// as data instead of waiting on UI it cannot answer.
+    case confirmationRequired(AutomationConfirmationRequirement)
+    /// The verb cannot run in the current context, most often because no live window/sidebar is bound.
+    case unsupported(String)
+    /// The repo id resolves to nothing the app tracks. Mapped to `invalid_request` at the wire.
+    case notFound
+    /// The request named something the UI path cannot create, such as an unknown provider.
+    case invalidRequest(String)
+}
+
 @MainActor
 public final class AutomationGestureVerbs {
     /// The minimum a verb needs to target and describe a workspace, projected out of the live
@@ -51,21 +65,46 @@ public final class AutomationGestureVerbs {
         }
     }
 
+    /// The minimum the create verb needs to target a repo after `workspace.read` projects it.
+    /// The app resolves this from live SwiftData models before the gesture runs.
+    public struct RepoTarget: Sendable, Equatable {
+        public let repoID: UUID
+        public let name: String
+        public let path: String
+
+        public init(repoID: UUID, name: String, path: String) {
+            self.repoID = repoID
+            self.name = name
+            self.path = path
+        }
+    }
+
     /// Resolve a stable workspace id (a `workspace.read` id) to a target, or `nil` if the app tracks
     /// no such workspace. Read-only — it never mutates selection.
     private let resolveWorkspace: @MainActor (UUID) -> WorkspaceTarget?
+    /// Resolve a stable repo id (a `workspace.read` repo id) to a target. Read-only.
+    private let resolveRepo: (@MainActor (UUID) -> RepoTarget?)?
 
     /// Drive the real selection gesture for `target` — write the selection binding whose setter
     /// attaches the terminal and requests focus — and report back what the UI did. This closure is
     /// the app's actual click path; the layer holds nothing else.
     private let performSelection: @MainActor (WorkspaceTarget) -> AutomationWorkspaceSelectEffect
+    /// Drive the real sidebar create gesture for `command` and report what the UI did.
+    private let performCreation:
+        (@MainActor (RepoTarget, AutomationWorkspaceCreateCommand) async -> AutomationWorkspaceCreateOutcome)?
 
     public init(
         resolveWorkspace: @escaping @MainActor (UUID) -> WorkspaceTarget?,
-        performSelection: @escaping @MainActor (WorkspaceTarget) -> AutomationWorkspaceSelectEffect
+        performSelection: @escaping @MainActor (WorkspaceTarget) -> AutomationWorkspaceSelectEffect,
+        resolveRepo: (@MainActor (UUID) -> RepoTarget?)? = nil,
+        performCreation: (
+            @MainActor (RepoTarget, AutomationWorkspaceCreateCommand) async -> AutomationWorkspaceCreateOutcome
+        )? = nil
     ) {
         self.resolveWorkspace = resolveWorkspace
         self.performSelection = performSelection
+        self.resolveRepo = resolveRepo
+        self.performCreation = performCreation
     }
 
     /// `workspace.select`: enter the same selection path a sidebar click takes. Resolves the id, then
@@ -78,5 +117,20 @@ public final class AutomationGestureVerbs {
         }
         let effect = performSelection(target)
         return .completed(effect)
+    }
+
+    /// `workspace.create`: enter the same sidebar helper the New Workspace sheet and smoke driver
+    /// use. Resolves the repo id, then drives only the supplied gesture closure. A missing create
+    /// closure means the live window did not install a create path, so the verb fails closed.
+    public func createWorkspace(
+        _ command: AutomationWorkspaceCreateCommand
+    ) async -> AutomationWorkspaceCreateOutcome {
+        guard let resolveRepo, let performCreation else {
+            return .unsupported("No WorkSpaces sidebar is attached; workspace.create requires a live window.")
+        }
+        guard let target = resolveRepo(command.repoID) else {
+            return .notFound
+        }
+        return await performCreation(target, command)
     }
 }

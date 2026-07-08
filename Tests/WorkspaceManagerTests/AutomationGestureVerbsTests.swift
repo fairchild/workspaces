@@ -18,6 +18,10 @@ struct AutomationGestureVerbsTests {
         AutomationGestureVerbs.WorkspaceTarget(workspaceID: id, name: name, isArchived: isArchived)
     }
 
+    private func repoTarget(_ id: UUID, name: String = "repo") -> AutomationGestureVerbs.RepoTarget {
+        AutomationGestureVerbs.RepoTarget(repoID: id, name: name, path: "/tmp/\(name)")
+    }
+
     @Test("select resolves and drives the gesture, returning the completed effect")
     func selectCompleted() {
         let id = UUID()
@@ -136,5 +140,104 @@ struct AutomationGestureVerbsTests {
         #expect(effectB.attachedSurfaceID == surfaceB)
         #expect(activeSurface == surfaceB)
         #expect(activeSurface != surfaceA)
+    }
+
+    @Test("create resolves the repo and drives the create gesture")
+    func createCompleted() async {
+        let repoID = UUID()
+        let workspaceID = UUID()
+        let surfaceID = UUID()
+        var performed: [AutomationWorkspaceCreateCommand] = []
+        let command = AutomationWorkspaceCreateCommand(
+            repoID: repoID,
+            name: "created",
+            providerID: "local"
+        )
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: { _ in nil },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            resolveRepo: { [repoID] in $0 == repoID ? self.repoTarget(repoID) : nil },
+            performCreation: { _, command in
+                performed.append(command)
+                return .completed(
+                    AutomationWorkspaceCreateEffect(
+                        repoID: command.repoID,
+                        workspaceID: workspaceID,
+                        workspaceName: command.name,
+                        workspacePath: "/tmp/repo/\(command.name)",
+                        selectedWorkspaceID: workspaceID,
+                        attachedSurfaceID: surfaceID,
+                        attachedTerminal: true
+                    )
+                )
+            }
+        )
+
+        let outcome = await verbs.createWorkspace(command)
+
+        #expect(performed == [command])
+        guard case .completed(let effect) = outcome else {
+            Issue.record("expected .completed, got \(outcome)")
+            return
+        }
+        #expect(effect.workspaceID == workspaceID)
+        #expect(effect.workspaceName == "created")
+        #expect(effect.attachedTerminal)
+        #expect(effect.attachedSurfaceID == surfaceID)
+    }
+
+    @Test("create of an unknown repo is notFound and never drives the gesture")
+    func createNotFound() async {
+        var performCount = 0
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: { _ in nil },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            resolveRepo: { _ in nil },
+            performCreation: { _, _ in
+                performCount += 1
+                return .unsupported("should not run")
+            }
+        )
+
+        let outcome = await verbs.createWorkspace(
+            AutomationWorkspaceCreateCommand(repoID: UUID(), name: "ws", providerID: "local")
+        )
+
+        #expect(outcome == .notFound)
+        #expect(performCount == 0)
+    }
+
+    @Test("create reports confirmation requirements as structured data")
+    func createConfirmationRequired() async {
+        let repoID = UUID()
+        let confirmation = AutomationConfirmationRequirement(
+            action: "workspace.create",
+            title: "Set Up Provider",
+            message: "Create workspace requires provider setup.",
+            providerID: "provider",
+            providerDisplayName: "Provider",
+            primaryButtonTitle: "Set Up"
+        )
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: { _ in nil },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            resolveRepo: { [repoID] in $0 == repoID ? self.repoTarget(repoID) : nil },
+            performCreation: { _, _ in .confirmationRequired(confirmation) }
+        )
+
+        let outcome = await verbs.createWorkspace(
+            AutomationWorkspaceCreateCommand(repoID: repoID, name: "ws", providerID: "provider")
+        )
+
+        #expect(outcome == .confirmationRequired(confirmation))
     }
 }
