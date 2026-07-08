@@ -3,13 +3,14 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { StreamChunk } from "./stream-chunk";
 import {
@@ -47,8 +48,12 @@ function workspace(root: string, sessionId: string): string {
 }
 
 function fakeClaude(script: string): string {
+	return fakeExecutable("claude", script);
+}
+
+function fakeExecutable(name: string, script: string): string {
 	const dir = tempDir();
-	const bin = join(dir, "claude");
+	const bin = join(dir, name);
 	writeFileSync(bin, script);
 	chmodSync(bin, 0o755);
 	return bin;
@@ -68,8 +73,18 @@ function expectRestrictedLaunch(argv: string[]): void {
 	expect(argv[argv.indexOf("--allowedTools") + 1]).toBe(
 		HOST_ALLOWED_TOOLS.join(","),
 	);
+	expect(argv).toContain("--tools");
+	expect(argv[argv.indexOf("--tools") + 1]).toBe(HOST_ALLOWED_TOOLS.join(","));
+	expect(argv).toContain("--safe-mode");
+	expect(argv).toContain("--strict-mcp-config");
 	expect(argv).not.toContain("--dangerously-skip-permissions");
 	expect(argv).not.toContain("--allow-dangerously-skip-permissions");
+	expect(HOST_ALLOWED_TOOLS).not.toContain("WebFetch");
+	expect(HOST_ALLOWED_TOOLS).not.toContain("WebSearch");
+	expect(argv[argv.indexOf("--allowedTools") + 1]).not.toContain("WebFetch");
+	expect(argv[argv.indexOf("--allowedTools") + 1]).not.toContain("WebSearch");
+	expect(argv[argv.indexOf("--tools") + 1]).not.toContain("WebFetch");
+	expect(argv[argv.indexOf("--tools") + 1]).not.toContain("WebSearch");
 }
 
 async function until(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
@@ -267,6 +282,236 @@ process.stdin.on("end", () => {
 				resumeState: JSON.stringify({ provider: "host", sessionId: "cli-old" }),
 			},
 		});
+	});
+
+	test("falls back once from a stale resume before assistant output and clears resume on double failure", async () => {
+		const root = tempDir();
+		const sessionId = "session-stale-resume";
+		workspace(root, sessionId);
+		const recordDir = tempDir();
+		const countPath = join(recordDir, "count.txt");
+		const bin = fakeClaude(`#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const recordDir = ${JSON.stringify(recordDir)};
+const countPath = ${JSON.stringify(countPath)};
+const count = fs.existsSync(countPath) ? Number(fs.readFileSync(countPath, "utf8")) : 0;
+fs.writeFileSync(countPath, String(count + 1));
+let stdin = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => { stdin += chunk; });
+process.stdin.on("end", () => {
+  fs.writeFileSync(path.join(recordDir, \`attempt-\${count + 1}.json\`), JSON.stringify({
+    argv: process.argv.slice(2),
+    cwd: process.cwd(),
+    stdin,
+  }));
+  console.error(count === 0 ? "stale resume failed" : "fresh fallback failed");
+  process.exit(count === 0 ? 7 : 8);
+});
+`);
+		vi.stubEnv("WEB_NEXT_HOST_WORKSPACE_ROOT", root);
+		vi.stubEnv("WEB_NEXT_HOST_CLAUDE_BIN", bin);
+
+		const chunks = await collect(
+			hostProvider.runTurn({
+				sessionId,
+				userMessage: "Continue the analysis",
+				repo: { fullName: "fairchild/workspaces", defaultBranch: "main" },
+				resume: {
+					harnessSessionId: "stale-cli-session",
+					resumeState: JSON.stringify({
+						provider: "host",
+						sessionId: "stale-cli-session",
+					}),
+				},
+				priorContext: "User: Find the issue\n\nAssistant: It is in host-provider.ts.",
+			}),
+		);
+
+		expect(readFileSync(countPath, "utf8")).toBe("2");
+		const first = readRecord(join(recordDir, "attempt-1.json"));
+		const second = readRecord(join(recordDir, "attempt-2.json"));
+		expect(first.argv).toEqual(
+			expect.arrayContaining(["--resume", "stale-cli-session"]),
+		);
+		expectRestrictedLaunch(first.argv);
+		expect(first.stdin).toBe("Continue the analysis");
+		expect(second.argv).not.toContain("--resume");
+		expectRestrictedLaunch(second.argv);
+		expect(second.stdin).toContain(
+			"The conversation so far (the local Claude session restarted",
+		);
+		expect(second.stdin).toContain("It is in host-provider.ts.");
+		expect(second.stdin).toContain("Continue the analysis");
+		expect(chunks.map((chunk) => chunk.content)).toContain(
+			"Previous local Claude session failed — starting fresh",
+		);
+		expect(
+			chunks.some((chunk) => chunk.content.includes("stale resume failed")),
+		).toBe(false);
+		expect(
+			chunks.some((chunk) => chunk.content.includes("fresh fallback failed")),
+		).toBe(true);
+		expect(chunks.at(-1)).toMatchObject({
+			type: "done",
+			metadata: { aborted: true, resume: null },
+		});
+	});
+
+	test("times out a hung turn and emits an aborted terminal chunk", async () => {
+		const root = tempDir();
+		const sessionId = "session-timeout";
+		workspace(root, sessionId);
+		const signalPath = join(tempDir(), "timeout-signal.txt");
+		const bin = fakeClaude(`#!/usr/bin/env node
+const fs = require("node:fs");
+process.on("SIGTERM", () => {
+  fs.writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM");
+  process.exit(0);
+});
+process.stdin.resume();
+process.stdin.on("end", () => {
+  console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "cli-timeout" }));
+  setInterval(() => {}, 1000);
+});
+`);
+		vi.stubEnv("WEB_NEXT_HOST_WORKSPACE_ROOT", root);
+		vi.stubEnv("WEB_NEXT_HOST_CLAUDE_BIN", bin);
+		vi.stubEnv("WEB_NEXT_HOST_TURN_TIMEOUT_MS", "300");
+
+		const chunks = await collect(
+			hostProvider.runTurn({
+				sessionId,
+				userMessage: "wait forever",
+				repo: { fullName: "fairchild/workspaces", defaultBranch: "main" },
+			}),
+		);
+
+		expect(readFileSync(signalPath, "utf8")).toBe("SIGTERM");
+		expect(chunks.slice(-2)).toMatchObject([
+			{
+				type: "error",
+				metadata: { code: "host_turn_timeout" },
+			},
+			{ type: "done", metadata: { aborted: true } },
+		]);
+	});
+
+	test("kills the claude process group so descendants do not survive timeout", async () => {
+		const root = tempDir();
+		const sessionId = "session-group-kill";
+		workspace(root, sessionId);
+		const sentinel = join(tempDir(), "grandchild-survived.txt");
+		const bin = fakeClaude(`#!/usr/bin/env node
+const { spawn } = require("node:child_process");
+process.stdin.resume();
+process.stdin.on("end", () => {
+  spawn(process.execPath, [
+    "-e",
+    "setTimeout(() => require('node:fs').writeFileSync(${JSON.stringify(sentinel)}, 'alive'), 250)"
+  ], { stdio: "ignore" });
+  setInterval(() => {}, 1000);
+});
+`);
+		vi.stubEnv("WEB_NEXT_HOST_WORKSPACE_ROOT", root);
+		vi.stubEnv("WEB_NEXT_HOST_CLAUDE_BIN", bin);
+		vi.stubEnv("WEB_NEXT_HOST_TURN_TIMEOUT_MS", "300");
+
+		const chunks = await collect(
+			hostProvider.runTurn({
+				sessionId,
+				userMessage: "wait with a descendant",
+				repo: { fullName: "fairchild/workspaces", defaultBranch: "main" },
+			}),
+		);
+		await new Promise((resolve) => setTimeout(resolve, 400));
+
+		expect(chunks.at(-1)).toMatchObject({
+			type: "done",
+			metadata: { aborted: true },
+		});
+		expect(existsSync(sentinel)).toBe(false);
+	});
+
+	test("caps retained stderr to the last 8 KiB", async () => {
+		const root = tempDir();
+		const sessionId = "session-stderr-cap";
+		workspace(root, sessionId);
+		const bin = fakeClaude(`#!/usr/bin/env node
+process.stdin.resume();
+process.stdin.on("end", () => {
+  process.stderr.write("HEAD-MARKER" + "A".repeat(12000) + "TAIL-MARKER");
+  process.exit(9);
+});
+`);
+		vi.stubEnv("WEB_NEXT_HOST_WORKSPACE_ROOT", root);
+		vi.stubEnv("WEB_NEXT_HOST_CLAUDE_BIN", bin);
+
+		const chunks = await collect(
+			hostProvider.runTurn({
+				sessionId,
+				userMessage: "fail loudly",
+				repo: { fullName: "fairchild/workspaces", defaultBranch: "main" },
+			}),
+		);
+
+		const error = chunks.find((chunk) => chunk.type === "error")?.content ?? "";
+		expect(error).toContain("stderr truncated to last 8192 bytes");
+		expect(error).toContain("TAIL-MARKER");
+		expect(error).not.toContain("HEAD-MARKER");
+		expect(error.length).toBeLessThan(8_700);
+		expect(chunks.at(-1)).toMatchObject({
+			type: "done",
+			metadata: { aborted: true },
+		});
+	});
+
+	test("serializes same-session workspace setup so concurrent first turns clone once", async () => {
+		const root = tempDir();
+		const sessionId = "session-clone-race";
+		const recordDir = tempDir();
+		const cloneCount = join(recordDir, "clone-count.txt");
+		const git = fakeExecutable("git", `#!/usr/bin/env node
+const fs = require("node:fs");
+const target = process.argv[process.argv.length - 1];
+const countPath = ${JSON.stringify(cloneCount)};
+const count = fs.existsSync(countPath) ? Number(fs.readFileSync(countPath, "utf8")) : 0;
+fs.writeFileSync(countPath, String(count + 1));
+setTimeout(() => {
+  fs.mkdirSync(target, { recursive: true });
+  process.exit(0);
+}, 100);
+`);
+		const bin = fakeClaude(`#!/usr/bin/env node
+process.stdin.resume();
+process.stdin.on("end", () => {
+  console.log(JSON.stringify({ type: "result", subtype: "success", session_id: "cli-race", duration_ms: 1 }));
+});
+`);
+		vi.stubEnv("PATH", `${dirname(git)}:${process.env.PATH ?? ""}`);
+		vi.stubEnv("WEB_NEXT_HOST_WORKSPACE_ROOT", root);
+		vi.stubEnv("WEB_NEXT_HOST_CLAUDE_BIN", bin);
+
+		await Promise.all([
+			collect(
+				hostProvider.runTurn({
+					sessionId,
+					userMessage: "first",
+					repo: { fullName: "fairchild/workspaces", defaultBranch: "main" },
+				}),
+			),
+			collect(
+				hostProvider.runTurn({
+					sessionId,
+					userMessage: "second",
+					repo: { fullName: "fairchild/workspaces", defaultBranch: "main" },
+				}),
+			),
+		]);
+
+		expect(readFileSync(cloneCount, "utf8")).toBe("1");
+		expect(readdirSync(join(root, sessionId))).toEqual([]);
 	});
 
 	test("aborts the child with SIGTERM and closes the stream", async () => {

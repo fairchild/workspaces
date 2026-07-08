@@ -19,7 +19,6 @@ import {
 	relative,
 	resolve,
 } from "node:path";
-import { createInterface } from "node:readline";
 import type {
 	ComputeProvider,
 	SessionResumeHandle,
@@ -36,16 +35,19 @@ import {
 
 const HOST_WORKSPACE_ROOT_ENV = "WEB_NEXT_HOST_WORKSPACE_ROOT";
 const HOST_CLAUDE_BIN_ENV = "WEB_NEXT_HOST_CLAUDE_BIN";
+const HOST_TURN_TIMEOUT_ENV = "WEB_NEXT_HOST_TURN_TIMEOUT_MS";
 const HOST_ABORT_MESSAGE = "Turn stopped.";
 const KILL_GRACE_MS = 5_000;
+const EXIT_AFTER_STDOUT_CLOSE_TIMEOUT_MS = 10_000;
+const DEFAULT_HOST_TURN_TIMEOUT_MS = 900_000;
+const STDERR_RETAIN_BYTES = 8 * 1024;
+const STDOUT_LINE_RETAIN_BYTES = 1024 * 1024;
 
 export const HOST_ALLOWED_TOOLS = [
 	"Read",
 	"LS",
 	"Glob",
 	"Grep",
-	"WebFetch",
-	"WebSearch",
 	"TodoRead",
 ] as const;
 
@@ -96,6 +98,7 @@ type ProviderFailureCode =
 	| "invalid_session_id"
 	| "host_claude_missing"
 	| "host_workspace_setup_failed"
+	| "host_turn_timeout"
 	| "host_claude_failed";
 
 interface HostFailure {
@@ -132,6 +135,38 @@ interface HostDoneMeta {
 	resume?: SessionResumeHandle | null;
 }
 
+interface RetainedText {
+	text: string;
+	truncated: boolean;
+}
+
+interface TurnLifetime {
+	signal: AbortSignal;
+	timedOut: () => boolean;
+	dispose: () => void;
+}
+
+interface StreamResult {
+	closed: boolean;
+	sessionId?: string;
+	sawError: boolean;
+	sawAbortedDone: boolean;
+}
+
+interface ClaudeAttemptResult {
+	failed: boolean;
+	assistantContent: boolean;
+	closed: boolean;
+	aborted: boolean;
+	timedOut: boolean;
+	exitTimedOut: boolean;
+	sessionId?: string;
+}
+
+interface BufferedAttemptResult extends ClaudeAttemptResult {
+	bufferedChunks: StreamChunk[];
+}
+
 function failureChunk(failure: HostFailure): StreamChunk {
 	return {
 		type: "error",
@@ -155,8 +190,11 @@ function doneChunk(
 	};
 }
 
-function abortedDone(startedAt: number): StreamChunk {
-	return doneChunk(startedAt, { aborted: true });
+function abortedDone(
+	startedAt: number,
+	metadata: Partial<HostDoneMeta> = {},
+): StreamChunk {
+	return doneChunk(startedAt, { aborted: true, ...metadata });
 }
 
 function isMissingPath(error: unknown): boolean {
@@ -258,6 +296,95 @@ export function resolveHostWorkspaceDir(
 	return workspaceDir;
 }
 
+function resolveHostTurnTimeoutMs(
+	env: NodeJS.ProcessEnv = process.env,
+): number {
+	const raw = env[HOST_TURN_TIMEOUT_ENV]?.trim();
+	if (!raw) return DEFAULT_HOST_TURN_TIMEOUT_MS;
+	const parsed = Number.parseInt(raw, 10);
+	return Number.isFinite(parsed) && parsed > 0
+		? parsed
+		: DEFAULT_HOST_TURN_TIMEOUT_MS;
+}
+
+function createTurnLifetime(
+	source: AbortSignal | undefined,
+	timeoutMs: number,
+): TurnLifetime {
+	const controller = new AbortController();
+	let timedOut = false;
+	const abortFromSource = () => {
+		if (!controller.signal.aborted) controller.abort(source?.reason);
+	};
+	const timeout = setTimeout(() => {
+		timedOut = true;
+		if (!controller.signal.aborted) controller.abort(new Error("host turn timed out"));
+	}, timeoutMs);
+	timeout.unref();
+	if (source) {
+		if (source.aborted) abortFromSource();
+		else source.addEventListener("abort", abortFromSource, { once: true });
+	}
+	return {
+		signal: controller.signal,
+		timedOut: () => timedOut,
+		dispose: () => {
+			clearTimeout(timeout);
+			source?.removeEventListener("abort", abortFromSource);
+		},
+	};
+}
+
+function timeoutFailure(timeoutMs: number): HostFailure {
+	return {
+		code: "host_turn_timeout",
+		message: `host Claude turn timed out after ${timeoutMs}ms`,
+	};
+}
+
+function appendRetainedText(
+	retained: RetainedText,
+	chunk: string,
+	limitBytes: number,
+): RetainedText {
+	if (!chunk) return retained;
+	const next = retained.text + chunk;
+	if (Buffer.byteLength(next, "utf8") <= limitBytes) {
+		return { text: next, truncated: retained.truncated };
+	}
+	const bytes = Buffer.from(next, "utf8");
+	return {
+		text: bytes.subarray(Math.max(0, bytes.length - limitBytes)).toString("utf8"),
+		truncated: true,
+	};
+}
+
+function formatRetainedStderr(stderr: RetainedText): string {
+	const text = stderr.text.trim();
+	if (!text) return "";
+	if (!stderr.truncated) return text;
+	return `[stderr truncated to last ${STDERR_RETAIN_BYTES} bytes]\n${text}`;
+}
+
+function assistantContentChunk(chunk: StreamChunk): boolean {
+	return (
+		chunk.type === "text" ||
+		chunk.type === "reasoning" ||
+		chunk.type === "tool_use" ||
+		chunk.type === "tool_result"
+	);
+}
+
+function doneWasAborted(chunk: StreamChunk): boolean {
+	return chunk.type === "done" && chunk.metadata?.aborted === true;
+}
+
+function metadataWithResumeClear(
+	clearResumeOnFailure: boolean,
+): Partial<HostDoneMeta> {
+	return clearResumeOnFailure ? { resume: null } : {};
+}
+
 export function buildHostCloneArgs(repo: TurnRepo, workspaceDir: string): string[] {
 	const args = ["clone", "--depth", "50"];
 	if (repo.defaultBranch) args.push("--branch", repo.defaultBranch);
@@ -273,20 +400,25 @@ async function runCommand(
 	const child = spawn(command, args, {
 		cwd: options.cwd,
 		env: options.env ?? curatedClaudeEnv(),
+		detached: true,
 		stdio: ["ignore", "ignore", "pipe"],
 	});
-	let stderr = "";
+	let stderr: RetainedText = { text: "", truncated: false };
 	child.stderr?.setEncoding("utf8");
 	child.stderr?.on("data", (chunk: string) => {
-		stderr += chunk;
+		stderr = appendRetainedText(stderr, chunk, STDERR_RETAIN_BYTES);
 	});
 	const stop = () => terminateChild(child);
 	options.signal?.addEventListener("abort", stop, { once: true });
 	try {
-		const exit = await waitForExit(child);
+		const exit = await waitForExitRespectingAbort(
+			child,
+			waitForExit(child),
+			options.signal,
+		);
 		return exit.code === 0
 			? { ok: true }
-			: { ok: false, stderr: stderr.trim(), code: exit.code };
+			: { ok: false, stderr: formatRetainedStderr(stderr), code: exit.code };
 	} catch (error) {
 		return { ok: false, stderr: errorText(error), code: null };
 	} finally {
@@ -329,6 +461,26 @@ async function ensureWorkspace(
 	};
 }
 
+const workspaceSetupBySession = new Map<string, Promise<HostFailure | null>>();
+
+async function ensureWorkspaceOnce(
+	sessionId: string,
+	workspaceDir: string,
+	repo: TurnRepo,
+	signal?: AbortSignal,
+): Promise<HostFailure | null> {
+	let setup = workspaceSetupBySession.get(sessionId);
+	if (!setup) {
+		setup = ensureWorkspace(workspaceDir, repo, signal).finally(() => {
+			if (workspaceSetupBySession.get(sessionId) === setup) {
+				workspaceSetupBySession.delete(sessionId);
+			}
+		});
+		workspaceSetupBySession.set(sessionId, setup);
+	}
+	return waitForPromiseRespectingAbort(setup, signal);
+}
+
 export function buildHostPrompt(
 	request: Pick<TurnRequest, "userMessage" | "resume" | "priorContext">,
 	repoFullName: string,
@@ -362,6 +514,15 @@ export function buildClaudeArgs(
 		"--output-format",
 		"stream-json",
 		"--verbose",
+		// Host v1 is intentionally configless: --safe-mode disables user/project
+		// customizations (settings-driven hooks, MCP, agents, plugins, CLAUDE.md,
+		// etc.) while keeping normal auth/model/tool permission behavior. Config
+		// parity belongs to #985; keep the explicit tool allowlist as defense in
+		// depth until the approval/config protocol exists.
+		"--safe-mode",
+		"--strict-mcp-config",
+		"--tools",
+		HOST_ALLOWED_TOOLS.join(","),
 		"--allowedTools",
 		HOST_ALLOWED_TOOLS.join(","),
 		"--permission-mode",
@@ -536,28 +697,192 @@ function waitForExit(child: ChildProcess): Promise<ExitStatus> {
 	});
 }
 
+function waitForExitWithTimeout(
+	exit: Promise<ExitStatus>,
+	timeoutMs: number,
+): Promise<ExitStatus | null> {
+	return new Promise((resolve, reject) => {
+		const timeout = setTimeout(() => resolve(null), timeoutMs);
+		timeout.unref();
+		exit.then(
+			(value) => {
+				clearTimeout(timeout);
+				resolve(value);
+			},
+			(error) => {
+				clearTimeout(timeout);
+				reject(error);
+			},
+		);
+	});
+}
+
+async function waitForExitRespectingAbort(
+	child: ChildProcess,
+	exit: Promise<ExitStatus>,
+	signal?: AbortSignal,
+): Promise<ExitStatus> {
+	if (!signal) return exit;
+	if (signal.aborted) {
+		terminateChild(child);
+		return (
+			(await waitForExitWithTimeout(exit, KILL_GRACE_MS + 1_000)) ?? {
+				code: null,
+				signal: "SIGKILL",
+			}
+		);
+	}
+	let onAbort: () => void = () => {};
+	const aborted = new Promise<"aborted">((resolve) => {
+		onAbort = () => resolve("aborted");
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	try {
+		const result = await Promise.race([exit, aborted]);
+		if (result !== "aborted") return result;
+		terminateChild(child);
+		return (
+			(await waitForExitWithTimeout(exit, KILL_GRACE_MS + 1_000)) ?? {
+				code: null,
+				signal: "SIGKILL",
+			}
+		);
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
+}
+
+function waitForPromiseRespectingAbort<T>(
+	promise: Promise<T>,
+	signal?: AbortSignal,
+): Promise<T> {
+	if (!signal) return promise;
+	if (signal.aborted) return Promise.reject(signal.reason ?? new Error("aborted"));
+	let onAbort: () => void = () => {};
+	const aborted = new Promise<never>((_, reject) => {
+		onAbort = () => reject(signal.reason ?? new Error("aborted"));
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
+	return Promise.race([promise, aborted]).finally(() => {
+		signal.removeEventListener("abort", onAbort);
+	});
+}
+
+function signalChild(child: ChildProcess, signal: NodeJS.Signals): void {
+	if (child.exitCode !== null || child.signalCode !== null) return;
+	const pid = child.pid;
+	if (pid) {
+		try {
+			process.kill(-pid, signal);
+			return;
+		} catch {
+			// Fall back to the direct child below; older/failed launches may not
+			// have a process group even though the normal claude path is detached.
+		}
+	}
+	try {
+		child.kill(signal);
+	} catch {
+		// Nothing else to do; the bounded exit wait will synthesize failure.
+	}
+}
+
 function terminateChild(child: ChildProcess): void {
 	if (child.exitCode !== null || child.signalCode !== null) return;
-	child.kill("SIGTERM");
+	signalChild(child, "SIGTERM");
 	setTimeout(() => {
-		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		if (child.exitCode === null && child.signalCode === null) {
+			signalChild(child, "SIGKILL");
+		}
 	}, KILL_GRACE_MS).unref();
 }
 
-function capStderr(stderr: string): string {
-	const trimmed = stderr.trim();
-	return trimmed.length <= 800 ? trimmed : `${trimmed.slice(0, 797)}...`;
+async function* boundedStdoutLines(
+	child: ChildProcessWithoutNullStreams,
+	signal: AbortSignal,
+): AsyncGenerator<
+	{ ok: true; line: string } | { ok: false; error: StreamChunk },
+	void,
+	void
+> {
+	let buffer = "";
+	let bufferBytes = 0;
+	let droppingLongLine = false;
+	let reportedLongLine = false;
+	const onAbort = () => {
+		child.stdout.destroy();
+	};
+	signal.addEventListener("abort", onAbort, { once: true });
+	child.stdout.setEncoding("utf8");
+	try {
+		for await (const rawChunk of child.stdout) {
+			let chunk = String(rawChunk);
+			while (chunk.length > 0) {
+				const newlineIndex = chunk.indexOf("\n");
+				const segment =
+					newlineIndex === -1 ? chunk : chunk.slice(0, newlineIndex);
+				chunk = newlineIndex === -1 ? "" : chunk.slice(newlineIndex + 1);
+				if (!droppingLongLine) {
+					const segmentBytes = Buffer.byteLength(segment, "utf8");
+					if (bufferBytes + segmentBytes > STDOUT_LINE_RETAIN_BYTES) {
+						buffer = "";
+						bufferBytes = 0;
+						droppingLongLine = true;
+						if (!reportedLongLine) {
+							reportedLongLine = true;
+							yield {
+								ok: false,
+								error: {
+									type: "error",
+									content: `claude stream-json line exceeded ${STDOUT_LINE_RETAIN_BYTES} bytes and was dropped`,
+									metadata: { code: "host_claude_failed" },
+								},
+							};
+						}
+					} else {
+						buffer += segment;
+						bufferBytes += segmentBytes;
+					}
+				}
+				if (newlineIndex !== -1) {
+					if (!droppingLongLine) {
+						const line = buffer.endsWith("\r")
+							? buffer.slice(0, -1)
+							: buffer;
+						yield { ok: true, line };
+					}
+					buffer = "";
+					bufferBytes = 0;
+					droppingLongLine = false;
+					reportedLongLine = false;
+				}
+			}
+		}
+		if (buffer && !droppingLongLine) {
+			yield { ok: true, line: buffer.endsWith("\r") ? buffer.slice(0, -1) : buffer };
+		}
+	} finally {
+		signal.removeEventListener("abort", onAbort);
+	}
 }
 
 async function* streamClaudeProcess(
 	child: ChildProcessWithoutNullStreams,
 	startedAt: number,
-): AsyncGenerator<StreamChunk, { closed: boolean; sessionId?: string }, void> {
-	const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
+	signal: AbortSignal,
+	clearResumeOnFailure: boolean,
+): AsyncGenerator<StreamChunk, StreamResult, void> {
 	let cliSessionId: string | undefined;
 	let closed = false;
-	for await (const raw of rl) {
-		const line = raw.trim();
+	let sawError = false;
+	let sawAbortedDone = false;
+	for await (const item of boundedStdoutLines(child, signal)) {
+		if (!item.ok) {
+			sawError = true;
+			yield item.error;
+			continue;
+		}
+		const line = item.line.trim();
 		if (!line) continue;
 		let event: unknown;
 		try {
@@ -568,20 +893,273 @@ async function* streamClaudeProcess(
 				content: `invalid claude stream-json line: ${errorText(error)}`,
 				metadata: { code: "host_claude_failed" },
 			};
+			sawError = true;
 			continue;
 		}
 		const mapped = mapClaudeJsonEvent(event);
 		if (mapped.sessionId) cliSessionId = mapped.sessionId;
-		for (const chunk of mapped.chunks) yield chunk;
+		for (const chunk of mapped.chunks) {
+			if (chunk.type === "error") sawError = true;
+			yield chunk;
+		}
 		if (mapped.done) {
 			closed = true;
-			yield doneChunk(startedAt, {
+			const metadata = {
 				...mapped.done.metadata,
-				resume: resumeFor(cliSessionId ?? mapped.sessionId),
-			});
+				resume:
+					mapped.done.metadata.aborted && clearResumeOnFailure
+						? null
+						: resumeFor(cliSessionId ?? mapped.sessionId),
+			};
+			if (metadata.aborted) sawAbortedDone = true;
+			yield doneChunk(startedAt, metadata);
 		}
 	}
-	return { closed, sessionId: cliSessionId };
+	return { closed, sessionId: cliSessionId, sawError, sawAbortedDone };
+}
+
+interface ClaudeAttemptOptions {
+	claudeBin: string;
+	args: string[];
+	prompt: string;
+	workspaceDir: string;
+	env: NodeJS.ProcessEnv;
+	startedAt: number;
+	signal: AbortSignal;
+	timedOut: () => boolean;
+	timeoutMs: number;
+	clearResumeOnFailure: boolean;
+}
+
+function failureDoneMetadata(
+	clearResumeOnFailure: boolean,
+): Partial<HostDoneMeta> {
+	return metadataWithResumeClear(clearResumeOnFailure);
+}
+
+async function* executeClaudeAttempt({
+	claudeBin,
+	args,
+	prompt,
+	workspaceDir,
+	env,
+	startedAt,
+	signal,
+	timedOut,
+	timeoutMs,
+	clearResumeOnFailure,
+}: ClaudeAttemptOptions): AsyncGenerator<StreamChunk, ClaudeAttemptResult, void> {
+	let child: ChildProcessWithoutNullStreams | undefined;
+	let settled = false;
+	let exitPromise: Promise<ExitStatus> | undefined;
+	let assistantContent = false;
+	let stderr: RetainedText = { text: "", truncated: false };
+	const failureMeta = failureDoneMetadata(clearResumeOnFailure);
+	const baseResult = (): ClaudeAttemptResult => ({
+		failed: true,
+		assistantContent,
+		closed: false,
+		aborted: signal.aborted && !timedOut(),
+		timedOut: timedOut(),
+		exitTimedOut: false,
+	});
+	const stop = () => {
+		if (!child) return;
+		terminateChild(child);
+		child.stdin.destroy();
+		child.stdout.destroy();
+		child.stderr.destroy();
+	};
+
+	if (signal.aborted) {
+		if (timedOut()) {
+			yield failureChunk(timeoutFailure(timeoutMs));
+		} else {
+			yield { type: "error", content: HOST_ABORT_MESSAGE };
+		}
+		yield abortedDone(startedAt, failureMeta);
+		return baseResult();
+	}
+
+	try {
+		child = spawn(claudeBin, args, {
+			cwd: workspaceDir,
+			env,
+			detached: true,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		exitPromise = waitForExit(child).finally(() => {
+			settled = true;
+		});
+		child.stderr.setEncoding("utf8");
+		child.stderr.on("data", (chunk: string) => {
+			stderr = appendRetainedText(stderr, chunk, STDERR_RETAIN_BYTES);
+		});
+		signal.addEventListener("abort", stop, { once: true });
+		child.stdin.end(prompt);
+
+		const stream = streamClaudeProcess(
+			child,
+			startedAt,
+			signal,
+			clearResumeOnFailure,
+		);
+		let streamResult: StreamResult = {
+			closed: false,
+			sawError: false,
+			sawAbortedDone: false,
+		};
+		for (;;) {
+			const next = await stream.next();
+			if (next.done) {
+				streamResult = next.value;
+				break;
+			}
+			if (assistantContentChunk(next.value)) assistantContent = true;
+			yield next.value;
+		}
+
+		let exitTimedOut = false;
+		let exit = await waitForExitWithTimeout(
+			exitPromise,
+			EXIT_AFTER_STDOUT_CLOSE_TIMEOUT_MS,
+		);
+		if (!exit) {
+			exitTimedOut = true;
+			terminateChild(child);
+			exit = await waitForExitWithTimeout(exitPromise, KILL_GRACE_MS + 1_000);
+		}
+
+		const attemptResult = (
+			overrides: Partial<ClaudeAttemptResult> = {},
+		): ClaudeAttemptResult => ({
+			failed: true,
+			assistantContent,
+			closed: streamResult.closed,
+			aborted: signal.aborted && !timedOut(),
+			timedOut: timedOut(),
+			exitTimedOut,
+			sessionId: streamResult.sessionId,
+			...overrides,
+		});
+
+		if (timedOut()) {
+			if (!streamResult.closed) {
+				yield failureChunk(timeoutFailure(timeoutMs));
+				yield abortedDone(startedAt, failureMeta);
+			}
+			return attemptResult({ timedOut: true });
+		}
+
+		if (signal.aborted) {
+			if (!streamResult.closed) {
+				yield { type: "error", content: HOST_ABORT_MESSAGE };
+				yield abortedDone(startedAt, failureMeta);
+			}
+			return attemptResult({ aborted: true });
+		}
+
+		if (exitTimedOut) {
+			if (!streamResult.closed) {
+				yield failureChunk({
+					code: "host_claude_failed",
+					message: `claude stdout closed but the process did not exit within ${EXIT_AFTER_STDOUT_CLOSE_TIMEOUT_MS}ms; killed`,
+				});
+				yield abortedDone(startedAt, failureMeta);
+			}
+			return attemptResult({ exitTimedOut: true });
+		}
+
+		if (!exit || exit.code !== 0) {
+			if (!streamResult.closed) {
+				const detail = formatRetainedStderr(stderr);
+				yield failureChunk({
+					code: "host_claude_failed",
+					message: `claude exited with ${exit?.signal ?? `code ${exit?.code ?? "unknown"}`}${detail ? `: ${detail}` : ""}`,
+				});
+				yield abortedDone(startedAt, failureMeta);
+			}
+			return attemptResult();
+		}
+
+		if (!streamResult.closed) {
+			const done = doneChunk(startedAt, {
+				resume: resumeFor(streamResult.sessionId),
+			});
+			yield done;
+			streamResult = {
+				...streamResult,
+				closed: true,
+				sawAbortedDone: doneWasAborted(done),
+			};
+		}
+
+		return attemptResult({
+			failed: streamResult.sawError || streamResult.sawAbortedDone,
+			closed: streamResult.closed,
+		});
+	} catch (error) {
+		if (timedOut()) {
+			yield failureChunk(timeoutFailure(timeoutMs));
+		} else if (signal.aborted) {
+			yield { type: "error", content: HOST_ABORT_MESSAGE };
+		} else {
+			yield failureChunk({
+				code: "host_claude_failed",
+				message: errorText(error),
+			});
+		}
+		yield abortedDone(startedAt, failureMeta);
+		if (child && exitPromise && signal.aborted) {
+			terminateChild(child);
+			await waitForExitWithTimeout(exitPromise, KILL_GRACE_MS + 1_000);
+		}
+		return baseResult();
+	} finally {
+		signal.removeEventListener("abort", stop);
+		if (child && !settled) terminateChild(child);
+	}
+}
+
+async function* bufferUntilAssistantContent(
+	attempt: AsyncGenerator<StreamChunk, ClaudeAttemptResult, void>,
+): AsyncGenerator<StreamChunk, BufferedAttemptResult, void> {
+	const bufferedChunks: StreamChunk[] = [];
+	let emitted = false;
+	for (;;) {
+		const next = await attempt.next();
+		if (next.done) {
+			return {
+				...next.value,
+				assistantContent: next.value.assistantContent || emitted,
+				bufferedChunks: emitted ? [] : bufferedChunks,
+			};
+		}
+		const chunk = next.value;
+		if (!emitted && assistantContentChunk(chunk)) {
+			emitted = true;
+			for (const buffered of bufferedChunks) yield buffered;
+			bufferedChunks.length = 0;
+		}
+		if (emitted) {
+			yield chunk;
+		} else {
+			bufferedChunks.push(chunk);
+		}
+	}
+}
+
+function shouldFallbackFromResume(
+	request: TurnRequest,
+	result: BufferedAttemptResult,
+): boolean {
+	return Boolean(
+		request.resume &&
+			result.failed &&
+			!result.assistantContent &&
+			!result.aborted &&
+			!result.timedOut,
+	);
 }
 
 export const hostProvider: ComputeProvider = {
@@ -612,85 +1190,84 @@ export const hostProvider: ComputeProvider = {
 			return;
 		}
 
-		yield { type: "status", content: "Preparing host workspace" };
-		const workspaceError = await ensureWorkspace(
-			workspaceDir,
-			targetRepo.repo,
-			request.signal,
-		);
-		if (workspaceError) {
-			yield failureChunk(workspaceError);
-			yield abortedDone(startedAt);
-			return;
-		}
-
-		const args = buildClaudeArgs(request);
-		const env = curatedClaudeEnv();
-		const prompt = buildHostPrompt(
-			request,
-			targetRepo.repo.fullName,
-			workspaceDir,
-		);
-		let child: ChildProcessWithoutNullStreams | undefined;
-		let settled = false;
-		let stderr = "";
-		const onAbort = () => {
-			if (child) terminateChild(child);
-		};
+		const timeoutMs = resolveHostTurnTimeoutMs();
+		const lifetime = createTurnLifetime(request.signal, timeoutMs);
 		try {
-			yield { type: "status", content: "Starting local Claude Code" };
-			child = spawn(claudeBin, args, {
-				cwd: workspaceDir,
-				env,
-				stdio: ["pipe", "pipe", "pipe"],
-			});
-			child.stderr.setEncoding("utf8");
-			child.stderr.on("data", (chunk: string) => {
-				stderr += chunk;
-			});
-			request.signal?.addEventListener("abort", onAbort, { once: true });
-			child.stdin.end(prompt);
-			const exitPromise = waitForExit(child).finally(() => {
-				settled = true;
-			});
-			const stream = streamClaudeProcess(child, startedAt);
-			let streamResult: { closed: boolean; sessionId?: string } = {
-				closed: false,
-			};
-			for (;;) {
-				const next = await stream.next();
-				if (next.done) {
-					streamResult = next.value;
-					break;
-				}
-				yield next.value;
-			}
-			const exit = await exitPromise;
-			if (request.signal?.aborted) {
-				if (!streamResult.closed) {
+			yield { type: "status", content: "Preparing host workspace" };
+			let workspaceError: HostFailure | null;
+			try {
+				workspaceError = await ensureWorkspaceOnce(
+					request.sessionId,
+					workspaceDir,
+					targetRepo.repo,
+					lifetime.signal,
+				);
+			} catch (error) {
+				if (lifetime.timedOut()) {
+					workspaceError = timeoutFailure(timeoutMs);
+				} else if (lifetime.signal.aborted) {
 					yield { type: "error", content: HOST_ABORT_MESSAGE };
 					yield abortedDone(startedAt);
+					return;
+				} else {
+					workspaceError = {
+						code: "host_workspace_setup_failed",
+						message: `host workspace setup failed: ${errorText(error)}`,
+					};
 				}
+			}
+			if (workspaceError) {
+				yield failureChunk(workspaceError);
+				yield abortedDone(startedAt);
 				return;
 			}
-			if (exit.code !== 0) {
-				if (!streamResult.closed) {
-					yield failureChunk({
-						code: "host_claude_failed",
-						message: `claude exited with ${exit.signal ?? `code ${exit.code ?? "unknown"}`}${stderr ? `: ${capStderr(stderr)}` : ""}`,
-					});
-					yield abortedDone(startedAt);
-				}
+			if (lifetime.signal.aborted) {
+				if (lifetime.timedOut()) yield failureChunk(timeoutFailure(timeoutMs));
+				else yield { type: "error", content: HOST_ABORT_MESSAGE };
+				yield abortedDone(startedAt);
 				return;
 			}
-			if (!streamResult.closed) {
-				yield doneChunk(startedAt, {
-					resume: resumeFor(streamResult.sessionId),
-				});
+
+			const env = curatedClaudeEnv();
+			const runAttempt = (
+				attemptRequest: TurnRequest,
+				clearResumeOnFailure: boolean,
+			) =>
+				bufferUntilAssistantContent(
+					executeClaudeAttempt({
+						claudeBin,
+						args: buildClaudeArgs(attemptRequest),
+						prompt: buildHostPrompt(
+							attemptRequest,
+							targetRepo.repo.fullName,
+							workspaceDir,
+						),
+						workspaceDir,
+						env,
+						startedAt,
+						signal: lifetime.signal,
+						timedOut: lifetime.timedOut,
+						timeoutMs,
+						clearResumeOnFailure,
+					}),
+				);
+
+			yield { type: "status", content: "Starting local Claude Code" };
+			let attempt = runAttempt(request, false);
+			let result = yield* attempt;
+			if (shouldFallbackFromResume(request, result)) {
+				yield {
+					type: "status",
+					content: "Previous local Claude session failed — starting fresh",
+				};
+				const freshRequest: TurnRequest = { ...request, resume: undefined };
+				attempt = runAttempt(freshRequest, true);
+				result = yield* attempt;
 			}
+
+			for (const chunk of result.bufferedChunks) yield chunk;
 		} finally {
-			request.signal?.removeEventListener("abort", onAbort);
-			if (child && !settled) terminateChild(child);
+			lifetime.dispose();
 		}
 	},
 };
