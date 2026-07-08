@@ -11,11 +11,14 @@ import {
 	createSession,
 	deleteSession,
 	getSession,
+	listSessionFilterOptions,
+	listSessions,
 	readEvents,
 	readTranscript,
 	titleSessionIfEmpty,
 	updateSession,
 } from "./sessions";
+import { ensureSchema } from "./schema";
 
 // A throwaway on-disk libSQL DB per test — isolated, and (unlike a bare
 // `:memory:` client) it survives the reconnect the driver makes across a
@@ -56,6 +59,7 @@ describe("session store", () => {
 			"0004_session_model",
 			"0005_terminal_tickets",
 			"0006_session_owner_login",
+			"0007_session_first_user_message",
 		]);
 	});
 
@@ -77,6 +81,7 @@ describe("session store", () => {
 			status: "active",
 		});
 		expect(created.resumeState).toBeNull();
+		expect(created.firstUserMessage).toBeNull();
 		expect(await getSession(handle, "s1")).toEqual(created);
 		expect(await getSession(handle, "missing")).toBeUndefined();
 	});
@@ -184,10 +189,147 @@ describe("session store", () => {
 		expect(events.map((e) => e.seq)).toEqual([1, 2, 3]);
 		expect(events.map((e) => e.role)).toEqual(["user", "assistant", "assistant"]);
 		expect(events[0].chunk).toEqual({ type: "text", content: "hi" });
+		expect((await getSession(handle, "s1"))?.firstUserMessage).toBe("hi");
 
 		// Resume cursor: only events after seq 1.
 		const tail = await readEvents(handle, "s1", 1);
 		expect(tail.map((e) => e.seq)).toEqual([2, 3]);
+	});
+
+	test("keeps the projected first user message stable after later user turns", async () => {
+		const handle = freshDb();
+		await createSession(handle, { id: "s1", provider: "mock" });
+		await appendEvents(handle, "s1", [
+			evt("assistant", { type: "status", content: "ready" }),
+			evt("user", { type: "text", content: "First request" }),
+		]);
+		await appendEvents(handle, "s1", [
+			evt("user", { type: "text", content: "Second request" }),
+		]);
+
+		expect((await getSession(handle, "s1"))?.firstUserMessage).toBe(
+			"First request",
+		);
+	});
+
+	test("listSessions searches titles and projected first user messages, filters, and keeps last activity order", async () => {
+		const handle = freshDb();
+		await ensureSchema(handle);
+		await handle.db
+			.insertInto("repos")
+			.values([
+				{
+					id: "repo-a",
+					full_name: "fairchild/workspaces",
+					default_branch: "main",
+					created_at: "2026-01-01T00:00:00.000Z",
+				},
+				{
+					id: "repo-b",
+					full_name: "fairchild/services",
+					default_branch: "main",
+					created_at: "2026-01-01T00:00:00.000Z",
+				},
+			])
+			.execute();
+		await createSession(handle, {
+			id: "old-title",
+			repoId: "repo-a",
+			title: "Fix launch crash",
+			provider: "mock",
+			status: "archived",
+		});
+		await createSession(handle, {
+			id: "middle-message",
+			repoId: "repo-b",
+			title: "Untitled",
+			provider: "mock",
+			status: "idle",
+		});
+		await createSession(handle, {
+			id: "new-title",
+			repoId: "repo-a",
+			title: "Keyboard resume polish",
+			provider: "mock",
+			status: "active",
+		});
+		await appendEvents(handle, "old-title", [
+			evt("user", { type: "text", content: "Unrelated first message" }),
+		]);
+		await appendEvents(handle, "middle-message", [
+			evt("user", { type: "text", content: "Search the session body" }),
+		]);
+		await appendEvents(handle, "new-title", [
+			evt("user", { type: "text", content: "Resume ergonomics" }),
+		]);
+		await handle.db
+			.updateTable("sessions")
+			.set({ last_activity_at: "2026-01-01T00:00:00.000Z" })
+			.where("id", "=", "old-title")
+			.execute();
+		await handle.db
+			.updateTable("sessions")
+			.set({ last_activity_at: "2026-01-01T00:01:00.000Z" })
+			.where("id", "=", "middle-message")
+			.execute();
+		await handle.db
+			.updateTable("sessions")
+			.set({ last_activity_at: "2026-01-01T00:02:00.000Z" })
+			.where("id", "=", "new-title")
+			.execute();
+
+		expect((await listSessions(handle, { query: "body" })).map((s) => s.id)).toEqual([
+			"middle-message",
+		]);
+		expect((await listSessions(handle, { query: "keyboard" })).map((s) => s.id)).toEqual([
+			"new-title",
+		]);
+		expect(
+			(await listSessions(handle, { repoId: "repo-a", status: "active" })).map(
+				(s) => s.id,
+			),
+		).toEqual(["new-title"]);
+		expect((await listSessions(handle)).map((s) => s.id)).toEqual([
+			"new-title",
+			"middle-message",
+			"old-title",
+		]);
+	});
+
+	test("listSessionFilterOptions returns cheap repo and status facets", async () => {
+		const handle = freshDb();
+		await ensureSchema(handle);
+		await handle.db
+			.insertInto("repos")
+			.values({
+				id: "repo-a",
+				full_name: "fairchild/workspaces",
+				default_branch: "main",
+				created_at: "2026-01-01T00:00:00.000Z",
+			})
+			.execute();
+		await createSession(handle, {
+			id: "s1",
+			repoId: "repo-a",
+			provider: "mock",
+			status: "active",
+		});
+		await createSession(handle, {
+			id: "s2",
+			provider: "mock",
+			status: "idle",
+		});
+
+		expect(await listSessionFilterOptions(handle)).toEqual({
+			repos: [
+				{ value: "__none", label: "no repository", count: 1 },
+				{ value: "repo-a", label: "fairchild/workspaces", count: 1 },
+			],
+			statuses: [
+				{ value: "active", label: "active", count: 1 },
+				{ value: "idle", label: "idle", count: 1 },
+			],
+		});
 	});
 
 	test("keeps per-session seq independent across sessions", async () => {

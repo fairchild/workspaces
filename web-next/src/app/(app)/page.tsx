@@ -3,53 +3,33 @@
  * the quiet new-session flow. This is the app's front door — everything on
  * it stays calm: one masthead, one list, one affordance.
  */
-import Link from "next/link";
 import { ThemeToggle } from "@/components/folio/theme-toggle";
 import { getDatabase } from "@/lib/db/client";
-import { listSessions, type SessionListItem } from "@/lib/db/sessions";
-import { formatRelativeTime } from "@/lib/relative-time";
+import { listSessionFilterOptions, listSessions } from "@/lib/db/sessions";
 import { NewSession } from "./new-session";
+import { SessionsHomeList } from "./sessions-home-list";
 import { SignOutButton } from "./sign-out-button";
 
-function SessionRow({ session, index }: { session: SessionListItem; index: number }) {
-	return (
-		<li
-			className="animate-rise border-b border-line"
-			style={index < 6 ? { animationDelay: `${0.03 + index * 0.05}s` } : undefined}
-		>
-			<Link
-				href={`/sessions/${session.id}`}
-				className="group block px-2.5 py-[16px]"
-			>
-				{session.title ? (
-					<span className="font-serif text-body text-ink transition-colors group-hover:text-accent">
-						{session.title}
-					</span>
-				) : (
-					<span className="font-serif text-body text-hint italic transition-colors group-hover:text-accent">
-						Untitled session
-					</span>
-				)}
-				<span className="mt-1 flex items-baseline gap-[9px] font-mono text-caption text-muted">
-					{session.repoFullName ?? "no repository"}
-					<span className="text-faint">·</span>
-					{formatRelativeTime(session.lastActivityAt)}
-					{session.status !== "active" && (
-						<>
-							<span className="text-faint">·</span>
-							<span className="text-hint">{session.status}</span>
-						</>
-					)}
-				</span>
-			</Link>
-		</li>
-	);
+interface SessionsHomeProps {
+	searchParams?: Promise<{
+		q?: string;
+		repo?: string;
+		status?: string;
+	}>;
 }
 
-export default async function SessionsHome() {
+export default async function SessionsHome({ searchParams }: SessionsHomeProps) {
 	const handle = getDatabase();
-	const sessions = await listSessions(handle);
+	const params = (await searchParams) ?? {};
+	const query = params.q?.trim() ?? "";
+	const repoId = params.repo ?? "";
+	const status = params.status ?? "";
+	const [sessions, filters] = await Promise.all([
+		listSessions(handle, { query, repoId, status }),
+		listSessionFilterOptions(handle),
+	]);
 	const isEmpty = sessions.length === 0;
+	const hasFilters = query || repoId || status;
 
 	return (
 		<>
@@ -62,7 +42,7 @@ export default async function SessionsHome() {
 				</span>
 			</header>
 			<main className="mx-auto max-w-[680px] px-5 pt-[72px] pb-16">
-				{isEmpty ? (
+				{isEmpty && !hasFilters ? (
 					<div className="animate-rise flex flex-col items-center pt-[14vh]">
 						<p className="font-serif text-body text-muted italic">
 							No sessions yet.
@@ -79,15 +59,13 @@ export default async function SessionsHome() {
 						<h1 className="mb-2 px-2.5 font-mono text-label font-medium tracking-[.16em] text-hint uppercase">
 							Sessions
 						</h1>
-						<ul>
-							{sessions.map((session, index) => (
-								<SessionRow key={session.id} session={session} index={index} />
-							))}
-						</ul>
-						{/* The list ends in a quiet invitation, not a persistent button. */}
-						<div className="mt-4 px-2.5">
-							<NewSession />
-						</div>
+						<SessionsHomeList
+							sessions={sessions}
+							filters={filters}
+							initialQuery={query}
+							initialRepoId={repoId}
+							initialStatus={status}
+						/>
 					</>
 				)}
 			</main>

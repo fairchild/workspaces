@@ -236,6 +236,42 @@ const sessionOwnerLogin: Migration = {
 	},
 };
 
+/**
+ * Adds `sessions.first_user_message` — the first user text chunk projected out
+ * of the append-only log so sessions-home search can stay one list query
+ * instead of probing `session_events` per row.
+ */
+const sessionFirstUserMessage: Migration = {
+	id: "0007_session_first_user_message",
+	async up(db) {
+		const info = await sql<{
+			name: string;
+		}>`PRAGMA table_info(sessions)`.execute(db);
+		const hasColumn = info.rows.some((row) => row.name === "first_user_message");
+		if (!hasColumn) {
+			await db.schema
+				.alterTable("sessions")
+				.addColumn("first_user_message", "text")
+				.execute();
+		}
+		await sql`
+			UPDATE sessions
+			SET first_user_message = (
+				SELECT json_extract(session_events.payload, '$.content')
+				FROM session_events
+				WHERE session_events.session_id = sessions.id
+					AND session_events.role = 'user'
+					AND session_events.kind = 'text'
+					AND json_extract(session_events.payload, '$.content') IS NOT NULL
+					AND trim(json_extract(session_events.payload, '$.content')) <> ''
+				ORDER BY session_events.seq ASC
+				LIMIT 1
+			)
+			WHERE first_user_message IS NULL
+		`.execute(db);
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
@@ -243,4 +279,5 @@ export const MIGRATIONS: Migration[] = [
 	sessionModel,
 	terminalTickets,
 	sessionOwnerLogin,
+	sessionFirstUserMessage,
 ];
