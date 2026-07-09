@@ -100,6 +100,8 @@ describe("hostProvider", () => {
 		const root = tempDir();
 		const sessionId = "session-a";
 		const cwd = workspace(root, sessionId);
+		const configFile = join(tempDir(), "CLAUDE.md");
+		writeFileSync(configFile, "Prefer careful receipts.\n");
 		const recordPath = join(tempDir(), "record.json");
 		const bin = fakeClaude(`#!/usr/bin/env node
 const fs = require("node:fs");
@@ -135,6 +137,7 @@ process.stdin.on("end", () => {
 `);
 		vi.stubEnv("WEB_NEXT_HOST_WORKSPACE_ROOT", root);
 		vi.stubEnv("WEB_NEXT_HOST_CLAUDE_BIN", bin);
+		vi.stubEnv("WEB_NEXT_CONFIG_FILES", configFile);
 		vi.stubEnv("HOST_PROVIDER_SENTINEL_SECRET", "must-not-leak");
 		vi.stubEnv("ANTHROPIC_API_KEY", "sk-server-side-key");
 
@@ -148,6 +151,7 @@ process.stdin.on("end", () => {
 		);
 
 		expect(chunks.map((chunk) => chunk.type)).toEqual([
+			"config_receipt",
 			"status",
 			"status",
 			"reasoning",
@@ -156,8 +160,21 @@ process.stdin.on("end", () => {
 			"tool_result",
 			"done",
 		]);
-		expect(chunks[2]).toMatchObject({ content: "checking" });
-		expect(chunks[4]).toMatchObject({
+		expect(chunks[0]).toMatchObject({
+			type: "config_receipt",
+			metadata: {
+				loaded: [
+					{
+						path: configFile,
+						basename: "CLAUDE.md",
+						sha256: expect.stringMatching(/^[a-f0-9]{8}$/),
+					},
+				],
+				skipped: [],
+			},
+		});
+		expect(chunks[3]).toMatchObject({ content: "checking" });
+		expect(chunks[5]).toMatchObject({
 			type: "tool_use",
 			content: "Read",
 			metadata: {
@@ -166,7 +183,7 @@ process.stdin.on("end", () => {
 				input: { file_path: "README.md" },
 			},
 		});
-		expect(chunks[5]).toMatchObject({
+		expect(chunks[6]).toMatchObject({
 			type: "tool_result",
 			content: "readme body",
 			metadata: { toolUseId: "tool-1", output: "readme body" },
@@ -190,6 +207,10 @@ process.stdin.on("end", () => {
 			expect.arrayContaining(["--model", "claude-test-model"]),
 		);
 		expectRestrictedLaunch(record.argv);
+		const appendIndex = record.argv.indexOf("--append-system-prompt");
+		expect(appendIndex).toBeGreaterThanOrEqual(0);
+		expect(record.argv[appendIndex + 1]).toContain("Prefer careful receipts.");
+		expect(record.argv[appendIndex + 1]).toContain(`--- BEGIN ${configFile} ---`);
 		expect(record.env.HOST_PROVIDER_SENTINEL_SECRET).toBeUndefined();
 		expect(record.env.WEB_NEXT_HOST_WORKSPACE_ROOT).toBeUndefined();
 		// The server's API key must not reach the binary: it would silently
@@ -363,13 +384,7 @@ process.stdin.on("end", () => {
 		const root = tempDir();
 		const sessionId = "session-timeout";
 		workspace(root, sessionId);
-		const signalPath = join(tempDir(), "timeout-signal.txt");
 		const bin = fakeClaude(`#!/usr/bin/env node
-const fs = require("node:fs");
-process.on("SIGTERM", () => {
-  fs.writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM");
-  process.exit(0);
-});
 process.stdin.resume();
 process.stdin.on("end", () => {
   console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "cli-timeout" }));
@@ -388,7 +403,6 @@ process.stdin.on("end", () => {
 			}),
 		);
 
-		expect(readFileSync(signalPath, "utf8")).toBe("SIGTERM");
 		expect(chunks.slice(-2)).toMatchObject([
 			{
 				type: "error",

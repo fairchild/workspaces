@@ -93,12 +93,26 @@ type Segment =
 			kind: "approval";
 			key: string;
 			part: Extract<FolioMessage["parts"][number], { type: "data-approval" }>;
+	  }
+	| {
+			kind: "configReceipt";
+			key: string;
+			part: Extract<
+				FolioMessage["parts"][number],
+				{ type: "data-config-receipt" }
+			>;
 	  };
 
 function isApprovalPart(
 	part: FolioMessage["parts"][number],
 ): part is Extract<FolioMessage["parts"][number], { type: "data-approval" }> {
 	return part.type === "data-approval";
+}
+
+function isConfigReceiptPart(
+	part: FolioMessage["parts"][number],
+): part is Extract<FolioMessage["parts"][number], { type: "data-config-receipt" }> {
+	return part.type === "data-config-receipt";
 }
 
 /** Contiguous tool parts collapse into one workings block. */
@@ -120,9 +134,35 @@ function groupParts(parts: FolioMessage["parts"]): Segment[] {
 			else segments.push({ kind: "tools", key: `part-${index}`, parts: [part] });
 		} else if (isApprovalPart(part)) {
 			segments.push({ kind: "approval", key: `part-${index}`, part });
+		} else if (isConfigReceiptPart(part)) {
+			segments.push({ kind: "configReceipt", key: `part-${index}`, part });
 		}
 	});
 	return segments;
+}
+
+function ConfigReceiptLine({
+	receipt,
+}: {
+	receipt: Extract<
+		FolioMessage["parts"][number],
+		{ type: "data-config-receipt" }
+	>["data"];
+}) {
+	const loaded = receipt.loaded.map((file) => `${file.basename} ${file.sha256}`);
+	const skipped = receipt.skipped.map(
+		(file) => `${file.basename} skipped: ${file.reason}`,
+	);
+	return (
+		<div
+			data-testid="config-receipt"
+			className="my-5 font-mono text-stat tracking-[.04em] text-hint"
+		>
+			Config {receipt.loaded.length} loaded
+			{loaded.length > 0 && <> · {loaded.join(" · ")}</>}
+			{skipped.length > 0 && <> · {skipped.join(" · ")}</>}
+		</div>
+	);
 }
 
 // --- ledger row rendering ------------------------------------------------------
@@ -274,6 +314,13 @@ export function Message({
 							key={segment.key}
 							approval={segment.part.data}
 							onDecision={onApprovalDecision}
+						/>
+					);
+				if (segment.kind === "configReceipt")
+					return (
+						<ConfigReceiptLine
+							key={segment.key}
+							receipt={segment.part.data}
 						/>
 					);
 				return segment.text.split(/\n{2,}/).map((paragraph, i) => (

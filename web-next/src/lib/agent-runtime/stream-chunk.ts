@@ -19,6 +19,24 @@ export interface ApprovalResolvedMetadata {
 	resolvedBy: ApprovalResolvedBy;
 }
 
+export interface ConfigReceiptFile {
+	path: string;
+	basename: string;
+	sha256: string;
+}
+
+export interface SkippedConfigReceiptFile {
+	path: string;
+	basename: string;
+	reason: string;
+}
+
+export interface ConfigReceipt {
+	envVar: string;
+	loaded: ConfigReceiptFile[];
+	skipped: SkippedConfigReceiptFile[];
+}
+
 export interface StreamChunk {
 	type:
 		| "text"
@@ -26,6 +44,7 @@ export interface StreamChunk {
 		| "tool_use"
 		| "tool_result"
 		| "status"
+		| "config_receipt"
 		| "error"
 		| "done"
 		| "approval_request"

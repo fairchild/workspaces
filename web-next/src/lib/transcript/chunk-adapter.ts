@@ -7,6 +7,7 @@ import type { UIMessageChunk } from "ai";
 import type {
 	ApprovalRequestMetadata,
 	ApprovalResolvedMetadata,
+	ConfigReceipt,
 	StreamChunk,
 } from "../agent-runtime/stream-chunk";
 
@@ -248,6 +249,18 @@ export async function* toUIMessageChunks(
 					data: { message: chunk.content },
 					transient: true,
 				};
+				break;
+			}
+			case "config_receipt": {
+				const receipt = chunk.metadata as Partial<ConfigReceipt> | undefined;
+				yield {
+					type: "data-config-receipt",
+					id: "config-receipt",
+					data: {
+						loaded: Array.isArray(receipt?.loaded) ? receipt.loaded : [],
+						skipped: Array.isArray(receipt?.skipped) ? receipt.skipped : [],
+					},
+				} as UIMessageChunk;
 				break;
 			}
 			case "error": {

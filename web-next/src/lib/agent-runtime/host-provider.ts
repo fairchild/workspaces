@@ -27,6 +27,11 @@ import type {
 } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
 import {
+	configReceiptChunk,
+	hasConfigReceipt,
+	loadRuntimeConfig,
+} from "./config-files";
+import {
 	canonicalToolName,
 	errorText,
 	resolveTargetRepo,
@@ -508,6 +513,7 @@ export function buildHostPrompt(
 
 export function buildClaudeArgs(
 	request: Pick<TurnRequest, "model" | "resume">,
+	appendSystemPrompt?: string,
 ): string[] {
 	const args = [
 		"-p",
@@ -528,6 +534,9 @@ export function buildClaudeArgs(
 		"--permission-mode",
 		"dontAsk",
 	];
+	if (appendSystemPrompt?.trim()) {
+		args.push("--append-system-prompt", appendSystemPrompt);
+	}
 	if (request.model) args.push("--model", request.model);
 	if (request.resume?.harnessSessionId) {
 		args.push("--resume", request.resume.harnessSessionId);
@@ -1166,6 +1175,8 @@ export const hostProvider: ComputeProvider = {
 	id: "host",
 	async *runTurn(request: TurnRequest): AsyncIterable<StreamChunk> {
 		const startedAt = Date.now();
+		const config = await loadRuntimeConfig();
+		if (hasConfigReceipt(config.receipt)) yield configReceiptChunk(config.receipt);
 		const targetRepo = resolveTargetRepo(request);
 		if (!targetRepo.ok) {
 			yield failureChunk({
@@ -1236,7 +1247,7 @@ export const hostProvider: ComputeProvider = {
 				bufferUntilAssistantContent(
 					executeClaudeAttempt({
 						claudeBin,
-						args: buildClaudeArgs(attemptRequest),
+						args: buildClaudeArgs(attemptRequest, config.prompt),
 						prompt: buildHostPrompt(
 							attemptRequest,
 							targetRepo.repo.fullName,
