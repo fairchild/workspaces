@@ -137,6 +137,7 @@ test("the masthead reports the sandbox state truthfully: a mock session has none
 	// (there is nothing to stop — a fake button would be dishonest chrome).
 	await expect(page.getByTestId("sandbox-state")).toContainText("no sandbox");
 	await expect(page.getByTestId("sandbox-stop")).toHaveCount(0);
+	await expect(page.getByTestId("open-session-pr")).toHaveCount(0);
 
 	// Still true after a turn: the mock provider parks no sandbox.
 	await send(page, "Fix the failing session test");
@@ -144,4 +145,5 @@ test("the masthead reports the sandbox state truthfully: a mock session has none
 		timeout: TURN_TIMEOUT,
 	});
 	await expect(page.getByTestId("sandbox-state")).toContainText("no sandbox");
+	await expect(page.getByTestId("open-session-pr")).toHaveCount(0);
 });

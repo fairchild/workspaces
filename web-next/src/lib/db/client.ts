@@ -61,6 +61,15 @@ export interface SessionsTable {
 	model: string;
 	/** Tool approval posture for provider turns (migration `0007_approvals`). */
 	approval_policy: ApprovalPolicy;
+	/**
+	 * Whether the pushed session branch has checkpoint commits ready for a PR.
+	 * Cleared after a PR is persisted; not a local/remote divergence signal.
+	 */
+	has_branch_work: number;
+	/** Pull request opened from this session branch, if any. */
+	pr_number: number | null;
+	pr_url: string | null;
+	pr_state: string | null;
 	created_at: string;
 	last_activity_at: string;
 }

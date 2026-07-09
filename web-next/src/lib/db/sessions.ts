@@ -40,6 +40,12 @@ export interface NewSession {
 	approvalPolicy?: ApprovalPolicy;
 }
 
+export interface SessionPullRequest {
+	number: number;
+	url: string;
+	state: string;
+}
+
 export interface Session {
 	id: string;
 	repoId: string | null;
@@ -56,6 +62,10 @@ export interface Session {
 	model: string;
 	/** Tool approval posture for this session's provider turns (#982). */
 	approvalPolicy: ApprovalPolicy;
+	/** True when the pushed session branch has checkpoint commits and no PR yet. */
+	hasBranchWork: boolean;
+	/** Pull request opened from this session branch, if any. */
+	pullRequest: SessionPullRequest | null;
 	createdAt: string;
 	lastActivityAt: string;
 }
@@ -79,6 +89,15 @@ function rowToSession(row: SessionsTable): Session {
 		resumeState: row.resume_state,
 		model: row.model,
 		approvalPolicy: row.approval_policy,
+		hasBranchWork: row.has_branch_work === 1,
+		pullRequest:
+			row.pr_number !== null && row.pr_url !== null
+				? {
+						number: row.pr_number,
+						url: row.pr_url,
+						state: row.pr_state ?? "unknown",
+					}
+				: null,
 		createdAt: row.created_at,
 		lastActivityAt: row.last_activity_at,
 	};
@@ -102,6 +121,10 @@ export async function createSession(
 		resume_state: null,
 		model: session.model ?? DEFAULT_MODEL,
 		approval_policy: session.approvalPolicy ?? "auto",
+		has_branch_work: 0,
+		pr_number: null,
+		pr_url: null,
+		pr_state: null,
 		created_at: now,
 		last_activity_at: now,
 	};
@@ -125,6 +148,8 @@ export async function updateSession(
 		model?: string;
 		title?: string;
 		approvalPolicy?: ApprovalPolicy;
+		hasBranchWork?: boolean;
+		pullRequest?: SessionPullRequest | null;
 	},
 ): Promise<void> {
 	await ensureSchema(handle);
@@ -135,6 +160,14 @@ export async function updateSession(
 	if ("title" in fields && fields.title) set.title = fields.title;
 	if ("approvalPolicy" in fields && fields.approvalPolicy)
 		set.approval_policy = fields.approvalPolicy;
+	if ("hasBranchWork" in fields && fields.hasBranchWork !== undefined) {
+		set.has_branch_work = fields.hasBranchWork ? 1 : 0;
+	}
+	if ("pullRequest" in fields) {
+		set.pr_number = fields.pullRequest?.number ?? null;
+		set.pr_url = fields.pullRequest?.url ?? null;
+		set.pr_state = fields.pullRequest?.state ?? null;
+	}
 	if (Object.keys(set).length === 0) return;
 	await handle.db.updateTable("sessions").set(set).where("id", "=", id).execute();
 }

@@ -51,6 +51,10 @@ that log, never stored here.
 | `resume_state` | text? | JSON harness resume payload from the last turn's `detach()` (migration `0003_session_resume_state`); null until a real turn parks, cleared when the parked sandbox expires. Session-row state, deliberately not in the event log. |
 | `model` | text | Claude model id this session's turns run on (migration `0004_session_model`, #824); NOT NULL, defaulting to `DEFAULT_MODEL` (`src/lib/agent-runtime/models.ts` — the single source of truth for the selectable set). Threaded into `TurnRequest.model` on every turn; changed via the status line's picker (`PATCH /api/sessions/[id]`). |
 | `approval_policy` | text | Tool approval posture for provider turns (migration `0008_turn_approvals`, #982): `auto` (default), `ask-writes`, or `ask-all`. Providers use `src/lib/agent-runtime/approval-policy.ts` to classify tool names; the mock approval scenario opens a real broker request regardless of this default so the round trip is testable without credentials. |
+| `has_branch_work` | integer boolean | PR-from-session gate (#820, migration `0011_session_pull_requests`). The Vercel checkpoint tail sets this after a checkpoint commit is pushed to the session branch; the Open PR route clears it once PR metadata is persisted. |
+| `pr_number` | integer? | GitHub PR number opened from this session branch. Null until the user-triggered Open PR action succeeds. |
+| `pr_url` | text? | Browser URL for the session PR; rendered as the persistent masthead link. |
+| `pr_state` | text? | Last state returned by GitHub for the PR (`open`, `closed`, etc.). |
 | `created_at` | text | ISO-8601. |
 | `last_activity_at` | text | ISO-8601; bumped on every event append. |
 

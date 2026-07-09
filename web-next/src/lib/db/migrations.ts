@@ -411,6 +411,38 @@ const queuedMessageDispatchOrder: Migration = {
 	},
 };
 
+/**
+ * Adds the PR-from-session projection (#820): a cheap pushed-branch-work flag
+ * set by the sandbox checkpoint tail, plus the PR identity the masthead renders
+ * once the user opens it.
+ */
+const sessionPullRequests: Migration = {
+	id: "0011_session_pull_requests",
+	async up(db) {
+		const info = await sql<{
+			name: string;
+		}>`PRAGMA table_info(sessions)`.execute(db);
+		const columns = new Set(info.rows.map((row) => row.name));
+		if (!columns.has("has_branch_work")) {
+			await db.schema
+				.alterTable("sessions")
+				.addColumn("has_branch_work", "integer", (col) =>
+					col.notNull().defaultTo(0),
+				)
+				.execute();
+		}
+		if (!columns.has("pr_number")) {
+			await db.schema.alterTable("sessions").addColumn("pr_number", "integer").execute();
+		}
+		if (!columns.has("pr_url")) {
+			await db.schema.alterTable("sessions").addColumn("pr_url", "text").execute();
+		}
+		if (!columns.has("pr_state")) {
+			await db.schema.alterTable("sessions").addColumn("pr_state", "text").execute();
+		}
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
@@ -422,4 +454,5 @@ export const MIGRATIONS: Migration[] = [
 	turnApprovals,
 	queuedMessages,
 	queuedMessageDispatchOrder,
+	sessionPullRequests,
 ];

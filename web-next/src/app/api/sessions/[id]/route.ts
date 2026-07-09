@@ -85,6 +85,8 @@ export async function GET(
 			provider: session.provider,
 			status: session.status,
 			model: session.model,
+			hasBranchWork: session.hasBranchWork,
+			pullRequest: session.pullRequest,
 			// Whether a turn parked a resumable sandbox handle; the handle itself
 			// is private server state and never leaves the row.
 			parked: !!(session.claudeSessionId && session.resumeState),
