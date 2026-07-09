@@ -10,11 +10,18 @@
  */
 import type { UIMessageChunk } from "ai";
 import type { DatabaseHandle } from "../db/client";
-import { enqueueMessage, type QueuedMessage } from "../db/queued-messages";
+import {
+	appendImmediateTurnOrQueue,
+	enqueueMessage,
+	type QueuedMessage,
+} from "../db/queued-messages";
 import type { Session } from "../db/sessions";
 import type { ComputeProvider } from "./provider";
 import { getProvider } from "./provider";
-import { startNextQueuedTurn, startTurn } from "./turn-ingest";
+import {
+	startNextQueuedTurn,
+	startTurnFromAppendedUserEvent,
+} from "./turn-ingest";
 import { closeAbandonedTurn, resolveTurn, tailStream } from "./turn-tail";
 
 export interface SessionTurn {
@@ -55,10 +62,10 @@ export type SessionTurnResult = SessionTurn | QueuedSessionTurn;
  * One turn at a time: a send against a session whose current turn is still
  * running (in-process, or fresh in the log per resolveTurn) is durably queued
  * instead of interleaving a second provider's chunks into the live turn's seq
- * range. The queued text does not touch session_events until the active turn's
- * ingest writes its terminal done and claims the row for the next startTurn.
- * Two truly simultaneous first sends can still race the check — full
- * serialization would need a DB reservation and is out of scope; see #811.
+ * range. The queued text does not touch session_events until an atomic
+ * claim-and-append transaction dispatches it as the next turn. If the log is
+ * idle but pending queue rows exist, this send also queues behind them; FIFO
+ * queue order is more important than making the newest POST special.
  */
 export async function runSessionTurn(
 	handle: DatabaseHandle,
@@ -74,7 +81,15 @@ export async function runSessionTurn(
 	if (current.status === "stale" && current.fromSeq !== null) {
 		await closeAbandonedTurn(handle, session.id, current.fromSeq);
 	}
-	const { fromSeq, ingest } = await startTurn(handle, session, userText, provider);
+	const start = await appendImmediateTurnOrQueue(handle, session.id, userText);
+	if (start.kind === "queued") return queuedTurnResponse(start.queued);
+	const { fromSeq, ingest } = await startTurnFromAppendedUserEvent(
+		handle,
+		session,
+		userText,
+		start.userSeq,
+		provider,
+	);
 	return { kind: "started", fromSeq, ingest, stream: tailStream(handle, session.id, fromSeq) };
 }
 

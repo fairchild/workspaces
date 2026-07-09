@@ -109,19 +109,20 @@ transcript events: the running turn's ingest loop stays the only writer to
 `session_events`, and the queued text is appended there only when the row is
 claimed for dispatch as the next turn.
 
-Migration: `0009_queued_messages`.
+Migration: `0009_queued_messages`, `0010_queued_message_dispatch_order`.
 
 | Column | Type | Meaning |
 |---|---|---|
+| `id` | integer | Monotonic insertion order; the dispatcher's strict FIFO key. |
 | `session_id` | text | Owning session. |
 | `queue_id` | text | Stable id used by the client to cancel/reconcile the row. |
 | `text` | text | User text to dispatch next. |
-| `queued_at` | text | ISO-8601 enqueue time; oldest active row dispatches first. |
+| `queued_at` | text | ISO-8601 enqueue time for display/debugging. |
 | `dispatched_at` | text? | Set when claimed for `startTurn`; null while pending. |
 | `canceled_at` | text? | Set when canceled before dispatch. |
 
-Primary key `(session_id, queue_id)`. Index
-`(session_id, queued_at)` serves the oldest-first queue read.
+Primary key `id`; unique `(session_id, queue_id)`. Index
+`(session_id, id)` serves the oldest-first queue read.
 
 ### Better Auth tables (`user`, `session`, `account`, `verification`)
 

@@ -9,7 +9,7 @@ import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
 import {
-	claimNextQueuedMessage,
+	claimAndStartQueuedTurn,
 	enqueueMessage,
 	listQueuedMessages,
 } from "@/lib/db/queued-messages";
@@ -67,7 +67,7 @@ describe("DELETE /api/sessions/[id]/queue/[queueId]", () => {
 	test("returns 409 once the queued message has dispatched", async () => {
 		const id = await freshSession();
 		const queued = await enqueueMessage(getDatabase(), id, "too late");
-		await claimNextQueuedMessage(getDatabase(), id);
+		await claimAndStartQueuedTurn(getDatabase(), id);
 
 		const res = await del(id, queued.queueId);
 

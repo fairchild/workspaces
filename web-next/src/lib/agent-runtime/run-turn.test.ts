@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { type DatabaseHandle, openDatabase } from "../db/client";
 import {
 	appendEvents,
@@ -24,6 +24,7 @@ import {
 	type SessionTurn,
 	type SessionTurnResult,
 } from "./run-turn";
+import { startNextQueuedTurn } from "./turn-ingest";
 import {
 	MOCK_PROVISION_ERROR_TRIGGER,
 	MOCK_TURN_ERROR_TRIGGER,
@@ -41,6 +42,7 @@ function freshDb(): DatabaseHandle {
 }
 
 afterEach(async () => {
+	vi.useRealTimers();
 	await open?.db.destroy();
 	open = undefined;
 	if (dir) rmSync(dir, { recursive: true, force: true });
@@ -80,6 +82,25 @@ async function drain(stream: ReadableStream<unknown>): Promise<unknown[]> {
 		if (done) return out;
 		out.push(value);
 	}
+}
+
+async function waitForUserContents(
+	handle: DatabaseHandle,
+	sessionId: string,
+	count: number,
+): Promise<string[]> {
+	for (let attempt = 0; attempt < 100; attempt += 1) {
+		const events = await readEvents(handle, sessionId);
+		const users = events
+			.filter((event) => event.role === "user")
+			.map((event) => event.chunk.content);
+		const doneCount = events.filter(
+			(event) => event.role === "assistant" && event.chunk.type === "done",
+		).length;
+		if (users.length >= count && doneCount >= count) return users;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`timed out waiting for ${count} user events`);
 }
 
 function started(result: SessionTurnResult): SessionTurn {
@@ -312,8 +333,7 @@ describe("runSessionTurn", () => {
 		await first.ingest;
 		// The queued row dispatched as the next normal user turn after the first
 		// turn closed.
-		const after = await readEvents(handle, session.id);
-		expect(after.filter((e) => e.role === "user").map((e) => e.chunk.content)).toEqual([
+		await expect(waitForUserContents(handle, session.id, 2)).resolves.toEqual([
 			"one",
 			queuedText,
 		]);
@@ -348,11 +368,102 @@ describe("runSessionTurn", () => {
 
 		release();
 		await first.ingest;
+		const users = await waitForUserContents(handle, session.id, 3);
+		expect(users).toEqual(["one", secondText, thirdText]);
+		expect(await listQueuedMessages(handle, session.id)).toEqual([]);
+	});
+
+	test("concurrent continuation and GET sweep dispatch exactly one queued turn first (#984)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "queue-concurrent",
+			provider: "mock",
+		});
+		const firstText = `first ${MOCK_TURN_ERROR_TRIGGER}`;
+		const secondText = `second ${MOCK_PROVISION_ERROR_TRIGGER}`;
+		await enqueueMessage(handle, session.id, firstText);
+		await enqueueMessage(handle, session.id, secondText);
+
+		const [continued, swept] = await Promise.all([
+			startNextQueuedTurn(handle, session.id),
+			dispatchQueuedTurnIfIdle(handle, session),
+		]);
+
+		const startedTurns = [continued, swept].filter(
+			(turn): turn is NonNullable<typeof turn> => turn !== null,
+		);
+		expect(startedTurns).toHaveLength(1);
+		await startedTurns[0].ingest;
+		const users = await waitForUserContents(handle, session.id, 2);
+		expect(users).toEqual([firstText, secondText]);
+	});
+
+	test("a direct POST behind a pending queue row enqueues instead of jumping ahead (#984)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "queue-direct-behind-pending",
+			provider: "mock",
+		});
+		const firstText = "already queued";
+		const directText = "new direct post";
+		await enqueueMessage(handle, session.id, firstText);
+
+		const result = await runSessionTurn(handle, session, directText, stubProvider());
+
+		expect(result).toMatchObject({ kind: "queued", position: 2 });
+		expect((await readEvents(handle, session.id)).filter((e) => e.role === "user")).toEqual(
+			[],
+		);
+		expect((await listQueuedMessages(handle, session.id)).map((m) => m.text)).toEqual([
+			firstText,
+			directText,
+		]);
+	});
+
+	test("a post-claim start failure leaves queued text visible in session_events (#984)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "queue-stranded-claim",
+			provider: "nope",
+		});
+		const queuedText = "dispatch me once";
+		await enqueueMessage(handle, session.id, queuedText);
+
+		await expect(dispatchQueuedTurnIfIdle(handle, session)).rejects.toThrow(
+			"Unknown compute provider: nope",
+		);
+
+		expect(await listQueuedMessages(handle, session.id)).toEqual([]);
 		const users = (await readEvents(handle, session.id))
 			.filter((event) => event.role === "user")
 			.map((event) => event.chunk.content);
-		expect(users).toEqual(["one", secondText, thirdText]);
-		expect(await listQueuedMessages(handle, session.id)).toEqual([]);
+		expect(users).toEqual([queuedText]);
+	});
+
+	test("same-millisecond queued messages dispatch in insertion order (#984)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "queue-fifo-tie",
+			provider: "mock",
+		});
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+		const firstText = `same-ms first ${MOCK_TURN_ERROR_TRIGGER}`;
+		const secondText = `same-ms second ${MOCK_PROVISION_ERROR_TRIGGER}`;
+		const first = await enqueueMessage(handle, session.id, firstText);
+		const second = await enqueueMessage(handle, session.id, secondText);
+		vi.useRealTimers();
+
+		expect(first.queuedAt).toBe(second.queuedAt);
+		expect((await listQueuedMessages(handle, session.id)).map((m) => m.text)).toEqual([
+			firstText,
+			secondText,
+		]);
+		const turn = await dispatchQueuedTurnIfIdle(handle, session);
+		expect(turn?.kind).toBe("started");
+		await turn?.ingest;
+		const users = await waitForUserContents(handle, session.id, 2);
+		expect(users).toEqual([firstText, secondText]);
 	});
 
 	test("canceling an undispatched queued turn prevents dispatch (#984)", async () => {

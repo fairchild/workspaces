@@ -11,7 +11,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Client, createClient } from "@libsql/client";
-import { Kysely } from "kysely";
+import { type Generated, Kysely } from "kysely";
 import type { ApprovalDecision, ApprovalResolvedBy } from "../agent-runtime/stream-chunk";
 import type { ApprovalPolicy } from "../agent-runtime/approval-policy";
 import { resolveSessionsDatabaseUrl } from "../local-data-dir";
@@ -91,6 +91,8 @@ export interface SessionEventsTable {
  * turn.
  */
 export interface QueuedMessagesTable {
+	/** Monotonic insertion order for strict FIFO dispatch. */
+	id: Generated<number>;
 	session_id: string;
 	/** Stable client-facing id for canceling or reconciling this queued send. */
 	queue_id: string;

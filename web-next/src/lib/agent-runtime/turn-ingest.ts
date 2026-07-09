@@ -9,10 +9,14 @@
  * The loop runs eagerly (fire-and-forget) so the POST response can tail it live;
  * the route additionally hands the ingest promise to next/server `after()` so a
  * serverless invocation is kept alive until the turn settles (a no-op on a
- * long-running node server). In-process state — an `activeTurns` map for
- * liveness and an EventEmitter bus for wakeups — lets same-process tail readers
- * follow without polling; the DB remains the durable source of truth, so a
- * cross-instance reader falls back to polling it.
+ * long-running node server). When a settled turn finds queued work, it starts
+ * the successor and then resolves without awaiting that successor's ingest; on
+ * serverless, later queued turns rely on the GET sweep/client pickup if the
+ * platform freezes the detached successor after the current `after()` window.
+ * In-process state — an `activeTurns` map for liveness and an EventEmitter bus
+ * for wakeups — lets same-process tail readers follow without polling; the DB
+ * remains the durable source of truth, so a cross-instance reader falls back to
+ * polling it.
  *
  * This is the seam #750 replaces with a sandbox-side detached runner: the
  * contract is exactly "append the turn's chunks to the log under (sessionId,
@@ -23,10 +27,7 @@
  */
 import { EventEmitter } from "node:events";
 import type { DatabaseHandle } from "../db/client";
-import {
-	claimNextQueuedMessage,
-	releaseClaimedQueuedMessage,
-} from "../db/queued-messages";
+import { claimAndStartQueuedTurn } from "../db/queued-messages";
 import { getRepo } from "../db/repos";
 import {
 	appendEvents,
@@ -142,6 +143,32 @@ export async function startTurn(
 	const userSeq = await appendEvents(handle, session.id, [
 		{ role: "user", chunk: { type: "text", content: userText } },
 	]);
+	return startTurnFromAppendedUserEvent(
+		handle,
+		session,
+		userText,
+		userSeq,
+		provider,
+		repo,
+	);
+}
+
+/**
+ * Starts a detached provider turn from a user event that has already been
+ * appended. Queue dispatch uses this after its atomic claim+append transaction:
+ * the provider launches only after the transaction commits, from the exact seq
+ * the transaction returned.
+ */
+export async function startTurnFromAppendedUserEvent(
+	handle: DatabaseHandle,
+	session: Session,
+	userText: string,
+	userSeq: number,
+	provider: ComputeProvider = getProvider(session.provider),
+	resolvedRepo?: TurnRepo | null,
+): Promise<StartedTurn> {
+	const repo =
+		resolvedRepo === undefined ? await resolveTurnRepo(handle, session) : resolvedRepo;
 	// Auto-title (#823): runs on every turn, not just conditionally "the
 	// first" — `titleSessionIfEmpty`'s atomic `WHERE title = ''` is what
 	// actually enforces "only once", so a first message that derives no
@@ -202,7 +229,14 @@ export async function startTurn(
 			}
 			try {
 				const next = await startNextQueuedTurn(handle, session.id);
-				if (next) await next.ingest;
+				if (next) {
+					void next.ingest.catch((error) => {
+						console.error(
+							`[turn-ingest] queued turn ingest failed for ${session.id}`,
+							error,
+						);
+					});
+				}
 			} catch (error) {
 				console.error(
 					`[turn-ingest] queued turn continuation failed for ${session.id}`,
@@ -232,19 +266,16 @@ export async function startNextQueuedTurn(
 	sessionId: string,
 ): Promise<StartedTurn | null> {
 	if (activeTurns.has(sessionId)) return null;
-	const queued = await claimNextQueuedMessage(handle, sessionId);
-	if (!queued) return null;
+	const claimed = await claimAndStartQueuedTurn(handle, sessionId);
+	if (!claimed) return null;
 	const session = await getSession(handle, sessionId);
-	if (!session) {
-		await releaseClaimedQueuedMessage(handle, queued);
-		return null;
-	}
-	try {
-		return await startTurn(handle, session, queued.text);
-	} catch (error) {
-		await releaseClaimedQueuedMessage(handle, queued);
-		throw error;
-	}
+	if (!session) return null;
+	return startTurnFromAppendedUserEvent(
+		handle,
+		session,
+		claimed.queued.text,
+		claimed.userSeq,
+	);
 }
 
 async function emitTurnCompletionNotification(
