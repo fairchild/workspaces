@@ -3,10 +3,11 @@
 //  WorkspaceManagerCore
 //
 //  Spawns and supervises the local-mode web-next server (`pnpm run start:local`)
-//  in its own process group, polls the port for readiness, and builds
-//  token-bearing sign-in URLs for the embedded web UI. The entrypoint does not
-//  forward signals to its `next start` child, so shutdown terminates the whole
-//  process group (SIGTERM → bounded grace → SIGKILL).
+//  in its own process group, requires a healthy `/api/healthz` for readiness,
+//  watches the server after it becomes ready, and builds token-bearing sign-in
+//  URLs for the embedded web UI. The entrypoint does not forward signals to its
+//  `next start` child, so shutdown terminates the whole process group
+//  (SIGTERM → bounded grace → SIGKILL until the group is empty).
 //
 
 import Foundation
@@ -64,8 +65,12 @@ public struct WebNextServerConfiguration: Sendable {
     public var launchCommand: WebNextLaunchCommand
     public var readinessTimeout: TimeInterval
     public var readinessPollInterval: TimeInterval
-    /// How long `stop()` waits after SIGTERM before escalating to SIGKILL.
+    /// How long termination waits after SIGTERM before escalating to SIGKILL.
     public var terminationGracePeriod: TimeInterval
+    /// How often the post-ready watchdog checks process liveness and health.
+    public var watchdogInterval: TimeInterval
+    /// Consecutive failed health checks before the watchdog declares the server dead.
+    public var watchdogFailureThreshold: Int
 
     public init(
         webNextRoot: URL,
@@ -75,7 +80,9 @@ public struct WebNextServerConfiguration: Sendable {
         launchCommand: WebNextLaunchCommand = .default,
         readinessTimeout: TimeInterval = 30,
         readinessPollInterval: TimeInterval = 0.5,
-        terminationGracePeriod: TimeInterval = 5
+        terminationGracePeriod: TimeInterval = 5,
+        watchdogInterval: TimeInterval = 5,
+        watchdogFailureThreshold: Int = 3
     ) {
         let resolvedDataDir = dataDir ?? Self.defaultDataDirectory()
         self.webNextRoot = webNextRoot
@@ -86,6 +93,8 @@ public struct WebNextServerConfiguration: Sendable {
         self.readinessTimeout = readinessTimeout
         self.readinessPollInterval = readinessPollInterval
         self.terminationGracePeriod = terminationGracePeriod
+        self.watchdogInterval = watchdogInterval
+        self.watchdogFailureThreshold = watchdogFailureThreshold
     }
 
     public static func defaultDataDirectory(fileManager: FileManager = .default) -> URL {
@@ -110,11 +119,22 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     private let urlSession: URLSession
     private let fileManager: FileManager
     private var processID: pid_t?
-    /// Bumped by every `start()`/`stop()`; in-flight readiness polls compare
-    /// against it so a superseded launch never overwrites current state.
+    /// Bumped by every `start()`/`stop()`; in-flight readiness polls and the
+    /// watchdog compare against it so a superseded launch never overwrites
+    /// current state or another launch's process handle.
     private var generation: UInt64 = 0
+    private var watchdogTask: Task<Void, Never>?
 
     private static let signInTokenFilename = "local-sign-in-token"
+
+    /// Query-value encoding for the sign-in URL. `URLQueryItem` leaves `+`
+    /// literal, which servers commonly decode as a space — encode it (and the
+    /// query structure characters) so redirect paths round-trip exactly.
+    private static let queryValueAllowedCharacters: CharacterSet = {
+        var allowed = CharacterSet.urlQueryAllowed
+        allowed.remove(charactersIn: "+&=")
+        return allowed
+    }()
 
     public init(
         configuration: WebNextServerConfiguration,
@@ -132,8 +152,8 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
 
     // MARK: Lifecycle
 
-    /// Spawn the server and wait until it answers on the port or the readiness
-    /// timeout elapses. Returns immediately when already starting or ready.
+    /// Spawn the server and wait until `/api/healthz` reports healthy or the
+    /// readiness timeout elapses. Returns immediately when already starting or ready.
     public func start() async {
         switch state {
         case .starting, .ready:
@@ -144,6 +164,7 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
 
         generation &+= 1
         let launchGeneration = generation
+        cancelWatchdog()
         state = .starting
 
         let pid: pid_t
@@ -161,16 +182,21 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
             guard generation == launchGeneration else { return }
 
             if processHasExited(pid) {
-                processID = nil
+                // The leader may have left group members behind (e.g. a child
+                // holding the port) — clean up the whole group before failing.
+                await terminateProcessGroup(pid)
+                guard generation == launchGeneration else { return }
+                if processID == pid { processID = nil }
                 state = .failed(
                     reason: "web-next server exited before becoming ready; see \(logFileURL?.path ?? "logs")"
                 )
                 return
             }
 
-            if await serverAnswersHTTP() {
+            if await serverIsHealthy() {
                 guard generation == launchGeneration else { return }
                 state = .ready(signInBaseURL: baseURL)
+                startWatchdog(pid: pid, launchGeneration: launchGeneration)
                 return
             }
 
@@ -179,10 +205,11 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
 
         guard generation == launchGeneration else { return }
         await terminateProcessGroup(pid)
-        processID = nil
+        guard generation == launchGeneration else { return }
+        if processID == pid { processID = nil }
         state = .failed(
             reason:
-                "Timed out after \(Int(configuration.readinessTimeout))s waiting for web-next on port \(configuration.port)."
+                "Timed out after \(Int(configuration.readinessTimeout))s waiting for web-next health on port \(configuration.port)."
         )
     }
 
@@ -190,6 +217,7 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     /// Idempotent — safe to call in any state, including mid-start.
     public func stop() async {
         generation &+= 1
+        cancelWatchdog()
         let pid = processID
         processID = nil
         if let pid {
@@ -214,12 +242,16 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
             url: signInBaseURL.appendingPathComponent("sign-in"),
             resolvingAgainstBaseURL: false
         )
-        var queryItems = [URLQueryItem(name: "token", value: token)]
+        var query = "token=\(Self.encodeQueryValue(token))"
         if let redirect {
-            queryItems.append(URLQueryItem(name: "redirect", value: redirect))
+            query += "&redirect=\(Self.encodeQueryValue(redirect))"
         }
-        components?.queryItems = queryItems
+        components?.percentEncodedQuery = query
         return components?.url
+    }
+
+    private static func encodeQueryValue(_ value: String) -> String {
+        value.addingPercentEncoding(withAllowedCharacters: queryValueAllowedCharacters) ?? value
     }
 
     // MARK: Spawning
@@ -282,7 +314,20 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP))
+        // SETSIGDEF/SETSIGMASK reset the child's signal state: ignored
+        // dispositions (SIG_IGN survives exec) and masked signals would
+        // otherwise leak from the parent and make the server deaf to the
+        // SIGTERM this supervisor relies on for graceful shutdown.
+        var defaultSignals = sigset_t()
+        sigfillset(&defaultSignals)
+        posix_spawnattr_setsigdefault(&attributes, &defaultSignals)
+        var emptySignalMask = sigset_t()
+        sigemptyset(&emptySignalMask)
+        posix_spawnattr_setsigmask(&attributes, &emptySignalMask)
+        posix_spawnattr_setflags(
+            &attributes,
+            Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)
+        )
         posix_spawnattr_setpgroup(&attributes, 0)
 
         var argv: [UnsafeMutablePointer<CChar>?] = ([executablePath] + arguments).map { strdup($0) }
@@ -303,8 +348,9 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
 
     // MARK: Supervision
 
-    /// True once the child has exited (reaping it as a side effect). ECHILD —
-    /// already reaped by an earlier check — also counts as exited.
+    /// True once the leader has exited (reaping it as a side effect). ECHILD —
+    /// already reaped by an earlier check — also counts as exited. Says nothing
+    /// about other group members; use `processGroupIsEmpty` for that.
     private func processHasExited(_ pid: pid_t) -> Bool {
         var status: Int32 = 0
         let result = waitpid(pid, &status, WNOHANG)
@@ -312,41 +358,108 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         return result == -1 && errno == ECHILD
     }
 
+    /// True when no member of the child's process group remains. Reaps the
+    /// leader first so a zombie leader doesn't count as a live member, then
+    /// probes the group with signal 0 (ESRCH = empty).
+    private func processGroupIsEmpty(_ pid: pid_t) -> Bool {
+        var status: Int32 = 0
+        _ = waitpid(pid, &status, WNOHANG)
+        if kill(-pid, 0) == 0 { return false }
+        return errno == ESRCH
+    }
+
+    /// SIGTERM the group, wait for the *group* — not just the leader — to be
+    /// empty within the grace period, then SIGKILL the group. The leader dying
+    /// while a member (e.g. `next start` ignoring SIGTERM) survives must still
+    /// escalate.
     private func terminateProcessGroup(_ pid: pid_t) async {
         kill(-pid, SIGTERM)
 
         let deadline = Date().addingTimeInterval(configuration.terminationGracePeriod)
         while Date() < deadline {
-            if processHasExited(pid) { return }
+            if processGroupIsEmpty(pid) { return }
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
 
         kill(-pid, SIGKILL)
-        for _ in 0..<40 where !processHasExited(pid) {
+        for _ in 0..<40 where !processGroupIsEmpty(pid) {
             try? await Task.sleep(nanoseconds: 50_000_000)
         }
     }
 
+    // MARK: Watchdog
+
+    /// Post-ready supervision: without it, a server that dies after one
+    /// successful health check would stay `.ready` forever and `signInURL()`
+    /// would keep vending URLs for a dead server.
+    private func startWatchdog(pid: pid_t, launchGeneration: UInt64) {
+        cancelWatchdog()
+        watchdogTask = Task { [weak self] in
+            await self?.runWatchdog(pid: pid, launchGeneration: launchGeneration)
+        }
+    }
+
+    private func cancelWatchdog() {
+        watchdogTask?.cancel()
+        watchdogTask = nil
+    }
+
+    private func runWatchdog(pid: pid_t, launchGeneration: UInt64) async {
+        var consecutiveHealthFailures = 0
+        while !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: UInt64(configuration.watchdogInterval * 1_000_000_000))
+            guard generation == launchGeneration, !Task.isCancelled else { return }
+
+            if processHasExited(pid) {
+                await failFromWatchdog(
+                    pid: pid,
+                    launchGeneration: launchGeneration,
+                    reason: "web-next server exited after becoming ready; see \(logFileURL?.path ?? "logs")"
+                )
+                return
+            }
+
+            if await serverIsHealthy() {
+                consecutiveHealthFailures = 0
+            } else {
+                consecutiveHealthFailures += 1
+                if consecutiveHealthFailures >= configuration.watchdogFailureThreshold {
+                    await failFromWatchdog(
+                        pid: pid,
+                        launchGeneration: launchGeneration,
+                        reason: "web-next server stopped answering on port \(configuration.port)."
+                    )
+                    return
+                }
+            }
+        }
+    }
+
+    private func failFromWatchdog(pid: pid_t, launchGeneration: UInt64, reason: String) async {
+        await terminateProcessGroup(pid)
+        guard generation == launchGeneration else { return }
+        if processID == pid { processID = nil }
+        state = .failed(reason: reason)
+    }
+
     // MARK: Readiness
 
-    /// Any HTTP response on the port means the server is up — connection
-    /// refused means it is still starting. When `/api/healthz` answers 200
-    /// with a JSON `ok` field (the endpoint ships in a parallel PR), that
-    /// field is authoritative.
-    private func serverAnswersHTTP() async -> Bool {
+    /// Strict readiness per embedded-native-contract.md § 2: `.ready` requires
+    /// `GET /api/healthz` to answer 200 with JSON `ok == true`. Any other HTTP
+    /// response — including a stale or foreign listener on the port — is not
+    /// ready; connection refused means still starting.
+    private func serverIsHealthy() async -> Bool {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/healthz"))
         request.timeoutInterval = 2
 
         do {
             let (data, response) = try await urlSession.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else { return true }
-            if httpResponse.statusCode == 200,
+            guard let httpResponse = response as? HTTPURLResponse,
+                httpResponse.statusCode == 200,
                 let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                 let ok = object["ok"] as? Bool
-            {
-                return ok
-            }
-            return true
+            else { return false }
+            return ok
         } catch {
             return false
         }
