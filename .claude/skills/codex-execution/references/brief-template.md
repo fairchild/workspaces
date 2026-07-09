@@ -20,11 +20,14 @@ then fix by <the standard the fix must meet — e.g. event-driven waits, not
 timing assumptions>. Do NOT just bump timeouts; that hides the race.
 
 ## Verification (all from <dir>/, using <package> scripts — never ad-hoc
-rm -rf; `<clean command>` exists for build/test state)
+rm -rf; `<clean command>` exists for build/test state; run every gate BARE,
+never piped through tail/rg — exit codes must survive)
 1. <install/setup>
 2. Reproduce each defect before fixing.
 3. After fixing: <exact gate commands> green, plus <stability loop, e.g.
-   --repeat-each 10>. Use <E2E_PORT=unique> to avoid colliding with siblings.
+   --repeat-each 10>. Use your assigned port block (<E2E_PORT=..>,
+   <EVIDENCE_PORT=..>, <PERF_PORT=..>) — all three collide across parallel
+   workers, not just e2e.
 4. Mutation check: re-introduce each defect briefly, confirm the failure mode
    returns, then restore. Record what you did.
 
