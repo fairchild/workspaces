@@ -11,6 +11,7 @@ import { DEFAULT_MODEL } from "@/lib/agent-runtime/models";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
 import { getSession } from "@/lib/db/sessions";
+import { PATH_PARAM_UNSUPPORTED } from "@/lib/db/start-session";
 
 vi.mock("@/lib/auth/auth-state", () => ({
 	getAuthState: vi.fn(),
@@ -76,7 +77,45 @@ describe("POST /api/sessions", () => {
 
 	test("rejects an unknown provider and an unknown field", async () => {
 		expect((await post({ provider: "skynet" })).status).toBe(400);
-		expect((await post({ repo: "o/r" })).status).toBe(400);
+		expect((await post({ branch: "main" })).status).toBe(400);
+	});
+
+	test("rejects the reserved path field with the contract message", async () => {
+		const res = await post({ path: "/tmp/checkout" });
+		expect(res.status).toBe(400);
+		await expect(res.json()).resolves.toEqual({
+			error: PATH_PARAM_UNSUPPORTED,
+		});
+	});
+
+	// Fixture repo directory (no App creds + bypass) keeps GitHub validation
+	// hermetic — fairchild/workspaces resolves, anything else 404s.
+	describe("optional repo", () => {
+		beforeEach(() => {
+			vi.stubEnv("AUTH_BYPASS", "1");
+			vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+			vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
+			return () => vi.unstubAllEnvs();
+		});
+
+		test("resolves and records the repo like the UI create path", async () => {
+			const res = await post({ repo: "fairchild/workspaces", title: "embed t0" });
+			expect(res.status).toBe(201);
+			const body = await res.json();
+			expect(body.title).toBe("embed t0");
+			const row = await getSession(getDatabase(), body.id);
+			expect(row?.repoId).toBe("fairchild/workspaces");
+			expect(row?.ownerLogin).toBe("fairchild");
+		});
+
+		test("400s a malformed repo, 404s an unresolvable one — never a 500", async () => {
+			expect((await post({ repo: "not-a-repo" })).status).toBe(400);
+			expect((await post({ repo: 42 })).status).toBe(400);
+			const res = await post({ repo: "fairchild/not-a-real-repo" });
+			expect(res.status).toBe(404);
+			const body = await res.json();
+			expect(body.error).toContain("doesn't exist or isn't accessible");
+		});
 	});
 
 	test("rejects a non-string or over-long title, and a non-JSON body", async () => {

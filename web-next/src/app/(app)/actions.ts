@@ -36,7 +36,7 @@ export async function createSessionAction(
 	}
 	let session: Awaited<ReturnType<typeof startSession>>;
 	try {
-		session = await startSession(getDatabase(), repo, user.login);
+		session = await startSession(getDatabase(), repo, { ownerLogin: user.login });
 	} catch (error) {
 		if (error instanceof RepoUnavailableError) {
 			return {

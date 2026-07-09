@@ -66,6 +66,17 @@ test.describe("signed out", () => {
 		}
 	});
 
+	test("the readiness probe answers signed out — /api/healthz is public (#987)", async ({
+		request,
+	}) => {
+		const response = await request.get("/api/healthz", { maxRedirects: 0 });
+		expect(response.status()).toBe(200);
+		await expect(response.json()).resolves.toEqual({
+			ok: true,
+			localMode: false,
+		});
+	});
+
 	test("the bypass button signs in as the allowlisted user", async ({
 		page,
 	}) => {

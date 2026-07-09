@@ -20,9 +20,12 @@ import {
 	resolveAuthSecret,
 	TEST_AUTH_COOKIE,
 } from "@/lib/auth/config";
+import { safeRedirectPath } from "@/lib/auth/redirect-path";
 import { evaluateSessionFreshness } from "@/lib/auth/session-cookie";
 
-const PUBLIC_PATHS = new Set(["/sign-in", "/api/auth"]);
+// /api/healthz is the embedded-native readiness probe (#987) — it must answer
+// before any sign-in exists, in every auth mode.
+const PUBLIC_PATHS = new Set(["/sign-in", "/api/auth", "/api/healthz"]);
 
 function isPublic(pathname: string): boolean {
 	if (PUBLIC_PATHS.has(pathname)) return true;
@@ -82,7 +85,10 @@ export async function middleware(request: NextRequest) {
 		}
 		const queryToken = request.nextUrl.searchParams.get("token");
 		if (pathname === "/sign-in" && localSessionCookieValid(queryToken)) {
-			const response = NextResponse.redirect(new URL("/", localOrigin));
+			// `redirect` lets the embedded shell land directly on a deep link
+			// (#987); safeRedirectPath pins the target to this origin.
+			const target = safeRedirectPath(request.nextUrl.searchParams.get("redirect"));
+			const response = NextResponse.redirect(new URL(target, localOrigin));
 			response.cookies.set(LOCAL_AUTH_COOKIE, queryToken ?? "", {
 				path: "/",
 				httpOnly: true,

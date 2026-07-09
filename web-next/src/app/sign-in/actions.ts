@@ -15,6 +15,7 @@ import {
 	TEST_AUTH_COOKIE,
 } from "@/lib/auth/config";
 import { localSignInTokenMatches } from "@/lib/auth/local-token";
+import { safeRedirectPath } from "@/lib/auth/redirect-path";
 
 export async function testSignInAction(): Promise<void> {
 	if (!authBypassEnabled()) {
@@ -40,5 +41,7 @@ export async function localSignInAction(formData: FormData): Promise<void> {
 		sameSite: "lax",
 		secure: false,
 	});
-	redirect("/");
+	// Deep-link continuation (#987): the sign-in page threads ?redirect=
+	// through a hidden field; re-validated here since form data is caller-set.
+	redirect(safeRedirectPath(String(formData.get("redirect") ?? "")));
 }

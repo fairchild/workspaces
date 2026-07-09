@@ -81,7 +81,9 @@ describe("ensureRepo (default_branch recording)", () => {
 describe("startSession", () => {
 	test("creates the repo on first use and an empty active session on it", async () => {
 		const handle = freshDb();
-		const session = await startSession(handle, "fairchild/workspaces", "FairChild");
+		const session = await startSession(handle, "fairchild/workspaces", {
+			ownerLogin: "FairChild",
+		});
 		expect(session).toMatchObject({
 			repoId: "fairchild/workspaces",
 			ownerLogin: "fairchild",
@@ -94,6 +96,19 @@ describe("startSession", () => {
 		expect((await listRepos(handle)).map((r) => r.fullName)).toEqual([
 			"fairchild/workspaces",
 		]);
+	});
+
+	test("honors explicit title and provider options", async () => {
+		const handle = freshDb();
+		const session = await startSession(handle, "fairchild/workspaces", {
+			title: "embed shell smoke",
+			provider: "vercel",
+		});
+		expect(session).toMatchObject({
+			title: "embed shell smoke",
+			provider: "vercel",
+			repoId: "fairchild/workspaces",
+		});
 	});
 
 	test("reuses an existing repo instead of duplicating it", async () => {

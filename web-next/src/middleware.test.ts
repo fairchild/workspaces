@@ -69,6 +69,11 @@ describe("middleware", () => {
 		const response = await middleware(requestFor("/api/auth/session"));
 		expect(response.headers.get("x-middleware-next")).toBe("1");
 	});
+
+	it("passes /api/healthz through unauthenticated — the readiness probe is public", async () => {
+		const response = await middleware(requestFor("/api/healthz"));
+		expect(response.headers.get("x-middleware-next")).toBe("1");
+	});
 });
 
 describe("middleware local mode", () => {
@@ -109,6 +114,44 @@ describe("middleware local mode", () => {
 		expect(response.headers.get("set-cookie")).toContain(
 			"web-next-local-session=local-secret",
 		);
+	});
+
+	it("honors a safe relative ?redirect= on local sign-in", async () => {
+		const response = await middleware(
+			localRequestFor("/sign-in?token=local-secret&redirect=/sessions/abc-123"),
+		);
+		expect(response.status).toBe(307);
+		expect(response.headers.get("location")).toBe(
+			"http://localhost:3100/sessions/abc-123",
+		);
+		expect(response.headers.get("set-cookie")).toContain(
+			"web-next-local-session=local-secret",
+		);
+	});
+
+	it("falls back to / for unsafe or empty ?redirect= targets", async () => {
+		for (const target of [
+			"//evil.com",
+			"/\\evil.com",
+			"https://evil.com",
+			"evil.com",
+			"",
+		]) {
+			const response = await middleware(
+				localRequestFor(
+					`/sign-in?token=local-secret&redirect=${encodeURIComponent(target)}`,
+				),
+			);
+			expect(response.status, target).toBe(307);
+			expect(response.headers.get("location"), target).toBe(
+				"http://localhost:3100/",
+			);
+		}
+	});
+
+	it("passes /api/healthz through without a local session cookie", async () => {
+		const response = await middleware(localRequestFor("/api/healthz"));
+		expect(response.headers.get("x-middleware-next")).toBe("1");
 	});
 
 	it("redirects local sign-in accepts to the validated Host origin", async () => {
