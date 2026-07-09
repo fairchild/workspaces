@@ -266,7 +266,22 @@ describe("buildPrompt", () => {
 			content: "config body",
 		});
 		expect(SANDBOX_CONFIG_PROMPT_PATH).toBe("/tmp/web-next-config-prompt.md");
-		expect(sandboxConfigPromptFile("")).toBeNull();
+		expect(sandboxConfigPromptFile("")).toEqual({
+			path: SANDBOX_CONFIG_PROMPT_PATH,
+			content: "",
+		});
+	});
+
+	test("turn-scopes sandbox config by clearing the prior config file", () => {
+		const writes = [
+			sandboxConfigPromptFile("turn 1 config"),
+			sandboxConfigPromptFile(""),
+		];
+
+		expect(writes).toEqual([
+			{ path: SANDBOX_CONFIG_PROMPT_PATH, content: "turn 1 config" },
+			{ path: SANDBOX_CONFIG_PROMPT_PATH, content: "" },
+		]);
 	});
 });
 

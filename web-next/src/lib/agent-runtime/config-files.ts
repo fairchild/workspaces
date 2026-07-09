@@ -5,7 +5,8 @@
  * skipped files are visible without failing the turn.
  */
 import { createHash } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
 import type {
 	ConfigReceipt,
@@ -16,6 +17,8 @@ import type {
 
 export const CONFIG_FILES_ENV = "WEB_NEXT_CONFIG_FILES";
 export const MAX_CONFIG_FILE_BYTES = 64 * 1024;
+export const MAX_CONFIG_TOTAL_BYTES = 256 * 1024;
+const CONFIG_OPEN_FLAGS = constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0);
 
 interface LoadedConfigFile extends ConfigReceiptFile {
 	content: string;
@@ -45,6 +48,7 @@ function containsGlob(path: string): boolean {
 
 async function loadOneConfigFile(
 	path: string,
+	remainingBudget: number,
 ): Promise<{ loaded: LoadedConfigFile } | { skipped: SkippedConfigReceiptFile }> {
 	if (!isAbsolute(path)) return { skipped: skipped(path, "not an absolute path") };
 	if (containsGlob(path)) return { skipped: skipped(path, "globs are not allowed") };
@@ -70,22 +74,37 @@ async function loadOneConfigFile(
 		return { skipped: skipped(path, "file is 64 KiB or larger") };
 	}
 
-	let content: string;
+	let handle: Awaited<ReturnType<typeof open>> | undefined;
 	try {
-		content = await readFile(path, "utf8");
-	} catch {
-		return { skipped: skipped(path, "file is not readable") };
-	}
+		handle = await open(path, CONFIG_OPEN_FLAGS);
+		const handleStat = await handle.stat();
+		if (!handleStat.isFile()) return { skipped: skipped(path, "not a regular file") };
+		if (handleStat.size >= MAX_CONFIG_FILE_BYTES) {
+			return { skipped: skipped(path, "file is 64 KiB or larger") };
+		}
 
-	const sha256 = createHash("sha256").update(content).digest("hex").slice(0, 8);
-	return {
-		loaded: {
-			path,
-			basename: basename(path),
-			sha256,
-			content,
-		},
-	};
+		const content = (await handle.readFile({ encoding: "utf8" })).trimEnd();
+		if (Buffer.byteLength(content, "utf8") > remainingBudget) {
+			return { skipped: skipped(path, "config budget exceeded") };
+		}
+
+		const sha256 = createHash("sha256").update(content).digest("hex").slice(0, 8);
+		return {
+			loaded: {
+				path,
+				basename: basename(path),
+				sha256,
+				content,
+			},
+		};
+	} catch (error) {
+		const code = (error as NodeJS.ErrnoException | undefined)?.code;
+		if (code === "ELOOP") return { skipped: skipped(path, "symlinks are not allowed") };
+		if (code === "ENOENT") return { skipped: skipped(path, "file does not exist") };
+		return { skipped: skipped(path, "file is not readable") };
+	} finally {
+		await handle?.close().catch(() => {});
+	}
 }
 
 function buildPrompt(loaded: LoadedConfigFile[]): string {
@@ -97,7 +116,7 @@ function buildPrompt(loaded: LoadedConfigFile[]): string {
 		lines.push(
 			"",
 			`--- BEGIN ${file.path} ---`,
-			file.content.trimEnd(),
+			file.content,
 			`--- END ${file.path} ---`,
 		);
 	}
@@ -109,10 +128,15 @@ export async function loadRuntimeConfig(
 ): Promise<RuntimeConfig> {
 	const loaded: LoadedConfigFile[] = [];
 	const skippedFiles: SkippedConfigReceiptFile[] = [];
+	let loadedBytes = 0;
 	for (const path of configPaths(env)) {
-		const result = await loadOneConfigFile(path);
-		if ("loaded" in result) loaded.push(result.loaded);
-		else skippedFiles.push(result.skipped);
+		const result = await loadOneConfigFile(path, MAX_CONFIG_TOTAL_BYTES - loadedBytes);
+		if ("loaded" in result) {
+			loaded.push(result.loaded);
+			loadedBytes += Buffer.byteLength(result.loaded.content, "utf8");
+		} else {
+			skippedFiles.push(result.skipped);
+		}
 	}
 	return {
 		prompt: buildPrompt(loaded),

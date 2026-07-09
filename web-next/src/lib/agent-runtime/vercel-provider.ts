@@ -347,8 +347,8 @@ function promptCurlBase(repo: TurnRepo): string {
 
 export function sandboxConfigPromptFile(
 	configPrompt: string,
-): { path: string; content: string } | null {
-	return configPrompt ? { path: SANDBOX_CONFIG_PROMPT_PATH, content: configPrompt } : null;
+): { path: string; content: string } {
+	return { path: SANDBOX_CONFIG_PROMPT_PATH, content: configPrompt };
 }
 
 export function buildPrompt(
@@ -616,12 +616,10 @@ export const vercelProvider: ComputeProvider = {
 				onSession: async ({ session }) => {
 					sandbox = session as RunnableSandbox;
 					const configFile = sandboxConfigPromptFile(config.prompt);
-					if (configFile) {
-						await session.writeTextFile({
-							path: configFile.path,
-							content: configFile.content,
-						});
-					}
+					await session.writeTextFile({
+						path: configFile.path,
+						content: configFile.content,
+					});
 					await session.writeTextFile({
 						path: "/tmp/session-setup.sh",
 						content: buildSessionSetupScript(request.sessionId, repo),
