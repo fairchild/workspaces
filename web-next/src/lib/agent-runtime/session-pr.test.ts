@@ -16,15 +16,23 @@ import {
 	SessionPrError,
 } from "./session-pr";
 import {
+	PullRequestBranchMissingRemote,
 	openPullRequestFromGitHubApi,
 	openPullRequestFromVercelSession,
 	PullRequestCommandFailed,
 } from "./vercel-provider";
 
 vi.mock("./vercel-provider", () => ({
+	MISSING_REMOTE_BRANCH_MESSAGE:
+		"branch not on remote — run another turn to checkpoint and push",
 	sessionBranch: (id: string) => `agent/session-${id.slice(0, 8)}`,
 	openPullRequestFromGitHubApi: vi.fn(),
 	openPullRequestFromVercelSession: vi.fn(),
+	PullRequestBranchMissingRemote: class PullRequestBranchMissingRemote extends Error {
+		constructor() {
+			super("branch not on remote — run another turn to checkpoint and push");
+		}
+	},
 	PullRequestCommandFailed: class PullRequestCommandFailed extends Error {
 		constructor(
 			message: string,
@@ -274,5 +282,34 @@ describe("openSessionPullRequest", () => {
 		expect(updated?.hasBranchWork).toBe(false);
 		expect(updated?.claudeSessionId).toBeNull();
 		expect(updated?.resumeState).toBeNull();
+	});
+
+	test("maps a missing remote branch from the API fallback to operator guidance", async () => {
+		const db = freshDb();
+		const repo = await ensureRepo(db, "fairchild/workspaces", "main");
+		const session = await createSession(db, {
+			id: "abcdef123456",
+			repoId: repo.id,
+			title: "Open missing branch",
+			provider: "vercel",
+		});
+		await updateSession(db, session.id, { hasBranchWork: true });
+		vi.mocked(openPullRequestFromGitHubApi).mockRejectedValue(
+			new PullRequestBranchMissingRemote(),
+		);
+
+		await expect(
+			openSessionPullRequest({
+				handle: db,
+				session: (await getSession(db, session.id)) ?? session,
+				repo,
+				sessionUrl: "https://spaces.test/sessions/abcdef123456",
+			}),
+		).rejects.toMatchObject({
+			code: "branch_not_on_remote",
+			message: "branch not on remote — run another turn to checkpoint and push",
+			status: 409,
+		} satisfies Partial<SessionPrError>);
+		expect(openPullRequestFromGitHubApi).toHaveBeenCalled();
 	});
 });

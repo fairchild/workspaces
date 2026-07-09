@@ -126,4 +126,23 @@ describe("POST /api/sessions/[id]/pr", () => {
 			error: "PRs from host-provider sessions need a separate credential story.",
 		});
 	});
+
+	test("returns structured guidance when the session branch is not on the remote", async () => {
+		const id = await freshVercelSession();
+		vi.mocked(openSessionPullRequest).mockRejectedValue(
+			new SessionPrError(
+				"branch_not_on_remote",
+				"branch not on remote — run another turn to checkpoint and push",
+				409,
+			),
+		);
+
+		const res = await postPr(id);
+
+		expect(res.status).toBe(409);
+		expect(await res.json()).toEqual({
+			code: "branch_not_on_remote",
+			error: "branch not on remote — run another turn to checkpoint and push",
+		});
+	});
 });

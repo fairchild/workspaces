@@ -85,7 +85,9 @@ export async function validateDirectoryRepo(
 	}
 	if (!hasAppCredentials()) return { kind: "unverified", fullName };
 	try {
-		const { token } = await mintInstallationToken(fullName);
+		const { token } = await mintInstallationToken(fullName, {
+			permissions: { contents: "read" },
+		});
 		const repo = await verifyRepoAccess(token, fullName);
 		return { kind: "ok", ...repo };
 	} catch {

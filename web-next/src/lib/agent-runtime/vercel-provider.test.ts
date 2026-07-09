@@ -451,12 +451,24 @@ describe("buildSessionSetupScript", () => {
 });
 
 describe("checkpointSessionBranch", () => {
-	test("skips add, commit, and push when the tree is clean", async () => {
+	test("skips add, commit, and push when the tree is clean and remote is current", async () => {
 		const events: string[] = [];
 		const sandbox = new RecordingSandbox((command) => {
 			if (command.includes("status --porcelain")) {
 				events.push("status");
 				return runResult("");
+			}
+			if (command.includes("ls-remote --exit-code")) {
+				events.push("remote");
+				return runResult("");
+			}
+			if (command.includes("fetch --depth 50 origin")) {
+				events.push("fetch");
+				return runResult("");
+			}
+			if (command.includes("rev-list --count")) {
+				events.push("rev-list");
+				return runResult("0\n");
 			}
 			throw new Error(`unexpected command: ${command}`);
 		});
@@ -466,14 +478,14 @@ describe("checkpointSessionBranch", () => {
 			"agent/session-abcdef12",
 		);
 
-		expect(status).toEqual({});
-		expect(events).toEqual(["status"]);
+		expect(status).toEqual({ hasBranchWork: true });
+		expect(events).toEqual(["status", "remote", "fetch", "rev-list"]);
 		expect(sandbox.calls.some((c) => c.includes(" add -A"))).toBe(false);
 		expect(sandbox.calls.some((c) => c.includes(" commit -m "))).toBe(false);
 		expect(sandbox.calls.some((c) => c.includes(" push -u origin "))).toBe(false);
 	});
 
-	test("commits dirty work and pushes the session branch safety net", async () => {
+	test("commits dirty work and pushes when the remote branch is missing", async () => {
 		const events: string[] = [];
 		const sandbox = new RecordingSandbox((command) => {
 			if (command.includes("status --porcelain")) {
@@ -492,6 +504,10 @@ describe("checkpointSessionBranch", () => {
 				events.push("commit");
 				return runResult("[agent/session-abcdef12 1234567] checkpoint\n");
 			}
+			if (command.includes("ls-remote --exit-code")) {
+				events.push("remote-missing");
+				return runResult("", 2, "");
+			}
 			if (command.includes(" push -u origin ")) {
 				events.push("push");
 				return runResult("");
@@ -508,8 +524,94 @@ describe("checkpointSessionBranch", () => {
 			hasBranchWork: true,
 			status: "Checkpoint pushed to session branch",
 		});
-		expect(events).toEqual(["status", "add", "staged", "commit", "push"]);
+		expect(events).toEqual([
+			"status",
+			"add",
+			"staged",
+			"commit",
+			"remote-missing",
+			"push",
+		]);
 		expect(sandbox.calls.some((c) => c.includes(" push -u origin "))).toBe(true);
+	});
+
+	test("pushes clean checkpoints when rev-list shows unpushed commits", async () => {
+		const events: string[] = [];
+		const sandbox = new RecordingSandbox((command) => {
+			if (command.includes("status --porcelain")) {
+				events.push("status");
+				return runResult("");
+			}
+			if (command.includes("ls-remote --exit-code")) {
+				events.push("remote");
+				return runResult("");
+			}
+			if (command.includes("fetch --depth 50 origin")) {
+				events.push("fetch");
+				return runResult("");
+			}
+			if (command.includes("rev-list --count")) {
+				events.push("rev-list");
+				return runResult("1\n");
+			}
+			if (command.includes(" push -u origin ")) {
+				events.push("push");
+				return runResult("");
+			}
+			throw new Error(`unexpected command: ${command}`);
+		});
+
+		const status = await checkpointSessionBranch(
+			sandbox,
+			"agent/session-abcdef12",
+		);
+
+		expect(status).toEqual({
+			hasBranchWork: true,
+			status: "Checkpoint pushed to session branch",
+		});
+		expect(events).toEqual(["status", "remote", "fetch", "rev-list", "push"]);
+		expect(sandbox.calls.some((c) => c.includes(" add -A"))).toBe(false);
+		expect(sandbox.calls.some((c) => c.includes(" commit -m "))).toBe(false);
+	});
+
+	test("leaves branch work unset when retry push fails after rev-list detects unpushed commits", async () => {
+		const events: string[] = [];
+		const sandbox = new RecordingSandbox((command) => {
+			if (command.includes("status --porcelain")) {
+				events.push("status");
+				return runResult("");
+			}
+			if (command.includes("ls-remote --exit-code")) {
+				events.push("remote");
+				return runResult("");
+			}
+			if (command.includes("fetch --depth 50 origin")) {
+				events.push("fetch");
+				return runResult("");
+			}
+			if (command.includes("rev-list --count")) {
+				events.push("rev-list");
+				return runResult("1\n");
+			}
+			if (command.includes(" push -u origin ")) {
+				events.push("push");
+				return runResult("", 1, "remote rejected checkpoint");
+			}
+			throw new Error(`unexpected command: ${command}`);
+		});
+
+		const status = await checkpointSessionBranch(
+			sandbox,
+			"agent/session-abcdef12",
+		);
+
+		expect(status).toEqual({
+			status:
+				"Checkpoint failed: checkpoint push failed (exit 1): remote rejected checkpoint",
+		});
+		expect(events).toEqual(["status", "remote", "fetch", "rev-list", "push"]);
+		expect(status).not.toHaveProperty("hasBranchWork");
 	});
 });
 
@@ -546,6 +648,10 @@ describe("runTurnTail", () => {
 				events.push("commit");
 				return runResult("[agent/session-abcdef12 1234567] checkpoint\n");
 			}
+			if (command.includes("ls-remote --exit-code")) {
+				events.push("remote-missing");
+				return runResult("", 2, "");
+			}
 			if (command.includes(" push -u origin ")) {
 				events.push("push");
 				return runResult("");
@@ -562,6 +668,7 @@ describe("runTurnTail", () => {
 			"add",
 			"staged",
 			"commit",
+			"remote-missing",
 			"push",
 			"detach",
 		]);
@@ -608,6 +715,10 @@ describe("runTurnTail", () => {
 				events.push("commit");
 				return runResult("[agent/session-abcdef12 1234567] checkpoint\n");
 			}
+			if (command.includes("ls-remote --exit-code")) {
+				events.push("remote-missing");
+				return runResult("", 2, "");
+			}
 			if (command.includes(" push -u origin ")) {
 				events.push("push");
 				return runResult("", 1, "remote rejected checkpoint");
@@ -624,6 +735,7 @@ describe("runTurnTail", () => {
 			"add",
 			"staged",
 			"commit",
+			"remote-missing",
 			"push",
 			"detach",
 		]);

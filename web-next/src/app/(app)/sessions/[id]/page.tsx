@@ -56,14 +56,7 @@ export default async function SessionPage({
 					enabled: session.hasBranchWork,
 					reason: session.hasBranchWork ? undefined : "no checkpoints ready",
 				}
-			: session.provider === "host"
-				? {
-						head: sessionBranch(session.id),
-						base: repo?.defaultBranch ?? "default branch",
-						enabled: false,
-						reason: "host credentials pending",
-					}
-				: null;
+			: null;
 
 	// The (app) layout only renders children for the authorized user; the
 	// state is re-read here for the display name on the user's own messages.

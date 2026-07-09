@@ -87,13 +87,46 @@ export interface InstallationToken {
 	permissions: Record<string, string>;
 }
 
+type InstallationPermission = "read" | "write";
+
+export interface InstallationTokenScope {
+	repo?: string;
+	permissions?: Record<string, InstallationPermission>;
+}
+
+const SESSION_REPO_PERMISSIONS = {
+	contents: "write",
+	pull_requests: "write",
+} satisfies Record<string, InstallationPermission>;
+
+function repoShortName(repo: string): string {
+	const [, shortName] = repo.split("/");
+	if (!shortName) throw new Error(`repository must be owner/name: ${repo}`);
+	return shortName;
+}
+
 export async function getInstallationToken(
 	jwt: string,
 	installationId: number,
+	scope: InstallationTokenScope = {},
 ): Promise<InstallationToken> {
+	const body = scope.repo
+		? JSON.stringify({
+				repositories: [repoShortName(scope.repo)],
+				permissions: scope.permissions ?? SESSION_REPO_PERMISSIONS,
+			})
+		: undefined;
 	const res = await fetch(
 		`${GH}/app/installations/${installationId}/access_tokens`,
-		{ method: "POST", headers: { Authorization: `Bearer ${jwt}`, ...HEADERS } },
+		{
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${jwt}`,
+				...HEADERS,
+				...(body ? { "Content-Type": "application/json" } : {}),
+			},
+			body,
+		},
 	);
 	if (!res.ok) return ghError(res, "installation token exchange");
 	const json = (await res.json()) as {
@@ -113,7 +146,10 @@ export async function getInstallationToken(
  * installation, and mint a short-lived installation token. The credential the
  * real runtime hands a sandbox to clone, push, and open PRs against `repo`.
  */
-export async function mintInstallationToken(repo: string): Promise<InstallationToken> {
+export async function mintInstallationToken(
+	repo: string,
+	scope: Omit<InstallationTokenScope, "repo"> = {},
+): Promise<InstallationToken> {
 	const appId = process.env.GITHUB_WEB_WORKSPACES_APP_ID;
 	const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
 	if (!appId || !privateKey) {
@@ -123,7 +159,7 @@ export async function mintInstallationToken(repo: string): Promise<InstallationT
 	}
 	const jwt = generateAppJWT(appId, privateKey);
 	const installationId = await findInstallationId(jwt, repo);
-	return getInstallationToken(jwt, installationId);
+	return getInstallationToken(jwt, installationId, { repo, ...scope });
 }
 
 /** Prove the token can read the repo — i.e. it can clone it. */

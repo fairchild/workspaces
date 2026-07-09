@@ -12,6 +12,8 @@ import type { FolioMessage } from "@/components/folio/types";
 import {
 	openPullRequestFromGitHubApi,
 	openPullRequestFromVercelSession,
+	MISSING_REMOTE_BRANCH_MESSAGE,
+	PullRequestBranchMissingRemote,
 	PullRequestCommandFailed,
 	sessionBranch,
 } from "./vercel-provider";
@@ -203,9 +205,19 @@ export async function openSessionPullRequest({
 			title,
 			body,
 		});
+	const openFromApiOrSessionError = async () => {
+		try {
+			return await openFromApi();
+		} catch (error) {
+			if (error instanceof PullRequestBranchMissingRemote) {
+				throw new SessionPrError("branch_not_on_remote", error.message, 409);
+			}
+			throw error;
+		}
+	};
 	const resume = resumeHandle(session);
 	if (!resume) {
-		return persistPullRequest(await openFromApi());
+		return persistPullRequest(await openFromApiOrSessionError());
 	}
 	try {
 		const pr = await openPullRequestFromVercelSession({
@@ -220,7 +232,10 @@ export async function openSessionPullRequest({
 		if (error instanceof PullRequestCommandFailed) {
 			await persistResume(handle, session.id, error.resume);
 			if (error.resume === null) {
-				return persistPullRequest(await openFromApi());
+				return persistPullRequest(await openFromApiOrSessionError());
+			}
+			if (error.message === MISSING_REMOTE_BRANCH_MESSAGE) {
+				throw new SessionPrError("branch_not_on_remote", error.message, 409);
 			}
 			throw new SessionPrError("pr_command_failed", error.message, 502);
 		}

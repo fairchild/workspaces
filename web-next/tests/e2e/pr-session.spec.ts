@@ -70,3 +70,109 @@ test("a Vercel session renders its PR masthead line and update affordance", asyn
 	);
 	await expect(page.getByTestId("open-session-pr")).toHaveText("Update PR");
 });
+
+test("a host session renders no PR masthead affordance", async ({ page }) => {
+	const db = e2eDb();
+	const id = randomUUID();
+	const now = new Date().toISOString();
+	try {
+		await db.batch([
+			{
+				sql: "INSERT OR IGNORE INTO repos (id, full_name, default_branch, created_at) VALUES (?, ?, ?, ?)",
+				args: ["fairchild/workspaces", "fairchild/workspaces", "main", now],
+			},
+			{
+				sql: `INSERT INTO sessions (
+					id, repo_id, owner_login, title, first_user_message, provider, status,
+					claude_session_id, resume_state, model, approval_policy,
+					has_branch_work, pr_number, pr_url, pr_state, created_at, last_activity_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				args: [
+					id,
+					"fairchild/workspaces",
+					"fairchild",
+					"Inspect on host",
+					null,
+					"host",
+					"active",
+					"host-1",
+					'{"provider":"host","sessionId":"host-1"}',
+					"claude-opus-4-8",
+					"auto",
+					1,
+					null,
+					null,
+					null,
+					now,
+					now,
+				],
+			},
+		]);
+	} finally {
+		db.close();
+	}
+
+	await page.goto(`/sessions/${id}`);
+
+	await expect(page.getByTestId("session-pr-line")).toHaveCount(0);
+	await expect(page.getByTestId("open-session-pr")).toHaveCount(0);
+});
+
+test("missing remote branch guidance is shown on the PR line", async ({ page }) => {
+	const db = e2eDb();
+	const id = randomUUID();
+	const now = new Date().toISOString();
+	try {
+		await db.batch([
+			{
+				sql: "INSERT OR IGNORE INTO repos (id, full_name, default_branch, created_at) VALUES (?, ?, ?, ?)",
+				args: ["fairchild/workspaces", "fairchild/workspaces", "main", now],
+			},
+			{
+				sql: `INSERT INTO sessions (
+					id, repo_id, owner_login, title, first_user_message, provider, status,
+					claude_session_id, resume_state, model, approval_policy,
+					has_branch_work, pr_number, pr_url, pr_state, created_at, last_activity_at
+				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				args: [
+					id,
+					"fairchild/workspaces",
+					"fairchild",
+					"Open missing branch",
+					null,
+					"vercel",
+					"active",
+					null,
+					null,
+					"claude-opus-4-8",
+					"auto",
+					1,
+					null,
+					null,
+					null,
+					now,
+					now,
+				],
+			},
+		]);
+	} finally {
+		db.close();
+	}
+	await page.route(`**/api/sessions/${id}/pr`, async (route) => {
+		await route.fulfill({
+			status: 409,
+			contentType: "application/json",
+			body: JSON.stringify({
+				code: "branch_not_on_remote",
+				error: "branch not on remote — run another turn to checkpoint and push",
+			}),
+		});
+	});
+
+	await page.goto(`/sessions/${id}`);
+	await page.getByTestId("open-session-pr").click();
+
+	await expect(page.getByTestId("session-pr-line")).toContainText(
+		"branch not on remote — run another turn to checkpoint and push",
+	);
+});

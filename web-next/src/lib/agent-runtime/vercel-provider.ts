@@ -581,6 +581,16 @@ export class PullRequestCommandFailed extends Error {
 	}
 }
 
+export const MISSING_REMOTE_BRANCH_MESSAGE =
+	"branch not on remote — run another turn to checkpoint and push";
+
+export class PullRequestBranchMissingRemote extends Error {
+	constructor() {
+		super(MISSING_REMOTE_BRANCH_MESSAGE);
+		this.name = "PullRequestBranchMissingRemote";
+	}
+}
+
 function buildOpenPullRequestScript(): string {
 	return String.raw`
 import { execFileSync } from "node:child_process";
@@ -721,9 +731,19 @@ async function githubJson<T>(
 			typeof data === "object" && data !== null && "message" in data
 				? String((data as { message: unknown }).message)
 				: text.slice(0, 300);
-		throw new Error(`GitHub ${response.status}: ${detail}`);
+		throw new GitHubApiError(response.status, detail);
 	}
 	return data as T;
+}
+
+class GitHubApiError extends Error {
+	constructor(
+		readonly status: number,
+		readonly detail: string,
+	) {
+		super(`GitHub ${status}: ${detail}`);
+		this.name = "GitHubApiError";
+	}
 }
 
 function pullRequestResult(pr: {
@@ -782,6 +802,9 @@ export async function openPullRequestFromGitHubApi({
 		>(token, `/repos/${repo.fullName}/pulls?head=${head}&state=all&per_page=10`);
 		const pr = latest[0];
 		if (pr) return pullRequestResult(pr);
+		if (error instanceof GitHubApiError && error.status === 422) {
+			throw new PullRequestBranchMissingRemote();
+		}
 		throw error;
 	}
 }
@@ -899,7 +922,9 @@ export const vercelProvider: ComputeProvider = {
 		const repo = targetRepo.repo;
 
 		yield { type: "status", content: "Minting GitHub credential" };
-		const { token } = await mintInstallationToken(repo.fullName);
+		const { token } = await mintInstallationToken(repo.fullName, {
+			permissions: { contents: "write" },
+		});
 
 		yield { type: "status", content: "Preparing sandbox runtime" };
 		const [{ HarnessAgent }, { createClaudeCode }, { createVercelSandbox }] =
@@ -1169,6 +1194,38 @@ async function runRequired(
 	return res;
 }
 
+async function remoteSessionBranchExists(
+	sandbox: RunnableSandbox,
+	branch: string,
+): Promise<boolean> {
+	const res = await sandbox.run({
+		command: `git -C ${WORKSPACE_DIR} ls-remote --exit-code --heads origin ${shellQuote(branch)} >/dev/null 2>&1`,
+	});
+	return res.exitCode === 0;
+}
+
+async function unpushedLocalCommitCount(
+	sandbox: RunnableSandbox,
+	branch: string,
+): Promise<number> {
+	const remoteBranch = `origin/${branch}`;
+	await runRequired(
+		sandbox,
+		"checkpoint fetch remote branch",
+		`git -C ${WORKSPACE_DIR} fetch --depth 50 origin ${shellQuote(`refs/heads/${branch}:refs/remotes/${remoteBranch}`)}`,
+	);
+	const res = await runRequired(
+		sandbox,
+		"checkpoint unpushed check",
+		`git -C ${WORKSPACE_DIR} rev-list --count ${shellQuote(remoteBranch)}..HEAD`,
+	);
+	const count = Number.parseInt(res.stdout.trim(), 10);
+	if (!Number.isFinite(count)) {
+		throw new Error(`checkpoint unpushed check returned invalid count: ${res.stdout}`);
+	}
+	return count;
+}
+
 function capCheckpointError(value: unknown): string {
 	const text = errorText(value).replace(/\s+/g, " ").trim() || "unknown error";
 	if (text.length <= CHECKPOINT_ERROR_CAP) return text;
@@ -1198,7 +1255,6 @@ export async function checkpointSessionBranch(
 			`git -C ${WORKSPACE_DIR} status --porcelain=v1`,
 		);
 		const hasTreeChanges = status.stdout.trim().length > 0;
-		let committed = false;
 		if (hasTreeChanges) {
 			await runRequired(
 				sandbox,
@@ -1222,20 +1278,26 @@ export async function checkpointSessionBranch(
 					"checkpoint commit",
 					`git -C ${WORKSPACE_DIR} commit -m ${shellQuote(CHECKPOINT_COMMIT_MESSAGE)}`,
 				);
-				committed = true;
 			}
 		}
 
-		if (!committed) return {};
-		await runRequired(
-			sandbox,
-			"checkpoint push",
-			`git -C ${WORKSPACE_DIR} push -u origin ${shellQuote(branch)}`,
-		);
-		return {
-			hasBranchWork: true,
-			status: "Checkpoint pushed to session branch",
-		};
+		const remoteExists = await remoteSessionBranchExists(sandbox, branch);
+		const unpushedCount = remoteExists
+			? await unpushedLocalCommitCount(sandbox, branch)
+			: 1;
+		const needsPush = !remoteExists || unpushedCount > 0;
+		if (needsPush) {
+			await runRequired(
+				sandbox,
+				"checkpoint push",
+				`git -C ${WORKSPACE_DIR} push -u origin ${shellQuote(branch)}`,
+			);
+			return {
+				hasBranchWork: true,
+				status: "Checkpoint pushed to session branch",
+			};
+		}
+		return { hasBranchWork: true };
 	} catch (error) {
 		return {
 			status: `Checkpoint failed: ${capCheckpointError(error)}`,
