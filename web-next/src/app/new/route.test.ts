@@ -40,9 +40,9 @@ beforeEach(() => {
 	return () => vi.unstubAllEnvs();
 });
 
-async function get(query: string) {
+async function get(query: string, headers?: Record<string, string>) {
 	const { GET } = await import("./route");
-	return GET(new Request(`http://localhost:3100/new${query}`));
+	return GET(new Request(`http://localhost:3100/new${query}`, { headers }));
 }
 
 describe("GET /new", () => {
@@ -93,6 +93,21 @@ describe("GET /new", () => {
 		const res = await get("?repo=fairchild/workspaces&path=/tmp/checkout");
 		expect(res.status).toBe(400);
 		expect(await res.text()).toContain(PATH_PARAM_UNSUPPORTED);
+	});
+
+	test("refuses an explicit cross-site navigation — no CSRF junk sessions", async () => {
+		const res = await get("?repo=fairchild/workspaces", {
+			"sec-fetch-site": "cross-site",
+		});
+		expect(res.status).toBe(403);
+		expect(await res.text()).toContain("cross-site");
+	});
+
+	test("still creates when fetch metadata is absent or none — the WKWebView flow", async () => {
+		for (const headers of [undefined, { "sec-fetch-site": "none" }]) {
+			const res = await get("?repo=fairchild/workspaces", headers);
+			expect(res.status, JSON.stringify(headers ?? {})).toBe(302);
+		}
 	});
 
 	test("redirects an unauthenticated caller to /sign-in", async () => {

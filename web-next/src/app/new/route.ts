@@ -25,6 +25,16 @@ function plainText(message: string, status: number): Response {
 }
 
 export async function GET(request: Request): Promise<Response> {
+	// State-changing GET + SameSite=Lax cookies means a hostile page could
+	// spam junk sessions via cross-site top-level navigation. Only an explicit
+	// `cross-site` fetch-metadata value is refused; missing/`none`/
+	// `same-origin`/`same-site` all proceed (fail open) because WKWebView
+	// app-initiated loads — the embedded shell's whole flow — send `none` or
+	// no header at all, as do older clients.
+	if (request.headers.get("sec-fetch-site") === "cross-site") {
+		return plainText("cross-site session creation is not allowed", 403);
+	}
+
 	// Middleware already gates this page-path at the edge; this mirrors it so
 	// the route stays safe if the matcher ever drifts.
 	const auth = await getAuthState();
