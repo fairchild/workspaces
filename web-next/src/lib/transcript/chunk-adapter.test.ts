@@ -275,6 +275,111 @@ describe("toUIMessageChunks", () => {
 		expect(toolInput).toBeGreaterThan(reasoningEnd);
 	});
 
+	test("approval request and resolution update one durable data part", async () => {
+		const out = await collect([
+			{
+				type: "approval_request",
+				content: "Claude wants to edit src/lib/session.ts.",
+				metadata: {
+					requestId: "approval-1",
+					toolName: "Edit",
+					inputSummary: "Edit src/lib/session.ts",
+					expiresAt: "2026-07-08T12:00:00.000Z",
+				},
+			},
+			{
+				type: "approval_resolved",
+				content: "allow",
+				metadata: {
+					requestId: "approval-1",
+					decision: "allow",
+					resolvedBy: "user",
+				},
+			},
+			{ type: "done", content: "" },
+		]);
+		expect(out).toContainEqual({
+			type: "data-approval",
+			id: "approval-1",
+			data: {
+				state: "pending",
+				requestId: "approval-1",
+				summary: "Claude wants to edit src/lib/session.ts.",
+				toolName: "Edit",
+				inputSummary: "Edit src/lib/session.ts",
+				expiresAt: "2026-07-08T12:00:00.000Z",
+			},
+		});
+		expect(out).toContainEqual({
+			type: "data-approval",
+			id: "approval-1",
+			data: {
+				state: "resolved",
+				requestId: "approval-1",
+				summary: "Claude wants to edit src/lib/session.ts.",
+				toolName: "Edit",
+				inputSummary: "Edit src/lib/session.ts",
+				expiresAt: "2026-07-08T12:00:00.000Z",
+				decision: "allow",
+				resolvedBy: "user",
+			},
+		});
+	});
+
+	test("an unresolved approval closes as cancelled at turn end (review finding)", async () => {
+		const out = await collect([
+			{
+				type: "approval_request",
+				content: "Claude wants to edit a.ts.",
+				metadata: {
+					requestId: "approval-hanging",
+					toolName: "Edit",
+					inputSummary: "Edit a.ts",
+					expiresAt: "2026-07-08T12:00:00.000Z",
+				},
+			},
+			{
+				type: "approval_request",
+				content: "Claude wants to run tests.",
+				metadata: {
+					requestId: "approval-answered",
+					toolName: "Bash",
+					inputSummary: "pnpm test",
+					expiresAt: "2026-07-08T12:00:00.000Z",
+				},
+			},
+			{
+				type: "approval_resolved",
+				content: "allow",
+				metadata: {
+					requestId: "approval-answered",
+					decision: "allow",
+					resolvedBy: "user",
+				},
+			},
+			{ type: "error", content: "turn stopped" },
+			{ type: "done", content: "" },
+		]);
+		const cancelled = out.filter(
+			(c) =>
+				c.type === "data-approval" &&
+				(c.data as { state?: string }).state === "cancelled",
+		);
+		expect(cancelled).toEqual([
+			{
+				type: "data-approval",
+				id: "approval-hanging",
+				data: {
+					state: "cancelled",
+					requestId: "approval-hanging",
+					summary: "Claude wants to edit a.ts.",
+					toolName: "Edit",
+					inputSummary: "Edit a.ts",
+				},
+			},
+		]);
+	});
+
 	test("empty reasoning content opens no part", async () => {
 		const out = await collect([
 			{ type: "reasoning", content: "" },

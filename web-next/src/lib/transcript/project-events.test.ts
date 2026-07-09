@@ -198,6 +198,68 @@ describe("projectSessionEvents", () => {
 		]);
 	});
 
+	test("projects a pending approval request as an actionable data part", async () => {
+		const messages = await projectSessionEvents("s", [
+			u(1, "go"),
+			a(2, "approval_request", "Claude wants to edit src/lib/session.ts.", {
+				requestId: "approval-1",
+				toolName: "Edit",
+				inputSummary: "Edit src/lib/session.ts",
+				expiresAt: "2026-07-08T12:00:00.000Z",
+			}),
+		]);
+
+		expect(messages[1].parts).toEqual([
+			{
+				type: "data-approval",
+				id: "approval-1",
+				data: {
+					state: "pending",
+					requestId: "approval-1",
+					summary: "Claude wants to edit src/lib/session.ts.",
+					toolName: "Edit",
+					inputSummary: "Edit src/lib/session.ts",
+					expiresAt: "2026-07-08T12:00:00.000Z",
+				},
+			},
+		]);
+	});
+
+	test("a resolved approval collapses to a receipt on replay", async () => {
+		const messages = await projectSessionEvents("s", [
+			u(1, "go"),
+			a(2, "approval_request", "Claude wants to edit src/lib/session.ts.", {
+				requestId: "approval-1",
+				toolName: "Edit",
+				inputSummary: "Edit src/lib/session.ts",
+				expiresAt: "2026-07-08T12:00:00.000Z",
+			}),
+			a(3, "approval_resolved", "allow", {
+				requestId: "approval-1",
+				decision: "allow",
+				resolvedBy: "user",
+			}),
+			a(4, "done", ""),
+		]);
+
+		expect(messages[1].parts).toEqual([
+			{
+				type: "data-approval",
+				id: "approval-1",
+				data: {
+					state: "resolved",
+					requestId: "approval-1",
+					summary: "Claude wants to edit src/lib/session.ts.",
+					toolName: "Edit",
+					inputSummary: "Edit src/lib/session.ts",
+					expiresAt: "2026-07-08T12:00:00.000Z",
+					decision: "allow",
+					resolvedBy: "user",
+				},
+			},
+		]);
+	});
+
 	test("interleaves multiple user+assistant turns in one log", async () => {
 		const messages = await projectSessionEvents("s", [
 			u(1, "first question"),

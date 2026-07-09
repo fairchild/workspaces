@@ -5,6 +5,7 @@ import {
 	MOCK_PROVISION_ERROR_TRIGGER,
 	MOCK_SANDBOX_DIED_TEXT,
 	MOCK_SANDBOX_DIED_TRIGGER,
+	MOCK_APPROVAL_TRIGGER,
 	MOCK_STREAM_ERROR_TEXT,
 	MOCK_STREAM_ERROR_TRIGGER,
 	MOCK_TURN_ERROR_TRIGGER,
@@ -144,6 +145,54 @@ describe("mockCodingTurn", () => {
 		const chunks = await fullTurn("go");
 		const done = chunks.find((chunk) => chunk.type === "done");
 		expect(done?.metadata?.contextTokens).toBeGreaterThan(0);
+	});
+
+	test("approval scenario emits request, waits for the broker result, then continues", async () => {
+		const chunks: StreamChunk[] = [];
+		for await (const chunk of mockCodingTurn(
+			`go ${MOCK_APPROVAL_TRIGGER}`,
+			() => Promise.resolve(),
+			undefined,
+			undefined,
+			async (input) => ({
+				requestId: "approval-1",
+				toolName: input.toolName,
+				inputSummary: input.inputSummary,
+				requestedAt: "2026-07-08T12:00:00.000Z",
+				expiresAt: "2026-07-08T12:01:00.000Z",
+				resolution: Promise.resolve({
+					requestId: "approval-1",
+					decision: "allow",
+					resolvedBy: "user",
+					decidedAt: "2026-07-08T12:00:05.000Z",
+				}),
+			}),
+		)) {
+			chunks.push(chunk);
+		}
+
+		expect(chunks).toContainEqual({
+			type: "approval_request",
+			content: "Claude wants to edit src/lib/session.ts.",
+			metadata: {
+				requestId: "approval-1",
+				toolName: "Edit",
+				inputSummary:
+					"Edit src/lib/session.ts to add a missing SessionNotFoundError guard.",
+				expiresAt: "2026-07-08T12:01:00.000Z",
+			},
+		});
+		expect(chunks).toContainEqual({
+			type: "approval_resolved",
+			content: "allow",
+			metadata: {
+				requestId: "approval-1",
+				decision: "allow",
+				resolvedBy: "user",
+			},
+		});
+		expect(chunks.some((chunk) => chunk.type === "tool_use")).toBe(true);
+		expect(chunks.at(-1)?.type).toBe("done");
 	});
 
 	describe("MOCK_TURN_ERROR_TRIGGER (#808)", () => {

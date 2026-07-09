@@ -12,10 +12,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+	beginApprovalRequest,
+	getApprovalRequest,
+} from "@/lib/agent-runtime/approval-broker";
 import { releaseParkedSandbox } from "@/lib/agent-runtime/sandbox-release";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
-import { appendEvents, createSession, getSession, updateSession } from "@/lib/db/sessions";
+import {
+	appendEvents,
+	createSession,
+	getSession,
+	readEvents,
+	updateSession,
+} from "@/lib/db/sessions";
 import { MAX_TITLE_LENGTH } from "@/lib/session-title";
 
 vi.mock("@/lib/auth/auth-state", () => ({
@@ -306,5 +316,140 @@ describe("DELETE /api/sessions/[id]", () => {
 		expect(res.status).toBe(502);
 		expect((await res.json()).sandbox).toBe("unreachable");
 		expect(await getSession(getDatabase(), id)).toBeDefined();
+	});
+});
+
+async function postApproval(id: string, requestId: string, body: unknown) {
+	const { POST } = await import("./approvals/[requestId]/route");
+	return POST(
+		new Request(`http://test/api/sessions/${id}/approvals/${requestId}`, {
+			method: "POST",
+			body: JSON.stringify(body),
+		}),
+		{ params: Promise.resolve({ id, requestId }) },
+	);
+}
+
+describe("POST /api/sessions/[id]/approvals/[requestId]", () => {
+	test("answers a pending approval without appending to session_events", async () => {
+		const id = await freshSession();
+		await appendEvents(getDatabase(), id, [
+			{ role: "user", chunk: { type: "text", content: "go" } },
+			{
+				role: "assistant",
+				chunk: {
+					type: "approval_request",
+					content: "Claude wants to edit src/lib/session.ts.",
+					metadata: {
+						requestId: "approval-1",
+						toolName: "Edit",
+						inputSummary: "Edit src/lib/session.ts",
+						expiresAt: new Date(Date.now() + 60_000).toISOString(),
+					},
+				},
+			},
+		]);
+		const before = await readEvents(getDatabase(), id);
+		const pending = await beginApprovalRequest(getDatabase(), {
+			sessionId: id,
+			requestId: "approval-1",
+			toolName: "Edit",
+			inputSummary: "Edit src/lib/session.ts",
+			timeoutMs: 60_000,
+			pollIntervalMs: 20,
+		});
+
+		const res = await postApproval(id, "approval-1", { decision: "allow" });
+
+		expect(res.status).toBe(200);
+		expect(await res.json()).toMatchObject({
+			requestId: "approval-1",
+			decision: "allow",
+			resolvedBy: "user",
+		});
+		await expect(pending.resolution).resolves.toMatchObject({
+			decision: "allow",
+			resolvedBy: "user",
+		});
+		expect(await readEvents(getDatabase(), id)).toEqual(before);
+		expect(await getApprovalRequest(getDatabase(), id, "approval-1")).toMatchObject({
+			decision: "allow",
+			decided_by: "user",
+		});
+	});
+
+	test("404s for an unknown approval request", async () => {
+		const id = await freshSession();
+		const res = await postApproval(id, "missing", { decision: "deny" });
+		expect(res.status).toBe(404);
+	});
+
+	test("409s when the approval was already decided", async () => {
+		const id = await freshSession();
+		const pending = await beginApprovalRequest(getDatabase(), {
+			sessionId: id,
+			requestId: "approval-decided",
+			toolName: "Edit",
+			inputSummary: "Edit src/lib/session.ts",
+			timeoutMs: 60_000,
+			pollIntervalMs: 20,
+		});
+		expect((await postApproval(id, "approval-decided", { decision: "deny" })).status).toBe(
+			200,
+		);
+		await pending.resolution;
+
+		const res = await postApproval(id, "approval-decided", { decision: "allow" });
+
+		expect(res.status).toBe(409);
+		expect((await res.json()).error).toMatch(/already decided/);
+	});
+
+	test("a retried identical decision is idempotent success, not 409 (review finding)", async () => {
+		const id = await freshSession();
+		const pending = await beginApprovalRequest(getDatabase(), {
+			sessionId: id,
+			requestId: "approval-retried",
+			toolName: "Edit",
+			inputSummary: "Edit src/lib/session.ts",
+			timeoutMs: 60_000,
+			pollIntervalMs: 20,
+		});
+		expect(
+			(await postApproval(id, "approval-retried", { decision: "allow" })).status,
+		).toBe(200);
+		await pending.resolution;
+
+		// A lost response + browser retry of the same decision must read as success.
+		const retry = await postApproval(id, "approval-retried", { decision: "allow" });
+		expect(retry.status).toBe(200);
+		expect(await retry.json()).toMatchObject({
+			requestId: "approval-retried",
+			decision: "allow",
+			resolvedBy: "user",
+		});
+	});
+
+	test("409s when the approval is expired but not yet decided", async () => {
+		const id = await freshSession();
+		await getDatabase()
+			.db.insertInto("turn_approvals")
+			.values({
+				session_id: id,
+				request_id: "approval-expired",
+				tool_name: "Bash",
+				input_summary: "pnpm test",
+				requested_at: new Date(Date.now() - 60_000).toISOString(),
+				expires_at: new Date(Date.now() - 1000).toISOString(),
+				decision: null,
+				decided_at: null,
+				decided_by: null,
+			})
+			.execute();
+
+		const res = await postApproval(id, "approval-expired", { decision: "allow" });
+
+		expect(res.status).toBe(409);
+		expect((await res.json()).error).toMatch(/expired/);
 	});
 });

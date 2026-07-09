@@ -60,6 +60,7 @@ describe("session store", () => {
 			"0005_terminal_tickets",
 			"0006_session_owner_login",
 			"0007_session_first_user_message",
+			"0008_turn_approvals",
 		]);
 	});
 
@@ -428,6 +429,20 @@ describe("deleteSession", () => {
 			sql: "INSERT INTO terminal_tickets (ticket_hash, login, session_id, mode, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
 			args: ["h1", "fairchild", "goner", "mock", "2026-01-01", "2026-01-01"],
 		});
+		await handle.db
+			.insertInto("turn_approvals")
+			.values({
+				session_id: "goner",
+				request_id: "approval-1",
+				tool_name: "Edit",
+				input_summary: "Edit a.ts",
+				requested_at: "2026-01-01",
+				expires_at: "2026-01-01",
+				decision: null,
+				decided_at: null,
+				decided_by: null,
+			})
+			.execute();
 
 		expect(await deleteSession(handle, "goner")).toBe(true);
 		expect(await getSession(handle, "goner")).toBeUndefined();
@@ -436,6 +451,10 @@ describe("deleteSession", () => {
 			"SELECT ticket_hash FROM terminal_tickets WHERE session_id = 'goner'",
 		);
 		expect(tickets.rows).toHaveLength(0);
+		const approvals = await handle.client.execute(
+			"SELECT request_id FROM turn_approvals WHERE session_id = 'goner'",
+		);
+		expect(approvals.rows).toHaveLength(0);
 
 		// The cascade is scoped: the other session and its log are untouched.
 		expect(await getSession(handle, "keeper")).toBeDefined();

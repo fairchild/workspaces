@@ -8,6 +8,7 @@ import { ComposeField } from "./compose-field";
 import { Message, MessageArticle } from "./message";
 import { SessionMasthead, type MastheadData } from "./session-masthead";
 import { StatusLine, type StatusLineData } from "./status-line";
+import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 import type { FolioMessage } from "./types";
 
 /** The live turn: always focal, labeled but unstamped while it works. */
@@ -98,6 +99,10 @@ export interface SessionViewProps {
 	/** Stops the session's live sandbox (#753); a quiet masthead action beside
 	 * the state label. Fixtures omit it. */
 	onSandboxStop?: () => void;
+	onApprovalDecision?: (
+		requestId: string,
+		decision: ApprovalDecision,
+	) => Promise<void>;
 }
 
 export function SessionView({
@@ -108,6 +113,7 @@ export function SessionView({
 	onTitleChange,
 	onStopTurn,
 	onSandboxStop,
+	onApprovalDecision,
 }: SessionViewProps) {
 	const isEmpty = session.messages.length === 0 && !session.activeTurn;
 	return (
@@ -169,6 +175,7 @@ export function SessionView({
 												: undefined
 										}
 										retryDisabled={composeDisabled}
+										onApprovalDecision={onApprovalDecision}
 									/>
 								))}
 								{recent && session.activeTurn && (

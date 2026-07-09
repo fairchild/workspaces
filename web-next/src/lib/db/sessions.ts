@@ -11,6 +11,7 @@
  */
 import { sql } from "kysely";
 import { DEFAULT_MODEL } from "../agent-runtime/models";
+import type { ApprovalPolicy } from "../agent-runtime/approval-policy";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 import type {
 	ProjectedEvent,
@@ -35,6 +36,8 @@ export interface NewSession {
 	claudeSessionId?: string | null;
 	/** Claude model id to stamp; defaults to `DEFAULT_MODEL` when omitted. */
 	model?: string;
+	/** Approval policy; defaults to auto for the sandbox-first web path. */
+	approvalPolicy?: ApprovalPolicy;
 }
 
 export interface Session {
@@ -51,6 +54,8 @@ export interface Session {
 	resumeState: string | null;
 	/** Claude model id this session's turns run on (#824). */
 	model: string;
+	/** Tool approval posture for this session's provider turns (#982). */
+	approvalPolicy: ApprovalPolicy;
 	createdAt: string;
 	lastActivityAt: string;
 }
@@ -73,6 +78,7 @@ function rowToSession(row: SessionsTable): Session {
 		claudeSessionId: row.claude_session_id,
 		resumeState: row.resume_state,
 		model: row.model,
+		approvalPolicy: row.approval_policy,
 		createdAt: row.created_at,
 		lastActivityAt: row.last_activity_at,
 	};
@@ -95,6 +101,7 @@ export async function createSession(
 		claude_session_id: session.claudeSessionId ?? null,
 		resume_state: null,
 		model: session.model ?? DEFAULT_MODEL,
+		approval_policy: session.approvalPolicy ?? "auto",
 		created_at: now,
 		last_activity_at: now,
 	};
@@ -117,6 +124,7 @@ export async function updateSession(
 		resumeState?: string | null;
 		model?: string;
 		title?: string;
+		approvalPolicy?: ApprovalPolicy;
 	},
 ): Promise<void> {
 	await ensureSchema(handle);
@@ -125,6 +133,8 @@ export async function updateSession(
 	if ("resumeState" in fields) set.resume_state = fields.resumeState ?? null;
 	if ("model" in fields && fields.model) set.model = fields.model;
 	if ("title" in fields && fields.title) set.title = fields.title;
+	if ("approvalPolicy" in fields && fields.approvalPolicy)
+		set.approval_policy = fields.approvalPolicy;
 	if (Object.keys(set).length === 0) return;
 	await handle.db.updateTable("sessions").set(set).where("id", "=", id).execute();
 }
@@ -182,6 +192,7 @@ export async function deleteSession(
 	return handle.db.transaction().execute(async (trx) => {
 		await trx.deleteFrom("session_events").where("session_id", "=", id).execute();
 		await trx.deleteFrom("terminal_tickets").where("session_id", "=", id).execute();
+		await trx.deleteFrom("turn_approvals").where("session_id", "=", id).execute();
 		const result = await trx.deleteFrom("sessions").where("id", "=", id).execute();
 		return Number(result[0]?.numDeletedRows ?? 0) > 0;
 	});

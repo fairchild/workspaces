@@ -12,7 +12,11 @@ import {
 	updateSession,
 } from "../db/sessions";
 import type { ComputeProvider, TurnRequest } from "./provider";
-import { runSessionTurn, TurnConflictError } from "./run-turn";
+import {
+	ApprovalPolicyUnsupportedError,
+	runSessionTurn,
+	TurnConflictError,
+} from "./run-turn";
 import type { StreamChunk } from "./stream-chunk";
 
 // Same throwaway on-disk DB pattern as sessions.test.ts.
@@ -137,6 +141,20 @@ describe("runSessionTurn", () => {
 			author: "Claude",
 			turnStats: { toolCount: 1, durationMs: 12 },
 		});
+	});
+
+	test("refuses a non-auto policy on a provider without approval support (review finding)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "s-ask",
+			provider: "mock",
+			approvalPolicy: "ask-writes",
+		});
+		// stubProvider has no supportsApprovals flag — the turn must be refused
+		// up front, never run with tool calls silently unguarded.
+		await expect(
+			runSessionTurn(handle, session, "hi", stubProvider()),
+		).rejects.toThrow(ApprovalPolicyUnsupportedError);
 	});
 
 	test("rejects an unknown provider before touching the log", async () => {

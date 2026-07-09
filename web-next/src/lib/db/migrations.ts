@@ -272,6 +272,52 @@ const sessionFirstUserMessage: Migration = {
 	},
 };
 
+/**
+ * Adds the bidirectional approval rendezvous (#982): a per-session policy knob
+ * and durable request rows that answer routes update while providers wait.
+ */
+const turnApprovals: Migration = {
+	id: "0008_turn_approvals",
+	async up(db) {
+		const info = await sql<{
+			name: string;
+		}>`PRAGMA table_info(sessions)`.execute(db);
+		const hasPolicy = info.rows.some((row) => row.name === "approval_policy");
+		if (!hasPolicy) {
+			await db.schema
+				.alterTable("sessions")
+				.addColumn("approval_policy", "text", (col) =>
+					col.notNull().defaultTo("auto"),
+				)
+				.execute();
+		}
+
+		await db.schema
+			.createTable("turn_approvals")
+			.ifNotExists()
+			.addColumn("session_id", "text", (c) => c.notNull())
+			.addColumn("request_id", "text", (c) => c.notNull())
+			.addColumn("tool_name", "text", (c) => c.notNull())
+			.addColumn("input_summary", "text", (c) => c.notNull())
+			.addColumn("requested_at", "text", (c) => c.notNull())
+			.addColumn("expires_at", "text", (c) => c.notNull())
+			.addColumn("decision", "text")
+			.addColumn("decided_at", "text")
+			.addColumn("decided_by", "text")
+			.addPrimaryKeyConstraint("turn_approvals_pk", [
+				"session_id",
+				"request_id",
+			])
+			.execute();
+		await db.schema
+			.createIndex("idx_turn_approvals_pending_expiry")
+			.ifNotExists()
+			.on("turn_approvals")
+			.columns(["session_id", "expires_at"])
+			.execute();
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
@@ -280,4 +326,5 @@ export const MIGRATIONS: Migration[] = [
 	terminalTickets,
 	sessionOwnerLogin,
 	sessionFirstUserMessage,
+	turnApprovals,
 ];

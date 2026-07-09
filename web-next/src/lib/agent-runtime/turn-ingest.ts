@@ -38,6 +38,7 @@ import {
 } from "../notify/turn-notification";
 import { deriveSessionTitle } from "../session-title";
 import { projectReplayContext } from "../transcript/replay-context";
+import { beginApprovalRequest } from "./approval-broker";
 import {
 	type ComputeProvider,
 	getProvider,
@@ -331,6 +332,13 @@ async function ingestTurn(
 			resume,
 			model: session.model,
 			signal,
+			approvalPolicy: session.approvalPolicy,
+			requestApproval: (approval) =>
+				beginApprovalRequest(handle, {
+					sessionId: session.id,
+					...approval,
+					signal,
+				}),
 		};
 		if (priorContext) request.priorContext = priorContext;
 		const iterator = provider

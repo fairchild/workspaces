@@ -43,6 +43,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 import { modelLabel } from "@/lib/agent-runtime/models";
 import {
 	type ActiveTurnData,
@@ -255,6 +256,23 @@ export function LiveSessionView({
 		})();
 	};
 
+	const answerApproval = async (
+		requestId: string,
+		decision: ApprovalDecision,
+	): Promise<void> => {
+		const res = await fetch(`/api/sessions/${sessionId}/approvals/${requestId}`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ decision }),
+		});
+		if (!res.ok) {
+			const data = (await res.json().catch(() => null)) as {
+				error?: string;
+			} | null;
+			throw new Error(data?.error ?? `approval failed (${res.status})`);
+		}
+	};
+
 	const send = (text: string) => {
 		setSteps([]);
 		// Await any in-flight model PATCH first, so the turn the server starts
@@ -345,6 +363,7 @@ export function LiveSessionView({
 				onSandboxStop={
 					sandbox?.state === "live" && !busy ? () => void stopSandbox() : undefined
 				}
+				onApprovalDecision={answerApproval}
 			/>
 		</>
 	);

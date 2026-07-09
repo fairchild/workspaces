@@ -12,6 +12,8 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { type Client, createClient } from "@libsql/client";
 import { Kysely } from "kysely";
+import type { ApprovalDecision, ApprovalResolvedBy } from "../agent-runtime/stream-chunk";
+import type { ApprovalPolicy } from "../agent-runtime/approval-policy";
 import { LibsqlDialect } from "./libsql-dialect";
 
 /**
@@ -56,6 +58,8 @@ export interface SessionsTable {
 	resume_state: string | null;
 	/** Claude model id this session's turns run on (migration `0004_session_model`, #824). */
 	model: string;
+	/** Tool approval posture for provider turns (migration `0007_approvals`). */
+	approval_policy: ApprovalPolicy;
 	created_at: string;
 	last_activity_at: string;
 }
@@ -101,11 +105,29 @@ export interface TerminalTicketsTable {
 	redeemed_at: string | null;
 }
 
+/**
+ * Pending and resolved provider permission requests. The transcript records the
+ * request/resolution chunks; this side table is the bidirectional rendezvous
+ * point answer routes update and providers await across serverless instances.
+ */
+export interface TurnApprovalsTable {
+	session_id: string;
+	request_id: string;
+	tool_name: string;
+	input_summary: string;
+	requested_at: string;
+	expires_at: string;
+	decision: ApprovalDecision | null;
+	decided_at: string | null;
+	decided_by: ApprovalResolvedBy | null;
+}
+
 export interface Database {
 	repos: ReposTable;
 	sessions: SessionsTable;
 	session_events: SessionEventsTable;
 	terminal_tickets: TerminalTicketsTable;
+	turn_approvals: TurnApprovalsTable;
 }
 
 /** A connected database: the raw client (for PRAGMA/DDL) and the typed builder. */

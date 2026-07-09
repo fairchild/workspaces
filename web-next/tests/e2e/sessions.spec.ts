@@ -534,3 +534,55 @@ test("an owner/name the fixture directory doesn't recognize shows a calm inline 
 	);
 	await expect(page.getByTestId("new-session-picker")).toBeVisible();
 });
+
+test("mock approval scenario: allow continues the turn and records a receipt", async ({
+	page,
+}) => {
+	await createSessionForRepo(page);
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await compose.fill("Exercise the approval path __mock_approval__");
+	await page.keyboard.press("Enter");
+
+	const card = page.getByTestId("approval-card");
+	await expect(card).toContainText("Edit", { timeout: TURN_TIMEOUT });
+	await expect(card).toContainText("SessionNotFoundError guard");
+	await card.getByRole("button", { name: "Allow" }).click();
+
+	await expect(page.getByTestId("approval-receipt")).toContainText(
+		"Edit approval allowed by you.",
+		{ timeout: TURN_TIMEOUT },
+	);
+	await expect(page.getByTestId("turn-stats")).toContainText(
+		"4 tools · 1 file · +3 −1 · 4 tests",
+		{ timeout: TURN_TIMEOUT },
+	);
+	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+});
+
+test("mock approval scenario: reload while pending keeps the card actionable", async ({
+	page,
+}) => {
+	await createSessionForRepo(page);
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await compose.fill("Pause for approval after reload __mock_approval__");
+	await page.keyboard.press("Enter");
+
+	await expect(page.getByTestId("approval-card")).toContainText("Edit", {
+		timeout: TURN_TIMEOUT,
+	});
+	await page.reload();
+
+	const reloadedCard = page.getByTestId("approval-card");
+	await expect(reloadedCard).toContainText("Edit", { timeout: TURN_TIMEOUT });
+	await reloadedCard.getByRole("button", { name: "Deny" }).click();
+
+	await expect(page.getByTestId("approval-receipt")).toContainText(
+		"Edit approval denied by you.",
+		{ timeout: TURN_TIMEOUT },
+	);
+	await expect(page.locator('[data-message-role="assistant"]')).toContainText(
+		"Permission was denied",
+		{ timeout: TURN_TIMEOUT },
+	);
+	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+});
