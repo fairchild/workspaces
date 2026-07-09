@@ -78,7 +78,7 @@ struct WebNextServerServiceTests {
             class Handler(BaseHTTPRequestHandler):
                 def do_GET(self):
                     if self.path.startswith("/api/healthz"):
-                        body = b'{"ok": true}'
+                        body = os.environ.get("HEALTHZ_BODY", '{"ok": true, "localMode": true}').encode()
                         self.send_response(200)
                         self.send_header("Content-Type", "application/json")
                         self.send_header("Content-Length", str(len(body)))
@@ -393,6 +393,115 @@ struct WebNextServerServiceTests {
         #expect(!logContents.contains(token), "token must never appear in server logs")
 
         await service.stop()
+    }
+
+    @Test("readiness rejects healthz without localMode true")
+    func readinessRequiresLocalMode() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let script = """
+            export HEALTHZ_BODY='{"ok": true, "localMode": false}'
+            \(fixture.healthzServerScript)
+            """
+        let service = WebNextServerService(
+            configuration: fixture.configuration(
+                script: script, readinessTimeout: 2, readinessPollInterval: 0.1))
+
+        await service.start()
+        defer { Task { await service.stop() } }
+
+        guard case .failed = await service.state else {
+            Issue.record("localMode:false must not satisfy readiness, got \(await service.state)")
+            return
+        }
+    }
+
+    // MARK: - Log redaction
+
+    @Test("redactSignInToken masks token values, keeps surrounding text")
+    func redactsTokenValue() {
+        let line = "Local sign-in: http://127.0.0.1:3140/sign-in?token=abc.DEF-123&redirect=/"
+        let out = WebNextServerService.redactSignInToken(in: line)
+        #expect(out == "Local sign-in: http://127.0.0.1:3140/sign-in?token=<redacted>&redirect=/")
+        #expect(!out.contains("abc.DEF-123"))
+        #expect(WebNextServerService.redactSignInToken(in: "no tokens here") == "no tokens here")
+    }
+
+    @Test("captured server logs redact bearer tokens before they reach disk")
+    func serverLogsRedactToken() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let secret = "SECRET-\(UUID().uuidString)"
+        let script = """
+            echo "Local sign-in: http://127.0.0.1:$PORT/sign-in?token=\(secret)&redirect=/"
+            \(fixture.healthzServerScript)
+            """
+        let service = WebNextServerService(configuration: fixture.configuration(script: script))
+
+        await service.start()
+        defer { Task { await service.stop() } }
+        guard case .ready = await service.state else {
+            Issue.record("expected .ready, got \(await service.state)")
+            return
+        }
+
+        let logURL = try #require(await service.logFileURL)
+        let redacted = await waitUntil(timeout: 5) {
+            let contents = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
+            return contents.contains("token=<redacted>") && !contents.contains(secret)
+        }
+        #expect(redacted, "log must show token=<redacted> and never the raw secret")
+
+        // When capturing evidence, emit the real on-disk log so the PR can show
+        // the redacted line (never the secret) as proof.
+        if let dir = ProcessInfo.processInfo.environment["WORKSPACES_EVIDENCE_DIR"],
+            let contents = try? String(contentsOf: logURL, encoding: .utf8)
+        {
+            try? contents.write(
+                to: URL(fileURLWithPath: dir).appendingPathComponent("redacted-server-log.txt"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+    }
+
+    // MARK: - Termination budget
+
+    @Test("stopForTermination finishes under the OS terminate budget and still SIGKILLs")
+    func stopForTerminationBudget() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let script = """
+            python3 -c 'import os, signal, time
+            signal.signal(signal.SIGTERM, signal.SIG_IGN)
+            open(os.environ["WEB_NEXT_DATA_DIR"] + "/term-ignorer-armed", "w").write("1")
+            time.sleep(300)' &
+            echo $! > "$WEB_NEXT_DATA_DIR/child.pid"
+            \(fixture.healthzServerScript)
+            """
+        // A full 5s grace here; stopForTermination must compress it under budget.
+        let service = WebNextServerService(
+            configuration: fixture.configuration(script: script, terminationGracePeriod: 5))
+
+        await service.start()
+        guard case .ready = await service.state else {
+            Issue.record("expected .ready, got \(await service.state)")
+            return
+        }
+        let armedURL = fixture.dataDir.appendingPathComponent("term-ignorer-armed")
+        let armed = await waitUntil(timeout: 5) { FileManager.default.fileExists(atPath: armedURL.path) }
+        #expect(armed, "the SIGTERM-ignoring child must be armed before termination")
+        let childPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("child.pid")))
+        #expect(processIsAlive(childPID))
+
+        let started = Date()
+        await service.stopForTermination()
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(elapsed < 4, "terminate path must finish under the OS budget, took \(elapsed)s")
+
+        let childDied = await waitUntil(timeout: 5) { !self.processIsAlive(childPID) }
+        #expect(childDied, "a SIGTERM-ignoring member must still be SIGKILLed")
+        #expect(await service.state == .idle)
     }
 
     @Test("signInURL is nil while not ready")

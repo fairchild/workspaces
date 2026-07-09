@@ -16,6 +16,12 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
     let additionalAllowedDomains: [String]
     private(set) var activeAllowedHost: String
     let allowsSubdomains: Bool
+    /// When set, navigation must match this port as well as an allowed host.
+    /// Cookies aren't port-scoped, so a host-only allowlist would let a
+    /// token-bearing loopback surface send its session cookie to any other local
+    /// service; pinning the port closes that. `nil` keeps host-only matching for
+    /// callers that don't need it.
+    let allowedPort: Int?
     private let openURL: (URL) -> Void
     var onBlockedNavigation: ((URL) -> Void)?
 
@@ -23,6 +29,7 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
         allowedHost: String,
         additionalAllowedDomains: [String] = [],
         allowsSubdomains: Bool = true,
+        allowedPort: Int? = nil,
         openURL: @escaping (URL) -> Void = { url in
             NSWorkspace.shared.open(url)
         },
@@ -33,6 +40,7 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
         self.additionalAllowedDomains = additionalAllowedDomains.map { $0.lowercased() }
         self.activeAllowedHost = normalizedAllowedHost
         self.allowsSubdomains = allowsSubdomains
+        self.allowedPort = allowedPort
         self.openURL = openURL
         self.onBlockedNavigation = onBlockedNavigation
     }
@@ -105,6 +113,13 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
             return false
         }
 
+        // Port gate (applies to primary host and additional domains alike): a
+        // token-bearing surface must not navigate to a different port on an
+        // otherwise-allowed host.
+        if let allowedPort, url.port != allowedPort {
+            return false
+        }
+
         if WebSourceValidation.host(
             host,
             isAllowedFor: activeAllowedHost,
@@ -124,6 +139,10 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
         targetFrameIsMainFrame: Bool?
     ) -> Bool {
         guard targetFrameIsMainFrame != false else { return false }
+        // Never adopt across the pinned port, even for an already-allowed host.
+        if let allowedPort, candidateURL.port != allowedPort {
+            return false
+        }
         guard let candidateHost = candidateURL.host?.lowercased(), !candidateHost.isEmpty else {
             return false
         }

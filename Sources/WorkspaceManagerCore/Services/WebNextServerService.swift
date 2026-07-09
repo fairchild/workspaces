@@ -124,6 +124,8 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     /// current state or another launch's process handle.
     private var generation: UInt64 = 0
     private var watchdogTask: Task<Void, Never>?
+    /// Pumps captured child stdout/stderr through token redaction onto disk.
+    private var logReaderTask: Task<Void, Never>?
 
     private static let signInTokenFilename = "local-sign-in-token"
 
@@ -216,12 +218,25 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     /// Terminate the whole process group: SIGTERM, bounded grace, SIGKILL.
     /// Idempotent — safe to call in any state, including mid-start.
     public func stop() async {
+        await stopInternal(gracePeriod: configuration.terminationGracePeriod)
+    }
+
+    /// Shutdown variant for the app-termination hook, which runs inside the OS's
+    /// ~5s terminate budget. Uses a compressed SIGTERM grace so the full
+    /// SIGTERM → grace → SIGKILL → reap path completes well under that budget;
+    /// the default `stop()` grace would risk the app being killed mid-cleanup,
+    /// orphaning the child the hook exists to reap.
+    public func stopForTermination() async {
+        await stopInternal(gracePeriod: min(configuration.terminationGracePeriod, 1.5))
+    }
+
+    private func stopInternal(gracePeriod: TimeInterval) async {
         generation &+= 1
         cancelWatchdog()
         let pid = processID
         processID = nil
         if let pid {
-            await terminateProcessGroup(pid)
+            await terminateProcessGroup(pid, gracePeriod: gracePeriod)
         }
         state = .idle
     }
@@ -269,18 +284,99 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         guard logFD >= 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        defer { close(logFD) }
+
+        // The child writes to the pipe, not straight to the log file, so a
+        // reader can redact bearer tokens (`start:local` prints the sign-in URL,
+        // token and all) before they land on disk.
+        var pipeFDs: [Int32] = [0, 0]
+        guard pipe(&pipeFDs) == 0 else {
+            close(logFD)
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        let readEnd = pipeFDs[0]
+        let writeEnd = pipeFDs[1]
 
         var environment = ProcessInfo.processInfo.environment
         environment["PORT"] = String(configuration.port)
         environment["WEB_NEXT_DATA_DIR"] = configuration.dataDir.path
 
-        return try Self.spawnInNewProcessGroup(
-            executablePath: configuration.launchCommand.executablePath,
-            arguments: configuration.launchCommand.arguments,
-            environment: environment,
-            workingDirectory: configuration.webNextRoot.path,
-            outputFD: logFD
+        let pid: pid_t
+        do {
+            pid = try Self.spawnInNewProcessGroup(
+                executablePath: configuration.launchCommand.executablePath,
+                arguments: configuration.launchCommand.arguments,
+                environment: environment,
+                workingDirectory: configuration.webNextRoot.path,
+                outputFD: writeEnd
+            )
+        } catch {
+            close(readEnd)
+            close(writeEnd)
+            close(logFD)
+            throw error
+        }
+
+        // Only the child writes; drop the parent's write end so the reader sees
+        // EOF once the child group exits. The reader owns `readEnd` and `logFD`.
+        close(writeEnd)
+        startLogRedactionReader(readEnd: readEnd, logFD: logFD)
+        return pid
+    }
+
+    /// Streams `readEnd` to `logFD`, redacting any `token=<value>` occurrence
+    /// line by line. Ends at EOF (child group gone); the detached task never
+    /// touches actor state, so it needs no isolation.
+    private func startLogRedactionReader(readEnd: Int32, logFD: Int32) {
+        logReaderTask?.cancel()
+        logReaderTask = Task.detached(priority: .utility) {
+            Self.pumpRedactedLog(readEnd: readEnd, logFD: logFD)
+        }
+    }
+
+    private nonisolated static func pumpRedactedLog(readEnd: Int32, logFD: Int32) {
+        defer {
+            close(readEnd)
+            close(logFD)
+        }
+        var pending: [UInt8] = []
+        var chunk = [UInt8](repeating: 0, count: 8192)
+        while true {
+            let count = read(readEnd, &chunk, chunk.count)
+            if count <= 0 { break }
+            pending.append(contentsOf: chunk[0..<count])
+            while let newline = pending.firstIndex(of: 0x0A) {
+                writeRedactedLine(Array(pending[0...newline]), to: logFD)
+                pending.removeSubrange(0...newline)
+            }
+        }
+        if !pending.isEmpty {
+            writeRedactedLine(pending, to: logFD)
+        }
+    }
+
+    private nonisolated static func writeRedactedLine(_ line: [UInt8], to logFD: Int32) {
+        var bytes = Array(redactSignInToken(in: String(decoding: line, as: UTF8.self)).utf8)
+        var offset = 0
+        while offset < bytes.count {
+            let written = bytes[offset...].withUnsafeBytes { buffer in
+                write(logFD, buffer.baseAddress, buffer.count)
+            }
+            if written <= 0 { break }
+            offset += written
+        }
+    }
+
+    /// Replace any `token=<value>` with `token=<redacted>` so a captured
+    /// `Local sign-in: …?token=<bearer>` line never persists the secret.
+    nonisolated static func redactSignInToken(in text: String) -> String {
+        guard let regex = try? NSRegularExpression(pattern: "token=[^\\s&\"']+") else {
+            return text
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.stringByReplacingMatches(
+            in: text,
+            range: range,
+            withTemplate: "token=<redacted>"
         )
     }
 
@@ -372,10 +468,10 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     /// empty within the grace period, then SIGKILL the group. The leader dying
     /// while a member (e.g. `next start` ignoring SIGTERM) survives must still
     /// escalate.
-    private func terminateProcessGroup(_ pid: pid_t) async {
+    private func terminateProcessGroup(_ pid: pid_t, gracePeriod: TimeInterval? = nil) async {
         kill(-pid, SIGTERM)
 
-        let deadline = Date().addingTimeInterval(configuration.terminationGracePeriod)
+        let deadline = Date().addingTimeInterval(gracePeriod ?? configuration.terminationGracePeriod)
         while Date() < deadline {
             if processGroupIsEmpty(pid) { return }
             try? await Task.sleep(nanoseconds: 50_000_000)
@@ -445,9 +541,12 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     // MARK: Readiness
 
     /// Strict readiness per embedded-native-contract.md § 2: `.ready` requires
-    /// `GET /api/healthz` to answer 200 with JSON `ok == true`. Any other HTTP
-    /// response — including a stale or foreign listener on the port — is not
-    /// ready; connection refused means still starting.
+    /// `GET /api/healthz` to answer 200 with JSON `ok == true` AND
+    /// `localMode == true`. Requiring `localMode` keeps a foreign or
+    /// non-local-mode server that merely answers `{ok:true}` on the port from
+    /// satisfying readiness (the WKWebView would otherwise send its session
+    /// cookie to it). Any other HTTP response is not ready; connection refused
+    /// means still starting.
     private func serverIsHealthy() async -> Bool {
         var request = URLRequest(url: baseURL.appendingPathComponent("api/healthz"))
         request.timeoutInterval = 2
@@ -457,9 +556,10 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
             guard let httpResponse = response as? HTTPURLResponse,
                 httpResponse.statusCode == 200,
                 let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                let ok = object["ok"] as? Bool
+                object["ok"] as? Bool == true,
+                object["localMode"] as? Bool == true
             else { return false }
-            return ok
+            return true
         } catch {
             return false
         }

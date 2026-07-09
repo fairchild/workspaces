@@ -191,6 +191,8 @@ public protocol WebNextServerServiceProtocol: Sendable {
     var state: WebNextServerState { get async }
     func start() async
     func stop() async
+    /// Shutdown under the OS app-termination budget (compressed SIGTERM grace).
+    func stopForTermination() async
     func signInURL(redirect: String?) async -> URL?
 }
 
