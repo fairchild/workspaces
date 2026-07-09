@@ -31,6 +31,13 @@ export function ensureLocalSignInToken(env: Env = process.env): string {
 	const file = localTokenPath(env);
 	fs.mkdirSync(path.dirname(file), { recursive: true });
 	if (fs.existsSync(file)) {
+		const stat = fs.lstatSync(file);
+		if (stat.isSymbolicLink()) {
+			throw new Error(`refusing to reuse symlinked local sign-in token file: ${file}`);
+		}
+		if ((stat.mode & 0o077) !== 0) {
+			fs.chmodSync(file, 0o600);
+		}
 		const existing = normalizeToken(fs.readFileSync(file, "utf8"));
 		if (existing.length > 0) return existing;
 	}

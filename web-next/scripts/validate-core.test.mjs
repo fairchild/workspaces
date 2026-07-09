@@ -48,6 +48,17 @@ describe("resolveTarget", () => {
 		});
 	});
 
+	test("--env local-mode --url keeps local-mode expectations", () => {
+		expect(
+			resolveTarget(["--env", "local-mode", "--url", "http://localhost:3183/"]),
+		).toMatchObject({
+			envName: "local-mode",
+			baseUrl: "http://localhost:3183",
+			spawnLocal: false,
+			localMode: true,
+		});
+	});
+
 	test("rejects a non-origin --url and an env with no stable origin", () => {
 		expect(() => resolveTarget(["--url", "pr-1.vercel.app"])).toThrow(/http/);
 		expect(() => resolveTarget(["--env", "preview"])).toThrow(/--url/);

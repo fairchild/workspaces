@@ -5,6 +5,7 @@ import {
 	constantTimeEqual,
 	isLoopbackHostHeader,
 	isLoginAllowed,
+	loopbackHostOrigin,
 	localModeEnabled,
 	localSessionCookieValid,
 	oauthEnvConfigured,
@@ -144,7 +145,13 @@ describe("local mode config", () => {
 		expect(isLoopbackHostHeader("localhost:3100")).toBe(true);
 		expect(isLoopbackHostHeader("127.0.0.1:3100")).toBe(true);
 		expect(isLoopbackHostHeader("[::1]:3100")).toBe(true);
+		expect(loopbackHostOrigin("localhost:3100")).toBe("http://localhost:3100");
+		expect(loopbackHostOrigin("[::1]:3100")).toBe("http://[::1]:3100");
 		expect(isLoopbackHostHeader("spaces.example")).toBe(false);
+		expect(isLoopbackHostHeader("localhost.attacker.test")).toBe(false);
+		expect(isLoopbackHostHeader("localhost:3100:evil")).toBe(false);
+		expect(isLoopbackHostHeader("[::1]:bad")).toBe(false);
+		expect(isLoopbackHostHeader("localhost:")).toBe(false);
 		expect(isLoopbackHostHeader("127.0.0.2:3100")).toBe(false);
 		expect(isLoopbackHostHeader(null)).toBe(false);
 	});

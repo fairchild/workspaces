@@ -186,7 +186,10 @@ async function localModeStage(baseUrl, token) {
 			{
 				id: "loopback_host_required",
 				status: badHost.status === 403 ? "pass" : "fail",
-				detail: `GET /api/repos with Host: spaces.example → ${badHost.status}`,
+				detail:
+					badHost.status === 403
+						? `GET /api/repos with Host: spaces.example → ${badHost.status}`
+						: `target is not in local mode: GET /api/repos with Host: spaces.example → ${badHost.status}`,
 			},
 			{
 				id: "token_required",

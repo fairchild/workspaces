@@ -32,6 +32,22 @@ describe("local sign-in token", () => {
 		expect(fs.readFileSync(localTokenPath(testEnv), "utf8").trim()).toBe(first);
 	});
 
+	it("tightens an existing token file to owner-only permissions before reuse", () => {
+		const testEnv = env();
+		const file = localTokenPath(testEnv);
+		fs.writeFileSync(file, "existing-token\n", { mode: 0o644 });
+		expect(ensureLocalSignInToken(testEnv)).toBe("existing-token");
+		expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+	});
+
+	it("refuses to reuse a symlinked token file", () => {
+		const testEnv = env();
+		const target = path.join(testEnv.WEB_NEXT_DATA_DIR, "target-token");
+		fs.writeFileSync(target, "existing-token\n", { mode: 0o600 });
+		fs.symlinkSync(target, localTokenPath(testEnv));
+		expect(() => ensureLocalSignInToken(testEnv)).toThrow(/symlinked local sign-in token/);
+	});
+
 	it("compares the supplied token without accepting wrong values", () => {
 		const testEnv = env();
 		const token = ensureLocalSignInToken(testEnv);

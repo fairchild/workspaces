@@ -122,14 +122,32 @@ export function localSessionCookieValid(
 	return constantTimeEqual(cookieValue, env.WEB_NEXT_LOCAL_TOKEN);
 }
 
-export function isLoopbackHostHeader(hostHeader: string | null): boolean {
-	if (!hostHeader) return false;
+function hostHeaderHasValidPortToken(hostHeader: string): boolean {
+	if (hostHeader.startsWith("[")) {
+		const match = hostHeader.match(/^\[[^\]]+\](?::([0-9]+))?$/);
+		return match !== null;
+	}
+	const parts = hostHeader.split(":");
+	if (parts.length === 1) return true;
+	return parts.length === 2 && /^[0-9]+$/.test(parts[1] ?? "");
+}
+
+export function loopbackHostOrigin(hostHeader: string | null): string | null {
+	if (!hostHeader) return null;
 	const host = hostHeader.trim().toLowerCase();
-	if (host === "localhost" || host === "127.0.0.1") return true;
-	if (host.startsWith("[::1]")) return host === "[::1]" || host.startsWith("[::1]:");
-	if (host === "::1") return true;
-	const withoutPort = host.includes(":") ? host.split(":")[0] : host;
-	return withoutPort === "localhost" || withoutPort === "127.0.0.1";
+	if (!hostHeaderHasValidPortToken(host)) return null;
+	try {
+		const url = new URL(`http://${host}`);
+		if (url.pathname !== "/" || url.search !== "" || url.hash !== "") return null;
+		if (!["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) return null;
+		return url.origin;
+	} catch {
+		return null;
+	}
+}
+
+export function isLoopbackHostHeader(hostHeader: string | null): boolean {
+	return loopbackHostOrigin(hostHeader) !== null;
 }
 
 /**

@@ -13,8 +13,8 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import {
 	authBypassEnabled,
-	isLoopbackHostHeader,
 	LOCAL_AUTH_COOKIE,
+	loopbackHostOrigin,
 	localModeEnabled,
 	localSessionCookieValid,
 	resolveAuthSecret,
@@ -72,7 +72,8 @@ export async function middleware(request: NextRequest) {
 	const { pathname } = request.nextUrl;
 
 	if (localModeEnabled()) {
-		if (!isLoopbackHostHeader(request.headers.get("host"))) {
+		const localOrigin = loopbackHostOrigin(request.headers.get("host"));
+		if (!localOrigin) {
 			return isApiPath(pathname)
 				? forbiddenLocalHostJson()
 				: new NextResponse("local mode only accepts loopback Host headers", {
@@ -81,7 +82,7 @@ export async function middleware(request: NextRequest) {
 		}
 		const queryToken = request.nextUrl.searchParams.get("token");
 		if (pathname === "/sign-in" && localSessionCookieValid(queryToken)) {
-			const response = NextResponse.redirect(new URL("/", request.url));
+			const response = NextResponse.redirect(new URL("/", localOrigin));
 			response.cookies.set(LOCAL_AUTH_COOKIE, queryToken ?? "", {
 				path: "/",
 				httpOnly: true,

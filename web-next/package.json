@@ -8,7 +8,7 @@
 		"start": "next start --port ${E2E_PORT:-3100}",
 		"start:local": "tsx scripts/start-local.ts",
 		"e2e:prepare-db": "AUTH_BYPASS=1 ALLOWED_LOGINS=fairchild SESSIONS_DATABASE_URL=file:.data/e2e.db node --import tsx scripts/e2e-db.ts",
-		"e2e:server": "node scripts/clean.mjs e2e-data && { test -f .next/BUILD_ID || NODE_ENV=production next build; } && pnpm run e2e:prepare-db && AUTH_BYPASS=1 ALLOWED_LOGINS=fairchild SESSIONS_DATABASE_URL=file:.data/e2e.db next start --port ${E2E_PORT:-3100}",
+		"e2e:server": "env GITHUB_WEB_WORKSPACES_APP_ID= GITHUB_APP_PRIVATE_KEY= sh -c 'node scripts/clean.mjs e2e-data && { test -f .next/BUILD_ID || NODE_ENV=production next build; } && pnpm run e2e:prepare-db && AUTH_BYPASS=1 ALLOWED_LOGINS=fairchild SESSIONS_DATABASE_URL=file:.data/e2e.db next start --port ${E2E_PORT:-3100}'",
 		"test": "vitest run",
 		"test:e2e": "playwright test",
 		"typecheck": "tsc --noEmit",

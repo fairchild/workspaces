@@ -17,8 +17,13 @@ function requestFor(path: string, cookie?: string): NextRequest {
 	});
 }
 
-function localRequestFor(path: string, host = "localhost:3100", cookie?: string): NextRequest {
-	return new NextRequest(`http://localhost:3100${path}`, {
+function localRequestFor(
+	path: string,
+	host = "localhost:3100",
+	cookie?: string,
+	origin = "http://localhost:3100",
+): NextRequest {
+	return new NextRequest(`${origin}${path}`, {
 		headers: {
 			host,
 			...(cookie ? { cookie } : {}),
@@ -86,6 +91,17 @@ describe("middleware local mode", () => {
 		});
 	});
 
+	it("rejects malformed loopback-looking Host headers", async () => {
+		for (const host of [
+			"localhost:3100:evil",
+			"[::1]:bad",
+			"localhost.attacker.test",
+		]) {
+			const response = await middleware(localRequestFor("/api/repos", host));
+			expect(response.status).toBe(403);
+		}
+	});
+
 	it("sets the local session cookie from a valid /sign-in token query", async () => {
 		const response = await middleware(localRequestFor("/sign-in?token=local-secret"));
 		expect(response.status).toBe(307);
@@ -93,6 +109,19 @@ describe("middleware local mode", () => {
 		expect(response.headers.get("set-cookie")).toContain(
 			"web-next-local-session=local-secret",
 		);
+	});
+
+	it("redirects local sign-in accepts to the validated Host origin", async () => {
+		const response = await middleware(
+			localRequestFor(
+				"/sign-in?token=local-secret",
+				"localhost:3100",
+				undefined,
+				"http://attacker.test",
+			),
+		);
+		expect(response.status).toBe(307);
+		expect(response.headers.get("location")).toBe("http://localhost:3100/");
 	});
 
 	it("does not accept a wrong local token", async () => {

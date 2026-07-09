@@ -23,14 +23,19 @@ export function resolveTarget(args, env = {}) {
 		const at = args.indexOf(flag);
 		return at >= 0 ? args[at + 1] : undefined;
 	};
+	const envName = get("--env") ?? "local";
 	const url = get("--url");
 	if (url) {
 		if (!/^https?:\/\//.test(url)) {
 			throw new Error(`--url must be an http(s) origin, got: ${url}`);
 		}
-		return { envName: get("--env") ?? "url", baseUrl: url.replace(/\/$/, ""), spawnLocal: false };
+		return {
+			envName: get("--env") ?? "url",
+			baseUrl: url.replace(/\/$/, ""),
+			spawnLocal: false,
+			localMode: envName === "local-mode",
+		};
 	}
-	const envName = get("--env") ?? "local";
 	if (envName === "local") {
 		return { envName, baseUrl: `http://localhost:${LOCAL_PORT}`, spawnLocal: true };
 	}

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { DEFAULT_MODEL } from "../agent-runtime/models";
 import { type DatabaseHandle, openDatabase } from "./client";
 import { ensureRepo, listRepos } from "./repos";
@@ -115,12 +115,18 @@ describe("startSession", () => {
 		expect(await listSessions(handle)).toHaveLength(0);
 	});
 
-	// The GitHub validation step (see ../github/repo-directory): no App creds
-	// gives deterministic fixtures, so these stay hermetic unit tests.
-	describe("GitHub validation (fixture directory)", () => {
-		test("records the real default_branch from the fixture on first connect", async () => {
-			const handle = freshDb();
-			await startSession(handle, "fairchild/web-next-fixtures");
+		// The GitHub validation step (see ../github/repo-directory): no App creds
+		// plus test bypass gives deterministic fixtures, so these stay hermetic.
+		describe("GitHub validation (fixture directory)", () => {
+			beforeEach(() => {
+				vi.stubEnv("AUTH_BYPASS", "1");
+				vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+				vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
+			});
+
+			test("records the real default_branch from the fixture on first connect", async () => {
+				const handle = freshDb();
+				await startSession(handle, "fairchild/web-next-fixtures");
 			const [repo] = await listRepos(handle);
 			expect(repo.defaultBranch).toBe("trunk");
 		});
@@ -140,14 +146,16 @@ describe("startSession", () => {
 			await startSession(handle, "fairchild/web-next-fixtures");
 			const [repo] = await listRepos(handle);
 			expect(repo.defaultBranch).toBe("trunk");
+			});
 		});
-	});
 
-	test("fixture mode is independent of AUTH_BYPASS", async () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
-		const handle = freshDb();
-		await startSession(handle, "fairchild/web-next-fixtures");
-		const [repo] = await listRepos(handle);
+		test("local mode also uses the fixture directory when App creds are absent", async () => {
+			vi.stubEnv("WEB_NEXT_LOCAL_MODE", "1");
+			vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+			vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
+			const handle = freshDb();
+			await startSession(handle, "fairchild/web-next-fixtures");
+			const [repo] = await listRepos(handle);
 		expect(repo.defaultBranch).toBe("trunk");
 	});
 });
