@@ -9,6 +9,8 @@ on:
   pull_request:
     paths:
       - "web-next/**"
+      - "!web-next/docs/**"
+      - "!web-next/**.md"
       - ".github/workflows/web-next-ci.yml"
 
 permissions:
