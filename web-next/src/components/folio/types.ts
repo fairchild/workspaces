@@ -10,6 +10,7 @@ import type { UIMessage } from "ai";
 import type {
 	ApprovalDecision,
 	ApprovalResolvedBy,
+	ConfigReceipt,
 } from "@/lib/agent-runtime/stream-chunk";
 
 /**
@@ -104,6 +105,8 @@ export type FolioDataParts = {
 	status: { message: string };
 	/** Durable permission request/receipt rendered in the transcript (#982). */
 	approval: ApprovalPartData;
+	/** Durable harness config receipt rendered quietly at turn start (#985). */
+	"config-receipt": Pick<ConfigReceipt, "loaded" | "skipped">;
 };
 
 export type FolioMessage = UIMessage<FolioMetadata, FolioDataParts>;

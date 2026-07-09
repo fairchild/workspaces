@@ -121,6 +121,54 @@ describe("toUIMessageChunks", () => {
 		});
 	});
 
+	test("config receipt becomes a durable data part", async () => {
+		const out = await collect([
+			{
+				type: "config_receipt",
+				content: "Config: 1 file loaded: CLAUDE.md deadbeef",
+				metadata: {
+					envVar: "WEB_NEXT_CONFIG_FILES",
+					loaded: [
+						{
+							path: "/Users/me/CLAUDE.md",
+							basename: "CLAUDE.md",
+							sha256: "deadbeef",
+						},
+					],
+					skipped: [
+						{
+							path: "/Users/me/missing.md",
+							basename: "missing.md",
+							reason: "file does not exist",
+						},
+					],
+				},
+			},
+			{ type: "done", content: "" },
+		]);
+
+		expect(out).toContainEqual({
+			type: "data-config-receipt",
+			id: "config-receipt",
+			data: {
+				loaded: [
+					{
+						path: "/Users/me/CLAUDE.md",
+						basename: "CLAUDE.md",
+						sha256: "deadbeef",
+					},
+				],
+				skipped: [
+					{
+						path: "/Users/me/missing.md",
+						basename: "missing.md",
+						reason: "file does not exist",
+					},
+				],
+			},
+		});
+	});
+
 	test("status does not split an open text part", async () => {
 		const out = await collect([
 			{ type: "text", content: "a" },

@@ -26,6 +26,11 @@ import type {
 	TurnRequest,
 } from "./provider";
 import type { StreamChunk } from "./stream-chunk";
+import {
+	configReceiptChunk,
+	hasConfigReceipt,
+	loadRuntimeConfig,
+} from "./config-files";
 
 // Type-only imports of the lazily-loaded factories keep the seam light (no
 // eager harness load) while giving the shared builders real signatures.
@@ -57,6 +62,7 @@ const WORKSPACE_DIR_NAME = "workspace";
 /** Absolute path to that working copy (sandbox default cwd is /vercel/sandbox).
  * Exported so the terminal (#752) opens its shell in the same working copy. */
 export const WORKSPACE_DIR = `/vercel/sandbox/${WORKSPACE_DIR_NAME}`;
+export const SANDBOX_CONFIG_PROMPT_PATH = "/tmp/web-next-config-prompt.md";
 /**
  * Stable template name so `runTurn` and `prewarmVercelTemplate` target the same
  * named snapshot; the harness reuses a template only when the sandbox identity
@@ -339,14 +345,30 @@ function promptCurlBase(repo: TurnRepo): string {
 	return repo.defaultBranch ?? "$(cat /tmp/default_branch)";
 }
 
+export function sandboxConfigPromptFile(
+	configPrompt: string,
+): { path: string; content: string } | null {
+	return configPrompt ? { path: SANDBOX_CONFIG_PROMPT_PATH, content: configPrompt } : null;
+}
+
 export function buildPrompt(
 	userMessage: string,
 	sessionId: string,
 	firstTurn: boolean,
 	repo: TurnRepo,
 	priorContext?: string | null,
+	configPrompt?: string,
 ): string {
-	if (!firstTurn) return userMessage;
+	const config = configPrompt?.trim();
+	if (!firstTurn) {
+		if (!config) return userMessage;
+		return [
+			config,
+			"",
+			"The user's request:",
+			userMessage,
+		].join("\n");
+	}
 	const branch = sessionBranch(sessionId);
 	const base = promptCurlBase(repo);
 	const baseLabel = baseBranchLabel(repo);
@@ -362,6 +384,9 @@ export function buildPrompt(
 		`- To open or update a pull request: commit, \`git push -u origin HEAD\`, then call the GitHub API with the token in /tmp/gh_token against base ${baseLabel}, e.g. \`${baseAssignment}; curl -sS -X POST -H "Authorization: Bearer $(cat /tmp/gh_token)" -H "Accept: application/vnd.github+json" https://api.github.com/repos/${repo.fullName}/pulls -d "{\\"title\\":\\"…\\",\\"head\\":\\"${branch}\\",\\"base\\":\\"$BASE_BRANCH\\",\\"body\\":\\"…\\"}"\`. Report the \`html_url\`.`,
 		`- Only open a PR when the request calls for one; otherwise just do the work and summarize it.`,
 	];
+	if (config) {
+		lines.push(``, config);
+	}
 	if (replay) {
 		lines.push(
 			``,
@@ -538,6 +563,8 @@ export const vercelProvider: ComputeProvider = {
 	id: "vercel",
 	async *runTurn(request: TurnRequest): AsyncIterable<StreamChunk> {
 		const startedAt = Date.now();
+		const config = await loadRuntimeConfig();
+		if (hasConfigReceipt(config.receipt)) yield configReceiptChunk(config.receipt);
 		const targetRepo = resolveTargetRepo(request);
 		if (!targetRepo.ok) {
 			yield {
@@ -588,6 +615,13 @@ export const vercelProvider: ComputeProvider = {
 				workDir: WORKSPACE_DIR_NAME,
 				onSession: async ({ session }) => {
 					sandbox = session as RunnableSandbox;
+					const configFile = sandboxConfigPromptFile(config.prompt);
+					if (configFile) {
+						await session.writeTextFile({
+							path: configFile.path,
+							content: configFile.content,
+						});
+					}
 					await session.writeTextFile({
 						path: "/tmp/session-setup.sh",
 						content: buildSessionSetupScript(request.sessionId, repo),
@@ -691,6 +725,7 @@ export const vercelProvider: ComputeProvider = {
 					!resumed,
 					repo,
 					!resumed ? replayContext : null,
+					config.prompt,
 				),
 			});
 			let doneChunk: StreamChunk | undefined;

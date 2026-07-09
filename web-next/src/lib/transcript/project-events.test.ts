@@ -260,6 +260,41 @@ describe("projectSessionEvents", () => {
 		]);
 	});
 
+	test("projects a config receipt as a durable quiet data part", async () => {
+		const messages = await projectSessionEvents("s", [
+			u(1, "go"),
+			a(2, "config_receipt", "Config: 1 file loaded: CLAUDE.md deadbeef", {
+				envVar: "WEB_NEXT_CONFIG_FILES",
+				loaded: [
+					{
+						path: "/Users/me/CLAUDE.md",
+						basename: "CLAUDE.md",
+						sha256: "deadbeef",
+					},
+				],
+				skipped: [],
+			}),
+			a(3, "done", ""),
+		]);
+
+		expect(messages[1].parts).toEqual([
+			{
+				type: "data-config-receipt",
+				id: "config-receipt",
+				data: {
+					loaded: [
+						{
+							path: "/Users/me/CLAUDE.md",
+							basename: "CLAUDE.md",
+							sha256: "deadbeef",
+						},
+					],
+					skipped: [],
+				},
+			},
+		]);
+	});
+
 	test("interleaves multiple user+assistant turns in one log", async () => {
 		const messages = await projectSessionEvents("s", [
 			u(1, "first question"),

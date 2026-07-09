@@ -11,6 +11,8 @@ import {
 	parseGitDiff,
 	resolveTargetRepo,
 	runTurnTail,
+	sandboxConfigPromptFile,
+	SANDBOX_CONFIG_PROMPT_PATH,
 	toolResultContent,
 	uniqueDiffToolCallId,
 	vercelProvider,
@@ -224,6 +226,47 @@ describe("buildPrompt", () => {
 				"User: old\n\nAssistant: context",
 			),
 		).toBe("Continue from the live harness session");
+	});
+
+	test("appends allowlisted config content to fresh and resumed prompts", () => {
+		const configPrompt = [
+			"Allowlisted harness config follows.",
+			"--- BEGIN /Users/me/CLAUDE.md ---",
+			"Prefer careful receipts.",
+			"--- END /Users/me/CLAUDE.md ---",
+		].join("\n");
+		const fresh = buildPrompt(
+			"Fix the failing test",
+			"abcdef123456",
+			true,
+			repo,
+			null,
+			configPrompt,
+		);
+		const resumed = buildPrompt(
+			"Continue from the live harness session",
+			"abcdef123456",
+			false,
+			repo,
+			null,
+			configPrompt,
+		);
+
+		expect(fresh).toContain(configPrompt);
+		expect(fresh).toContain("The user's request:\nFix the failing test");
+		expect(resumed).toContain(configPrompt);
+		expect(resumed).toContain(
+			"The user's request:\nContinue from the live harness session",
+		);
+	});
+
+	test("builds the sandbox-side config prompt file outside the workspace", () => {
+		expect(sandboxConfigPromptFile("config body")).toEqual({
+			path: SANDBOX_CONFIG_PROMPT_PATH,
+			content: "config body",
+		});
+		expect(SANDBOX_CONFIG_PROMPT_PATH).toBe("/tmp/web-next-config-prompt.md");
+		expect(sandboxConfigPromptFile("")).toBeNull();
 	});
 });
 
