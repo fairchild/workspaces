@@ -1,18 +1,24 @@
 /*
  * POST /api/sessions — programmatic session creation, the API complement to
- * the UI's server action (actions.ts). Exists for API clients that need a
- * throwaway session with an explicit title and provider — the #818 real-turn
- * validation probe is the first — so it skips the action's GitHub repo
- * resolution (repoId stays null; the vercel provider falls back to its
- * configured AGENT_TARGET_REPO only for these repo-less sessions). Auth-gated
- * like every session route; model always starts at the DEFAULT_MODEL, same as
- * the UI path.
+ * the UI's server action (actions.ts). An optional `repo` (owner/name) runs
+ * the same GitHub validation + resolution as the UI path (#987 embedded
+ * shell); omitted, it keeps the original repo-less behavior for API clients
+ * that need a throwaway session — the #818 real-turn validation probe is the
+ * first (repoId stays null; the vercel provider falls back to its configured
+ * AGENT_TARGET_REPO only for these repo-less sessions). Auth-gated like every
+ * session route; model always starts at the DEFAULT_MODEL, same as the UI.
  */
 import { getProvider } from "@/lib/agent-runtime/provider";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
 import { createSession } from "@/lib/db/sessions";
-import { defaultComputeProvider } from "@/lib/db/start-session";
+import {
+	defaultComputeProvider,
+	isValidRepoFullName,
+	PATH_PARAM_UNSUPPORTED,
+	RepoUnavailableError,
+	startSession,
+} from "@/lib/db/start-session";
 import { cleanTitleText, MAX_TITLE_LENGTH } from "@/lib/session-title";
 
 export const runtime = "nodejs";
@@ -30,10 +36,23 @@ export async function POST(request: Request) {
 	if (typeof body !== "object" || body === null) {
 		return Response.json({ error: "a JSON body is required" }, { status: 400 });
 	}
-	const { title: rawTitle, provider: rawProvider, ...rest } = body as {
+	const {
+		title: rawTitle,
+		provider: rawProvider,
+		repo: rawRepo,
+		path: rawPath,
+		...rest
+	} = body as {
 		title?: unknown;
 		provider?: unknown;
+		repo?: unknown;
+		path?: unknown;
 	};
+	// Reserved by the embedded-native contract for Milestone 2 — refused
+	// loudly so a shell that sends it early gets told, not silently unbound.
+	if (rawPath !== undefined) {
+		return Response.json({ error: PATH_PARAM_UNSUPPORTED }, { status: 400 });
+	}
 	const unknownFields = Object.keys(rest);
 	if (unknownFields.length > 0) {
 		return Response.json(
@@ -69,12 +88,43 @@ export async function POST(request: Request) {
 		}
 	}
 
-	const session = await createSession(getDatabase(), {
-		id: crypto.randomUUID(),
-		ownerLogin: auth.user.login,
-		title,
-		provider,
-	});
+	let repo: string | undefined;
+	if (rawRepo !== undefined) {
+		if (typeof rawRepo !== "string" || !isValidRepoFullName(rawRepo.trim())) {
+			return Response.json(
+				{ error: "repo must be an owner/name repository" },
+				{ status: 400 },
+			);
+		}
+		repo = rawRepo.trim();
+	}
+
+	let session;
+	if (repo !== undefined) {
+		// Same validation + resolution as the UI create path (start-session.ts).
+		try {
+			session = await startSession(getDatabase(), repo, {
+				ownerLogin: auth.user.login,
+				title,
+				provider,
+			});
+		} catch (error) {
+			if (error instanceof RepoUnavailableError) {
+				return Response.json(
+					{ error: `${repo} doesn't exist or isn't accessible` },
+					{ status: 404 },
+				);
+			}
+			throw error;
+		}
+	} else {
+		session = await createSession(getDatabase(), {
+			id: crypto.randomUUID(),
+			ownerLogin: auth.user.login,
+			title,
+			provider,
+		});
+	}
 	return Response.json(
 		{
 			id: session.id,

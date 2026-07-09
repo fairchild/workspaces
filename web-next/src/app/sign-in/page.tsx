@@ -10,14 +10,23 @@ import {
 	localModeEnabled,
 	parseAllowedLogins,
 } from "@/lib/auth/config";
+import { safeRedirectPath } from "@/lib/auth/redirect-path";
 import { localSignInAction, testSignInAction } from "./actions";
 import { GitHubSignInButton } from "./github-sign-in-button";
 
 export const dynamic = "force-dynamic";
 
-export default async function SignInPage() {
+export default async function SignInPage({
+	searchParams,
+}: {
+	searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
 	const auth = await getAuthState();
 	if (auth.kind !== "unauthenticated") redirect("/");
+	const params = await searchParams;
+	const redirectPath = safeRedirectPath(
+		typeof params.redirect === "string" ? params.redirect : "",
+	);
 	const local = localModeEnabled();
 	const bypass = authBypassEnabled();
 	const [bypassLogin] = bypass ? parseAllowedLogins() : [];
@@ -33,6 +42,8 @@ export default async function SignInPage() {
 			<div className="flex flex-col items-center gap-4">
 				{local ? (
 					<form action={localSignInAction} className="flex w-full max-w-sm flex-col gap-3">
+						{/* Deep-link continuation (#987) — re-validated in the action. */}
+						<input type="hidden" name="redirect" value={redirectPath} />
 						<input
 							name="token"
 							type="password"

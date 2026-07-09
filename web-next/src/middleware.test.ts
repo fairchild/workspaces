@@ -69,6 +69,16 @@ describe("middleware", () => {
 		const response = await middleware(requestFor("/api/auth/session"));
 		expect(response.headers.get("x-middleware-next")).toBe("1");
 	});
+
+	it("passes /api/healthz through unauthenticated — the readiness probe is public", async () => {
+		const response = await middleware(requestFor("/api/healthz"));
+		expect(response.headers.get("x-middleware-next")).toBe("1");
+	});
+
+	it("does not extend healthz's public grant to nested paths", async () => {
+		const response = await middleware(requestFor("/api/healthz/debug"));
+		expect(response.status).toBe(401);
+	});
 });
 
 describe("middleware local mode", () => {
@@ -109,6 +119,65 @@ describe("middleware local mode", () => {
 		expect(response.headers.get("set-cookie")).toContain(
 			"web-next-local-session=local-secret",
 		);
+	});
+
+	it("honors a safe relative ?redirect= on local sign-in", async () => {
+		const response = await middleware(
+			localRequestFor("/sign-in?token=local-secret&redirect=/sessions/abc-123"),
+		);
+		expect(response.status).toBe(307);
+		expect(response.headers.get("location")).toBe(
+			"http://localhost:3100/sessions/abc-123",
+		);
+		expect(response.headers.get("set-cookie")).toContain(
+			"web-next-local-session=local-secret",
+		);
+	});
+
+	it("neutralizes encoded control characters in ?redirect= — the WHATWG-strip exploit", async () => {
+		// searchParams.get() decodes %09/%0A/%0D; without the control-char
+		// reject + origin backstop, new URL("/\t/evil.com/path", origin)
+		// resolves to http://evil.com/path (codex review of #1030, confirmed
+		// live). Raw query form, exactly as a hostile link would send it.
+		for (const encoded of [
+			"%2F%09%2Fevil.com%2Fpath",
+			"%2F%0A%2Fevil.com",
+			"%2F%0D%2Fevil.com",
+		]) {
+			const response = await middleware(
+				localRequestFor(`/sign-in?token=local-secret&redirect=${encoded}`),
+			);
+			expect(response.status, encoded).toBe(307);
+			expect(response.headers.get("location"), encoded).toBe(
+				"http://localhost:3100/",
+			);
+		}
+	});
+
+	it("falls back to / for unsafe or empty ?redirect= targets", async () => {
+		for (const target of [
+			"//evil.com",
+			"/\\evil.com",
+			"/foo\\bar",
+			"https://evil.com",
+			"evil.com",
+			"",
+		]) {
+			const response = await middleware(
+				localRequestFor(
+					`/sign-in?token=local-secret&redirect=${encodeURIComponent(target)}`,
+				),
+			);
+			expect(response.status, target).toBe(307);
+			expect(response.headers.get("location"), target).toBe(
+				"http://localhost:3100/",
+			);
+		}
+	});
+
+	it("passes /api/healthz through without a local session cookie", async () => {
+		const response = await middleware(localRequestFor("/api/healthz"));
+		expect(response.headers.get("x-middleware-next")).toBe("1");
 	});
 
 	it("redirects local sign-in accepts to the validated Host origin", async () => {

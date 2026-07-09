@@ -20,11 +20,18 @@ import {
 	resolveAuthSecret,
 	TEST_AUTH_COOKIE,
 } from "@/lib/auth/config";
+import { safeRedirectPath } from "@/lib/auth/redirect-path";
 import { evaluateSessionFreshness } from "@/lib/auth/session-cookie";
 
 const PUBLIC_PATHS = new Set(["/sign-in", "/api/auth"]);
 
+// /api/healthz is the embedded-native readiness probe (#987) — it must answer
+// before any sign-in exists, in every auth mode. Exact-match only, so a
+// future route nested under it can't silently inherit the auth bypass.
+const PUBLIC_EXACT_PATHS = new Set(["/api/healthz"]);
+
 function isPublic(pathname: string): boolean {
+	if (PUBLIC_EXACT_PATHS.has(pathname)) return true;
 	if (PUBLIC_PATHS.has(pathname)) return true;
 	for (const prefix of PUBLIC_PATHS) {
 		if (pathname.startsWith(`${prefix}/`)) return true;
@@ -82,7 +89,16 @@ export async function middleware(request: NextRequest) {
 		}
 		const queryToken = request.nextUrl.searchParams.get("token");
 		if (pathname === "/sign-in" && localSessionCookieValid(queryToken)) {
-			const response = NextResponse.redirect(new URL("/", localOrigin));
+			// `redirect` lets the embedded shell land directly on a deep link
+			// (#987); safeRedirectPath pins the target to this origin, and the
+			// resolved-origin check is the backstop: even if a parser-mangled
+			// value slips through the validator (WHATWG strips tab/LF/CR), an
+			// off-origin resolution falls back to "/".
+			const target = safeRedirectPath(request.nextUrl.searchParams.get("redirect"));
+			const resolved = new URL(target, localOrigin);
+			const destination =
+				resolved.origin === localOrigin ? resolved : new URL("/", localOrigin);
+			const response = NextResponse.redirect(destination);
 			response.cookies.set(LOCAL_AUTH_COOKIE, queryToken ?? "", {
 				path: "/",
 				httpOnly: true,
