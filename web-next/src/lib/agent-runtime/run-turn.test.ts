@@ -11,12 +11,23 @@ import {
 	type Session,
 	updateSession,
 } from "../db/sessions";
+import {
+	cancelQueuedMessage,
+	enqueueMessage,
+	listQueuedMessages,
+} from "../db/queued-messages";
 import type { ComputeProvider, TurnRequest } from "./provider";
 import {
 	ApprovalPolicyUnsupportedError,
+	dispatchQueuedTurnIfIdle,
 	runSessionTurn,
-	TurnConflictError,
+	type SessionTurn,
+	type SessionTurnResult,
 } from "./run-turn";
+import {
+	MOCK_PROVISION_ERROR_TRIGGER,
+	MOCK_TURN_ERROR_TRIGGER,
+} from "./mock-provider";
 import type { StreamChunk } from "./stream-chunk";
 
 // Same throwaway on-disk DB pattern as sessions.test.ts.
@@ -71,11 +82,16 @@ async function drain(stream: ReadableStream<unknown>): Promise<unknown[]> {
 	}
 }
 
+function started(result: SessionTurnResult): SessionTurn {
+	expect(result.kind).toBe("started");
+	return result as SessionTurn;
+}
+
 describe("runSessionTurn", () => {
 	test("persists the user event immediately, before the turn is ingested", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const turn = started(await runSessionTurn(handle, session, "fix it", stubProvider()));
 
 		// The user event exists as soon as runSessionTurn returns — detached
 		// ingest of the assistant reply runs independently.
@@ -94,7 +110,7 @@ describe("runSessionTurn", () => {
 		const session = await makeSession(handle);
 		// Drop the stream on the floor — the turn must still complete because
 		// ingest is independent of any reader.
-		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const turn = started(await runSessionTurn(handle, session, "fix it", stubProvider()));
 		await turn.stream.cancel();
 		await turn.ingest;
 
@@ -111,7 +127,7 @@ describe("runSessionTurn", () => {
 	test("the live stream tails the log with ids matching its projection", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const turn = started(await runSessionTurn(handle, session, "fix it", stubProvider()));
 		const chunks = (await drain(turn.stream)) as {
 			type: string;
 			messageId?: string;
@@ -129,7 +145,7 @@ describe("runSessionTurn", () => {
 	test("the finished stream carries the derived turn receipt", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const turn = await runSessionTurn(handle, session, "fix it", stubProvider());
+		const turn = started(await runSessionTurn(handle, session, "fix it", stubProvider()));
 		const chunks = (await drain(turn.stream)) as {
 			type: string;
 			messageMetadata?: { author?: string; turnStats?: { toolCount: number } };
@@ -183,7 +199,7 @@ describe("runSessionTurn", () => {
 				yield { type: "done", content: "" } as StreamChunk;
 			},
 		};
-		const turn = await runSessionTurn(handle, fresh, "again", capturing);
+		const turn = started(await runSessionTurn(handle, fresh, "again", capturing));
 		await drain(turn.stream);
 		await turn.ingest;
 
@@ -209,7 +225,7 @@ describe("runSessionTurn", () => {
 				yield { type: "done", content: "" } as StreamChunk;
 			},
 		};
-		const turn = await runSessionTurn(handle, session, "go", capturing);
+		const turn = started(await runSessionTurn(handle, session, "go", capturing));
 		await drain(turn.stream);
 		await turn.ingest;
 
@@ -230,7 +246,7 @@ describe("runSessionTurn", () => {
 				},
 			},
 		]);
-		const turn = await runSessionTurn(handle, session, "go", parking);
+		const turn = started(await runSessionTurn(handle, session, "go", parking));
 		await drain(turn.stream);
 		await turn.ingest;
 
@@ -256,7 +272,7 @@ describe("runSessionTurn", () => {
 		const clearing = stubProvider([
 			{ type: "done", content: "", metadata: { resume: null } },
 		]);
-		const turn = await runSessionTurn(handle, session, "go", clearing);
+		const turn = started(await runSessionTurn(handle, session, "go", clearing));
 		await drain(turn.stream);
 		await turn.ingest;
 
@@ -265,9 +281,12 @@ describe("runSessionTurn", () => {
 		expect(after?.resumeState).toBeNull();
 	});
 
-	test("a send while a turn is running is a structured conflict, not interleaved (#811)", async () => {
+	test("a send while a turn is running queues without touching session_events (#984)", async () => {
 		const handle = freshDb();
-		const session = await makeSession(handle);
+		const session = await createSession(handle, {
+			id: "queue-conflict",
+			provider: "mock",
+		});
 		// A provider that stays open until the test releases it.
 		let release!: () => void;
 		const gate = new Promise<void>((r) => (release = r));
@@ -280,28 +299,121 @@ describe("runSessionTurn", () => {
 			},
 		};
 
-		const first = await runSessionTurn(handle, session, "one", slow);
-		await expect(
-			runSessionTurn(handle, session, "two", stubProvider()),
-		).rejects.toBeInstanceOf(TurnConflictError);
-		// The rejected send persisted nothing — the live turn's seq range is intact.
-		const during = await readEvents(handle, "s1");
+		const first = started(await runSessionTurn(handle, session, "one", slow));
+		const queuedText = `two ${MOCK_TURN_ERROR_TRIGGER}`;
+		const queued = await runSessionTurn(handle, session, queuedText, stubProvider());
+		expect(queued).toMatchObject({ kind: "queued", position: 1 });
+		// The queued send persisted nothing to session_events while the live
+		// turn's seq range is still open.
+		const during = await readEvents(handle, session.id);
 		expect(during.filter((e) => e.role === "user")).toHaveLength(1);
 
 		release();
 		await first.ingest;
-		// With the turn closed, the session accepts the next send.
-		const second = await runSessionTurn(handle, session, "two", stubProvider());
-		await second.ingest;
-		expect(
-			(await readEvents(handle, "s1")).filter((e) => e.role === "user"),
-		).toHaveLength(2);
+		// The queued row dispatched as the next normal user turn after the first
+		// turn closed.
+		const after = await readEvents(handle, session.id);
+		expect(after.filter((e) => e.role === "user").map((e) => e.chunk.content)).toEqual([
+			"one",
+			queuedText,
+		]);
+	});
+
+	test("queued turns dispatch oldest-first after the running turn settles (#984)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "queue-order",
+			provider: "mock",
+		});
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const slow: ComputeProvider = {
+			id: "slow",
+			runTurn: async function* () {
+				yield { type: "text", content: "working " } as StreamChunk;
+				await gate;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+
+		const first = started(await runSessionTurn(handle, session, "one", slow));
+		const secondText = `two ${MOCK_TURN_ERROR_TRIGGER}`;
+		const thirdText = `three ${MOCK_PROVISION_ERROR_TRIGGER}`;
+		await runSessionTurn(handle, session, secondText, stubProvider());
+		await runSessionTurn(handle, session, thirdText, stubProvider());
+		expect((await listQueuedMessages(handle, session.id)).map((m) => m.text)).toEqual([
+			secondText,
+			thirdText,
+		]);
+
+		release();
+		await first.ingest;
+		const users = (await readEvents(handle, session.id))
+			.filter((event) => event.role === "user")
+			.map((event) => event.chunk.content);
+		expect(users).toEqual(["one", secondText, thirdText]);
+		expect(await listQueuedMessages(handle, session.id)).toEqual([]);
+	});
+
+	test("canceling an undispatched queued turn prevents dispatch (#984)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "queue-cancel",
+			provider: "mock",
+		});
+		let release!: () => void;
+		const gate = new Promise<void>((r) => (release = r));
+		const slow: ComputeProvider = {
+			id: "slow",
+			runTurn: async function* () {
+				yield { type: "text", content: "working " } as StreamChunk;
+				await gate;
+				yield { type: "done", content: "" } as StreamChunk;
+			},
+		};
+
+		const first = started(await runSessionTurn(handle, session, "one", slow));
+		const queued = await runSessionTurn(handle, session, "two", stubProvider());
+		expect(queued.kind).toBe("queued");
+		if (queued.kind !== "queued") throw new Error("expected queued result");
+
+		await expect(cancelQueuedMessage(handle, session.id, queued.queueId)).resolves.toBe(
+			"canceled",
+		);
+		release();
+		await first.ingest;
+		const users = (await readEvents(handle, session.id))
+			.filter((event) => event.role === "user")
+			.map((event) => event.chunk.content);
+		expect(users).toEqual(["one"]);
+	});
+
+	test("dispatched queued turns cannot be canceled, and idle fallback starts them (#984)", async () => {
+		const handle = freshDb();
+		const session = await createSession(handle, {
+			id: "queue-fallback",
+			provider: "mock",
+		});
+		const queuedText = `handoff turn ${MOCK_TURN_ERROR_TRIGGER}`;
+		const queued = await enqueueMessage(handle, session.id, queuedText);
+
+		const fallback = await dispatchQueuedTurnIfIdle(handle, session);
+		expect(fallback?.kind).toBe("started");
+		await expect(cancelQueuedMessage(handle, session.id, queued.queueId)).resolves.toBe(
+			"dispatched",
+		);
+		await fallback?.ingest;
+
+		const users = (await readEvents(handle, session.id))
+			.filter((event) => event.role === "user")
+			.map((event) => event.chunk.content);
+		expect(users).toEqual([queuedText]);
 	});
 
 	test("titles the session from the first turn's message, before the tab could close (#823)", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const turn = await runSessionTurn(handle, session, "  Fix   the   login   bug  ", stubProvider());
+		const turn = started(await runSessionTurn(handle, session, "  Fix   the   login   bug  ", stubProvider()));
 		// The title is set as soon as runSessionTurn returns — synchronously with
 		// the durable user-event append, not waiting on the detached ingest.
 		expect((await getSession(handle, "s1"))?.title).toBe("Fix the login bug");
@@ -311,11 +423,11 @@ describe("runSessionTurn", () => {
 	test("a second turn never overwrites the title from the first (#823)", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const first = await runSessionTurn(handle, session, "Fix the login bug", stubProvider());
+		const first = started(await runSessionTurn(handle, session, "Fix the login bug", stubProvider()));
 		await first.ingest;
 
 		const resessioned = (await getSession(handle, "s1")) as Session;
-		const second = await runSessionTurn(handle, resessioned, "Now add a test", stubProvider());
+		const second = started(await runSessionTurn(handle, resessioned, "Now add a test", stubProvider()));
 		await second.ingest;
 
 		expect((await getSession(handle, "s1"))?.title).toBe("Fix the login bug");
@@ -324,12 +436,12 @@ describe("runSessionTurn", () => {
 	test("an empty first message leaves the session untitled for a later turn to name (#823)", async () => {
 		const handle = freshDb();
 		const session = await makeSession(handle);
-		const first = await runSessionTurn(handle, session, "   ", stubProvider());
+		const first = started(await runSessionTurn(handle, session, "   ", stubProvider()));
 		await first.ingest;
 		expect((await getSession(handle, "s1"))?.title).toBe("");
 
 		const resessioned = (await getSession(handle, "s1")) as Session;
-		const second = await runSessionTurn(handle, resessioned, "Fix the real bug", stubProvider());
+		const second = started(await runSessionTurn(handle, resessioned, "Fix the real bug", stubProvider()));
 		await second.ingest;
 		expect((await getSession(handle, "s1"))?.title).toBe("Fix the real bug");
 	});
@@ -340,7 +452,7 @@ describe("runSessionTurn", () => {
 		await updateSession(handle, "s1", { title: "My own title" });
 		const resessioned = (await getSession(handle, "s1")) as Session;
 
-		const turn = await runSessionTurn(handle, resessioned, "Fix the login bug", stubProvider());
+		const turn = started(await runSessionTurn(handle, resessioned, "Fix the login bug", stubProvider()));
 		await turn.ingest;
 		expect((await getSession(handle, "s1"))?.title).toBe("My own title");
 	});
@@ -359,7 +471,7 @@ describe("runSessionTurn", () => {
 			args: [old],
 		});
 
-		const turn = await runSessionTurn(handle, session, "new", stubProvider());
+		const turn = started(await runSessionTurn(handle, session, "new", stubProvider()));
 		await turn.ingest;
 		const events = await readEvents(handle, "s1");
 		// The old run gained error+done BEFORE the new user event — every

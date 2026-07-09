@@ -318,6 +318,34 @@ const turnApprovals: Migration = {
 	},
 };
 
+/**
+ * Adds `queued_messages` (#984): durable mid-turn steering text that must not
+ * enter `session_events` until the running turn has closed and the row is
+ * claimed for dispatch as the next turn.
+ */
+const queuedMessages: Migration = {
+	id: "0009_queued_messages",
+	async up(db) {
+		await db.schema
+			.createTable("queued_messages")
+			.ifNotExists()
+			.addColumn("session_id", "text", (c) => c.notNull())
+			.addColumn("queue_id", "text", (c) => c.notNull())
+			.addColumn("text", "text", (c) => c.notNull())
+			.addColumn("queued_at", "text", (c) => c.notNull())
+			.addColumn("dispatched_at", "text")
+			.addColumn("canceled_at", "text")
+			.addPrimaryKeyConstraint("queued_messages_pk", ["session_id", "queue_id"])
+			.execute();
+		await db.schema
+			.createIndex("idx_queued_messages_session_queued_at")
+			.ifNotExists()
+			.on("queued_messages")
+			.columns(["session_id", "queued_at"])
+			.execute();
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
@@ -327,4 +355,5 @@ export const MIGRATIONS: Migration[] = [
 	sessionOwnerLogin,
 	sessionFirstUserMessage,
 	turnApprovals,
+	queuedMessages,
 ];

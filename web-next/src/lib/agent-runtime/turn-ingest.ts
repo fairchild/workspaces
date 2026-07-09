@@ -23,6 +23,10 @@
  */
 import { EventEmitter } from "node:events";
 import type { DatabaseHandle } from "../db/client";
+import {
+	claimNextQueuedMessage,
+	releaseClaimedQueuedMessage,
+} from "../db/queued-messages";
 import { getRepo } from "../db/repos";
 import {
 	appendEvents,
@@ -175,7 +179,7 @@ export async function startTurn(
 		resume,
 		priorContext,
 	).then(
-		(outcome) => {
+		async (outcome) => {
 			// Deregister once this turn settles — but only if a newer turn hasn't
 			// already taken the slot (guards a fast resend replacing the entry).
 			if (activeTurns.get(session.id)?.fromSeq === fromSeq) {
@@ -196,6 +200,15 @@ export async function startTurn(
 					error,
 				);
 			}
+			try {
+				const next = await startNextQueuedTurn(handle, session.id);
+				if (next) await next.ingest;
+			} catch (error) {
+				console.error(
+					`[turn-ingest] queued turn continuation failed for ${session.id}`,
+					error,
+				);
+			}
 		},
 		(error) => {
 			if (activeTurns.get(session.id)?.fromSeq === fromSeq) {
@@ -206,6 +219,32 @@ export async function startTurn(
 	);
 	activeTurns.set(session.id, { fromSeq, startedAt, controller });
 	return { fromSeq, ingest };
+}
+
+/**
+ * Claims and starts the next queued user message for a session. This is the
+ * post-terminal continuation path: the claimed row is marked dispatched before
+ * startTurn appends its normal user event, preventing duplicate dispatch across
+ * processes while preserving session_events as a single-writer log.
+ */
+export async function startNextQueuedTurn(
+	handle: DatabaseHandle,
+	sessionId: string,
+): Promise<StartedTurn | null> {
+	if (activeTurns.has(sessionId)) return null;
+	const queued = await claimNextQueuedMessage(handle, sessionId);
+	if (!queued) return null;
+	const session = await getSession(handle, sessionId);
+	if (!session) {
+		await releaseClaimedQueuedMessage(handle, queued);
+		return null;
+	}
+	try {
+		return await startTurn(handle, session, queued.text);
+	} catch (error) {
+		await releaseClaimedQueuedMessage(handle, queued);
+		throw error;
+	}
 }
 
 async function emitTurnCompletionNotification(

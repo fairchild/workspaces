@@ -50,7 +50,7 @@ that log, never stored here.
 | `claude_session_id` | text? | Harness/Claude session id for resume; null until a real turn parks one. |
 | `resume_state` | text? | JSON harness resume payload from the last turn's `detach()` (migration `0003_session_resume_state`); null until a real turn parks, cleared when the parked sandbox expires. Session-row state, deliberately not in the event log. |
 | `model` | text | Claude model id this session's turns run on (migration `0004_session_model`, #824); NOT NULL, defaulting to `DEFAULT_MODEL` (`src/lib/agent-runtime/models.ts` — the single source of truth for the selectable set). Threaded into `TurnRequest.model` on every turn; changed via the status line's picker (`PATCH /api/sessions/[id]`). |
-| `approval_policy` | text | Tool approval posture for provider turns (migration `0007_turn_approvals`, #982): `auto` (default), `ask-writes`, or `ask-all`. Providers use `src/lib/agent-runtime/approval-policy.ts` to classify tool names; the mock approval scenario opens a real broker request regardless of this default so the round trip is testable without credentials. |
+| `approval_policy` | text | Tool approval posture for provider turns (migration `0008_turn_approvals`, #982): `auto` (default), `ask-writes`, or `ask-all`. Providers use `src/lib/agent-runtime/approval-policy.ts` to classify tool names; the mock approval scenario opens a real broker request regardless of this default so the round trip is testable without credentials. |
 | `created_at` | text | ISO-8601. |
 | `last_activity_at` | text | ISO-8601; bumped on every event append. |
 
@@ -85,6 +85,8 @@ approval requests and resolutions as provider-native `StreamChunk`s in
 `session_events`; this side table is the mutable answer surface providers await
 and answer routes update. The answer endpoint never appends to `session_events`.
 
+Migration: `0008_turn_approvals`.
+
 | Column | Type | Meaning |
 |---|---|---|
 | `session_id` | text | Owning session. |
@@ -99,6 +101,27 @@ and answer routes update. The answer endpoint never appends to `session_events`.
 
 Primary key `(session_id, request_id)`. Index
 `idx_turn_approvals_pending_expiry` covers per-session pending/expiry checks.
+
+### `queued_messages`
+
+Durable mid-turn steering queue (#984). Rows here are pending user text, not
+transcript events: the running turn's ingest loop stays the only writer to
+`session_events`, and the queued text is appended there only when the row is
+claimed for dispatch as the next turn.
+
+Migration: `0009_queued_messages`.
+
+| Column | Type | Meaning |
+|---|---|---|
+| `session_id` | text | Owning session. |
+| `queue_id` | text | Stable id used by the client to cancel/reconcile the row. |
+| `text` | text | User text to dispatch next. |
+| `queued_at` | text | ISO-8601 enqueue time; oldest active row dispatches first. |
+| `dispatched_at` | text? | Set when claimed for `startTurn`; null while pending. |
+| `canceled_at` | text? | Set when canceled before dispatch. |
+
+Primary key `(session_id, queue_id)`. Index
+`(session_id, queued_at)` serves the oldest-first queue read.
 
 ### Better Auth tables (`user`, `session`, `account`, `verification`)
 

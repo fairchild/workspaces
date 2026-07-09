@@ -191,6 +191,7 @@ export async function deleteSession(
 	await ensureSchema(handle);
 	return handle.db.transaction().execute(async (trx) => {
 		await trx.deleteFrom("session_events").where("session_id", "=", id).execute();
+		await trx.deleteFrom("queued_messages").where("session_id", "=", id).execute();
 		await trx.deleteFrom("terminal_tickets").where("session_id", "=", id).execute();
 		await trx.deleteFrom("turn_approvals").where("session_id", "=", id).execute();
 		const result = await trx.deleteFrom("sessions").where("id", "=", id).execute();

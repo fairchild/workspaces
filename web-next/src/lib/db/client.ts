@@ -85,6 +85,24 @@ export interface SessionEventsTable {
 }
 
 /**
+ * Durable mid-turn steering queue (#984). Rows live outside session_events so
+ * the in-flight turn's ingest loop remains the only writer to the transcript;
+ * a queued row becomes a normal user event only when it is claimed for the next
+ * turn.
+ */
+export interface QueuedMessagesTable {
+	session_id: string;
+	/** Stable client-facing id for canceling or reconciling this queued send. */
+	queue_id: string;
+	text: string;
+	queued_at: string;
+	/** Set just before the queued row is dispatched through startTurn. */
+	dispatched_at: string | null;
+	/** Set when the user cancels a not-yet-dispatched row. */
+	canceled_at: string | null;
+}
+
+/**
  * Single-use, short-TTL terminal access tickets (#752): issued by the
  * authenticated mint route and redeemed exactly once, binding a login +
  * session to one sandbox attach. Only the SHA-256 of the ticket is stored;
@@ -127,6 +145,7 @@ export interface Database {
 	repos: ReposTable;
 	sessions: SessionsTable;
 	session_events: SessionEventsTable;
+	queued_messages: QueuedMessagesTable;
 	terminal_tickets: TerminalTicketsTable;
 	turn_approvals: TurnApprovalsTable;
 }
