@@ -38,6 +38,21 @@ struct EmbeddedWebNextActivation: Equatable, Identifiable {
     static func == (lhs: EmbeddedWebNextActivation, rhs: EmbeddedWebNextActivation) -> Bool {
         lhs.id == rhs.id
     }
+
+    /// Resolve the next activation. `forceFresh` (an explicit New Web Session)
+    /// always yields a new activation — even for a repo already open — because
+    /// the current pane may have navigated on to `/sessions/<id>` while its
+    /// redirect still reads `/new?repo=…`. The plain shortcut is not force-fresh,
+    /// so re-opening an already-shown surface with the same redirect is a no-op
+    /// (`nil`) rather than a jarring re-mount.
+    static func next(
+        current: EmbeddedWebNextActivation?,
+        redirect: String?,
+        forceFresh: Bool
+    ) -> EmbeddedWebNextActivation? {
+        if !forceFresh, let current, current.redirect == redirect { return nil }
+        return EmbeddedWebNextActivation(redirect: redirect)
+    }
 }
 
 struct ContentView: View {
@@ -1236,18 +1251,29 @@ struct ContentView: View {
     /// (`nil` for a plain open). Re-activating with the same redirect is a no-op
     /// so a repeated shortcut press doesn't re-mount and re-navigate the pane.
     @MainActor
-    private func openEmbeddedWebNext(redirect: String?) {
-        if let existing = embeddedWebNext, existing.redirect == redirect { return }
-        embeddedWebNext = EmbeddedWebNextActivation(redirect: redirect)
+    private func openEmbeddedWebNext(redirect: String?, forceFresh: Bool = false) {
+        guard
+            let next = EmbeddedWebNextActivation.next(
+                current: embeddedWebNext,
+                redirect: redirect,
+                forceFresh: forceFresh
+            )
+        else { return }
+        embeddedWebNext = next
     }
 
-    /// Open a repo-bound New Web Session. No-ops when the repo's remote can't be
+    /// Open a repo-bound New Web Session. Always forces a fresh activation so a
+    /// second New Web Session for the same repo still opens (the prior pane may
+    /// have moved on to `/sessions/<id>`). No-ops when the repo's remote can't be
     /// resolved to `owner/name` (the sidebar entry is disabled in that case, so
     /// this guard only defends against a stale invocation).
     @MainActor
     private func openWebNextSession(for repo: Repo) {
         guard let slug = GitHubRepoSlug(remoteURL: repo.remoteURL) else { return }
-        openEmbeddedWebNext(redirect: EmbeddedWebNextDeepLink.newSessionRedirect(repo: slug))
+        openEmbeddedWebNext(
+            redirect: EmbeddedWebNextDeepLink.newSessionRedirect(repo: slug),
+            forceFresh: true
+        )
     }
 
     @MainActor

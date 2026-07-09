@@ -54,10 +54,10 @@ final class WebNextServerLifecycle: @unchecked Sendable {
     }
 
     /// Best-effort synchronous shutdown for `applicationWillTerminate`. Blocks up
-    /// to `timeout` (covering the service's own SIGTERM grace before SIGKILL) so
-    /// the child group is gone before the process exits; returns early if no
-    /// server was ever started.
-    func stopBlocking(timeout: TimeInterval = 6) {
+    /// to `timeout` — kept under the OS's ~5s terminate budget — while the
+    /// service runs its compressed-grace `stopForTermination`, so the child group
+    /// is gone before the process exits; returns early if no server was started.
+    func stopBlocking(timeout: TimeInterval = 4) {
         lock.lock()
         let service = self.service
         lock.unlock()
@@ -65,7 +65,7 @@ final class WebNextServerLifecycle: @unchecked Sendable {
 
         let semaphore = DispatchSemaphore(value: 0)
         Task.detached {
-            await service.stop()
+            await service.stopForTermination()
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + timeout)

@@ -52,6 +52,27 @@ struct GitHubRepoSlugTests {
         #expect(GitHubRepoSlug(remoteURL: "not-a-url") == nil)
     }
 
+    @Test("Rejects segments outside GitHub's charset (query/fragment injection)")
+    func rejectsInjectionChars() {
+        // A crafted remote whose name would inject a second query param once the
+        // deep link is decoded, or carries URL-significant characters.
+        #expect(GitHubRepoSlug(remoteURL: "https://github.com/acme/repo&title=pwn.git") == nil)
+        #expect(GitHubRepoSlug(remoteURL: "https://github.com/acme/a?b.git") == nil)
+        #expect(GitHubRepoSlug(remoteURL: "https://github.com/acme/a#b.git") == nil)
+        #expect(GitHubRepoSlug(remoteURL: "https://github.com/acme/a b.git") == nil)
+    }
+
+    @Test("Rejects dot-only path-traversal segments")
+    func rejectsTraversal() {
+        #expect(GitHubRepoSlug(remoteURL: "https://github.com/acme/...git") == nil)  // name ".."
+        #expect(GitHubRepoSlug(remoteURL: "git@github.com:../workspaces.git") == nil)  // owner ".."
+        #expect(GitHubRepoSlug(remoteURL: "https://github.com/./workspaces") == nil)  // owner "."
+        // A legitimate dotted repo name must still resolve.
+        #expect(
+            GitHubRepoSlug(remoteURL: "https://github.com/acme/my.tool.git")
+                == GitHubRepoSlug(owner: "acme", name: "my.tool"))
+    }
+
     @Test("Builds the create-session redirect path")
     func buildsRedirect() {
         let slug = GitHubRepoSlug(owner: "fairchild", name: "workspaces")

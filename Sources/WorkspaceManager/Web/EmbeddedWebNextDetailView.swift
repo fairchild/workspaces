@@ -41,11 +41,13 @@ final class EmbeddedWebNextModel: ObservableObject {
 
     func activate(redirect: String?) async {
         phase = .connecting
-        // `start()` returns once the server is ready, has failed, or timed out;
-        // it is a no-op when already ready, so re-activation is cheap.
+        // `start()` returns immediately when a launch is already in flight
+        // (state `.starting`), so a second activation racing the first must not
+        // sample state once and conclude failure — wait for the launch to reach
+        // a terminal `.ready`/`.failed` transition.
         await server.start()
 
-        switch await server.state {
+        switch await awaitTerminalState() {
         case .ready:
             if let url = await server.signInURL(redirect: redirect) {
                 phase = .ready(url)
@@ -59,6 +61,22 @@ final class EmbeddedWebNextModel: ObservableObject {
         case .idle, .starting:
             phase = .failed("web-next did not reach a ready state.")
         }
+    }
+
+    /// Poll until the server leaves `.starting`, so an activation that raced an
+    /// in-flight launch resolves on the real outcome. Bounded well past the
+    /// service's own readiness timeout as a backstop against a wedged launch.
+    private func awaitTerminalState() async -> WebNextServerState {
+        var state = await server.state
+        var elapsed: TimeInterval = 0
+        let pollInterval: TimeInterval = 0.15
+        let maxWait: TimeInterval = 45
+        while case .starting = state, elapsed < maxWait, !Task.isCancelled {
+            try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
+            elapsed += pollInterval
+            state = await server.state
+        }
+        return state
     }
 }
 
@@ -163,24 +181,26 @@ struct EmbeddedWebNextStatusView: View {
     }
 }
 
-/// WKWebView bound to the loopback web-next origin. The navigation policy allows
-/// only `127.0.0.1` / `localhost` (port is not part of host matching); anything
-/// else is treated as an external link and opened in the default browser.
-private struct EmbeddedWebNextWebView: NSViewRepresentable {
+/// WKWebView bound to the loopback web-next origin, pinned to both host
+/// (`127.0.0.1` / `localhost`) AND the server port so the token-bearing session
+/// cookie can't leak to another local service; anything else is treated as an
+/// external link and opened in the default browser. The webview uses a
+/// non-persistent data store so the session cookie dies with the pane rather
+/// than surviving across app runs on disk.
+struct EmbeddedWebNextWebView: NSViewRepresentable {
     let signInURL: URL
 
     func makeCoordinator() -> WebNavigationPolicy {
         WebNavigationPolicy(
             allowedHost: "127.0.0.1",
             additionalAllowedDomains: ["localhost"],
-            allowsSubdomains: false
+            allowsSubdomains: false,
+            allowedPort: signInURL.port
         )
     }
 
     func makeNSView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = WKWebView(frame: .zero, configuration: Self.makeConfiguration())
         webView.allowsBackForwardNavigationGestures = true
         webView.navigationDelegate = context.coordinator
         webView.load(URLRequest(url: signInURL))
@@ -188,4 +208,12 @@ private struct EmbeddedWebNextWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {}
+
+    /// Ephemeral, in-memory configuration: the bearer session cookie must not
+    /// persist to disk across runs.
+    static func makeConfiguration() -> WKWebViewConfiguration {
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        return configuration
+    }
 }

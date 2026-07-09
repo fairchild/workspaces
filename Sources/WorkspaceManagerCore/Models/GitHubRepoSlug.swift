@@ -70,13 +70,23 @@ public struct GitHubRepoSlug: Equatable, Sendable {
 
         let owner = String(segments[segments.count - 2])
         let name = String(segments[segments.count - 1])
-        guard !owner.isEmpty, !name.isEmpty,
-            !owner.contains(where: \.isWhitespace),
-            !name.contains(where: \.isWhitespace)
-        else { return nil }
+        guard Self.isValidSegment(owner), Self.isValidSegment(name) else { return nil }
 
         self.owner = owner
         self.name = name
+    }
+
+    /// GitHub's real owner/name charset. Rejecting anything outside it — plus the
+    /// dot-only `.`/`..` segments GitHub disallows — keeps a crafted remote from
+    /// injecting a second query parameter into the deep link (`repo&title=…`) or
+    /// path-traversing when interpolated into a GitHub API URL.
+    static func isValidSegment(_ segment: String) -> Bool {
+        guard !segment.isEmpty, segment != ".", segment != ".." else { return false }
+        return segment.allSatisfy { character in
+            character.isASCII
+                && (character.isLetter || character.isNumber || character == "." || character == "-"
+                    || character == "_")
+        }
     }
 }
 
