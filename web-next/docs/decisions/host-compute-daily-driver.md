@@ -71,6 +71,8 @@ Owner direction, recorded here as policy: **web-next work stays in
 - The **one sanctioned boundary crossing** is #987, and it crosses via a
   contract, not reach-in: the native app spawns the `start:local` entrypoint,
   passes a loopback port + minted token, and talks localhost HTTP/deep-links.
+  The concrete interface (spawn env, readiness, token handoff, deep-links) is
+  specified in `embedded-native-contract.md`.
   Native code never imports from or writes into `web-next/`; web-next never
   imports from `Sources/`. Native work lands in separate PRs on the desktop
   lane.
