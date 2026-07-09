@@ -1,0 +1,73 @@
+//
+//  WebNextServerSettings.swift
+//  WorkspaceManager
+//
+//  Resolves the embedded web-next server's launch configuration from user
+//  settings (with the Milestone-1 demo defaults) and holds the live service so
+//  app termination can shut the server's process group down cleanly. The server
+//  is started lazily on first activation of the embedded surface, so nothing
+//  here spawns a process — it only decides where and how one would launch.
+//
+
+import Foundation
+import WorkspaceManagerCore
+
+enum WebNextServerSettings {
+    /// UserDefaults key for the web-next checkout the server launches from.
+    static let rootStorageKey = "webNextServerRoot"
+
+    /// Milestone-1 demo default: the sibling CLAUDE.md/AGENTS.md checkout. Packaging
+    /// web-next into the app bundle is deferred (Milestone-2 follow-up).
+    static let defaultRoot = "~/code/workspaces/web-next"
+
+    /// Loopback port, clear of dev (3100) and hero (3200) per the contract.
+    static let port = 3140
+
+    static func resolvedConfiguration(
+        defaults: UserDefaults = .standard
+    ) -> WebNextServerConfiguration {
+        let configured = defaults.string(forKey: rootStorageKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let root = (configured?.isEmpty == false ? configured! : defaultRoot)
+        let expanded = (root as NSString).expandingTildeInPath
+        return WebNextServerConfiguration(
+            webNextRoot: URL(fileURLWithPath: expanded),
+            port: port
+        )
+    }
+}
+
+/// Process-wide handle to the live embedded web-next server so the AppKit
+/// termination hook — which cannot reach the SwiftUI service graph — can stop
+/// the server's process group before the app exits. Without this, quitting
+/// while the server runs would orphan a `next start` child holding the port.
+final class WebNextServerLifecycle: @unchecked Sendable {
+    static let shared = WebNextServerLifecycle()
+
+    private let lock = NSLock()
+    private var service: (any WebNextServerServiceProtocol)?
+
+    func register(_ service: any WebNextServerServiceProtocol) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.service = service
+    }
+
+    /// Best-effort synchronous shutdown for `applicationWillTerminate`. Blocks up
+    /// to `timeout` (covering the service's own SIGTERM grace before SIGKILL) so
+    /// the child group is gone before the process exits; returns early if no
+    /// server was ever started.
+    func stopBlocking(timeout: TimeInterval = 6) {
+        lock.lock()
+        let service = self.service
+        lock.unlock()
+        guard let service else { return }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        Task.detached {
+            await service.stop()
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + timeout)
+    }
+}

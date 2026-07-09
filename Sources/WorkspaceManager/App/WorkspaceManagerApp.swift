@@ -83,6 +83,7 @@ struct WorkspaceManagerApp: App {
                 \.workspaceProviderRegistry,
                 appRuntimeDependencies.workspaceProviderRegistry
             )
+            .environment(\.webNextServerService, appRuntimeDependencies.webNextServerService)
             .environmentObject(modelStoreStatusController)
             .environmentObject(agentSessionRegistry)
             .environmentObject(lastCommandStatusRegistry)
@@ -240,6 +241,17 @@ struct WorkspaceManagerApp: App {
             SidebarCommands()
 
             CommandMenu("Selection") {
+                Button("Open Web Session") {
+                    appCommandState.perform(.openEmbeddedWebNext)
+                }
+                .keyboardShortcut(
+                    AppChromeShortcut.openEmbeddedWebNext.keyEquivalent,
+                    modifiers: AppChromeShortcut.openEmbeddedWebNext.eventModifiers
+                )
+                .disabled(!appCommandState.mainWindowAvailability.canOpenEmbeddedWebNext)
+
+                Divider()
+
                 Button("Open in Browser") {
                     appCommandState.perform(.openInBrowser)
                 }
@@ -612,6 +624,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        // Tear down the embedded web-next server's process group so quitting
+        // never orphans a `next start` child holding the loopback port. No-op
+        // when the surface was never activated.
+        WebNextServerLifecycle.shared.stopBlocking()
+    }
+
     func application(_ application: NSApplication, shouldSaveSecureApplicationState coder: NSCoder) -> Bool {
         !disablesStateRestoration
     }
@@ -688,6 +707,12 @@ private struct FeedbackServiceKey: EnvironmentKey {
     static let defaultValue: any FeedbackServiceProtocol = FeedbackService.shared
 }
 
+private struct WebNextServerServiceKey: EnvironmentKey {
+    static let defaultValue: any WebNextServerServiceProtocol = WebNextServerService(
+        configuration: WebNextServerSettings.resolvedConfiguration()
+    )
+}
+
 extension EnvironmentValues {
     var gitService: any GitServiceProtocol {
         get { self[GitServiceKey.self] }
@@ -743,6 +768,11 @@ extension EnvironmentValues {
         get { self[FeedbackServiceKey.self] }
         set { self[FeedbackServiceKey.self] = newValue }
     }
+
+    var webNextServerService: any WebNextServerServiceProtocol {
+        get { self[WebNextServerServiceKey.self] }
+        set { self[WebNextServerServiceKey.self] = newValue }
+    }
 }
 
 struct MainWindowFocusedActions {
@@ -764,6 +794,7 @@ struct MainWindowFocusedActions {
     var openSessionSwitcher: Action? = nil
     var openCommandRunner: Action? = nil
     var sendFeedback: Action? = nil
+    var openEmbeddedWebNext: Action? = nil
 
     @MainActor static let empty = MainWindowFocusedActions()
 }
@@ -785,6 +816,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canOpenSessionSwitcher: Bool
     let canOpenCommandRunner: Bool
     let canSendFeedback: Bool
+    let canOpenEmbeddedWebNext: Bool
 
     static let empty = MainWindowCommandAvailability(
         canToggleSidebar: false,
@@ -802,7 +834,8 @@ struct MainWindowCommandAvailability: Equatable {
         canCopyPath: false,
         canOpenSessionSwitcher: false,
         canOpenCommandRunner: false,
-        canSendFeedback: false
+        canSendFeedback: false,
+        canOpenEmbeddedWebNext: false
     )
 }
 
@@ -823,6 +856,7 @@ enum MainWindowCommand {
     case openSessionSwitcher
     case openCommandRunner
     case sendFeedback
+    case openEmbeddedWebNext
 }
 
 @MainActor
@@ -935,6 +969,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.openCommandRunner?()
         case .sendFeedback:
             mainWindowActions.sendFeedback?()
+        case .openEmbeddedWebNext:
+            mainWindowActions.openEmbeddedWebNext?()
         }
     }
 }

@@ -29,6 +29,7 @@ enum AppChromeShortcut: CaseIterable {
     case settings
     case workspaceSwitcher
     case commandRunner
+    case openEmbeddedWebNext
 
     private var definition: AppChromeShortcutDefinition {
         switch self {
@@ -60,6 +61,12 @@ enum AppChromeShortcut: CaseIterable {
         case .commandRunner:
             return AppChromeShortcutDefinition(
                 keyString: "p",
+                modifiers: [.command, .shift],
+                defaultRoute: .appChrome
+            )
+        case .openEmbeddedWebNext:
+            return AppChromeShortcutDefinition(
+                keyString: "a",
                 modifiers: [.command, .shift],
                 defaultRoute: .appChrome
             )
@@ -114,6 +121,7 @@ enum AppChromeShortcut: CaseIterable {
         case .settings: return "Settings"
         case .workspaceSwitcher: return "Switch Session"
         case .commandRunner: return "Run Command"
+        case .openEmbeddedWebNext: return "Open Web Session"
         }
     }
 

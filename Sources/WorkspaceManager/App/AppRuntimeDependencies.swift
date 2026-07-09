@@ -11,10 +11,15 @@ import WorkspaceManagerCore
 struct AppRuntimeDependencies {
     let lumeRuntimeService: any LumeRuntimeServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
+    /// Supervisor for the embedded local-mode web-next server. Constructed here
+    /// but not started — activation of the embedded surface starts it lazily.
+    let webNextServerService: any WebNextServerServiceProtocol
 
     static func resolved(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> AppRuntimeDependencies {
+        let webNextServerService = makeWebNextServerService()
+
         if UIFixtureLumeEnvironment.isEnabled(environment: environment) {
             let runtimeService = UIFixtureLumeRuntimeService()
             return AppRuntimeDependencies(
@@ -25,7 +30,8 @@ struct AppRuntimeDependencies {
                         UIFixtureDaytonaWorkspaceProvider(),
                         UIFixtureLumeWorkspaceProvider(runtimeService: runtimeService),
                     ]
-                )
+                ),
+                webNextServerService: webNextServerService
             )
         }
 
@@ -60,7 +66,18 @@ struct AppRuntimeDependencies {
                         LumeWorkspaceProvider(runtimeService: runtimeService)
                     },
                 ]
-            )
+            ),
+            webNextServerService: webNextServerService
         )
+    }
+
+    /// Build (not start) the embedded web-next supervisor from resolved settings
+    /// and register it for clean shutdown on app termination.
+    private static func makeWebNextServerService() -> any WebNextServerServiceProtocol {
+        let service = WebNextServerService(
+            configuration: WebNextServerSettings.resolvedConfiguration()
+        )
+        WebNextServerLifecycle.shared.register(service)
+        return service
     }
 }

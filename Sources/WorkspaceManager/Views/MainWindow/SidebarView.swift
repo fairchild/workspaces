@@ -63,6 +63,11 @@ struct SidebarView: View {
     let onRepoTerminalSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
+    /// Resolves a repo's GitHub `owner/name` for the "New Web Session" deep link,
+    /// or nil when the remote can't be parsed (the entry is then disabled).
+    let webNextSessionSlug: (Repo) -> GitHubRepoSlug?
+    /// Opens the embedded web-next surface with a repo-bound new-session deep link.
+    let onOpenWebNextSession: (Repo) -> Void
     let onWorkspaceCreated: () -> Void
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
@@ -523,6 +528,11 @@ struct SidebarView: View {
                 onRequestWebSourceCreation(.repo(repo))
             }
 
+            Button("New Web Session") {
+                onOpenWebNextSession(repo)
+            }
+            .disabled(webNextSessionSlug(repo) == nil)
+
             Divider()
 
             Button("Reveal in Finder") {
@@ -621,6 +631,13 @@ struct SidebarView: View {
                 localWorkspaceActions(workspace)
             } else {
                 providerWorkspaceActions(workspace)
+            }
+
+            if let repo = workspace.sourceRepo {
+                Button("New Web Session") {
+                    onOpenWebNextSession(repo)
+                }
+                .disabled(webNextSessionSlug(repo) == nil)
             }
 
             Divider()

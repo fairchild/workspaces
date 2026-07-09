@@ -128,7 +128,8 @@ struct AppCommandStateTests {
             canCopyPath: false,
             canOpenSessionSwitcher: true,
             canOpenCommandRunner: true,
-            canSendFeedback: true
+            canSendFeedback: true,
+            canOpenEmbeddedWebNext: true
         )
 
         state.setMainWindowActions(

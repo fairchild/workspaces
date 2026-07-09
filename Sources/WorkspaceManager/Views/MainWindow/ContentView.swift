@@ -28,6 +28,18 @@ enum PendingCodePreviewNavigation: Equatable {
     case close
 }
 
+/// One activation of the embedded web-next surface. `redirect` is the relative
+/// path to land on after sign-in (`nil` = the app's default `/`); the unique
+/// `id` keys the detail view so a fresh activation always re-navigates.
+struct EmbeddedWebNextActivation: Equatable, Identifiable {
+    let id = UUID()
+    let redirect: String?
+
+    static func == (lhs: EmbeddedWebNextActivation, rhs: EmbeddedWebNextActivation) -> Bool {
+        lhs.id == rhs.id
+    }
+}
+
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.localStateStore) private var localStateStore
@@ -51,6 +63,7 @@ struct ContentView: View {
     private var minimalToolbarEnabled: Bool
     @Environment(\.externalEditorService) private var externalEditorService
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
+    @Environment(\.webNextServerService) private var webNextServerService
     @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
@@ -63,6 +76,10 @@ struct ContentView: View {
     @State private var repoForNewWorkspaceFromLanding: Repo?
     @State private var isPreparingLandingNewWorkspaceSheet = false
     @State private var webSourceCreationTarget: WebSourceCreationTarget?
+    /// Non-nil while the embedded web-next surface is shown; takes precedence over
+    /// the SwiftData selection in `detailContent`. Cleared whenever a repo /
+    /// workspace / web source is selected (see `applyNavigationDestination`).
+    @State private var embeddedWebNext: EmbeddedWebNextActivation?
     @State private var workspaceEnvironmentSheetState = WorkspaceEnvironmentSheetState.empty
     @State private var didScheduleInitialWorkspaceStatusSync = false
     @State private var didPrewarmPerfTerminalSurfaces = false
@@ -472,7 +489,8 @@ struct ContentView: View {
             copyPath: copyPathFocusedAction,
             openSessionSwitcher: presentSessionSwitcher,
             openCommandRunner: { viewState.isShowingThemeOverlay = true },
-            sendFeedback: { isShowingFeedbackSheet = true }
+            sendFeedback: { isShowingFeedbackSheet = true },
+            openEmbeddedWebNext: { openEmbeddedWebNext(redirect: nil) }
         )
     }
 
@@ -493,7 +511,8 @@ struct ContentView: View {
             canCopyPath: copyPathFocusedAction != nil,
             canOpenSessionSwitcher: true,
             canOpenCommandRunner: true,
-            canSendFeedback: true
+            canSendFeedback: true,
+            canOpenEmbeddedWebNext: true
         )
     }
 
@@ -556,7 +575,14 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detailContent: some View {
-        if let selectedWebSource = currentSelectedWebSource {
+        if let activation = embeddedWebNext {
+            EmbeddedWebNextDetailView(
+                server: webNextServerService,
+                redirect: activation.redirect,
+                onClose: { embeddedWebNext = nil }
+            )
+            .id(activation.id)
+        } else if let selectedWebSource = currentSelectedWebSource {
             WebSourceDetailView(
                 source: selectedWebSource,
                 tileID: webDetailTileID,
@@ -627,6 +653,8 @@ struct ContentView: View {
                 onRequestWebSourceCreation: { target in
                     webSourceCreationTarget = target
                 },
+                webNextSessionSlug: { GitHubRepoSlug(remoteURL: $0.remoteURL) },
+                onOpenWebNextSession: openWebNextSession,
                 onWorkspaceCreated: handleWorkspaceCreated,
                 retireTerminalSessions: { key in
                     try await retireTerminalSessions(inScope: key)
@@ -1204,11 +1232,32 @@ struct ContentView: View {
         }
     }
 
+    /// Show the embedded web-next surface. `redirect` is the post-sign-in path
+    /// (`nil` for a plain open). Re-activating with the same redirect is a no-op
+    /// so a repeated shortcut press doesn't re-mount and re-navigate the pane.
+    @MainActor
+    private func openEmbeddedWebNext(redirect: String?) {
+        if let existing = embeddedWebNext, existing.redirect == redirect { return }
+        embeddedWebNext = EmbeddedWebNextActivation(redirect: redirect)
+    }
+
+    /// Open a repo-bound New Web Session. No-ops when the repo's remote can't be
+    /// resolved to `owner/name` (the sidebar entry is disabled in that case, so
+    /// this guard only defends against a stale invocation).
+    @MainActor
+    private func openWebNextSession(for repo: Repo) {
+        guard let slug = GitHubRepoSlug(remoteURL: repo.remoteURL) else { return }
+        openEmbeddedWebNext(redirect: EmbeddedWebNextDeepLink.newSessionRedirect(repo: slug))
+    }
+
     @MainActor
     private func applyNavigationDestination(
         _ destination: MainWindowNavigationDestination,
         persistSurface: Bool = true
     ) {
+        // Selecting any sidebar surface dismisses the embedded web-next pane so
+        // the two selection kinds stay mutually exclusive.
+        if embeddedWebNext != nil { embeddedWebNext = nil }
         let transition = navigationStateController.transition(to: destination)
         navigationStateController.apply(transition, to: &viewState)
         if persistSurface {
