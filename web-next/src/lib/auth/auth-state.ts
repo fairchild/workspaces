@@ -8,7 +8,15 @@
 import { cookies, headers } from "next/headers";
 import { getDatabase } from "../db/client";
 import { ensureSchema } from "../db/schema";
-import { authBypassEnabled, isLoginAllowed, TEST_AUTH_COOKIE } from "./config";
+import {
+	authBypassEnabled,
+	isLoginAllowed,
+	LOCAL_AUTH_COOKIE,
+	localModeEnabled,
+	resolveLocalLogin,
+	TEST_AUTH_COOKIE,
+} from "./config";
+import { localSignInTokenMatches } from "./local-token";
 
 export type AuthState =
 	| { kind: "unauthenticated" }
@@ -22,6 +30,13 @@ function verdict(login: string, name: string): AuthState {
 }
 
 export async function getAuthState(): Promise<AuthState> {
+	if (localModeEnabled()) {
+		const token = (await cookies()).get(LOCAL_AUTH_COOKIE)?.value ?? "";
+		if (!localSignInTokenMatches(token)) return { kind: "unauthenticated" };
+		const login = resolveLocalLogin();
+		return { kind: "authorized", user: { login, name: login } };
+	}
+
 	if (authBypassEnabled()) {
 		const login = (await cookies()).get(TEST_AUTH_COOKIE)?.value ?? "";
 		if (!login) return { kind: "unauthenticated" };

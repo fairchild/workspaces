@@ -1,19 +1,14 @@
 /*
  * GitHub-backed repo directory for the new-session picker: lists the App
  * installation's repositories and validates a freetext `owner/name`, sitting
- * in front of the raw App-auth mechanics in `../diag/github-app`. Three modes,
- * resolved once per call so callers never branch on environment themselves:
+ * in front of the raw App-auth mechanics in `../diag/github-app`. Directory
+ * mode is credential-driven, not auth-driven:
  *
- *  - bypass (`AUTH_BYPASS=1`, no real OAuth configured — see `../auth/config`):
- *    a small deterministic fixture set, so e2e/evidence/perf runs never touch
- *    the real GitHub API.
  *  - configured (App creds present): the real installation-repos + repo-read
  *    endpoints.
- *  - degraded (App creds absent, e.g. local dev without `.env.local`): listing
- *    comes back empty and validation always resolves "unverified" rather than
- *    blocking — freetext still works, just unproven.
+ *  - fixtures (App creds absent): a small deterministic fixture set, so
+ *    e2e/evidence/perf runs stay hermetic and local mode has a visible picker.
  */
-import { authBypassEnabled } from "../auth/config";
 import {
 	type DirectoryRepo,
 	listInstallationRepositories,
@@ -34,9 +29,7 @@ export class RepoUnavailableError extends Error {
 
 export type RepoValidation =
 	| ({ kind: "ok" } & DirectoryRepo)
-	| { kind: "not-found"; fullName: string }
-	/** Degraded mode: no App creds to check against, so we don't block. */
-	| { kind: "unverified"; fullName: string };
+	| { kind: "not-found"; fullName: string };
 
 const FIXTURE_REPOS: DirectoryRepo[] = [
 	{ fullName: "fairchild/workspaces", defaultBranch: "main", private: false },
@@ -54,17 +47,16 @@ function hasAppCredentials(): boolean {
 	);
 }
 
-/** True when the picker has nothing but the freetext escape hatch to offer. */
+/** No degraded mode now: no App creds means deterministic fixtures, not empty. */
 export function isDirectoryDegraded(): boolean {
-	return !authBypassEnabled() && !hasAppCredentials();
+	return false;
 }
 
-/** The installation's repos, alphabetical — empty (not thrown) when degraded. */
+/** The installation's repos, or deterministic fixtures when App creds are absent. */
 export async function listDirectoryRepos(): Promise<DirectoryRepo[]> {
-	if (authBypassEnabled()) {
+	if (!hasAppCredentials()) {
 		return [...FIXTURE_REPOS].sort((a, b) => a.fullName.localeCompare(b.fullName));
 	}
-	if (!hasAppCredentials()) return [];
 	const { token } = await mintDirectoryToken();
 	const repos = await listInstallationRepositories(token);
 	return repos.sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -74,13 +66,12 @@ export async function listDirectoryRepos(): Promise<DirectoryRepo[]> {
 export async function validateDirectoryRepo(
 	fullName: string,
 ): Promise<RepoValidation> {
-	if (authBypassEnabled()) {
+	if (!hasAppCredentials()) {
 		const fixture = FIXTURE_REPOS.find(
 			(repo) => repo.fullName.toLowerCase() === fullName.toLowerCase(),
 		);
 		return fixture ? { kind: "ok", ...fixture } : { kind: "not-found", fullName };
 	}
-	if (!hasAppCredentials()) return { kind: "unverified", fullName };
 	try {
 		const { token } = await mintInstallationToken(fullName);
 		const repo = await verifyRepoAccess(token, fullName);
@@ -103,7 +94,6 @@ export async function resolveRepo(
 ): Promise<{ defaultBranch: string | null }> {
 	const result = await validateDirectoryRepo(fullName);
 	if (result.kind === "not-found") throw new RepoUnavailableError(fullName);
-	if (result.kind === "unverified") return { defaultBranch: null };
 	return { defaultBranch: result.defaultBranch };
 }
 

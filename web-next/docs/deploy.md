@@ -14,6 +14,7 @@ expects in production. Single-user product: GitHub OAuth + a login allowlist.
 | `ALLOWED_LOGINS` | Comma-separated GitHub logins allowed in (case-insensitive), e.g. `fairchild`. Anyone else who authenticates gets the polite refusal page and no data. |
 | `SESSIONS_DATABASE_URL` | libSQL URL — a Turso `libsql://…` URL in production, or a `file:` path. Defaults to `file:.data/sessions.db` (fine for dev, not for serverless). |
 | `SESSIONS_DATABASE_AUTH_TOKEN` | Turso auth token, when `SESSIONS_DATABASE_URL` is a remote URL. |
+| `WEB_NEXT_DATA_DIR` | Local filesystem data directory for defaults. When `SESSIONS_DATABASE_URL` is unset, SQLite lives at `<dir>/sessions.db`; local serving mode also stores its minted token there. Defaults to `.data`. |
 
 The GitHub OAuth app's authorization callback URL is
 `<BETTER_AUTH_URL>/api/auth/callback/github`. Production uses the
@@ -64,6 +65,26 @@ AUTH_BYPASS=1 ALLOWED_LOGINS=<your-github-login> pnpm dev
 
 Then use the "continue as … (test bypass)" button on `/sign-in`. The database
 defaults to `file:.data/sessions.db` (gitignored); no other env is needed.
+
+## Owner-local `next start`
+
+```bash
+pnpm start:local
+PORT=3183 WEB_NEXT_DATA_DIR=/path/to/spaces-data pnpm start:local
+```
+
+`WEB_NEXT_LOCAL_MODE=1` is the single-user local production-serving mode. It is
+not GitHub OAuth and not the test bypass: startup fails if `AUTH_BYPASS=1` or
+GitHub OAuth env vars are present. The wrapper mints a random token with Node
+crypto, persists it under `WEB_NEXT_DATA_DIR` (default
+`.data/local-sign-in-token`), exports it to middleware, and prints a usable
+sign-in URL: `http://localhost:<port>/sign-in?token=…`. Visiting that URL sets
+the local session cookie for `WEB_NEXT_LOCAL_LOGIN` (default `fairchild`).
+
+The wrapper starts Next with `-H 127.0.0.1`; because Next owns the socket, the
+app also hard-fails any local-mode request whose Host header is not loopback.
+Use `pnpm validate --env local-mode` for the posture check: loopback Host
+required, token cookie required, bypass cookie inert, and no OAuth door.
 
 ## Real-runtime credentials (#750+)
 

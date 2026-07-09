@@ -1,7 +1,7 @@
 /*
- * Covers all three repo-directory modes: bypass fixtures (the hermetic e2e
- * seam), degraded (no App creds — never blocks), and configured (real GitHub
- * calls, network mocked here so these stay unit tests).
+ * Covers both repo-directory modes: fixtures when App creds are absent (the
+ * hermetic e2e seam) and configured (real GitHub calls, network mocked here so
+ * these stay unit tests). Auth mode must not decide directory mode.
  */
 import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,9 +25,10 @@ afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
-describe("bypass mode (AUTH_BYPASS=1)", () => {
+describe("fixture mode (no App creds)", () => {
 	it("lists the deterministic fixture repos, alphabetical", async () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		await expect(listDirectoryRepos()).resolves.toEqual([
 			{ fullName: "fairchild/dotfiles", defaultBranch: "main", private: false },
 			{
@@ -40,7 +41,8 @@ describe("bypass mode (AUTH_BYPASS=1)", () => {
 	});
 
 	it("validates a fixture repo as ok, case-insensitively", async () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		await expect(validateDirectoryRepo("Fairchild/Workspaces")).resolves.toEqual({
 			kind: "ok",
 			fullName: "fairchild/workspaces",
@@ -50,7 +52,8 @@ describe("bypass mode (AUTH_BYPASS=1)", () => {
 	});
 
 	it("resolves a non-fixture repo as not-found without touching the network", async () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
 		await expect(
@@ -60,59 +63,19 @@ describe("bypass mode (AUTH_BYPASS=1)", () => {
 	});
 
 	it("is never degraded", () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		expect(isDirectoryDegraded()).toBe(false);
 	});
 
-	// The double lock, proven through this seam (not just config.test.ts):
-	// AUTH_BYPASS=1 with real OAuth configured must NOT serve fixtures —
-	// a leaked bypass flag in production falls through to the real path.
-	it("fixtures cannot activate when real OAuth is configured", async () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
-		vi.stubEnv("GITHUB_OAUTH_CLIENT_ID", "Iv1.real");
+	it("falls back to fixtures even when auth is not bypass", async () => {
+		vi.stubEnv("AUTH_BYPASS", "");
 		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
 		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		// Without App creds the fall-through lands in degraded, not fixtures.
-		expect(isDirectoryDegraded()).toBe(true);
-		await expect(listDirectoryRepos()).resolves.toEqual([]);
-		await expect(validateDirectoryRepo("fairchild/workspaces")).resolves.toEqual({
-			kind: "unverified",
+		await expect(listDirectoryRepos()).resolves.toContainEqual({
 			fullName: "fairchild/workspaces",
-		});
-	});
-});
-
-describe("degraded mode (no App creds, no bypass)", () => {
-	it("reports degraded", () => {
-		vi.stubEnv("AUTH_BYPASS", "");
-		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
-		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		expect(isDirectoryDegraded()).toBe(true);
-	});
-
-	it("lists no repos rather than throwing", async () => {
-		vi.stubEnv("AUTH_BYPASS", "");
-		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
-		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		await expect(listDirectoryRepos()).resolves.toEqual([]);
-	});
-
-	it("validates any shape-valid repo as unverified, not blocking", async () => {
-		vi.stubEnv("AUTH_BYPASS", "");
-		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
-		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		await expect(validateDirectoryRepo("anyone/anything")).resolves.toEqual({
-			kind: "unverified",
-			fullName: "anyone/anything",
-		});
-	});
-
-	it("resolveRepo accepts unverified without a default branch", async () => {
-		vi.stubEnv("AUTH_BYPASS", "");
-		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
-		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		await expect(resolveRepo("anyone/anything")).resolves.toEqual({
-			defaultBranch: null,
+			defaultBranch: "main",
+			private: false,
 		});
 	});
 });
@@ -227,6 +190,46 @@ describe("configured mode (App creds present, GitHub mocked)", () => {
 		await expect(listDirectoryRepos()).resolves.toEqual([
 			{ fullName: "fairchild/alpha", defaultBranch: "main", private: false },
 			{ fullName: "fairchild/zeta", defaultBranch: "main", private: false },
+		]);
+	});
+
+	it("uses real App credentials even under AUTH_BYPASS", async () => {
+		stubEnv();
+		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url.endsWith("/app/installations")) {
+					return Response.json([{ id: 7, account: { login: "fairchild" } }]);
+				}
+				if (url.endsWith("/app/installations/7/access_tokens")) {
+					return Response.json({
+						token: "ghs_dir_token",
+						expires_at: "2026-01-01T00:00:00Z",
+						permissions: {},
+					});
+				}
+				if (url.includes("/installation/repositories")) {
+					return Response.json({
+						repositories: [
+							{
+								full_name: "fairchild/real-from-app",
+								default_branch: "main",
+								private: true,
+							},
+						],
+					});
+				}
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		await expect(listDirectoryRepos()).resolves.toEqual([
+			{
+				fullName: "fairchild/real-from-app",
+				defaultBranch: "main",
+				private: true,
+			},
 		]);
 	});
 });

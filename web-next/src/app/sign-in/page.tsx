@@ -1,13 +1,16 @@
 /*
- * The doorway: wordmark, one GitHub button, nothing else. In test-bypass
- * mode a second quiet button signs in as the allowlisted user so e2e,
- * evidence, and local dev work without OAuth. Already signed in → home
- * (the allowlist verdict, if negative, is delivered by the app shell).
+ * The doorway: GitHub OAuth in production, the quiet test bypass in harness
+ * mode, or a local token paste box under WEB_NEXT_LOCAL_MODE. Already signed
+ * in → home (the allowlist verdict, if negative, is delivered by the shell).
  */
 import { redirect } from "next/navigation";
 import { getAuthState } from "@/lib/auth/auth-state";
-import { authBypassEnabled, parseAllowedLogins } from "@/lib/auth/config";
-import { testSignInAction } from "./actions";
+import {
+	authBypassEnabled,
+	localModeEnabled,
+	parseAllowedLogins,
+} from "@/lib/auth/config";
+import { localSignInAction, testSignInAction } from "./actions";
 import { GitHubSignInButton } from "./github-sign-in-button";
 
 export const dynamic = "force-dynamic";
@@ -15,6 +18,7 @@ export const dynamic = "force-dynamic";
 export default async function SignInPage() {
 	const auth = await getAuthState();
 	if (auth.kind !== "unauthenticated") redirect("/");
+	const local = localModeEnabled();
 	const bypass = authBypassEnabled();
 	const [bypassLogin] = bypass ? parseAllowedLogins() : [];
 
@@ -27,7 +31,26 @@ export default async function SignInPage() {
 				</p>
 			</div>
 			<div className="flex flex-col items-center gap-4">
-				<GitHubSignInButton />
+				{local ? (
+					<form action={localSignInAction} className="flex w-full max-w-sm flex-col gap-3">
+						<input
+							name="token"
+							type="password"
+							required
+							autoComplete="off"
+							placeholder="local sign-in token"
+							className="rounded-md border border-line bg-transparent px-3 py-2 font-mono text-[13px] text-ink outline-none transition-colors placeholder:text-hint focus:border-focus-line"
+						/>
+						<button
+							type="submit"
+							className="rounded-md border border-line px-3 py-2 font-mono text-[12px] text-ink transition-colors hover:border-focus-line hover:text-accent"
+						>
+							continue locally
+						</button>
+					</form>
+				) : (
+					<GitHubSignInButton />
+				)}
 				{bypass && bypassLogin && (
 					<form action={testSignInAction}>
 						<button

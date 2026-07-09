@@ -14,6 +14,13 @@ type Env = Record<string, string | undefined>;
  */
 export const TEST_AUTH_COOKIE = "test-auth-login";
 
+/**
+ * Cookie carrying the bearer token for owner-local serving mode. This is not
+ * the test bypass: it is minted locally, persisted under the data dir, and only
+ * honored when WEB_NEXT_LOCAL_MODE=1.
+ */
+export const LOCAL_AUTH_COOKIE = "web-next-local-session";
+
 /** GitHub logins allowed in (`ALLOWED_LOGINS`, csv, case-insensitive). */
 export function parseAllowedLogins(env: Env = process.env): Set<string> {
 	return new Set(
@@ -37,6 +44,33 @@ export function realAuthConfigured(env: Env = process.env): boolean {
 	return Boolean(env.GITHUB_OAUTH_CLIENT_ID);
 }
 
+/** Any GitHub OAuth var means the server is trying to use the real OAuth door. */
+export function oauthEnvConfigured(env: Env = process.env): boolean {
+	return Boolean(env.GITHUB_OAUTH_CLIENT_ID || env.GITHUB_OAUTH_CLIENT_SECRET);
+}
+
+/** First-class local serving mode: loopback + locally minted bearer token. */
+export function localModeEnabled(env: Env = process.env): boolean {
+	return env.WEB_NEXT_LOCAL_MODE === "1";
+}
+
+export function resolveLocalLogin(env: Env = process.env): string {
+	const login = env.WEB_NEXT_LOCAL_LOGIN?.trim();
+	return login && login.length > 0 ? login.toLowerCase() : "fairchild";
+}
+
+export function assertAuthModeConfig(env: Env = process.env): void {
+	if (!localModeEnabled(env)) return;
+	if (env.AUTH_BYPASS === "1") {
+		throw new Error("WEB_NEXT_LOCAL_MODE cannot be combined with AUTH_BYPASS=1");
+	}
+	if (oauthEnvConfigured(env)) {
+		throw new Error(
+			"WEB_NEXT_LOCAL_MODE cannot be combined with GitHub OAuth environment variables",
+		);
+	}
+}
+
 /**
  * Test/dev auth bypass: cookie-driven identity instead of GitHub OAuth, so
  * e2e, evidence, and perf runs work headlessly. Triple-locked:
@@ -52,7 +86,50 @@ export function realAuthConfigured(env: Env = process.env): boolean {
  * unauth redirect and the allowlist rejection stay testable per request.
  */
 export function authBypassEnabled(env: Env = process.env): boolean {
-	return env.AUTH_BYPASS === "1" && !realAuthConfigured(env) && !env.VERCEL;
+	return (
+		env.AUTH_BYPASS === "1" &&
+		!localModeEnabled(env) &&
+		!realAuthConfigured(env) &&
+		!env.VERCEL
+	);
+}
+
+const encoder = new TextEncoder();
+
+/**
+ * Edge-safe constant-time string comparison. It keeps the loop count tied to
+ * the longest encoded input and folds the length mismatch into the result, so
+ * callers do not branch early on unequal lengths.
+ */
+export function constantTimeEqual(left: string, right: string): boolean {
+	const a = encoder.encode(left);
+	const b = encoder.encode(right);
+	let diff = a.length ^ b.length;
+	const length = Math.max(a.length, b.length);
+	for (let index = 0; index < length; index += 1) {
+		diff |= (a[index] ?? 0) ^ (b[index] ?? 0);
+	}
+	return diff === 0;
+}
+
+export function localSessionCookieValid(
+	cookieValue: string | null | undefined,
+	env: Env = process.env,
+): boolean {
+	if (!localModeEnabled(env) || !cookieValue || !env.WEB_NEXT_LOCAL_TOKEN) {
+		return false;
+	}
+	return constantTimeEqual(cookieValue, env.WEB_NEXT_LOCAL_TOKEN);
+}
+
+export function isLoopbackHostHeader(hostHeader: string | null): boolean {
+	if (!hostHeader) return false;
+	const host = hostHeader.trim().toLowerCase();
+	if (host === "localhost" || host === "127.0.0.1") return true;
+	if (host.startsWith("[::1]")) return host === "[::1]" || host.startsWith("[::1]:");
+	if (host === "::1") return true;
+	const withoutPort = host.includes(":") ? host.split(":")[0] : host;
+	return withoutPort === "localhost" || withoutPort === "127.0.0.1";
 }
 
 /**

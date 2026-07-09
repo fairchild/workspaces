@@ -115,11 +115,10 @@ describe("startSession", () => {
 		expect(await listSessions(handle)).toHaveLength(0);
 	});
 
-	// The GitHub validation step (see ../github/repo-directory): bypass mode
+	// The GitHub validation step (see ../github/repo-directory): no App creds
 	// gives deterministic fixtures, so these stay hermetic unit tests.
-	describe("GitHub validation (bypass fixtures)", () => {
+	describe("GitHub validation (fixture directory)", () => {
 		test("records the real default_branch from the fixture on first connect", async () => {
-			vi.stubEnv("AUTH_BYPASS", "1");
 			const handle = freshDb();
 			await startSession(handle, "fairchild/web-next-fixtures");
 			const [repo] = await listRepos(handle);
@@ -127,7 +126,6 @@ describe("startSession", () => {
 		});
 
 		test("rejects a repo the fixture directory doesn't recognize, writing nothing", async () => {
-			vi.stubEnv("AUTH_BYPASS", "1");
 			const handle = freshDb();
 			await expect(
 				startSession(handle, "fairchild/not-a-real-repo"),
@@ -137,7 +135,6 @@ describe("startSession", () => {
 		});
 
 		test("backfills the default_branch onto a repo connected before validation existed", async () => {
-			vi.stubEnv("AUTH_BYPASS", "1");
 			const handle = freshDb();
 			await ensureRepo(handle, "fairchild/web-next-fixtures"); // no branch yet
 			await startSession(handle, "fairchild/web-next-fixtures");
@@ -146,15 +143,12 @@ describe("startSession", () => {
 		});
 	});
 
-	// No AUTH_BYPASS and no App creds in this test run (see vitest.config.ts /
-	// CI): startSession runs in degraded mode here, same as unset env in prod
-	// local dev — freetext is accepted unverified rather than blocked.
-	test("degraded mode (no App creds) accepts any shape-valid repo unverified", async () => {
+	test("fixture mode is independent of AUTH_BYPASS", async () => {
+		vi.stubEnv("AUTH_BYPASS", "1");
 		const handle = freshDb();
-		const session = await startSession(handle, "anyone/anything");
-		expect(session.repoId).toBe("anyone/anything");
+		await startSession(handle, "fairchild/web-next-fixtures");
 		const [repo] = await listRepos(handle);
-		expect(repo.defaultBranch).toBeNull();
+		expect(repo.defaultBranch).toBe("trunk");
 	});
 });
 

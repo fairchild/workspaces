@@ -14,6 +14,7 @@ import { type Client, createClient } from "@libsql/client";
 import { Kysely } from "kysely";
 import type { ApprovalDecision, ApprovalResolvedBy } from "../agent-runtime/stream-chunk";
 import type { ApprovalPolicy } from "../agent-runtime/approval-policy";
+import { resolveSessionsDatabaseUrl } from "../local-data-dir";
 import { LibsqlDialect } from "./libsql-dialect";
 
 /**
@@ -155,9 +156,7 @@ let singleton: DatabaseHandle | undefined;
 /** The app-wide handle, created once from `SESSIONS_DATABASE_URL`. */
 export function getDatabase(): DatabaseHandle {
 	if (!singleton) {
-		singleton = openDatabase(
-			process.env.SESSIONS_DATABASE_URL ?? "file:.data/sessions.db",
-		);
+		singleton = openDatabase(resolveSessionsDatabaseUrl());
 	}
 	return singleton;
 }
