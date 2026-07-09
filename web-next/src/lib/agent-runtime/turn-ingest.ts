@@ -475,7 +475,15 @@ async function persistResume(
 	if (!chunk.metadata || !("resume" in chunk.metadata)) return chunk;
 	const { resume, ...rest } = chunk.metadata as {
 		resume?: SessionResumeHandle | null;
+		hasUnpushedWork?: unknown;
 	} & Record<string, unknown>;
+	const hasUnpushedWork =
+		typeof chunk.metadata.hasUnpushedWork === "boolean"
+			? chunk.metadata.hasUnpushedWork
+			: undefined;
+	if (hasUnpushedWork !== undefined) {
+		await updateSession(handle, sessionId, { hasUnpushedWork });
+	}
 	if (resume === null) {
 		await updateSession(handle, sessionId, { claudeSessionId: null, resumeState: null });
 	} else if (resume) {

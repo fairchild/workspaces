@@ -157,6 +157,8 @@ export interface SessionViewProps {
 	/** Stops the session's live sandbox (#753); a quiet masthead action beside
 	 * the state label. Fixtures omit it. */
 	onSandboxStop?: () => void;
+	/** Opens or updates the session PR (#820). Fixtures omit it. */
+	onPullRequestAction?: () => void;
 	onApprovalDecision?: (
 		requestId: string,
 		decision: ApprovalDecision,
@@ -174,20 +176,30 @@ export function SessionView({
 	onTitleChange,
 	onStopTurn,
 	onSandboxStop,
+	onPullRequestAction,
 	onApprovalDecision,
 }: SessionViewProps) {
 	const isEmpty = session.messages.length === 0 && !session.activeTurn;
+	const hasMastheadSubline =
+		!!session.masthead.pullRequest ||
+		!!session.masthead.pullRequestAction ||
+		!!session.masthead.pullRequestError;
 	return (
 		<>
 			<SessionMasthead
 				session={session.masthead}
 				onTitleChange={onTitleChange}
 				onSandboxStop={onSandboxStop}
+				onPullRequestAction={onPullRequestAction}
 			/>
 			{/* break-words inherits into the prose, so an unbroken token (a long
 			    path, a URL) wraps instead of forcing 375px pages sideways (#753);
 			    pre/diff bodies keep their own inner overflow-x scrolling. */}
-			<main className="mx-auto max-w-[680px] px-4 pt-[76px] pb-6 break-words sm:px-5">
+			<main
+				className={`mx-auto max-w-[680px] px-4 pb-6 break-words sm:px-5 ${
+					hasMastheadSubline ? "pt-[104px]" : "pt-[76px]"
+				}`}
+			>
 				{isEmpty && session.empty && (
 					<div
 						data-testid="empty-transcript"

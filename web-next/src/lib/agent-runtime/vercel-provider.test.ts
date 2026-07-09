@@ -115,13 +115,9 @@ describe("repo targeting", () => {
 		expect(prompt).toContain(
 			"persistent clone of the GitHub repository fairchild/web-next-fixtures",
 		);
-		expect(prompt).toContain(
-			"https://api.github.com/repos/fairchild/web-next-fixtures/pulls",
-		);
-		expect(prompt).toContain("BASE_BRANCH='trunk'");
-		expect(prompt).toContain('\\"base\\":\\"$BASE_BRANCH\\"');
+		expect(prompt).toContain("user-triggered Open PR action");
 		expect(prompt).not.toContain("fairchild/workspaces");
-		expect(prompt).not.toContain('"base":"main"');
+		expect(prompt).not.toContain("api.github.com");
 	});
 
 	test("uses the clone default HEAD fallback when the repo row has no default branch", () => {
@@ -138,7 +134,7 @@ describe("repo targeting", () => {
 
 		const prompt = buildPrompt("Fix the failing test", "abcdef123456", true, repo);
 		expect(prompt).toContain("the clone's default HEAD");
-		expect(prompt).toContain('BASE_BRANCH="$(cat /tmp/default_branch)"');
+		expect(prompt).toContain("user-triggered Open PR action");
 	});
 
 	test("rejects invalid repo full names with structured chunks before setup", async () => {
@@ -455,7 +451,7 @@ describe("buildSessionSetupScript", () => {
 });
 
 describe("checkpointSessionBranch", () => {
-	test("skips add, commit, and push when tree and remote branch are already clean", async () => {
+	test("skips add and commit when tree and remote branch are already clean", async () => {
 		const events: string[] = [];
 		const sandbox = new RecordingSandbox((command) => {
 			if (command.includes("status --porcelain")) {
@@ -482,7 +478,7 @@ describe("checkpointSessionBranch", () => {
 			"agent/session-abcdef12",
 		);
 
-		expect(status).toBeUndefined();
+		expect(status).toEqual({ hasUnpushedWork: false });
 		expect(events).toEqual(["status", "ls-remote", "fetch", "ahead"]);
 		expect(sandbox.calls.some((c) => c.includes(" add -A"))).toBe(false);
 		expect(sandbox.calls.some((c) => c.includes(" commit -m "))).toBe(false);
@@ -491,7 +487,7 @@ describe("checkpointSessionBranch", () => {
 });
 
 describe("runTurnTail", () => {
-	test("emits Diff rows, then pushes a checkpoint, then parks", async () => {
+	test("emits Diff rows, checkpoints local work, then parks", async () => {
 		const events: string[] = [];
 		const sandbox = new RecordingSandbox((command) => {
 			if (command.includes("add -N .") && command.includes(" diff")) {
@@ -535,11 +531,6 @@ describe("runTurnTail", () => {
 				events.push("ahead");
 				return runResult("1\n");
 			}
-			if (command.includes(" push -u origin ")) {
-				events.push("push");
-				expect(command).toContain("push -u origin 'agent/session-abcdef12'");
-				return runResult("branch pushed\n");
-			}
 			throw new Error(`unexpected command: ${command}`);
 		});
 
@@ -555,7 +546,6 @@ describe("runTurnTail", () => {
 			"ls-remote",
 			"fetch",
 			"ahead",
-			"push",
 			"detach",
 		]);
 		expect(chunks.map((c) => c.type)).toEqual([
@@ -566,10 +556,11 @@ describe("runTurnTail", () => {
 		]);
 		expect(chunks[2]).toMatchObject({
 			type: "status",
-			content: "Pushed checkpoint to agent/session-abcdef12",
+			content: "1 checkpoint commit ready for PR",
 		});
 		expect(chunks.at(-1)?.metadata).toMatchObject({
 			tokenCount: 7,
+			hasUnpushedWork: true,
 			resume: {
 				harnessSessionId: "sandbox-1",
 				resumeState: JSON.stringify({ parked: true }),
@@ -577,7 +568,7 @@ describe("runTurnTail", () => {
 		});
 	});
 
-	test("push failure yields a calm status and still parks the turn", async () => {
+	test("checkpoint failure yields a calm status and still parks the turn", async () => {
 		const events: string[] = [];
 		const sandbox = new RecordingSandbox((command) => {
 			if (command.includes("add -N .") && command.includes(" diff")) {
@@ -602,14 +593,6 @@ describe("runTurnTail", () => {
 			}
 			if (command.includes("ls-remote --exit-code")) {
 				events.push("ls-remote");
-				return runResult("", 2);
-			}
-			if (command.includes("rev-list --count")) {
-				events.push("ahead");
-				return runResult("1\n");
-			}
-			if (command.includes(" push -u origin ")) {
-				events.push("push");
 				return runResult("", 1, "remote rejected checkpoint");
 			}
 			throw new Error(`unexpected command: ${command}`);
@@ -625,16 +608,15 @@ describe("runTurnTail", () => {
 			"staged",
 			"commit",
 			"ls-remote",
-			"ahead",
-			"push",
 			"detach",
 		]);
 		expect(chunks.map((c) => c.type)).toEqual(["status", "done"]);
 		expect(chunks[0]).toMatchObject({
 			type: "status",
 			content:
-				"Checkpoint push failed: checkpoint push failed (exit 1): remote rejected checkpoint",
+				"Checkpoint failed: checkpoint remote branch check failed (exit 1): remote rejected checkpoint",
 		});
+		expect(chunks.at(-1)?.metadata).toMatchObject({ hasUnpushedWork: false });
 		expect(chunks.some((c) => c.type === "error")).toBe(false);
 	});
 });

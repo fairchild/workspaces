@@ -14,6 +14,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { MODEL_OPTIONS, modelLabel } from "@/lib/agent-runtime/models";
+import { sessionBranch } from "@/lib/agent-runtime/vercel-provider";
 import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
 import type { FolioMessage } from "@/components/folio/types";
 import { getAuthState } from "@/lib/auth/auth-state";
@@ -47,6 +48,22 @@ export default async function SessionPage({
 	if (!session) notFound();
 	const repo = session.repoId ? await getRepo(handle, session.repoId) : undefined;
 	const repoName = repo?.fullName ?? "no repository";
+	const prAction =
+		session.provider === "vercel" && repo
+			? {
+					head: sessionBranch(session.id),
+					base: repo.defaultBranch ?? "default branch",
+					enabled: session.hasUnpushedWork,
+					reason: session.hasUnpushedWork ? undefined : "no checkpoints ready",
+				}
+			: session.provider === "host"
+				? {
+						head: sessionBranch(session.id),
+						base: repo?.defaultBranch ?? "default branch",
+						enabled: false,
+						reason: "host credentials pending",
+					}
+				: null;
 
 	// The (app) layout only renders children for the authorized user; the
 	// state is re-read here for the display name on the user's own messages.
@@ -96,6 +113,8 @@ export default async function SessionPage({
 					// The client fills this in from the verified sandbox state (#753);
 					// "" renders as absence — the masthead never guesses.
 					stateLabel: "",
+					pullRequest: session.pullRequest,
+					pullRequestAction: prAction,
 				},
 				statusLine: {
 					model: session.model,

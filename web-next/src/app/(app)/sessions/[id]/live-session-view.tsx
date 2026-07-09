@@ -67,6 +67,14 @@ import { sandboxStateLabel, useSandboxState } from "./use-sandbox-state";
 const TOKEN_THROTTLE_MS = 50;
 
 interface SessionSnapshot {
+	session?: {
+		hasUnpushedWork?: boolean;
+		pullRequest?: {
+			number: number;
+			url: string;
+			state: string;
+		} | null;
+	};
 	turn?: { status: "none" | "running" | "done" | "stale"; fromSeq: number | null };
 	messages?: FolioMessage[];
 	queuedMessages?: QueuedMessageData[];
@@ -120,6 +128,14 @@ export function LiveSessionView({
 	useEffect(() => {
 		queuedMessagesRef.current = queuedMessages;
 	}, [queuedMessages]);
+	const [pullRequest, setPullRequest] = useState(
+		session.masthead.pullRequest ?? null,
+	);
+	const [hasUnpushedWork, setHasUnpushedWork] = useState(
+		session.masthead.pullRequestAction?.enabled ?? false,
+	);
+	const [pullRequestBusy, setPullRequestBusy] = useState(false);
+	const [pullRequestError, setPullRequestError] = useState<string | null>(null);
 
 	// The selected model: seeded from the server-resolved session, updated
 	// optimistically on change (reverted if its PATCH fails while it is still
@@ -258,6 +274,10 @@ export function LiveSessionView({
 			const res = await fetch(`/api/sessions/${sessionId}`);
 			if (!res.ok) return;
 			const data = (await res.json()) as SessionSnapshot;
+			if (data.session) {
+				setHasUnpushedWork(data.session.hasUnpushedWork === true);
+				setPullRequest(data.session.pullRequest ?? null);
+			}
 			if (data.messages) setMessages(data.messages);
 			setQueuedMessages(data.queuedMessages ?? []);
 			if (data.turn?.status === "running" || data.turn?.status === "stale") {
@@ -279,6 +299,33 @@ export function LiveSessionView({
 		lastQueueKickRef.current = queueKey;
 		void refreshSessionFromServer();
 	}, [busy, queueKey, refreshSessionFromServer, resume]);
+
+	const openPullRequest = async () => {
+		setPullRequestBusy(true);
+		setPullRequestError(null);
+		try {
+			const res = await fetch(`/api/sessions/${sessionId}/pr`, { method: "POST" });
+			const data = (await res.json().catch(() => null)) as {
+				error?: string;
+				pullRequest?: {
+					number: number;
+					url: string;
+					state: string;
+				};
+				hasUnpushedWork?: boolean;
+			} | null;
+			if (!res.ok) {
+				setPullRequestError(data?.error ?? `Open PR failed (${res.status})`);
+				return;
+			}
+			if (data?.pullRequest) setPullRequest(data.pullRequest);
+			setHasUnpushedWork(data?.hasUnpushedWork === true);
+		} catch {
+			setPullRequestError("Open PR failed — network error");
+		} finally {
+			setPullRequestBusy(false);
+		}
+	};
 
 	// The sandbox lifecycle surface (#753): a verified state in the masthead,
 	// and two honest controls — stop the in-flight turn (the compose's send
@@ -472,6 +519,23 @@ export function LiveSessionView({
 						title: displayTitle,
 						stateLabel: sandboxStateLabel(sandbox),
 						live: sandbox?.state === "live",
+						pullRequest,
+						pullRequestAction: session.masthead.pullRequestAction
+							? {
+									...session.masthead.pullRequestAction,
+									enabled:
+										session.masthead.pullRequestAction.enabled &&
+										hasUnpushedWork &&
+										!busy,
+									reason: busy
+										? "wait for turn"
+										: hasUnpushedWork
+											? session.masthead.pullRequestAction.reason
+											: "no checkpoints ready",
+								}
+							: null,
+						pullRequestBusy,
+						pullRequestError,
 					},
 					statusLine: {
 						...session.statusLine,
@@ -491,6 +555,7 @@ export function LiveSessionView({
 				onSandboxStop={
 					sandbox?.state === "live" && !busy ? () => void stopSandbox() : undefined
 				}
+				onPullRequestAction={openPullRequest}
 				onApprovalDecision={answerApproval}
 			/>
 		</>
