@@ -86,7 +86,7 @@ describe("session store", () => {
 		});
 		expect(created.resumeState).toBeNull();
 		expect(created.firstUserMessage).toBeNull();
-		expect(created.hasUnpushedWork).toBe(false);
+		expect(created.hasBranchWork).toBe(false);
 		expect(created.pullRequest).toBeNull();
 		expect(await getSession(handle, "s1")).toEqual(created);
 		expect(await getSession(handle, "missing")).toBeUndefined();
@@ -120,12 +120,12 @@ describe("session store", () => {
 		expect((await getSession(handle, "s1"))?.title).toBe("My title");
 	});
 
-	test("updateSession persists PR metadata and the work-ahead flag (#820)", async () => {
+	test("updateSession persists PR metadata and the branch-work flag (#820)", async () => {
 		const handle = freshDb();
 		await createSession(handle, { id: "s1", provider: "vercel" });
 
 		await updateSession(handle, "s1", {
-			hasUnpushedWork: true,
+			hasBranchWork: true,
 			pullRequest: {
 				number: 42,
 				url: "https://github.com/fairchild/workspaces/pull/42",
@@ -133,7 +133,7 @@ describe("session store", () => {
 			},
 		});
 		let session = await getSession(handle, "s1");
-		expect(session?.hasUnpushedWork).toBe(true);
+		expect(session?.hasBranchWork).toBe(true);
 		expect(session?.pullRequest).toEqual({
 			number: 42,
 			url: "https://github.com/fairchild/workspaces/pull/42",
@@ -141,11 +141,11 @@ describe("session store", () => {
 		});
 
 		await updateSession(handle, "s1", {
-			hasUnpushedWork: false,
+			hasBranchWork: false,
 			pullRequest: null,
 		});
 		session = await getSession(handle, "s1");
-		expect(session?.hasUnpushedWork).toBe(false);
+		expect(session?.hasBranchWork).toBe(false);
 		expect(session?.pullRequest).toBeNull();
 	});
 

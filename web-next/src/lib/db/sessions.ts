@@ -62,8 +62,8 @@ export interface Session {
 	model: string;
 	/** Tool approval posture for this session's provider turns (#982). */
 	approvalPolicy: ApprovalPolicy;
-	/** True when checkpoint commits exist locally and still need a user push/PR action. */
-	hasUnpushedWork: boolean;
+	/** True when the pushed session branch has checkpoint commits and no PR yet. */
+	hasBranchWork: boolean;
 	/** Pull request opened from this session branch, if any. */
 	pullRequest: SessionPullRequest | null;
 	createdAt: string;
@@ -89,7 +89,7 @@ function rowToSession(row: SessionsTable): Session {
 		resumeState: row.resume_state,
 		model: row.model,
 		approvalPolicy: row.approval_policy,
-		hasUnpushedWork: row.has_unpushed_work === 1,
+		hasBranchWork: row.has_branch_work === 1,
 		pullRequest:
 			row.pr_number !== null && row.pr_url !== null
 				? {
@@ -121,7 +121,7 @@ export async function createSession(
 		resume_state: null,
 		model: session.model ?? DEFAULT_MODEL,
 		approval_policy: session.approvalPolicy ?? "auto",
-		has_unpushed_work: 0,
+		has_branch_work: 0,
 		pr_number: null,
 		pr_url: null,
 		pr_state: null,
@@ -148,7 +148,7 @@ export async function updateSession(
 		model?: string;
 		title?: string;
 		approvalPolicy?: ApprovalPolicy;
-		hasUnpushedWork?: boolean;
+		hasBranchWork?: boolean;
 		pullRequest?: SessionPullRequest | null;
 	},
 ): Promise<void> {
@@ -160,8 +160,8 @@ export async function updateSession(
 	if ("title" in fields && fields.title) set.title = fields.title;
 	if ("approvalPolicy" in fields && fields.approvalPolicy)
 		set.approval_policy = fields.approvalPolicy;
-	if ("hasUnpushedWork" in fields && fields.hasUnpushedWork !== undefined) {
-		set.has_unpushed_work = fields.hasUnpushedWork ? 1 : 0;
+	if ("hasBranchWork" in fields && fields.hasBranchWork !== undefined) {
+		set.has_branch_work = fields.hasBranchWork ? 1 : 0;
 	}
 	if ("pullRequest" in fields) {
 		set.pr_number = fields.pullRequest?.number ?? null;

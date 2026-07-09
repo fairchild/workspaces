@@ -68,7 +68,7 @@ const TOKEN_THROTTLE_MS = 50;
 
 interface SessionSnapshot {
 	session?: {
-		hasUnpushedWork?: boolean;
+		hasBranchWork?: boolean;
 		pullRequest?: {
 			number: number;
 			url: string;
@@ -131,7 +131,7 @@ export function LiveSessionView({
 	const [pullRequest, setPullRequest] = useState(
 		session.masthead.pullRequest ?? null,
 	);
-	const [hasUnpushedWork, setHasUnpushedWork] = useState(
+	const [hasBranchWork, setHasBranchWork] = useState(
 		session.masthead.pullRequestAction?.enabled ?? false,
 	);
 	const [pullRequestBusy, setPullRequestBusy] = useState(false);
@@ -275,7 +275,7 @@ export function LiveSessionView({
 			if (!res.ok) return;
 			const data = (await res.json()) as SessionSnapshot;
 			if (data.session) {
-				setHasUnpushedWork(data.session.hasUnpushedWork === true);
+				setHasBranchWork(data.session.hasBranchWork === true);
 				setPullRequest(data.session.pullRequest ?? null);
 			}
 			if (data.messages) setMessages(data.messages);
@@ -312,14 +312,14 @@ export function LiveSessionView({
 					url: string;
 					state: string;
 				};
-				hasUnpushedWork?: boolean;
+				hasBranchWork?: boolean;
 			} | null;
 			if (!res.ok) {
 				setPullRequestError(data?.error ?? `Open PR failed (${res.status})`);
 				return;
 			}
 			if (data?.pullRequest) setPullRequest(data.pullRequest);
-			setHasUnpushedWork(data?.hasUnpushedWork === true);
+			setHasBranchWork(data?.hasBranchWork === true);
 		} catch {
 			setPullRequestError("Open PR failed — network error");
 		} finally {
@@ -525,11 +525,11 @@ export function LiveSessionView({
 									...session.masthead.pullRequestAction,
 									enabled:
 										session.masthead.pullRequestAction.enabled &&
-										hasUnpushedWork &&
+										hasBranchWork &&
 										!busy,
 									reason: busy
 										? "wait for turn"
-										: hasUnpushedWork
+										: hasBranchWork
 											? session.masthead.pullRequestAction.reason
 											: "no checkpoints ready",
 								}

@@ -412,9 +412,9 @@ const queuedMessageDispatchOrder: Migration = {
 };
 
 /**
- * Adds the PR-from-session projection (#820): a cheap work-ahead flag set by
- * the sandbox checkpoint tail, plus the PR identity the masthead renders once
- * the user opens it.
+ * Adds the PR-from-session projection (#820): a cheap pushed-branch-work flag
+ * set by the sandbox checkpoint tail, plus the PR identity the masthead renders
+ * once the user opens it.
  */
 const sessionPullRequests: Migration = {
 	id: "0011_session_pull_requests",
@@ -423,10 +423,10 @@ const sessionPullRequests: Migration = {
 			name: string;
 		}>`PRAGMA table_info(sessions)`.execute(db);
 		const columns = new Set(info.rows.map((row) => row.name));
-		if (!columns.has("has_unpushed_work")) {
+		if (!columns.has("has_branch_work")) {
 			await db.schema
 				.alterTable("sessions")
-				.addColumn("has_unpushed_work", "integer", (col) =>
+				.addColumn("has_branch_work", "integer", (col) =>
 					col.notNull().defaultTo(0),
 				)
 				.execute();

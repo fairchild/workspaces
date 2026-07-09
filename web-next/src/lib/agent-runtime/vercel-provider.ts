@@ -341,10 +341,6 @@ function baseBranchLabel(repo: TurnRepo): string {
 		: "the clone's default HEAD (`cat /tmp/default_branch`)";
 }
 
-function promptCurlBase(repo: TurnRepo): string {
-	return repo.defaultBranch ?? "$(cat /tmp/default_branch)";
-}
-
 export function sandboxConfigPromptFile(
 	configPrompt: string,
 ): { path: string; content: string } {
@@ -573,6 +569,8 @@ export interface PullRequestCommandResult {
 	resume: SessionResumeHandle | null;
 }
 
+export type PullRequestApiResult = Omit<PullRequestCommandResult, "resume">;
+
 export class PullRequestCommandFailed extends Error {
 	constructor(
 		message: string,
@@ -697,12 +695,102 @@ function parsePullRequestCommandOutput(stdout: string): Omit<
 	return { number: parsed.number, url: parsed.url, state: parsed.state };
 }
 
+const GITHUB_API_HEADERS = {
+	Accept: "application/vnd.github+json",
+	"User-Agent": "web-next-session-pr",
+	"X-GitHub-Api-Version": "2022-11-28",
+};
+
+async function githubJson<T>(
+	token: string,
+	path: string,
+	init: RequestInit = {},
+): Promise<T> {
+	const response = await fetch(`https://api.github.com${path}`, {
+		...init,
+		headers: {
+			...GITHUB_API_HEADERS,
+			...(init.headers as Record<string, string> | undefined),
+			Authorization: `Bearer ${token}`,
+		},
+	});
+	const text = await response.text();
+	const data = text ? (JSON.parse(text) as unknown) : null;
+	if (!response.ok) {
+		const detail =
+			typeof data === "object" && data !== null && "message" in data
+				? String((data as { message: unknown }).message)
+				: text.slice(0, 300);
+		throw new Error(`GitHub ${response.status}: ${detail}`);
+	}
+	return data as T;
+}
+
+function pullRequestResult(pr: {
+	number: number;
+	html_url: string;
+	state: string;
+}): PullRequestApiResult {
+	return {
+		number: pr.number,
+		url: pr.html_url,
+		state: pr.state,
+	};
+}
+
+export async function openPullRequestFromGitHubApi({
+	sessionId,
+	repo,
+	title,
+	body,
+}: Omit<PullRequestCommandRequest, "resume">): Promise<PullRequestApiResult> {
+	const targetRepo = resolveTargetRepo({ repo });
+	if (!targetRepo.ok) throw new Error(targetRepo.error);
+	const { token } = await mintInstallationToken(repo.fullName);
+	const [owner] = repo.fullName.split("/");
+	const headBranch = sessionBranch(sessionId);
+	const baseBranch = repo.defaultBranch?.trim();
+	if (!baseBranch) {
+		throw new Error("repository default branch is required to open a pull request");
+	}
+	const head = encodeURIComponent(`${owner}:${headBranch}`);
+	const existing = await githubJson<
+		Array<{ number: number; html_url: string; state: string }>
+	>(token, `/repos/${repo.fullName}/pulls?head=${head}&state=all&per_page=10`);
+	const current = existing[0];
+	if (current) return pullRequestResult(current);
+	try {
+		const created = await githubJson<{
+			number: number;
+			html_url: string;
+			state: string;
+		}>(token, `/repos/${repo.fullName}/pulls`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				title,
+				head: headBranch,
+				base: baseBranch,
+				body,
+				draft: true,
+			}),
+		});
+		return pullRequestResult(created);
+	} catch (error) {
+		const latest = await githubJson<
+			Array<{ number: number; html_url: string; state: string }>
+		>(token, `/repos/${repo.fullName}/pulls?head=${head}&state=all&per_page=10`);
+		const pr = latest[0];
+		if (pr) return pullRequestResult(pr);
+		throw error;
+	}
+}
+
 /**
- * Resumes the parked Vercel harness session and runs the user-triggered push +
- * draft-PR command inside the same sandbox clone the turn used. This preserves
- * unpushed local checkpoint commits; if the parked sandbox cannot be resumed,
- * the caller should surface that as a visible failure rather than opening a PR
- * from a fresh clone that is missing work.
+ * Resumes the parked Vercel harness session and runs the user-triggered PR
+ * command inside the same sandbox clone the turn used. Checkpoints already push
+ * the branch; this path only needs the sandbox for any final live delta before
+ * creating the PR.
  */
 export async function openPullRequestFromVercelSession({
 	sessionId,
@@ -751,12 +839,13 @@ export async function openPullRequestFromVercelSession({
 		},
 	});
 
-	const session = await agent.createSession({
-		sessionId: resume.harnessSessionId,
-		resumeFrom: JSON.parse(resume.resumeState),
-	});
+	let session;
 	let nextResume: SessionResumeHandle | null | undefined;
 	try {
+		session = await agent.createSession({
+			sessionId: resume.harnessSessionId,
+			resumeFrom: JSON.parse(resume.resumeState),
+		});
 		if (!sandbox) throw new Error("sandbox command surface was unavailable");
 		await sandbox.writeTextFile({
 			path: "/tmp/open-session-pr.mjs",
@@ -778,10 +867,12 @@ export async function openPullRequestFromVercelSession({
 		nextResume = await parkSession(session, resume.harnessSessionId, debugHarness);
 		return { ...pr, resume: nextResume };
 	} catch (error) {
-		nextResume = await parkSession(session, resume.harnessSessionId, debugHarness);
+		nextResume = session
+			? await parkSession(session, resume.harnessSessionId, debugHarness)
+			: null;
 		throw new PullRequestCommandFailed(errorText(error), nextResume);
 	} finally {
-		if (nextResume === null) await session.destroy().catch(() => {});
+		if (nextResume === null) await session?.destroy().catch(() => {});
 	}
 }
 
@@ -1084,57 +1175,22 @@ function capCheckpointError(value: unknown): string {
 	return `${text.slice(0, CHECKPOINT_ERROR_CAP - 3)}...`;
 }
 
-async function unpushedCommitCount(
-	sandbox: RunnableSandbox,
-	branch: string,
-): Promise<number> {
-	const branchArg = shellQuote(branch);
-	const remoteRef = `refs/remotes/origin/${branch}`;
-	const remoteExists = await sandbox.run({
-		command: `git -C ${WORKSPACE_DIR} ls-remote --exit-code --heads origin ${branchArg} >/dev/null`,
-	});
-	let baseRef: string;
-	if (remoteExists.exitCode === 0) {
-		await runRequired(
-			sandbox,
-			"checkpoint fetch",
-			`git -C ${WORKSPACE_DIR} fetch --depth 50 origin ${shellQuote(`refs/heads/${branch}:refs/remotes/origin/${branch}`)}`,
-		);
-		baseRef = remoteRef;
-	} else if (remoteExists.exitCode === 2) {
-		baseRef = "origin/HEAD";
-	} else {
-		throw commandFailure("checkpoint remote branch check", remoteExists);
-	}
-
-	const ahead = await runRequired(
-		sandbox,
-		"checkpoint ahead check",
-		`git -C ${WORKSPACE_DIR} rev-list --count ${shellQuote(`${baseRef}..HEAD`)}`,
-	);
-	const count = Number.parseInt(ahead.stdout.trim(), 10);
-	if (!Number.isFinite(count)) {
-		throw new Error(`checkpoint ahead check returned ${JSON.stringify(ahead.stdout)}`);
-	}
-	return count;
-}
-
 export interface CheckpointResult {
 	status?: string;
-	hasUnpushedWork: boolean;
+	hasBranchWork?: boolean;
 }
 
 /**
  * Best-effort end-of-turn preservation. It records dirty work as a WIP commit
- * and reports whether the session branch is ahead of its remote. It deliberately
- * does not push: #820 makes push/PR creation a user-triggered masthead action.
+ * and pushes the session branch immediately, preserving #968's safety net:
+ * sandbox death after a completed turn must not lose checkpointed work.
  * Failures become calm status chunks; they never fail the agent turn.
  */
 export async function checkpointSessionBranch(
 	sandbox: RunnableSandbox | undefined,
 	branch: string,
 ): Promise<CheckpointResult> {
-	if (!sandbox) return { hasUnpushedWork: false };
+	if (!sandbox) return {};
 	try {
 		const status = await runRequired(
 			sandbox,
@@ -1142,6 +1198,7 @@ export async function checkpointSessionBranch(
 			`git -C ${WORKSPACE_DIR} status --porcelain=v1`,
 		);
 		const hasTreeChanges = status.stdout.trim().length > 0;
+		let committed = false;
 		if (hasTreeChanges) {
 			await runRequired(
 				sandbox,
@@ -1165,18 +1222,22 @@ export async function checkpointSessionBranch(
 					"checkpoint commit",
 					`git -C ${WORKSPACE_DIR} commit -m ${shellQuote(CHECKPOINT_COMMIT_MESSAGE)}`,
 				);
+				committed = true;
 			}
 		}
 
-		const ahead = await unpushedCommitCount(sandbox, branch);
-		if (ahead <= 0) return { hasUnpushedWork: false };
+		if (!committed) return {};
+		await runRequired(
+			sandbox,
+			"checkpoint push",
+			`git -C ${WORKSPACE_DIR} push -u origin ${shellQuote(branch)}`,
+		);
 		return {
-			hasUnpushedWork: true,
-			status: `${ahead} checkpoint commit${ahead === 1 ? "" : "s"} ready for PR`,
+			hasBranchWork: true,
+			status: "Checkpoint pushed to session branch",
 		};
 	} catch (error) {
 		return {
-			hasUnpushedWork: false,
 			status: `Checkpoint failed: ${capCheckpointError(error)}`,
 		};
 	}
@@ -1243,7 +1304,9 @@ export async function* runTurnTail({
 		metadata: {
 			...doneChunk?.metadata,
 			resume,
-			hasUnpushedWork: checkpoint.hasUnpushedWork,
+			...(checkpoint.hasBranchWork === undefined
+				? {}
+				: { hasBranchWork: checkpoint.hasBranchWork }),
 		},
 	};
 	return resume !== null;

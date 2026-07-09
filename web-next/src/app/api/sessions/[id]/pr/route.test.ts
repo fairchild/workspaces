@@ -59,7 +59,7 @@ async function freshVercelSession(ownerLogin: string | null = "fairchild") {
 	await updateSession(getDatabase(), id, {
 		claudeSessionId: "harness-1",
 		resumeState: '{"parked":true}',
-		hasUnpushedWork: true,
+		hasBranchWork: true,
 	});
 	return id;
 }
@@ -85,7 +85,7 @@ describe("POST /api/sessions/[id]/pr", () => {
 	test("delegates to the PR service with repo and session URL", async () => {
 		const id = await freshVercelSession();
 		vi.mocked(openSessionPullRequest).mockResolvedValue({
-			hasUnpushedWork: false,
+			hasBranchWork: false,
 			pullRequest: {
 				number: 123,
 				url: "https://github.com/fairchild/workspaces/pull/123",
@@ -97,7 +97,7 @@ describe("POST /api/sessions/[id]/pr", () => {
 
 		expect(res.status).toBe(200);
 		expect(await res.json()).toMatchObject({
-			hasUnpushedWork: false,
+			hasBranchWork: false,
 			pullRequest: { number: 123, state: "open" },
 		});
 		expect(openSessionPullRequest).toHaveBeenCalledWith(

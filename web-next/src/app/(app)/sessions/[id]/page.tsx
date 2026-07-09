@@ -53,8 +53,8 @@ export default async function SessionPage({
 			? {
 					head: sessionBranch(session.id),
 					base: repo.defaultBranch ?? "default branch",
-					enabled: session.hasUnpushedWork,
-					reason: session.hasUnpushedWork ? undefined : "no checkpoints ready",
+					enabled: session.hasBranchWork,
+					reason: session.hasBranchWork ? undefined : "no checkpoints ready",
 				}
 			: session.provider === "host"
 				? {

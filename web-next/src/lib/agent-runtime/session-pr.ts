@@ -10,6 +10,7 @@ import type { DatabaseHandle } from "../db/client";
 import { projectSessionEvents } from "../transcript/project-events";
 import type { FolioMessage } from "@/components/folio/types";
 import {
+	openPullRequestFromGitHubApi,
 	openPullRequestFromVercelSession,
 	PullRequestCommandFailed,
 	sessionBranch,
@@ -18,7 +19,7 @@ import type { SessionResumeHandle } from "./provider";
 
 export interface SessionPrResponse {
 	pullRequest: SessionPullRequest;
-	hasUnpushedWork: boolean;
+	hasBranchWork: boolean;
 }
 
 export class SessionPrError extends Error {
@@ -134,8 +135,11 @@ export async function openSessionPullRequest({
 	repo: Repo | undefined;
 	sessionUrl: string;
 }): Promise<SessionPrResponse> {
-	if (session.pullRequest && !session.hasUnpushedWork) {
-		return { pullRequest: session.pullRequest, hasUnpushedWork: false };
+	if (session.pullRequest) {
+		if (session.hasBranchWork) {
+			await updateSession(handle, session.id, { hasBranchWork: false });
+		}
+		return { pullRequest: session.pullRequest, hasBranchWork: false };
 	}
 	if (session.provider !== "vercel") {
 		throw new SessionPrError(
@@ -153,18 +157,10 @@ export async function openSessionPullRequest({
 			409,
 		);
 	}
-	const resume = resumeHandle(session);
-	if (!resume) {
+	if (!session.hasBranchWork) {
 		throw new SessionPrError(
-			"sandbox_unavailable",
-			"The session sandbox is not parked; run another turn before opening a PR.",
-			409,
-		);
-	}
-	if (!session.hasUnpushedWork && !session.pullRequest) {
-		throw new SessionPrError(
-			"no_unpushed_work",
-			"This session has no checkpoint commits ready for a PR.",
+			"no_branch_work",
+			"This session branch has no checkpoint commits ready for a PR.",
 			409,
 		);
 	}
@@ -175,29 +171,57 @@ export async function openSessionPullRequest({
 		repo,
 		sessionUrl,
 	});
-	try {
-		const pr = await openPullRequestFromVercelSession({
-			sessionId: session.id,
-			repo: { fullName: repo.fullName, defaultBranch: repo.defaultBranch },
-			resume,
-			title: titleFor(session),
-			body,
-		});
+	const title = titleFor(session);
+	const repoRequest = { fullName: repo.fullName, defaultBranch: repo.defaultBranch };
+	const persistPullRequest = async (pr: {
+		number: number;
+		url: string;
+		state: string;
+		resume?: SessionResumeHandle | null;
+	}) => {
 		const pullRequest = {
 			number: pr.number,
 			url: pr.url,
 			state: pr.state,
 		};
 		await updateSession(handle, session.id, {
-			hasUnpushedWork: false,
+			hasBranchWork: false,
 			pullRequest,
-			claudeSessionId: pr.resume?.harnessSessionId ?? null,
-			resumeState: pr.resume?.resumeState ?? null,
+			...(pr.resume === undefined
+				? {}
+				: {
+						claudeSessionId: pr.resume?.harnessSessionId ?? null,
+						resumeState: pr.resume?.resumeState ?? null,
+					}),
 		});
-		return { pullRequest, hasUnpushedWork: false };
+		return { pullRequest, hasBranchWork: false };
+	};
+	const openFromApi = () =>
+		openPullRequestFromGitHubApi({
+			sessionId: session.id,
+			repo: repoRequest,
+			title,
+			body,
+		});
+	const resume = resumeHandle(session);
+	if (!resume) {
+		return persistPullRequest(await openFromApi());
+	}
+	try {
+		const pr = await openPullRequestFromVercelSession({
+			sessionId: session.id,
+			repo: repoRequest,
+			resume,
+			title,
+			body,
+		});
+		return persistPullRequest(pr);
 	} catch (error) {
 		if (error instanceof PullRequestCommandFailed) {
 			await persistResume(handle, session.id, error.resume);
+			if (error.resume === null) {
+				return persistPullRequest(await openFromApi());
+			}
 			throw new SessionPrError("pr_command_failed", error.message, 502);
 		}
 		throw error;

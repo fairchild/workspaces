@@ -62,10 +62,10 @@ export interface SessionsTable {
 	/** Tool approval posture for provider turns (migration `0007_approvals`). */
 	approval_policy: ApprovalPolicy;
 	/**
-	 * Whether the sandbox has local checkpoint commits ahead of the remote
-	 * session branch. This is the honest UI gate for PR/update actions.
+	 * Whether the pushed session branch has checkpoint commits ready for a PR.
+	 * Cleared after a PR is persisted; not a local/remote divergence signal.
 	 */
-	has_unpushed_work: number;
+	has_branch_work: number;
 	/** Pull request opened from this session branch, if any. */
 	pr_number: number | null;
 	pr_url: string | null;

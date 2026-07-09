@@ -475,14 +475,14 @@ async function persistResume(
 	if (!chunk.metadata || !("resume" in chunk.metadata)) return chunk;
 	const { resume, ...rest } = chunk.metadata as {
 		resume?: SessionResumeHandle | null;
-		hasUnpushedWork?: unknown;
+		hasBranchWork?: unknown;
 	} & Record<string, unknown>;
-	const hasUnpushedWork =
-		typeof chunk.metadata.hasUnpushedWork === "boolean"
-			? chunk.metadata.hasUnpushedWork
+	const hasBranchWork =
+		typeof chunk.metadata.hasBranchWork === "boolean"
+			? chunk.metadata.hasBranchWork
 			: undefined;
-	if (hasUnpushedWork !== undefined) {
-		await updateSession(handle, sessionId, { hasUnpushedWork });
+	if (hasBranchWork !== undefined) {
+		await updateSession(handle, sessionId, { hasBranchWork });
 	}
 	if (resume === null) {
 		await updateSession(handle, sessionId, { claudeSessionId: null, resumeState: null });

@@ -30,7 +30,7 @@ test("a Vercel session renders its PR masthead line and update affordance", asyn
 				sql: `INSERT INTO sessions (
 					id, repo_id, owner_login, title, first_user_message, provider, status,
 					claude_session_id, resume_state, model, approval_policy,
-					has_unpushed_work, pr_number, pr_url, pr_state, created_at, last_activity_at
+					has_branch_work, pr_number, pr_url, pr_state, created_at, last_activity_at
 				) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				args: [
 					id,

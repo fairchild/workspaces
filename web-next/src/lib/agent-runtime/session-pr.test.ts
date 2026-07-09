@@ -15,10 +15,15 @@ import {
 	openSessionPullRequest,
 	SessionPrError,
 } from "./session-pr";
-import { openPullRequestFromVercelSession } from "./vercel-provider";
+import {
+	openPullRequestFromGitHubApi,
+	openPullRequestFromVercelSession,
+	PullRequestCommandFailed,
+} from "./vercel-provider";
 
 vi.mock("./vercel-provider", () => ({
 	sessionBranch: (id: string) => `agent/session-${id.slice(0, 8)}`,
+	openPullRequestFromGitHubApi: vi.fn(),
 	openPullRequestFromVercelSession: vi.fn(),
 	PullRequestCommandFailed: class PullRequestCommandFailed extends Error {
 		constructor(
@@ -48,6 +53,7 @@ afterEach(async () => {
 
 beforeEach(() => {
 	vi.mocked(openPullRequestFromVercelSession).mockReset();
+	vi.mocked(openPullRequestFromGitHubApi).mockReset();
 });
 
 describe("composeSessionPullRequestBody", () => {
@@ -82,7 +88,7 @@ describe("composeSessionPullRequestBody", () => {
 });
 
 describe("openSessionPullRequest", () => {
-	test("returns a persisted PR without running the sandbox command when no work is ahead", async () => {
+	test("returns a persisted PR without running commands and clears stale branch work", async () => {
 		const db = freshDb();
 		const repo = await ensureRepo(db, "fairchild/workspaces", "main");
 		const session = await createSession(db, {
@@ -91,6 +97,7 @@ describe("openSessionPullRequest", () => {
 			provider: "vercel",
 		});
 		await updateSession(db, session.id, {
+			hasBranchWork: true,
 			pullRequest: {
 				number: 12,
 				url: "https://github.com/fairchild/workspaces/pull/12",
@@ -106,8 +113,10 @@ describe("openSessionPullRequest", () => {
 		});
 
 		expect(result.pullRequest.number).toBe(12);
-		expect(result.hasUnpushedWork).toBe(false);
+		expect(result.hasBranchWork).toBe(false);
+		expect((await getSession(db, session.id))?.hasBranchWork).toBe(false);
 		expect(openPullRequestFromVercelSession).not.toHaveBeenCalled();
+		expect(openPullRequestFromGitHubApi).not.toHaveBeenCalled();
 	});
 
 	test("refuses host-provider sessions with a credential-story error", async () => {
@@ -133,7 +142,51 @@ describe("openSessionPullRequest", () => {
 		expect(openPullRequestFromVercelSession).not.toHaveBeenCalled();
 	});
 
-	test("runs the sandbox PR command, persists the PR, and clears unpushed work", async () => {
+	test("creates the PR through GitHub API when the pushed branch exists but the sandbox is gone", async () => {
+		const db = freshDb();
+		const repo = await ensureRepo(db, "fairchild/workspaces", "main");
+		const session = await createSession(db, {
+			id: "abcdef123456",
+			repoId: repo.id,
+			title: "Ship parked branch",
+			provider: "vercel",
+		});
+		await updateSession(db, session.id, { hasBranchWork: true });
+		vi.mocked(openPullRequestFromGitHubApi).mockResolvedValue({
+			number: 100,
+			url: "https://github.com/fairchild/workspaces/pull/100",
+			state: "open",
+		});
+
+		const result = await openSessionPullRequest({
+			handle: db,
+			session: (await getSession(db, session.id)) ?? session,
+			repo,
+			sessionUrl: "https://spaces.test/sessions/abcdef123456",
+		});
+
+		expect(result).toEqual({
+			hasBranchWork: false,
+			pullRequest: {
+				number: 100,
+				url: "https://github.com/fairchild/workspaces/pull/100",
+				state: "open",
+			},
+		});
+		expect(openPullRequestFromVercelSession).not.toHaveBeenCalled();
+		expect(openPullRequestFromGitHubApi).toHaveBeenCalledWith(
+			expect.objectContaining({
+				sessionId: session.id,
+				title: "Ship parked branch",
+				repo: { fullName: "fairchild/workspaces", defaultBranch: "main" },
+			}),
+		);
+		const updated = await getSession(db, session.id);
+		expect(updated?.hasBranchWork).toBe(false);
+		expect(updated?.pullRequest?.number).toBe(100);
+	});
+
+	test("runs the sandbox PR command, persists the PR, and clears branch work", async () => {
 		const db = freshDb();
 		const repo = await ensureRepo(db, "fairchild/workspaces", "main");
 		const session = await createSession(db, {
@@ -145,7 +198,7 @@ describe("openSessionPullRequest", () => {
 		await updateSession(db, session.id, {
 			claudeSessionId: "harness-1",
 			resumeState: '{"parked":true}',
-			hasUnpushedWork: true,
+			hasBranchWork: true,
 		});
 		vi.mocked(openPullRequestFromVercelSession).mockResolvedValue({
 			number: 99,
@@ -165,7 +218,7 @@ describe("openSessionPullRequest", () => {
 		});
 
 		expect(result).toEqual({
-			hasUnpushedWork: false,
+			hasBranchWork: false,
 			pullRequest: {
 				number: 99,
 				url: "https://github.com/fairchild/workspaces/pull/99",
@@ -180,8 +233,46 @@ describe("openSessionPullRequest", () => {
 			}),
 		);
 		const updated = await getSession(db, session.id);
-		expect(updated?.hasUnpushedWork).toBe(false);
+		expect(updated?.hasBranchWork).toBe(false);
 		expect(updated?.pullRequest?.number).toBe(99);
 		expect(updated?.resumeState).toBe('{"parked":"again"}');
+	});
+
+	test("falls back to the GitHub API when sandbox resume is expired", async () => {
+		const db = freshDb();
+		const repo = await ensureRepo(db, "fairchild/workspaces", "main");
+		const session = await createSession(db, {
+			id: "abcdef123456",
+			repoId: repo.id,
+			title: "Expired sandbox PR",
+			provider: "vercel",
+		});
+		await updateSession(db, session.id, {
+			claudeSessionId: "harness-1",
+			resumeState: '{"parked":true}',
+			hasBranchWork: true,
+		});
+		vi.mocked(openPullRequestFromVercelSession).mockRejectedValue(
+			new PullRequestCommandFailed("sandbox expired", null),
+		);
+		vi.mocked(openPullRequestFromGitHubApi).mockResolvedValue({
+			number: 101,
+			url: "https://github.com/fairchild/workspaces/pull/101",
+			state: "open",
+		});
+
+		const result = await openSessionPullRequest({
+			handle: db,
+			session: (await getSession(db, session.id)) ?? session,
+			repo,
+			sessionUrl: "https://spaces.test/sessions/abcdef123456",
+		});
+
+		expect(result.pullRequest.number).toBe(101);
+		expect(openPullRequestFromGitHubApi).toHaveBeenCalled();
+		const updated = await getSession(db, session.id);
+		expect(updated?.hasBranchWork).toBe(false);
+		expect(updated?.claudeSessionId).toBeNull();
+		expect(updated?.resumeState).toBeNull();
 	});
 });
