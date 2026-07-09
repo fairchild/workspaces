@@ -25,11 +25,10 @@ export interface ComposeFieldProps {
 	/** Names the reply target for assistive tech ("Reply to Claude"). */
 	agentName: string;
 	onSend?: (text: string) => void;
-	/** While true, submits are held and the draft kept (turn in flight). */
+	/** Hard-disable for contexts that cannot accept text at all. */
 	disabled?: boolean;
-	/** Stops the in-flight turn (#753). While `disabled` (a turn is running)
-	 * the send affordance becomes this stop — same footprint, honest verb —
-	 * rather than a dead button beside new chrome. */
+	/** Stops the in-flight turn (#753). Mid-turn steering keeps Send live, so
+	 * Stop sits beside it instead of replacing it. */
 	onStop?: () => void;
 }
 
@@ -113,28 +112,29 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 					// the field instead of growing the field (and the page) forever.
 					className="my-[7px] max-h-[168px] min-w-0 flex-1 resize-none overflow-y-auto border-none bg-transparent font-serif text-compose text-ink outline-none"
 				/>
-				{disabled && onStop ? (
-					<button
-						type="button"
-						title="Stop the turn"
-						aria-label="Stop"
-						onClick={onStop}
-						className="relative z-[1] flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[11px] leading-none text-muted transition-colors duration-200 hover:border-del-ink hover:text-del-ink"
-					>
-						■
-					</button>
-				) : (
+				<div className="relative z-[1] flex shrink-0 items-center gap-2">
+					{onStop && (
+						<button
+							type="button"
+							title="Stop the turn"
+							aria-label="Stop"
+							onClick={onStop}
+							className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[11px] leading-none text-muted transition-colors duration-200 hover:border-del-ink hover:text-del-ink"
+						>
+							■
+						</button>
+					)}
 					<button
 						type="button"
 						title="Send"
 						aria-label="Send"
 						disabled={disabled}
 						onClick={submit}
-						className="relative z-[1] flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent disabled:opacity-40 disabled:group-focus-within:border-line-strong disabled:group-focus-within:bg-transparent disabled:group-focus-within:text-muted disabled:hover:border-line-strong disabled:hover:text-muted"
+						className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[15px] leading-none text-muted transition-colors duration-200 group-focus-within:border-accent group-focus-within:bg-accent group-focus-within:text-send-ink hover:border-accent hover:text-accent disabled:opacity-40 disabled:group-focus-within:border-line-strong disabled:group-focus-within:bg-transparent disabled:group-focus-within:text-muted disabled:hover:border-line-strong disabled:hover:text-muted"
 					>
 						↑
 					</button>
-				)}
+				</div>
 			</div>
 		</div>
 	);

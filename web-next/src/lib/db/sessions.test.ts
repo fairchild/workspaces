@@ -61,6 +61,8 @@ describe("session store", () => {
 			"0006_session_owner_login",
 			"0007_session_first_user_message",
 			"0008_turn_approvals",
+			"0009_queued_messages",
+			"0010_queued_message_dispatch_order",
 		]);
 	});
 

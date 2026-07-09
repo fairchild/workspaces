@@ -318,6 +318,99 @@ const turnApprovals: Migration = {
 	},
 };
 
+/**
+ * Adds `queued_messages` (#984): durable mid-turn steering text that must not
+ * enter `session_events` until the running turn has closed and the row is
+ * claimed for dispatch as the next turn.
+ */
+const queuedMessages: Migration = {
+	id: "0009_queued_messages",
+	async up(db) {
+		await db.schema
+			.createTable("queued_messages")
+			.ifNotExists()
+			.addColumn("session_id", "text", (c) => c.notNull())
+			.addColumn("queue_id", "text", (c) => c.notNull())
+			.addColumn("text", "text", (c) => c.notNull())
+			.addColumn("queued_at", "text", (c) => c.notNull())
+			.addColumn("dispatched_at", "text")
+			.addColumn("canceled_at", "text")
+			.addPrimaryKeyConstraint("queued_messages_pk", ["session_id", "queue_id"])
+			.execute();
+		await db.schema
+			.createIndex("idx_queued_messages_session_queued_at")
+			.ifNotExists()
+			.on("queued_messages")
+			.columns(["session_id", "queued_at"])
+			.execute();
+	},
+};
+
+/**
+ * Adds a monotonic queue insertion key. `queued_at` can tie for two sends in
+ * the same millisecond; `id` is the durable FIFO order the dispatcher uses.
+ */
+const queuedMessageDispatchOrder: Migration = {
+	id: "0010_queued_message_dispatch_order",
+	async up(db) {
+		const info = await sql<{
+			name: string;
+		}>`PRAGMA table_info(queued_messages)`.execute(db);
+		const hasId = info.rows.some((row) => row.name === "id");
+		if (!hasId) {
+			await db.transaction().execute(async (trx) => {
+				await sql`
+					CREATE TABLE queued_messages_next (
+						id INTEGER PRIMARY KEY AUTOINCREMENT,
+						session_id TEXT NOT NULL,
+						queue_id TEXT NOT NULL,
+						text TEXT NOT NULL,
+						queued_at TEXT NOT NULL,
+						dispatched_at TEXT,
+						canceled_at TEXT,
+						UNIQUE(session_id, queue_id)
+					)
+				`.execute(trx);
+				await sql`
+					INSERT INTO queued_messages_next (
+						session_id,
+						queue_id,
+						text,
+						queued_at,
+						dispatched_at,
+						canceled_at
+					)
+					SELECT
+						session_id,
+						queue_id,
+						text,
+						queued_at,
+						dispatched_at,
+						canceled_at
+					FROM queued_messages
+					ORDER BY queued_at ASC, queue_id ASC
+				`.execute(trx);
+				await sql`DROP TABLE queued_messages`.execute(trx);
+				await sql`ALTER TABLE queued_messages_next RENAME TO queued_messages`.execute(
+					trx,
+				);
+			});
+		}
+		await db.schema
+			.createIndex("idx_queued_messages_session_order")
+			.ifNotExists()
+			.on("queued_messages")
+			.columns(["session_id", "id"])
+			.execute();
+		await db.schema
+			.createIndex("idx_queued_messages_session_queue_id")
+			.ifNotExists()
+			.on("queued_messages")
+			.columns(["session_id", "queue_id"])
+			.execute();
+	},
+};
+
 export const MIGRATIONS: Migration[] = [
 	baseline,
 	authTables,
@@ -327,4 +420,6 @@ export const MIGRATIONS: Migration[] = [
 	sessionOwnerLogin,
 	sessionFirstUserMessage,
 	turnApprovals,
+	queuedMessages,
+	queuedMessageDispatchOrder,
 ];

@@ -33,6 +33,13 @@ export interface SessionViewData {
 	empty?: EmptyTranscriptNote;
 }
 
+export interface QueuedMessageData {
+	queueId: string;
+	text: string;
+	queuedAt: string;
+	position: number;
+}
+
 /** Entry stagger for the first few messages, matching the prototype. */
 function riseDelay(index: number): number {
 	return index < 4 ? 0.03 + index * 0.07 : 0;
@@ -81,20 +88,71 @@ function withoutMessagePresence(message: FolioMessage): FolioMessage {
 	};
 }
 
+function QueuedMessages({
+	messages,
+	onCancel,
+}: {
+	messages: QueuedMessageData[];
+	onCancel?: (queueId: string) => void;
+}) {
+	if (messages.length === 0) return null;
+	return (
+		<div
+			aria-label="Queued messages"
+			className="mx-auto flex max-w-[680px] flex-col gap-2 px-5 pb-2"
+		>
+			{messages.map((message) => (
+				<div
+					key={message.queueId}
+					data-testid="queued-message"
+					className="flex items-start gap-3 rounded-[13px] border border-dashed border-line-strong bg-raised/95 px-4 py-3 shadow-field"
+				>
+					<div className="min-w-0 flex-1">
+						<div className="mb-1 flex items-center gap-2 font-mono text-[10px] font-medium tracking-[.14em] text-hint uppercase">
+							<span>queued</span>
+							<span aria-hidden>#{message.position}</span>
+						</div>
+						<p className="font-serif text-[15px] leading-[1.45] text-user-ink">
+							{message.text}
+						</p>
+					</div>
+					{onCancel && (
+						<button
+							type="button"
+							aria-label={`Cancel queued message ${message.position}`}
+							title="Cancel queued message"
+							onClick={() => onCancel(message.queueId)}
+							className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] border border-line text-[15px] leading-none text-muted transition-colors duration-200 hover:border-del-ink hover:text-del-ink"
+						>
+							×
+						</button>
+					)}
+				</div>
+			))}
+		</div>
+	);
+}
+
 export interface SessionViewProps {
 	session: SessionViewData;
 	/** Compose submit handler (client wrappers wire this; fixtures omit it). */
 	onSend?: (text: string) => void;
-	/** Holds sends (keeping the draft) while a turn is streaming. */
+	/** Hard-disables compose when this surface cannot accept text. */
 	composeDisabled?: boolean;
+	/** Holds retry actions while a turn is streaming; new compose sends queue. */
+	retryDisabled?: boolean;
+	/** User messages waiting for the current turn to settle (#984). */
+	queuedMessages?: QueuedMessageData[];
+	/** Cancels an undispatched queued message. */
+	onCancelQueuedMessage?: (queueId: string) => void;
 	/** Model picker handler (client wrappers wire this; fixtures omit it, which
 	 * leaves the status line's model as static text — see status-line.tsx). */
 	onModelChange?: (id: string) => void;
 	/** Inline title-edit handler (client wrappers wire this; fixtures omit it,
 	 * which leaves the masthead title as static text — see session-masthead.tsx). */
 	onTitleChange?: (title: string) => void;
-	/** Stops the in-flight turn (#753); the compose's send affordance becomes
-	 * the stop while a turn runs. Fixtures omit it. */
+	/** Stops the in-flight turn (#753); compose keeps Send live for queued
+	 * steering while this quiet control sits beside it. Fixtures omit it. */
 	onStopTurn?: () => void;
 	/** Stops the session's live sandbox (#753); a quiet masthead action beside
 	 * the state label. Fixtures omit it. */
@@ -109,6 +167,9 @@ export function SessionView({
 	session,
 	onSend,
 	composeDisabled,
+	retryDisabled,
+	queuedMessages = [],
+	onCancelQueuedMessage,
 	onModelChange,
 	onTitleChange,
 	onStopTurn,
@@ -174,7 +235,7 @@ export function SessionView({
 												? () => onSend(retryText)
 												: undefined
 										}
-										retryDisabled={composeDisabled}
+										retryDisabled={retryDisabled}
 										onApprovalDecision={onApprovalDecision}
 									/>
 								))}
@@ -196,6 +257,10 @@ export function SessionView({
 				})()}
 			</main>
 			<footer className="sticky bottom-0 z-[15]">
+				<QueuedMessages
+					messages={queuedMessages}
+					onCancel={onCancelQueuedMessage}
+				/>
 				<ComposeField
 					agentName={session.masthead.agentName}
 					onSend={onSend}

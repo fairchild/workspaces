@@ -200,14 +200,14 @@ test("sending a message streams a mock coding turn into the Folio transcript", a
 	await compose.fill("Fix the failing session test");
 	await page.keyboard.press("Enter");
 
-	// The user message lands at once; compose clears and holds while busy —
-	// the send affordance becomes the stop control for the in-flight turn (#753).
+	// The user message lands at once; compose clears while busy. Send remains
+	// live for mid-turn steering (#984), with Stop beside it (#753).
 	await expect(page.locator('[data-message-role="user"]')).toContainText(
 		"Fix the failing session test",
 	);
 	await expect(page.getByTestId("empty-transcript")).toHaveCount(0);
 	await expect(compose).toHaveValue("");
-	await expect(page.getByRole("button", { name: "Send" })).toHaveCount(0);
+	await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
 	await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
 	// The activity line breathes while the provider provisions.
@@ -386,6 +386,66 @@ test("a turn survives a mid-stream reload and resumes to completion", async ({
 	await expect(page.getByTestId("tool-row")).toHaveCount(8);
 	// Nothing is in flight once the resumed turn completes.
 	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+});
+
+test("sending during a running turn queues, then auto-dispatches as the next turn (#984)", async ({
+	page,
+}) => {
+	await createSessionForRepo(page);
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await compose.fill("First steering turn");
+	await page.keyboard.press("Enter");
+	await expect(page.getByTestId("activity-line")).toBeVisible();
+
+	await compose.fill("Queue this next");
+	await page.keyboard.press("Enter");
+
+	const queued = page.getByTestId("queued-message");
+	await expect(queued).toContainText("queued");
+	await expect(queued).toContainText("Queue this next");
+	await expect(compose).toHaveValue("");
+	await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
+	await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+
+	await expect(queued).toHaveCount(0, { timeout: TURN_TIMEOUT });
+	const userMessages = page.locator('[data-message-role="user"]');
+	await expect(userMessages).toHaveCount(2, { timeout: TURN_TIMEOUT });
+	await expect(userMessages.nth(0)).toContainText("First steering turn");
+	await expect(userMessages.nth(1)).toContainText("Queue this next");
+	await expect(page.getByTestId("turn-stats")).toHaveCount(2, {
+		timeout: TURN_TIMEOUT * 2,
+	});
+	await expect(page.getByTestId("activity-line")).toHaveCount(0);
+});
+
+test("reload preserves queued bubbles and cancel removes an undispatched row (#984)", async ({
+	page,
+}) => {
+	await createSessionForRepo(page);
+	const compose = page.getByRole("textbox", { name: "Reply to Claude" });
+	await compose.fill("Turn with reloadable queue");
+	await page.keyboard.press("Enter");
+	await expect(page.getByTestId("activity-line")).toBeVisible();
+
+	await compose.fill("Cancel me after reload");
+	await page.keyboard.press("Enter");
+	await expect(page.getByTestId("queued-message")).toContainText(
+		"Cancel me after reload",
+	);
+
+	await page.reload();
+	const queued = page.getByTestId("queued-message");
+	await expect(queued).toContainText("Cancel me after reload");
+	await queued.getByRole("button", { name: /Cancel queued message/ }).click();
+	await expect(page.getByTestId("queued-message")).toHaveCount(0);
+
+	await expect(page.getByTestId("turn-stats")).toHaveCount(1, {
+		timeout: TURN_TIMEOUT,
+	});
+	await expect(page.locator('[data-message-role="user"]')).toHaveCount(1);
+	await expect(page.locator('[data-message-role="user"]')).not.toContainText(
+		"Cancel me after reload",
+	);
 });
 
 test("closing the tab mid-turn does not kill it — a fresh tab catches up", async ({

@@ -3,15 +3,17 @@
  * (same allowlist verdict as the pages; middleware freshness is not enough
  * for a data-writing route), then delegates to runSessionTurn: the user event
  * and the provider's chunks land in session_events while the adapted
- * UIMessage stream flows back to useChat.
+ * UIMessage stream flows back to useChat. Mid-turn sends are queued durably
+ * and return 202; their user event is appended only when the row dispatches as
+ * the next turn.
  */
 import { createUIMessageStreamResponse } from "ai";
 import { after } from "next/server";
 import { getAuthState } from "@/lib/auth/auth-state";
 import {
 	ApprovalPolicyUnsupportedError,
+	queueSessionTurn,
 	runSessionTurn,
-	TurnConflictError,
 } from "@/lib/agent-runtime/run-turn";
 import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
@@ -48,25 +50,35 @@ export async function POST(
 		typeof body === "object" && body !== null && "text" in body
 			? String((body as { text: unknown }).text).trim()
 			: "";
+	const queueOnly =
+		typeof body === "object" &&
+		body !== null &&
+		"queue" in body &&
+		(body as { queue: unknown }).queue === true;
 	if (text.length === 0) {
 		return Response.json({ error: "text is required" }, { status: 400 });
 	}
 
 	let turn;
 	try {
-		turn = await runSessionTurn(handle, session, text);
+		turn = queueOnly
+			? await queueSessionTurn(handle, session, text)
+			: await runSessionTurn(handle, session, text);
 	} catch (error) {
-		// Structured errors, not unhandled 500s: a concurrent send is a 409 the
-		// client can retry after the turn; a session naming an unregistered
-		// provider is a 500 with the reason.
-		if (error instanceof TurnConflictError) {
-			return Response.json({ error: error.message }, { status: 409 });
-		}
+		// Structured errors, not unhandled 500s: unsupported approval policy is
+		// a client-fixable session/provider mismatch. Active-turn sends no
+		// longer throw here; they enqueue and return 202.
 		if (error instanceof ApprovalPolicyUnsupportedError) {
 			return Response.json({ error: error.message }, { status: 409 });
 		}
 		const message = error instanceof Error ? error.message : "failed to start the turn";
 		return Response.json({ error: message }, { status: 500 });
+	}
+	if (turn.kind === "queued") {
+		return Response.json(
+			{ queued: true, queueId: turn.queueId, position: turn.position },
+			{ status: 202 },
+		);
 	}
 	// The ingest loop already runs eagerly (the stream below tails it live).
 	// after() keeps a serverless invocation alive until the turn settles — the

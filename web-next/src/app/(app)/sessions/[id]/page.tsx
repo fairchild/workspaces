@@ -18,6 +18,7 @@ import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
 import type { FolioMessage } from "@/components/folio/types";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
+import { listQueuedMessages } from "@/lib/db/queued-messages";
 import { getRepo } from "@/lib/db/repos";
 import { getSession, readTranscript } from "@/lib/db/sessions";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
@@ -61,6 +62,7 @@ export default async function SessionPage({
 	// Assistant messages carry their metadata (author, turn stats) from the
 	// projection; user messages get the signed-in user's name here.
 	const transcript = (await readTranscript(handle, id)) as FolioMessage[];
+	const queuedMessages = await listQueuedMessages(handle, id);
 	const initialMessages = transcript
 		.filter((message) => !(resume && message.id === activeMessageId))
 		.map((message) =>
@@ -75,6 +77,12 @@ export default async function SessionPage({
 			author={author}
 			resume={resume}
 			initialMessages={initialMessages}
+			initialQueuedMessages={queuedMessages.map((message) => ({
+				queueId: message.queueId,
+				text: message.text,
+				queuedAt: message.queuedAt,
+				position: message.position,
+			}))}
 			session={{
 				masthead: {
 					repo: repoName,

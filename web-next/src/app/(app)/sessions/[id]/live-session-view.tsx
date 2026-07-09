@@ -42,11 +42,12 @@
  */
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 import { modelLabel } from "@/lib/agent-runtime/models";
 import {
 	type ActiveTurnData,
+	type QueuedMessageData,
 	SessionView,
 	type SessionViewData,
 } from "@/components/folio/session-view";
@@ -64,6 +65,12 @@ import { sandboxStateLabel, useSandboxState } from "./use-sandbox-state";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
 const TOKEN_THROTTLE_MS = 50;
+
+interface SessionSnapshot {
+	turn?: { status: "none" | "running" | "done" | "stale"; fromSeq: number | null };
+	messages?: FolioMessage[];
+	queuedMessages?: QueuedMessageData[];
+}
 
 function lastUserText(messages: FolioMessage[]): string {
 	const last = [...messages].reverse().find((m) => m.role === "user");
@@ -90,6 +97,7 @@ export function LiveSessionView({
 	session,
 	author,
 	initialMessages,
+	initialQueuedMessages = [],
 	resume = false,
 }: {
 	sessionId: string;
@@ -98,11 +106,20 @@ export function LiveSessionView({
 	author: string;
 	/** The persisted transcript, projected server-side from session_events. */
 	initialMessages: FolioMessage[];
+	/** Durable mid-turn user messages that have not dispatched yet. */
+	initialQueuedMessages?: QueuedMessageData[];
 	/** When a turn is in flight on mount, reconnect to its tail and catch up. */
 	resume?: boolean;
 }) {
 	// Transient provider statuses of the in-flight turn, oldest first.
 	const [steps, setSteps] = useState<string[]>([]);
+	const [queuedMessages, setQueuedMessages] = useState<QueuedMessageData[]>(
+		initialQueuedMessages,
+	);
+	const queuedMessagesRef = useRef(queuedMessages);
+	useEffect(() => {
+		queuedMessagesRef.current = queuedMessages;
+	}, [queuedMessages]);
 
 	// The selected model: seeded from the server-resolved session, updated
 	// optimistically on change (reverted if its PATCH fails while it is still
@@ -205,7 +222,14 @@ export function LiveSessionView({
 		[sessionId],
 	);
 
-	const { messages, sendMessage, status, error } = useChat<FolioMessage>({
+	const {
+		messages,
+		setMessages,
+		sendMessage,
+		resumeStream,
+		status,
+		error,
+	} = useChat<FolioMessage>({
 		id: sessionId,
 		transport,
 		messages: initialMessages,
@@ -222,6 +246,39 @@ export function LiveSessionView({
 	});
 
 	const busy = status === "submitted" || status === "streaming";
+	const hasSeenBusyRef = useRef(false);
+	useEffect(() => {
+		if (busy) hasSeenBusyRef.current = true;
+	}, [busy]);
+	const refreshInFlightRef = useRef(false);
+	const refreshSessionFromServer = useCallback(async () => {
+		if (refreshInFlightRef.current) return;
+		refreshInFlightRef.current = true;
+		try {
+			const res = await fetch(`/api/sessions/${sessionId}`);
+			if (!res.ok) return;
+			const data = (await res.json()) as SessionSnapshot;
+			if (data.messages) setMessages(data.messages);
+			setQueuedMessages(data.queuedMessages ?? []);
+			if (data.turn?.status === "running" || data.turn?.status === "stale") {
+				void resumeStream();
+			}
+		} finally {
+			refreshInFlightRef.current = false;
+		}
+	}, [sessionId, setMessages, resumeStream]);
+	const queueKey = queuedMessages.map((message) => message.queueId).join("|");
+	const lastQueueKickRef = useRef("");
+	useEffect(() => {
+		if (resume && !hasSeenBusyRef.current) return;
+		if (busy || queueKey.length === 0) {
+			if (queueKey.length === 0) lastQueueKickRef.current = "";
+			return;
+		}
+		if (lastQueueKickRef.current === queueKey) return;
+		lastQueueKickRef.current = queueKey;
+		void refreshSessionFromServer();
+	}, [busy, queueKey, refreshSessionFromServer, resume]);
 
 	// The sandbox lifecycle surface (#753): a verified state in the masthead,
 	// and two honest controls — stop the in-flight turn (the compose's send
@@ -273,14 +330,83 @@ export function LiveSessionView({
 		}
 	};
 
+	const queueMessage = useCallback(
+		async (text: string) => {
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}/chat`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ text, queue: true }),
+				});
+				if (res.status !== 202) {
+					await refreshSessionFromServer();
+					if (!res.ok) {
+						const data = (await res.json().catch(() => null)) as {
+							error?: string;
+						} | null;
+						setSteps((current) => [
+							...current,
+							`Queue unavailable — ${data?.error ?? `HTTP ${res.status}`}`,
+						]);
+					}
+					return;
+				}
+				const data = (await res.json()) as {
+					queued?: boolean;
+					queueId?: string;
+					position?: number;
+				};
+				if (!data.queued || !data.queueId) {
+					await refreshSessionFromServer();
+					return;
+				}
+				const queueId = data.queueId;
+				setQueuedMessages((current) =>
+					[
+						...current.filter((message) => message.queueId !== queueId),
+						{
+							queueId,
+							text,
+							queuedAt: new Date().toISOString(),
+							position: data.position ?? current.length + 1,
+						},
+					].sort((a, b) => a.position - b.position),
+				);
+			} catch {
+				setSteps((current) => [...current, "Queue unavailable — network error"]);
+			}
+		},
+		[sessionId, refreshSessionFromServer],
+	);
+
 	const send = (text: string) => {
 		setSteps([]);
 		// Await any in-flight model PATCH first, so the turn the server starts
 		// reads the session row this send was composed against.
-		void modelPatchChain.current.then(() =>
-			sendMessage({ text, metadata: { author } }),
-		);
+		void modelPatchChain.current.then(() => {
+			if (busy) return queueMessage(text);
+			return sendMessage({ text, metadata: { author } });
+		});
 	};
+
+	const cancelQueuedMessage = useCallback(
+		(queueId: string) => {
+			const previous = queuedMessagesRef.current;
+			setQueuedMessages((current) =>
+				current.filter((message) => message.queueId !== queueId),
+			);
+			void fetch(`/api/sessions/${sessionId}/queue/${queueId}`, {
+				method: "DELETE",
+			})
+				.then(async (res) => {
+					if (!res.ok) await refreshSessionFromServer();
+				})
+				.catch(() => {
+					setQueuedMessages(previous);
+				});
+		},
+		[sessionId, refreshSessionFromServer],
+	);
 
 	// A live failure (#808): the trailing assistant message useChat pushed at
 	// the turn's `start` never gets `metadata.error` from the stream itself
@@ -356,7 +482,9 @@ export function LiveSessionView({
 					},
 				}}
 				onSend={send}
-				composeDisabled={busy}
+				retryDisabled={busy}
+				queuedMessages={queuedMessages}
+				onCancelQueuedMessage={cancelQueuedMessage}
 				onModelChange={handleModelChange}
 				onTitleChange={handleTitleChange}
 				onStopTurn={busy ? stopTurn : undefined}

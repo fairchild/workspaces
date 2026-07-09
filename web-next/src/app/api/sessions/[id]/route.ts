@@ -9,19 +9,24 @@
  * the session, so the only pointer to a still-billing machine is never lost.
  * Every method carries the same auth gate as the chat route.
  */
+import { after } from "next/server";
+import { dispatchQueuedTurnIfIdle } from "@/lib/agent-runtime/run-turn";
 import { isSelectableModel } from "@/lib/agent-runtime/models";
 import { releaseParkedSandbox } from "@/lib/agent-runtime/sandbox-release";
 import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { sessionOwnerScopeResponse } from "@/lib/auth/session-owner";
 import { getDatabase } from "@/lib/db/client";
+import { listQueuedMessages } from "@/lib/db/queued-messages";
 import {
 	deleteSession,
 	getSession,
 	readEvents,
+	readTranscript,
 	updateSession,
 } from "@/lib/db/sessions";
 import { cleanTitleText, MAX_TITLE_LENGTH } from "@/lib/session-title";
+import type { FolioMessage } from "@/components/folio/types";
 
 export const runtime = "nodejs";
 
@@ -52,7 +57,27 @@ export async function GET(
 			{ status: 400 },
 		);
 	}
+	const dispatched = await dispatchQueuedTurnIfIdle(handle, session);
+	if (dispatched) {
+		try {
+			after(() => dispatched.ingest);
+		} catch {
+			// Outside a request scope in tests — the ingest is already running.
+		}
+	}
 	const events = await readEvents(handle, id, sinceSeq);
+	const turn = await resolveTurn(handle, id);
+	const activeMessageId = turn.fromSeq !== null ? `${id}:${turn.fromSeq}` : null;
+	const resume = turn.status === "running" || turn.status === "stale";
+	const transcript = (await readTranscript(handle, id)) as FolioMessage[];
+	const messages = transcript
+		.filter((message) => !(resume && message.id === activeMessageId))
+		.map((message) =>
+			message.role === "user"
+				? { ...message, metadata: { author: auth.user.name, ...message.metadata } }
+				: message,
+		);
+	const queuedMessages = await listQueuedMessages(handle, id);
 	return Response.json({
 		session: {
 			id: session.id,
@@ -66,6 +91,14 @@ export async function GET(
 			createdAt: session.createdAt,
 			lastActivityAt: session.lastActivityAt,
 		},
+		turn,
+		messages,
+		queuedMessages: queuedMessages.map((message) => ({
+			queueId: message.queueId,
+			text: message.text,
+			queuedAt: message.queuedAt,
+			position: message.position,
+		})),
 		events: events.map((event) => ({
 			seq: event.seq,
 			role: event.role,
