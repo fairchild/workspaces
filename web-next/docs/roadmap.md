@@ -32,10 +32,18 @@ GitHub milestones, not aspiration — keep it in sync as milestones close.
 > (`docs/decisions/web-next-subscription-compute.md`). Open follow-up: #999
 > (cron sweeper for idle sandboxes when no client polls).
 >
-> **Next arc.** [W6](https://github.com/fairchild/workspaces/milestone/19)
-> (daily driver — host compute + workflow depth) is planned, founded on
-> [`decisions/host-compute-daily-driver.md`](decisions/host-compute-daily-driver.md).
-> New web-next ADRs live in `web-next/docs/decisions/` from here on.
+> **W6 web lane complete (2026-07-09).** [W6](https://github.com/fairchild/workspaces/milestone/19)
+> (daily driver — host compute + workflow depth), founded on
+> [`decisions/host-compute-daily-driver.md`](decisions/host-compute-daily-driver.md),
+> shipped all nine web-lane issues in one arc: session-list workspace (#1002),
+> mobile polish (#1010), **host compute provider** (#1012 — turns via the local
+> `claude` binary, subscription-billed, hard read-only v1), approval protocol
+> (#1016), local serving mode (#1017 — `pnpm start:local`), mid-turn steering
+> (#1018), config parity (#1019), and PR-from-session (#1021). Still open in
+> the milestone: #987 (native embedding, desktop lane) and the gap wave
+> (#998/#1004/#1014). Retro:
+> `docs/retros/2026-07-09-w6-host-compute-daily-driver.md`. New web-next ADRs
+> live in `web-next/docs/decisions/` from here on.
 
 ## Definition of "totally usable"
 
