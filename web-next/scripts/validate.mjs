@@ -11,6 +11,7 @@
  */
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import http from "node:http";
 import path from "node:path";
 import { MODEL_OPTIONS } from "../src/lib/agent-runtime/models.ts";
 import { realTurnStage } from "./real-turn.mjs";
@@ -25,6 +26,7 @@ import {
 	evaluatePosture,
 	gateStage,
 	isRedirectToSignIn,
+	LOCAL_MODE_PORT,
 	LOCAL_PORT,
 	redactSecrets,
 	renderMarkdownReport,
@@ -32,7 +34,12 @@ import {
 	summarize,
 	validationSessionCookieName,
 } from "./validate-core.mjs";
-import { bypassServerEnv, startProductionServer, WEB_NEXT_ROOT } from "./harness.mjs";
+import {
+	bypassServerEnv,
+	localModeServerEnv,
+	startProductionServer,
+	WEB_NEXT_ROOT,
+} from "./harness.mjs";
 
 const PROBE_TIMEOUT_MS = 15_000;
 
@@ -75,6 +82,45 @@ async function probe(baseUrl, pathname, init = {}) {
 		];
 		return { path: pathname, method, status: 0, body: redactSecrets(String(error), secrets) };
 	}
+}
+
+async function probeWithHostHeader(baseUrl, pathname, host) {
+	const url = new URL(pathname, baseUrl);
+	return new Promise((resolve) => {
+		const req = http.request(
+			{
+				hostname: url.hostname,
+				port: url.port,
+				path: `${url.pathname}${url.search}`,
+				method: "GET",
+				headers: { Host: host },
+				timeout: PROBE_TIMEOUT_MS,
+			},
+			(res) => {
+				let body = "";
+				res.setEncoding("utf8");
+				res.on("data", (chunk) => {
+					body += chunk;
+				});
+				res.on("end", () => {
+					resolve({
+						path: pathname,
+						method: "GET",
+						status: res.statusCode ?? 0,
+						location: res.headers.location,
+						body,
+					});
+				});
+			},
+		);
+		req.on("timeout", () => {
+			req.destroy(new Error("request timed out"));
+		});
+		req.on("error", (error) => {
+			resolve({ path: pathname, method: "GET", status: 0, body: String(error) });
+		});
+		req.end();
+	});
 }
 
 async function reachabilityStage(baseUrl) {
@@ -121,6 +167,46 @@ async function postureStage(baseUrl, signIn) {
 		id: `posture (${mode} auth)`,
 		status: "run",
 		checks: evaluatePosture(mode, { home, signIn, forgedCookieHome, api }),
+	};
+}
+
+async function localModeStage(baseUrl, token) {
+	const [badHost, noCookieApi, bypassCookieHome, tokenCookieHome] = await Promise.all([
+		probeWithHostHeader(baseUrl, "/api/repos", "spaces.example"),
+		probe(baseUrl, "/api/repos"),
+		probe(baseUrl, "/", { headers: { cookie: "test-auth-login=fairchild" } }),
+		probe(baseUrl, "/", {
+			headers: token ? { cookie: `web-next-local-session=${token}` } : {},
+		}),
+	]);
+	return {
+		id: "local-mode posture",
+		status: "run",
+		checks: [
+			{
+				id: "loopback_host_required",
+				status: badHost.status === 403 ? "pass" : "fail",
+				detail:
+					badHost.status === 403
+						? `GET /api/repos with Host: spaces.example → ${badHost.status}`
+						: `target is not in local mode: GET /api/repos with Host: spaces.example → ${badHost.status}`,
+			},
+			{
+				id: "token_required",
+				status: noCookieApi.status === 401 ? "pass" : "fail",
+				detail: `GET /api/repos without cookie → ${noCookieApi.status}`,
+			},
+			{
+				id: "bypass_cookie_inert",
+				status: isRedirectToSignIn(bypassCookieHome) ? "pass" : "fail",
+				detail: `GET / with test-auth-login cookie → ${bypassCookieHome.status}`,
+			},
+			{
+				id: "local_cookie_authenticates",
+				status: tokenCookieHome.status === 200 ? "pass" : "fail",
+				detail: `GET / with local session cookie → ${tokenCookieHome.status}`,
+			},
+		],
 	};
 }
 
@@ -264,8 +350,14 @@ async function main() {
 	const skipRealTurn = args.includes("--skip-real-turn");
 	let server;
 	if (target.spawnLocal) {
-		const { env } = bypassServerEnv("validate-db");
-		server = await startProductionServer(LOCAL_PORT, env);
+		if (target.localMode) {
+			const { env } = await localModeServerEnv("validate-local-mode");
+			server = await startProductionServer(LOCAL_MODE_PORT, env);
+			process.env.WEB_NEXT_LOCAL_TOKEN = env.WEB_NEXT_LOCAL_TOKEN;
+		} else {
+			const { env } = bypassServerEnv("validate-db");
+			server = await startProductionServer(LOCAL_PORT, env);
+		}
 	}
 	try {
 		console.log(`validating ${target.envName}: ${target.baseUrl}\n`);
@@ -280,6 +372,13 @@ async function main() {
 		const mode = detectAuthMode(reach.signIn?.body ?? "");
 		if (reachable) {
 			stages.push(await timed(() => postureStage(target.baseUrl, reach.signIn)));
+			if (target.localMode) {
+				stages.push(
+					await timed(() =>
+						localModeStage(target.baseUrl, process.env.WEB_NEXT_LOCAL_TOKEN),
+					),
+				);
+			}
 			stages.push(await timed(() => authenticatedStage(target.baseUrl, mode, process.env)));
 			stages.push(await timed(() => modelSweepStage(target.baseUrl, process.env)));
 			stages.push(await timed(() => e2eDeployedSafeStage(target, process.env)));

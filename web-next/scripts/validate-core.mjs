@@ -10,6 +10,7 @@
 export const DEFAULT_PROD_URL = "https://folio.cloudcompute.com";
 
 export const LOCAL_PORT = 3101;
+export const LOCAL_MODE_PORT = 3102;
 
 /**
  * Resolves what a run targets. `--url <origin>` wins; `--env local` spawns a
@@ -22,16 +23,29 @@ export function resolveTarget(args, env = {}) {
 		const at = args.indexOf(flag);
 		return at >= 0 ? args[at + 1] : undefined;
 	};
+	const envName = get("--env") ?? "local";
 	const url = get("--url");
 	if (url) {
 		if (!/^https?:\/\//.test(url)) {
 			throw new Error(`--url must be an http(s) origin, got: ${url}`);
 		}
-		return { envName: get("--env") ?? "url", baseUrl: url.replace(/\/$/, ""), spawnLocal: false };
+		return {
+			envName: get("--env") ?? "url",
+			baseUrl: url.replace(/\/$/, ""),
+			spawnLocal: false,
+			localMode: envName === "local-mode",
+		};
 	}
-	const envName = get("--env") ?? "local";
 	if (envName === "local") {
 		return { envName, baseUrl: `http://localhost:${LOCAL_PORT}`, spawnLocal: true };
+	}
+	if (envName === "local-mode") {
+		return {
+			envName,
+			baseUrl: `http://localhost:${LOCAL_MODE_PORT}`,
+			spawnLocal: true,
+			localMode: true,
+		};
 	}
 	if (envName === "prod") {
 		return {
@@ -51,6 +65,7 @@ export function resolveTarget(args, env = {}) {
  * its presence distinguishes the modes from the outside.
  */
 export function detectAuthMode(signInHtml) {
+	if (/local sign-in token|continue locally/i.test(signInHtml)) return "local";
 	return /test bypass/i.test(signInHtml) ? "bypass" : "real";
 }
 
@@ -129,12 +144,34 @@ export function evaluatePosture(mode, probes) {
 				`GET / with forged test-auth-login → ${probes.forgedCookieHome.status}`,
 			),
 		);
-	} else {
+	} else if (mode === "bypass") {
 		checks.push(
 			check(
 				"bypass_cookie_signs_in",
 				probes.forgedCookieHome.status === 200,
 				`GET / with test-auth-login cookie → ${probes.forgedCookieHome.status} (bypass mode)`,
+			),
+		);
+	} else {
+		checks.push(
+			check(
+				"no_github_oauth_button",
+				!/github/i.test(probes.signIn.body ?? ""),
+				"local-mode door must not offer GitHub OAuth",
+			),
+		);
+		checks.push(
+			check(
+				"no_bypass_button",
+				!/test bypass/i.test(probes.signIn.body ?? ""),
+				"local-mode door must not offer the test bypass",
+			),
+		);
+		checks.push(
+			check(
+				"forged_bypass_cookie_inert",
+				isRedirectToSignIn(probes.forgedCookieHome),
+				`GET / with forged test-auth-login → ${probes.forgedCookieHome.status}`,
 			),
 		);
 	}
@@ -189,6 +226,9 @@ export function validationSessionCookieName(baseUrl) {
  */
 export function authedCookie(mode, baseUrl, env) {
 	if (mode === "bypass") return "test-auth-login=fairchild";
+	if (mode === "local" && env.WEB_NEXT_LOCAL_TOKEN) {
+		return `web-next-local-session=${env.WEB_NEXT_LOCAL_TOKEN}`;
+	}
 	if (!env.WEB_NEXT_VALIDATION_SESSION) return null;
 	return `${validationSessionCookieName(baseUrl)}=${env.WEB_NEXT_VALIDATION_SESSION}`;
 }

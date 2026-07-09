@@ -34,6 +34,29 @@ coding turn with reasoning, tool calls, a failing→passing test cycle, and a
 diff. Try `/sessions/demo?scenario=adversarial` or `?scenario=long` to stress
 the transcript.
 
+## Run the owner-local production server
+
+```bash
+cd web-next
+pnpm start:local                  # builds if .next/ is missing, serves :3100
+PORT=3183 pnpm start:local
+WEB_NEXT_DATA_DIR=/path/to/spaces-data PORT=3183 pnpm start:local
+```
+
+`start:local` is the first-class `next start` target for the owner's machine.
+It sets `WEB_NEXT_LOCAL_MODE=1`, mints a random local token under
+`WEB_NEXT_DATA_DIR` (default `.data/local-sign-in-token`), prints
+`http://localhost:<port>/sign-in?token=…`, and starts Next bound with
+`-H 127.0.0.1`. Next owns the socket, so the app also refuses requests whose
+Host header is not loopback (`localhost`, `127.0.0.1`, or `::1`).
+
+Local mode is separate from both GitHub OAuth and the test bypass. It exits at
+startup if `AUTH_BYPASS=1` or GitHub OAuth env vars are present. The local
+identity defaults to `fairchild`; set `WEB_NEXT_LOCAL_LOGIN` to change the
+stored session owner. When GitHub App installation credentials are present, the
+repo picker uses the real installation directory; without them it falls back to
+the deterministic fixture repos used by e2e.
+
 ## Quality gates (what CI runs)
 
 ```bash
@@ -44,7 +67,7 @@ pnpm build       # production build — must stay clean (see #780 for the stale-
 pnpm test:e2e    # Playwright; builds + serves on :3100 in auth-bypass mode
 pnpm evidence    # light+dark screenshot walk → output/evidence/
 pnpm perf        # perf harness vs perf/contract.json budgets
-pnpm validate    # env-targetable validation (--env local|prod, --url <origin>)
+pnpm validate    # env-targetable validation (--env local|local-mode|prod, --url <origin>)
 ```
 
 `pnpm evidence` only writes local files — the repo's evidence gate needs

@@ -1,7 +1,7 @@
 /*
- * Covers all three repo-directory modes: bypass fixtures (the hermetic e2e
- * seam), degraded (no App creds — never blocks), and configured (real GitHub
- * calls, network mocked here so these stay unit tests).
+ * Covers the repo-directory decision matrix: App credentials always use the
+ * real GitHub path, no credentials plus local/bypass use fixtures, and no
+ * credentials plus real OAuth stays degraded.
  */
 import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,9 +25,11 @@ afterEach(() => {
 	vi.unstubAllEnvs();
 });
 
-describe("bypass mode (AUTH_BYPASS=1)", () => {
+describe("fixture mode (no App creds plus local or bypass auth)", () => {
 	it("lists the deterministic fixture repos, alphabetical", async () => {
 		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		await expect(listDirectoryRepos()).resolves.toEqual([
 			{ fullName: "fairchild/dotfiles", defaultBranch: "main", private: false },
 			{
@@ -40,7 +42,9 @@ describe("bypass mode (AUTH_BYPASS=1)", () => {
 	});
 
 	it("validates a fixture repo as ok, case-insensitively", async () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("WEB_NEXT_LOCAL_MODE", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		await expect(validateDirectoryRepo("Fairchild/Workspaces")).resolves.toEqual({
 			kind: "ok",
 			fullName: "fairchild/workspaces",
@@ -51,6 +55,8 @@ describe("bypass mode (AUTH_BYPASS=1)", () => {
 
 	it("resolves a non-fixture repo as not-found without touching the network", async () => {
 		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		const fetchSpy = vi.fn();
 		vi.stubGlobal("fetch", fetchSpy);
 		await expect(
@@ -60,60 +66,49 @@ describe("bypass mode (AUTH_BYPASS=1)", () => {
 	});
 
 	it("is never degraded", () => {
-		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("WEB_NEXT_LOCAL_MODE", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		expect(isDirectoryDegraded()).toBe(false);
 	});
 
-	// The double lock, proven through this seam (not just config.test.ts):
-	// AUTH_BYPASS=1 with real OAuth configured must NOT serve fixtures —
-	// a leaked bypass flag in production falls through to the real path.
-	it("fixtures cannot activate when real OAuth is configured", async () => {
+	it("treats empty-string App credentials as absent for e2e fixture mode", async () => {
 		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
+		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
+		await expect(listDirectoryRepos()).resolves.toContainEqual({
+			fullName: "fairchild/workspaces",
+			defaultBranch: "main",
+			private: false,
+		});
+	});
+});
+
+describe("degraded mode (no App creds plus real OAuth)", () => {
+	it("lists no repos and accepts freetext as unverified", async () => {
+		vi.stubEnv("AUTH_BYPASS", "");
+		vi.stubEnv("WEB_NEXT_LOCAL_MODE", "");
 		vi.stubEnv("GITHUB_OAUTH_CLIENT_ID", "Iv1.real");
 		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
 		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		// Without App creds the fall-through lands in degraded, not fixtures.
 		expect(isDirectoryDegraded()).toBe(true);
 		await expect(listDirectoryRepos()).resolves.toEqual([]);
 		await expect(validateDirectoryRepo("fairchild/workspaces")).resolves.toEqual({
 			kind: "unverified",
 			fullName: "fairchild/workspaces",
 		});
+		await expect(resolveRepo("fairchild/workspaces")).resolves.toEqual({
+			defaultBranch: null,
+		});
 	});
-});
 
-describe("degraded mode (no App creds, no bypass)", () => {
-	it("reports degraded", () => {
-		vi.stubEnv("AUTH_BYPASS", "");
+	it("does not let a leaked bypass flag activate fixtures when real OAuth is configured", async () => {
+		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubEnv("GITHUB_OAUTH_CLIENT_ID", "Iv1.real");
 		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
 		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		expect(isDirectoryDegraded()).toBe(true);
-	});
-
-	it("lists no repos rather than throwing", async () => {
-		vi.stubEnv("AUTH_BYPASS", "");
-		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
-		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
 		await expect(listDirectoryRepos()).resolves.toEqual([]);
-	});
-
-	it("validates any shape-valid repo as unverified, not blocking", async () => {
-		vi.stubEnv("AUTH_BYPASS", "");
-		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
-		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		await expect(validateDirectoryRepo("anyone/anything")).resolves.toEqual({
-			kind: "unverified",
-			fullName: "anyone/anything",
-		});
-	});
-
-	it("resolveRepo accepts unverified without a default branch", async () => {
-		vi.stubEnv("AUTH_BYPASS", "");
-		vi.stubEnv("GITHUB_WEB_WORKSPACES_APP_ID", "");
-		vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "");
-		await expect(resolveRepo("anyone/anything")).resolves.toEqual({
-			defaultBranch: null,
-		});
 	});
 });
 
@@ -227,6 +222,86 @@ describe("configured mode (App creds present, GitHub mocked)", () => {
 		await expect(listDirectoryRepos()).resolves.toEqual([
 			{ fullName: "fairchild/alpha", defaultBranch: "main", private: false },
 			{ fullName: "fairchild/zeta", defaultBranch: "main", private: false },
+		]);
+	});
+
+	it("uses real App credentials even under AUTH_BYPASS", async () => {
+		stubEnv();
+		vi.stubEnv("AUTH_BYPASS", "1");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url.endsWith("/app/installations")) {
+					return Response.json([{ id: 7, account: { login: "fairchild" } }]);
+				}
+				if (url.endsWith("/app/installations/7/access_tokens")) {
+					return Response.json({
+						token: "ghs_dir_token",
+						expires_at: "2026-01-01T00:00:00Z",
+						permissions: {},
+					});
+				}
+				if (url.includes("/installation/repositories")) {
+					return Response.json({
+						repositories: [
+							{
+								full_name: "fairchild/real-from-app",
+								default_branch: "main",
+								private: true,
+							},
+						],
+					});
+				}
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		await expect(listDirectoryRepos()).resolves.toEqual([
+			{
+				fullName: "fairchild/real-from-app",
+				defaultBranch: "main",
+				private: true,
+			},
+			]);
+	});
+
+	it("uses real App credentials even under local mode", async () => {
+		stubEnv();
+		vi.stubEnv("WEB_NEXT_LOCAL_MODE", "1");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: RequestInfo | URL) => {
+				const url = String(input);
+				if (url.endsWith("/app/installations")) {
+					return Response.json([{ id: 7, account: { login: "fairchild" } }]);
+				}
+				if (url.endsWith("/app/installations/7/access_tokens")) {
+					return Response.json({
+						token: "ghs_dir_token",
+						expires_at: "2026-01-01T00:00:00Z",
+						permissions: {},
+					});
+				}
+				if (url.includes("/installation/repositories")) {
+					return Response.json({
+						repositories: [
+							{
+								full_name: "fairchild/local-but-real",
+								default_branch: "main",
+								private: true,
+							},
+						],
+					});
+				}
+				throw new Error(`unexpected fetch: ${url}`);
+			}),
+		);
+		await expect(listDirectoryRepos()).resolves.toEqual([
+			{
+				fullName: "fairchild/local-but-real",
+				defaultBranch: "main",
+				private: true,
+			},
 		]);
 	});
 });

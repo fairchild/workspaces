@@ -1,10 +1,9 @@
 /*
  * GET /api/repos?q=<query> — auth-gated feed for the new-session picker's
  * searchable repo list: the GitHub App installation's repos merged with the
- * already-connected ones (see mergeRepoLists), so one-click rows survive
- * even when the directory is empty. `degraded: true` when the App has no
- * credentials configured, so the client can show the quiet unverified note
- * instead of an empty-looking error.
+ * already-connected ones (see mergeRepoLists), so one-click rows survive.
+ * When App credentials are absent, the directory layer returns deterministic
+ * fixtures rather than coupling itself to the active auth mode.
  */
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";

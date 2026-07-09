@@ -1,19 +1,18 @@
 /*
  * GitHub-backed repo directory for the new-session picker: lists the App
  * installation's repositories and validates a freetext `owner/name`, sitting
- * in front of the raw App-auth mechanics in `../diag/github-app`. Three modes,
- * resolved once per call so callers never branch on environment themselves:
+ * in front of the raw App-auth mechanics in `../diag/github-app`. Directory
+ * mode is credential-first, then local/test auth posture:
  *
- *  - bypass (`AUTH_BYPASS=1`, no real OAuth configured — see `../auth/config`):
- *    a small deterministic fixture set, so e2e/evidence/perf runs never touch
- *    the real GitHub API.
  *  - configured (App creds present): the real installation-repos + repo-read
  *    endpoints.
- *  - degraded (App creds absent, e.g. local dev without `.env.local`): listing
- *    comes back empty and validation always resolves "unverified" rather than
- *    blocking — freetext still works, just unproven.
+ *  - fixtures (App creds absent + local mode or test bypass): a small
+ *    deterministic fixture set, so e2e/evidence/perf runs stay hermetic and
+ *    local mode has a visible picker.
+ *  - degraded (App creds absent + real OAuth): listing comes back empty and
+ *    validation resolves "unverified" rather than blocking.
  */
-import { authBypassEnabled } from "../auth/config";
+import { authBypassEnabled, localModeEnabled } from "../auth/config";
 import {
 	type DirectoryRepo,
 	listInstallationRepositories,
@@ -54,14 +53,18 @@ function hasAppCredentials(): boolean {
 	);
 }
 
-/** True when the picker has nothing but the freetext escape hatch to offer. */
-export function isDirectoryDegraded(): boolean {
-	return !authBypassEnabled() && !hasAppCredentials();
+function shouldUseFixtureDirectory(): boolean {
+	return !hasAppCredentials() && (localModeEnabled() || authBypassEnabled());
 }
 
-/** The installation's repos, alphabetical — empty (not thrown) when degraded. */
+/** True when the picker has nothing but the freetext escape hatch to offer. */
+export function isDirectoryDegraded(): boolean {
+	return !hasAppCredentials() && !shouldUseFixtureDirectory();
+}
+
+/** The installation's repos, fixtures for hermetic modes, or empty when degraded. */
 export async function listDirectoryRepos(): Promise<DirectoryRepo[]> {
-	if (authBypassEnabled()) {
+	if (shouldUseFixtureDirectory()) {
 		return [...FIXTURE_REPOS].sort((a, b) => a.fullName.localeCompare(b.fullName));
 	}
 	if (!hasAppCredentials()) return [];
@@ -74,7 +77,7 @@ export async function listDirectoryRepos(): Promise<DirectoryRepo[]> {
 export async function validateDirectoryRepo(
 	fullName: string,
 ): Promise<RepoValidation> {
-	if (authBypassEnabled()) {
+	if (shouldUseFixtureDirectory()) {
 		const fixture = FIXTURE_REPOS.find(
 			(repo) => repo.fullName.toLowerCase() === fullName.toLowerCase(),
 		);

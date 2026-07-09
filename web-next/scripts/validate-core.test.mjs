@@ -30,12 +30,32 @@ describe("resolveTarget", () => {
 		).toBe("https://x.example");
 	});
 
+	test("--env local-mode spawns the owner-local target", () => {
+		expect(resolveTarget(["--env", "local-mode"])).toMatchObject({
+			envName: "local-mode",
+			baseUrl: "http://localhost:3102",
+			spawnLocal: true,
+			localMode: true,
+		});
+	});
+
 	test("--url wins and never spawns", () => {
 		const t = resolveTarget(["--env", "preview", "--url", "https://pr-1.vercel.app/"]);
 		expect(t).toMatchObject({
 			envName: "preview",
 			baseUrl: "https://pr-1.vercel.app",
 			spawnLocal: false,
+		});
+	});
+
+	test("--env local-mode --url keeps local-mode expectations", () => {
+		expect(
+			resolveTarget(["--env", "local-mode", "--url", "http://localhost:3183/"]),
+		).toMatchObject({
+			envName: "local-mode",
+			baseUrl: "http://localhost:3183",
+			spawnLocal: false,
+			localMode: true,
 		});
 	});
 
@@ -47,6 +67,7 @@ describe("resolveTarget", () => {
 
 test("detectAuthMode reads the door", () => {
 	expect(detectAuthMode("<button>continue as fairchild (test bypass)</button>")).toBe("bypass");
+	expect(detectAuthMode("<input placeholder='local sign-in token' />")).toBe("local");
 	expect(detectAuthMode("<button>Continue with GitHub</button>")).toBe("real");
 });
 
@@ -83,6 +104,16 @@ describe("evaluatePosture", () => {
 			home: redirect,
 			signIn: { status: 200, body: "test bypass" },
 			forgedCookieHome: { status: 200 },
+			api: [{ path: "/api/x", method: "POST", status: 401, body: unauthJson }],
+		});
+		expect(checks.every((c) => c.status === "pass")).toBe(true);
+	});
+
+	test("local mode: no OAuth door, no bypass door, forged bypass cookie inert", () => {
+		const checks = evaluatePosture("local", {
+			home: redirect,
+			signIn: { status: 200, body: "local sign-in token" },
+			forgedCookieHome: redirect,
 			api: [{ path: "/api/x", method: "POST", status: 401, body: unauthJson }],
 		});
 		expect(checks.every((c) => c.status === "pass")).toBe(true);
@@ -147,6 +178,15 @@ test("validationSessionCookieName picks the __Secure- prefix over https, plain o
 	expect(validationSessionCookieName("http://localhost:3101")).toBe(
 		"better-auth.session_token",
 	);
+});
+
+test("authedCookie can authenticate local-mode validation with the minted token", () => {
+	expect(
+		authedCookie("local", "http://localhost:3102", {
+			WEB_NEXT_LOCAL_TOKEN: "local-secret",
+		}),
+	).toBe("web-next-local-session=local-secret");
+	expect(authedCookie("local", "http://localhost:3102", {})).toBeNull();
 });
 
 describe("classifyModelSweepGate (#816)", () => {

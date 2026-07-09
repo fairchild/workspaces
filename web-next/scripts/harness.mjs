@@ -5,7 +5,8 @@
  * Node-only, no test framework.
  */
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
@@ -62,6 +63,33 @@ export function bypassServerEnv(dbDirName) {
 	};
 }
 
+/**
+ * Local-mode server env over a fresh WEB_NEXT_DATA_DIR. The token is persisted
+ * where the app expects it and exported for middleware, matching start:local.
+ */
+export function localModeServerEnv(dbDirName) {
+	const dataDir = path.join(WEB_NEXT_ROOT, "output", dbDirName);
+	rmSync(dataDir, { recursive: true, force: true });
+	mkdirSync(dataDir, { recursive: true });
+	const token = randomBytes(32).toString("base64url");
+	writeFileSync(path.join(dataDir, "local-sign-in-token"), `${token}\n`, {
+		mode: 0o600,
+	});
+	return {
+		env: {
+			WEB_NEXT_LOCAL_MODE: "1",
+			WEB_NEXT_LOCAL_TOKEN: token,
+			WEB_NEXT_DATA_DIR: dataDir,
+			WEB_NEXT_LOCAL_LOGIN: HARNESS_LOGIN,
+			AUTH_BYPASS: "",
+			GITHUB_OAUTH_CLIENT_ID: "",
+			GITHUB_OAUTH_CLIENT_SECRET: "",
+		},
+		token,
+		dataDir,
+	};
+}
+
 /** Fails fast when `next build` hasn't produced a servable build. */
 export function assertProductionBuild() {
 	if (!existsSync(path.join(WEB_NEXT_ROOT, ".next", "BUILD_ID"))) {
@@ -90,28 +118,58 @@ async function waitForServer(url, timeoutMs = 60_000) {
  */
 export async function startProductionServer(port = 3100, env = {}) {
 	assertProductionBuild();
+	const args =
+		env.WEB_NEXT_LOCAL_MODE === "1"
+			? ["exec", "next", "start", "-H", "127.0.0.1", "--port", String(port)]
+			: ["exec", "next", "start", "--port", String(port)];
 	const child = spawn(
 		"pnpm",
-		["exec", "next", "start", "--port", String(port)],
+		args,
 		{
 			cwd: WEB_NEXT_ROOT,
 			stdio: ["ignore", "pipe", "pipe"],
 			env: { ...process.env, ...env },
+			detached: true,
 		},
 	);
 	const baseUrl = `http://localhost:${port}`;
 	try {
 		await waitForServer(baseUrl);
 	} catch (error) {
-		child.kill("SIGTERM");
+		try {
+			process.kill(-child.pid, "SIGTERM");
+		} catch {
+			child.kill("SIGTERM");
+		}
 		throw error;
 	}
 	return {
 		baseUrl,
 		stop: () =>
 			new Promise((resolve) => {
-				child.once("exit", resolve);
-				child.kill("SIGTERM");
+				let done = false;
+				const finish = () => {
+					if (done) return;
+					done = true;
+					resolve();
+				};
+				const killTimer = setTimeout(() => {
+					try {
+						process.kill(-child.pid, "SIGKILL");
+					} catch {
+						child.kill("SIGKILL");
+					}
+					finish();
+				}, 5_000);
+				child.once("exit", () => {
+					clearTimeout(killTimer);
+					finish();
+				});
+				try {
+					process.kill(-child.pid, "SIGTERM");
+				} catch {
+					child.kill("SIGTERM");
+				}
 			}),
 	};
 }
