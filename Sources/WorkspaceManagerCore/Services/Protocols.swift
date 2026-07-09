@@ -185,6 +185,15 @@ public protocol EventStreamServiceProtocol: Sendable {
     var lastDisconnectReason: StreamDisconnectReason { get async }
 }
 
+/// Supervision surface for the embedded local-mode web-next server. Views and
+/// tests inject this instead of the concrete actor.
+public protocol WebNextServerServiceProtocol: Sendable {
+    var state: WebNextServerState { get async }
+    func start() async
+    func stop() async
+    func signInURL(redirect: String?) async -> URL?
+}
+
 public protocol GitHubDeviceAuthProtocol: Sendable {
     func requestDeviceCode(scope: String) async throws -> DeviceCodeResponse
     func pollForToken(deviceCode: String, interval: Int) async throws -> GitHubAuthToken
