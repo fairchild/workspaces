@@ -19,7 +19,7 @@ struct EmbeddedWebNextStatusRenderTests {
         try render(
             EmbeddedWebNextStatusView(
                 state: .failed(
-                    "Timed out after 30s waiting for web-next health on port 3140."
+                    "Timed out after 180s waiting for web-next health on port 3140."
                 )
             ),
             named: "embedded-webnext-failed.png"

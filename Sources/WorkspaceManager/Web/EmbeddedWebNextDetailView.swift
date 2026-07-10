@@ -64,13 +64,16 @@ final class EmbeddedWebNextModel: ObservableObject {
     }
 
     /// Poll until the server leaves `.starting`, so an activation that raced an
-    /// in-flight launch resolves on the real outcome. Bounded well past the
-    /// service's own readiness timeout as a backstop against a wedged launch.
+    /// in-flight launch resolves on the real outcome. This is only a backstop
+    /// against a wedged launch that never transitions; it must stay comfortably
+    /// past the service's own `readinessTimeout` (currently 180s, sized for a
+    /// cold first-run build) so the UI never gives up on a launch the service
+    /// still considers healthy-in-progress.
     private func awaitTerminalState() async -> WebNextServerState {
         var state = await server.state
         var elapsed: TimeInterval = 0
         let pollInterval: TimeInterval = 0.15
-        let maxWait: TimeInterval = 45
+        let maxWait: TimeInterval = 210
         while case .starting = state, elapsed < maxWait, !Task.isCancelled {
             try? await Task.sleep(nanoseconds: UInt64(pollInterval * 1_000_000_000))
             elapsed += pollInterval
@@ -158,9 +161,13 @@ struct EmbeddedWebNextStatusView: View {
                     .controlSize(.large)
                 Text("Starting web-next…")
                     .font(.headline)
-                Text("Launching the local server and signing you in.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Text(
+                    "Launching the local server and signing you in. The first run builds web-next and can take a minute."
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 420)
             case .failed(let reason):
                 Image(systemName: "exclamationmark.triangle")
                     .font(.largeTitle)

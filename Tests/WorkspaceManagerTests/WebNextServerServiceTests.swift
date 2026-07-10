@@ -207,6 +207,38 @@ struct WebNextServerServiceTests {
         #expect(died, "spawned process should be terminated after readiness timeout")
     }
 
+    @Test("a cancelled activation does not abort the launch — the server still becomes ready")
+    func callerCancellationDoesNotPoisonLaunch() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        // Delay the healthz listener a beat so cancellation lands while the
+        // service is mid-readiness, not after it is already healthy.
+        let script = """
+            sleep 0.4
+            \(fixture.healthzServerScript)
+            """
+        let service = WebNextServerService(
+            configuration: fixture.configuration(script: script, readinessTimeout: 20))
+
+        // Trigger start() from a task we cancel almost immediately — mirroring the
+        // user closing the embedded pane during a cold build. If the readiness poll
+        // were bound to the caller's task it would busy-spin, auto-cancel every
+        // health probe, and time out into a process-killing .failed; the launch must
+        // instead run to ready in its own context.
+        let starter = Task { await service.start() }
+        try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms: inside the readiness loop
+        starter.cancel()
+
+        let ready = await waitUntil(timeout: 10) {
+            if case .ready = await service.state { return true }
+            return false
+        }
+        #expect(ready, "caller cancellation must not prevent the server from reaching .ready")
+
+        await service.stop()
+        #expect(await service.state == .idle)
+    }
+
     @Test("early process exit transitions to failed before the timeout")
     func earlyExitFails() async throws {
         let fixture = try Fixture()
