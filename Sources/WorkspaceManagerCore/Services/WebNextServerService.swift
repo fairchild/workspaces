@@ -63,6 +63,12 @@ public struct WebNextServerConfiguration: Sendable {
     /// Where per-launch server logs (captured child stdout/stderr) are written.
     public var logDirectory: URL
     public var launchCommand: WebNextLaunchCommand
+    /// How long to wait for `/api/healthz` after spawn before declaring failure.
+    /// Sized for a cold first run: `start:local` builds web-next when
+    /// `.next/BUILD_ID` is absent, which takes one to two minutes. A generous
+    /// budget is safe because a process that dies mid-build is detected
+    /// independently and fails fast (see `start()`); this only bounds the
+    /// alive-but-not-yet-serving window, which is precisely the build.
     public var readinessTimeout: TimeInterval
     public var readinessPollInterval: TimeInterval
     /// How long termination waits after SIGTERM before escalating to SIGKILL.
@@ -78,7 +84,7 @@ public struct WebNextServerConfiguration: Sendable {
         dataDir: URL? = nil,
         logDirectory: URL? = nil,
         launchCommand: WebNextLaunchCommand = .default,
-        readinessTimeout: TimeInterval = 30,
+        readinessTimeout: TimeInterval = 180,
         readinessPollInterval: TimeInterval = 0.5,
         terminationGracePeriod: TimeInterval = 5,
         watchdogInterval: TimeInterval = 5,
@@ -155,7 +161,11 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     // MARK: Lifecycle
 
     /// Spawn the server and wait until `/api/healthz` reports healthy or the
-    /// readiness timeout elapses. Returns immediately when already starting or ready.
+    /// readiness timeout elapses. Returns immediately when already starting or
+    /// ready. Cancelling the caller does not abort the launch: the server is a
+    /// process-wide resource whose bring-up is owned by the actor, so a cancelled
+    /// activation leaves it coming up (and available on reopen) rather than
+    /// killing a build in flight.
     public func start() async {
         switch state {
         case .starting, .ready:
@@ -179,6 +189,23 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         }
         processID = pid
 
+        // Own the readiness poll as an unstructured task so it runs in a fresh,
+        // non-cancelled context. If the triggering caller is cancelled mid-launch
+        // (e.g. the user closes the pane during a cold build), an inline poll would
+        // busy-spin and its health probes would auto-cancel — never observing
+        // readiness and forcing a spurious timeout-kill of a live build. The
+        // launch's lifetime is owned by the actor + generation, not the caller;
+        // `await launch.value` keeps start()'s "blocks until terminal" contract.
+        let launch = Task { await self.awaitReadiness(pid: pid, launchGeneration: launchGeneration) }
+        await launch.value
+    }
+
+    /// Poll `/api/healthz` until it reports healthy, the process exits, or the
+    /// readiness timeout elapses — then transition state. Runs as an unstructured
+    /// task (see `start()`) so caller cancellation cannot poison the launch;
+    /// generation guards drop the outcome if a newer `start()`/`stop()`
+    /// superseded it.
+    private func awaitReadiness(pid: pid_t, launchGeneration: UInt64) async {
         let deadline = Date().addingTimeInterval(configuration.readinessTimeout)
         while Date() < deadline {
             guard generation == launchGeneration else { return }
