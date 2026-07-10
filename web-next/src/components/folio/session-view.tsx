@@ -135,6 +135,8 @@ function QueuedMessages({
 
 export interface SessionViewProps {
 	session: SessionViewData;
+	/** Scopes live-turn follow DOM lookups when this is a real session surface. */
+	turnFollowScopeId?: string;
 	/** Compose submit handler (client wrappers wire this; fixtures omit it). */
 	onSend?: (text: string) => void;
 	/** Hard-disables compose when this surface cannot accept text. */
@@ -167,6 +169,7 @@ export interface SessionViewProps {
 
 export function SessionView({
 	session,
+	turnFollowScopeId,
 	onSend,
 	composeDisabled,
 	retryDisabled,
@@ -196,6 +199,7 @@ export function SessionView({
 			    path, a URL) wraps instead of forcing 375px pages sideways (#753);
 			    pre/diff bodies keep their own inner overflow-x scrolling. */}
 			<main
+				data-turn-follow-scope={turnFollowScopeId}
 				className={`mx-auto max-w-[680px] px-4 pb-6 break-words sm:px-5 ${
 					hasMastheadSubline ? "pt-[104px]" : "pt-[76px]"
 				}`}
@@ -268,7 +272,10 @@ export function SessionView({
 					});
 				})()}
 			</main>
-			<footer className="sticky bottom-0 z-[15]">
+			<footer
+				data-turn-follow-scope={turnFollowScopeId}
+				className="sticky bottom-0 z-[15]"
+			>
 				<QueuedMessages
 					messages={queuedMessages}
 					onCancel={onCancelQueuedMessage}

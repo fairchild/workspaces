@@ -62,6 +62,7 @@ import {
 } from "@/lib/transcript/live-turn-error";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
 import { sandboxStateLabel, useSandboxState } from "./use-sandbox-state";
+import { useTurnFollow } from "./use-turn-follow";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
 const TOKEN_THROTTLE_MS = 50;
@@ -98,6 +99,14 @@ function firstUserText(messages: FolioMessage[]): string {
 			.map((part) => part.text)
 			.join("") ?? ""
 	);
+}
+
+function latestUserMessageId(messages: readonly FolioMessage[]): string | null {
+	for (let index = messages.length - 1; index >= 0; index -= 1) {
+		const message = messages[index];
+		if (message.role === "user") return message.id;
+	}
+	return null;
 }
 
 export function LiveSessionView({
@@ -476,6 +485,13 @@ export function LiveSessionView({
 	// article stands in for an in-progress, contentless reply.
 	const visibleMessages = displayMessages.filter(isVisibleMessage);
 
+	const latestVisibleUserMessageId = latestUserMessageId(visibleMessages);
+	useTurnFollow({
+		active: busy,
+		scopeId: sessionId,
+		userMessageId: latestVisibleUserMessageId,
+	});
+
 	// The standalone activity article covers the gap before the streamed
 	// reply renders content (provisioning statuses); once parts land, the
 	// growing message itself — running ledger rows, prose — is the live
@@ -510,6 +526,7 @@ export function LiveSessionView({
 		<>
 			<TerminalDrawer sessionId={sessionId} />
 			<SessionView
+				turnFollowScopeId={sessionId}
 				session={{
 					...session,
 					messages: visibleMessages,
