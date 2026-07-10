@@ -13,6 +13,7 @@ import {
 	localTokenPath,
 } from "../src/lib/auth/local-token";
 import { assertAuthModeConfig } from "../src/lib/auth/config";
+import { parseDotEnv } from "../src/lib/env/parse-dotenv";
 
 const WEB_NEXT_ROOT = path.resolve(
 	path.dirname(fileURLToPath(import.meta.url)),
@@ -37,21 +38,12 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<v
 function loadDotEnvLocal(): void {
 	const file = path.join(WEB_NEXT_ROOT, ".env.local");
 	if (!existsSync(file)) return;
-	for (const rawLine of readFileSync(file, "utf8").split(/\r?\n/)) {
-		const line = rawLine.trim();
-		if (!line || line.startsWith("#")) continue;
-		const equals = line.indexOf("=");
-		if (equals <= 0) continue;
-		const key = line.slice(0, equals).trim();
-		if (process.env[key] !== undefined) continue;
-		let value = line.slice(equals + 1).trim();
-		if (
-			(value.startsWith('"') && value.endsWith('"')) ||
-			(value.startsWith("'") && value.endsWith("'"))
-		) {
-			value = value.slice(1, -1);
-		}
-		process.env[key] = value;
+	// Parse with multi-line-quote awareness: a GitHub App key is a multi-line
+	// PEM, and a line-by-line splitter truncates it to its BEGIN header (which
+	// then fails crypto.sign). Preserve the pre-set-wins precedence so an
+	// explicit process env still overrides the file.
+	for (const [key, value] of Object.entries(parseDotEnv(readFileSync(file, "utf8")))) {
+		if (process.env[key] === undefined) process.env[key] = value;
 	}
 }
 
