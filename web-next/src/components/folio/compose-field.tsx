@@ -83,6 +83,7 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 	return (
 		<div className="bg-[linear-gradient(to_top,var(--paper)_66%,var(--paper-0))] px-5 pt-11 pb-5">
 			<div
+				data-compose-boundary
 				className="group mx-auto flex min-h-[54px] max-w-[680px] cursor-text items-end gap-[13px] rounded-[13px] border border-line-strong bg-raised py-2 pr-2 pl-[19px] shadow-field transition-[border-color,box-shadow] duration-200 hover:border-focus-line focus-within:border-focus-line focus-within:shadow-[0_0_0_3px_var(--focus-ring),var(--field-shadow)]"
 				onClick={(event) => {
 					if (!(event.target as HTMLElement).closest("button"))

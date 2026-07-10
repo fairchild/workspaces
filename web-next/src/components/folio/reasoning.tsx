@@ -187,7 +187,7 @@ export const ReasoningContent = memo(function ReasoningContent({
 	return (
 		<Collapsible.Content
 			data-testid="reasoning-content"
-			className={`overflow-hidden ${className ?? ""}`}
+			className={`reasoning-content overflow-hidden ${className ?? ""}`}
 			{...props}
 		>
 			<div className="animate-rise-fast mt-2.5 mb-1 border-l border-line pl-4 text-[16px] leading-[1.65] text-muted [&_code]:text-[.8em] [&_p+p]:mt-3">

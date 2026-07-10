@@ -407,11 +407,27 @@ test("sending during a running turn queues, then auto-dispatches as the next tur
 	await expect(page.getByRole("button", { name: "Send" })).toBeEnabled();
 	await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
 
+	// User may be reading earlier scrollback when the queued turn dispatches;
+	// terminal follow should keep the growing next turn above the composer (#1015).
+	await page.evaluate(() => window.scrollTo(0, 0));
+
 	await expect(queued).toHaveCount(0, { timeout: TURN_TIMEOUT });
 	const userMessages = page.locator('[data-message-role="user"]');
 	await expect(userMessages).toHaveCount(2, { timeout: TURN_TIMEOUT });
 	await expect(userMessages.nth(0)).toContainText("First steering turn");
 	await expect(userMessages.nth(1)).toContainText("Queue this next");
+	const recentTurn = page.locator('section[data-turn="recent"]');
+	await expect(recentTurn).toContainText("Queue this next");
+	await expect
+		.poll(async () => {
+			const [turnBox, composeBox] = await Promise.all([
+				recentTurn.boundingBox(),
+				compose.boundingBox(),
+			]);
+			if (!turnBox || !composeBox) return Number.POSITIVE_INFINITY;
+			return turnBox.y + turnBox.height - composeBox.y;
+		})
+		.toBeLessThanOrEqual(-8);
 	await expect(page.getByTestId("turn-stats")).toHaveCount(2, {
 		timeout: TURN_TIMEOUT * 2,
 	});
