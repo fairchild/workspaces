@@ -22,12 +22,14 @@ export function useTurnFollow({
 	scopeId: string;
 	userMessageId: string | null;
 }) {
-	const followedUserMessageIdRef = useRef<string | null>(null);
+	// Ownership survives the active → complete render so the final layout can
+	// settle. User takeover clears it, which prevents completion from yanking
+	// the reader back to the tail.
+	const followOwnerIdRef = useRef<string | null>(null);
 
 	useEffect(() => {
 		if (!userMessageId) return;
-		const finishingFollow =
-			!active && followedUserMessageIdRef.current === userMessageId;
+		const finishingFollow = !active && followOwnerIdRef.current === userMessageId;
 		if (!active && !finishingFollow) return;
 
 		const scope = `[data-turn-follow-scope="${CSS.escape(scopeId)}"]`;
@@ -41,6 +43,8 @@ export function useTurnFollow({
 
 		const scrollRoot = document.documentElement;
 		const previousOverflowAnchor = scrollRoot.style.overflowAnchor;
+		// Native anchoring and our animator otherwise add their corrections,
+		// producing a visible jump when streamed content changes height.
 		if (active) scrollRoot.style.overflowAnchor = "none";
 
 		let measureFrame = 0;
@@ -92,6 +96,8 @@ export function useTurnFollow({
 				0,
 				document.documentElement.scrollHeight - window.innerHeight,
 			);
+			// Never chase small layout contractions backwards; the browser can
+			// clamp at the document tail while follow remains visually monotonic.
 			targetScrollY = Math.max(
 				targetScrollY,
 				Math.min(window.scrollY + overflow, maxScrollY),
@@ -115,7 +121,7 @@ export function useTurnFollow({
 		};
 		const pauseFollowing = () => {
 			followPaused = true;
-			followedUserMessageIdRef.current = null;
+			followOwnerIdRef.current = null;
 			stopFollowing();
 		};
 		const handleScroll = () => {
@@ -128,7 +134,7 @@ export function useTurnFollow({
 			);
 			if (distanceFromTail > FOLLOW_RESUME_THRESHOLD_PX) return;
 			followPaused = false;
-			followedUserMessageIdRef.current = userMessageId;
+			followOwnerIdRef.current = userMessageId;
 			targetScrollY = window.scrollY;
 			lastAnimationAt = 0;
 			follow();
@@ -161,12 +167,12 @@ export function useTurnFollow({
 		};
 
 		if (finishingFollow) {
-			followedUserMessageIdRef.current = null;
+			followOwnerIdRef.current = null;
 			follow();
 			return stopFollowing;
 		}
 
-		followedUserMessageIdRef.current = userMessageId;
+		followOwnerIdRef.current = userMessageId;
 		const observer = new ResizeObserver(follow);
 		observer.observe(turn);
 		observer.observe(compose);

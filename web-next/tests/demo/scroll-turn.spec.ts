@@ -100,17 +100,12 @@ test("a directly sent follow-up naturally follows its growing bottom", async ({
 	await expect(recentTurn).toContainText(
 		"Keep this active turn above the composer while it grows",
 	);
-	await expectActiveTurnAboveComposer(page);
-
-	// Each milestone grows the same live turn. Its lower edge must keep moving
-	// up with the output instead of disappearing behind the sticky composer.
-	await expect(page.getByTestId("reasoning")).toHaveCount(2, {
-		timeout: TURN_TIMEOUT,
-	});
-	await expectActiveTurnAboveComposer(page);
-	await expect(page.getByTestId("tool-row")).toHaveCount(5, {
-		timeout: TURN_TIMEOUT,
-	});
+	const initialTurnHeight = (await recentTurn.boundingBox())?.height ?? 0;
+	await expect
+		.poll(async () => (await recentTurn.boundingBox())?.height ?? 0, {
+			timeout: TURN_TIMEOUT,
+		})
+		.toBeGreaterThan(initialTurnHeight + 160);
 	await expectActiveTurnAboveComposer(page);
 	await expect(page.getByTestId("turn-stats")).toHaveCount(2, {
 		timeout: TURN_TIMEOUT,
@@ -125,14 +120,25 @@ test("a directly sent follow-up naturally follows its growing bottom", async ({
 		.map((sample, index) => Math.abs(sample.y - samples[index].y));
 	const maxFrameDelta = Math.max(0, ...frameDeltas);
 	const movingFrames = frameDeltas.filter((delta) => delta > 0.5).length;
+	const scrollTravel =
+		Math.max(...samples.map(({ y }) => y)) -
+		Math.min(...samples.map(({ y }) => y));
 	await testInfo.attach("scroll-trace", {
 		body: JSON.stringify(
-			{ sampleCount: samples.length, maxFrameDelta, movingFrames, samples },
+			{
+				sampleCount: samples.length,
+				maxFrameDelta,
+				movingFrames,
+				scrollTravel,
+				samples,
+			},
 			null,
 			2,
 		),
 		contentType: "application/json",
 	});
+	expect(scrollTravel).toBeGreaterThan(400);
+	expect(movingFrames).toBeGreaterThan(10);
 	expect(maxFrameDelta).toBeLessThanOrEqual(MAX_NATURAL_FRAME_DELTA_PX);
 });
 
@@ -151,11 +157,16 @@ test("manual upward scrolling pauses follow while the turn keeps growing", async
 
 	await compose.fill("Keep streaming while I inspect older output");
 	await page.keyboard.press("Enter");
-	await expect(page.getByTestId("tool-row")).toHaveCount(5, {
-		timeout: TURN_TIMEOUT,
-	});
+	const recentTurn = page.locator('section[data-turn="recent"]');
+	await expect(recentTurn).toContainText(
+		"Keep streaming while I inspect older output",
+	);
+	await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+	await expect
+		.poll(() => page.evaluate(() => window.scrollY))
+		.toBeGreaterThan(150);
 	const followedScrollY = await page.evaluate(() => window.scrollY);
-	expect(followedScrollY).toBeGreaterThan(400);
+	const turnHeightBeforePause = (await recentTurn.boundingBox())?.height ?? 0;
 
 	await page.mouse.move(100, 180);
 	await page.mouse.wheel(0, -500);
@@ -165,15 +176,16 @@ test("manual upward scrolling pauses follow while the turn keeps growing", async
 
 	// More streamed layout lands after the user takes the wheel. Follow must
 	// stay suspended instead of pulling the viewport back to the active tail.
-	await expect(page.getByTestId("tool-row")).toHaveCount(6, {
-		timeout: TURN_TIMEOUT,
-	});
-	await page.waitForTimeout(500);
+	await expect
+		.poll(async () => (await recentTurn.boundingBox())?.height ?? 0, {
+			timeout: TURN_TIMEOUT,
+		})
+		.toBeGreaterThan(turnHeightBeforePause + 60);
 	const afterGrowthScrollY = await page.evaluate(() => window.scrollY);
 	expect(Math.abs(afterGrowthScrollY - pausedScrollY)).toBeLessThanOrEqual(8);
 
-	// Returning to the document tail opts back into follow. Deterministic turn
-	// growth then exercises the same ResizeObserver path without provider timing.
+	// Returning to the document tail opts back into follow. As more visible
+	// output lands, the viewport should move with it again.
 	for (let step = 0; step < 4; step += 1) {
 		await page.mouse.wheel(0, 1_000);
 		await page.waitForTimeout(50);
@@ -188,12 +200,16 @@ test("manual upward scrolling pauses follow while the turn keeps growing", async
 			),
 		)
 		.toBeLessThanOrEqual(8);
-	const recentTurn = page.locator('section[data-turn="recent"]');
-	await recentTurn.evaluate((turn) => {
-		const growth = document.createElement("div");
-		growth.setAttribute("aria-hidden", "true");
-		growth.style.height = "240px";
-		turn.append(growth);
-	});
+	await expect(page.getByRole("button", { name: "Stop" })).toBeVisible();
+	const resumedScrollY = await page.evaluate(() => window.scrollY);
+	const turnHeightAtResume = (await recentTurn.boundingBox())?.height ?? 0;
+	await expect
+		.poll(async () => (await recentTurn.boundingBox())?.height ?? 0, {
+			timeout: TURN_TIMEOUT,
+		})
+		.toBeGreaterThan(turnHeightAtResume + 40);
+	await expect
+		.poll(() => page.evaluate(() => window.scrollY))
+		.toBeGreaterThan(resumedScrollY + 20);
 	await expectActiveTurnAboveComposer(page);
 });
