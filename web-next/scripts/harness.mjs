@@ -113,7 +113,7 @@ async function waitForServer(url, timeoutMs = 60_000) {
 }
 
 function hostHasListener(port, host) {
-	return new Promise((resolve, reject) => {
+	return new Promise((resolve) => {
 		const socket = connect({ port, host });
 		let settled = false;
 		const finish = (value) => {
@@ -124,17 +124,9 @@ function hostHasListener(port, host) {
 		};
 		socket.setTimeout(500, () => finish(false));
 		socket.once("connect", () => finish(true));
-		socket.once("error", (error) => {
-			if (["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "EAFNOSUPPORT"].includes(error.code)) {
-				finish(false);
-				return;
-			}
-			if (!settled) {
-				settled = true;
-				socket.destroy();
-				reject(error);
-			}
-		});
+		// Any connection error means this address did not accept a connection.
+		// In particular, IPv6-less runners may report EADDRNOTAVAIL for ::1.
+		socket.once("error", () => finish(false));
 	});
 }
 
@@ -278,16 +270,12 @@ export async function startProductionServer(port = 3100, env = {}) {
 		terminateChildProcessGroup(child, "SIGTERM");
 		throw error;
 	}
-	let stopped = false;
+	let stopPromise;
 	return {
 		baseUrl,
-		stop: () =>
-			new Promise((resolve) => {
-				if (stopped) {
-					resolve();
-					return;
-				}
-				stopped = true;
+		stop: () => {
+			if (stopPromise) return stopPromise;
+			stopPromise = new Promise((resolve) => {
 				unregisterExitCleanup();
 				let done = false;
 				const finish = () => {
@@ -310,7 +298,9 @@ export async function startProductionServer(port = 3100, env = {}) {
 					return;
 				}
 				terminateChildProcessGroup(child, "SIGTERM");
-			}),
+			});
+			return stopPromise;
+		},
 	};
 }
 

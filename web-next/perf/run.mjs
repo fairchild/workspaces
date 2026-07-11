@@ -469,6 +469,7 @@ async function runLocalSuite() {
 	let server;
 	let db;
 	let browser;
+	let primaryError;
 	try {
 		server = await startProductionServer(PORT, env);
 		// Seed the fixed rows the scenarios navigate to: one repo, one empty
@@ -563,8 +564,16 @@ async function runLocalSuite() {
 			}
 			results.scenarios.push({ id: scenario.id, status: "measured", metrics });
 		}
+	} catch (error) {
+		primaryError = error;
+		throw error;
 	} finally {
-		await closeHarnessResources({ browser, database: db, server });
+		try {
+			await closeHarnessResources({ browser, database: db, server });
+		} catch (cleanupError) {
+			if (!primaryError) throw cleanupError;
+			console.error("Harness cleanup also failed after the primary error:", cleanupError);
+		}
 	}
 
 	const markdown = toMarkdown(results);

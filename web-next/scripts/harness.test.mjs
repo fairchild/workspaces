@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createServer } from "node:net";
 import { describe, expect, test, vi } from "vitest";
 import {
 	assertPortAvailable,
@@ -23,6 +24,25 @@ describe("production harness lifecycle", () => {
 		const probe = vi.fn().mockResolvedValue(false);
 
 		await expect(assertPortAvailable(3188, { probe })).resolves.toBeUndefined();
+	});
+
+	test("detects a real IPv4 loopback listener", async () => {
+		const listener = createServer();
+		await new Promise((resolve, reject) => {
+			listener.once("error", reject);
+			listener.listen(0, "127.0.0.1", resolve);
+		});
+		try {
+			const address = listener.address();
+			expect(address).not.toBeNull();
+			await expect(
+				assertPortAvailable(address.port, { describeOwner: () => "" }),
+			).rejects.toThrow(/already listening/i);
+		} finally {
+			await new Promise((resolve, reject) =>
+				listener.close((error) => (error ? reject(error) : resolve())),
+			);
+		}
 	});
 
 	test("terminates the child on parent exit and unregisters after normal cleanup", () => {

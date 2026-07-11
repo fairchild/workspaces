@@ -412,6 +412,7 @@ async function main() {
 	let server;
 	let db;
 	let browser;
+	let primaryError;
 	try {
 		server = await startProductionServer(PORT, env);
 		db = await connectSeedClient(server.baseUrl, databaseUrl);
@@ -451,8 +452,16 @@ async function main() {
 				`captured home (empty+populated) + session (empty, streaming, final, reloaded) + compose (empty, multiline, disabled) + terminal drawer + failed turn (failure, retried) + error surfaces (provisioning, sandbox-died, stream) + stop control (stopping, stopped) + mobile 375px (turn, diff) + disconnect→resume (midturn, catchup, complete) + sessions-demo + prototype (${colorScheme})`,
 			);
 		}
+	} catch (error) {
+		primaryError = error;
+		throw error;
 	} finally {
-		await closeHarnessResources({ browser, database: db, server });
+		try {
+			await closeHarnessResources({ browser, database: db, server });
+		} catch (cleanupError) {
+			if (!primaryError) throw cleanupError;
+			console.error("Harness cleanup also failed after the primary error:", cleanupError);
+		}
 	}
 	console.log(`evidence written to ${OUTPUT_DIR}`);
 }
