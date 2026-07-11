@@ -18,6 +18,7 @@ import path from "node:path";
 import { gzipSync } from "node:zlib";
 import {
 	bypassServerEnv,
+	closeHarnessResources,
 	connectSeedClient,
 	launchChromium,
 	startProductionServer,
@@ -465,66 +466,70 @@ async function runLocalSuite() {
 	let failed = false;
 
 	const { env, databaseUrl } = bypassServerEnv("perf-db");
-	const server = await startProductionServer(PORT, env);
-	// Seed the fixed rows the scenarios navigate to: one repo, one empty
-	// session at a stable id, and one fresh session per turn-scenario run.
-	const db = await connectSeedClient(server.baseUrl, databaseUrl);
-	const now = new Date().toISOString();
-	await db.execute({
-		sql: "INSERT INTO repos (id, full_name, default_branch, created_at) VALUES (?, ?, 'main', ?)",
-		args: ["fairchild/workspaces", "fairchild/workspaces", now],
-	});
-	const seedSession = (id) =>
-		db.execute({
-			sql: `INSERT INTO sessions
+	let server;
+	let db;
+	let browser;
+	try {
+		server = await startProductionServer(PORT, env);
+		// Seed the fixed rows the scenarios navigate to: one repo, one empty
+		// session at a stable id, and one fresh session per turn-scenario run.
+		db = await connectSeedClient(server.baseUrl, databaseUrl);
+		const now = new Date().toISOString();
+		await db.execute({
+			sql: "INSERT INTO repos (id, full_name, default_branch, created_at) VALUES (?, ?, 'main', ?)",
+			args: ["fairchild/workspaces", "fairchild/workspaces", now],
+		});
+		const seedSession = (id) =>
+			db.execute({
+				sql: `INSERT INTO sessions
 				(id, repo_id, title, provider, status, claude_session_id, created_at, last_activity_at)
 				VALUES (?, 'fairchild/workspaces', '', 'mock', 'active', NULL, ?, ?)`,
-			args: [id, now, now],
-		});
-	// A ~100-event assistant turn with no `done`, backdated so it reads as
-	// stale (an interrupted turn). seq 1 is the user prompt; seq 2..N are
-	// assistant text deltas, the last carrying the caught-up marker.
-	const seedInterruptedTurn = async (db, id) => {
-		const old = new Date(Date.now() - 60_000).toISOString();
-		const event = (seq, role, chunk) =>
-			db.execute({
-				sql: `INSERT INTO session_events (session_id, seq, role, kind, payload, created_at)
-					VALUES (?, ?, ?, ?, ?, ?)`,
-				args: [id, seq, role, chunk.type, JSON.stringify(chunk), old],
+				args: [id, now, now],
 			});
-		await event(1, "user", { type: "text", content: "Resume a long turn" });
-		for (let seq = 2; seq < RESUME_EVENT_COUNT; seq++) {
-			await event(seq, "assistant", { type: "text", content: `token${seq} ` });
+		// A ~100-event assistant turn with no `done`, backdated so it reads as
+		// stale (an interrupted turn). seq 1 is the user prompt; seq 2..N are
+		// assistant text deltas, the last carrying the caught-up marker.
+		const seedInterruptedTurn = async (db, id) => {
+			const old = new Date(Date.now() - 60_000).toISOString();
+			const event = (seq, role, chunk) =>
+				db.execute({
+					sql: `INSERT INTO session_events (session_id, seq, role, kind, payload, created_at)
+					VALUES (?, ?, ?, ?, ?, ?)`,
+					args: [id, seq, role, chunk.type, JSON.stringify(chunk), old],
+				});
+			await event(1, "user", { type: "text", content: "Resume a long turn" });
+			for (let seq = 2; seq < RESUME_EVENT_COUNT; seq++) {
+				await event(seq, "assistant", { type: "text", content: `token${seq} ` });
+			}
+			await event(RESUME_EVENT_COUNT, "assistant", {
+				type: "text",
+				content: RESUME_MARKER,
+			});
+		};
+		await seedSession("perf-empty");
+		const runsOf = (id) =>
+			contract.scenarios.find((scenario) => scenario.id === id)?.runs ?? 0;
+		for (let i = 0; i < runsOf("ttft_mock"); i++) {
+			await seedSession(`perf-turn-${i}`);
 		}
-		await event(RESUME_EVENT_COUNT, "assistant", {
-			type: "text",
-			content: RESUME_MARKER,
-		});
-	};
-	await seedSession("perf-empty");
-	const runsOf = (id) =>
-		contract.scenarios.find((scenario) => scenario.id === id)?.runs ?? 0;
-	for (let i = 0; i < runsOf("ttft_mock"); i++) {
-		await seedSession(`perf-turn-${i}`);
-	}
-	for (let i = 0; i < runsOf("streaming_cadence"); i++) {
-		await seedSession(`perf-cadence-${i}`);
-	}
-	for (let i = 0; i < runsOf("terminal_drawer_interactive"); i++) {
-		await seedSession(`perf-drawer-${i}`);
-	}
-	// resume_latency_100: one interrupted turn per run. Each is a ~100-event
-	// assistant turn with NO `done` and a backdated clock, so resolveTurn reads
-	// it as stale and the client resumes it on load.
-	for (let i = 0; i < runsOf("resume_latency_100"); i++) {
-		const id = `${RESUME_SESSION_PREFIX}${i}`;
-		await seedSession(id);
-		await seedInterruptedTurn(db, id);
-	}
-	db.close();
+		for (let i = 0; i < runsOf("streaming_cadence"); i++) {
+			await seedSession(`perf-cadence-${i}`);
+		}
+		for (let i = 0; i < runsOf("terminal_drawer_interactive"); i++) {
+			await seedSession(`perf-drawer-${i}`);
+		}
+		// resume_latency_100: one interrupted turn per run. Each is a ~100-event
+		// assistant turn with NO `done` and a backdated clock, so resolveTurn reads
+		// it as stale and the client resumes it on load.
+		for (let i = 0; i < runsOf("resume_latency_100"); i++) {
+			const id = `${RESUME_SESSION_PREFIX}${i}`;
+			await seedSession(id);
+			await seedInterruptedTurn(db, id);
+		}
+		db.close();
+		db = undefined;
 
-	const browser = await launchChromium();
-	try {
+		browser = await launchChromium();
 		for (const scenario of contract.scenarios) {
 			if (scenario.status === "pending") {
 				results.scenarios.push({
@@ -559,8 +564,7 @@ async function runLocalSuite() {
 			results.scenarios.push({ id: scenario.id, status: "measured", metrics });
 		}
 	} finally {
-		await browser.close();
-		await server.stop();
+		await closeHarnessResources({ browser, database: db, server });
 	}
 
 	const markdown = toMarkdown(results);

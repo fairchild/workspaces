@@ -18,6 +18,7 @@ import { mkdirSync } from "node:fs";
 import path from "node:path";
 import {
 	bypassServerEnv,
+	closeHarnessResources,
 	connectSeedClient,
 	launchChromium,
 	startProductionServer,
@@ -408,10 +409,13 @@ async function capturePrototype(page, theme, file) {
 async function main() {
 	mkdirSync(OUTPUT_DIR, { recursive: true });
 	const { env, databaseUrl } = bypassServerEnv("evidence-db");
-	const server = await startProductionServer(PORT, env);
-	const db = await connectSeedClient(server.baseUrl, databaseUrl);
-	const browser = await launchChromium();
+	let server;
+	let db;
+	let browser;
 	try {
+		server = await startProductionServer(PORT, env);
+		db = await connectSeedClient(server.baseUrl, databaseUrl);
+		browser = await launchChromium();
 		for (const colorScheme of ["light", "dark"]) {
 			// colorScheme emulation drives the app theme (system preference is
 			// the default resolution); the prototype is forced via its hash.
@@ -448,9 +452,7 @@ async function main() {
 			);
 		}
 	} finally {
-		await browser.close();
-		await server.stop();
-		db.close();
+		await closeHarnessResources({ browser, database: db, server });
 	}
 	console.log(`evidence written to ${OUTPUT_DIR}`);
 }
