@@ -83,8 +83,11 @@ async function captureSettled(page, url, file) {
 async function scrollToSettled(page, testId) {
 	let detachedError;
 	for (let attempt = 0; attempt < 4; attempt += 1) {
-		const target = page.getByTestId(testId).last();
-		await target.waitFor({ state: "visible", timeout: TURN_TIMEOUT_MS });
+		const target = page.getByTestId(testId);
+		await target.waitFor({
+			state: "visible",
+			timeout: attempt === 0 ? TURN_TIMEOUT_MS : 5_000,
+		});
 		try {
 			await target.scrollIntoViewIfNeeded({ timeout: 5_000 });
 			await page.waitForTimeout(ANIMATION_SETTLE_MS);
