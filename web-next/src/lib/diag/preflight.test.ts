@@ -71,16 +71,34 @@ describe("provider-aware preflight", () => {
 		});
 	});
 
-	test("mock reports that no real-runtime preflight is required", async () => {
+	test("mock fails closed because it is not a real runtime", async () => {
 		const report = await runPreflight({
 			includeSandbox: false,
-			provider: "mock",
 			env: { NODE_ENV: "test" },
 		});
 
-		expect(report).toMatchObject({ ok: true, provider: "mock" });
+		expect(report).toMatchObject({ ok: false, provider: "mock" });
 		expect(report.checks).toEqual([
-			expect.objectContaining({ name: "provider", ok: true, skipped: true }),
+			expect.objectContaining({
+				name: "provider",
+				ok: false,
+				error: "mock is not a configured real compute provider",
+			}),
 		]);
+	});
+
+	test("derives the active provider through the runtime's selection function", async () => {
+		const report = await runPreflight({
+			includeSandbox: false,
+			env: {
+				NODE_ENV: "test",
+				PATH: "/usr/bin:/bin",
+				WEB_NEXT_COMPUTE_PROVIDER: "host",
+				WEB_NEXT_HOST_WORKSPACE_ROOT: join(tempRoot(), "sessions"),
+			},
+			hostDependencies,
+		});
+
+		expect(report).toMatchObject({ ok: true, provider: "host" });
 	});
 });

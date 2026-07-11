@@ -209,10 +209,15 @@ export function evaluateHostTurnEvents(events, nonce, { deadlineMs } = {}) {
 		/preparing host workspace|starting local claude code/i.test(event.content ?? ""),
 	);
 	const toolUses = assistant.filter((event) => event.kind === "tool_use");
-	const readUsed = toolUses.some((event) => {
+	const toolNames = toolUses.map((event) => {
 		const name = event.metadata?.toolName ?? event.content;
-		return String(name ?? "").toLowerCase() === "read";
+		return String(name ?? "");
 	});
+	const readUsed = toolNames.some((name) => name.toLowerCase() === "read");
+	const allowed = new Set(["read", "ls", "glob", "grep", "todoread"]);
+	const unexpectedTools = toolNames.filter(
+		(name) => !allowed.has(name.toLowerCase()),
+	);
 	const streamed = assistant.filter(
 		(event) =>
 			(event.kind === "text" || event.kind === "reasoning") &&
@@ -231,9 +236,13 @@ export function evaluateHostTurnEvents(events, nonce, { deadlineMs } = {}) {
 			localLifecycle ? "host workspace/Claude lifecycle observed" : "no host lifecycle status event",
 		),
 		check(
-			"read_only_tool_used",
-			readUsed,
-			readUsed ? "Read tool observed" : `no Read tool among ${toolUses.length} tool call(s)`,
+			"read_only_tools",
+			readUsed && unexpectedTools.length === 0,
+			unexpectedTools.length > 0
+				? `unexpected tool(s): ${unexpectedTools.join(", ")}`
+				: readUsed
+					? "Read observed; every tool call is in the host read-only allowlist"
+					: `no Read tool among ${toolUses.length} tool call(s)`,
 		),
 		check(
 			"streamed_output",
@@ -276,10 +285,14 @@ export function classifyTeardown(state, del) {
 	if (del.status === 200 && del.body?.deleted === true) {
 		const sandbox = del.body.sandbox;
 		if (!turnCompleted) {
+			const possibleLeak =
+				provider === "host"
+					? "a local Claude process may still be running"
+					: "an unparked live sandbox may persist until its lifetime cap";
 			return check(
 				"no_leaked_sandbox",
 				false,
-				`session deleted but the turn never closed — an unparked live sandbox may persist until its lifetime cap (disposition: ${sandbox})`,
+				`session deleted but the turn never closed — ${possibleLeak} (disposition: ${sandbox})`,
 			);
 		}
 		const ok =

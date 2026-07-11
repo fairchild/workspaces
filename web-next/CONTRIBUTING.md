@@ -100,8 +100,9 @@ pnpm validate --env local-mode
 ```
 
 This is the only local spawn that runs a real model turn without `--url`. It
-uses the local Claude login, restricts the probe to `Read`, verifies durable
-completion plus a resume handle, deletes the probe session, and leaves ordinary
+uses the local Claude login, enforces the host provider's read-only tool
+allowlist and proves a `Read`, verifies durable completion plus a resume handle,
+deletes the probe session, and leaves ordinary
 `pnpm validate` zero-spend. Pass `--skip-real-turn` to retain only the zero-spend
 local-mode posture and authenticated-flow stages.
 

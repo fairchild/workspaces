@@ -153,10 +153,7 @@ export async function realTurnStage(baseUrl, cookie, env, options = {}) {
 				detail: redactSecrets(String(c.detail ?? ""), secretsToRedact(env)),
 			}));
 		}
-		return {
-			id: gate.provider === "host" ? "real host-provider turn (#1014)" : id,
-			...result,
-		};
+		return { id, ...result };
 	} catch (error) {
 		// The probe's own teardown already ran (its `finally`); an escaped error
 		// becomes a failing check rather than crashing the whole run.

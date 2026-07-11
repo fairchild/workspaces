@@ -80,8 +80,7 @@ async function defaultGetSandbox(name: string): Promise<StoppableSandbox> {
  * treats `stop-failed` as a reason not to delete; everything else is clear).
  */
 export async function releaseParkedSandbox(
-	session: Pick<Session, "claudeSessionId" | "resumeState"> &
-		Partial<Pick<Session, "provider">>,
+	session: Pick<Session, "claudeSessionId" | "resumeState" | "provider">,
 	getSandbox: GetStoppableSandbox = defaultGetSandbox,
 ): Promise<SandboxRelease> {
 	// Host turns exit after each invocation. Their persisted resume handle names

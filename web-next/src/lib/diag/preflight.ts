@@ -12,6 +12,7 @@ import {
 	curatedClaudeEnv,
 	resolveClaudeBinary,
 } from "@/lib/agent-runtime/host-provider";
+import { defaultComputeProvider } from "@/lib/db/start-session";
 import {
 	generateAppJWT,
 	findInstallationId,
@@ -424,8 +425,8 @@ async function checkSandbox(
 
 export async function runPreflight({
 	includeSandbox,
-	provider = process.env.WEB_NEXT_COMPUTE_PROVIDER ?? "mock",
 	env = process.env,
+	provider = defaultComputeProvider(env),
 	hostDependencies,
 }: {
 	includeSandbox: boolean;
@@ -458,16 +459,16 @@ export async function runPreflight({
 		const checks = [
 			{
 				name: "provider",
-				ok: true,
-				skipped: true,
+				ok: false,
+				error: `${provider} is not a configured real compute provider`,
 				detail: {
 					provider,
-					note: "no real-runtime preflight required for this provider",
+					note: "set WEB_NEXT_COMPUTE_PROVIDER to host or vercel",
 				},
 			},
 		];
 		return {
-			ok: true,
+			ok: false,
 			ranAt: new Date().toISOString(),
 			onVercel: !!env.VERCEL,
 			provider,

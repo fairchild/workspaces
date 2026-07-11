@@ -119,6 +119,25 @@ describe("host turn contract", () => {
 
 		expect(checks.every((check) => check.status === "pass")).toBe(true);
 	});
+
+	test("fails unexpected tools, missing marker, errors, and aborted completion", () => {
+		const byId = Object.fromEntries(
+			evaluateHostTurnEvents([
+				ev("assistant", "status", "Starting local Claude Code"),
+				ev("assistant", "tool_use", "Read", { toolName: "Read" }),
+				ev("assistant", "tool_use", "Bash", { toolName: "Bash" }),
+				ev("assistant", "text", "package name is spaces-next"),
+				ev("assistant", "error", "write-capable tool escaped policy"),
+				ev("assistant", "done", "", { aborted: true }),
+			], NONCE).map((check) => [check.id, check]),
+		);
+
+		expect(byId.read_only_tools).toMatchObject({ status: "fail" });
+		expect(byId.read_only_tools.detail).toMatch(/Bash/);
+		expect(byId.streamed_output).toMatchObject({ status: "fail" });
+		expect(byId.no_turn_errors).toMatchObject({ status: "fail" });
+		expect(byId.turn_done).toMatchObject({ status: "fail" });
+	});
 });
 
 describe("classifyCreateGate", () => {
@@ -244,6 +263,21 @@ describe("classifyTeardown (leak semantics)", () => {
 				{ status: 200, body: { deleted: true, sandbox: "none" } },
 			).status,
 		).toBe("pass");
+		expect(
+			classifyTeardown(
+				{ parked: true, turnCompleted: true, provider: "host" },
+				{ status: 200, body: { deleted: true, sandbox: "stopped" } },
+			).status,
+		).toBe("fail");
+	});
+
+	test("an unclosed host turn reports the possible local process leak", () => {
+		const verdict = classifyTeardown(
+			{ parked: false, turnCompleted: false, provider: "host" },
+			{ status: 200, body: { deleted: true, sandbox: "none" } },
+		);
+		expect(verdict).toMatchObject({ status: "fail" });
+		expect(verdict.detail).toMatch(/local Claude process/);
 	});
 
 	test("a turn that never closed cannot pass, even when the delete succeeds", () => {
@@ -437,5 +471,42 @@ describe("runHostTurnProbe", () => {
 		expect(
 			result.checks.find((check) => check.id === "resume_handle_persisted"),
 		).toMatchObject({ status: "pass" });
+	});
+
+	test("fails when a completed host turn does not persist its resume handle", async () => {
+		const events = [
+			ev("assistant", "status", "Starting local Claude Code"),
+			ev("assistant", "tool_use", "Read", { toolName: "Read" }),
+			ev("assistant", "text", `host-turn probe ${NONCE}`),
+			ev("assistant", "done", "", { durationMs: 12 }),
+		];
+		const result = await runHostTurnProbe(
+			{
+				createSession: async () => ({
+					status: 201,
+					body: { id: "host-probe", model: "model-default" },
+				}),
+				sendChat: async () => ({ status: 200 }),
+				getSession: async () => ({
+					status: 200,
+					body: { session: { parked: false }, events },
+				}),
+				deleteSession: async () => ({
+					status: 200,
+					body: { deleted: true, sandbox: "none" },
+				}),
+			},
+			{
+				nonce: NONCE,
+				defaultModel: "model-default",
+				deadlineMs: 10,
+				pollMs: 1,
+				sleep: () => Promise.resolve(),
+			},
+		);
+
+		expect(
+			result.checks.find((check) => check.id === "resume_handle_persisted"),
+		).toMatchObject({ status: "fail" });
 	});
 });

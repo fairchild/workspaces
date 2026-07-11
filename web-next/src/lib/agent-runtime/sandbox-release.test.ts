@@ -2,7 +2,11 @@ import { describe, expect, test } from "vitest";
 import { releaseParkedSandbox, type StoppableSandbox } from "./sandbox-release";
 import { sessionSandboxName } from "./vercel-provider";
 
-const parked = { claudeSessionId: "harness-1", resumeState: "{}" };
+const parked = {
+	claudeSessionId: "harness-1",
+	resumeState: "{}",
+	provider: "vercel",
+};
 
 function sandbox(status: string, stop: () => Promise<unknown> = async () => {}) {
 	return { status, stop } satisfies StoppableSandbox;
@@ -24,10 +28,18 @@ describe("releaseParkedSandbox", () => {
 
 	test("a session that never parked has nothing to release", async () => {
 		expect(
-			await releaseParkedSandbox({ claudeSessionId: null, resumeState: null }),
+			await releaseParkedSandbox({
+				claudeSessionId: null,
+				resumeState: null,
+				provider: "vercel",
+			}),
 		).toEqual({ disposition: "none" });
 		expect(
-			await releaseParkedSandbox({ claudeSessionId: "h", resumeState: null }),
+			await releaseParkedSandbox({
+				claudeSessionId: "h",
+				resumeState: null,
+				provider: "vercel",
+			}),
 		).toEqual({ disposition: "none" });
 	});
 

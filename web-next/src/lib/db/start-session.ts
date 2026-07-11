@@ -26,8 +26,10 @@ export function isValidRepoFullName(value: string): boolean {
  * `WEB_NEXT_COMPUTE_PROVIDER=vercel` or `WEB_NEXT_COMPUTE_PROVIDER=host` to
  * route new sessions to a real runtime.
  */
-export function defaultComputeProvider(): string {
-	return process.env.WEB_NEXT_COMPUTE_PROVIDER ?? "mock";
+export function defaultComputeProvider(
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	return env.WEB_NEXT_COMPUTE_PROVIDER ?? "mock";
 }
 
 /**
