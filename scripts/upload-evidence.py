@@ -16,7 +16,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "webm", "mp4"}
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_BASE_URL = "https://evidence.cloudcompute.com"
 
 CONTENT_TYPES = {
@@ -26,6 +27,8 @@ CONTENT_TYPES = {
     "gif": "image/gif",
     "webp": "image/webp",
     "svg": "image/svg+xml",
+    "webm": "video/webm",
+    "mp4": "video/mp4",
 }
 
 
@@ -53,6 +56,14 @@ def main() -> int:
     ext = filepath.suffix.lstrip(".").lower()
     if ext not in ALLOWED_EXTENSIONS:
         print(f"error: unsupported file type: .{ext} (allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))})", file=sys.stderr)
+        return 1
+
+    size = filepath.stat().st_size
+    if size > MAX_UPLOAD_BYTES:
+        print(
+            f"error: file is {size} bytes and exceeds the 50 MiB upload limit",
+            file=sys.stderr,
+        )
         return 1
 
     now = datetime.now(timezone.utc)

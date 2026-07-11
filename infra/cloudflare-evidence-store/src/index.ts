@@ -5,6 +5,8 @@ interface Env {
 
 const encoder = new TextEncoder();
 
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   const aBytes = encoder.encode(a);
@@ -25,6 +27,8 @@ const CONTENT_TYPES: Record<string, string> = {
   svg: "image/svg+xml",
   txt: "text/plain",
   json: "application/json",
+  webm: "video/webm",
+  mp4: "video/mp4",
 };
 
 function contentTypeFromPath(path: string): string {
@@ -62,9 +66,17 @@ export default {
         return new Response("unauthorized", { status: 401 });
       }
 
+      const declaredLength = Number(request.headers.get("Content-Length"));
+      if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
+        return new Response("upload exceeds the 50 MiB limit", { status: 413 });
+      }
+
       const contentType =
         request.headers.get("Content-Type") ?? contentTypeFromPath(path);
       const body = await request.arrayBuffer();
+      if (body.byteLength > MAX_UPLOAD_BYTES) {
+        return new Response("upload exceeds the 50 MiB limit", { status: 413 });
+      }
 
       await env.EVIDENCE_BUCKET.put(path, body, {
         httpMetadata: { contentType },

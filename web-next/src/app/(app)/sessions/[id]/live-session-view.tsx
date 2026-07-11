@@ -61,6 +61,10 @@ import {
 	recordLiveTurnError,
 } from "@/lib/transcript/live-turn-error";
 import { deriveContextLabel } from "@/lib/transcript/turn-stats";
+import {
+	deriveLivePullRequestAction,
+	shouldRefreshSessionAfterTurn,
+} from "./pull-request-action";
 import { sandboxStateLabel, useSandboxState } from "./use-sandbox-state";
 import { useTurnFollow } from "./use-turn-follow";
 
@@ -276,26 +280,45 @@ export function LiveSessionView({
 		if (busy) hasSeenBusyRef.current = true;
 	}, [busy]);
 	const refreshInFlightRef = useRef(false);
+	const refreshQueuedRef = useRef(false);
 	const refreshSessionFromServer = useCallback(async () => {
-		if (refreshInFlightRef.current) return;
+		if (refreshInFlightRef.current) {
+			// A completion edge must not disappear behind an older snapshot fetch.
+			// Coalesce concurrent callers into one follow-up read after the current
+			// request settles so the newest durable checkpoint state wins.
+			refreshQueuedRef.current = true;
+			return;
+		}
 		refreshInFlightRef.current = true;
 		try {
-			const res = await fetch(`/api/sessions/${sessionId}`);
-			if (!res.ok) return;
-			const data = (await res.json()) as SessionSnapshot;
-			if (data.session) {
-				setHasBranchWork(data.session.hasBranchWork === true);
-				setPullRequest(data.session.pullRequest ?? null);
-			}
-			if (data.messages) setMessages(data.messages);
-			setQueuedMessages(data.queuedMessages ?? []);
-			if (data.turn?.status === "running" || data.turn?.status === "stale") {
-				void resumeStream();
-			}
+			do {
+				refreshQueuedRef.current = false;
+				const res = await fetch(`/api/sessions/${sessionId}`);
+				if (!res.ok) continue;
+				const data = (await res.json()) as SessionSnapshot;
+				if (data.session) {
+					setHasBranchWork(data.session.hasBranchWork === true);
+					setPullRequest(data.session.pullRequest ?? null);
+				}
+				if (data.messages) setMessages(data.messages);
+				setQueuedMessages(data.queuedMessages ?? []);
+				if (data.turn?.status === "running" || data.turn?.status === "stale") {
+					void resumeStream();
+				}
+			} while (refreshQueuedRef.current);
 		} finally {
 			refreshInFlightRef.current = false;
 		}
 	}, [sessionId, setMessages, resumeStream]);
+	const previousBusyRef = useRef(busy);
+	useEffect(() => {
+		const shouldRefresh = shouldRefreshSessionAfterTurn(
+			previousBusyRef.current,
+			busy,
+		);
+		previousBusyRef.current = busy;
+		if (shouldRefresh) void refreshSessionFromServer();
+	}, [busy, refreshSessionFromServer]);
 	const queueKey = queuedMessages.map((message) => message.queueId).join("|");
 	const lastQueueKickRef = useRef("");
 	useEffect(() => {
@@ -537,20 +560,10 @@ export function LiveSessionView({
 						stateLabel: sandboxStateLabel(sandbox),
 						live: sandbox?.state === "live",
 						pullRequest,
-						pullRequestAction: session.masthead.pullRequestAction
-							? {
-									...session.masthead.pullRequestAction,
-									enabled:
-										session.masthead.pullRequestAction.enabled &&
-										hasBranchWork &&
-										!busy,
-									reason: busy
-										? "wait for turn"
-										: hasBranchWork
-											? session.masthead.pullRequestAction.reason
-											: "no checkpoints ready",
-								}
-							: null,
+						pullRequestAction: deriveLivePullRequestAction(
+							session.masthead.pullRequestAction,
+							{ hasBranchWork, busy },
+						),
 						pullRequestBusy,
 						pullRequestError,
 					},

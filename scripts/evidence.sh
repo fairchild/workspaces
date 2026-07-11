@@ -13,7 +13,7 @@
 #   # no activation, no focus steal.
 #   ./scripts/evidence.sh --pr 253 --fixture phase-1-release
 #
-# Outputs markdown-ready image link to stdout.
+# Outputs the uploaded URL to stdout and markdown-ready evidence to stderr.
 # ==========================================================================
 
 set -euo pipefail
@@ -201,7 +201,11 @@ echo "" >&2
 echo "Uploaded: $URL" >&2
 echo "" >&2
 echo "Markdown:" >&2
-echo "![${NAME}](${URL})" >&2
+FILE_EXT="${FILE##*.}"
+case "$FILE_EXT" in
+  [Ww][Ee][Bb][Mm]|[Mm][Pp]4) echo "[${NAME}](${URL})" >&2 ;;
+  *) echo "![${NAME}](${URL})" >&2 ;;
+esac
 echo "" >&2
 
 # Print just the URL to stdout for piping

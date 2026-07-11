@@ -42,13 +42,10 @@ test("hero flow: new session → real agent turn → draft PR", async ({ page })
 	});
 	await page.waitForTimeout(2500);
 
-	// has_branch_work is server-rendered into the masthead action; reload
-	// until the checkpoint has landed and the affordance arms.
+	// The completed turn refreshes its durable session snapshot and arms the
+	// affordance in place — no page reload or transcript discontinuity.
 	const openPr = page.getByTestId("open-session-pr");
-	await expect(async () => {
-		await page.reload();
-		await expect(openPr).toBeEnabled({ timeout: 5_000 });
-	}).toPass({ timeout: 3 * 60_000, intervals: [5_000] });
+	await expect(openPr).toBeEnabled({ timeout: 3 * 60_000 });
 	await page.waitForTimeout(1500);
 	await openPr.click();
 
