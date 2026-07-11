@@ -4,9 +4,10 @@
  * launch Chromium (honoring the remote-sandbox executable override).
  * Node-only, no test framework.
  */
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { connect } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
@@ -111,6 +112,133 @@ async function waitForServer(url, timeoutMs = 60_000) {
 	throw new Error(`Server at ${url} not ready within ${timeoutMs}ms`);
 }
 
+function hostHasListener(port, host) {
+	return new Promise((resolve) => {
+		const socket = connect({ port, host });
+		let settled = false;
+		const finish = (value) => {
+			if (settled) return;
+			settled = true;
+			socket.destroy();
+			resolve(value);
+		};
+		socket.setTimeout(500, () => finish(false));
+		socket.once("connect", () => finish(true));
+		// Any connection error means this address did not accept a connection.
+		// In particular, IPv6-less runners may report EADDRNOTAVAIL for ::1.
+		socket.once("error", () => finish(false));
+	});
+}
+
+async function loopbackHasListener(port) {
+	const results = await Promise.all([
+		hostHasListener(port, "127.0.0.1"),
+		hostHasListener(port, "::1"),
+	]);
+	return results.some(Boolean);
+}
+
+function describePortOwner(port) {
+	try {
+		const output = execFileSync(
+			"lsof",
+			["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"],
+			{ encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+		);
+		let pid;
+		let command;
+		for (const line of output.split("\n")) {
+			if (!pid && line.startsWith("p")) pid = line.slice(1);
+			if (!command && line.startsWith("c")) command = line.slice(1);
+			if (pid && command) break;
+		}
+		if (!pid && !command) return "";
+		return ` (${[pid && `PID ${pid}`, command].filter(Boolean).join(", ")})`;
+	} catch {
+		return "";
+	}
+}
+
+/** Refuse to let a stale server satisfy readiness for a newly spawned child. */
+export async function assertPortAvailable(
+	port,
+	{ probe = loopbackHasListener, describeOwner = describePortOwner } = {},
+) {
+	if (await probe(port)) {
+		throw new Error(
+			`Harness port ${port} is already listening${describeOwner(port)}; stop that process or choose another EVIDENCE_PORT/PERF_PORT.`,
+		);
+	}
+}
+
+function terminateChildProcessGroup(child, signal = "SIGTERM") {
+	if (!child || child.exitCode != null || child.signalCode != null) return;
+	try {
+		process.kill(-child.pid, signal);
+	} catch {
+		try {
+			child.kill(signal);
+		} catch {
+			// Best effort during process teardown: the child may already be gone.
+		}
+	}
+}
+
+/** Keep detached `next start` descendants tied to the harness parent lifetime. */
+export function registerParentExitCleanup(
+	child,
+	{
+		parent = process,
+		terminate = terminateChildProcessGroup,
+		resignal = (signal) => process.kill(process.pid, signal),
+	} = {},
+) {
+	let registered = true;
+	const onExit = () => terminate(child, "SIGTERM");
+	const signalHandlers = new Map(
+		["SIGINT", "SIGTERM"].map((signal) => [
+			signal,
+			() => {
+				unregister();
+				terminate(child, "SIGTERM");
+				resignal(signal);
+			},
+		]),
+	);
+	parent.once("exit", onExit);
+	for (const [signal, handler] of signalHandlers) parent.once(signal, handler);
+	function unregister() {
+		if (!registered) return;
+		registered = false;
+		parent.off("exit", onExit);
+		for (const [signal, handler] of signalHandlers) parent.off(signal, handler);
+	}
+	return unregister;
+}
+
+/** Close every acquired harness resource even when an earlier close fails. */
+export async function closeHarnessResources({ browser, database, server }) {
+	const errors = [];
+	try {
+		await browser?.close();
+	} catch (error) {
+		errors.push(error);
+	}
+	try {
+		database?.close();
+	} catch (error) {
+		errors.push(error);
+	}
+	try {
+		await server?.stop();
+	} catch (error) {
+		errors.push(error);
+	}
+	if (errors.length > 0) {
+		throw new AggregateError(errors, "Failed to close every harness resource");
+	}
+}
+
 /**
  * Starts `next start` on the given port (with optional extra env) and
  * resolves once it serves 200s. Returns { baseUrl, stop } — always call
@@ -118,6 +246,7 @@ async function waitForServer(url, timeoutMs = 60_000) {
  */
 export async function startProductionServer(port = 3100, env = {}) {
 	assertProductionBuild();
+	await assertPortAvailable(port);
 	const args =
 		env.WEB_NEXT_LOCAL_MODE === "1"
 			? ["exec", "next", "start", "-H", "127.0.0.1", "--port", String(port)]
@@ -132,21 +261,22 @@ export async function startProductionServer(port = 3100, env = {}) {
 			detached: true,
 		},
 	);
+	const unregisterExitCleanup = registerParentExitCleanup(child);
 	const baseUrl = `http://localhost:${port}`;
 	try {
 		await waitForServer(baseUrl);
 	} catch (error) {
-		try {
-			process.kill(-child.pid, "SIGTERM");
-		} catch {
-			child.kill("SIGTERM");
-		}
+		unregisterExitCleanup();
+		terminateChildProcessGroup(child, "SIGTERM");
 		throw error;
 	}
+	let stopPromise;
 	return {
 		baseUrl,
-		stop: () =>
-			new Promise((resolve) => {
+		stop: () => {
+			if (stopPromise) return stopPromise;
+			stopPromise = new Promise((resolve) => {
+				unregisterExitCleanup();
 				let done = false;
 				const finish = () => {
 					if (done) return;
@@ -154,23 +284,23 @@ export async function startProductionServer(port = 3100, env = {}) {
 					resolve();
 				};
 				const killTimer = setTimeout(() => {
-					try {
-						process.kill(-child.pid, "SIGKILL");
-					} catch {
-						child.kill("SIGKILL");
-					}
+					terminateChildProcessGroup(child, "SIGKILL");
 					finish();
 				}, 5_000);
+				killTimer.unref();
 				child.once("exit", () => {
 					clearTimeout(killTimer);
 					finish();
 				});
-				try {
-					process.kill(-child.pid, "SIGTERM");
-				} catch {
-					child.kill("SIGTERM");
+				if (child.exitCode != null || child.signalCode != null) {
+					clearTimeout(killTimer);
+					finish();
+					return;
 				}
-			}),
+				terminateChildProcessGroup(child, "SIGTERM");
+			});
+			return stopPromise;
+		},
 	};
 }
 
