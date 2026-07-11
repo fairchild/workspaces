@@ -260,6 +260,32 @@ The script passes `-Demit-macos-app=false` because Workspaces only needs
 `GhosttyKit.xcframework`; building Ghostty's full app bundle adds an unrelated
 `xcodebuild` step that can fail after the xcframework has already been produced.
 
+### Shared Zig cache pollution (wrong platform / minimum macOS)
+
+The per-commit Zig cache (`~/.cache/workspacemanager/zig-cache/<commit>/`) is
+shared by every build of the pinned Ghostty commit on the host. When the
+emitted archive lacks `ghostty_init` (a recurring quirk of cached xcframework
+emits), the script's repair sweep rebuilds `libghostty-fat.a` from every thin
+`.a` in that cache — so anything another build wrote there ends up candidate
+material. A universal/iOS xcframework build sharing the cache leaves thin
+arm64 archives for other platforms and macOS objects pinned to the host's own
+OS version. Objects for the wrong platform are a **fatal ld error** when the
+app links (`building for 'macOS', but linking in object file ... built for
+'iOS-simulator'`); objects with a too-new minimum macOS link with warnings but
+can't ship at the app's 14.0 deployment target. This is exactly how the
+v0.23.0 release build failed — and the fatal ld line never made it into the CI
+log, only the minos warnings did.
+
+The sweep therefore filters objects by platform and minimum-macOS (in
+addition to host arch), and `assert_macos_deployment_target` fails the build
+loudly if the final archive still contains an object for another platform or
+a minimum macOS above the app's deployment target. The remedy for a polluted
+cache is a purge via the named entrypoint:
+
+```bash
+./scripts/build-ghosttykit.sh --purge-cache
+```
+
 ## Upgrade Procedure (when bumping Ghostty)
 
 1. Edit `GHOSTTY_COMMIT` in `scripts/build-ghosttykit.sh`.
