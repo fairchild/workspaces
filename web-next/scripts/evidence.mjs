@@ -75,6 +75,32 @@ async function captureSettled(page, url, file) {
 	await page.screenshot({ path: file });
 }
 
+/**
+ * Scroll to a final-state element without retaining a DOM node across React's
+ * streaming→settled replacement. Playwright locators re-resolve, but the node
+ * can still detach during the scroll action itself; retry only that condition.
+ */
+async function scrollToSettled(page, testId) {
+	let detachedError;
+	for (let attempt = 0; attempt < 4; attempt += 1) {
+		const target = page.getByTestId(testId);
+		await target.waitFor({
+			state: "visible",
+			timeout: attempt === 0 ? TURN_TIMEOUT_MS : 5_000,
+		});
+		try {
+			await target.scrollIntoViewIfNeeded({ timeout: 5_000 });
+			await page.waitForTimeout(ANIMATION_SETTLE_MS);
+			return;
+		} catch (error) {
+			if (!/not attached|detached/i.test(String(error))) throw error;
+			detachedError = error;
+			await page.waitForTimeout(100);
+		}
+	}
+	throw detachedError ?? new Error(`could not scroll to settled ${testId}`);
+}
+
 /** Drives the real new-session flow and captures the empty session it makes. */
 async function captureNewSessionFlow(page, file) {
 	await page.goto("/", { waitUntil: "networkidle" });
@@ -151,14 +177,12 @@ async function captureSessionTurn(page, shot) {
 	await page.getByTestId("tool-row").nth(3).locator("button").first().click();
 	await page.getByTestId("test-output").waitFor();
 	// Scroll to the end of the turn so the diff + receipt are in frame.
-	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
-	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await scrollToSettled(page, "turn-stats");
 	await page.screenshot({ path: shot("session-turn-final") });
 
 	// Reloaded: the persisted transcript served from session_events.
 	await page.reload({ waitUntil: "networkidle" });
-	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
-	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await scrollToSettled(page, "turn-stats");
 	await page.screenshot({ path: shot("session-turn-reloaded") });
 }
 
@@ -214,8 +238,7 @@ async function captureFailedTurn(page, shot) {
 
 	await page.getByRole("button", { name: "Retry" }).click();
 	await page.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
-	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
-	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await scrollToSettled(page, "turn-stats");
 	await page.screenshot({ path: shot("session-turn-failed-retried") });
 }
 
@@ -247,8 +270,7 @@ async function captureErrorSurfaces(page, shot) {
 		await page.getByRole("textbox", { name: "Reply to Claude" }).fill(text);
 		await page.keyboard.press("Enter");
 		await page.getByTestId("turn-failure").waitFor({ timeout: TURN_TIMEOUT_MS });
-		await page.getByTestId("turn-failure").scrollIntoViewIfNeeded();
-		await page.waitForTimeout(ANIMATION_SETTLE_MS);
+		await scrollToSettled(page, "turn-failure");
 		await page.screenshot({ path: shot(name) });
 	}
 }
@@ -297,8 +319,7 @@ async function captureMobile(context, shot) {
 	const rows = page.getByTestId("tool-row");
 	await rows.nth(2).locator("button").first().click();
 	await page.getByTestId("diff-lines").waitFor();
-	await page.getByTestId("turn-stats").scrollIntoViewIfNeeded();
-	await page.waitForTimeout(ANIMATION_SETTLE_MS);
+	await scrollToSettled(page, "turn-stats");
 	await page.screenshot({ path: shot("session-mobile-diff") });
 	await page.close();
 }
@@ -345,8 +366,7 @@ async function captureDisconnectResume(context, shot) {
 
 	// Completed: the resumed turn finished; the receipt proves it caught up.
 	await reopened.getByTestId("turn-stats").waitFor({ timeout: TURN_TIMEOUT_MS });
-	await reopened.getByTestId("turn-stats").scrollIntoViewIfNeeded();
-	await reopened.waitForTimeout(ANIMATION_SETTLE_MS);
+	await scrollToSettled(reopened, "turn-stats");
 	await reopened.screenshot({ path: shot("resume-complete") });
 	await reopened.close();
 }

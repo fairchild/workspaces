@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { DEFAULT_MODEL } from "../src/lib/agent-runtime/models.ts";
 import {
 	classifyPreflightGate,
+	runHostTurnProbe,
 	runRealTurnProbe,
 } from "./real-turn-core.mjs";
 import { redactSecrets } from "./validate-core.mjs";
@@ -131,7 +132,15 @@ export async function realTurnStage(baseUrl, cookie, env, options = {}) {
 	}
 
 	try {
-		const result = await runRealTurnProbe(createRealTurnClient(baseUrl, cookie, env), {
+		if (gate.provider !== "vercel" && gate.provider !== "host") {
+			return {
+				id,
+				status: "skip",
+				reason: `provider ${JSON.stringify(gate.provider)} has no real-turn validation contract`,
+			};
+		}
+		const runProbe = gate.provider === "host" ? runHostTurnProbe : runRealTurnProbe;
+		const result = await runProbe(createRealTurnClient(baseUrl, cookie, env), {
 			nonce: crypto.randomBytes(8).toString("hex"),
 			defaultModel: DEFAULT_MODEL,
 			...options,
