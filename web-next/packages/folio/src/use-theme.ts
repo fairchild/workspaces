@@ -6,7 +6,7 @@
  * system-preference changes live after the pre-paint init script ran.
  */
 import { useCallback, useEffect } from "react";
-import { resolveTheme, THEME_STORAGE_KEY, type Theme } from "@/lib/theme";
+import { resolveTheme, THEME_STORAGE_KEY, type Theme } from "./theme";
 
 function applyTheme(theme: Theme) {
 	document.documentElement.dataset.theme = theme;

@@ -16,7 +16,7 @@ import { notFound } from "next/navigation";
 import { MODEL_OPTIONS, modelLabel } from "@/lib/agent-runtime/models";
 import { sessionBranch } from "@/lib/agent-runtime/vercel-provider";
 import { resolveTurn } from "@/lib/agent-runtime/turn-tail";
-import type { FolioMessage } from "@/components/folio/types";
+import type { FolioMessage } from "@fairchild/folio";
 import { getAuthState } from "@/lib/auth/auth-state";
 import { getDatabase } from "@/lib/db/client";
 import { listQueuedMessages } from "@/lib/db/queued-messages";

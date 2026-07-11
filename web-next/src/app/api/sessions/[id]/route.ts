@@ -26,7 +26,7 @@ import {
 	updateSession,
 } from "@/lib/db/sessions";
 import { cleanTitleText, MAX_TITLE_LENGTH } from "@/lib/session-title";
-import type { FolioMessage } from "@/components/folio/types";
+import type { FolioMessage } from "@fairchild/folio";
 
 export const runtime = "nodejs";
 

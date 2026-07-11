@@ -5,12 +5,12 @@
  * chunk adapter's messageMetadata hook, so live streams and replayed logs
  * produce identical stats (the numbers are in the persisted events).
  */
-import { formatTokenCount } from "@/components/folio/ledger";
-import type {
-	FolioMessage,
-	FolioMetadata,
-	TurnStatsData,
-} from "@/components/folio/types";
+import {
+	formatTokenCount,
+	type FolioMessage,
+	type FolioMetadata,
+	type TurnStatsData,
+} from "@fairchild/folio";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 
 /** The agent's display name on assistant messages (single-agent for now). */

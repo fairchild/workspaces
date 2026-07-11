@@ -50,8 +50,8 @@ import {
 	type QueuedMessageData,
 	SessionView,
 	type SessionViewData,
-} from "@/components/folio/session-view";
-import type { FolioDataParts, FolioMessage } from "@/components/folio/types";
+} from "@fairchild/folio";
+import type { FolioDataParts, FolioMessage } from "@fairchild/folio";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
 import {

@@ -4,7 +4,7 @@
  * action is currently eligible, so a completed checkpoint can arm it without
  * a page reload.
  */
-import type { MastheadData } from "@/components/folio/session-masthead";
+import type { MastheadData } from "@fairchild/folio";
 
 type PullRequestAction = NonNullable<MastheadData["pullRequestAction"]>;
 

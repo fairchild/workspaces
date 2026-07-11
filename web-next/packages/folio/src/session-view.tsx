@@ -8,8 +8,7 @@ import { ComposeField } from "./compose-field";
 import { Message, MessageArticle } from "./message";
 import { SessionMasthead, type MastheadData } from "./session-masthead";
 import { StatusLine, type StatusLineData } from "./status-line";
-import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
-import type { FolioMessage } from "./types";
+import type { ApprovalDecision, FolioMessage } from "./types";
 
 /** The live turn: always focal, labeled but unstamped while it works. */
 export interface ActiveTurnData extends ActivityLineProps {

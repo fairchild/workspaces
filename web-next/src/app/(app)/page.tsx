@@ -3,7 +3,7 @@
  * the quiet new-session flow. This is the app's front door — everything on
  * it stays calm: one masthead, one list, one affordance.
  */
-import { ThemeToggle } from "@/components/folio/theme-toggle";
+import { ThemeToggle } from "@fairchild/folio";
 import { getDatabase } from "@/lib/db/client";
 import { listSessionFilterOptions, listSessions } from "@/lib/db/sessions";
 import { NewSession } from "./new-session";

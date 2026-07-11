@@ -8,7 +8,6 @@
  */
 import { isDynamicToolUIPart, type DynamicToolUIPart } from "ai";
 import type { CSSProperties, ReactNode } from "react";
-import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 import { ApprovalCard } from "./approval-card";
 import { DiffHunk } from "./diff-card";
 import { InlineMarkdown } from "./inline-markdown";
@@ -23,7 +22,7 @@ import { TestOutputPanel } from "./test-output-panel";
 import { ToolLedgerRow } from "./tool-ledger-row";
 import { TurnFailure } from "./turn-failure";
 import { TurnStatsReceipt } from "./turn-stats";
-import type { FolioMessage } from "./types";
+import type { ApprovalDecision, FolioMessage } from "./types";
 
 // --- shell -------------------------------------------------------------------
 

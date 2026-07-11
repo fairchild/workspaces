@@ -8,7 +8,7 @@ import type { Session, SessionPullRequest } from "../db/sessions";
 import { readEvents, updateSession } from "../db/sessions";
 import type { DatabaseHandle } from "../db/client";
 import { projectSessionEvents } from "../transcript/project-events";
-import type { FolioMessage } from "@/components/folio/types";
+import type { FolioMessage } from "@fairchild/folio";
 import {
 	openPullRequestFromGitHubApi,
 	openPullRequestFromVercelSession,

@@ -7,11 +7,27 @@
  * data part here.
  */
 import type { UIMessage } from "ai";
-import type {
-	ApprovalDecision,
-	ApprovalResolvedBy,
-	ConfigReceipt,
-} from "@/lib/agent-runtime/stream-chunk";
+
+export type ApprovalDecision = "allow" | "deny";
+export type ApprovalResolvedBy = "user" | "timeout" | "abort";
+
+export interface ConfigReceiptFile {
+	path: string;
+	basename: string;
+	sha256: string;
+}
+
+export interface SkippedConfigReceiptFile {
+	path: string;
+	basename: string;
+	reason: string;
+}
+
+export interface ConfigReceipt {
+	envVar: string;
+	loaded: ConfigReceiptFile[];
+	skipped: SkippedConfigReceiptFile[];
+}
 
 /**
  * End-of-turn receipt numbers ("3 tools · 1 file · +3 −1 · 4 tests · 6.2s").

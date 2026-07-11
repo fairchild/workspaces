@@ -1,0 +1,36 @@
+{
+	"name": "@fairchild/folio",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Folio conversation interface for agent-backed applications.",
+	"license": "Apache-2.0",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/fairchild/workspaces.git",
+		"directory": "web-next/packages/folio"
+	},
+	"exports": {
+		".": {
+			"types": "./src/index.ts",
+			"import": "./src/index.ts"
+		}
+	},
+	"files": [
+		"src",
+		"!src/**/*.test.ts"
+	],
+	"sideEffects": false,
+	"folioCompatibility": {
+		"next": ">=15.5.0 <16"
+	},
+	"peerDependencies": {
+		"ai": "^7.0.15",
+		"react": "^19.0.0",
+		"react-dom": "^19.0.0"
+	},
+	"dependencies": {
+		"@radix-ui/react-collapsible": "^1.1.15",
+		"@radix-ui/react-use-controllable-state": "^1.2.3"
+	}
+}
