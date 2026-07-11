@@ -3,8 +3,8 @@
  * <origin>]` runs the full staged suite — reachability, the auth/security
  * posture checks, authenticated flows (#814), the per-model gateway sweep
  * (#816), deployed-safe e2e (#817), and one real agentic coding turn (#818,
- * deployed targets; `--skip-real-turn` to opt out of the spend) — against a
- * local spawn or a real deployment, and reports pass/fail/skip per check
+ * deployed Vercel targets and local-mode host targets; `--skip-real-turn` to
+ * opt out of the spend) — against a local spawn or a real deployment, and reports pass/fail/skip per check
  * (JSON + a Markdown report under output/validate/, exit 1 on any failure).
  * Stages needing credentials gate themselves and report `skipped: missing
  * <name>` rather than silently passing.
@@ -382,23 +382,30 @@ async function main() {
 			stages.push(await timed(() => authenticatedStage(target.baseUrl, mode, process.env)));
 			stages.push(await timed(() => modelSweepStage(target.baseUrl, process.env)));
 			stages.push(await timed(() => e2eDeployedSafeStage(target, process.env)));
-			// The real turn runs LAST: it is the only stage that spends real money
-			// (one small coding turn) and boots a sandbox, so everything cheaper
-			// gets its verdict in first. Local spawns skip it — the throwaway
-			// bypass server has no deployed runtime posture worth probing, and
-			// `pnpm validate` with no args must never surprise-spend.
+			// The real turn runs LAST: it is the only stage that spends model usage.
+			// Ordinary local spawns still skip so `pnpm validate` never surprise-
+			// spends. An explicitly host-configured local-mode target is the host
+			// provider's sanctioned production-shaped validation lane (#1014).
+			const localHostTarget =
+				target.spawnLocal &&
+				target.localMode &&
+				process.env.WEB_NEXT_COMPUTE_PROVIDER === "host";
 			if (skipRealTurn) {
 				stages.push({ id: REAL_TURN_STAGE_ID, status: "skip", reason: "skipped by flag (--skip-real-turn)" });
-			} else if (target.spawnLocal) {
+			} else if (target.spawnLocal && !localHostTarget) {
 				stages.push({
 					id: REAL_TURN_STAGE_ID,
 					status: "skip",
-					reason: "local spawn — probe a deployed target (or --url a server provisioned with runtime credentials)",
+					reason: "local spawn — use --env local-mode with WEB_NEXT_COMPUTE_PROVIDER=host, or probe a deployed target",
 				});
 			} else {
 				const cookie = authedCookie(mode, target.baseUrl, process.env);
 				if (!cookie) {
-					const gate = gateStage({ WEB_NEXT_VALIDATION_SESSION: process.env.WEB_NEXT_VALIDATION_SESSION });
+					const gate = gateStage(
+						localHostTarget
+							? { WEB_NEXT_LOCAL_TOKEN: process.env.WEB_NEXT_LOCAL_TOKEN }
+							: { WEB_NEXT_VALIDATION_SESSION: process.env.WEB_NEXT_VALIDATION_SESSION },
+					);
 					stages.push({ id: REAL_TURN_STAGE_ID, status: "skip", reason: gate.reason });
 				} else {
 					stages.push(await timed(() => realTurnStage(target.baseUrl, cookie, process.env)));

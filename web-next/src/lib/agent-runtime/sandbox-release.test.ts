@@ -9,6 +9,19 @@ function sandbox(status: string, stop: () => Promise<unknown> = async () => {}) 
 }
 
 describe("releaseParkedSandbox", () => {
+	test("a host resume handle is not treated as a Vercel sandbox", async () => {
+		let lookedUp = false;
+		const release = await releaseParkedSandbox(
+			{ ...parked, provider: "host" },
+			async () => {
+				lookedUp = true;
+				return sandbox("running");
+			},
+		);
+		expect(release).toEqual({ disposition: "none" });
+		expect(lookedUp).toBe(false);
+	});
+
 	test("a session that never parked has nothing to release", async () => {
 		expect(
 			await releaseParkedSandbox({ claudeSessionId: null, resumeState: null }),

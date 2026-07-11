@@ -30,6 +30,15 @@ export function buildProbePrompt(nonce) {
 	].join("\n");
 }
 
+/** Read-only host probe: exercises local Claude + workspace + durable resume. */
+export function buildHostProbePrompt(nonce) {
+	return [
+		"Read package.json from the repository root and report its package name.",
+		`End your answer with exactly: host-turn probe ${nonce}`,
+		"Do not edit files, run commands, commit, push, or open a pull request.",
+	].join("\n");
+}
+
 /**
  * Interprets `/api/diag/preflight` (cheap, no sandbox spin-up) as the stage's
  * runtime-credential gate. Only a failing env-presence check is a *skip* — a
@@ -47,7 +56,9 @@ export function classifyPreflightGate(probe) {
 			reason: "target has no /api/diag/preflight — deployment predates the real runtime",
 		};
 	}
-	if (probe.status === 200) return { ok: true };
+	if (probe.status === 200) {
+		return { ok: true, provider: probe.body?.provider ?? "vercel" };
+	}
 	const checks = Array.isArray(probe.body?.checks) ? probe.body.checks : [];
 	const failing = checks.filter((c) => c.ok === false);
 	const envCheck = failing.find((c) => /env/i.test(String(c.name)));
@@ -190,6 +201,64 @@ export function evaluateRealTurnEvents(events, nonce, { deadlineMs } = {}) {
 	return checks;
 }
 
+/** Host turn contract: local lifecycle, read-only tool use, durable completion. */
+export function evaluateHostTurnEvents(events, nonce, { deadlineMs } = {}) {
+	const assistant = events.filter(isAssistant);
+	const statuses = assistant.filter((event) => event.kind === "status");
+	const localLifecycle = statuses.some((event) =>
+		/preparing host workspace|starting local claude code/i.test(event.content ?? ""),
+	);
+	const toolUses = assistant.filter((event) => event.kind === "tool_use");
+	const readUsed = toolUses.some((event) => {
+		const name = event.metadata?.toolName ?? event.content;
+		return String(name ?? "").toLowerCase() === "read";
+	});
+	const streamed = assistant.filter(
+		(event) =>
+			(event.kind === "text" || event.kind === "reasoning") &&
+			(event.content ?? "").length > 0,
+	);
+	const marker = streamed.some((event) =>
+		(event.content ?? "").includes(`host-turn probe ${nonce}`),
+	);
+	const errors = assistant.filter((event) => event.kind === "error");
+	const done = assistant.find((event) => event.kind === "done");
+	const aborted = done?.metadata?.aborted === true;
+	return [
+		check(
+			"host_lifecycle_started",
+			localLifecycle,
+			localLifecycle ? "host workspace/Claude lifecycle observed" : "no host lifecycle status event",
+		),
+		check(
+			"read_only_tool_used",
+			readUsed,
+			readUsed ? "Read tool observed" : `no Read tool among ${toolUses.length} tool call(s)`,
+		),
+		check(
+			"streamed_output",
+			streamed.length > 0 && marker,
+			`${streamed.length} text/reasoning event(s); marker ${marker ? "observed" : "missing"}`,
+		),
+		check(
+			"no_turn_errors",
+			errors.length === 0,
+			errors.length === 0
+				? "no error events"
+				: `error event(s): ${errors.map((event) => JSON.stringify((event.content ?? "").slice(0, 200))).join("; ")}`,
+		),
+		check(
+			"turn_done",
+			!!done && !aborted,
+			done
+				? aborted
+					? "turn closed as aborted"
+					: `terminal done arrived (durationMs=${done.metadata?.durationMs ?? "?"})`
+				: `no terminal done${deadlineMs ? ` within ${Math.round(deadlineMs / 1000)}s` : ""}`,
+		),
+	];
+}
+
 /**
  * The no-leak verdict from the DELETE response (assertion 6). `state` is what
  * the probe observed: `turnCompleted` (a terminal done landed) and `parked`
@@ -203,7 +272,7 @@ export function evaluateRealTurnEvents(events, nonce, { deadlineMs } = {}) {
  * which is litter and equally a failure.
  */
 export function classifyTeardown(state, del) {
-	const { parked, turnCompleted } = state;
+	const { parked, turnCompleted, provider = "vercel" } = state;
 	if (del.status === 200 && del.body?.deleted === true) {
 		const sandbox = del.body.sandbox;
 		if (!turnCompleted) {
@@ -213,9 +282,12 @@ export function classifyTeardown(state, del) {
 				`session deleted but the turn never closed — an unparked live sandbox may persist until its lifetime cap (disposition: ${sandbox})`,
 			);
 		}
-		const ok = parked
-			? sandbox === "stopped" || sandbox === "expired"
-			: sandbox === "none" || sandbox === "stopped" || sandbox === "expired";
+		const ok =
+			provider === "host"
+				? sandbox === "none"
+				: parked
+					? sandbox === "stopped" || sandbox === "expired"
+					: sandbox === "none" || sandbox === "stopped" || sandbox === "expired";
 		return check(
 			"no_leaked_sandbox",
 			ok,
@@ -250,7 +322,7 @@ const hasDone = (events) =>
  * assertion or client fault can't leak the probe session; the teardown check
  * is appended even on that path so the report shows what happened to it.
  */
-export async function runRealTurnProbe(client, options) {
+async function runProviderTurnProbe(client, options, specification) {
 	const {
 		nonce,
 		defaultModel,
@@ -263,7 +335,7 @@ export async function runRealTurnProbe(client, options) {
 
 	const created = await client.createSession({
 		title: buildProbeTitle(nowIso),
-		provider: "vercel",
+		provider: specification.provider,
 	});
 	const gate = classifyCreateGate(created);
 	if (gate.skip) return { status: "skip", reason: gate.reason };
@@ -296,7 +368,7 @@ export async function runRealTurnProbe(client, options) {
 	let turnCompleted = false;
 	let aborted = false;
 	try {
-		const chat = await client.sendChat(sessionId, buildProbePrompt(nonce));
+		const chat = await client.sendChat(sessionId, specification.prompt(nonce));
 		if (chat.status !== 200) {
 			checks.push(
 				check(
@@ -324,7 +396,20 @@ export async function runRealTurnProbe(client, options) {
 			}
 			await sleep(pollMs);
 		}
-		checks.push(...evaluateRealTurnEvents(events, nonce, { deadlineMs }));
+		checks.push(...specification.evaluate(events, nonce, { deadlineMs }));
+		if (specification.requireResume) {
+			checks.push(
+				check(
+					"resume_handle_persisted",
+					turnCompleted && parked,
+					turnCompleted
+						? parked
+							? "completed host turn retained a durable resume handle"
+							: "completed host turn did not retain a resume handle"
+						: "turn did not complete, so no resume handle could be verified",
+				),
+			);
+		}
 	} catch (error) {
 		// Never rethrow: an escaped client fault would otherwise discard every
 		// accumulated check — including the teardown verdict below — from the
@@ -341,7 +426,34 @@ export async function runRealTurnProbe(client, options) {
 		}
 		// A probe aborted before its turn ever started has no turn to hold
 		// against the teardown — only the delete itself is asserted.
-		checks.push(classifyTeardown({ parked, turnCompleted: turnCompleted || aborted }, del));
+		checks.push(
+			classifyTeardown(
+				{
+					parked,
+					turnCompleted: turnCompleted || aborted,
+					provider: specification.provider,
+				},
+				del,
+			),
+		);
 	}
 	return { status: "run", checks };
+}
+
+export async function runRealTurnProbe(client, options) {
+	return runProviderTurnProbe(client, options, {
+		provider: "vercel",
+		prompt: buildProbePrompt,
+		evaluate: evaluateRealTurnEvents,
+		requireResume: false,
+	});
+}
+
+export async function runHostTurnProbe(client, options) {
+	return runProviderTurnProbe(client, options, {
+		provider: "host",
+		prompt: buildHostProbePrompt,
+		evaluate: evaluateHostTurnEvents,
+		requireResume: true,
+	});
 }

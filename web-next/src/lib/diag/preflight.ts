@@ -1,10 +1,17 @@
 /*
- * Environment preflight: one call that proves every capability a real #750 turn
- * needs — model inference, GitHub App clone credentials, Vercel access, and
- * (opt-in) a live sandbox that runs bash and clones the repo. Each check is
- * isolated so one failure still reports the rest. Secret values are never
- * returned — only presence, status, and non-secret metadata.
+ * Provider-aware environment preflight. Vercel targets prove model, GitHub
+ * App, Vercel, and optional sandbox access; host targets prove the local
+ * Claude binary, git, and a writable owned-workspace root. Inactive-provider
+ * checks remain visible as informational skips, never as false failures.
  */
+import { execFile } from "node:child_process";
+import { constants } from "node:fs";
+import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import {
+	curatedClaudeEnv,
+	resolveClaudeBinary,
+} from "@/lib/agent-runtime/host-provider";
 import {
 	generateAppJWT,
 	findInstallationId,
@@ -26,15 +33,28 @@ export interface PreflightReport {
 	ok: boolean;
 	ranAt: string;
 	onVercel: boolean;
+	provider: string;
 	cloneRepo: string;
 	checks: CheckResult[];
 	tookMs: number;
 }
 
 /** Repo the GitHub + sandbox-clone checks target. */
-const CLONE_REPO = process.env.PREFLIGHT_CLONE_REPO ?? "fairchild/workspaces";
+function cloneRepo(env: NodeJS.ProcessEnv): string {
+	return env.PREFLIGHT_CLONE_REPO ?? "fairchild/workspaces";
+}
 
 type CheckBody = Omit<CheckResult, "name" | "latencyMs">;
+
+type VersionProbe = (
+	command: string,
+	env: NodeJS.ProcessEnv,
+) => Promise<string>;
+
+interface HostPreflightDependencies {
+	resolveClaude?: typeof resolveClaudeBinary;
+	version?: VersionProbe;
+}
 
 async function timed(
 	name: string,
@@ -42,7 +62,8 @@ async function timed(
 ): Promise<CheckResult> {
 	const started = Date.now();
 	try {
-		return { name, latencyMs: Date.now() - started, ...(await fn()) };
+		const result = await fn();
+		return { name, latencyMs: Date.now() - started, ...result };
 	} catch (e) {
 		return {
 			name,
@@ -58,7 +79,7 @@ function redact(s: string): string {
 	return s.replace(/x-access-token:[^@\s]*@/g, "x-access-token:***@");
 }
 
-function checkEnv(): CheckResult {
+function checkEnv(env: NodeJS.ProcessEnv): CheckResult {
 	const all = [
 		"AI_GATEWAY_API_KEY",
 		"ANTHROPIC_API_KEY",
@@ -69,20 +90,17 @@ function checkEnv(): CheckResult {
 		"GITHUB_WEB_WORKSPACES_APP_ID",
 		"GITHUB_APP_PRIVATE_KEY",
 	];
-	const present = all.filter((v) => !!process.env[v]);
-	const missing = all.filter((v) => !process.env[v]);
+	const present = all.filter((v) => !!env[v]);
+	const missing = all.filter((v) => !env[v]);
 	const hasModel = !!(
-		process.env.AI_GATEWAY_API_KEY || process.env.ANTHROPIC_API_KEY
+		env.AI_GATEWAY_API_KEY || env.ANTHROPIC_API_KEY
 	);
 	const hasVercel = !!(
-		process.env.VERCEL_OIDC_TOKEN ||
-		(process.env.VERCEL_TOKEN &&
-			process.env.VERCEL_TEAM_ID &&
-			process.env.VERCEL_PROJECT_ID)
+		env.VERCEL_OIDC_TOKEN ||
+		(env.VERCEL_TOKEN && env.VERCEL_TEAM_ID && env.VERCEL_PROJECT_ID)
 	);
 	const hasGithub = !!(
-		process.env.GITHUB_WEB_WORKSPACES_APP_ID &&
-		process.env.GITHUB_APP_PRIVATE_KEY
+		env.GITHUB_WEB_WORKSPACES_APP_ID && env.GITHUB_APP_PRIVATE_KEY
 	);
 	return {
 		name: "env",
@@ -91,8 +109,85 @@ function checkEnv(): CheckResult {
 	};
 }
 
-async function checkLlm(): Promise<CheckBody> {
-	const gateway = process.env.AI_GATEWAY_API_KEY;
+function informational(name: string, activeProvider: string): CheckResult {
+	return {
+		name,
+		ok: true,
+		skipped: true,
+		detail: {
+			informational: true,
+			reason: `inactive for ${activeProvider} compute provider`,
+		},
+	};
+}
+
+function defaultVersionProbe(
+	command: string,
+	env: NodeJS.ProcessEnv,
+): Promise<string> {
+	return new Promise((resolveProbe, rejectProbe) => {
+		execFile(
+			command,
+			["--version"],
+			{
+				encoding: "utf8",
+				env,
+				timeout: 10_000,
+			},
+			(error, stdout) => {
+				if (error) rejectProbe(error);
+				else resolveProbe(stdout.trim());
+			},
+		);
+	});
+}
+
+/** Host-provider readiness without exposing credentials or touching user repos. */
+export async function checkHostProvider(
+	env: NodeJS.ProcessEnv = process.env,
+	dependencies: HostPreflightDependencies = {},
+): Promise<CheckResult[]> {
+	const resolveBinary = dependencies.resolveClaude ?? resolveClaudeBinary;
+	const version = dependencies.version ?? defaultVersionProbe;
+	const claude = await timed("host:claude", async () => {
+		const binary = await resolveBinary(env);
+		if (typeof binary !== "string") {
+			return { ok: false, error: binary.message };
+		}
+		return {
+			ok: true,
+			detail: {
+				binary,
+				version: await version(binary, curatedClaudeEnv(env)),
+			},
+		};
+	});
+	const git = await timed("host:git", async () => ({
+		ok: true,
+		detail: {
+			version: await version("git", curatedClaudeEnv(env)),
+		},
+	}));
+	const workspace = await timed("host:workspace", async () => {
+		const configured = env.WEB_NEXT_HOST_WORKSPACE_ROOT?.trim();
+		if (!configured) {
+			return {
+				ok: false,
+				error: "WEB_NEXT_HOST_WORKSPACE_ROOT unset",
+			};
+		}
+		const root = resolve(configured);
+		await mkdir(root, { recursive: true });
+		await access(root, constants.R_OK | constants.W_OK | constants.X_OK);
+		const probe = await mkdtemp(join(root, ".preflight-"));
+		await rm(probe, { recursive: true, force: true });
+		return { ok: true, detail: { root, writable: true } };
+	});
+	return [claude, git, workspace];
+}
+
+async function checkLlm(env: NodeJS.ProcessEnv): Promise<CheckBody> {
+	const gateway = env.AI_GATEWAY_API_KEY;
 	if (gateway) {
 		const res = await fetch("https://ai-gateway.vercel.sh/v1/chat/completions", {
 			method: "POST",
@@ -117,7 +212,7 @@ async function checkLlm(): Promise<CheckBody> {
 			},
 		};
 	}
-	const anthropic = process.env.ANTHROPIC_API_KEY;
+	const anthropic = env.ANTHROPIC_API_KEY;
 	if (anthropic) {
 		const res = await fetch("https://api.anthropic.com/v1/messages", {
 			method: "POST",
@@ -146,12 +241,12 @@ async function checkLlm(): Promise<CheckBody> {
 	return { ok: false, error: "no model credential (AI_GATEWAY_API_KEY or ANTHROPIC_API_KEY)" };
 }
 
-async function checkVercel(): Promise<CheckBody> {
-	const token = process.env.VERCEL_TOKEN;
-	const teamId = process.env.VERCEL_TEAM_ID;
-	const projectId = process.env.VERCEL_PROJECT_ID;
+async function checkVercel(env: NodeJS.ProcessEnv): Promise<CheckBody> {
+	const token = env.VERCEL_TOKEN;
+	const teamId = env.VERCEL_TEAM_ID;
+	const projectId = env.VERCEL_PROJECT_ID;
 	if (!token) {
-		if (process.env.VERCEL_OIDC_TOKEN) {
+		if (env.VERCEL_OIDC_TOKEN) {
 			return {
 				ok: true,
 				skipped: true,
@@ -192,10 +287,13 @@ async function checkVercel(): Promise<CheckBody> {
 }
 
 /** Mint + verify the GitHub App token, returning it (out of band) for the clone check. */
-async function mintGithub(): Promise<{ result: CheckResult; token?: string }> {
+async function mintGithub(
+	env: NodeJS.ProcessEnv,
+	repo: string,
+): Promise<{ result: CheckResult; token?: string }> {
 	const started = Date.now();
-	const appId = process.env.GITHUB_WEB_WORKSPACES_APP_ID;
-	const pk = process.env.GITHUB_APP_PRIVATE_KEY;
+	const appId = env.GITHUB_WEB_WORKSPACES_APP_ID;
+	const pk = env.GITHUB_APP_PRIVATE_KEY;
 	if (!appId || !pk) {
 		return {
 			result: {
@@ -208,9 +306,9 @@ async function mintGithub(): Promise<{ result: CheckResult; token?: string }> {
 	}
 	try {
 		const jwt = generateAppJWT(appId, pk);
-		const installationId = await findInstallationId(jwt, CLONE_REPO);
+		const installationId = await findInstallationId(jwt, repo);
 		const tok = await getInstallationToken(jwt, installationId);
-		const repo = await verifyRepoAccess(tok.token, CLONE_REPO);
+		const accessibleRepo = await verifyRepoAccess(tok.token, repo);
 		return {
 			token: tok.token,
 			result: {
@@ -218,9 +316,9 @@ async function mintGithub(): Promise<{ result: CheckResult; token?: string }> {
 				ok: true,
 				latencyMs: Date.now() - started,
 				detail: {
-					repo: repo.fullName,
-					defaultBranch: repo.defaultBranch,
-					private: repo.private,
+					repo: accessibleRepo.fullName,
+					defaultBranch: accessibleRepo.defaultBranch,
+					private: accessibleRepo.private,
 					installationId,
 					tokenExpiresAt: tok.expiresAt,
 					permissions: tok.permissions,
@@ -240,7 +338,11 @@ async function mintGithub(): Promise<{ result: CheckResult; token?: string }> {
 }
 
 /** Opt-in: create a live sandbox, run bash, and clone the repo inside it. */
-async function checkSandbox(cloneToken?: string): Promise<CheckResult> {
+async function checkSandbox(
+	cloneToken: string | undefined,
+	env: NodeJS.ProcessEnv,
+	repo: string,
+): Promise<CheckResult> {
 	const started = Date.now();
 	const detail: Record<string, unknown> = {};
 	let sandbox: Awaited<ReturnType<typeof import("@vercel/sandbox").Sandbox.create>> | undefined;
@@ -256,9 +358,9 @@ async function checkSandbox(cloneToken?: string): Promise<CheckResult> {
 			};
 		}
 		sandbox = await mod.Sandbox.create({
-			token: process.env.VERCEL_TOKEN,
-			teamId: process.env.VERCEL_TEAM_ID,
-			projectId: process.env.VERCEL_PROJECT_ID,
+			token: env.VERCEL_TOKEN,
+			teamId: env.VERCEL_TEAM_ID,
+			projectId: env.VERCEL_PROJECT_ID,
 			runtime: "node22",
 			resources: { vcpus: 2 },
 			timeout: 5 * 60 * 1000,
@@ -275,7 +377,7 @@ async function checkSandbox(cloneToken?: string): Promise<CheckResult> {
 		};
 
 		if (cloneToken) {
-			const url = `https://x-access-token:${cloneToken}@github.com/${CLONE_REPO}.git`;
+			const url = `https://x-access-token:${cloneToken}@github.com/${repo}.git`;
 			const clone = await sandbox.runCommand({
 				cmd: "git",
 				args: ["clone", "--depth", "1", url, "/tmp/preflight-repo"],
@@ -322,22 +424,71 @@ async function checkSandbox(cloneToken?: string): Promise<CheckResult> {
 
 export async function runPreflight({
 	includeSandbox,
+	provider = process.env.WEB_NEXT_COMPUTE_PROVIDER ?? "mock",
+	env = process.env,
+	hostDependencies,
 }: {
 	includeSandbox: boolean;
+	provider?: string;
+	env?: NodeJS.ProcessEnv;
+	hostDependencies?: HostPreflightDependencies;
 }): Promise<PreflightReport> {
 	const started = Date.now();
+	const repo = cloneRepo(env);
+	if (provider === "host") {
+		const checks = [
+			informational("env", provider),
+			informational("llm", provider),
+			informational("vercel", provider),
+			informational("github", provider),
+			...(await checkHostProvider(env, hostDependencies)),
+		];
+		if (includeSandbox) checks.push(informational("sandbox", provider));
+		return {
+			ok: checks.every((check) => check.ok || check.skipped),
+			ranAt: new Date().toISOString(),
+			onVercel: !!env.VERCEL,
+			provider,
+			cloneRepo: repo,
+			checks,
+			tookMs: Date.now() - started,
+		};
+	}
+	if (provider !== "vercel") {
+		const checks = [
+			{
+				name: "provider",
+				ok: true,
+				skipped: true,
+				detail: {
+					provider,
+					note: "no real-runtime preflight required for this provider",
+				},
+			},
+		];
+		return {
+			ok: true,
+			ranAt: new Date().toISOString(),
+			onVercel: !!env.VERCEL,
+			provider,
+			cloneRepo: repo,
+			checks,
+			tookMs: Date.now() - started,
+		};
+	}
 	const [llm, vercel, gh] = await Promise.all([
-		timed("llm", checkLlm),
-		timed("vercel", checkVercel),
-		mintGithub(),
+		timed("llm", () => checkLlm(env)),
+		timed("vercel", () => checkVercel(env)),
+		mintGithub(env, repo),
 	]);
-	const checks: CheckResult[] = [checkEnv(), llm, vercel, gh.result];
-	if (includeSandbox) checks.push(await checkSandbox(gh.token));
+	const checks: CheckResult[] = [checkEnv(env), llm, vercel, gh.result];
+	if (includeSandbox) checks.push(await checkSandbox(gh.token, env, repo));
 	return {
 		ok: checks.every((c) => c.ok || c.skipped),
 		ranAt: new Date().toISOString(),
-		onVercel: !!process.env.VERCEL,
-		cloneRepo: CLONE_REPO,
+		onVercel: !!env.VERCEL,
+		provider,
+		cloneRepo: repo,
 		checks,
 		tookMs: Date.now() - started,
 	};

@@ -1,14 +1,17 @@
 import { describe, expect, test } from "vitest";
 import {
 	buildProbePrompt,
+	buildHostProbePrompt,
 	buildProbeTitle,
 	classifyCreateGate,
 	classifyPreflightGate,
 	classifyTeardown,
 	checkDefaultModel,
 	evaluateRealTurnEvents,
+	evaluateHostTurnEvents,
 	PROBE_FILE,
 	runRealTurnProbe,
+	runHostTurnProbe,
 } from "./real-turn-core.mjs";
 
 const NONCE = "abc123deadbeef00";
@@ -86,7 +89,35 @@ describe("classifyPreflightGate", () => {
 	});
 
 	test("200 runs the stage", () => {
-		expect(classifyPreflightGate({ status: 200 })).toEqual({ ok: true });
+		expect(
+			classifyPreflightGate({ status: 200, body: { provider: "host" } }),
+		).toEqual({ ok: true, provider: "host" });
+		expect(classifyPreflightGate({ status: 200 })).toEqual({
+			ok: true,
+			provider: "vercel",
+		});
+	});
+});
+
+describe("host turn contract", () => {
+	test("prompt is read-only and carries a unique response marker", () => {
+		const prompt = buildHostProbePrompt(NONCE);
+		expect(prompt).toMatch(/read package\.json/i);
+		expect(prompt).toContain(NONCE);
+		expect(prompt).toMatch(/do not edit/i);
+	});
+
+	test("healthy host events prove lifecycle, Read use, output, and completion", () => {
+		const checks = evaluateHostTurnEvents([
+			ev("assistant", "status", "Preparing host workspace"),
+			ev("assistant", "status", "Starting local Claude Code"),
+			ev("assistant", "tool_use", "Read", { toolName: "Read" }),
+			ev("assistant", "tool_result", '{"name":"spaces-next"}'),
+			ev("assistant", "text", `spaces-next\nhost-turn probe ${NONCE}`),
+			ev("assistant", "done", "", { durationMs: 123 }),
+		], NONCE);
+
+		expect(checks.every((check) => check.status === "pass")).toBe(true);
 	});
 });
 
@@ -204,6 +235,15 @@ describe("classifyTeardown (leak semantics)", () => {
 		expect(
 			classifyTeardown(done(true), { status: 200, body: { deleted: true, sandbox: "none" } }).status,
 		).toBe("fail");
+	});
+
+	test("a host resume handle names a conversation, not a live sandbox", () => {
+		expect(
+			classifyTeardown(
+				{ parked: true, turnCompleted: true, provider: "host" },
+				{ status: 200, body: { deleted: true, sandbox: "none" } },
+			).status,
+		).toBe("pass");
 	});
 
 	test("a turn that never closed cannot pass, even when the delete succeeds", () => {
@@ -351,5 +391,51 @@ describe("runRealTurnProbe", () => {
 		// An unclosed turn can hide a live unparked sandbox — the leak check
 		// must not read the delete's "none" as proof of cleanliness.
 		expect(result.checks.find((c) => c.id === "no_leaked_sandbox").status).toBe("fail");
+	});
+});
+
+describe("runHostTurnProbe", () => {
+	test("runs a read-only host session and requires a persisted resume handle", async () => {
+		const log = [];
+		const events = [
+			ev("assistant", "status", "Preparing host workspace"),
+			ev("assistant", "status", "Starting local Claude Code"),
+			ev("assistant", "tool_use", "Read", { toolName: "Read" }),
+			ev("assistant", "text", `spaces-next\nhost-turn probe ${NONCE}`),
+			ev("assistant", "done", "", { durationMs: 12 }),
+		];
+		const client = {
+			createSession: async (body) => {
+				log.push(["create", body]);
+				return { status: 201, body: { id: "host-probe", model: "model-default" } };
+			},
+			sendChat: async (_id, prompt) => {
+				log.push(["chat", prompt]);
+				return { status: 200 };
+			},
+			getSession: async () => ({
+				status: 200,
+				body: { session: { parked: true }, events },
+			}),
+			deleteSession: async () => ({
+				status: 200,
+				body: { deleted: true, sandbox: "none" },
+			}),
+		};
+
+		const result = await runHostTurnProbe(client, {
+			nonce: NONCE,
+			defaultModel: "model-default",
+			deadlineMs: 10,
+			pollMs: 1,
+			sleep: () => Promise.resolve(),
+		});
+
+		expect(log[0][1].provider).toBe("host");
+		expect(log[1][1]).toEqual(buildHostProbePrompt(NONCE));
+		expect(result.checks.every((check) => check.status === "pass")).toBe(true);
+		expect(
+			result.checks.find((check) => check.id === "resume_handle_persisted"),
+		).toMatchObject({ status: "pass" });
 	});
 });

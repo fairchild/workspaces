@@ -91,6 +91,20 @@ set by hand. Both report `skipped: validation session expired — re-seed`
 when the session cookie doesn't authenticate, matching the decision doc's
 expiry wording, rather than failing.
 
+To exercise the host provider end to end, use the explicit local-mode lane:
+
+```bash
+WEB_NEXT_COMPUTE_PROVIDER=host \
+WEB_NEXT_HOST_WORKSPACE_ROOT="$HOME/.webnext/workspaces" \
+pnpm validate --env local-mode
+```
+
+This is the only local spawn that runs a real model turn without `--url`. It
+uses the local Claude login, restricts the probe to `Read`, verifies durable
+completion plus a resume handle, deletes the probe session, and leaves ordinary
+`pnpm validate` zero-spend. Pass `--skip-real-turn` to retain only the zero-spend
+local-mode posture and authenticated-flow stages.
+
 ## Cleaning up
 
 ```bash

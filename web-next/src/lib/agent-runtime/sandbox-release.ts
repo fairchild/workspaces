@@ -80,9 +80,13 @@ async function defaultGetSandbox(name: string): Promise<StoppableSandbox> {
  * treats `stop-failed` as a reason not to delete; everything else is clear).
  */
 export async function releaseParkedSandbox(
-	session: Pick<Session, "claudeSessionId" | "resumeState">,
+	session: Pick<Session, "claudeSessionId" | "resumeState"> &
+		Partial<Pick<Session, "provider">>,
 	getSandbox: GetStoppableSandbox = defaultGetSandbox,
 ): Promise<SandboxRelease> {
+	// Host turns exit after each invocation. Their persisted resume handle names
+	// a Claude conversation + working copy, not a live Vercel sandbox.
+	if (session.provider === "host") return { disposition: "none" };
 	if (!session.claudeSessionId || !session.resumeState) {
 		return { disposition: "none" };
 	}

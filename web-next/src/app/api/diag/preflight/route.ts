@@ -1,8 +1,8 @@
 /*
- * GET /api/diag/preflight — auth-gated environment health check for the #750
- * real runtime. Default run proves model inference, GitHub App clone
- * credentials, and Vercel access (cheap, no sandbox cost). Add `?sandbox=1` to
- * also spin a live Vercel sandbox that runs bash and clones the repo inside it.
+ * GET /api/diag/preflight — auth-gated, provider-aware runtime health check.
+ * Vercel targets prove model/GitHub/Vercel access; host targets prove local
+ * Claude, git, and the owned workspace root. Add `?sandbox=1` to a Vercel
+ * target to spin a live sandbox that runs bash and clones the repo inside it.
  * Never returns secret values — only status and non-secret metadata. Returns
  * 200 when every check passes/skips, 503 otherwise.
  */
