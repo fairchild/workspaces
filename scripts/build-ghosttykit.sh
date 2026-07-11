@@ -244,17 +244,27 @@ archive_exports_ghostty_api() {
 # "other 17.0", or "none -" when it carries no version load command
 # (platform-agnostic, e.g. raw assembly). otool prints LC_BUILD_VERSION
 # platforms numerically (1 = macOS) or symbolically depending on version;
-# older objects use LC_VERSION_MIN_MACOSX instead.
+# older objects use LC_VERSION_MIN_MACOSX (or _IPHONEOS/_TVOS/_WATCHOS)
+# instead. All version commands are scanned: a zippered object (macOS +
+# Catalyst) counts as macOS with the macOS command's minos, whichever order
+# the commands appear in. otool failing on a member must not kill the build
+# under pipefail, hence the `|| true`.
 object_platform_minos() {
   local object="$1"
-  otool -l "$object" 2>/dev/null | awk '
+  { otool -l "$object" 2>/dev/null || true; } | awk '
     $1 == "cmd" { curcmd = $2 }
-    curcmd == "LC_BUILD_VERSION" && $1 == "platform" && platform == "" { platform = $2 }
-    curcmd == "LC_BUILD_VERSION" && $1 == "minos" && out == "" {
-      out = ((platform == "1" || platform == "MACOS") ? "macos " : "other ") $2
+    curcmd == "LC_BUILD_VERSION" && $1 == "platform" { platform = $2; seen = 1 }
+    curcmd == "LC_BUILD_VERSION" && $1 == "minos" {
+      if (platform == "1" || platform == "MACOS") mac_minos = $2
+      else if (other == "") other = $2
     }
-    curcmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" && out == "" { out = "macos " $2 }
-    END { print (out == "" ? "none -" : out) }
+    curcmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" { mac_minos = $2; seen = 1 }
+    curcmd ~ /^LC_VERSION_MIN_/ && curcmd != "LC_VERSION_MIN_MACOSX" { seen = 1; if ($1 == "version" && other == "") other = $2 }
+    END {
+      if (mac_minos != "") print "macos " mac_minos
+      else if (seen) print "other " (other == "" ? "-" : other)
+      else print "none -"
+    }
   '
 }
 
@@ -330,7 +340,9 @@ repair_ghostty_archive_if_needed() {
   # deployment target). Drop those too; platform-agnostic objects with no
   # version load command are kept.
   local host_arch object platform_minos
+  local drops_file="$tmp_dir/dropped-names"
   host_arch="$(uname -m)"
+  : > "$drops_file"
   while IFS= read -r object; do
     if ! file -b "$object" 2>/dev/null | grep -qw "$host_arch"; then
       rm -f "$object"
@@ -341,12 +353,28 @@ repair_ghostty_archive_if_needed() {
       "none -") ;;
       macos\ *)
         if ! version_lte "${platform_minos#macos }" "$MACOS_DEPLOYMENT_TARGET"; then
+          basename "$object" >> "$drops_file"
           rm -f "$object"
         fi
         ;;
-      *) rm -f "$object" ;;
+      *)
+        basename "$object" >> "$drops_file"
+        rm -f "$object"
+        ;;
     esac
   done < <(find "$tmp_dir/objects" -type f -name "*.o")
+
+  # A platform/minos drop is only safe while another copy of that object
+  # survives (the native build that just populated the cache provides one).
+  # If the sweep removed every copy of a member, the archive would silently
+  # lose symbols and fail at app link time — die here instead.
+  local dropped_name
+  while IFS= read -r dropped_name; do
+    if ! find "$tmp_dir/objects" -type f -name "$dropped_name" -print -quit | grep -q .; then
+      die "repair sweep dropped every copy of $dropped_name (wrong platform or minimum macOS above $MACOS_DEPLOYMENT_TARGET); the Zig cache has no usable copy. Purge and rebuild: ./scripts/build-ghosttykit.sh --purge-cache"
+    fi
+  done < <(sort -u "$drops_file")
+  rm -f "$drops_file"
 
   if ! find "$tmp_dir/objects" -type f -name "*.o" -print -quit | grep -q .; then
     die "no $host_arch objects found in the Zig cache to repair the GhosttyKit archive"
@@ -417,7 +445,7 @@ assert_macos_deployment_target() {
 
   local archive violations
   while IFS= read -r archive; do
-    violations="$(otool -l "$archive" 2>/dev/null | awk -v max="$MACOS_DEPLOYMENT_TARGET" '
+    violations="$({ otool -l "$archive" 2>/dev/null || true; } | awk -v max="$MACOS_DEPLOYMENT_TARGET" '
       function vgt(a, b,   n, m, i, x, y, av, bv) {
         n = split(a, av, "."); m = split(b, bv, ".")
         for (i = 1; i <= (n > m ? n : m); i++) {
@@ -429,16 +457,26 @@ assert_macos_deployment_target() {
       }
       function flush() {
         if (member == "") return
-        if (platform != "" && platform != "1" && platform != "MACOS")
-          printf "  %s: platform %s (not macOS)\n", member, platform
-        else if (minos != "" && vgt(minos, max))
-          printf "  %s: minimum macOS %s > %s\n", member, minos, max
+        if (mac_minos != "") {
+          if (vgt(mac_minos, max))
+            printf "  %s: minimum macOS %s > %s\n", member, mac_minos, max
+        } else if (seen)
+          printf "  %s: platform %s (not macOS)\n", member, (plat_desc == "" ? "unknown" : plat_desc)
       }
-      /\):$/ { flush(); member = $0; sub(/:$/, "", member); platform = ""; minos = ""; curcmd = "" }
+      /^[^ \t].*\):$/ { flush(); member = $0; sub(/:$/, "", member); mac_minos = ""; seen = 0; plat_desc = ""; platform = ""; curcmd = "" }
       $1 == "cmd" { curcmd = $2 }
-      curcmd == "LC_BUILD_VERSION" && $1 == "platform" && platform == "" { platform = $2 }
-      curcmd == "LC_BUILD_VERSION" && $1 == "minos" && minos == "" { minos = $2 }
-      curcmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" && minos == "" { platform = "1"; minos = $2 }
+      curcmd == "LC_BUILD_VERSION" && $1 == "platform" {
+        platform = $2; seen = 1
+        if (platform != "1" && platform != "MACOS" && plat_desc == "") plat_desc = platform
+      }
+      curcmd == "LC_BUILD_VERSION" && $1 == "minos" {
+        if (platform == "1" || platform == "MACOS") mac_minos = $2
+      }
+      curcmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" { mac_minos = $2; seen = 1 }
+      curcmd ~ /^LC_VERSION_MIN_/ && curcmd != "LC_VERSION_MIN_MACOSX" {
+        seen = 1
+        if (plat_desc == "") plat_desc = curcmd
+      }
       END { flush() }
     ')"
     if [[ -n "$violations" ]]; then
