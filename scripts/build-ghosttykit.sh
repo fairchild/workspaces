@@ -585,6 +585,11 @@ main() {
   resolve_zig_runner
 
   if [[ "$purge_cache" == "1" ]]; then
+    # Only ever delete the script-managed per-commit location. A user-managed
+    # GHOSTTY_ZIG_CACHE_DIR could point anywhere; refuse rather than rm -rf it.
+    if [[ -n "${GHOSTTY_ZIG_CACHE_DIR:-}" ]]; then
+      die "--purge-cache refuses to delete a user-managed GHOSTTY_ZIG_CACHE_DIR; clean it yourself or unset it"
+    fi
     echo "Purging Zig cache for pinned commit: $ZIG_CACHE_DIR"
     rm -rf "$ZIG_CACHE_DIR"
   fi
