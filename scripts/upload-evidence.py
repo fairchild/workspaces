@@ -73,6 +73,12 @@ def main() -> int:
 
     content_type = CONTENT_TYPES.get(ext, "application/octet-stream")
     data = filepath.read_bytes()
+    if len(data) > MAX_UPLOAD_BYTES:
+        print(
+            f"error: file grew to {len(data)} bytes and exceeds the 50 MiB upload limit",
+            file=sys.stderr,
+        )
+        return 1
 
     url = f"{base_url.rstrip('/')}/{key}"
     req = Request(url, data=data, method="PUT")

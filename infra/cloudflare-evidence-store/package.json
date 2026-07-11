@@ -5,10 +5,11 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test src/*.test.mjs"
+    "test": "tsx --test src/*.test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4",
-    "@cloudflare/workers-types": "^4"
+    "@cloudflare/workers-types": "^4",
+    "tsx": "^4.22.5"
   }
 }

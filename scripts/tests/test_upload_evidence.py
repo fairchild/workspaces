@@ -95,6 +95,22 @@ class UploadEvidenceTests(unittest.TestCase):
             self.assertIn("exceeds the 50 MiB upload limit", stderr)
             urlopen.assert_not_called()
 
+    def test_rechecks_the_bytes_when_a_recording_grows_after_stat(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "still-recording.webm"
+            video.write_bytes(b"123")
+
+            with (
+                patch.object(upload_evidence, "MAX_UPLOAD_BYTES", 4),
+                patch.object(Path, "read_bytes", return_value=b"12345"),
+                patch.object(upload_evidence, "urlopen") as urlopen,
+            ):
+                result, _stdout, stderr = self.run_main(video)
+
+            self.assertEqual(result, 1)
+            self.assertIn("file grew to 5 bytes", stderr)
+            urlopen.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

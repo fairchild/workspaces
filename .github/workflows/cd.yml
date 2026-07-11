@@ -123,6 +123,9 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
+      - name: Test evidence worker
+        if: matrix.worker == 'cloudflare-evidence-store'
+        run: npm ci && npm test
       - name: Deploy to preview env
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

@@ -66,6 +66,7 @@ import {
 	shouldRefreshSessionAfterTurn,
 } from "./pull-request-action";
 import { sandboxStateLabel, useSandboxState } from "./use-sandbox-state";
+import { fetchSessionSnapshotWithRetry } from "./session-refresh";
 import { useTurnFollow } from "./use-turn-follow";
 
 /** Streamed tokens paint at most this often — batched, never per-chunk. */
@@ -293,9 +294,10 @@ export function LiveSessionView({
 		try {
 			do {
 				refreshQueuedRef.current = false;
-				const res = await fetch(`/api/sessions/${sessionId}`);
-				if (!res.ok) continue;
-				const data = (await res.json()) as SessionSnapshot;
+				const data = await fetchSessionSnapshotWithRetry<SessionSnapshot>(
+					`/api/sessions/${sessionId}`,
+				);
+				if (!data) continue;
 				if (data.session) {
 					setHasBranchWork(data.session.hasBranchWork === true);
 					setPullRequest(data.session.pullRequest ?? null);

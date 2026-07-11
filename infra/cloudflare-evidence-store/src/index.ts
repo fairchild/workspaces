@@ -36,6 +36,34 @@ function contentTypeFromPath(path: string): string {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
+export async function readBodyWithinLimit(
+  body: ReadableStream<Uint8Array> | null,
+  maxBytes = MAX_UPLOAD_BYTES,
+): Promise<ArrayBuffer | null> {
+  if (!body) return new ArrayBuffer(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (total + value.byteLength > maxBytes) {
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged.buffer;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -73,8 +101,8 @@ export default {
 
       const contentType =
         request.headers.get("Content-Type") ?? contentTypeFromPath(path);
-      const body = await request.arrayBuffer();
-      if (body.byteLength > MAX_UPLOAD_BYTES) {
+      const body = await readBodyWithinLimit(request.body);
+      if (!body) {
         return new Response("upload exceeds the 50 MiB limit", { status: 413 });
       }
 

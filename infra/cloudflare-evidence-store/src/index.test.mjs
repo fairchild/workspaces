@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import worker, { MAX_UPLOAD_BYTES } from "./index.ts";
+import worker, { MAX_UPLOAD_BYTES, readBodyWithinLimit } from "./index.ts";
 
 function env(overrides = {}) {
 	return {
@@ -62,4 +62,18 @@ test("rejects uploads declared over the cap before touching R2", async () => {
 	assert.equal(response.status, 413);
 	assert.equal(putCalled, false);
 	assert.equal(await response.text(), "upload exceeds the 50 MiB limit");
+});
+
+test("bounds the actual stream when Content-Length is absent or undersized", async () => {
+	const exact = await readBodyWithinLimit(
+		new Response(new Uint8Array([1, 2, 3])).body,
+		3,
+	);
+	assert.deepEqual([...new Uint8Array(exact)], [1, 2, 3]);
+
+	const oversized = await readBodyWithinLimit(
+		new Response(new Uint8Array([1, 2, 3, 4])).body,
+		3,
+	);
+	assert.equal(oversized, null);
 });
