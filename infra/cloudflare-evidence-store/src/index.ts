@@ -36,32 +36,22 @@ function contentTypeFromPath(path: string): string {
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
 }
 
-export async function readBodyWithinLimit(
-  body: ReadableStream<Uint8Array> | null,
-  maxBytes = MAX_UPLOAD_BYTES,
-): Promise<ArrayBuffer | null> {
-  if (!body) return new ArrayBuffer(0);
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (total + value.byteLength > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-    total += value.byteLength;
+function declaredUploadLength(request: Request): number | Response {
+  const raw = request.headers.get("Content-Length");
+  if (raw === null) {
+    return new Response("Content-Length is required", { status: 411 });
   }
-
-  const merged = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.byteLength;
+  if (!/^\d+$/.test(raw)) {
+    return new Response("invalid Content-Length", { status: 400 });
   }
-  return merged.buffer;
+  const length = Number(raw);
+  if (!Number.isSafeInteger(length)) {
+    return new Response("invalid Content-Length", { status: 400 });
+  }
+  if (length > MAX_UPLOAD_BYTES) {
+    return new Response("upload exceeds the 50 MiB limit", { status: 413 });
+  }
+  return length;
 }
 
 export default {
@@ -94,19 +84,16 @@ export default {
         return new Response("unauthorized", { status: 401 });
       }
 
-      const declaredLength = Number(request.headers.get("Content-Length"));
-      if (Number.isFinite(declaredLength) && declaredLength > MAX_UPLOAD_BYTES) {
-        return new Response("upload exceeds the 50 MiB limit", { status: 413 });
+      const declaredLength = declaredUploadLength(request);
+      if (declaredLength instanceof Response) return declaredLength;
+      if (declaredLength > 0 && !request.body) {
+        return new Response("request body is required", { status: 400 });
       }
 
       const contentType =
         request.headers.get("Content-Type") ?? contentTypeFromPath(path);
-      const body = await readBodyWithinLimit(request.body);
-      if (!body) {
-        return new Response("upload exceeds the 50 MiB limit", { status: 413 });
-      }
 
-      await env.EVIDENCE_BUCKET.put(path, body, {
+      await env.EVIDENCE_BUCKET.put(path, request.body, {
         httpMetadata: { contentType },
       });
 

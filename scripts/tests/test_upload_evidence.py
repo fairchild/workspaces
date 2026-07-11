@@ -80,6 +80,7 @@ class UploadEvidenceTests(unittest.TestCase):
                     self.assertEqual(result, 0, stderr)
                     request = urlopen.call_args.args[0]
                     self.assertEqual(request.get_header("Content-type"), expected)
+                    self.assertEqual(request.get_header("Content-length"), "14")
                     self.assertIn(f"hero-flow.{extension}", stdout)
 
     def test_rejects_files_over_the_upload_cap_before_reading_or_network(self) -> None:

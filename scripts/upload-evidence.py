@@ -83,6 +83,7 @@ def main() -> int:
     url = f"{base_url.rstrip('/')}/{key}"
     req = Request(url, data=data, method="PUT")
     req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Length", str(len(data)))
     req.add_header("Content-Type", content_type)
     req.add_header("User-Agent", "upload-evidence/1.0")
 
