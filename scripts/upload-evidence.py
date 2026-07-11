@@ -16,7 +16,8 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg"}
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "webm", "mp4"}
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_BASE_URL = "https://evidence.cloudcompute.com"
 
 CONTENT_TYPES = {
@@ -26,6 +27,8 @@ CONTENT_TYPES = {
     "gif": "image/gif",
     "webp": "image/webp",
     "svg": "image/svg+xml",
+    "webm": "video/webm",
+    "mp4": "video/mp4",
 }
 
 
@@ -55,6 +58,14 @@ def main() -> int:
         print(f"error: unsupported file type: .{ext} (allowed: {', '.join(sorted(ALLOWED_EXTENSIONS))})", file=sys.stderr)
         return 1
 
+    size = filepath.stat().st_size
+    if size > MAX_UPLOAD_BYTES:
+        print(
+            f"error: file is {size} bytes and exceeds the 50 MiB upload limit",
+            file=sys.stderr,
+        )
+        return 1
+
     now = datetime.now(timezone.utc)
     timestamp = now.strftime("%Y%m%d-%H%M%S")
     slug = args.name or filepath.stem
@@ -62,10 +73,17 @@ def main() -> int:
 
     content_type = CONTENT_TYPES.get(ext, "application/octet-stream")
     data = filepath.read_bytes()
+    if len(data) > MAX_UPLOAD_BYTES:
+        print(
+            f"error: file grew to {len(data)} bytes and exceeds the 50 MiB upload limit",
+            file=sys.stderr,
+        )
+        return 1
 
     url = f"{base_url.rstrip('/')}/{key}"
     req = Request(url, data=data, method="PUT")
     req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Length", str(len(data)))
     req.add_header("Content-Type", content_type)
     req.add_header("User-Agent", "upload-evidence/1.0")
 

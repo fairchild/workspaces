@@ -13,8 +13,9 @@ Evidence is a merge gate for all PRs. Upload test results or screenshots before 
 # Capture the live desktop screenshot + upload in one step
 ./scripts/evidence.sh --pr <number> --name <slug>
 
-# Upload an existing file
+# Upload an existing image or video file
 ./scripts/evidence.sh --pr <number> --name <slug> --file /tmp/screenshot.png
+./scripts/evidence.sh --pr <number> --name <slug> --file /tmp/flow.webm
 
 # Via mise
 mise run evidence -- --pr <number> --name <slug>
@@ -132,7 +133,14 @@ gh secret set EVIDENCE_UPLOAD_TOKEN --repo fairchild/workspaces --body "$TOKEN"
 
 ### `scripts/upload-evidence.py`
 
-Lower-level upload client. Accepts png, jpg, gif, webp, svg. Called internally by `evidence.sh`.
+Lower-level upload client. Accepts `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`,
+`webm`, and `mp4`, with a 50 MiB per-file limit enforced by both the client and
+the evidence-store Worker. Uploads carry a fixed `Content-Length`; the Worker
+rejects chunked or malformed-length requests so accepted files can stream
+directly into R2 without consuming the Worker's memory budget. Called internally
+by `evidence.sh`. Images produce inline-image Markdown; videos produce a normal
+click-to-play link because GitHub does not render uploaded video URLs inline in
+PR bodies.
 
 ```bash
 uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug>
@@ -177,6 +185,6 @@ Three layers, from gentlest to strongest:
 
 ## Architecture
 
-Screenshots flow through: `evidence.sh` → `upload-evidence.py` (PUT with bearer token) → Cloudflare Worker (`infra/cloudflare-evidence-store/`) → R2 bucket (`evidence-screenshots`) → public URL at `https://evidence.cloudcompute.com/`.
+Evidence files flow through: `evidence.sh` → `upload-evidence.py` (PUT with bearer token) → Cloudflare Worker (`infra/cloudflare-evidence-store/`) → R2 bucket (`evidence-screenshots`) → public URL at `https://evidence.cloudcompute.com/`.
 
 For infrastructure details (Worker deployment, R2 bucket config, runner setup), see [lume-runner-setup.md § Evidence store](lume-runner-setup.md#evidence-store-r2).

@@ -5,6 +5,8 @@ interface Env {
 
 const encoder = new TextEncoder();
 
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   const aBytes = encoder.encode(a);
@@ -25,11 +27,31 @@ const CONTENT_TYPES: Record<string, string> = {
   svg: "image/svg+xml",
   txt: "text/plain",
   json: "application/json",
+  webm: "video/webm",
+  mp4: "video/mp4",
 };
 
 function contentTypeFromPath(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   return CONTENT_TYPES[ext] ?? "application/octet-stream";
+}
+
+function declaredUploadLength(request: Request): number | Response {
+  const raw = request.headers.get("Content-Length");
+  if (raw === null) {
+    return new Response("Content-Length is required", { status: 411 });
+  }
+  if (!/^\d+$/.test(raw)) {
+    return new Response("invalid Content-Length", { status: 400 });
+  }
+  const length = Number(raw);
+  if (!Number.isSafeInteger(length)) {
+    return new Response("invalid Content-Length", { status: 400 });
+  }
+  if (length > MAX_UPLOAD_BYTES) {
+    return new Response("upload exceeds the 50 MiB limit", { status: 413 });
+  }
+  return length;
 }
 
 export default {
@@ -62,11 +84,16 @@ export default {
         return new Response("unauthorized", { status: 401 });
       }
 
+      const declaredLength = declaredUploadLength(request);
+      if (declaredLength instanceof Response) return declaredLength;
+      if (declaredLength > 0 && !request.body) {
+        return new Response("request body is required", { status: 400 });
+      }
+
       const contentType =
         request.headers.get("Content-Type") ?? contentTypeFromPath(path);
-      const body = await request.arrayBuffer();
 
-      await env.EVIDENCE_BUCKET.put(path, body, {
+      await env.EVIDENCE_BUCKET.put(path, request.body, {
         httpMetadata: { contentType },
       });
 
