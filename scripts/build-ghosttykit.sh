@@ -16,7 +16,13 @@ set -euo pipefail
 #   lands so `swift build` and Xcode open/build work reliably.
 #
 # Usage:
-#   ./scripts/build-ghosttykit.sh
+#   ./scripts/build-ghosttykit.sh [--purge-cache]
+#
+# Flags:
+#   --purge-cache     Delete the per-commit Zig cache before building. The
+#                     remedy when the shared cache has been polluted by a
+#                     build for another platform or macOS version (see
+#                     assert_macos_deployment_target below).
 #
 # Optional environment variables:
 #   GHOSTTY_DIR       Existing Ghostty checkout (must already be at pinned commit).
@@ -42,6 +48,9 @@ ZIG_VERSION="0.15.2"
 ARM64_HOMEBREW_PREFIX="/opt/homebrew"
 HOMEBREW_ZIG_BIN="$ARM64_HOMEBREW_PREFIX/opt/zig@0.15/bin/zig"
 GHOSTTY_ARCH_DIAGNOSTICS="${GHOSTTY_ARCH_DIAGNOSTICS:-1}"
+# The app's minimum macOS (Package.swift `.macOS(.v14)`). Objects built for a
+# newer minimum, or for another platform entirely, cannot link into the app.
+MACOS_DEPLOYMENT_TARGET="14.0"
 
 GHOSTTY_REPO_URL="https://github.com/ghostty-org/ghostty.git"
 CACHE_DIR="${GHOSTTY_CACHE_DIR:-$HOME/.cache/workspacemanager}"
@@ -231,6 +240,39 @@ archive_exports_ghostty_api() {
   nm -gU "$archive" 2>/dev/null | grep ' _ghostty_init$' >/dev/null
 }
 
+# Prints "<platform> <minos>" for a Mach-O object — "macos 13.0",
+# "other 17.0", or "none -" when it carries no version load command
+# (platform-agnostic, e.g. raw assembly). otool prints LC_BUILD_VERSION
+# platforms numerically (1 = macOS) or symbolically depending on version;
+# older objects use LC_VERSION_MIN_MACOSX (or _IPHONEOS/_TVOS/_WATCHOS)
+# instead. All version commands are scanned: a zippered object (macOS +
+# Catalyst) counts as macOS with the macOS command's minos, whichever order
+# the commands appear in. otool failing on a member must not kill the build
+# under pipefail, hence the `|| true`.
+object_platform_minos() {
+  local object="$1"
+  { otool -l "$object" 2>/dev/null || true; } | awk '
+    $1 == "cmd" { curcmd = $2 }
+    curcmd == "LC_BUILD_VERSION" && $1 == "platform" { platform = $2; seen = 1 }
+    curcmd == "LC_BUILD_VERSION" && $1 == "minos" {
+      if (platform == "1" || platform == "MACOS") mac_minos = $2
+      else if (other == "") other = $2
+    }
+    curcmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" { mac_minos = $2; seen = 1 }
+    curcmd ~ /^LC_VERSION_MIN_/ && curcmd != "LC_VERSION_MIN_MACOSX" { seen = 1; if ($1 == "version" && other == "") other = $2 }
+    END {
+      if (mac_minos != "") print "macos " mac_minos
+      else if (seen) print "other " (other == "" ? "-" : other)
+      else print "none -"
+    }
+  '
+}
+
+# True when dotted-decimal version $1 <= $2.
+version_lte() {
+  [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$2" ]]
+}
+
 find_ghostty_archives() {
   local cache_root="$ZIG_CACHE_DIR/local/o"
   local candidate
@@ -290,13 +332,49 @@ repair_ghostty_archive_if_needed() {
   # or drop an object based on its filename rather than its actual
   # architecture), and `-w` requires a whole-word match so "arm64" doesn't
   # also match "arm64e".
-  local host_arch object
+  #
+  # Arch alone is not enough: a universal/iOS xcframework build sharing this
+  # cache leaves thin arm64 archives for other platforms (iOS-simulator
+  # objects are a fatal ld error when linking the macOS app) and macOS
+  # objects with the host's own minimum version (unlinkable at the app's
+  # deployment target). Drop those too; platform-agnostic objects with no
+  # version load command are kept.
+  local host_arch object platform_minos
+  local drops_file="$tmp_dir/dropped-names"
   host_arch="$(uname -m)"
+  : > "$drops_file"
   while IFS= read -r object; do
     if ! file -b "$object" 2>/dev/null | grep -qw "$host_arch"; then
       rm -f "$object"
+      continue
     fi
+    platform_minos="$(object_platform_minos "$object")"
+    case "$platform_minos" in
+      "none -") ;;
+      macos\ *)
+        if ! version_lte "${platform_minos#macos }" "$MACOS_DEPLOYMENT_TARGET"; then
+          basename "$object" >> "$drops_file"
+          rm -f "$object"
+        fi
+        ;;
+      *)
+        basename "$object" >> "$drops_file"
+        rm -f "$object"
+        ;;
+    esac
   done < <(find "$tmp_dir/objects" -type f -name "*.o")
+
+  # A platform/minos drop is only safe while another copy of that object
+  # survives (the native build that just populated the cache provides one).
+  # If the sweep removed every copy of a member, the archive would silently
+  # lose symbols and fail at app link time — die here instead.
+  local dropped_name
+  while IFS= read -r dropped_name; do
+    if ! find "$tmp_dir/objects" -type f -name "$dropped_name" -print -quit | grep -q .; then
+      die "repair sweep dropped every copy of $dropped_name (wrong platform or minimum macOS above $MACOS_DEPLOYMENT_TARGET); the Zig cache has no usable copy. Purge and rebuild: ./scripts/build-ghosttykit.sh --purge-cache"
+    fi
+  done < <(sort -u "$drops_file")
+  rm -f "$drops_file"
 
   if ! find "$tmp_dir/objects" -type f -name "*.o" -print -quit | grep -q .; then
     die "no $host_arch objects found in the Zig cache to repair the GhosttyKit archive"
@@ -354,6 +432,61 @@ assert_host_arch_slice() {
   if ! plutil -p "$info_plist" 2>/dev/null | grep -q "\"$host_arch\""; then
     die "xcframework Info.plist does not declare a slice supporting host arch $host_arch: $info_plist"
   fi
+}
+
+# A poisoned Zig cache can hand the repair sweep objects for the wrong
+# platform or a newer minimum macOS than the app's deployment target. ld
+# rejects wrong-platform objects outright — and CI swallowed exactly that
+# error once (the v0.23.0 release: an iOS-simulator targets.o swept in from a
+# universal build sharing the cache). Fail here, at GhosttyKit build time,
+# with the remedy in hand.
+assert_macos_deployment_target() {
+  local framework_dir="$1"
+
+  local archive violations
+  while IFS= read -r archive; do
+    violations="$({ otool -l "$archive" 2>/dev/null || true; } | awk -v max="$MACOS_DEPLOYMENT_TARGET" '
+      function vgt(a, b,   n, m, i, x, y, av, bv) {
+        n = split(a, av, "."); m = split(b, bv, ".")
+        for (i = 1; i <= (n > m ? n : m); i++) {
+          x = (i <= n) ? av[i] + 0 : 0
+          y = (i <= m) ? bv[i] + 0 : 0
+          if (x != y) return x > y
+        }
+        return 0
+      }
+      function flush() {
+        if (member == "") return
+        if (mac_minos != "") {
+          if (vgt(mac_minos, max))
+            printf "  %s: minimum macOS %s > %s\n", member, mac_minos, max
+        } else if (seen)
+          printf "  %s: platform %s (not macOS)\n", member, (plat_desc == "" ? "unknown" : plat_desc)
+      }
+      /^[^ \t].*\):$/ { flush(); member = $0; sub(/:$/, "", member); mac_minos = ""; seen = 0; plat_desc = ""; platform = ""; curcmd = "" }
+      $1 == "cmd" { curcmd = $2 }
+      curcmd == "LC_BUILD_VERSION" && $1 == "platform" {
+        platform = $2; seen = 1
+        if (platform != "1" && platform != "MACOS" && plat_desc == "") plat_desc = platform
+      }
+      curcmd == "LC_BUILD_VERSION" && $1 == "minos" {
+        if (platform == "1" || platform == "MACOS") mac_minos = $2
+      }
+      curcmd == "LC_VERSION_MIN_MACOSX" && $1 == "version" { mac_minos = $2; seen = 1 }
+      curcmd ~ /^LC_VERSION_MIN_/ && curcmd != "LC_VERSION_MIN_MACOSX" {
+        seen = 1
+        if (plat_desc == "") plat_desc = curcmd
+      }
+      END { flush() }
+    ')"
+    if [[ -n "$violations" ]]; then
+      die "GhosttyKit archive has objects unusable at the app deployment target (macOS $MACOS_DEPLOYMENT_TARGET):
+$violations
+The shared Zig cache is likely polluted by a build for another platform or
+macOS version (e.g. a universal/iOS xcframework build). Purge and rebuild:
+  ./scripts/build-ghosttykit.sh --purge-cache"
+    fi
+  done < <(find "$framework_dir" -type f -name "libghostty-fat.a" 2>/dev/null)
 }
 
 log_arch_diagnostics() {
@@ -476,10 +609,28 @@ install_xcframework() {
 }
 
 main() {
+  local arg purge_cache=0
+  for arg in "$@"; do
+    case "$arg" in
+      --purge-cache) purge_cache=1 ;;
+      *) die "unknown argument: $arg (supported: --purge-cache)" ;;
+    esac
+  done
+
   require_cmd git
   require_cmd xcrun
   require_msgfmt
   resolve_zig_runner
+
+  if [[ "$purge_cache" == "1" ]]; then
+    # Only ever delete the script-managed per-commit location. A user-managed
+    # GHOSTTY_ZIG_CACHE_DIR could point anywhere; refuse rather than rm -rf it.
+    if [[ -n "${GHOSTTY_ZIG_CACHE_DIR:-}" ]]; then
+      die "--purge-cache refuses to delete a user-managed GHOSTTY_ZIG_CACHE_DIR; clean it yourself or unset it"
+    fi
+    echo "Purging Zig cache for pinned commit: $ZIG_CACHE_DIR"
+    rm -rf "$ZIG_CACHE_DIR"
+  fi
 
   resolve_ghostty_dir
   ensure_ghostty_checkout
@@ -496,6 +647,7 @@ main() {
   postprocess_xcframework "$OUT_DIR/GhosttyKit.xcframework"
   log_arch_diagnostics "$OUT_DIR/GhosttyKit.xcframework"
   assert_host_arch_slice "$OUT_DIR/GhosttyKit.xcframework"
+  assert_macos_deployment_target "$OUT_DIR/GhosttyKit.xcframework"
   echo "Built GhosttyKit.xcframework -> $OUT_DIR/GhosttyKit.xcframework"
 }
 
