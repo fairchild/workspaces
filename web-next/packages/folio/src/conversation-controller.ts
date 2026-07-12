@@ -94,6 +94,21 @@ export class FolioConversationController {
 
 	constructor(readonly port: FolioConversationPort) {}
 
+	/**
+	 * Starts from a snapshot the host already projected. This is the bridge for
+	 * hosts whose established runtime owns live state (for example an SDK hook):
+	 * they can use the same port-backed command membrane without an async blank
+	 * render while `readSnapshot()` repeats data they already have.
+	 */
+	static fromSnapshot(
+		port: FolioConversationPort,
+		snapshot: FolioConversationSnapshot,
+	): FolioConversationController {
+		const controller = new FolioConversationController(port);
+		controller.#snapshot = snapshot;
+		return controller;
+	}
+
 	get snapshot(): FolioConversationSnapshot | null {
 		return this.#snapshot;
 	}
@@ -180,7 +195,7 @@ export class FolioFollowInProgressError extends Error {
 
 export function createPortBackedConversationActions(
 	controller: FolioConversationController,
-	idempotencyKey: () => string,
+	requestId: () => string,
 	onCommandError: (error: unknown) => void,
 ): FolioConversationActions {
 	const snapshot = controller.snapshot;
@@ -192,11 +207,11 @@ export function createPortBackedConversationActions(
 	};
 	return {
 		send: capabilities.send
-			? (text) => run(controller.send({ text, idempotencyKey: idempotencyKey() }))
+			? (text) => run(controller.send({ text, requestId: requestId() }))
 			: undefined,
 		retry: capabilities.retry
 			? (messageId, text) =>
-					run(controller.send({ text, idempotencyKey: idempotencyKey(), retryOf: messageId }))
+					run(controller.send({ text, requestId: requestId(), retryOf: messageId }))
 			: undefined,
 		cancelQueuedMessage: capabilities.cancelQueuedMessage
 			? (queueId) => run(controller.cancelQueuedMessage(queueId))

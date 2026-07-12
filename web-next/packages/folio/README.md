@@ -6,8 +6,8 @@ authentication, persistence, transport, agent execution, repositories, and
 publication authority.
 
 The current package is source-first and private while the boundary is proven
-inside Workspaces. Follow-up W7 slices add host ports, package-owned styles,
-the versioned install artifact, and a real external-consumer proof.
+inside Workspaces. It owns its host ports and scoped styles; the remaining W7
+slices create a versioned install artifact and prove a real external consumer.
 
 React 19 and AI SDK 7 are peers. Next 15.5 is the tested Workspaces host and is
 recorded as advisory compatibility metadata rather than a peer because Folio
@@ -60,10 +60,27 @@ await controller.hydrate();
 await controller.follow(render);
 ```
 
+When an established host runtime already owns and projects the current live
+snapshot, seed the controller without a redundant async read, then recreate the
+binding when that host snapshot changes. `follow()` begins at the seeded cursor
+without calling `readSnapshot()` again:
+
+```ts
+const controller = FolioConversationController.fromSnapshot(hostPort, hostSnapshot);
+```
+
 Only one `follow()` may own a controller at a time. Hosts reconnect by creating
 a controller from their durable snapshot cursor; unknown cursors fail closed
-instead of replaying the conversation from the beginning. Command receipts
-return the host's durable cursor rather than a separate acknowledgement ID.
+with `FolioUnknownCursorError` instead of replaying the conversation from the
+beginning. A command receipt carries the first host cursor known to contain the
+effect. Its cursor is `null` when a host accepted the command but an externally
+owned projection has not observed it yet; callers then await the next snapshot
+instead of assuming the old cursor includes new state.
+
+Send commands carry a unique `requestId` for correlation and optional `retryOf`
+UI provenance. A retry is a new send unless the host explicitly provides
+stronger semantics; hosts may use `requestId` as a deduplication key, but Folio
+does not claim that every transport does so.
 
 `SessionView` receives one `FolioConversationActions` object. Missing callbacks
 are missing capabilities; the component never discovers or constructs host

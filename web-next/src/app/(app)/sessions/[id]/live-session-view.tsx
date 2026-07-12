@@ -46,7 +46,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 import { modelLabel } from "@/lib/agent-runtime/models";
 import {
+	createPortBackedConversationActions,
 	type ActiveTurnData,
+	type FolioConversationSnapshot,
+	type FolioSendRequest,
 	type QueuedMessageData,
 	SessionView,
 	type SessionViewData,
@@ -54,7 +57,11 @@ import {
 import type { FolioDataParts, FolioMessage } from "@fairchild/folio";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
-import { createWorkspacesFolioActions } from "@/lib/folio/workspaces-conversation-adapter";
+import {
+	createWorkspacesChatRequestBody,
+	createWorkspacesFolioConversation,
+	createWorkspacesProjectionCursor,
+} from "@/lib/folio/workspaces-conversation-adapter";
 import {
 	applyLiveTurnErrors,
 	isVisibleMessage,
@@ -175,17 +182,23 @@ export function LiveSessionView({
 				setModel(previous);
 			}
 		};
-		modelPatchChain.current = modelPatchChain.current.then(() =>
-			fetch(`/api/sessions/${sessionId}`, {
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ model: nextModel }),
-			})
-				.then((res) => {
-					if (!res.ok) revert();
-				})
-				.catch(revert),
-		);
+		const request = modelPatchChain.current.then(async () => {
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}`, {
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ model: nextModel }),
+				});
+				if (!res.ok) throw new Error(`model update failed (${res.status})`);
+			} catch (caught) {
+				revert();
+				throw caught;
+			}
+		});
+		// Keep the sequencing chain live after a rejected command while returning
+		// the real request promise to Folio's command error channel.
+		modelPatchChain.current = request.catch(() => undefined);
+		return request;
 	};
 
 	// The persisted title, "" until either the auto-titler or an edit sets one.
@@ -203,46 +216,47 @@ export function LiveSessionView({
 				setTitle(previous);
 			}
 		};
-		titlePatchChain.current = titlePatchChain.current.then(() =>
-			fetch(`/api/sessions/${sessionId}`, {
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ title: nextTitle }),
-			})
-				.then(async (res) => {
-					if (!res.ok) {
-						revert();
-						return;
-					}
-					// The route cleans the title server-side (trim + whitespace
-					// collapse), which can differ from the raw optimistic text (e.g.
-					// "Fix   the  bug" → "Fix the bug") — reconcile so the display
-					// matches what's actually persisted, unless a newer edit has
-					// already superseded this one.
-					const data = (await res.json().catch(() => null)) as {
-						title?: string;
-					} | null;
-					if (
-						data?.title &&
-						data.title !== nextTitle &&
-						latestTitleRef.current === nextTitle
-					) {
-						latestTitleRef.current = data.title;
-						setTitle(data.title);
-					}
-				})
-				.catch(revert),
-		);
+		const request = titlePatchChain.current.then(async () => {
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}`, {
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ title: nextTitle }),
+				});
+				if (!res.ok) throw new Error(`title update failed (${res.status})`);
+				// The route cleans the title server-side (trim + whitespace
+				// collapse), which can differ from the raw optimistic text (e.g.
+				// "Fix   the  bug" → "Fix the bug") — reconcile so the display
+				// matches what's actually persisted, unless a newer edit has
+				// already superseded this one.
+				const data = (await res.json().catch(() => null)) as {
+					title?: string;
+				} | null;
+				if (
+					data?.title &&
+					data.title !== nextTitle &&
+					latestTitleRef.current === nextTitle
+				) {
+					latestTitleRef.current = data.title;
+					setTitle(data.title);
+				}
+			} catch (caught) {
+				revert();
+				throw caught;
+			}
+		});
+		titlePatchChain.current = request.catch(() => undefined);
+		return request;
 	};
 
 	const transport = useMemo(
 		() =>
 			new DefaultChatTransport<FolioMessage>({
 				api: `/api/sessions/${sessionId}/chat`,
-				// The server owns the transcript (the event log); a send carries
-				// only the new user text.
-				prepareSendMessagesRequest: ({ messages }) => ({
-					body: { text: lastUserText(messages) },
+				// The server owns the transcript (the event log); a send carries the
+				// new text plus Folio's correlation and retry-provenance metadata.
+				prepareSendMessagesRequest: ({ messages, body }) => ({
+					body: body ?? { text: lastUserText(messages) },
 				}),
 				// Resume reconnects here — the durable tail route, not the send
 				// endpoint's default `${api}/${chatId}/stream`.
@@ -366,7 +380,7 @@ export function LiveSessionView({
 	// and two honest controls — stop the in-flight turn (the compose's send
 	// affordance while busy), stop the live VM (a quiet masthead action).
 	const { sandbox, stopSandbox } = useSandboxState(sessionId, busy);
-	const stopTurn = () => {
+	const stopTurn = async () => {
 		// On success the UI follows the stream, not this request: the server
 		// closes the turn's log, the tail surfaces the stop as this turn's
 		// failure card ("Turn stopped."), and the hook's status transition
@@ -375,24 +389,22 @@ export function LiveSessionView({
 		// another server instance) must not be a silent click (codex finding,
 		// gpt-5.5 xhigh). The benign 409 right after the turn finished on its
 		// own adds a step nothing renders: the activity line is already gone.
-		void (async () => {
-			try {
-				const res = await fetch(`/api/sessions/${sessionId}/stop`, {
-					method: "POST",
-				});
-				if (!res.ok) {
-					const data = (await res.json().catch(() => null)) as {
-						error?: string;
-					} | null;
-					setSteps((current) => [
-						...current,
-						`Stop unavailable — ${data?.error ?? `HTTP ${res.status}`}`,
-					]);
-				}
-			} catch {
-				setSteps((current) => [...current, "Stop unavailable — network error"]);
+		try {
+			const res = await fetch(`/api/sessions/${sessionId}/stop`, {
+				method: "POST",
+			});
+			if (!res.ok) {
+				const data = (await res.json().catch(() => null)) as {
+					error?: string;
+				} | null;
+				setSteps((current) => [
+					...current,
+					`Stop unavailable — ${data?.error ?? `HTTP ${res.status}`}`,
+				]);
 			}
-		})();
+		} catch {
+			setSteps((current) => [...current, "Stop unavailable — network error"]);
+		}
 	};
 
 	const answerApproval = async (
@@ -413,12 +425,12 @@ export function LiveSessionView({
 	};
 
 	const queueMessage = useCallback(
-		async (text: string) => {
+		async (request: FolioSendRequest) => {
 			try {
 				const res = await fetch(`/api/sessions/${sessionId}/chat`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ text, queue: true }),
+					body: JSON.stringify(createWorkspacesChatRequestBody(request, true)),
 				});
 				if (res.status !== 202) {
 					await refreshSessionFromServer();
@@ -448,7 +460,7 @@ export function LiveSessionView({
 						...current.filter((message) => message.queueId !== queueId),
 						{
 							queueId,
-							text,
+							text: request.text,
 							queuedAt: new Date().toISOString(),
 							position: data.position ?? current.length + 1,
 						},
@@ -461,31 +473,32 @@ export function LiveSessionView({
 		[sessionId, refreshSessionFromServer],
 	);
 
-	const send = (text: string) => {
+	const send = async (request: FolioSendRequest) => {
 		setSteps([]);
 		// Await any in-flight model PATCH first, so the turn the server starts
 		// reads the session row this send was composed against.
-		void modelPatchChain.current.then(() => {
-			if (busy) return queueMessage(text);
-			return sendMessage({ text, metadata: { author } });
-		});
+		await modelPatchChain.current;
+		if (busy) return queueMessage(request);
+		await sendMessage(
+			{ text: request.text, metadata: { author } },
+			{ body: createWorkspacesChatRequestBody(request) },
+		);
 	};
 
 	const cancelQueuedMessage = useCallback(
-		(queueId: string) => {
+		async (queueId: string) => {
 			const previous = queuedMessagesRef.current;
 			setQueuedMessages((current) =>
 				current.filter((message) => message.queueId !== queueId),
 			);
-			void fetch(`/api/sessions/${sessionId}/queue/${queueId}`, {
-				method: "DELETE",
-			})
-				.then(async (res) => {
-					if (!res.ok) await refreshSessionFromServer();
-				})
-				.catch(() => {
-					setQueuedMessages(previous);
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}/queue/${queueId}`, {
+					method: "DELETE",
 				});
+				if (!res.ok) await refreshSessionFromServer();
+			} catch {
+				setQueuedMessages(previous);
+			}
 		},
 		[sessionId, refreshSessionFromServer],
 	);
@@ -548,51 +561,110 @@ export function LiveSessionView({
 		document.title = displayTitle ? `${displayTitle} — Spaces` : "Spaces";
 	}, [displayTitle]);
 
-	const folioActions = createWorkspacesFolioActions({
+	const pullRequestAction = deriveLivePullRequestAction(
+		session.masthead.pullRequestAction,
+		{ hasBranchWork, busy },
+	);
+	const folioView: SessionViewData = {
+		...session,
+		messages: visibleMessages,
+		activeTurn,
+		masthead: {
+			...session.masthead,
+			title: displayTitle,
+			stateLabel: sandboxStateLabel(sandbox),
+			live: sandbox?.state === "live",
+			pullRequest,
+			pullRequestAction,
+			pullRequestBusy,
+			pullRequestError,
+		},
+		statusLine: {
+			...session.statusLine,
+			model,
+			modelLabel: modelLabel(model),
+			contextLabel:
+				deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
+		},
+	};
+	const folioProjection: Omit<
+		FolioConversationSnapshot,
+		"conversationId" | "cursor"
+	> = {
+		view: folioView,
+		queuedMessages,
+		capabilities: {
+			send: true,
+			stop: busy,
+			retry: true,
+			cancelQueuedMessage: true,
+			decideApproval: true,
+			decideReview: false,
+			updateConversation: true,
+		},
+		// Workspaces currently renders artifacts and review receipts as durable
+		// message parts. These top-level seams stay empty until the host exposes
+		// conversation-wide artifact/review authority.
+		artifacts: [],
+		review: null,
+		workspace: sandbox
+			? {
+					id: sessionId,
+					state: sandbox.state,
+					actions: sandbox.state === "live" && !busy ? ["stop"] : [],
+				}
+			: null,
+		publication:
+			pullRequestAction || pullRequest
+				? {
+						id: pullRequest ? String(pullRequest.number) : null,
+						state: pullRequest?.state ?? null,
+						url: pullRequest?.url ?? null,
+						actions: pullRequestAction?.enabled ? ["open"] : [],
+					}
+				: null,
+		failure: error?.message ?? null,
+	};
+	const folioSnapshot: FolioConversationSnapshot = {
+		conversationId: sessionId,
+		// Workspaces' durable AI SDK/event-log transport owns resume. This stable
+		// fingerprint changes with every material host projection, so an old
+		// cursor fails closed instead of falsely claiming that new state is current.
+		// It stays lazy because this SDK-owned binding never follows the Folio port;
+		// streaming renders therefore do not serialize the transcript just for UI.
+		get cursor() {
+			return createWorkspacesProjectionCursor(sessionId, folioProjection);
+		},
+		...folioProjection,
+	};
+	const folioConversation = createWorkspacesFolioConversation(folioSnapshot, {
 		sendMessage: send,
 		cancelQueuedMessage,
 		changeModel: handleModelChange,
 		changeTitle: handleTitleChange,
 		stopTurn: busy ? stopTurn : undefined,
-		stopSandbox:
-			sandbox?.state === "live" && !busy ? () => void stopSandbox() : undefined,
-		openPullRequest,
+		stopSandbox: sandbox?.state === "live" && !busy ? stopSandbox : undefined,
+		openPullRequest: () => openPullRequest(),
 		answerApproval,
 	});
+	const folioActions = createPortBackedConversationActions(
+		folioConversation,
+		() => crypto.randomUUID(),
+		(caught) => {
+			const message = caught instanceof Error ? caught.message : "command failed";
+			setSteps((current) => [...current, `Action unavailable — ${message}`]);
+		},
+	);
 
 	return (
 		<>
 			<TerminalDrawer sessionId={sessionId} />
 			<SessionView
 				turnFollowScopeId={sessionId}
-				session={{
-					...session,
-					messages: visibleMessages,
-					activeTurn,
-					masthead: {
-						...session.masthead,
-						title: displayTitle,
-						stateLabel: sandboxStateLabel(sandbox),
-						live: sandbox?.state === "live",
-						pullRequest,
-						pullRequestAction: deriveLivePullRequestAction(
-							session.masthead.pullRequestAction,
-							{ hasBranchWork, busy },
-						),
-						pullRequestBusy,
-						pullRequestError,
-					},
-					statusLine: {
-						...session.statusLine,
-						model,
-						modelLabel: modelLabel(model),
-						contextLabel:
-							deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
-					},
-				}}
+				session={folioConversation.snapshot!.view}
 				actions={folioActions}
 				retryDisabled={busy}
-				queuedMessages={queuedMessages}
+				queuedMessages={folioConversation.snapshot!.queuedMessages}
 			/>
 		</>
 	);

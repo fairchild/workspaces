@@ -119,7 +119,7 @@ export function ComposeField({ agentName, onSend, disabled, onStop }: ComposeFie
 							type="button"
 							title="Stop the turn"
 							aria-label="Stop"
-							onClick={onStop}
+							onClick={() => onStop()}
 							className="flex h-[37px] w-[37px] shrink-0 items-center justify-center rounded-[10px] border border-line-strong text-[11px] leading-none text-muted transition-colors duration-200 hover:border-del-ink hover:text-del-ink"
 						>
 							■

@@ -8,7 +8,10 @@ import type {
 	FolioConversationEvent,
 	FolioConversationSnapshot,
 } from "./conversation-ports";
-import { FolioCapabilityUnavailableError } from "./conversation-ports";
+import {
+	FolioCapabilityUnavailableError,
+	FolioUnknownCursorError,
+} from "./conversation-ports";
 import { FakeConversationPort } from "./fake-conversation-port";
 
 function snapshot(cursor = "cursor-0"): FolioConversationSnapshot {
@@ -167,7 +170,7 @@ describe("FolioConversationController", () => {
 	test("rejects unknown resume cursors instead of replaying duplicates", async () => {
 		const port = new FakeConversationPort(snapshot(), events);
 		const iterator = port.readEvents("unknown-cursor")[Symbol.asyncIterator]();
-		await expect(iterator.next()).rejects.toThrow("unknown conversation cursor");
+		await expect(iterator.next()).rejects.toBeInstanceOf(FolioUnknownCursorError);
 	});
 
 	test("projects a stopped turn as terminal failure state", async () => {
@@ -236,15 +239,51 @@ describe("FolioConversationController", () => {
 		expect(port.calls.filter((call) => call.command !== "readSnapshot")).toEqual([
 			{
 				command: "send",
-				payload: { text: "Hello", idempotencyKey: "request-1" },
+				payload: { text: "Hello", requestId: "request-1" },
 			},
 			{
 				command: "send",
-				payload: { text: "Again", idempotencyKey: "request-2", retryOf: "message-1" },
+				payload: { text: "Again", requestId: "request-2", retryOf: "message-1" },
 			},
 			{ command: "cancelQueuedMessage", payload: "queue-1" },
 			{ command: "updateConversation", payload: { title: "Updated" } },
 			{ command: "requestPublication", payload: "publish" },
+		]);
+	});
+
+	test("derives actions from a host-projected snapshot without reading it twice", () => {
+		const projected = snapshot("cursor-projected");
+		const port = new FakeConversationPort(projected);
+		const controller = FolioConversationController.fromSnapshot(port, projected);
+		const actions = createPortBackedConversationActions(
+			controller,
+			() => "request-1",
+			vi.fn(),
+		);
+
+		actions.send?.("Hello");
+
+		expect(controller.snapshot).toBe(projected);
+		expect(port.calls).toEqual([
+			{
+				command: "send",
+				payload: { text: "Hello", requestId: "request-1" },
+			},
+		]);
+	});
+
+	test("follows from a host-projected cursor without re-reading the snapshot", async () => {
+		const projected = snapshot("cursor-projected");
+		const port = new FakeConversationPort(projected, [
+			{ cursor: "cursor-next", type: "complete" },
+		]);
+		const controller = FolioConversationController.fromSnapshot(port, projected);
+
+		const result = await controller.follow();
+
+		expect(result.cursor).toBe("cursor-next");
+		expect(port.calls).toEqual([
+			{ command: "readEvents", payload: "cursor-projected" },
 		]);
 	});
 
@@ -290,10 +329,10 @@ describe("FolioConversationController", () => {
 		);
 	});
 
-	test("fake host records idempotent send and authority requests", async () => {
+	test("fake host records correlated sends and authority requests", async () => {
 		const port = new FakeConversationPort(snapshot());
 		const controller = new FolioConversationController(port);
-		const sendReceipt = await controller.send({ text: "Hello", idempotencyKey: "request-1" });
+		const sendReceipt = await controller.send({ text: "Hello", requestId: "request-1" });
 		await controller.decideApproval("approval-1", "allow");
 		await controller.decideReview("accept", "ship it");
 		await controller.updateConversation({ title: "Updated" });

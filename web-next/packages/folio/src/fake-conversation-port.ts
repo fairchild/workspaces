@@ -7,7 +7,10 @@ import type {
 	FolioConversationUpdate,
 	FolioSendRequest,
 } from "./conversation-ports";
-import { FolioCapabilityUnavailableError } from "./conversation-ports";
+import {
+	FolioCapabilityUnavailableError,
+	FolioUnknownCursorError,
+} from "./conversation-ports";
 
 export interface FakeConversationCall {
 	command: string;
@@ -49,7 +52,7 @@ export class FakeConversationPort implements FolioConversationPort {
 		this.calls.push({ command: "readEvents", payload: after });
 		const eventIndex = this.events.findIndex((event) => event.cursor === after);
 		if (eventIndex < 0 && after !== this.initialSnapshot.cursor) {
-			throw new Error(`unknown conversation cursor: ${after}`);
+			throw new FolioUnknownCursorError(`unknown conversation cursor: ${after}`);
 		}
 		const startIndex = eventIndex < 0 ? 0 : eventIndex + 1;
 		for (const event of this.events.slice(startIndex)) {
@@ -66,7 +69,10 @@ export class FakeConversationPort implements FolioConversationPort {
 	}
 
 	async send(request: FolioSendRequest): Promise<FolioCommandReceipt> {
-		this.#require(this.#capabilities.send, "send");
+		this.#require(
+			request.retryOf ? this.#capabilities.retry : this.#capabilities.send,
+			request.retryOf ? "retry" : "send",
+		);
 		this.calls.push({ command: "send", payload: request });
 		return this.#receipt();
 	}
