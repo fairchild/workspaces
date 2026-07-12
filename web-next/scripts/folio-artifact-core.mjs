@@ -137,6 +137,9 @@ export function validateBuildOutput({
 		if (!/^\s*["']use client["'];/.test(source)) {
 			errors.push(`${name} lost its use client boundary`);
 		}
+		if (/Folio(?:UnknownCursor|CapabilityUnavailable)Error/.test(source)) {
+			errors.push(`${name} bundles conversation runtime identities`);
+		}
 	}
 	for (const [name, sourceMap] of Object.entries(sourceMaps)) {
 		const sources = Array.isArray(sourceMap.sources) ? sourceMap.sources : [];

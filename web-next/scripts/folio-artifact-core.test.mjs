@@ -101,4 +101,19 @@ describe("Folio artifact contract", () => {
 			}),
 		).toEqual(["theme-toggle.js lost its use client boundary"]);
 	});
+
+	test("rejects duplicate conversation runtime identities in client entries", () => {
+		const manifest = createArtifactManifest(sourceManifest);
+		expect(
+			validateBuildOutput({
+				manifest,
+				javascript: [],
+				clientJavascript: {
+					"index.js": '"use client";\nclass FolioUnknownCursorError {}',
+				},
+				sourceMaps: {},
+				css: "",
+			}),
+		).toEqual(["index.js bundles conversation runtime identities"]);
+	});
 });

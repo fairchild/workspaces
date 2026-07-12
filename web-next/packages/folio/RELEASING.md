@@ -11,11 +11,12 @@ Run the canonical release-candidate command from `web-next/`:
 pnpm folio:package
 ```
 
-It clean-builds the compiled ESM, declarations, JavaScript/CSS source maps, and
-standalone stylesheet; packs the same staging tree twice and requires identical
-SHA-256 checksums; enforces the file and size allowlists; then copies the tarball
-into a temporary project, installs with no workspace link, and runs a
-production Next build. Review artifacts are written under `artifacts/folio/`.
+It independently clean-builds and stages the compiled ESM, declarations,
+JavaScript/CSS source maps, and standalone stylesheet twice; packs both staging
+trees and requires identical SHA-256 checksums; enforces the file and size
+allowlists; then copies the tarball into a temporary project, installs with no
+workspace link, and runs a production Next build. Review artifacts are written
+under `artifacts/folio/`.
 
 The artifact remains `private: true`. Public-registry publication is a separate
 owner decision after the first external-consumer proof (#1055). That gate must

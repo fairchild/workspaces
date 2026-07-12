@@ -47,12 +47,12 @@ pnpm folio:package
 ```
 
 `folio:package` is the only supported pack path. It emits ESM, declarations,
-JavaScript/CSS source maps, and standalone compiled CSS; packs the staged tree
-twice and requires matching SHA-256 checksums; enforces the exact file/dependency
-and size contracts; then installs the tarball into a temporary non-workspace
-Next app and production-builds it. Evidence lands in `artifacts/folio/` and is
-uploaded by CI. Semver and the public-registry decision gate are documented in
-`packages/folio/RELEASING.md`.
+JavaScript/CSS source maps, and standalone compiled CSS; independently builds
+and packs two staging trees and requires matching SHA-256 checksums; enforces
+the exact file/dependency and size contracts; then installs the tarball into a
+temporary non-workspace Next app and production-builds it. Evidence lands in
+`artifacts/folio/` and is uploaded by CI. Semver and the public-registry
+decision gate are documented in `packages/folio/RELEASING.md`.
 
 ## Run the owner-local production server
 

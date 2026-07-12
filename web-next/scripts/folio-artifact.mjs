@@ -29,7 +29,8 @@ const exec = promisify(execFile);
 const WEB_NEXT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE = path.join(WEB_NEXT, "packages", "folio");
 const ARTIFACTS = path.join(WEB_NEXT, "artifacts", "folio");
-const STAGE = path.join(ARTIFACTS, "stage");
+const STAGE_A = path.join(ARTIFACTS, "stage-a");
+const STAGE_B = path.join(ARTIFACTS, "stage-b");
 const RUN_A = path.join(ARTIFACTS, "pack-a");
 const RUN_B = path.join(ARTIFACTS, "pack-b");
 const PNPM = process.env.npm_execpath;
@@ -49,15 +50,14 @@ async function sha256(file) {
 	return createHash("sha256").update(await readFile(file)).digest("hex");
 }
 
-async function stagePackage() {
-	await runPnpm(["run", "clean", "folio-artifact"]);
+async function stagePackage(destination) {
 	await runPnpm(["--filter", "@fairchild/folio", "build"]);
-	await mkdir(STAGE, { recursive: true });
-	await cp(path.join(PACKAGE, "dist"), path.join(STAGE, "dist"), {
+	await mkdir(destination, { recursive: true });
+	await cp(path.join(PACKAGE, "dist"), path.join(destination, "dist"), {
 		recursive: true,
 	});
 	for (const file of ["README.md", "LICENSE", "CHANGELOG.md"]) {
-		await cp(path.join(PACKAGE, file), path.join(STAGE, file));
+		await cp(path.join(PACKAGE, file), path.join(destination, file));
 	}
 	const sourceManifest = JSON.parse(
 		await readFile(path.join(PACKAGE, "package.json"), "utf8"),
@@ -100,13 +100,13 @@ async function stagePackage() {
 		css: await readFile(path.join(dist, "styles.css"), "utf8"),
 	});
 	if (buildErrors.length > 0) throw new Error(buildErrors.join("\n"));
-	await writeFile(path.join(STAGE, "package.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
+	await writeFile(path.join(destination, "package.json"), `${JSON.stringify(manifest, null, "\t")}\n`);
 	return manifest;
 }
 
-async function packInto(destination) {
+async function packInto(source, destination) {
 	await mkdir(destination, { recursive: true });
-	await runPnpm(["pack", "--pack-destination", destination], { cwd: STAGE });
+	await runPnpm(["pack", "--pack-destination", destination], { cwd: source });
 }
 
 async function tarFiles(tarball) {
@@ -176,6 +176,8 @@ function fixtureFiles(tarballName) {
 
 async function verifyCleanConsumer(tarball) {
 	const fixture = await mkdtemp(path.join(os.tmpdir(), "folio-clean-consumer-"));
+	const log = [];
+	let stage = "install";
 	try {
 		const fixtureRoot = await realpath(fixture);
 		const localTarball = path.join(fixture, path.basename(tarball));
@@ -188,10 +190,14 @@ async function verifyCleanConsumer(tarball) {
 		const install = await runPnpm(["install", "--prefer-offline", "--ignore-workspace"], {
 			cwd: fixture,
 		});
+		log.push(`INSTALL\n${install.stdout}${install.stderr}`);
+		stage = "isolation";
 		const installed = await realpath(path.join(fixture, "node_modules", "@fairchild", "folio"));
 		if (!installed.startsWith(fixtureRoot + path.sep)) {
 			throw new Error(`clean fixture resolved Folio outside itself: ${installed}`);
 		}
+		log.push(`ISOLATION\ninstalled package resolved inside ${fixtureRoot}`);
+		stage = "identity";
 		const identity = await exec(
 			process.execPath,
 			[
@@ -201,23 +207,35 @@ async function verifyCleanConsumer(tarball) {
 			],
 			{ cwd: fixture },
 		);
+		log.push(
+			`IDENTITY\n${identity.stdout}${identity.stderr}shared conversation runtime identity verified`,
+		);
+		stage = "build";
 		const build = await runPnpm(["--ignore-workspace", "run", "build"], {
 			cwd: fixture,
 			env: { NODE_ENV: "production", NEXT_TELEMETRY_DISABLED: "1" },
 		});
-		await writeFile(
-			path.join(ARTIFACTS, "clean-fixture.log"),
-			`INSTALL\n${install.stdout}${install.stderr}\nIDENTITY\n${identity.stdout}${identity.stderr}shared conversation runtime identity verified\nBUILD\n${build.stdout}${build.stderr}`,
+		log.push(`BUILD\n${build.stdout}${build.stderr}`);
+		await writeFile(path.join(ARTIFACTS, "clean-fixture.log"), `${log.join("\n")}\n`);
+	} catch (error) {
+		const stdout = typeof error?.stdout === "string" ? error.stdout : "";
+		const stderr = typeof error?.stderr === "string" ? error.stderr : "";
+		log.push(
+			`${stage.toUpperCase()} FAILED\n${stdout}${stderr}${error instanceof Error ? error.stack : String(error)}`,
 		);
+		await writeFile(path.join(ARTIFACTS, "clean-fixture.log"), `${log.join("\n")}\n`);
+		throw error;
 	} finally {
 		await rm(fixture, { recursive: true, force: true });
 	}
 }
 
-const manifest = await stagePackage();
+await runPnpm(["run", "clean", "folio-artifact"]);
+const manifest = await stagePackage(STAGE_A);
 const filename = tarballFilename(manifest.name, manifest.version);
-await packInto(RUN_A);
-await packInto(RUN_B);
+await packInto(STAGE_A, RUN_A);
+await stagePackage(STAGE_B);
+await packInto(STAGE_B, RUN_B);
 const first = path.join(RUN_A, filename);
 const second = path.join(RUN_B, filename);
 const [firstSha256, secondSha256, files, packedStat] = await Promise.all([
