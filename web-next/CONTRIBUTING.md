@@ -9,11 +9,10 @@ usable product is [`docs/roadmap.md`](docs/roadmap.md).
 ## Prerequisites
 
 - **Node 22** and **pnpm 10** (what CI pins — see `.github/workflows/web-next-ci.yml`).
-  pnpm 11 currently breaks `pnpm run` here (its verify-deps prompt writes an
-  invalid placeholder `pnpm-workspace.yaml` in no-TTY shells); if you see
-  `ERR_PNPM_IGNORED_BUILDS` or a stray `web-next/pnpm-workspace.yaml`, delete
-  that file and use pnpm 10 (`corepack prepare pnpm@10 --activate` or
-  `npx pnpm@10`).
+  `pnpm-workspace.yaml` is intentional: it links the Workspaces app to the
+  Folio package. Do not delete it as stale setup state. pnpm 11's no-TTY
+  verify-deps behavior remains unsupported here; use pnpm 10
+  (`corepack prepare pnpm@10 --activate` or `npx pnpm@10`).
 
 ## Run it (no credentials needed)
 
@@ -33,6 +32,22 @@ first request). Everything runs against the **mock provider** — a scripted
 coding turn with reasoning, tool calls, a failing→passing test cycle, and a
 diff. Try `/sessions/demo?scenario=adversarial` or `?scenario=long` to stress
 the transcript.
+
+## Folio workspace package
+
+The conversation UI lives in `packages/folio` and the app consumes its named
+`@fairchild/folio` entry point. Package-private source paths are guarded by a
+unit test. The first W7 slice is source-first: Workspaces still supplies the
+global Folio styles while later slices add package-owned styles, host ports,
+and a compiled install artifact.
+
+```bash
+pnpm --filter @fairchild/folio pack --pack-destination /tmp/folio-pack --json
+pnpm exec vitest run scripts/folio-boundary.test.mjs packages/folio/src/*.test.ts
+```
+
+The pack listing is reviewer evidence: it should contain the package README,
+manifest, and runtime/type source, but no tests or Workspaces application files.
 
 ## Run the owner-local production server
 

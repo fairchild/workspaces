@@ -9,9 +9,9 @@
 import { useEffect, useState } from "react";
 import type {
 	ApprovalDecision,
+	ApprovalPartData,
 	ApprovalResolvedBy,
-} from "@/lib/agent-runtime/stream-chunk";
-import type { ApprovalPartData } from "./types";
+} from "./types";
 
 export interface ApprovalCardProps {
 	approval: ApprovalPartData;

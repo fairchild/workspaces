@@ -7,6 +7,7 @@
  * is no separate free-floating diff card in the transcript (#790).
  */
 import { isDynamicToolUIPart, type DynamicToolUIPart } from "ai";
+import { formatTokenCount } from "./format";
 import type { DiffCardData, DiffLine, FolioMessage, TurnStatsData } from "./types";
 
 export type LedgerMeta =
@@ -239,12 +240,6 @@ export function highlightTestOutput(content: string): OutputSegment[][] {
 }
 
 // --- end-of-turn receipt ----------------------------------------------------
-
-/** "820" / "3.2k" — shared with the status line's context figure (#824). */
-export function formatTokenCount(count: number): string {
-	if (count < 1000) return String(count);
-	return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
-}
 
 function formatDuration(ms: number): string {
 	const seconds = ms / 1000;

@@ -21,7 +21,7 @@
  * Recording each failure once, by the id it was caught on, keeps it tagged
  * for the rest of the session regardless of what happens afterward.
  */
-import type { FolioMessage } from "@/components/folio/types";
+import type { FolioMessage } from "@fairchild/folio";
 
 /** Matches turn-stats.ts's deriveTurnError fallback for an empty error chunk
  * — keeps the live and projected text identical in that edge case too. */

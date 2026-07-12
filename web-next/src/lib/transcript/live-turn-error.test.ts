@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { FolioMessage } from "@/components/folio/types";
+import type { FolioMessage } from "@fairchild/folio";
 import {
 	applyLiveTurnErrors,
 	isVisibleMessage,

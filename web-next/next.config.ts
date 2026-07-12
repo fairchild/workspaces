@@ -12,6 +12,7 @@ if (process.env.WEB_NEXT_LOCAL_MODE === "1") {
 }
 
 const nextConfig: NextConfig = {
+	transpilePackages: ["@fairchild/folio"],
 	// The real (vercel) compute provider talks to the in-sandbox harness bridge
 	// over a WebSocket. Bundling `ws` (and its native `bufferutil`) breaks that
 	// path with "bufferUtil.mask is not a function", so keep the harness stack

@@ -5,7 +5,7 @@
  * worst-case turn (long reasoning, 16 tools, a 100+ line diff, a failure) and
  * `?scenario=long` a 15+ turn session for reviewing the frame at scale.
  */
-import { SessionView } from "@/components/folio/session-view";
+import { SessionView } from "@fairchild/folio";
 import {
 	adversarialSession,
 	demoSession,

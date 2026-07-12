@@ -12,12 +12,12 @@
  *     card-in-card framing (recent turn lifted, older ones quiet) at scale.
  */
 import type { DynamicToolUIPart } from "ai";
-import type { SessionViewData } from "@/components/folio/session-view";
 import type {
 	DiffCardData,
 	DiffLine,
 	FolioMessage,
-} from "@/components/folio/types";
+	SessionViewData,
+} from "@fairchild/folio";
 
 function completedTool(
 	toolCallId: string,
