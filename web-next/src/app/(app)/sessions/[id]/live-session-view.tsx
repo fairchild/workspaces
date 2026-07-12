@@ -54,6 +54,7 @@ import {
 import type { FolioDataParts, FolioMessage } from "@fairchild/folio";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
+import { createWorkspacesFolioActions } from "@/lib/folio/workspaces-conversation-adapter";
 import {
 	applyLiveTurnErrors,
 	isVisibleMessage,
@@ -547,6 +548,18 @@ export function LiveSessionView({
 		document.title = displayTitle ? `${displayTitle} — Spaces` : "Spaces";
 	}, [displayTitle]);
 
+	const folioActions = createWorkspacesFolioActions({
+		sendMessage: send,
+		cancelQueuedMessage,
+		changeModel: handleModelChange,
+		changeTitle: handleTitleChange,
+		stopTurn: busy ? stopTurn : undefined,
+		stopSandbox:
+			sandbox?.state === "live" && !busy ? () => void stopSandbox() : undefined,
+		openPullRequest,
+		answerApproval,
+	});
+
 	return (
 		<>
 			<TerminalDrawer sessionId={sessionId} />
@@ -577,18 +590,9 @@ export function LiveSessionView({
 							deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
 					},
 				}}
-				onSend={send}
+				actions={folioActions}
 				retryDisabled={busy}
 				queuedMessages={queuedMessages}
-				onCancelQueuedMessage={cancelQueuedMessage}
-				onModelChange={handleModelChange}
-				onTitleChange={handleTitleChange}
-				onStopTurn={busy ? stopTurn : undefined}
-				onSandboxStop={
-					sandbox?.state === "live" && !busy ? () => void stopSandbox() : undefined
-				}
-				onPullRequestAction={openPullRequest}
-				onApprovalDecision={answerApproval}
 			/>
 		</>
 	);

@@ -19,6 +19,41 @@ Import only from the named entry point:
 import { SessionView, type SessionViewData } from "@fairchild/folio";
 ```
 
+Hosts integrate through `FolioConversationPort`, not through component-specific
+knowledge of their routes or runtimes. The port exposes a durable snapshot,
+opaque resume cursor, ordered host-neutral events, and commands whose authority
+remains with the host:
+
+```ts
+import {
+  FolioConversationController,
+  type FolioConversationPort,
+} from "@fairchild/folio";
+
+const controller = new FolioConversationController(hostPort satisfies FolioConversationPort);
+await controller.hydrate();
+await controller.follow(render);
+```
+
+Only one `follow()` may own a controller at a time. Hosts reconnect by creating
+a controller from their durable snapshot cursor; unknown cursors fail closed
+instead of replaying the conversation from the beginning. Command receipts
+return the host's durable cursor rather than a separate acknowledgement ID.
+
+`SessionView` receives one `FolioConversationActions` object. Missing callbacks
+are missing capabilities; the component never discovers or constructs host
+authority itself. A hydrated controller can derive that action membrane with
+`createPortBackedConversationActions`, which requires a host error callback for
+command failures. Derive it again after a capabilities, workspace, or
+publication event so the UI reflects the latest host authority; the error
+callback still closes the race if authority changes between render and click.
+Tests and external adapters can use the deterministic fake without putting test
+code in production imports:
+
+```ts
+import { FakeConversationPort } from "@fairchild/folio/testing";
+```
+
 Server code that only needs the pure token formatter uses the side-effect-free
 format entry instead of loading the React component barrel:
 
