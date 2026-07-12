@@ -152,7 +152,7 @@ export function SessionMasthead({
 									data-testid="sandbox-stop"
 									title="Stop the sandbox"
 									aria-label="Stop sandbox"
-									onClick={onSandboxStop}
+									onClick={() => onSandboxStop()}
 									className="ml-2 rounded-[5px] border-b border-transparent px-1 py-0.5 leading-none text-hint opacity-0 transition-opacity duration-200 group-hover/sandbox:opacity-100 hover:text-del-ink focus-visible:opacity-100"
 								>
 									stop
@@ -189,7 +189,7 @@ export function SessionMasthead({
 							<button
 								type="button"
 								data-testid="open-session-pr"
-								onClick={onPullRequestAction}
+								onClick={() => onPullRequestAction?.()}
 								disabled={!prAction.enabled || session.pullRequestBusy}
 								title={prAction.enabled ? prButtonLabel : prAction.reason}
 								className="ml-auto rounded-[5px] border-b border-transparent px-1.5 py-0.5 text-muted transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:text-faint disabled:hover:border-transparent"

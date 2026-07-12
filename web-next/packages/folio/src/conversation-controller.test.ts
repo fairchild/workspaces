@@ -248,6 +248,27 @@ describe("FolioConversationController", () => {
 		]);
 	});
 
+	test("derives actions from a host-projected snapshot without reading it twice", () => {
+		const projected = snapshot("cursor-projected");
+		const port = new FakeConversationPort(projected);
+		const controller = FolioConversationController.fromSnapshot(port, projected);
+		const actions = createPortBackedConversationActions(
+			controller,
+			() => "request-1",
+			vi.fn(),
+		);
+
+		actions.send?.("Hello");
+
+		expect(controller.snapshot).toBe(projected);
+		expect(port.calls).toEqual([
+			{
+				command: "send",
+				payload: { text: "Hello", idempotencyKey: "request-1" },
+			},
+		]);
+	});
+
 	test("routes a command rejected after an authority change to the host error channel", async () => {
 		const port = new FakeConversationPort(snapshot(), [
 			{

@@ -94,6 +94,21 @@ export class FolioConversationController {
 
 	constructor(readonly port: FolioConversationPort) {}
 
+	/**
+	 * Starts from a snapshot the host already projected. This is the bridge for
+	 * hosts whose established runtime owns live state (for example an SDK hook):
+	 * they can use the same port-backed command membrane without an async blank
+	 * render while `readSnapshot()` repeats data they already have.
+	 */
+	static fromSnapshot(
+		port: FolioConversationPort,
+		snapshot: FolioConversationSnapshot,
+	): FolioConversationController {
+		const controller = new FolioConversationController(port);
+		controller.#snapshot = snapshot;
+		return controller;
+	}
+
 	get snapshot(): FolioConversationSnapshot | null {
 		return this.#snapshot;
 	}

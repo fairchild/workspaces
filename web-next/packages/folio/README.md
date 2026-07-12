@@ -6,8 +6,8 @@ authentication, persistence, transport, agent execution, repositories, and
 publication authority.
 
 The current package is source-first and private while the boundary is proven
-inside Workspaces. Follow-up W7 slices add host ports, package-owned styles,
-the versioned install artifact, and a real external-consumer proof.
+inside Workspaces. It owns its host ports and scoped styles; the remaining W7
+slices create a versioned install artifact and prove a real external consumer.
 
 React 19 and AI SDK 7 are peers. Next 15.5 is the tested Workspaces host and is
 recorded as advisory compatibility metadata rather than a peer because Folio
@@ -58,6 +58,14 @@ import {
 const controller = new FolioConversationController(hostPort satisfies FolioConversationPort);
 await controller.hydrate();
 await controller.follow(render);
+```
+
+When an established host runtime already owns and projects the current live
+snapshot, seed the controller without a redundant async read, then recreate the
+binding when that host snapshot changes:
+
+```ts
+const controller = FolioConversationController.fromSnapshot(hostPort, hostSnapshot);
 ```
 
 Only one `follow()` may own a controller at a time. Hosts reconnect by creating

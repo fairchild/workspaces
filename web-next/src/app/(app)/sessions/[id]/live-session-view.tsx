@@ -46,7 +46,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 import { modelLabel } from "@/lib/agent-runtime/models";
 import {
+	createPortBackedConversationActions,
 	type ActiveTurnData,
+	type FolioConversationSnapshot,
 	type QueuedMessageData,
 	SessionView,
 	type SessionViewData,
@@ -54,7 +56,7 @@ import {
 import type { FolioDataParts, FolioMessage } from "@fairchild/folio";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
-import { createWorkspacesFolioActions } from "@/lib/folio/workspaces-conversation-adapter";
+import { createWorkspacesFolioConversation } from "@/lib/folio/workspaces-conversation-adapter";
 import {
 	applyLiveTurnErrors,
 	isVisibleMessage,
@@ -186,6 +188,7 @@ export function LiveSessionView({
 				})
 				.catch(revert),
 		);
+		return modelPatchChain.current;
 	};
 
 	// The persisted title, "" until either the auto-titler or an edit sets one.
@@ -233,6 +236,7 @@ export function LiveSessionView({
 				})
 				.catch(revert),
 		);
+		return titlePatchChain.current;
 	};
 
 	const transport = useMemo(
@@ -366,7 +370,7 @@ export function LiveSessionView({
 	// and two honest controls — stop the in-flight turn (the compose's send
 	// affordance while busy), stop the live VM (a quiet masthead action).
 	const { sandbox, stopSandbox } = useSandboxState(sessionId, busy);
-	const stopTurn = () => {
+	const stopTurn = async () => {
 		// On success the UI follows the stream, not this request: the server
 		// closes the turn's log, the tail surfaces the stop as this turn's
 		// failure card ("Turn stopped."), and the hook's status transition
@@ -375,24 +379,22 @@ export function LiveSessionView({
 		// another server instance) must not be a silent click (codex finding,
 		// gpt-5.5 xhigh). The benign 409 right after the turn finished on its
 		// own adds a step nothing renders: the activity line is already gone.
-		void (async () => {
-			try {
-				const res = await fetch(`/api/sessions/${sessionId}/stop`, {
-					method: "POST",
-				});
-				if (!res.ok) {
-					const data = (await res.json().catch(() => null)) as {
-						error?: string;
-					} | null;
-					setSteps((current) => [
-						...current,
-						`Stop unavailable — ${data?.error ?? `HTTP ${res.status}`}`,
-					]);
-				}
-			} catch {
-				setSteps((current) => [...current, "Stop unavailable — network error"]);
+		try {
+			const res = await fetch(`/api/sessions/${sessionId}/stop`, {
+				method: "POST",
+			});
+			if (!res.ok) {
+				const data = (await res.json().catch(() => null)) as {
+					error?: string;
+				} | null;
+				setSteps((current) => [
+					...current,
+					`Stop unavailable — ${data?.error ?? `HTTP ${res.status}`}`,
+				]);
 			}
-		})();
+		} catch {
+			setSteps((current) => [...current, "Stop unavailable — network error"]);
+		}
 	};
 
 	const answerApproval = async (
@@ -461,31 +463,29 @@ export function LiveSessionView({
 		[sessionId, refreshSessionFromServer],
 	);
 
-	const send = (text: string) => {
+	const send = async (text: string) => {
 		setSteps([]);
 		// Await any in-flight model PATCH first, so the turn the server starts
 		// reads the session row this send was composed against.
-		void modelPatchChain.current.then(() => {
-			if (busy) return queueMessage(text);
-			return sendMessage({ text, metadata: { author } });
-		});
+		await modelPatchChain.current;
+		if (busy) return queueMessage(text);
+		await sendMessage({ text, metadata: { author } });
 	};
 
 	const cancelQueuedMessage = useCallback(
-		(queueId: string) => {
+		async (queueId: string) => {
 			const previous = queuedMessagesRef.current;
 			setQueuedMessages((current) =>
 				current.filter((message) => message.queueId !== queueId),
 			);
-			void fetch(`/api/sessions/${sessionId}/queue/${queueId}`, {
-				method: "DELETE",
-			})
-				.then(async (res) => {
-					if (!res.ok) await refreshSessionFromServer();
-				})
-				.catch(() => {
-					setQueuedMessages(previous);
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}/queue/${queueId}`, {
+					method: "DELETE",
 				});
+				if (!res.ok) await refreshSessionFromServer();
+			} catch {
+				setQueuedMessages(previous);
+			}
 		},
 		[sessionId, refreshSessionFromServer],
 	);
@@ -548,51 +548,100 @@ export function LiveSessionView({
 		document.title = displayTitle ? `${displayTitle} — Spaces` : "Spaces";
 	}, [displayTitle]);
 
-	const folioActions = createWorkspacesFolioActions({
-		sendMessage: send,
+	const pullRequestAction = deriveLivePullRequestAction(
+		session.masthead.pullRequestAction,
+		{ hasBranchWork, busy },
+	);
+	const folioView: SessionViewData = {
+		...session,
+		messages: visibleMessages,
+		activeTurn,
+		masthead: {
+			...session.masthead,
+			title: displayTitle,
+			stateLabel: sandboxStateLabel(sandbox),
+			live: sandbox?.state === "live",
+			pullRequest,
+			pullRequestAction,
+			pullRequestBusy,
+			pullRequestError,
+		},
+		statusLine: {
+			...session.statusLine,
+			model,
+			modelLabel: modelLabel(model),
+			contextLabel:
+				deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
+		},
+	};
+	const folioSnapshot: FolioConversationSnapshot = {
+		conversationId: sessionId,
+		// Workspaces' durable AI SDK/event-log transport owns resume. This opaque
+		// projection cursor identifies the current host snapshot at the Folio seam;
+		// the adapter deliberately does not invent a second replay stream.
+		cursor: `workspaces:${sessionId}:${messages.at(-1)?.id ?? "empty"}:${status}:${queueKey}`,
+		view: folioView,
+		queuedMessages,
+		capabilities: {
+			send: true,
+			stop: busy,
+			retry: true,
+			cancelQueuedMessage: true,
+			decideApproval: true,
+			decideReview: false,
+			updateConversation: true,
+		},
+		// Workspaces currently renders artifacts and review receipts as durable
+		// message parts. These top-level seams stay empty until the host exposes
+		// conversation-wide artifact/review authority.
+		artifacts: [],
+		review: null,
+		workspace: sandbox
+			? {
+					id: sessionId,
+					state: sandbox.state,
+					actions: sandbox.state === "live" && !busy ? ["stop"] : [],
+				}
+			: null,
+		publication:
+			pullRequestAction || pullRequest
+				? {
+						id: pullRequest ? String(pullRequest.number) : null,
+						state: pullRequest?.state ?? null,
+						url: pullRequest?.url ?? null,
+						actions: pullRequestAction?.enabled ? ["open"] : [],
+					}
+				: null,
+		failure: error?.message ?? null,
+	};
+	const folioConversation = createWorkspacesFolioConversation(folioSnapshot, {
+		sendMessage: ({ text }) => send(text),
 		cancelQueuedMessage,
 		changeModel: handleModelChange,
 		changeTitle: handleTitleChange,
 		stopTurn: busy ? stopTurn : undefined,
-		stopSandbox:
-			sandbox?.state === "live" && !busy ? () => void stopSandbox() : undefined,
-		openPullRequest,
+		stopSandbox: sandbox?.state === "live" && !busy ? stopSandbox : undefined,
+		openPullRequest: () => openPullRequest(),
 		answerApproval,
 	});
+	const folioActions = createPortBackedConversationActions(
+		folioConversation,
+		() => crypto.randomUUID(),
+		(caught) => {
+			const message = caught instanceof Error ? caught.message : "command failed";
+			setSteps((current) => [...current, `Action unavailable — ${message}`]);
+		},
+	);
 
 	return (
 		<>
 			<TerminalDrawer sessionId={sessionId} />
 			<SessionView
 				turnFollowScopeId={sessionId}
-				session={{
-					...session,
-					messages: visibleMessages,
-					activeTurn,
-					masthead: {
-						...session.masthead,
-						title: displayTitle,
-						stateLabel: sandboxStateLabel(sandbox),
-						live: sandbox?.state === "live",
-						pullRequest,
-						pullRequestAction: deriveLivePullRequestAction(
-							session.masthead.pullRequestAction,
-							{ hasBranchWork, busy },
-						),
-						pullRequestBusy,
-						pullRequestError,
-					},
-					statusLine: {
-						...session.statusLine,
-						model,
-						modelLabel: modelLabel(model),
-						contextLabel:
-							deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
-					},
-				}}
+				session={folioConversation.snapshot!.view}
 				actions={folioActions}
 				retryDisabled={busy}
-				queuedMessages={queuedMessages}
+				queuedMessages={folioConversation.snapshot!.queuedMessages}
 			/>
 		</>
 	);

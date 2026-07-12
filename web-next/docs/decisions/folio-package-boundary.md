@@ -47,8 +47,32 @@ acquires host authority merely because it renders the control.
   primitives are package dependencies.
 - The package is source-first and `private` in this slice. W7's artifact issue
   defines compilation, semver, checksums, and the public-registry decision.
-- Styles remain supplied by the Workspaces host only until #1052 moves tokens,
-  assets, and scoped styles behind package-owned exports.
+- Folio supplies its scoped stylesheet and tokens through the declared
+  `@fairchild/folio/styles.css` export; hosts retain the narrow documented token
+  override seam.
+
+## Workspaces strict-consumer proof
+
+Workspaces crosses the conversation boundary in one application-owned module:
+`src/lib/folio/workspaces-conversation-adapter.ts`.
+
+- The authenticated session page and API routes keep identity and authorization;
+  Folio receives only the already-authorized author's display metadata.
+- `useChat` and the append-only session event log keep streaming, persistence,
+  reload, and resume authority. The live view projects that current state into a
+  `FolioConversationSnapshot` instead of teaching Folio about AI SDK transport.
+- The adapter implements `FolioConversationPort` through the public package
+  export. Its capability checks translate sends, queue cancellation, mutable
+  session settings, approvals, turn stop, sandbox stop, and PR publication into
+  explicit Workspaces callbacks.
+- `FolioConversationController.fromSnapshot()` supports hosts that already own
+  a live projection, avoiding a second state owner or a redundant asynchronous
+  snapshot read. The controller still derives the package's action membrane.
+
+Deleting the Workspaces adapter removes this host integration without removing
+or partially disabling any Folio package module. The package compiles and tests
+under its independent TypeScript configuration, and the boundary test scans
+both production and test imports for package-private paths.
 
 ## Sequence
 
