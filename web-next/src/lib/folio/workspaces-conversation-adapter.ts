@@ -7,6 +7,7 @@
 import {
 	FolioCapabilityUnavailableError,
 	FolioConversationController,
+	FolioUnknownCursorError,
 	type FolioCommandReceipt,
 	type FolioConversationPort,
 	type FolioConversationSnapshot,
@@ -34,12 +35,42 @@ function unavailable(command: string): never {
 	);
 }
 
-function commandReceipt(snapshot: FolioConversationSnapshot): FolioCommandReceipt {
-	return { cursor: snapshot.cursor };
+function acceptedButUnobservedReceipt(): FolioCommandReceipt {
+	return { cursor: null };
 }
 
 function assertNotAborted(signal?: AbortSignal): void {
 	signal?.throwIfAborted();
+}
+
+function fnv1a(value: string, seed: number): string {
+	let hash = seed >>> 0;
+	for (let index = 0; index < value.length; index += 1) {
+		hash = Math.imul(hash ^ value.charCodeAt(index), 0x01000193);
+	}
+	return (hash >>> 0).toString(36).padStart(7, "0");
+}
+
+/** Stable identity for the complete host projection, not only its last message. */
+export function createWorkspacesProjectionCursor(
+	conversationId: string,
+	projection: unknown,
+): string {
+	const serialized = JSON.stringify(projection);
+	return `workspaces:${conversationId}:${serialized.length}:${fnv1a(serialized, 0x811c9dc5)}${fnv1a(serialized, 0x9e3779b9)}`;
+}
+
+/** The exact Workspaces HTTP payload derived from a public Folio send request. */
+export function createWorkspacesChatRequestBody(
+	request: FolioSendRequest,
+	queue = false,
+): { text: string; requestId: string; retryOf?: string; queue?: true } {
+	return {
+		text: request.text,
+		requestId: request.requestId,
+		...(request.retryOf ? { retryOf: request.retryOf } : {}),
+		...(queue ? { queue: true as const } : {}),
+	};
 }
 
 /**
@@ -52,7 +83,7 @@ export function createWorkspacesConversationPort(
 	snapshot: FolioConversationSnapshot,
 	host: WorkspacesConversationHost,
 ): FolioConversationPort {
-	const receipt = () => commandReceipt(snapshot);
+	const receipt = acceptedButUnobservedReceipt;
 	return {
 		async readSnapshot(signal) {
 			assertNotAborted(signal);
@@ -61,7 +92,9 @@ export function createWorkspacesConversationPort(
 		async *readEvents(after, signal) {
 			assertNotAborted(signal);
 			if (after !== snapshot.cursor) {
-				throw new Error(`unknown Workspaces conversation cursor: ${after}`);
+				throw new FolioUnknownCursorError(
+					`unknown Workspaces conversation cursor: ${after}`,
+				);
 			}
 		},
 		async send(request, signal) {
@@ -71,14 +104,12 @@ export function createWorkspacesConversationPort(
 				: snapshot.capabilities.send;
 			if (!granted) unavailable(request.retryOf ? "retry" : "send");
 			await host.sendMessage(request);
-			assertNotAborted(signal);
 			return receipt();
 		},
 		async stop(signal) {
 			assertNotAborted(signal);
 			if (!snapshot.capabilities.stop || !host.stopTurn) unavailable("stop");
 			await host.stopTurn();
-			assertNotAborted(signal);
 			return receipt();
 		},
 		async cancelQueuedMessage(queueId, signal) {
@@ -87,14 +118,12 @@ export function createWorkspacesConversationPort(
 				unavailable("queued-message cancellation");
 			}
 			await host.cancelQueuedMessage(queueId);
-			assertNotAborted(signal);
 			return receipt();
 		},
 		async decideApproval(requestId, decision, signal) {
 			assertNotAborted(signal);
 			if (!snapshot.capabilities.decideApproval) unavailable("approval decision");
 			await host.answerApproval(requestId, decision);
-			assertNotAborted(signal);
 			return receipt();
 		},
 		async decideReview() {
@@ -105,9 +134,13 @@ export function createWorkspacesConversationPort(
 			if (!snapshot.capabilities.updateConversation) {
 				unavailable("conversation update");
 			}
-			if (update.model !== undefined) await host.changeModel(update.model);
-			if (update.title !== undefined) await host.changeTitle(update.title);
-			assertNotAborted(signal);
+			const changesModel = typeof update.model === "string";
+			const changesTitle = typeof update.title === "string";
+			if (changesModel === changesTitle) {
+				throw new TypeError("Folio conversation updates change exactly one field");
+			}
+			if (changesModel) await host.changeModel(update.model);
+			else await host.changeTitle(update.title);
 			return receipt();
 		},
 		async requestWorkspaceAction(action, signal) {
@@ -117,7 +150,6 @@ export function createWorkspacesConversationPort(
 			}
 			if (action !== "stop") unavailable(`workspace ${action}`);
 			await host.stopSandbox();
-			assertNotAborted(signal);
 			return receipt();
 		},
 		async requestPublication(action, signal) {
@@ -126,7 +158,6 @@ export function createWorkspacesConversationPort(
 				unavailable(`publication ${action}`);
 			}
 			await host.openPullRequest(action);
-			assertNotAborted(signal);
 			return receipt();
 		},
 	};

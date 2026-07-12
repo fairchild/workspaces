@@ -19,7 +19,10 @@ export {
 	applyConversationEvent,
 	createPortBackedConversationActions,
 } from "./conversation-controller";
-export { FolioCapabilityUnavailableError } from "./conversation-ports";
+export {
+	FolioCapabilityUnavailableError,
+	FolioUnknownCursorError,
+} from "./conversation-ports";
 export type {
 	FolioArtifact,
 	FolioCommandReceipt,

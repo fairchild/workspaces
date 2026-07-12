@@ -49,6 +49,7 @@ import {
 	createPortBackedConversationActions,
 	type ActiveTurnData,
 	type FolioConversationSnapshot,
+	type FolioSendRequest,
 	type QueuedMessageData,
 	SessionView,
 	type SessionViewData,
@@ -56,7 +57,11 @@ import {
 import type { FolioDataParts, FolioMessage } from "@fairchild/folio";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
-import { createWorkspacesFolioConversation } from "@/lib/folio/workspaces-conversation-adapter";
+import {
+	createWorkspacesChatRequestBody,
+	createWorkspacesFolioConversation,
+	createWorkspacesProjectionCursor,
+} from "@/lib/folio/workspaces-conversation-adapter";
 import {
 	applyLiveTurnErrors,
 	isVisibleMessage,
@@ -239,14 +244,17 @@ export function LiveSessionView({
 		return titlePatchChain.current;
 	};
 
+	const pendingSendRequestRef = useRef<FolioSendRequest | null>(null);
 	const transport = useMemo(
 		() =>
 			new DefaultChatTransport<FolioMessage>({
 				api: `/api/sessions/${sessionId}/chat`,
-				// The server owns the transcript (the event log); a send carries
-				// only the new user text.
+				// The server owns the transcript (the event log); a send carries the
+				// new text plus Folio's correlation and retry-provenance metadata.
 				prepareSendMessagesRequest: ({ messages }) => ({
-					body: { text: lastUserText(messages) },
+					body: pendingSendRequestRef.current
+						? createWorkspacesChatRequestBody(pendingSendRequestRef.current)
+						: { text: lastUserText(messages) },
 				}),
 				// Resume reconnects here — the durable tail route, not the send
 				// endpoint's default `${api}/${chatId}/stream`.
@@ -415,12 +423,12 @@ export function LiveSessionView({
 	};
 
 	const queueMessage = useCallback(
-		async (text: string) => {
+		async (request: FolioSendRequest) => {
 			try {
 				const res = await fetch(`/api/sessions/${sessionId}/chat`, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ text, queue: true }),
+					body: JSON.stringify(createWorkspacesChatRequestBody(request, true)),
 				});
 				if (res.status !== 202) {
 					await refreshSessionFromServer();
@@ -450,7 +458,7 @@ export function LiveSessionView({
 						...current.filter((message) => message.queueId !== queueId),
 						{
 							queueId,
-							text,
+							text: request.text,
 							queuedAt: new Date().toISOString(),
 							position: data.position ?? current.length + 1,
 						},
@@ -463,13 +471,20 @@ export function LiveSessionView({
 		[sessionId, refreshSessionFromServer],
 	);
 
-	const send = async (text: string) => {
+	const send = async (request: FolioSendRequest) => {
 		setSteps([]);
 		// Await any in-flight model PATCH first, so the turn the server starts
 		// reads the session row this send was composed against.
 		await modelPatchChain.current;
-		if (busy) return queueMessage(text);
-		await sendMessage({ text, metadata: { author } });
+		if (busy) return queueMessage(request);
+		pendingSendRequestRef.current = request;
+		try {
+			await sendMessage({ text: request.text, metadata: { author } });
+		} finally {
+			if (pendingSendRequestRef.current === request) {
+				pendingSendRequestRef.current = null;
+			}
+		}
 	};
 
 	const cancelQueuedMessage = useCallback(
@@ -574,12 +589,10 @@ export function LiveSessionView({
 				deriveContextLabel(visibleMessages) ?? session.statusLine.contextLabel,
 		},
 	};
-	const folioSnapshot: FolioConversationSnapshot = {
-		conversationId: sessionId,
-		// Workspaces' durable AI SDK/event-log transport owns resume. This opaque
-		// projection cursor identifies the current host snapshot at the Folio seam;
-		// the adapter deliberately does not invent a second replay stream.
-		cursor: `workspaces:${sessionId}:${messages.at(-1)?.id ?? "empty"}:${status}:${queueKey}`,
+	const folioProjection: Omit<
+		FolioConversationSnapshot,
+		"conversationId" | "cursor"
+	> = {
 		view: folioView,
 		queuedMessages,
 		capabilities: {
@@ -614,8 +627,16 @@ export function LiveSessionView({
 				: null,
 		failure: error?.message ?? null,
 	};
+	const folioSnapshot: FolioConversationSnapshot = {
+		conversationId: sessionId,
+		// Workspaces' durable AI SDK/event-log transport owns resume. This stable
+		// fingerprint changes with every material host projection, so an old
+		// cursor fails closed instead of falsely claiming that new state is current.
+		cursor: createWorkspacesProjectionCursor(sessionId, folioProjection),
+		...folioProjection,
+	};
 	const folioConversation = createWorkspacesFolioConversation(folioSnapshot, {
-		sendMessage: ({ text }) => send(text),
+		sendMessage: send,
 		cancelQueuedMessage,
 		changeModel: handleModelChange,
 		changeTitle: handleTitleChange,

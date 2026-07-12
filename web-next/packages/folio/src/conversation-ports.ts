@@ -11,6 +11,9 @@ export type FolioConversationCursor = string;
 
 export class FolioCapabilityUnavailableError extends Error {}
 
+/** The host cannot resume from a cursor it did not issue or no longer retains. */
+export class FolioUnknownCursorError extends Error {}
+
 export interface FolioConversationCapabilities {
 	send: boolean;
 	stop: boolean;
@@ -86,19 +89,26 @@ export type FolioConversationEvent =
 	| (EventEnvelope & { type: "complete" });
 
 export interface FolioCommandReceipt {
-	cursor: FolioConversationCursor;
+	/**
+	 * A host cursor known to contain the command's effect. `null` means the host
+	 * accepted the command but its externally owned projection has not observed
+	 * the effect yet; callers must await the next snapshot rather than assuming.
+	 */
+	cursor: FolioConversationCursor | null;
 }
 
 export interface FolioSendRequest {
 	text: string;
-	idempotencyKey: string;
+	/** Unique client correlation id. Hosts may additionally use it for deduplication. */
+	requestId: string;
+	/** UI provenance only; a retry remains a new send unless the host says otherwise. */
 	retryOf?: string;
 }
 
-export interface FolioConversationUpdate {
-	title?: string;
-	model?: string;
-}
+/** One atomic mutable field per command; hosts never expose partial combined updates. */
+export type FolioConversationUpdate =
+	| { title: string; model?: never }
+	| { model: string; title?: never };
 
 export interface FolioConversationPort {
 	readSnapshot(signal?: AbortSignal): Promise<FolioConversationSnapshot>;

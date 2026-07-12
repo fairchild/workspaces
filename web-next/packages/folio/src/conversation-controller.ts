@@ -195,7 +195,7 @@ export class FolioFollowInProgressError extends Error {
 
 export function createPortBackedConversationActions(
 	controller: FolioConversationController,
-	idempotencyKey: () => string,
+	requestId: () => string,
 	onCommandError: (error: unknown) => void,
 ): FolioConversationActions {
 	const snapshot = controller.snapshot;
@@ -207,11 +207,11 @@ export function createPortBackedConversationActions(
 	};
 	return {
 		send: capabilities.send
-			? (text) => run(controller.send({ text, idempotencyKey: idempotencyKey() }))
+			? (text) => run(controller.send({ text, requestId: requestId() }))
 			: undefined,
 		retry: capabilities.retry
 			? (messageId, text) =>
-					run(controller.send({ text, idempotencyKey: idempotencyKey(), retryOf: messageId }))
+					run(controller.send({ text, requestId: requestId(), retryOf: messageId }))
 			: undefined,
 		cancelQueuedMessage: capabilities.cancelQueuedMessage
 			? (queueId) => run(controller.cancelQueuedMessage(queueId))
