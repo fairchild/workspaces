@@ -26,7 +26,14 @@ format entry instead of loading the React component barrel:
 import { formatTokenCount } from "@fairchild/folio/format";
 ```
 
-Both entries expose an import condition and a default condition so the
+App shells use the narrow theme entry so a home or layout route does not pull
+in the conversation component graph:
+
+```tsx
+import { ThemeToggle, themeInitScript } from "@fairchild/folio/theme";
+```
+
+All entries expose an import condition and a default condition so the
 source-first package resolves in Next.js, native ESM, and `tsx` CommonJS graphs.
 
 Package-private source paths are not compatibility surfaces.

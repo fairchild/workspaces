@@ -1,6 +1,7 @@
 /**
  * Folio's public package surface. Hosts supply conversation data and actions;
- * Folio owns the calm transcript, compose, status, and theme presentation.
+ * Folio owns the calm transcript, compose, and status presentation. Theme and
+ * pure-format helpers have narrow entries so hosts do not load this UI graph.
  */
 export {
 	SessionView,
@@ -10,13 +11,6 @@ export {
 	type SessionViewData,
 	type SessionViewProps,
 } from "./session-view";
-export { ThemeToggle } from "./theme-toggle";
-export {
-	THEME_STORAGE_KEY,
-	resolveTheme,
-	themeInitScript,
-	type Theme,
-} from "./theme";
 export type { MastheadData } from "./session-masthead";
 export type {
 	ApprovalDecision,

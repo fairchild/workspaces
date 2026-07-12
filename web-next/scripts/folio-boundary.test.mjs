@@ -18,6 +18,7 @@ const SKIPPED_CONSUMER_DIRECTORIES = new Set([
 const PUBLIC_FOLIO_IMPORTS = new Set([
 	"@fairchild/folio",
 	"@fairchild/folio/format",
+	"@fairchild/folio/theme",
 ]);
 const require = createRequire(import.meta.url);
 
@@ -87,6 +88,11 @@ describe("Folio package boundary", () => {
 				types: "./src/format.ts",
 				import: "./src/format.ts",
 				default: "./src/format.ts",
+			},
+			"./theme": {
+				types: "./src/theme-entry.ts",
+				import: "./src/theme-entry.ts",
+				default: "./src/theme-entry.ts",
 			},
 		});
 		expect(manifest.files).toEqual([

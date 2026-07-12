@@ -20,6 +20,11 @@
 			"types": "./src/format.ts",
 			"import": "./src/format.ts",
 			"default": "./src/format.ts"
+		},
+		"./theme": {
+			"types": "./src/theme-entry.ts",
+			"import": "./src/theme-entry.ts",
+			"default": "./src/theme-entry.ts"
 		}
 	},
 	"files": [

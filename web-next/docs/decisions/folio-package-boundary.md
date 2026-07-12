@@ -40,7 +40,9 @@ acquires host authority merely because it renders the control.
   internally, and never imports the Workspaces `@/` alias or application modules.
 - Workspaces imports Folio through its declared `@fairchild/folio` exports,
   never package-private source paths. Pure server-safe helpers use the explicit
-  `@fairchild/folio/format` entry so component modules cannot enter server graphs.
+  `@fairchild/folio/format` entry so component modules cannot enter server graphs;
+  app shells use `@fairchild/folio/theme` so they do not load the conversation
+  graph.
 - React, React DOM, and AI SDK identity are peer contracts; Folio-owned Radix
   primitives are package dependencies.
 - The package is source-first and `private` in this slice. W7's artifact issue
