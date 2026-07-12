@@ -67,7 +67,11 @@ describe("POST /api/sessions/[id]/chat", () => {
 			queuedAt: "2026-01-01T00:00:00.000Z",
 		});
 
-		const res = await post(id, { text: "steer next" });
+		const res = await post(id, {
+			text: "steer next",
+			requestId: "request-1",
+			retryOf: "message-0",
+		});
 
 		expect(res.status).toBe(202);
 		expect(await res.json()).toEqual({
@@ -91,7 +95,12 @@ describe("POST /api/sessions/[id]/chat", () => {
 			queuedAt: "2026-01-01T00:00:00.000Z",
 		});
 
-		const res = await post(id, { text: "still next", queue: true });
+		const res = await post(id, {
+			text: "still next",
+			requestId: "request-2",
+			retryOf: "message-1",
+			queue: true,
+		});
 
 		expect(res.status).toBe(202);
 		expect(await res.json()).toMatchObject({

@@ -182,18 +182,23 @@ export function LiveSessionView({
 				setModel(previous);
 			}
 		};
-		modelPatchChain.current = modelPatchChain.current.then(() =>
-			fetch(`/api/sessions/${sessionId}`, {
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ model: nextModel }),
-			})
-				.then((res) => {
-					if (!res.ok) revert();
-				})
-				.catch(revert),
-		);
-		return modelPatchChain.current;
+		const request = modelPatchChain.current.then(async () => {
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}`, {
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ model: nextModel }),
+				});
+				if (!res.ok) throw new Error(`model update failed (${res.status})`);
+			} catch (caught) {
+				revert();
+				throw caught;
+			}
+		});
+		// Keep the sequencing chain live after a rejected command while returning
+		// the real request promise to Folio's command error channel.
+		modelPatchChain.current = request.catch(() => undefined);
+		return request;
 	};
 
 	// The persisted title, "" until either the auto-titler or an edit sets one.
@@ -211,50 +216,47 @@ export function LiveSessionView({
 				setTitle(previous);
 			}
 		};
-		titlePatchChain.current = titlePatchChain.current.then(() =>
-			fetch(`/api/sessions/${sessionId}`, {
-				method: "PATCH",
-				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ title: nextTitle }),
-			})
-				.then(async (res) => {
-					if (!res.ok) {
-						revert();
-						return;
-					}
-					// The route cleans the title server-side (trim + whitespace
-					// collapse), which can differ from the raw optimistic text (e.g.
-					// "Fix   the  bug" → "Fix the bug") — reconcile so the display
-					// matches what's actually persisted, unless a newer edit has
-					// already superseded this one.
-					const data = (await res.json().catch(() => null)) as {
-						title?: string;
-					} | null;
-					if (
-						data?.title &&
-						data.title !== nextTitle &&
-						latestTitleRef.current === nextTitle
-					) {
-						latestTitleRef.current = data.title;
-						setTitle(data.title);
-					}
-				})
-				.catch(revert),
-		);
-		return titlePatchChain.current;
+		const request = titlePatchChain.current.then(async () => {
+			try {
+				const res = await fetch(`/api/sessions/${sessionId}`, {
+					method: "PATCH",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ title: nextTitle }),
+				});
+				if (!res.ok) throw new Error(`title update failed (${res.status})`);
+				// The route cleans the title server-side (trim + whitespace
+				// collapse), which can differ from the raw optimistic text (e.g.
+				// "Fix   the  bug" → "Fix the bug") — reconcile so the display
+				// matches what's actually persisted, unless a newer edit has
+				// already superseded this one.
+				const data = (await res.json().catch(() => null)) as {
+					title?: string;
+				} | null;
+				if (
+					data?.title &&
+					data.title !== nextTitle &&
+					latestTitleRef.current === nextTitle
+				) {
+					latestTitleRef.current = data.title;
+					setTitle(data.title);
+				}
+			} catch (caught) {
+				revert();
+				throw caught;
+			}
+		});
+		titlePatchChain.current = request.catch(() => undefined);
+		return request;
 	};
 
-	const pendingSendRequestRef = useRef<FolioSendRequest | null>(null);
 	const transport = useMemo(
 		() =>
 			new DefaultChatTransport<FolioMessage>({
 				api: `/api/sessions/${sessionId}/chat`,
 				// The server owns the transcript (the event log); a send carries the
 				// new text plus Folio's correlation and retry-provenance metadata.
-				prepareSendMessagesRequest: ({ messages }) => ({
-					body: pendingSendRequestRef.current
-						? createWorkspacesChatRequestBody(pendingSendRequestRef.current)
-						: { text: lastUserText(messages) },
+				prepareSendMessagesRequest: ({ messages, body }) => ({
+					body: body ?? { text: lastUserText(messages) },
 				}),
 				// Resume reconnects here — the durable tail route, not the send
 				// endpoint's default `${api}/${chatId}/stream`.
@@ -477,14 +479,10 @@ export function LiveSessionView({
 		// reads the session row this send was composed against.
 		await modelPatchChain.current;
 		if (busy) return queueMessage(request);
-		pendingSendRequestRef.current = request;
-		try {
-			await sendMessage({ text: request.text, metadata: { author } });
-		} finally {
-			if (pendingSendRequestRef.current === request) {
-				pendingSendRequestRef.current = null;
-			}
-		}
+		await sendMessage(
+			{ text: request.text, metadata: { author } },
+			{ body: createWorkspacesChatRequestBody(request) },
+		);
 	};
 
 	const cancelQueuedMessage = useCallback(
@@ -632,7 +630,11 @@ export function LiveSessionView({
 		// Workspaces' durable AI SDK/event-log transport owns resume. This stable
 		// fingerprint changes with every material host projection, so an old
 		// cursor fails closed instead of falsely claiming that new state is current.
-		cursor: createWorkspacesProjectionCursor(sessionId, folioProjection),
+		// It stays lazy because this SDK-owned binding never follows the Folio port;
+		// streaming renders therefore do not serialize the transcript just for UI.
+		get cursor() {
+			return createWorkspacesProjectionCursor(sessionId, folioProjection);
+		},
 		...folioProjection,
 	};
 	const folioConversation = createWorkspacesFolioConversation(folioSnapshot, {
