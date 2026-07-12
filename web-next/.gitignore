@@ -7,6 +7,8 @@ next-env.d.ts
 
 # Test + harness artifacts
 output/
+artifacts/
+packages/folio/dist/
 playwright-report/
 test-results/
 perf/results.json

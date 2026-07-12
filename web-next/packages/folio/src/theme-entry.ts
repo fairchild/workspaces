@@ -1,8 +1,7 @@
 /**
- * Folio's narrow theme entry. Hosts can initialize and toggle presentation
- * without pulling the conversation/session component graph into every route.
+ * Folio's server-safe theme entry. Hosts can initialize presentation without
+ * pulling React or the conversation component graph into layouts.
  */
-export { ThemeToggle } from "./theme-toggle";
 export {
 	THEME_STORAGE_KEY,
 	resolveTheme,

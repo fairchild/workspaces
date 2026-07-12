@@ -14,6 +14,8 @@
 		"typecheck": "tsc --noEmit",
 		"lint": "eslint .",
 		"clean": "node scripts/clean.mjs",
+		"folio:build": "pnpm --filter @fairchild/folio build",
+		"folio:package": "node scripts/folio-artifact.mjs",
 		"evidence": "node scripts/evidence.mjs",
 		"evidence:upload": "bash scripts/upload-evidence.sh",
 		"demo:scroll-turn": "playwright test --config=playwright.scroll-turn.config.ts",
@@ -47,7 +49,9 @@
 		"@types/react-dom": "^19",
 		"eslint": "^9.39.4",
 		"eslint-config-next": "^15.5.20",
+		"postcss": "8.5.17",
 		"tailwindcss": "^4.3.2",
+		"tsup": "8.5.1",
 		"tsx": "^4.22.5",
 		"typescript": "^5.7.2",
 		"vitest": "^4.1.9"

@@ -5,13 +5,23 @@ This workspace package owns presentation and typed view data; its host owns
 authentication, persistence, transport, agent execution, repositories, and
 publication authority.
 
-The current package is source-first and private while the boundary is proven
-inside Workspaces. It owns its host ports and scoped styles; the remaining W7
-slices create a versioned install artifact and prove a real external consumer.
+The workspace package is source-first for co-development inside Workspaces. Its
+canonical `0.1.x` install surface is the compiled, private tarball produced by
+`pnpm folio:package`: ESM, declarations, source maps, and standalone scoped CSS.
+The remaining W7 slice proves that artifact in a real external consumer.
 
 React 19 and AI SDK 7 are peers. Next 15.5 is the tested Workspaces host and is
 recorded as advisory compatibility metadata rather than a peer because Folio
 itself imports no Next.js API.
+
+Install a release candidate by its checked tarball rather than copying source:
+
+```bash
+pnpm add ./fairchild-folio-0.1.0.tgz
+```
+
+The artifact stays `private: true` to close accidental registry publication;
+private packages remain installable from a local or Git-hosted tarball.
 
 Import only from the named entry point:
 
@@ -53,7 +63,7 @@ remains with the host:
 import {
   FolioConversationController,
   type FolioConversationPort,
-} from "@fairchild/folio";
+} from "@fairchild/folio/conversation";
 
 const controller = new FolioConversationController(hostPort satisfies FolioConversationPort);
 await controller.hydrate();
@@ -103,11 +113,12 @@ format entry instead of loading the React component barrel:
 import { formatTokenCount } from "@fairchild/folio/format";
 ```
 
-App shells use the narrow theme entry so a home or layout route does not pull
-in the conversation component graph:
+App layouts use the server-safe theme entry; interactive surfaces import the
+explicit client control without collapsing those RSC boundaries:
 
 ```tsx
-import { ThemeToggle, themeInitScript } from "@fairchild/folio/theme";
+import { themeInitScript } from "@fairchild/folio/theme";
+import { ThemeToggle } from "@fairchild/folio/theme-toggle";
 ```
 
 All entries expose an import condition and a default condition so the
