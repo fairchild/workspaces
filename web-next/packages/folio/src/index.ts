@@ -17,7 +17,6 @@ export {
 	themeInitScript,
 	type Theme,
 } from "./theme";
-export { formatTokenCount } from "./ledger";
 export type { MastheadData } from "./session-masthead";
 export type {
 	ApprovalDecision,

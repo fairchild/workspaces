@@ -13,7 +13,7 @@ export default defineConfig({
 		environment: "node",
 		include: [
 			"src/**/*.test.ts",
-			"packages/**/*.test.ts",
+			"packages/**/*.test.{ts,tsx}",
 			"scripts/**/*.test.mjs",
 			"perf/**/*.test.mjs",
 		],

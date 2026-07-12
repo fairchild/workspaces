@@ -6,11 +6,11 @@
  * produce identical stats (the numbers are in the persisted events).
  */
 import {
-	formatTokenCount,
 	type FolioMessage,
 	type FolioMetadata,
 	type TurnStatsData,
 } from "@fairchild/folio";
+import { formatTokenCount } from "@fairchild/folio/format";
 import type { StreamChunk } from "../agent-runtime/stream-chunk";
 
 /** The agent's display name on assistant messages (single-agent for now). */

@@ -36,10 +36,11 @@ acquires host authority merely because it renders the control.
 
 ## Boundary rules
 
-- Package source uses relative imports internally and never imports the
-  Workspaces `@/` alias or application modules.
-- Workspaces imports Folio through `@fairchild/folio`, never package-private
-  source paths.
+- Package source uses an independent TypeScript configuration, relative imports
+  internally, and never imports the Workspaces `@/` alias or application modules.
+- Workspaces imports Folio through its declared `@fairchild/folio` exports,
+  never package-private source paths. Pure server-safe helpers use the explicit
+  `@fairchild/folio/format` entry so component modules cannot enter server graphs.
 - React, React DOM, and AI SDK identity are peer contracts; Folio-owned Radix
   primitives are package dependencies.
 - The package is source-first and `private` in this slice. W7's artifact issue

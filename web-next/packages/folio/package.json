@@ -13,12 +13,19 @@
 	"exports": {
 		".": {
 			"types": "./src/index.ts",
-			"import": "./src/index.ts"
+			"import": "./src/index.ts",
+			"default": "./src/index.ts"
+		},
+		"./format": {
+			"types": "./src/format.ts",
+			"import": "./src/format.ts",
+			"default": "./src/format.ts"
 		}
 	},
 	"files": [
 		"src",
-		"!src/**/*.test.ts"
+		"!src/**/*.test.ts",
+		"!src/**/*.test.tsx"
 	],
 	"sideEffects": false,
 	"folioCompatibility": {
@@ -32,5 +39,8 @@
 	"dependencies": {
 		"@radix-ui/react-collapsible": "^1.1.15",
 		"@radix-ui/react-use-controllable-state": "^1.2.3"
+	},
+	"devDependencies": {
+		"vitest": "^4.1.9"
 	}
 }
