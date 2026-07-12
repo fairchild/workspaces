@@ -11,6 +11,7 @@ export {
 	type SessionViewData,
 	type SessionViewProps,
 } from "./session-view";
+export { FolioRoot, type FolioRootProps } from "./folio-root";
 export type { MastheadData } from "./session-masthead";
 export {
 	FolioConversationController,
