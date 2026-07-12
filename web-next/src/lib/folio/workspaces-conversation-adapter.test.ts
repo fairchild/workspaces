@@ -1,8 +1,8 @@
-import {
-	FolioUnknownCursorError,
-	type FolioConversationSnapshot,
-	type FolioConversationUpdate,
+import type {
+	FolioConversationSnapshot,
+	FolioConversationUpdate,
 } from "@fairchild/folio";
+import { FolioUnknownCursorError } from "@fairchild/folio/conversation";
 import { describe, expect, test, vi } from "vitest";
 import {
 	createWorkspacesChatRequestBody,

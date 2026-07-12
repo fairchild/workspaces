@@ -17,9 +17,11 @@ const SKIPPED_CONSUMER_DIRECTORIES = new Set([
 ]);
 const PUBLIC_FOLIO_IMPORTS = new Set([
 	"@fairchild/folio",
+	"@fairchild/folio/conversation",
 	"@fairchild/folio/format",
 	"@fairchild/folio/styles.css",
 	"@fairchild/folio/theme",
+	"@fairchild/folio/theme-toggle",
 	"@fairchild/folio/testing",
 ]);
 const require = createRequire(import.meta.url);
@@ -96,10 +98,20 @@ describe("Folio package boundary", () => {
 				import: "./src/format.ts",
 				default: "./src/format.ts",
 			},
+			"./conversation": {
+				types: "./src/conversation.ts",
+				import: "./src/conversation.ts",
+				default: "./src/conversation.ts",
+			},
 			"./theme": {
 				types: "./src/theme-entry.ts",
 				import: "./src/theme-entry.ts",
 				default: "./src/theme-entry.ts",
+			},
+			"./theme-toggle": {
+				types: "./src/theme-toggle-entry.ts",
+				import: "./src/theme-toggle-entry.ts",
+				default: "./src/theme-toggle-entry.ts",
 			},
 			"./styles.css": "./src/styles.css",
 			"./testing": {

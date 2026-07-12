@@ -13,16 +13,6 @@ export {
 } from "./session-view";
 export { FolioRoot, type FolioRootProps } from "./folio-root";
 export type { MastheadData } from "./session-masthead";
-export {
-	FolioConversationController,
-	FolioFollowInProgressError,
-	applyConversationEvent,
-	createPortBackedConversationActions,
-} from "./conversation-controller";
-export {
-	FolioCapabilityUnavailableError,
-	FolioUnknownCursorError,
-} from "./conversation-ports";
 export type {
 	FolioArtifact,
 	FolioCommandReceipt,

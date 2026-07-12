@@ -2,5 +2,8 @@
 export {
 	FakeConversationPort,
 } from "./fake-conversation-port";
-export { FolioCapabilityUnavailableError } from "./conversation-ports";
+export {
+	FolioCapabilityUnavailableError,
+	FolioUnknownCursorError,
+} from "./conversation.js";
 export type { FakeConversationCall } from "./fake-conversation-port";

@@ -46,7 +46,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 import { modelLabel } from "@/lib/agent-runtime/models";
 import {
-	createPortBackedConversationActions,
 	type ActiveTurnData,
 	type FolioConversationSnapshot,
 	type FolioSendRequest,
@@ -55,6 +54,7 @@ import {
 	type SessionViewData,
 } from "@fairchild/folio";
 import type { FolioDataParts, FolioMessage } from "@fairchild/folio";
+import { createPortBackedConversationActions } from "@fairchild/folio/conversation";
 import { TerminalDrawer } from "@/components/terminal/terminal-drawer";
 import { deriveSessionTitle } from "@/lib/session-title";
 import {

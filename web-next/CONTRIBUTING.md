@@ -35,19 +35,24 @@ the transcript.
 
 ## Folio workspace package
 
-The conversation UI lives in `packages/folio` and the app consumes its named
-`@fairchild/folio` entry point. Package-private source paths are guarded by a
-unit test. The first W7 slice is source-first: Workspaces still supplies the
-global Folio styles while later slices add package-owned styles, host ports,
-and a compiled install artifact.
+The conversation UI lives in `packages/folio` and the app consumes only its
+named `@fairchild/folio` entries. Package-private paths are guarded across
+production and tests. The workspace stays source-first for fast co-development;
+the canonical release candidate is a compiled, versioned tarball with its own
+scoped CSS and host-neutral port.
 
 ```bash
-pnpm --filter @fairchild/folio pack --pack-destination /tmp/folio-pack --json
-pnpm exec vitest run scripts/folio-boundary.test.mjs packages/folio/src/*.test.ts
+pnpm folio:build
+pnpm folio:package
 ```
 
-The pack listing is reviewer evidence: it should contain the package README,
-manifest, and runtime/type source, but no tests or Workspaces application files.
+`folio:package` is the only supported pack path. It emits ESM, declarations,
+JavaScript/CSS source maps, and standalone compiled CSS; independently builds
+and packs two staging trees and requires matching SHA-256 checksums; enforces
+the exact file/dependency and size contracts; then installs the tarball into a
+temporary non-workspace Next app and production-builds it. Evidence lands in
+`artifacts/folio/` and is uploaded by CI. Semver and the public-registry
+decision gate are documented in `packages/folio/RELEASING.md`.
 
 ## Run the owner-local production server
 

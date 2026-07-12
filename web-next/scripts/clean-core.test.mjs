@@ -32,6 +32,13 @@ describe("expandTargets", () => {
 		]);
 	});
 
+	test("Folio generated package state has explicit cleanup targets", () => {
+		expect(expandTargets(["folio-build", "folio-artifact"])).toEqual([
+			"packages/folio/dist",
+			"artifacts/folio",
+		]);
+	});
+
 	test("unknown targets are rejected with the valid vocabulary", () => {
 		expect(() => expandTargets(["buld"])).toThrow(/unknown target.*buld.*valid/);
 		expect(() => expandTargets(["hasOwnProperty"])).toThrow(/unknown target/);

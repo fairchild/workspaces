@@ -10,7 +10,7 @@ import type {
 import {
 	FolioCapabilityUnavailableError,
 	FolioUnknownCursorError,
-} from "./conversation-ports";
+} from "./conversation.js";
 
 export interface FakeConversationCall {
 	command: string;

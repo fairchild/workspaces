@@ -41,12 +41,18 @@ acquires host authority merely because it renders the control.
 - Workspaces imports Folio through its declared `@fairchild/folio` exports,
   never package-private source paths. Pure server-safe helpers use the explicit
   `@fairchild/folio/format` entry so component modules cannot enter server graphs;
-  app shells use `@fairchild/folio/theme` so they do not load the conversation
-  graph.
+  app shells use the server-safe `@fairchild/folio/theme`; interactive surfaces
+  use `@fairchild/folio/theme-toggle` so the compiled artifact preserves the
+  React Server Component boundary without loading the conversation graph.
+- Conversation authority uses the server-safe `@fairchild/folio/conversation`
+  entry. The testing entry imports that runtime rather than bundling a second
+  copy, so exported error identities remain stable across entries.
 - React, React DOM, and AI SDK identity are peer contracts; Folio-owned Radix
   primitives are package dependencies.
-- The package is source-first and `private` in this slice. W7's artifact issue
-  defines compilation, semver, checksums, and the public-registry decision.
+- The workspace is source-first; `pnpm folio:package` produces the install
+  surface as a compiled `private` tarball with deterministic checksum/file/size
+  gates and a clean non-workspace consumer build. Public-registry publication
+  remains a separate owner decision after the external-consumer proof.
 - Folio supplies its scoped stylesheet and tokens through the declared
   `@fairchild/folio/styles.css` export; hosts retain the narrow documented token
   override seam.

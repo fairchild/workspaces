@@ -21,10 +21,20 @@
 			"import": "./src/format.ts",
 			"default": "./src/format.ts"
 		},
+		"./conversation": {
+			"types": "./src/conversation.ts",
+			"import": "./src/conversation.ts",
+			"default": "./src/conversation.ts"
+		},
 		"./theme": {
 			"types": "./src/theme-entry.ts",
 			"import": "./src/theme-entry.ts",
 			"default": "./src/theme-entry.ts"
+		},
+		"./theme-toggle": {
+			"types": "./src/theme-toggle-entry.ts",
+			"import": "./src/theme-toggle-entry.ts",
+			"default": "./src/theme-toggle-entry.ts"
 		},
 		"./styles.css": "./src/styles.css",
 		"./testing": {
@@ -41,6 +51,9 @@
 	"sideEffects": [
 		"./src/styles.css"
 	],
+	"scripts": {
+		"build": "node ../../scripts/clean.mjs folio-build && tsup --config tsup.client.config.ts && tsup --config tsup.server.config.ts && node ../../scripts/build-folio-css.mjs"
+	},
 	"folioCompatibility": {
 		"next": ">=15.5.0 <16"
 	},
@@ -50,8 +63,8 @@
 		"react-dom": "^19.0.0"
 	},
 	"dependencies": {
-		"@radix-ui/react-collapsible": "^1.1.15",
-		"@radix-ui/react-use-controllable-state": "^1.2.3"
+		"@radix-ui/react-collapsible": "1.1.15",
+		"@radix-ui/react-use-controllable-state": "1.2.3"
 	},
 	"devDependencies": {
 		"vitest": "^4.1.9"

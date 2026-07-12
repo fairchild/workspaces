@@ -48,11 +48,15 @@ jobs:
       - name: Unit tests
         run: pnpm test
 
+      - name: Package Folio and build clean consumer
+        id: folio_package
+        run: pnpm folio:package
+
       - name: Cache Next.js build cache
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4
         with:
           path: web-next/.next/cache
-          key: nextjs-web-next-${{ runner.os }}-${{ hashFiles('web-next/pnpm-lock.yaml') }}-${{ hashFiles('web-next/src/**') }}
+          key: nextjs-web-next-${{ runner.os }}-${{ hashFiles('web-next/pnpm-lock.yaml') }}-${{ hashFiles('web-next/src/**', 'web-next/packages/folio/src/**', 'web-next/packages/folio/package.json', 'web-next/packages/folio/tsup.*.config.ts', 'web-next/scripts/build-folio-css.mjs') }}
           restore-keys: |
             nextjs-web-next-${{ runner.os }}-${{ hashFiles('web-next/pnpm-lock.yaml') }}-
 
@@ -94,6 +98,18 @@ jobs:
           name: web-next-evidence
           path: web-next/output/evidence/
           if-no-files-found: ignore
+
+      - name: Upload Folio install artifact
+        if: ${{ !cancelled() && steps.folio_package.outcome != 'skipped' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: folio-package
+          path: |
+            web-next/artifacts/folio/*.tgz
+            web-next/artifacts/folio/manifest.json
+            web-next/artifacts/folio/files.txt
+            web-next/artifacts/folio/clean-fixture.log
+          if-no-files-found: error
 
       - name: Upload perf results
         if: always()

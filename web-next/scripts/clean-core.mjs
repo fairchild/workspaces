@@ -16,6 +16,7 @@ export const TARGETS = {
 		".data/sessions-spec.lock",
 	],
 	artifacts: [
+		"artifacts/folio",
 		"output",
 		"playwright-report",
 		"test-results",
@@ -24,6 +25,8 @@ export const TARGETS = {
 		"perf/results-deployed.json",
 		"perf/results-deployed.md",
 	],
+	"folio-build": ["packages/folio/dist"],
+	"folio-artifact": ["artifacts/folio"],
 	deps: ["node_modules"],
 };
 
@@ -31,7 +34,7 @@ export const TARGETS = {
 export const DEFAULT_TARGETS = ["build", "data", "artifacts"];
 
 export const USAGE =
-	"usage: pnpm run clean [build|data|e2e-data|artifacts|deps|all]... [--dry-run]";
+	"usage: pnpm run clean [build|data|e2e-data|artifacts|folio-build|folio-artifact|deps|all]... [--dry-run]";
 
 /**
  * Expands target names into a deduplicated list of web-next-relative paths.

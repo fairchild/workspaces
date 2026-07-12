@@ -13,7 +13,7 @@ import {
 	type FolioConversationSnapshot,
 	type FolioConversationUpdate,
 	type FolioSendRequest,
-} from "@fairchild/folio";
+} from "@fairchild/folio/conversation";
 import type { ApprovalDecision } from "@/lib/agent-runtime/stream-chunk";
 
 type HostCommand = void | Promise<void>;
