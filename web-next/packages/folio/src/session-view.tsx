@@ -8,7 +8,8 @@ import { ComposeField } from "./compose-field";
 import { Message, MessageArticle } from "./message";
 import { SessionMasthead, type MastheadData } from "./session-masthead";
 import { StatusLine, type StatusLineData } from "./status-line";
-import type { ApprovalDecision, FolioMessage } from "./types";
+import type { FolioConversationActions } from "./conversation-ports";
+import type { FolioMessage } from "./types";
 
 /** The live turn: always focal, labeled but unstamped while it works. */
 export interface ActiveTurnData extends ActivityLineProps {
@@ -136,50 +137,23 @@ export interface SessionViewProps {
 	session: SessionViewData;
 	/** Scopes live-turn follow DOM lookups when this is a real session surface. */
 	turnFollowScopeId?: string;
-	/** Compose submit handler (client wrappers wire this; fixtures omit it). */
-	onSend?: (text: string) => void;
+	/** Host authority injected as one capability object; fixtures omit it. */
+	actions?: FolioConversationActions;
 	/** Hard-disables compose when this surface cannot accept text. */
 	composeDisabled?: boolean;
 	/** Holds retry actions while a turn is streaming; new compose sends queue. */
 	retryDisabled?: boolean;
 	/** User messages waiting for the current turn to settle (#984). */
 	queuedMessages?: QueuedMessageData[];
-	/** Cancels an undispatched queued message. */
-	onCancelQueuedMessage?: (queueId: string) => void;
-	/** Model picker handler (client wrappers wire this; fixtures omit it, which
-	 * leaves the status line's model as static text — see status-line.tsx). */
-	onModelChange?: (id: string) => void;
-	/** Inline title-edit handler (client wrappers wire this; fixtures omit it,
-	 * which leaves the masthead title as static text — see session-masthead.tsx). */
-	onTitleChange?: (title: string) => void;
-	/** Stops the in-flight turn (#753); compose keeps Send live for queued
-	 * steering while this quiet control sits beside it. Fixtures omit it. */
-	onStopTurn?: () => void;
-	/** Stops the session's live sandbox (#753); a quiet masthead action beside
-	 * the state label. Fixtures omit it. */
-	onSandboxStop?: () => void;
-	/** Opens or updates the session PR (#820). Fixtures omit it. */
-	onPullRequestAction?: () => void;
-	onApprovalDecision?: (
-		requestId: string,
-		decision: ApprovalDecision,
-	) => Promise<void>;
 }
 
 export function SessionView({
 	session,
 	turnFollowScopeId,
-	onSend,
+	actions,
 	composeDisabled,
 	retryDisabled,
 	queuedMessages = [],
-	onCancelQueuedMessage,
-	onModelChange,
-	onTitleChange,
-	onStopTurn,
-	onSandboxStop,
-	onPullRequestAction,
-	onApprovalDecision,
 }: SessionViewProps) {
 	const isEmpty = session.messages.length === 0 && !session.activeTurn;
 	const hasMastheadSubline =
@@ -190,9 +164,9 @@ export function SessionView({
 		<>
 			<SessionMasthead
 				session={session.masthead}
-				onTitleChange={onTitleChange}
-				onSandboxStop={onSandboxStop}
-				onPullRequestAction={onPullRequestAction}
+				onTitleChange={actions?.changeTitle}
+				onSandboxStop={actions?.stopWorkspace}
+				onPullRequestAction={actions?.requestPublication}
 			/>
 			{/* break-words inherits into the prose, so an unbroken token (a long
 			    path, a URL) wraps instead of forcing 375px pages sideways (#753);
@@ -246,12 +220,12 @@ export function SessionView({
 										openToolCallIds={session.openToolCallIds}
 										animationDelay={riseDelay(orderIndex.get(message.id) ?? 0)}
 										onRetry={
-											message.metadata?.error && onSend && retryText
-												? () => onSend(retryText)
+											message.metadata?.error && actions?.retry && retryText
+												? () => actions.retry?.(message.id, retryText)
 												: undefined
 										}
 										retryDisabled={retryDisabled}
-										onApprovalDecision={onApprovalDecision}
+										onApprovalDecision={actions?.decideApproval}
 									/>
 								))}
 								{recent && session.activeTurn && (
@@ -277,15 +251,15 @@ export function SessionView({
 			>
 				<QueuedMessages
 					messages={queuedMessages}
-					onCancel={onCancelQueuedMessage}
+					onCancel={actions?.cancelQueuedMessage}
 				/>
 				<ComposeField
 					agentName={session.masthead.agentName}
-					onSend={onSend}
+					onSend={actions?.send}
 					disabled={composeDisabled}
-					onStop={onStopTurn}
+					onStop={actions?.stopTurn}
 				/>
-				<StatusLine status={session.statusLine} onModelChange={onModelChange} />
+				<StatusLine status={session.statusLine} onModelChange={actions?.changeModel} />
 			</footer>
 		</>
 	);

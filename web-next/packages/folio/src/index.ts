@@ -12,6 +12,28 @@ export {
 	type SessionViewProps,
 } from "./session-view";
 export type { MastheadData } from "./session-masthead";
+export {
+	FolioConversationController,
+	FolioFollowInProgressError,
+	applyConversationEvent,
+	createPortBackedConversationActions,
+} from "./conversation-controller";
+export { FolioCapabilityUnavailableError } from "./conversation-ports";
+export type {
+	FolioArtifact,
+	FolioCommandReceipt,
+	FolioConversationActions,
+	FolioConversationCapabilities,
+	FolioConversationCursor,
+	FolioConversationEvent,
+	FolioConversationPort,
+	FolioConversationSnapshot,
+	FolioConversationUpdate,
+	FolioPublication,
+	FolioReview,
+	FolioSendRequest,
+	FolioWorkspace,
+} from "./conversation-ports";
 export type {
 	ApprovalDecision,
 	ApprovalPartData,

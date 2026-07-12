@@ -25,6 +25,11 @@
 			"types": "./src/theme-entry.ts",
 			"import": "./src/theme-entry.ts",
 			"default": "./src/theme-entry.ts"
+		},
+		"./testing": {
+			"types": "./src/testing-entry.ts",
+			"import": "./src/testing-entry.ts",
+			"default": "./src/testing-entry.ts"
 		}
 	},
 	"files": [

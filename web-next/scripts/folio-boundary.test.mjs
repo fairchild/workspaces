@@ -19,6 +19,7 @@ const PUBLIC_FOLIO_IMPORTS = new Set([
 	"@fairchild/folio",
 	"@fairchild/folio/format",
 	"@fairchild/folio/theme",
+	"@fairchild/folio/testing",
 ]);
 const require = createRequire(import.meta.url);
 
@@ -58,6 +59,11 @@ describe("Folio package boundary", () => {
 				expect(specifier, file).not.toContain("packages/folio/src");
 				if (specifier.startsWith("@fairchild/folio")) {
 					expect(PUBLIC_FOLIO_IMPORTS, file).toContain(specifier);
+					if (specifier === "@fairchild/folio/testing") {
+						expect(file, "testing entry imported by production source").toMatch(
+						/\.test\.[cm]?[jt]sx?$/,
+					);
+					}
 				}
 			}
 		}
@@ -93,6 +99,11 @@ describe("Folio package boundary", () => {
 				types: "./src/theme-entry.ts",
 				import: "./src/theme-entry.ts",
 				default: "./src/theme-entry.ts",
+			},
+			"./testing": {
+				types: "./src/testing-entry.ts",
+				import: "./src/testing-entry.ts",
+				default: "./src/testing-entry.ts",
 			},
 		});
 		expect(manifest.files).toEqual([
