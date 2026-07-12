@@ -1,17 +1,16 @@
-/*
- * Folio design tokens on Tailwind v4 — the "Refined Folio" system from
- * prototypes/web-session-redesign/refine-folio.html: paper light theme +
- * warm-charcoal dark, Newsreader serif prose, IBM Plex Mono apparatus.
- * Palettes live on :root[data-theme=...]; `@theme inline` maps them to
- * Tailwind tokens so utilities follow the active theme attribute.
- */
-@import "tailwindcss";
+/* Workspaces shell tokens and host-owned base rules. Folio's independently
+   scoped utilities, tokens, and component selectors live in its package CSS. */
+@import "tailwindcss" source(none);
+@source "../**/*.{ts,tsx}";
 
 /* Theme is a data attribute (set pre-paint by themeInitScript), not the
    OS scheme — system preference only feeds the initial resolution. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 :root {
+	/* Host-owned font loading, passed through Folio's narrow token seam. */
+	--folio-font-serif: var(--font-newsreader, "Iowan Old Style"), Georgia, serif;
+	--folio-font-mono: var(--font-plex-mono, ui-monospace), "SF Mono", monospace;
 	--paper: #f7f4ed;
 	--raised: #fdfbf6;
 	--ink: #26221a;
@@ -242,66 +241,6 @@
 		background: var(--code-bg);
 		padding: 1px 5px 2px;
 		border-radius: 4px;
-	}
-}
-
-@layer components {
-	/* Radix exposes the exact content height, so the thinking block can fold
-	   without deleting a pageful of layout in one frame. This is the one
-	   intentional layout animation in the transcript: it prevents the browser's
-	   max-scroll clamp from producing a much larger viewport jump. */
-	.reasoning-content[data-state="open"] {
-		animation: reasoning-expand 240ms cubic-bezier(0.2, 0.7, 0.2, 1);
-	}
-	.reasoning-content[data-state="closed"] {
-		animation: reasoning-collapse 320ms cubic-bezier(0.4, 0, 0.2, 1);
-	}
-	@keyframes reasoning-expand {
-		from {
-			height: 0;
-			opacity: 0;
-		}
-		to {
-			height: var(--radix-collapsible-content-height);
-			opacity: 1;
-		}
-	}
-	@keyframes reasoning-collapse {
-		from {
-			height: var(--radix-collapsible-content-height);
-			opacity: 1;
-		}
-		to {
-			height: 0;
-			opacity: 0;
-		}
-	}
-	@media (prefers-reduced-motion: reduce) {
-		.reasoning-content[data-state="open"],
-		.reasoning-content[data-state="closed"] {
-			animation: none;
-		}
-	}
-
-	/* Animated trailing dots ('' → . → .. → …); content keyframes can't be
-	   expressed as a Tailwind utility. */
-	.ellipsis-dots::after {
-		content: "…";
-		animation: ellip 1.8s steps(4) infinite;
-	}
-	@keyframes ellip {
-		0% {
-			content: "";
-		}
-		25% {
-			content: ".";
-		}
-		50% {
-			content: "..";
-		}
-		75% {
-			content: "…";
-		}
 	}
 }
 

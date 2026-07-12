@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { IBM_Plex_Mono, Newsreader } from "next/font/google";
 import { themeInitScript } from "@fairchild/folio/theme";
+import "@fairchild/folio/styles.css";
 import "./globals.css";
 
 const newsreader = Newsreader({

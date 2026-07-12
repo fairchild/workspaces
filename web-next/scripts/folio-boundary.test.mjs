@@ -18,6 +18,7 @@ const SKIPPED_CONSUMER_DIRECTORIES = new Set([
 const PUBLIC_FOLIO_IMPORTS = new Set([
 	"@fairchild/folio",
 	"@fairchild/folio/format",
+	"@fairchild/folio/styles.css",
 	"@fairchild/folio/theme",
 	"@fairchild/folio/testing",
 ]);
@@ -100,6 +101,7 @@ describe("Folio package boundary", () => {
 				import: "./src/theme-entry.ts",
 				default: "./src/theme-entry.ts",
 			},
+			"./styles.css": "./src/styles.css",
 			"./testing": {
 				types: "./src/testing-entry.ts",
 				import: "./src/testing-entry.ts",

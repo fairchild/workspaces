@@ -57,5 +57,6 @@ describe("Folio port component integration", () => {
 
 		expect(html).toContain("Port-driven session");
 		expect(html).toContain("Hello from the host port");
+		expect(html).toMatch(/^<div data-folio-root="surface">/);
 	});
 });

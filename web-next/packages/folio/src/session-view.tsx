@@ -5,6 +5,7 @@
  */
 import { ActivityLine, type ActivityLineProps } from "./activity-line";
 import { ComposeField } from "./compose-field";
+import { FolioRoot } from "./folio-root";
 import { Message, MessageArticle } from "./message";
 import { SessionMasthead, type MastheadData } from "./session-masthead";
 import { StatusLine, type StatusLineData } from "./status-line";
@@ -161,7 +162,7 @@ export function SessionView({
 		!!session.masthead.pullRequestAction ||
 		!!session.masthead.pullRequestError;
 	return (
-		<>
+		<FolioRoot>
 			<SessionMasthead
 				session={session.masthead}
 				onTitleChange={actions?.changeTitle}
@@ -261,6 +262,6 @@ export function SessionView({
 				/>
 				<StatusLine status={session.statusLine} onModelChange={actions?.changeModel} />
 			</footer>
-		</>
+		</FolioRoot>
 	);
 }

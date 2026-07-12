@@ -26,6 +26,7 @@
 			"import": "./src/theme-entry.ts",
 			"default": "./src/theme-entry.ts"
 		},
+		"./styles.css": "./src/styles.css",
 		"./testing": {
 			"types": "./src/testing-entry.ts",
 			"import": "./src/testing-entry.ts",
@@ -37,7 +38,9 @@
 		"!src/**/*.test.ts",
 		"!src/**/*.test.tsx"
 	],
-	"sideEffects": false,
+	"sideEffects": [
+		"./src/styles.css"
+	],
 	"folioCompatibility": {
 		"next": ">=15.5.0 <16"
 	},

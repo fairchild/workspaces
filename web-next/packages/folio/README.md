@@ -17,7 +17,32 @@ Import only from the named entry point:
 
 ```tsx
 import { SessionView, type SessionViewData } from "@fairchild/folio";
+import "@fairchild/folio/styles.css";
 ```
+
+The stylesheet compiles utilities from Folio source only and scopes every
+selector to `data-folio-root`. `SessionView` supplies its own surface root;
+`FolioRoot` is available when composing lower-level exports. Multiple instances
+can coexist with host UI without resets or token values escaping the root.
+
+Hosts own font loading and may override the narrow `--folio-*` token seam on an
+ancestor or one instance. For example:
+
+```css
+:root {
+  --folio-font-serif: var(--my-prose-font), Georgia, serif;
+  --folio-accent: #8f4f2a;
+  --folio-dark-accent: #dfa36c;
+}
+```
+
+Full session surfaces default to `--folio-min-height: 100dvh`; embedded hosts
+can set that token to `100%`, a pane height, or `auto` without changing package
+CSS.
+
+Folio currently has no external image or font asset paths: its small interface
+marks are text/inline CSS. The exported sheet therefore contains the complete
+visual dependency graph.
 
 Hosts integrate through `FolioConversationPort`, not through component-specific
 knowledge of their routes or runtimes. The port exposes a durable snapshot,
