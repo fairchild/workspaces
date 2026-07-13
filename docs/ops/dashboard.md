@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-07-13T11:04:04.351534Z`
+Last updated: `2026-07-13T11:05:02.924761Z`
 Source: `live`
 
 ## Funnel
