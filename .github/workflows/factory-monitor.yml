@@ -90,7 +90,18 @@ jobs:
           elif git show-ref --verify --quiet refs/remotes/origin/factory/ops-data; then
             git switch --track -c factory/ops-data origin/factory/ops-data
           else
-            git switch -c factory/ops-data
+            # Orphan: a permanent public data branch must not carry a stale
+            # snapshot of main's source tree — telemetry and a README only.
+            git switch --orphan factory/ops-data
+            cat > README.md <<'MD'
+          # factory/ops-data
+
+          Telemetry data branch written by the Factory Monitor workflow
+          (`.github/workflows/factory-monitor.yml`). Contains only
+          `docs/ops/` artifacts; it shares no history with `main`, which is
+          PR-only and cannot receive telemetry commits directly.
+          MD
+            git add README.md
           fi
 
           git config user.name "github-actions[bot]"
@@ -149,7 +160,8 @@ jobs:
           git status --short docs/ops
           if [ -z "$(git status --porcelain -- docs/ops)" ]; then
             if [ "$OPS_BRANCH_EXISTS" = "false" ]; then
-              echo "No telemetry changes; creating factory/ops-data at the current seed commit."
+              echo "No telemetry changes; initializing factory/ops-data."
+              git commit --allow-empty -m "chore(factory): initialize ops-data branch"
               git push origin HEAD:factory/ops-data
             else
               echo "No telemetry changes; nothing to commit."
