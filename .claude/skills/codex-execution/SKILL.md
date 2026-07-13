@@ -1,6 +1,6 @@
 ---
 name: codex-execution
-description: Dispatch codex CLI (gpt-5.6 xhigh) as the implementing agent for a well-specified issue — codex commits locally in a dedicated worktree, the orchestrator reviews, gates, and ships. Use when delegating implementation work to codex ("dispatch to codex", "codex implements"), especially when Claude subagent capacity is constrained. Complements codex-review-loop (codex as reviewer).
+description: Dispatch codex CLI (gpt-5.6-sol xhigh) as the implementing agent for a well-specified issue — codex commits locally in a dedicated worktree, the orchestrator reviews, gates, and ships. Use when delegating implementation work to codex ("dispatch to codex", "codex implements"), especially when Claude subagent capacity is constrained. Complements codex-review-loop (codex as reviewer).
 ---
 
 # Codex as Execution Agent
@@ -19,7 +19,7 @@ git -C <repo> fetch origin main   # ALWAYS — a stale origin/main base costs a
                                   # surprise rebase later (bit twice in W6)
 git -C <repo> worktree add -b codex/<slug> <worktree-path> origin/main
 codex exec --cd <worktree-path> \
-  -c model='"gpt-5.6"' -c model_reasoning_effort='"xhigh"' \
+  -c model='"gpt-5.6-sol"' -c model_reasoning_effort='"xhigh"' \
   --dangerously-bypass-approvals-and-sandbox \
   "$(cat brief.md)" </dev/null
 ```
@@ -64,7 +64,7 @@ non-negotiables:
 ## Orchestrator gating (after codex returns)
 
 1. Read `CODEX_REPORT.md` + the full diff; react with attributed commits
-   (`In response to my (…) review of the codex (gpt-5.6, xhigh) implementation`).
+   (`In response to my (…) review of the codex (gpt-5.6-sol, xhigh) implementation`).
    **Stage explicit paths, never `git add -A`** — a sweep in a worktree
    commits the untracked report (now also gitignored, but the habit matters).
 2. Rebase onto current `origin/main`; **clean stale build state before

@@ -4,7 +4,7 @@ Directed prompts produce bugs; "review this" produces checklists. Pick the patte
 
 ## Mechanics
 
-- `codex exec -c model="gpt-5.6" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>"`
+- `codex exec -c model="gpt-5.6-sol" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>"`
   — tell the prompt which diff to read (`git diff main...HEAD`, `git show HEAD`); plain `exec`
   doesn't infer it. (`codex exec review --base main` exists but cannot combine with a custom prompt.)
 - 8–12 min typical at xhigh; set Bash timeout ≥ 600s. On timeout the session survives:

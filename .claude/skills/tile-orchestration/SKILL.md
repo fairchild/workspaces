@@ -80,7 +80,7 @@ gitignored):
 2. Write `.agents/inbox/tile-start`:
    ```bash
    echo "[worker-<issue>] started $(date)" | tee .agents/inbox/worker.log
-   codex exec --cd . -c model='"gpt-5.6"' -c model_reasoning_effort='"high"' \
+   codex exec --cd . -c model='"gpt-5.6-sol"' -c model_reasoning_effort='"high"' \
      --dangerously-bypass-approvals-and-sandbox \
      "$(cat .agents/inbox/brief-<issue>.md)" </dev/null 2>&1 | tee -a .agents/inbox/worker.log
    echo "[worker-<issue>] finished $(date)" | tee -a .agents/inbox/worker.log
