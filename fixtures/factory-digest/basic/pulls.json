@@ -1,0 +1,42 @@
+[
+  {
+    "number": 201,
+    "title": "Ready to land",
+    "url": "https://example.test/pulls/201",
+    "state": "OPEN",
+    "isDraft": false,
+    "createdAt": "2026-07-10T13:30:00Z",
+    "updatedAt": "2026-07-12T11:00:00Z",
+    "closingIssuesReferences": [{"number": 101}]
+  },
+  {
+    "number": 202,
+    "title": "Stalled review",
+    "url": "https://example.test/pulls/202",
+    "state": "OPEN",
+    "isDraft": false,
+    "createdAt": "2026-07-02T13:30:00Z",
+    "updatedAt": "2026-07-08T13:29:59Z",
+    "closingIssuesReferences": [{"number": 105}]
+  },
+  {
+    "number": 203,
+    "title": "Ordinary review",
+    "url": "https://example.test/pulls/203",
+    "state": "OPEN",
+    "isDraft": false,
+    "createdAt": "2026-07-07T13:30:00Z",
+    "updatedAt": "2026-07-12T10:00:00Z",
+    "closingIssuesReferences": []
+  },
+  {
+    "number": 204,
+    "title": "Draft work",
+    "url": "https://example.test/pulls/204",
+    "state": "OPEN",
+    "isDraft": true,
+    "createdAt": "2026-07-01T13:30:00Z",
+    "updatedAt": "2026-07-12T10:00:00Z",
+    "closingIssuesReferences": []
+  }
+]
