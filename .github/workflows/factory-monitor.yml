@@ -16,8 +16,9 @@ on:
 permissions:
   actions: read
   contents: write
-  discussions: write
-  issues: read
+  # ops-report.py still reads legacy discussion telemetry.
+  discussions: read
+  issues: write
   pull-requests: read
 
 concurrency:
@@ -178,7 +179,6 @@ jobs:
         env:
           DRY_RUN: ${{ inputs.dry_run || false }}
           GH_TOKEN: ${{ github.token }}
-          DIGEST_TOKEN: ${{ secrets.PETER_DISCUSSION_TOKEN || github.token }}
         run: |
           set -euo pipefail
           ARGS=(--summary "$GITHUB_WORKSPACE/ops-data/docs/ops/latest-summary.json")
