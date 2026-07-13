@@ -13,6 +13,11 @@ on:
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
       - "scripts/tests/test_carl_community.py"
+      - "scripts/close-v1-discussions.py"
+      - "scripts/tests/test_close_v1_discussions.py"
+      - "fixtures/close-v1-discussions/**"
+      - ".github/workflows/cd-fail-notify.js"
+      - ".github/workflows/cd-fail-notify.test.js"
   pull_request:
     branches: [main]
     paths:
@@ -25,6 +30,11 @@ on:
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
       - "scripts/tests/test_carl_community.py"
+      - "scripts/close-v1-discussions.py"
+      - "scripts/tests/test_close_v1_discussions.py"
+      - "fixtures/close-v1-discussions/**"
+      - ".github/workflows/cd-fail-notify.js"
+      - ".github/workflows/cd-fail-notify.test.js"
   workflow_dispatch:
 
 permissions:
@@ -64,3 +74,9 @@ jobs:
 
       - name: Run Carl community tests
         run: uv run --script scripts/tests/test_carl_community.py
+
+      - name: Run v1 discussion cleanup tests
+        run: uv run --script scripts/tests/test_close_v1_discussions.py
+
+      - name: Run CD failure notifier tests
+        run: node --test .github/workflows/cd-fail-notify.test.js

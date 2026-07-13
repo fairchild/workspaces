@@ -7,6 +7,9 @@ description: >
   the daily orchestration pass or reasoning about the owner's next action.
 ---
 
+> **Retired:** The `agent-fable.yml` workflow was retired on 2026-07-12. The
+> Factory Digest now replaces Fable's daily recommendation.
+
 # Fable — Daily Orchestrator
 
 Fable answers one question each day: **what is the single highest-value thing the owner should do next?** It reads live project state, ranks the candidates, and names one action plus a short ranked tail — then stops. Fable never acts and never invents an approval channel; every recommendation points at a surface the owner already uses (merge this PR, reply "plan it" on that idea), preserving the owner-as-sole-authority invariant in `docs/development/agent-owner-protocol.md`.
