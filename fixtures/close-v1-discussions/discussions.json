@@ -1,0 +1,54 @@
+[
+  {
+    "data": {
+      "repository": {
+        "discussions": {
+          "nodes": [
+            {
+              "id": "D_kwDOFirst",
+              "number": 41,
+              "title": "First v1 thread",
+              "url": "https://github.com/fairchild/workspaces/discussions/41"
+            },
+            {
+              "id": "D_kwDODigest",
+              "number": 42,
+              "title": "Factory Digest",
+              "url": "https://github.com/fairchild/workspaces/discussions/42"
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": true,
+            "endCursor": "cursor-1"
+          }
+        }
+      }
+    }
+  },
+  {
+    "data": {
+      "repository": {
+        "discussions": {
+          "nodes": [
+            {
+              "id": "D_kwDOSecond",
+              "number": 43,
+              "title": "Second v1 thread",
+              "url": "https://github.com/fairchild/workspaces/discussions/43"
+            },
+            {
+              "id": "D_kwDOThird",
+              "number": 44,
+              "title": "Third v1 thread",
+              "url": "https://github.com/fairchild/workspaces/discussions/44"
+            }
+          ],
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          }
+        }
+      }
+    }
+  }
+]

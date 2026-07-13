@@ -22,9 +22,6 @@ export default async function failNotify({
 }) {
 	const validator = env.VALIDATOR;
 	const marker = `<!-- cd-failure:${validator} -->`;
-	const dispatchMarker = `<!-- april-dispatch -->`;
-	const escalateLabel = "needs-human";
-	const maxAttempts = 2;
 	const findings = fs.existsSync("findings.md")
 		? fs.readFileSync("findings.md", "utf8")
 		: "_No findings file produced._";
@@ -39,36 +36,6 @@ export default async function failNotify({
 	});
 	const existing = found.data.items[0];
 
-	let attempts = 0;
-	if (existing) {
-		const comments = await github.rest.issues.listComments({
-			owner: context.repo.owner,
-			repo: context.repo.repo,
-			issue_number: existing.number,
-			per_page: 100,
-		});
-		attempts = comments.data.filter(
-			(c) => c.body && c.body.includes(dispatchMarker),
-		).length;
-	}
-	const shouldDispatch = attempts < maxAttempts;
-
-	const statusSection = shouldDispatch
-		? [
-				"",
-				"## Auto-fix",
-				`April will be dispatched to investigate (attempt ${attempts + 1}/${maxAttempts}).`,
-				`Reproduce locally: \`${env.REPRO_HINT}\``,
-				"",
-			]
-		: [
-				"",
-				"## Auto-fix exhausted — needs human",
-				`April attempted ${attempts} fix(es) without success. Triage required.`,
-				"/cc @fairchild",
-				"",
-			];
-
 	const body = [
 		marker,
 		`**Commit:** ${context.sha}`,
@@ -77,7 +44,11 @@ export default async function failNotify({
 		"",
 		"## Findings",
 		findings,
-		...statusSection,
+		"",
+		"## Factory triage",
+		"This CD failure entered the Factory through its issue triage inlet.",
+		`Reproduce locally: \`${env.REPRO_HINT}\``,
+		"",
 		"## Plan to fix (if root cause is obvious)",
 		"- [ ] Root cause: <one sentence>",
 		"- [ ] Reproduction: <local command>",
@@ -90,7 +61,8 @@ export default async function failNotify({
 		"- [ ] Decision point: <what result tells us to do what>",
 	].join("\n");
 
-	let issueNumber;
+	// CD failures enter the Factory as issues, its triage inlet. Auto-dispatching
+	// a retired persona workflow was v1 behavior and stays removed.
 	if (existing) {
 		if (existing.state === "closed") {
 			await github.rest.issues.update({
@@ -100,89 +72,23 @@ export default async function failNotify({
 				state: "open",
 			});
 		}
-		if (!shouldDispatch) {
-			await github.rest.issues.addLabels({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				issue_number: existing.number,
-				labels: [escalateLabel],
-			});
-		}
 		await github.rest.issues.createComment({
 			owner: context.repo.owner,
 			repo: context.repo.repo,
 			issue_number: existing.number,
 			body,
 		});
-		issueNumber = existing.number;
-		core.notice(
-			`Updated rolling issue #${issueNumber} (attempts=${attempts}, dispatch=${shouldDispatch})`,
-		);
-	} else {
-		const created = await github.rest.issues.create({
-			owner: context.repo.owner,
-			repo: context.repo.repo,
-			title,
-			body,
-			labels: ["cd-failure", `cd-failure:${validator}`, "auto-opened"],
-		});
-		issueNumber = created.data.number;
-		core.notice(`Created rolling issue #${issueNumber}`);
+		core.notice(`Updated rolling issue #${existing.number}`);
+		return { issueNumber: existing.number };
 	}
 
-	if (shouldDispatch) {
-		const directive = [
-			`@${context.repo.owner} mentioned you in issue #${issueNumber}`,
-			"",
-			"---",
-			`CD ${validator} validation failed on \`${context.sha}\`.`,
-			"",
-			`- Commit: ${context.sha}`,
-			`- Preview URL: ${env.PREVIEW_URL || "(not available)"}`,
-			`- Workflow run: ${runUrl}`,
-			`- Reproduce: \`${env.REPRO_HINT}\``,
-			"",
-			`Reproduce locally, root-cause the failure, open a fix PR, and link it back to issue #${issueNumber}.`,
-			"---",
-			"",
-		].join("\n");
-		const ref = context.ref.replace(/^refs\/heads\//, "");
-		try {
-			await github.rest.actions.createWorkflowDispatch({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				workflow_id: "agent-april.yml",
-				ref,
-				inputs: { message: directive },
-			});
-			await github.rest.issues.createComment({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				issue_number: issueNumber,
-				body: [
-					dispatchMarker,
-					`🤖 Dispatched **April** (attempt ${attempts + 1}/${maxAttempts}) on \`${ref}\`.`,
-					"",
-					"<details><summary>Directive</summary>",
-					"",
-					"```",
-					directive,
-					"```",
-					"",
-					"</details>",
-				].join("\n"),
-			});
-			core.notice(`Dispatched April (attempt ${attempts + 1})`);
-		} catch (err) {
-			core.warning(`Failed to dispatch April: ${err.message}`);
-			await github.rest.issues.createComment({
-				owner: context.repo.owner,
-				repo: context.repo.repo,
-				issue_number: issueNumber,
-				body: `⚠️ Tried to dispatch April but failed: \`${err.message}\`. /cc @fairchild`,
-			});
-		}
-	}
-
-	return { issueNumber, attempts, shouldDispatch };
+	const created = await github.rest.issues.create({
+		owner: context.repo.owner,
+		repo: context.repo.repo,
+		title,
+		body,
+		labels: ["cd-failure", `cd-failure:${validator}`, "auto-opened"],
+	});
+	core.notice(`Created rolling issue #${created.data.number}`);
+	return { issueNumber: created.data.number };
 }
