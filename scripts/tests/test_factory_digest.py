@@ -345,7 +345,7 @@ class FactoryDigestTests(unittest.TestCase):
                 "title": "Renamed by the owner",
                 "body": "intro\n<!-- factory-digest:v1 -->\nold digest",
                 "url": "https://example.test/discussions/99",
-                "state": "OPEN",
+                "closed": False,
                 "createdAt": "2026-07-01T00:00:00Z",
             }
         ]
@@ -388,7 +388,7 @@ class FactoryDigestTests(unittest.TestCase):
             "title": "Old title",
             "body": "<!-- factory-digest:v1 -->\n\nold",
             "url": "https://example.test/discussions/98",
-            "state": "CLOSED",
+            "closed": True,
             "createdAt": "2026-07-01T00:00:00Z",
         }
         operations: list[str] = []
@@ -465,7 +465,7 @@ class FactoryDigestTests(unittest.TestCase):
             "title": "Factory Digest",
             "body": "owner-authored discussion",
             "url": "https://example.test/discussions/90",
-            "state": "OPEN",
+            "closed": False,
             "createdAt": "2026-06-01T00:00:00Z",
         }
         discussions: list[dict[str, object]] = [unmarked]
@@ -481,7 +481,7 @@ class FactoryDigestTests(unittest.TestCase):
                     "title": "Factory Digest",
                     "body": variables["input"]["body"],
                     "url": "https://example.test/discussions/100",
-                    "state": "OPEN",
+                    "closed": False,
                     "createdAt": "2026-07-01T00:00:00Z",
                 }
                 discussions.append(discussion)
@@ -639,7 +639,7 @@ class FactoryDigestTests(unittest.TestCase):
                                             else "unmarked"
                                         ),
                                         "url": "https://example.test/discussions/1",
-                                        "state": "OPEN" if cursor is None else "CLOSED",
+                                        "closed": False if cursor is None else True,
                                         "createdAt": "2026-07-01T00:00:00Z",
                                     }
                                 ],
@@ -705,7 +705,7 @@ class FactoryDigestTests(unittest.TestCase):
         ]
         self.assertTrue(discussion_queries)
         self.assertIn("states: [OPEN, CLOSED]", discussion_queries[0])
-        self.assertEqual(inputs.discussions[1]["state"], "CLOSED")
+        self.assertTrue(inputs.discussions[1]["closed"])
         self.assertIn(factory_digest.DIGEST_MARKER, inputs.discussions[1]["body"])
         self.assertEqual(inputs.issues[0]["labels"], [{"name": "ready"}])
         self.assertEqual(inputs.pulls[0]["closingIssuesReferences"], [{"number": 10}])
