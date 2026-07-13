@@ -24,6 +24,13 @@ codex exec --cd <worktree-path> \
   "$(cat brief.md)" </dev/null
 ```
 
+**Model pin: `gpt-5.6-sol`.** Marketing names and dispatchable ids diverge —
+ChatGPT-account codex rejects bare `gpt-5.6` ("model is not supported when
+using Codex with a ChatGPT account"). On that error, don't guess ids: read the
+CLI's own configured default (`rg '^model' <codex home>/config.toml` — the
+runtime's config is the known-good id), dispatch with that, and update this
+pin in the same arc.
+
 **Foreground-synchronous, stdin closed.** A backgrounded codex hangs on
 "Reading additional input from stdin…" with zero output — this stalled three
 agents in one arc. Run it in the foreground of a background *shell* if you need
