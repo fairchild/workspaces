@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-07-13T07:12:29.978432Z`
+Last updated: `2026-07-13T07:21:36.660690Z`
 Source: `live`
 
 ## Funnel
@@ -22,15 +22,15 @@ Source: `live`
 
 | Metric | Value |
 |---|---:|
-| Completed runs | 495 |
-| Failure rate | 5.05% |
+| Completed runs | 494 |
+| Failure rate | 5.06% |
 | Rerun rate | 0.20% |
 
 Top failing workflows:
 - `CD` — 6 failure(s)
-- `Web Next CI` — 6 failure(s)
-- `Managed Reviewer Health` — 4 failure(s)
-- `PR Readiness` — 2 failure(s)
+- `Web Next CI` — 5 failure(s)
+- `PR Readiness` — 3 failure(s)
+- `Managed Reviewer Health` — 3 failure(s)
 - `Agent: Plat Ironwood` — 2 failure(s)
 
 ## Agent Health
