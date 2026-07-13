@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-07-13T07:21:36.660690Z`
+Last updated: `2026-07-13T07:22:35.568746Z`
 Source: `live`
 
 ## Funnel
@@ -22,8 +22,8 @@ Source: `live`
 
 | Metric | Value |
 |---|---:|
-| Completed runs | 494 |
-| Failure rate | 5.06% |
+| Completed runs | 495 |
+| Failure rate | 5.05% |
 | Rerun rate | 0.20% |
 
 Top failing workflows:
@@ -37,7 +37,7 @@ Top failing workflows:
 
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
-| Approved Mention Execution | 39 | 0 | 0.00% | 0 | 0.00% |
+| Approved Mention Execution | 38 | 0 | 0.00% | 0 | 0.00% |
 | April Clearwater | 2 | 2 | 100.00% | 0 | 0.00% |
 | Carl Community | 1 | 1 | 100.00% | 0 | 0.00% |
 | Fable Orchestrator | 1 | 0 | 0.00% | 0 | 0.00% |
