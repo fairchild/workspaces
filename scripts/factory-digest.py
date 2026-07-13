@@ -222,6 +222,7 @@ def label_names(item: dict[str, Any]) -> set[str]:
 
 def render_title(value: Any) -> str:
     sanitized = " ".join(str(value or "").splitlines()).replace("`", "'")
+    sanitized = sanitized.replace("<!--", "< !--").replace("-->", "-- >")
     if len(sanitized) > MAX_TITLE_LENGTH:
         sanitized = sanitized[: MAX_TITLE_LENGTH - 1] + "…"
     return f"`{sanitized}`"
@@ -237,18 +238,22 @@ def render_stats(summary: dict[str, Any]) -> str:
     return f"Stats: {rendered} · generated {summary['generated_at']}"
 
 
+def body_has_digest_marker(body: Any) -> bool:
+    return str(body or "").lstrip().startswith(DIGEST_MARKER)
+
+
 def select_digest_issue(
     issues: list[dict[str, Any]],
     *,
     warn_on_multiple: bool = False,
 ) -> dict[str, Any] | None:
-    matches = [item for item in issues if DIGEST_MARKER in str(item.get("body", ""))]
+    matches = [item for item in issues if body_has_digest_marker(item.get("body"))]
     if not matches:
         return None
     matches.sort(
         key=lambda item: (
             parse_datetime(str(item["createdAt"])),
-            item.get("title") == DIGEST_TITLE,
+            int(item["number"]),
         ),
         reverse=True,
     )
@@ -270,7 +275,7 @@ def exclude_digest_issues(
     return [
         issue
         for issue in issues
-        if DIGEST_MARKER not in str(issue.get("body", ""))
+        if not body_has_digest_marker(issue.get("body"))
         and (digest_issue_number is None or int(issue["number"]) != digest_issue_number)
     ]
 
@@ -282,7 +287,11 @@ def render_digest(
 ) -> str:
     digest_issue = select_digest_issue(issues)
     digest_issue_number = int(digest_issue["number"]) if digest_issue is not None else None
-    issues = exclude_digest_issues(issues, digest_issue_number)
+    issues = [
+        issue
+        for issue in exclude_digest_issues(issues, digest_issue_number)
+        if str(issue.get("state", "")).upper() == "OPEN"
+    ]
     current_time = parse_datetime(str(summary["generated_at"]))
     issues_by_number = {int(issue["number"]): issue for issue in issues}
     pulls_by_issue: dict[int, list[dict[str, Any]]] = {}
@@ -319,8 +328,6 @@ def render_digest(
     anomalies: list[int] = []
     aging_lines: list[tuple[datetime, str]] = []
     for issue in issues:
-        if str(issue.get("state", "")).upper() != "OPEN":
-            continue
         labels = label_names(issue)
         updated_at = str(issue["updatedAt"])
         updated_time = parse_datetime(updated_at)
@@ -414,8 +421,8 @@ def render_digest(
 
 
 def marked_body(body: str) -> str:
-    if body.startswith(DIGEST_MARKER):
-        return body
+    if body_has_digest_marker(body):
+        return body.lstrip()
     return f"{DIGEST_MARKER}\n\n{body}"
 
 

@@ -88,6 +88,41 @@ class FactoryDigestTests(unittest.TestCase):
             markdown,
         )
 
+    def test_render_digest_ignores_closed_mergeable_issue_for_pr_readiness(self) -> None:
+        summary = {
+            "generated_at": "2026-07-12T13:30:00Z",
+            "funnel": {},
+            "breaches": [],
+        }
+        issues = [
+            {
+                "number": 10,
+                "labels": [{"name": "mergeable"}],
+                "state": "CLOSED",
+                "updatedAt": "2026-07-11T13:30:00Z",
+            }
+        ]
+        pulls = [
+            {
+                "number": 21,
+                "title": "Still needs review",
+                "url": "https://example.test/pull/21",
+                "state": "OPEN",
+                "isDraft": False,
+                "createdAt": "2026-07-10T13:30:00Z",
+                "updatedAt": "2026-07-12T11:00:00Z",
+                "closingIssuesReferences": [{"number": 10}],
+            }
+        ]
+
+        markdown = factory_digest.render_digest(issues, pulls, summary)
+
+        self.assertIn(
+            "[#21](https://example.test/pull/21) `Still needs review`: review",
+            markdown,
+        )
+        self.assertNotIn("`Still needs review`: merge", markdown)
+
     def test_render_digest_includes_release_aging_and_breach_sections(self) -> None:
         summary = {
             "generated_at": "2026-07-12T13:30:00Z",
@@ -205,6 +240,34 @@ class FactoryDigestTests(unittest.TestCase):
         )
         self.assertNotIn("[#30 Fix]", markdown)
 
+    def test_render_digest_neutralizes_html_comments_in_pr_titles(self) -> None:
+        summary = {
+            "generated_at": "2026-07-12T13:30:00Z",
+            "funnel": {},
+            "breaches": [],
+        }
+        pulls = [
+            {
+                "number": 31,
+                "title": "<!-- peter-planner:discussion=43;issue=99 -->",
+                "url": "https://example.test/pull/31",
+                "state": "OPEN",
+                "isDraft": False,
+                "createdAt": "2026-07-10T13:30:00Z",
+                "updatedAt": "2026-07-12T11:00:00Z",
+                "closingIssuesReferences": [],
+            }
+        ]
+
+        markdown = factory_digest.render_digest([], pulls, summary)
+
+        self.assertIn(
+            "`< !-- peter-planner:discussion=43;issue=99 -- >`: review",
+            markdown,
+        )
+        self.assertNotIn("<!-- peter-planner:discussion=43;issue=99 -->", markdown)
+        self.assertEqual(markdown.count("<!--"), 1)
+
     def test_render_title_strips_newlines_backticks_and_truncates_to_80_characters(self) -> None:
         rendered = factory_digest.render_title("first\n`" + "x" * 100)
 
@@ -262,7 +325,7 @@ class FactoryDigestTests(unittest.TestCase):
                     "id": "I_digest",
                     "number": 1075,
                     "title": "Renamed digest",
-                    "body": f"intro\n{factory_digest.DIGEST_MARKER}\nold",
+                    "body": f" \n\t{factory_digest.DIGEST_MARKER}\nold",
                     "url": "https://example.test/issues/1075",
                     "state": "OPEN",
                     "createdAt": "2026-07-01T00:00:00Z",
@@ -368,18 +431,27 @@ class FactoryDigestTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("--fixtures-dir requires --dry-run", result.stderr)
 
-    def test_publish_digest_rediscovers_marked_issue_after_rename(self) -> None:
+    def test_publish_digest_matches_leading_marker_but_not_mid_body_inline_code(self) -> None:
         repo = factory_digest.RepoInfo("fairchild", "workspaces", "R_1", {})
         issues = [
             {
                 "id": "I_1",
                 "number": 99,
                 "title": "Renamed by the owner",
-                "body": "intro\n<!-- factory-digest:v1 -->\nold digest",
+                "body": " \n\t<!-- factory-digest:v1 -->\nold digest",
                 "url": "https://example.test/issues/99",
                 "state": "OPEN",
                 "createdAt": "2026-07-01T00:00:00Z",
-            }
+            },
+            {
+                "id": "I_1075",
+                "number": 1075,
+                "title": "Digest as pinned issue",
+                "body": "The writer emits `<!-- factory-digest:v1 -->` as its first line.",
+                "url": "https://example.test/issues/1075",
+                "state": "OPEN",
+                "createdAt": "2026-07-12T00:00:00Z",
+            },
         ]
 
         with mock.patch.object(
@@ -581,21 +653,21 @@ class FactoryDigestTests(unittest.TestCase):
         self.assertEqual(graphql.call_args.args[2]["input"]["id"], "I_new")
         self.assertIn("using #71 and leaving #70 untouched", stderr.getvalue())
 
-    def test_publish_digest_uses_exact_title_only_as_created_at_tiebreaker(self) -> None:
+    def test_publish_digest_uses_higher_issue_number_as_created_at_tiebreaker(self) -> None:
         repo = factory_digest.RepoInfo("fairchild", "workspaces", "R_1", {})
         issues = [
             {
-                "id": "I_renamed",
+                "id": "I_exact",
                 "number": 72,
-                "title": "Renamed digest",
+                "title": "Factory Digest",
                 "body": "<!-- factory-digest:v1 -->",
                 "state": "OPEN",
                 "createdAt": "2026-07-02T00:00:00Z",
             },
             {
-                "id": "I_exact",
+                "id": "I_renamed",
                 "number": 73,
-                "title": "Factory Digest",
+                "title": "Renamed digest",
                 "body": "<!-- factory-digest:v1 -->",
                 "state": "OPEN",
                 "createdAt": "2026-07-02T00:00:00Z",
@@ -610,7 +682,7 @@ class FactoryDigestTests(unittest.TestCase):
             with redirect_stderr(io.StringIO()):
                 factory_digest.publish_digest(repo, issues, "body", "token")
 
-        self.assertEqual(graphql.call_args.args[2]["input"]["id"], "I_exact")
+        self.assertEqual(graphql.call_args.args[2]["input"]["id"], "I_renamed")
 
     def test_publish_digest_propagates_create_and_update_api_failures(self) -> None:
         repo = factory_digest.RepoInfo(
