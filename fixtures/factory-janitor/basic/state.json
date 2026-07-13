@@ -47,7 +47,13 @@
       ],
       "assignees": [],
       "comments": [],
-      "timelineItems": []
+      "timelineItems": [
+        {
+          "__typename": "LabeledEvent",
+          "createdAt": "2026-07-12T10:00:00Z",
+          "label": {"name": "ready"}
+        }
+      ]
     },
     {
       "id": "I_103",
@@ -62,7 +68,13 @@
       ],
       "assignees": [],
       "comments": [],
-      "timelineItems": []
+      "timelineItems": [
+        {
+          "__typename": "LabeledEvent",
+          "createdAt": "2026-07-12T10:00:00Z",
+          "label": {"name": "ready"}
+        }
+      ]
     },
     {
       "id": "I_104",
@@ -75,7 +87,10 @@
         {"id": "L_task", "name": "task"},
         {"id": "L_claimed", "name": "claimed"}
       ],
-      "assignees": [{"id": "U_april", "login": "april-clearwater[bot]"}],
+      "assignees": [
+        {"id": "U_april", "login": "april-clearwater[bot]"},
+        {"id": "U_human", "login": "fairchild"}
+      ],
       "comments": [
         {
           "body": "Claimed.\n\n<!-- contributor:issue=104;status=claimed;agent=april;branch=agent/april-104 -->",
@@ -84,7 +99,13 @@
           "author": {"login": "april-clearwater[bot]"}
         }
       ],
-      "timelineItems": []
+      "timelineItems": [
+        {
+          "__typename": "LabeledEvent",
+          "createdAt": "2026-07-11T23:00:00Z",
+          "label": {"name": "ready"}
+        }
+      ]
     },
     {
       "id": "I_105",
@@ -141,6 +162,7 @@
       "body": "",
       "state": "OPEN",
       "labels": [
+        {"id": "L_agent", "name": "agent"},
         {"id": "L_human", "name": "human"},
         {"id": "L_task", "name": "task"},
         {"id": "L_ready", "name": "ready"},
@@ -204,7 +226,7 @@
     {
       "id": "I_112",
       "number": 112,
-      "title": "Recent assignee event wins",
+      "title": "Claim label wins over comment and assignment",
       "body": "",
       "state": "OPEN",
       "labels": [
@@ -213,7 +235,14 @@
         {"id": "L_claimed", "name": "claimed"}
       ],
       "assignees": [{"id": "U_plat", "login": "plat-ironwood[bot]"}],
-      "comments": [],
+      "comments": [
+        {
+          "body": "Claimed.\n\n<!-- contributor:issue=112;status=claimed;agent=plat;branch=agent/plat-112 -->",
+          "createdAt": "2026-07-13T08:00:00Z",
+          "authorAssociation": "NONE",
+          "author": {"login": "plat-ironwood[bot]"}
+        }
+      ],
       "timelineItems": [
         {
           "__typename": "LabeledEvent",
@@ -273,14 +302,87 @@
       "assignees": [],
       "comments": [],
       "timelineItems": []
+    },
+    {
+      "id": "I_116",
+      "number": 116,
+      "title": "Ignore draft and raw-body pull requests",
+      "body": "",
+      "state": "OPEN",
+      "labels": [
+        {"id": "L_agent", "name": "agent"},
+        {"id": "L_task", "name": "task"},
+        {"id": "L_ready", "name": "ready"}
+      ],
+      "assignees": [],
+      "comments": [],
+      "timelineItems": []
+    },
+    {
+      "id": "I_117",
+      "number": 117,
+      "title": "Demote review without a known pull request",
+      "body": "",
+      "state": "OPEN",
+      "labels": [
+        {"id": "L_agent", "name": "agent"},
+        {"id": "L_task", "name": "task"},
+        {"id": "L_review", "name": "review"}
+      ],
+      "assignees": [],
+      "comments": [],
+      "timelineItems": []
+    },
+    {
+      "id": "I_118",
+      "number": 118,
+      "title": "Demote closed pull request without prior release",
+      "body": "",
+      "state": "OPEN",
+      "labels": [
+        {"id": "L_agent", "name": "agent"},
+        {"id": "L_task", "name": "task"},
+        {"id": "L_review", "name": "review"}
+      ],
+      "assignees": [],
+      "comments": [],
+      "timelineItems": []
+    },
+    {
+      "id": "I_119",
+      "number": 119,
+      "title": "Malformed chosen claim timestamp",
+      "body": "",
+      "state": "OPEN",
+      "labels": [
+        {"id": "L_agent", "name": "agent"},
+        {"id": "L_task", "name": "task"},
+        {"id": "L_claimed", "name": "claimed"}
+      ],
+      "assignees": [{"id": "U_plat", "login": "plat-ironwood[bot]"}],
+      "comments": [
+        {
+          "body": "Claimed.\n\n<!-- contributor:issue=119;status=claimed;agent=plat;branch=agent/plat-119 -->",
+          "createdAt": "2026-07-10T08:00:00Z",
+          "authorAssociation": "NONE",
+          "author": {"login": "plat-ironwood[bot]"}
+        }
+      ],
+      "timelineItems": [
+        {
+          "__typename": "LabeledEvent",
+          "createdAt": "not-a-timestamp",
+          "label": {"name": "claimed"}
+        }
+      ]
     }
   ],
   "pulls": [
     {
       "number": 201,
-      "body": "Implementation",
       "url": "https://example.test/pulls/201",
       "state": "OPEN",
+      "isDraft": false,
       "updatedAt": "2026-07-13T10:00:00Z",
       "closedAt": null,
       "mergedAt": null,
@@ -288,19 +390,29 @@
     },
     {
       "number": 202,
-      "body": "Attempt that did not land.\n\nCloses #103",
       "url": "https://example.test/pulls/202",
       "state": "CLOSED",
+      "isDraft": false,
       "updatedAt": "2026-07-13T09:00:00Z",
       "closedAt": "2026-07-13T09:00:00Z",
       "mergedAt": null,
-      "closingIssuesReferences": []
+      "closingIssuesReferences": [{"number": 103}]
+    },
+    {
+      "number": 205,
+      "url": "https://example.test/pulls/205",
+      "state": "OPEN",
+      "isDraft": false,
+      "updatedAt": "2026-07-13T09:30:00Z",
+      "closedAt": null,
+      "mergedAt": null,
+      "closingIssuesReferences": [{"number": 105}]
     },
     {
       "number": 210,
-      "body": "First contender",
       "url": "https://example.test/pulls/210",
       "state": "OPEN",
+      "isDraft": false,
       "updatedAt": "2026-07-13T11:00:00Z",
       "closedAt": null,
       "mergedAt": null,
@@ -308,23 +420,54 @@
     },
     {
       "number": 211,
-      "body": "Second contender\n\nFixes #110",
       "url": "https://example.test/pulls/211",
       "state": "OPEN",
+      "isDraft": false,
       "updatedAt": "2026-07-13T12:00:00Z",
+      "closedAt": null,
+      "mergedAt": null,
+      "closingIssuesReferences": [{"number": 110}]
+    },
+    {
+      "number": 215,
+      "url": "https://example.test/pulls/215",
+      "state": "OPEN",
+      "isDraft": false,
+      "updatedAt": "2026-07-13T12:30:00Z",
+      "closedAt": null,
+      "mergedAt": null,
+      "closingIssuesReferences": [{"number": 115}]
+    },
+    {
+      "number": 216,
+      "url": "https://example.test/pulls/216",
+      "state": "OPEN",
+      "isDraft": true,
+      "updatedAt": "2026-07-13T12:45:00Z",
+      "closedAt": null,
+      "mergedAt": null,
+      "closingIssuesReferences": [{"number": 116}]
+    },
+    {
+      "number": 217,
+      "body": "Closes #116",
+      "url": "https://example.test/pulls/217",
+      "state": "OPEN",
+      "isDraft": false,
+      "updatedAt": "2026-07-13T12:50:00Z",
       "closedAt": null,
       "mergedAt": null,
       "closingIssuesReferences": []
     },
     {
-      "number": 215,
-      "body": "Closes #115",
-      "url": "https://example.test/pulls/215",
-      "state": "OPEN",
-      "updatedAt": "2026-07-13T12:30:00Z",
-      "closedAt": null,
+      "number": 218,
+      "url": "https://example.test/pulls/218",
+      "state": "CLOSED",
+      "isDraft": false,
+      "updatedAt": "2026-07-13T13:00:00Z",
+      "closedAt": "2026-07-13T13:00:00Z",
       "mergedAt": null,
-      "closingIssuesReferences": []
+      "closingIssuesReferences": [{"number": 118}]
     }
   ]
 }

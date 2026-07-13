@@ -16,6 +16,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -27,15 +28,15 @@ from typing import Any
 FIXTURE_REQUIRED_FILES = ("state.json",)
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 STALE_CLAIM_HOURS = 24
+MUTATION_ATTEMPTS = 3
+MUTATION_BACKOFF_SECONDS = 1.0
 MANAGED_STATES = frozenset({"ready", "claimed", "review"})
 STATE_PRIORITY = ("review", "claimed", "ready")
 DIGEST_MARKER = "<!-- " + "-".join(("factory", "digest:v1")) + " -->"
+JANITOR_MARKER_PREFIX = "factory-janitor"
 CLAIM_MARKER_RE = re.compile(
     r"<!-- contributor:issue=(?P<number>\d+);status=(?P<status>[a-z_]+);"
     r"agent=(?P<agent>[a-z0-9-]+);branch=(?P<branch>[^>\n]+) -->"
-)
-CLOSING_REFERENCE_RE = re.compile(
-    r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
 TRUSTED_AUTHOR_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
 TRUSTED_AUTOMATION_LOGINS = {
@@ -67,14 +68,13 @@ query FactoryJanitorIssues($owner: String!, $name: String!, $after: String) {
             author { login }
           }
         }
-        timelineItems(last: 100, itemTypes: [LABELED_EVENT, ASSIGNED_EVENT]) {
+        timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
           nodes {
             __typename
             ... on LabeledEvent {
               createdAt
               label { name }
             }
-            ... on AssignedEvent { createdAt }
           }
         }
       }
@@ -95,7 +95,7 @@ query FactoryJanitorPulls($owner: String!, $name: String!, $after: String) {
     ) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number body url state updatedAt closedAt mergedAt
+        number url state isDraft updatedAt closedAt mergedAt
         closingIssuesReferences(first: 50) { nodes { number } }
       }
     }
@@ -106,6 +106,14 @@ query FactoryJanitorPulls($owner: String!, $name: String!, $after: String) {
 
 class FactoryJanitorError(RuntimeError):
     """Raised when reconciliation cannot be planned or applied safely."""
+
+
+class GitHubRequestError(FactoryJanitorError):
+    """A classified GitHub failure, optionally safe to retry."""
+
+    def __init__(self, message: str, *, transient: bool = False):
+        super().__init__(message)
+        self.transient = transient
 
 
 @dataclass(frozen=True)
@@ -129,11 +137,19 @@ class Transition:
     issue_number: int
     title: str
     current_states: tuple[str, ...]
-    desired_state: str
+    desired_state: str | None
     reason: str
     current_label_ids: dict[str, str]
     assignees: tuple[tuple[str, str], ...] = ()
+    preserved_assignees: tuple[str, ...] = ()
     comment: str | None = None
+
+
+@dataclass(frozen=True)
+class MutationOperation:
+    name: str
+    query: str
+    variables: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -166,20 +182,46 @@ def graphql(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", errors="replace")
-        raise FactoryJanitorError(
-            f"GitHub GraphQL HTTP {error.code}: {detail}"
+        headers = error.headers or {}
+        rate_limited = error.code == 429 or (
+            error.code == 403
+            and (
+                headers.get("X-RateLimit-Remaining") == "0"
+                or "rate limit" in detail.casefold()
+            )
+        )
+        raise GitHubRequestError(
+            f"GitHub GraphQL HTTP {error.code}: {detail}",
+            transient=rate_limited or 500 <= error.code < 600,
         ) from error
     except urllib.error.URLError as error:
-        raise FactoryJanitorError(
-            f"GitHub GraphQL request failed: {error.reason}"
+        raise GitHubRequestError(
+            f"GitHub GraphQL request failed: {error.reason}", transient=True
         ) from error
     except json.JSONDecodeError as error:
-        raise FactoryJanitorError("GitHub GraphQL returned invalid JSON") from error
+        raise GitHubRequestError(
+            "GitHub GraphQL returned invalid JSON", transient=True
+        ) from error
     if payload.get("errors"):
         messages = "; ".join(
             str(item.get("message", item)) for item in payload["errors"]
         )
-        raise FactoryJanitorError(f"GitHub GraphQL error: {messages}")
+        classifications = " ".join(
+            str(item.get("type", "")) for item in payload["errors"]
+        ).casefold()
+        transient = "rate_limited" in classifications or any(
+            phrase in messages.casefold()
+            for phrase in (
+                "rate limit",
+                "service unavailable",
+                "something went wrong",
+                "timed out",
+                "timeout",
+            )
+        )
+        raise GitHubRequestError(
+            f"GitHub GraphQL error: {messages}", transient=transient
+        )
     return payload
 
 
@@ -355,7 +397,11 @@ def is_managed_issue(issue: dict[str, Any]) -> bool:
     labels = label_names(issue)
     if str(issue.get("state", "")).upper() != "OPEN":
         return False
-    if "factory" in labels or body_has_digest_marker(issue.get("body")):
+    if (
+        "human" in labels
+        or "factory" in labels
+        or body_has_digest_marker(issue.get("body"))
+    ):
         return False
     return {"agent", "task"}.issubset(labels)
 
@@ -372,60 +418,61 @@ def trusted_comment_author(comment: dict[str, Any]) -> bool:
 
 def claim_timestamp(issue: dict[str, Any]) -> tuple[datetime, str] | None:
     issue_number = int(issue["number"])
-    candidates: list[tuple[datetime, str]] = []
-    for comment in issue.get("comments", []) or []:
-        if not isinstance(comment, dict) or not trusted_comment_author(comment):
-            continue
-        match = CLAIM_MARKER_RE.search(str(comment.get("body", "")))
-        if match is None or int(match.group("number")) != issue_number:
-            continue
-        try:
-            candidates.append(
-                (parse_datetime(str(comment["createdAt"])), "claim comment")
-            )
-        except (FactoryJanitorError, KeyError):
-            continue
-
-    for event in issue.get("timelineItems", []) or []:
-        if not isinstance(event, dict) or event.get("__typename") != "AssignedEvent":
-            continue
-        try:
-            candidates.append(
-                (parse_datetime(str(event["createdAt"])), "assignee event")
-            )
-        except (FactoryJanitorError, KeyError):
-            continue
-
-    if candidates:
-        return max(candidates, key=lambda item: item[0])
-
-    label_events: list[tuple[datetime, str]] = []
+    label_events: list[dict[str, Any]] = []
     for event in issue.get("timelineItems", []) or []:
         if not isinstance(event, dict) or event.get("__typename") != "LabeledEvent":
             continue
         label = event.get("label") or {}
         if not isinstance(label, dict) or label.get("name") != "claimed":
             continue
+        label_events.append(event)
+
+    if label_events:
+        event = label_events[-1]
         try:
-            label_events.append(
-                (parse_datetime(str(event["createdAt"])), "claimed label event")
-            )
-        except (FactoryJanitorError, KeyError):
+            return parse_datetime(str(event["createdAt"])), "claimed label event"
+        except (FactoryJanitorError, KeyError) as error:
+            raise FactoryJanitorError(
+                "latest claimed label event has malformed or missing timestamp"
+            ) from error
+
+    claim_comments: list[dict[str, Any]] = []
+    for comment in issue.get("comments", []) or []:
+        if not isinstance(comment, dict) or not trusted_comment_author(comment):
             continue
-    return max(label_events, key=lambda item: item[0]) if label_events else None
+        match = CLAIM_MARKER_RE.search(str(comment.get("body", "")))
+        if match is None or int(match.group("number")) != issue_number:
+            continue
+        claim_comments.append(comment)
+
+    if claim_comments:
+        comment = claim_comments[-1]
+        try:
+            return parse_datetime(str(comment["createdAt"])), "claim comment"
+        except (FactoryJanitorError, KeyError) as error:
+            raise FactoryJanitorError(
+                "latest claim comment has malformed or missing timestamp"
+            ) from error
+
+    return None
+
+
+def has_labeled_event(issue: dict[str, Any], label_name: str) -> bool:
+    return any(
+        isinstance(event, dict)
+        and event.get("__typename") == "LabeledEvent"
+        and isinstance(event.get("label"), dict)
+        and event["label"].get("name") == label_name
+        for event in issue.get("timelineItems", []) or []
+    )
 
 
 def referenced_issue_numbers(pull: dict[str, Any]) -> set[int]:
-    numbers = {
+    return {
         int(reference["number"])
         for reference in pull.get("closingIssuesReferences", []) or []
         if reference.get("number") is not None
     }
-    numbers.update(
-        int(match.group("number"))
-        for match in CLOSING_REFERENCE_RE.finditer(str(pull.get("body", "")))
-    )
-    return numbers
 
 
 def pulls_by_issue(
@@ -440,6 +487,8 @@ def pulls_by_issue(
     merged_pulls: dict[int, list[dict[str, Any]]] = {}
     buckets = {"OPEN": open_pulls, "CLOSED": closed_pulls, "MERGED": merged_pulls}
     for pull in pulls:
+        if bool(pull.get("isDraft")):
+            continue
         bucket = buckets.get(str(pull.get("state", "")).upper())
         if bucket is None:
             continue
@@ -450,22 +499,48 @@ def pulls_by_issue(
 
 def _transition(
     issue: dict[str, Any],
-    desired_state: str,
+    desired_state: str | None,
     reason: str,
     *,
     unassign: bool = False,
     comment: str | None = None,
+    comment_key: str | None = None,
 ) -> Transition | None:
     states = current_states(issue)
-    if states == (desired_state,):
+    if (desired_state is None and not states) or states == (desired_state,):
         return None
-    if comment is not None and "\n" in comment:
-        raise FactoryJanitorError("janitor comments must be exactly one line")
     assignees = tuple(
         (str(assignee["id"]), str(assignee["login"]))
         for assignee in issue.get("assignees", []) or []
-        if unassign and assignee.get("id") and assignee.get("login")
+        if unassign
+        and assignee.get("id")
+        and assignee.get("login")
+        and str(assignee["login"]).casefold().endswith("[bot]")
     )
+    preserved_assignees = tuple(
+        str(assignee["login"])
+        for assignee in issue.get("assignees", []) or []
+        if unassign
+        and assignee.get("login")
+        and not str(assignee["login"]).casefold().endswith("[bot]")
+    )
+    marked_comment = None
+    if comment is not None:
+        if comment_key is None:
+            raise FactoryJanitorError("janitor comment requires a transition key")
+        if preserved_assignees:
+            rendered = ", ".join(f"@{login}" for login in preserved_assignees)
+            comment = f"{comment} Human assignees left in place: {rendered}."
+        marker = f"<!-- {JANITOR_MARKER_PREFIX} transition={comment_key} -->"
+        if not any(
+            isinstance(existing, dict)
+            and trusted_comment_author(existing)
+            and marker in str(existing.get("body", ""))
+            for existing in issue.get("comments", []) or []
+        ):
+            marked_comment = f"{comment} {marker}"
+    if marked_comment is not None and "\n" in marked_comment:
+        raise FactoryJanitorError("janitor comments must be exactly one line")
     return Transition(
         issue_id=str(issue["id"]),
         issue_number=int(issue["number"]),
@@ -475,7 +550,8 @@ def _transition(
         reason=reason,
         current_label_ids=current_label_ids(issue),
         assignees=assignees,
-        comment=comment,
+        preserved_assignees=preserved_assignees,
+        comment=marked_comment,
     )
 
 
@@ -498,6 +574,12 @@ def build_plan(inputs: JanitorInputs, *, now: datetime) -> ReconciliationPlan:
             continue
         number = int(issue["number"])
         states = current_states(issue)
+
+        # The Owner release gate is total. Nothing downstream may infer lifecycle
+        # state for an issue that the Owner has not released into a managed lane.
+        if not states:
+            continue
+
         issue_open_pulls = open_pulls.get(number, [])
         issue_closed_pulls = closed_pulls.get(number, [])
         issue_merged_pulls = merged_pulls.get(number, [])
@@ -529,7 +611,7 @@ def build_plan(inputs: JanitorInputs, *, now: datetime) -> ReconciliationPlan:
                     number, f"open issue has merged closing PR reference: {rendered}"
                 )
             )
-            if len(states) > 1:
+            if "review" not in states and len(states) > 1:
                 transition = _transition(
                     issue,
                     states[0],
@@ -537,42 +619,55 @@ def build_plan(inputs: JanitorInputs, *, now: datetime) -> ReconciliationPlan:
                 )
                 if transition is not None:
                     transitions.append(transition)
-            continue
+            if "review" not in states:
+                continue
 
         if "review" in states:
+            desired_state = "ready" if has_labeled_event(issue, "ready") else None
+            desired_name = desired_state or "awaiting-release"
             if issue_closed_pulls:
                 pull = _newest_pull(issue_closed_pulls)
                 pull_number = int(pull["number"])
+                outcome = (
+                    "restored ready"
+                    if desired_state == "ready"
+                    else "returned to awaiting release"
+                )
                 comment = (
-                    "Factory janitor restored ready because "
-                    f"PR #{pull_number} closed without merging."
+                    f"Factory janitor {outcome} because PR #{pull_number} "
+                    "closed without merging."
                 )
                 transition = _transition(
                     issue,
-                    "ready",
+                    desired_state,
                     f"PR #{pull_number} closed without merging",
                     comment=comment,
+                    comment_key=f"review-pr-{pull_number}-to-{desired_name}",
                 )
-                if transition is not None:
-                    transitions.append(transition)
             else:
-                anomalies.append(Anomaly(number, "review has no known referencing PR"))
-                if len(states) > 1:
-                    transition = _transition(
-                        issue,
-                        "review",
-                        "keep highest-priority lifecycle state review",
-                    )
-                    if transition is not None:
-                        transitions.append(transition)
-            continue
-
-        if not states:
+                outcome = (
+                    "restored ready"
+                    if desired_state == "ready"
+                    else "returned to awaiting release"
+                )
+                transition = _transition(
+                    issue,
+                    desired_state,
+                    "review has no open PR",
+                    comment=f"Factory janitor {outcome} because review has no open PR.",
+                    comment_key=f"review-no-open-pr-to-{desired_name}",
+                )
+            if transition is not None:
+                transitions.append(transition)
             continue
 
         desired_state = states[0]
         if desired_state == "claimed":
-            claim = claim_timestamp(issue)
+            try:
+                claim = claim_timestamp(issue)
+            except FactoryJanitorError as error:
+                anomalies.append(Anomaly(number, str(error)))
+                continue
             if claim is None:
                 anomalies.append(
                     Anomaly(number, "claimed state has no derivable claim timestamp")
@@ -582,16 +677,28 @@ def build_plan(inputs: JanitorInputs, *, now: datetime) -> ReconciliationPlan:
                 age = now - claimed_at
                 if age >= timedelta(hours=STALE_CLAIM_HOURS):
                     age_hours = age.total_seconds() / 3600
+                    release_state = (
+                        "ready" if has_labeled_event(issue, "ready") else None
+                    )
+                    desired_name = release_state or "awaiting-release"
+                    outcome = (
+                        "restored ready"
+                        if release_state == "ready"
+                        else "returned to awaiting release"
+                    )
                     comment = (
-                        "Factory janitor restored ready because the claim expired after "
-                        "24 hours without an open PR."
+                        f"Factory janitor {outcome} because the claim expired after "
+                        f"{STALE_CLAIM_HOURS} hours without an open PR."
                     )
                     transition = _transition(
                         issue,
-                        "ready",
+                        release_state,
                         f"claim is stale at {age_hours:.1f}h ({source})",
                         unassign=True,
                         comment=comment,
+                        comment_key=(
+                            f"stale-claim-{claimed_at.isoformat()}-to-{desired_name}"
+                        ),
                     )
                     if transition is not None:
                         transitions.append(transition)
@@ -609,6 +716,24 @@ def _format_states(states: tuple[str, ...]) -> str:
     return "+".join(states) if states else "none"
 
 
+def _format_desired_state(state: str | None) -> str:
+    return state or "none"
+
+
+def validate_plan(plan: ReconciliationPlan) -> None:
+    violations = [
+        transition for transition in plan.transitions if not transition.current_states
+    ]
+    if violations:
+        rendered = ", ".join(
+            f"#{transition.issue_number} none->{_format_desired_state(transition.desired_state)}"
+            for transition in violations
+        )
+        raise FactoryJanitorError(
+            f"Owner release gate forbids every none->* transition: {rendered}"
+        )
+
+
 def _format_anomaly_count(count: int) -> str:
     noun = "anomaly" if count == 1 else "anomalies"
     return f"{count} {noun}"
@@ -621,22 +746,25 @@ def print_plan(plan: ReconciliationPlan) -> None:
             extras.append(
                 "unassign=" + ",".join(login for _, login in transition.assignees)
             )
+        if transition.preserved_assignees:
+            extras.append("preserve=" + ",".join(transition.preserved_assignees))
         if transition.comment:
             extras.append(f"comment={json.dumps(transition.comment)}")
         suffix = f"; {'; '.join(extras)}" if extras else ""
         print(
             f"[transition] #{transition.issue_number}: "
-            f"{_format_states(transition.current_states)} -> {transition.desired_state} "
+            f"{_format_states(transition.current_states)} -> "
+            f"{_format_desired_state(transition.desired_state)} "
             f"({transition.reason}){suffix}"
         )
     for anomaly in plan.anomalies:
         print(f"[anomaly] #{anomaly.issue_number}: {anomaly.detail}")
 
 
-def _mutation_for_transition(
+def _mutations_for_transition(
     transition: Transition,
     label_ids: dict[str, str],
-) -> tuple[str, dict[str, Any]]:
+) -> tuple[MutationOperation, ...]:
     missing_current_ids = [
         state
         for state in transition.current_states
@@ -648,23 +776,32 @@ def _mutation_for_transition(
         raise FactoryJanitorError(
             f"issue #{transition.issue_number} is missing label IDs for: {rendered}"
         )
-    desired_label_id = label_ids.get(transition.desired_state)
-    if desired_label_id is None:
-        raise FactoryJanitorError(
-            f"required label {transition.desired_state!r} does not exist"
+    operations: list[MutationOperation] = []
+    mutation_id_prefix = f"factory-janitor-{transition.issue_number}"
+    if (
+        transition.desired_state is not None
+        and transition.desired_state not in transition.current_states
+    ):
+        desired_label_id = label_ids.get(transition.desired_state)
+        if desired_label_id is None:
+            raise FactoryJanitorError(
+                f"required label {transition.desired_state!r} does not exist"
+            )
+        operations.append(
+            MutationOperation(
+                "add-label",
+                """mutation FactoryJanitorAddLabel($input: AddLabelsToLabelableInput!) {
+  result: addLabelsToLabelable(input: $input) { clientMutationId }
+}""",
+                {
+                    "input": {
+                        "labelableId": transition.issue_id,
+                        "labelIds": [desired_label_id],
+                        "clientMutationId": f"{mutation_id_prefix}-add-label",
+                    }
+                },
+            )
         )
-    variable_definitions: list[str] = []
-    fields: list[str] = []
-    variables: dict[str, Any] = {}
-    if transition.desired_state not in transition.current_states:
-        variable_definitions.append("$addInput: AddLabelsToLabelableInput!")
-        fields.append(
-            "addState: addLabelsToLabelable(input: $addInput) { clientMutationId }"
-        )
-        variables["addInput"] = {
-            "labelableId": transition.issue_id,
-            "labelIds": [desired_label_id],
-        }
 
     remove_ids = [
         label_id
@@ -672,56 +809,101 @@ def _mutation_for_transition(
         if state != transition.desired_state
     ]
     if remove_ids:
-        variable_definitions.append("$removeInput: RemoveLabelsFromLabelableInput!")
-        fields.append(
-            "removeStates: removeLabelsFromLabelable(input: $removeInput) { clientMutationId }"
+        operations.append(
+            MutationOperation(
+                "remove-labels",
+                """mutation FactoryJanitorRemoveLabels($input: RemoveLabelsFromLabelableInput!) {
+  result: removeLabelsFromLabelable(input: $input) { clientMutationId }
+}""",
+                {
+                    "input": {
+                        "labelableId": transition.issue_id,
+                        "labelIds": sorted(remove_ids),
+                        "clientMutationId": f"{mutation_id_prefix}-remove-labels",
+                    }
+                },
+            )
         )
-        variables["removeInput"] = {
-            "labelableId": transition.issue_id,
-            "labelIds": sorted(remove_ids),
-        }
 
     if transition.assignees:
-        variable_definitions.append(
-            "$unassignInput: RemoveAssigneesFromAssignableInput!"
+        operations.append(
+            MutationOperation(
+                "unassign-bots",
+                """mutation FactoryJanitorUnassign($input: RemoveAssigneesFromAssignableInput!) {
+  result: removeAssigneesFromAssignable(input: $input) { clientMutationId }
+}""",
+                {
+                    "input": {
+                        "assignableId": transition.issue_id,
+                        "assigneeIds": sorted(
+                            assignee_id for assignee_id, _ in transition.assignees
+                        ),
+                        "clientMutationId": f"{mutation_id_prefix}-unassign-bots",
+                    }
+                },
+            )
         )
-        fields.append(
-            "unassign: removeAssigneesFromAssignable(input: $unassignInput) { clientMutationId }"
-        )
-        variables["unassignInput"] = {
-            "assignableId": transition.issue_id,
-            "assigneeIds": sorted(
-                assignee_id for assignee_id, _ in transition.assignees
-            ),
-        }
 
     if transition.comment:
-        variable_definitions.append("$commentInput: AddCommentInput!")
-        fields.append("comment: addComment(input: $commentInput) { clientMutationId }")
-        variables["commentInput"] = {
-            "subjectId": transition.issue_id,
-            "body": transition.comment,
-        }
+        operations.append(
+            MutationOperation(
+                "comment",
+                """mutation FactoryJanitorComment($input: AddCommentInput!) {
+  result: addComment(input: $input) { clientMutationId }
+}""",
+                {
+                    "input": {
+                        "subjectId": transition.issue_id,
+                        "body": transition.comment,
+                        "clientMutationId": f"{mutation_id_prefix}-comment",
+                    }
+                },
+            )
+        )
 
-    if not fields:
+    if not operations:
         raise FactoryJanitorError(
             f"issue #{transition.issue_number} transition has no mutation operations"
         )
-    query = (
-        "mutation FactoryJanitorApply("
-        + ", ".join(variable_definitions)
-        + ") {\n  "
-        + "\n  ".join(fields)
-        + "\n}"
-    )
-    return query, variables
+    return tuple(operations)
+
+
+def _apply_mutation_with_retry(token: str, operation: MutationOperation) -> None:
+    for attempt in range(1, MUTATION_ATTEMPTS + 1):
+        try:
+            graphql(token, operation.query, operation.variables)
+            return
+        except GitHubRequestError as error:
+            if not error.transient or attempt == MUTATION_ATTEMPTS:
+                raise
+            delay = MUTATION_BACKOFF_SECONDS * (2 ** (attempt - 1))
+            print(
+                f"[retry] {operation.name}: transient failure; "
+                f"attempt {attempt + 1}/{MUTATION_ATTEMPTS} in {delay:.1f}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def apply_plan(plan: ReconciliationPlan, inputs: JanitorInputs, token: str) -> None:
+    failures: list[tuple[int, str]] = []
     for transition in plan.transitions:
-        query, variables = _mutation_for_transition(transition, inputs.repo.label_ids)
-        graphql(token, query, variables)
-        print(f"[applied] #{transition.issue_number}: {transition.desired_state}")
+        try:
+            operations = _mutations_for_transition(transition, inputs.repo.label_ids)
+            for operation in operations:
+                _apply_mutation_with_retry(token, operation)
+        except FactoryJanitorError as error:
+            failures.append((transition.issue_number, str(error)))
+            print(f"[failed] #{transition.issue_number}: {error}", file=sys.stderr)
+            continue
+        print(
+            f"[applied] #{transition.issue_number}: "
+            f"{_format_desired_state(transition.desired_state)}"
+        )
+
+    if failures:
+        rendered = "; ".join(f"#{number}: {detail}" for number, detail in failures)
+        raise FactoryJanitorError(f"persistent per-issue failures: {rendered}")
 
 
 def main() -> int:
@@ -736,6 +918,7 @@ def main() -> int:
         now = datetime.now(UTC)
 
     plan = build_plan(inputs, now=now)
+    validate_plan(plan)
     print_plan(plan)
     if args.apply:
         apply_plan(plan, inputs, token)
