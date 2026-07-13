@@ -61,5 +61,22 @@
     "createdAt": "2026-07-11T13:30:00Z",
     "updatedAt": "2026-07-11T13:30:00Z",
     "labels": [{"name": "agent"}, {"name": "task"}]
+  },
+  {
+    "id": "I_digest",
+    "number": 108,
+    "title": "Renamed Factory Digest",
+    "body": "<!-- factory-digest:v1 -->\n\nPrevious digest body",
+    "url": "https://example.test/issues/108",
+    "state": "OPEN",
+    "createdAt": "2026-07-01T13:30:00Z",
+    "updatedAt": "2026-07-12T13:00:00Z",
+    "labels": [
+      {"name": "agent"},
+      {"name": "task"},
+      {"name": "ready"},
+      {"name": "claimed"},
+      {"name": "needs-human"}
+    ]
   }
 ]

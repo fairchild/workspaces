@@ -3,7 +3,7 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Build and publish the owner's Factory Digest discussion.
+"""Build and publish the owner's Factory Digest issue.
 
 The digest combines live GitHub gates with the latest monitor summary so one
 mobile-friendly surface carries every action and threshold breach.
@@ -23,14 +23,11 @@ from pathlib import Path
 from typing import Any
 
 
-FIXTURE_REQUIRED_FILES = ("discussions.json", "issues.json", "pulls.json")
+FIXTURE_REQUIRED_FILES = ("issues.json", "pulls.json")
 DIGEST_TITLE = "Factory Digest"
 DIGEST_MARKER = "<!-- factory-digest:v1 -->"
-DISCUSSION_WRITE_ACCESS_ERROR = (
-    "DIGEST_TOKEN lacks discussion write access — set the PETER_DISCUSSION_TOKEN repo secret "
-    "(a PAT with discussions write); the built-in Actions token has historically been unable "
-    "to update discussions in this repo."
-)
+FACTORY_LABEL_COLOR = "BFD4F2"
+FACTORY_LABEL_DESCRIPTION = "Agent Factory observability and operations"
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_TITLE_LENGTH = 80
 
@@ -44,13 +41,12 @@ class RepoInfo:
     owner: str
     name: str
     repository_id: str
-    category_ids: dict[str, str] = field(default_factory=dict)
+    label_ids: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class DigestInputs:
     repo: RepoInfo
-    discussions: list[dict[str, Any]]
     issues: list[dict[str, Any]]
     pulls: list[dict[str, Any]]
 
@@ -94,45 +90,16 @@ def split_repo_slug(slug: str) -> tuple[str, str]:
 def fetch_live_inputs(repo_slug: str, token: str) -> DigestInputs:
     owner, name = split_repo_slug(repo_slug)
     common_variables: dict[str, Any] = {"owner": owner, "name": name}
-    discussion_query = """
-query FactoryDigestDiscussions($owner: String!, $name: String!, $after: String) {
-  repository(owner: $owner, name: $name) {
-    id
-    discussionCategories(first: 25) { nodes { id name } }
-    discussions(first: 100, after: $after, states: [OPEN, CLOSED]) {
-      pageInfo { hasNextPage endCursor }
-      nodes { id number title body url closed createdAt }
-    }
-  }
-}
-"""
-    discussions: list[dict[str, Any]] = []
-    cursor: str | None = None
-    repository_id = ""
-    category_ids: dict[str, str] = {}
-    while True:
-        payload = graphql(token, discussion_query, {**common_variables, "after": cursor})
-        repository = payload["data"]["repository"]
-        if repository is None:
-            raise FactoryDigestError(f"repository {repo_slug} was not found")
-        repository_id = str(repository["id"])
-        category_ids = {
-            str(node["name"]).lower(): str(node["id"])
-            for node in repository["discussionCategories"]["nodes"]
-        }
-        connection = repository["discussions"]
-        discussions.extend(connection["nodes"])
-        if not connection["pageInfo"]["hasNextPage"]:
-            break
-        cursor = connection["pageInfo"]["endCursor"]
-
     issue_query = """
 query FactoryDigestIssues($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
-    issues(first: 100, after: $after, states: OPEN) {
+    id
+    factoryLabel: label(name: "factory") { id name }
+    humanLabel: label(name: "human") { id name }
+    issues(first: 100, after: $after, states: [OPEN, CLOSED]) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title url state createdAt updatedAt
+        id number title body url state createdAt updatedAt
         labels(first: 50) { nodes { name } }
       }
     }
@@ -140,10 +107,21 @@ query FactoryDigestIssues($owner: String!, $name: String!, $after: String) {
 }
 """
     issues: list[dict[str, Any]] = []
-    cursor = None
+    cursor: str | None = None
+    repository_id = ""
+    label_ids: dict[str, str] = {}
     while True:
         payload = graphql(token, issue_query, {**common_variables, "after": cursor})
-        connection = payload["data"]["repository"]["issues"]
+        repository = payload["data"]["repository"]
+        if repository is None:
+            raise FactoryDigestError(f"repository {repo_slug} was not found")
+        repository_id = str(repository["id"])
+        label_fields = (("factory", "factoryLabel"), ("human", "humanLabel"))
+        for label_name, field_name in label_fields:
+            label = repository.get(field_name)
+            if label is not None:
+                label_ids[label_name] = str(label["id"])
+        connection = repository["issues"]
         for node in connection["nodes"]:
             issues.append({**node, "labels": list(node["labels"]["nodes"])})
         if not connection["pageInfo"]["hasNextPage"]:
@@ -180,8 +158,7 @@ query FactoryDigestPulls($owner: String!, $name: String!, $after: String) {
         cursor = connection["pageInfo"]["endCursor"]
 
     return DigestInputs(
-        repo=RepoInfo(owner, name, repository_id, category_ids),
-        discussions=discussions,
+        repo=RepoInfo(owner, name, repository_id, label_ids),
         issues=issues,
         pulls=pulls,
     )
@@ -211,7 +188,7 @@ def load_json_file(path: Path) -> Any:
 
 def load_fixture_inputs(
     fixtures_dir: Path,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not fixtures_dir.is_dir():
         raise FactoryDigestError(f"fixture pack not found: {fixtures_dir}")
     missing = [name for name in FIXTURE_REQUIRED_FILES if not (fixtures_dir / name).is_file()]
@@ -220,7 +197,6 @@ def load_fixture_inputs(
             f"fixture pack {fixtures_dir} is missing required files: {', '.join(missing)}"
         )
     return (
-        list(load_json_file(fixtures_dir / "discussions.json")),
         list(load_json_file(fixtures_dir / "issues.json")),
         list(load_json_file(fixtures_dir / "pulls.json")),
     )
@@ -261,11 +237,52 @@ def render_stats(summary: dict[str, Any]) -> str:
     return f"Stats: {rendered} · generated {summary['generated_at']}"
 
 
+def select_digest_issue(
+    issues: list[dict[str, Any]],
+    *,
+    warn_on_multiple: bool = False,
+) -> dict[str, Any] | None:
+    matches = [item for item in issues if DIGEST_MARKER in str(item.get("body", ""))]
+    if not matches:
+        return None
+    matches.sort(
+        key=lambda item: (
+            parse_datetime(str(item["createdAt"])),
+            item.get("title") == DIGEST_TITLE,
+        ),
+        reverse=True,
+    )
+    selected = matches[0]
+    if warn_on_multiple and len(matches) > 1:
+        others = ", ".join(f"#{item['number']}" for item in matches[1:])
+        print(
+            f"warning: multiple marked Factory Digest issues found; using "
+            f"#{selected['number']} and leaving {others} untouched",
+            file=sys.stderr,
+        )
+    return selected
+
+
+def exclude_digest_issues(
+    issues: list[dict[str, Any]],
+    digest_issue_number: int | None,
+) -> list[dict[str, Any]]:
+    return [
+        issue
+        for issue in issues
+        if DIGEST_MARKER not in str(issue.get("body", ""))
+        and (digest_issue_number is None or int(issue["number"]) != digest_issue_number)
+    ]
+
+
 def render_digest(
     issues: list[dict[str, Any]],
     pulls: list[dict[str, Any]],
     summary: dict[str, Any],
 ) -> str:
+    digest_issue = select_digest_issue(issues)
+    digest_issue_number = int(digest_issue["number"]) if digest_issue is not None else None
+    issues = exclude_digest_issues(issues, digest_issue_number)
     current_time = parse_datetime(str(summary["generated_at"]))
     issues_by_number = {int(issue["number"]): issue for issue in issues}
     pulls_by_issue: dict[int, list[dict[str, Any]]] = {}
@@ -396,40 +413,6 @@ def render_digest(
     return "\n\n".join([DIGEST_MARKER, *sections])
 
 
-def is_discussion_access_error(error: FactoryDigestError) -> bool:
-    message = str(error).lower()
-    indicators = (
-        "permission",
-        "forbidden",
-        "resource not accessible",
-        "required scope",
-        "insufficient scope",
-        "http 401",
-        "http 403",
-        "unknown argument",
-        "unknown type",
-        "is not defined",
-        "doesn't exist on type",
-        "cannot query field",
-        "expected type",
-        "invalid value",
-    )
-    return any(indicator in message for indicator in indicators)
-
-
-def run_discussion_write(
-    token: str,
-    mutation: str,
-    variables: dict[str, Any],
-) -> dict[str, Any]:
-    try:
-        return graphql(token, mutation, variables)
-    except FactoryDigestError as error:
-        if is_discussion_access_error(error):
-            raise FactoryDigestError(DISCUSSION_WRITE_ACCESS_ERROR) from error
-        raise
-
-
 def marked_body(body: str) -> str:
     if body.startswith(DIGEST_MARKER):
         return body
@@ -438,93 +421,99 @@ def marked_body(body: str) -> str:
 
 def publish_digest(
     repo: RepoInfo,
-    discussions: list[dict[str, Any]],
+    issues: list[dict[str, Any]],
     body: str,
     token: str,
 ) -> dict[str, Any]:
     body = marked_body(body)
-    matches = [item for item in discussions if DIGEST_MARKER in str(item.get("body", ""))]
-    if matches:
-        matches.sort(
-            key=lambda item: (
-                parse_datetime(str(item["createdAt"])),
-                item.get("title") == DIGEST_TITLE,
-            ),
-            reverse=True,
-        )
-        selected = matches[0]
-        if len(matches) > 1:
-            others = ", ".join(f"#{item['number']}" for item in matches[1:])
-            print(
-                f"warning: multiple marked Factory Digest discussions found; using "
-                f"#{selected['number']} and leaving {others} untouched",
-                file=sys.stderr,
-            )
-        if bool(selected.get("closed")):
+    selected = select_digest_issue(issues, warn_on_multiple=True)
+    if selected is not None:
+        if str(selected.get("state", "")).upper() == "CLOSED":
             reopen_mutation = """
-mutation ReopenFactoryDigest($input: ReopenDiscussionInput!) {
-  reopenDiscussion(input: $input) {
-    discussion { id number url }
+mutation ReopenFactoryDigest($input: ReopenIssueInput!) {
+  reopenIssue(input: $input) {
+    issue { id number url }
   }
 }
 """
-            run_discussion_write(
+            graphql(
                 token,
                 reopen_mutation,
-                {"input": {"discussionId": selected["id"]}},
+                {"input": {"issueId": selected["id"]}},
             )
         mutation = """
-mutation UpdateFactoryDigest($input: UpdateDiscussionInput!) {
-  updateDiscussion(input: $input) {
-    discussion { id number url }
+mutation UpdateFactoryDigest($input: UpdateIssueInput!) {
+  updateIssue(input: $input) {
+    issue { id number url }
   }
 }
 """
-        data = run_discussion_write(
+        data = graphql(
             token,
             mutation,
-            {"input": {"discussionId": selected["id"], "body": body}},
+            {"input": {"id": selected["id"], "body": body}},
         )
-        return data["data"]["updateDiscussion"]["discussion"]
+        return data["data"]["updateIssue"]["issue"]
 
-    category_id = repo.category_ids.get("announcements") or repo.category_ids.get("general")
-    if not category_id:
-        raise FactoryDigestError(
-            'neither the "Announcements" nor "General" discussion category exists'
-        )
-    create_mutation = """
-mutation CreateFactoryDigest($input: CreateDiscussionInput!) {
-  createDiscussion(input: $input) {
-    discussion { id number url }
+    human_label_id = repo.label_ids.get("human")
+    if human_label_id is None:
+        raise FactoryDigestError('required "human" label does not exist')
+    factory_label_id = repo.label_ids.get("factory")
+    if factory_label_id is None:
+        label_mutation = """
+mutation CreateFactoryLabel($input: CreateLabelInput!) {
+  createLabel(input: $input) {
+    label { id name }
   }
 }
 """
-    data = run_discussion_write(
+        data = graphql(
+            token,
+            label_mutation,
+            {
+                "input": {
+                    "repositoryId": repo.repository_id,
+                    "name": "factory",
+                    "color": FACTORY_LABEL_COLOR,
+                    "description": FACTORY_LABEL_DESCRIPTION,
+                }
+            },
+        )
+        factory_label_id = str(data["data"]["createLabel"]["label"]["id"])
+
+    create_mutation = """
+mutation CreateFactoryDigest($input: CreateIssueInput!) {
+  createIssue(input: $input) {
+    issue { id number url }
+  }
+}
+"""
+    data = graphql(
         token,
         create_mutation,
         {
             "input": {
                 "repositoryId": repo.repository_id,
-                "categoryId": category_id,
                 "title": DIGEST_TITLE,
                 "body": body,
+                "labelIds": [factory_label_id, human_label_id],
             }
         },
     )
-    discussion = data["data"]["createDiscussion"]["discussion"]
+    issue = data["data"]["createIssue"]["issue"]
 
     pin_mutation = """
-mutation PinFactoryDigest($input: PinDiscussionInput!) {
-  pinDiscussion(input: $input) {
-    discussion { id number url }
+mutation PinFactoryDigest($input: PinIssueInput!) {
+  pinIssue(input: $input) {
+    issue { id number url }
   }
 }
 """
     try:
-        graphql(token, pin_mutation, {"input": {"discussionId": discussion["id"]}})
+        graphql(token, pin_mutation, {"input": {"issueId": issue["id"]}})
     except FactoryDigestError as error:
         print(f"warning: unable to pin Factory Digest: {error}", file=sys.stderr)
-    return discussion
+    return issue
 
 
 def main() -> int:
@@ -532,25 +521,22 @@ def main() -> int:
     validate_args(args)
     summary = load_json_file(args.summary)
     if args.fixtures_dir is not None:
-        _, issues, pulls = load_fixture_inputs(args.fixtures_dir)
+        issues, pulls = load_fixture_inputs(args.fixtures_dir)
         print(render_digest(issues, pulls, summary))
         return 0
 
     repo_slug = os.environ.get("GITHUB_REPOSITORY", "")
-    read_token = os.environ.get("GH_TOKEN", "")
-    if not read_token:
-        raise FactoryDigestError("GH_TOKEN is required for live GitHub reads")
-    inputs = fetch_live_inputs(repo_slug, read_token)
+    token = os.environ.get("GH_TOKEN", "")
+    if not token:
+        raise FactoryDigestError("GH_TOKEN is required for live GitHub access")
+    inputs = fetch_live_inputs(repo_slug, token)
     markdown = render_digest(inputs.issues, inputs.pulls, summary)
     if args.dry_run:
         print(markdown)
         return 0
 
-    write_token = os.environ.get("DIGEST_TOKEN", "")
-    if not write_token:
-        raise FactoryDigestError("DIGEST_TOKEN is required to publish the Factory Digest")
-    discussion = publish_digest(inputs.repo, inputs.discussions, markdown, write_token)
-    print(f"Factory Digest: {discussion['url']}")
+    issue = publish_digest(inputs.repo, inputs.issues, markdown, token)
+    print(f"Factory Digest: {issue['url']}")
     return 0
 
 
