@@ -149,6 +149,7 @@ New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S u
 | Web local dev (mise tasks, auth bypass) | web/docs/local-dev.md | - |
 | Web architecture | web/docs/architecture.md | - |
 | PR reviewer agent | docs/pr-review/pr-reviewer.md | - |
+| Agent Factory (autonomous pipeline) plan + glossary | docs/development/agent-factory-v2-plan.md, docs/agents/CONTEXT.md | docs/development/agent-team.md (superseded architecture) |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |
 | Prototypes | prototypes/README.md | - |
