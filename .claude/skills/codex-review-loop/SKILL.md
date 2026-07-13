@@ -1,6 +1,6 @@
 ---
 name: codex-review-loop
-description: Pre-PR review loop — self-reflect, then a directed codex CLI (gpt-5.5 xhigh) review, then react with attributed commits. Use before opening any substantive PR or when asked to "run the review loop" / "codex review this". Skip for metadata/docs-only diffs.
+description: Pre-PR review loop — self-reflect, then a directed codex CLI (gpt-5.6 xhigh) review, then react with attributed commits. Use before opening any substantive PR or when asked to "run the review loop" / "codex review this". Skip for metadata/docs-only diffs.
 ---
 
 # Codex Review Loop
@@ -28,7 +28,7 @@ docs-only diffs.
 2. **Codex, directed.**
 
    ```bash
-   codex exec -c model="gpt-5.5" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>"
+   codex exec -c model="gpt-5.6" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>"
    ```
 
    Give it the diff command, named failure modes, and one falsifiable completeness question —
@@ -52,7 +52,7 @@ docs-only diffs.
    introduced a finding — run `git log <base>..HEAD -- <files>` before acting. Pre-existing
    findings become issues, not scope creep. Declining a finding is valid; say why in the PR.
 
-4. **React with attribution.** Fix commits open with `In response to codex (gpt-5.5, xhigh) ...`;
+4. **React with attribution.** Fix commits open with `In response to codex (gpt-5.6, xhigh) ...`;
    the PR body carries a `## Review loop` section listing each finding and its disposition.
    Never fold review reactions silently into other commits — attribution is how the loop's
    value is measured.
