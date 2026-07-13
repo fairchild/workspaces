@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-07-13T09:59:44.322061Z`
+Last updated: `2026-07-13T10:00:40.833567Z`
 Source: `live`
 
 ## Funnel
@@ -23,7 +23,7 @@ Source: `live`
 | Metric | Value |
 |---|---:|
 | Completed runs | 499 |
-| Failure rate | 4.21% |
+| Failure rate | 4.01% |
 | Rerun rate | 0.20% |
 
 Top failing workflows:
@@ -37,10 +37,10 @@ Top failing workflows:
 
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
-| Approved Mention Execution | 44 | 0 | 0.00% | 0 | 0.00% |
+| Approved Mention Execution | 43 | 0 | 0.00% | 0 | 0.00% |
 | April Clearwater | 1 | 1 | 100.00% | 0 | 0.00% |
 | Mention Triage | 32 | 0 | 0.00% | 0 | 0.00% |
-| Plat Ironwood | 2 | 2 | 100.00% | 0 | 0.00% |
+| Plat Ironwood | 1 | 1 | 100.00% | 0 | 0.00% |
 
 ## Perf Snapshot
 
