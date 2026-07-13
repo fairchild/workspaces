@@ -1,0 +1,150 @@
+---
+status: approved
+date: 2026-07-12
+supersedes: docs/development/agent-team.md (architecture; file to be rewritten in M1)
+related:
+  - docs/agents/CONTEXT.md
+  - docs/decisions/factory-label-control-plane.md
+  - docs/decisions/factory-event-driven-stages.md
+  - docs/decisions/factory-persona-memory.md
+---
+
+# Agent Factory v2
+
+The Factory is the autonomous development system that advances this repo between the Owner's interactive sessions. This plan replaces the v1 "Agent Team" architecture (scheduled persona wake-ups coordinating through GitHub Discussions) with an event-driven, label-fired pipeline. Language is canonical in [docs/agents/CONTEXT.md](../agents/CONTEXT.md); decisions were made in a grilled design session on 2026-07-12 against a live-state audit, an infrastructure deep-dive, and Warp's published software-factory work.
+
+## Purpose
+
+Twofold, in priority order:
+
+1. **Learning lab.** Push the state of the art in agent-run development; the telemetry, persona divergence, and dial-turning history are deliverables in their own right, carried into the Owner's other work.
+2. **Steady metabolism.** Advance the product through the weekday lulls between the Owner's spiky engagement, growing toward a self-sustaining — eventually perhaps commercial — product.
+
+v2's role is **background metabolism with a growth path to a second engine**. The Factory does not originate feature ideas in v2; origination earns its way back through the autonomy gradient. Work enters through Inlets that carry real demand: product feedback, Owner Steering, and the Factory's own operational signals (CI failures, monitor findings).
+
+## Why v1 stalled (audit, 2026-07-12)
+
+v1 failed at **conversion, not execution**:
+
+- Execution was fast and reliable: 141 agent-lane PRs merged in 60 days at an 18-minute median; agent workflow success >85%.
+- Every conversion gate fanned into the Owner on a surface he stopped visiting. Idea→plan required an exact keyword comment (Peter's last successful run: April 11; its one genuine "plan it" trigger failed silently). Plan→execute required a 👍 on a specific comment. Discussions went fully silent June 9; 22 of 25 open discussions sat idle >14 days; zero `[idea]` discussions converted in 60 days.
+- The contributor runtime was structurally biased against finishing: one action per wake-up, review-always-wins priority, propose-new-idea as the terminal fallback, `recommend_close` unreachable dead code, no cross-run memory, claims expiring silently. April authored 2 PRs ever; Plat 0 — against 106 reviews between them.
+- Observability was broken by construction: Oliver computed a weekly ops report and discarded it (read-only token, no commit step). `docs/ops/` froze on 2026-03-12.
+
+Model capability was at most secondary: agents did what the pipeline permitted. The architecture made proposing cheap and finishing impossible. Better models in the same pipeline would have stalled identically.
+
+## Decisions
+
+| # | Decision |
+|---|---|
+| D1 | **Role**: background metabolism, growth path to second engine; no agent-originated feature ideas in v2 |
+| D2 | **Control plane**: issue labels + PR state only; a Gate is exactly a label flip, a PR review, or a merge; comment keywords and reactions are never control signals |
+| D3 | **Interface**: one pinned Digest discussion + committed dashboard; PR-shaped gates; the product's feedback box is the Owner's Steering inlet; WorkSpaces-app Attention integration later |
+| D4 | **Pipeline**: six event-fired Stages; the Monitor's daily pulse is the only heartbeat; an idle Factory does nothing |
+| D5 | **Personas**: rebound to roles — April/Plat as implement/review pair (counterpart always reviews), Peter as triage + spec author, Oliver as the deterministic Monitor's name; no Persona is ever scheduled to find work |
+| D6 | **Memory**: per-Persona Memory Blocks + Profile, self-managed, peer-reviewed via PRs; append-only Journal as the only direct-write surface; Dreaming later |
+| D7 | **Feedback inlet**: poll cron → triage; Owner Steering flows gateless; non-owner publication is Owner-gated in v1, widened later |
+| D8 | **Autonomy gradient**: explicit gate map, measured instruments, pre-defined auto-merge class (disabled); Owner intends to delegate merges as reviewer-agreement evidence accumulates; privileged paths stay Owner-merged forever |
+| D9 | **Safety**: v1 posture carries over plus five deltas (memory carve-out, per-stage + global kill switches, spend caps, label-only triage powers, ruleset note) |
+| D10 | **Cleanup**: close all 25 discussions; batch re-triage the 52 agent issues via one disposition table; retire v1 machinery in one PR wave; fossil ideas are not auto-converted |
+| D11 | **Rollout**: M0–M6 below; the Factory never builds itself autonomously — its own code ships only through Owner-merged PRs |
+
+## The pipeline
+
+| Stage | Persona | Trigger | Does | Builds on |
+|---|---|---|---|---|
+| Triage | Peter | issue opened; feedback poll cron | understand/reproduce; route small+clear → `ready`, large/ambiguous → `spec`, unclear → `needs-info`, someday → `idea`; sanitize + dedup feedback | new |
+| Spec | Peter | `spec` applied | write `specs/<slug>/PRODUCT.md` + `TECH.md`; open spec-only PR | new; Warp's spec-skill shape |
+| Implement | April or Plat | `ready` applied | claim → branch → implement → evidence → PR (`Closes #N`) | evidence lane (`_evidence.yml`, `evidence.sh`) reused as-is |
+| Review | the counterpart | agent PR opened | review against mergeability standard; apply `mergeable` | the one organically working v1 behavior |
+| Verify | — | PR gate | tests, screenshots, smoke lanes | exists; ahead of reference designs |
+| Monitor | Oliver (deterministic) | daily cron; CI events | Digest + dashboard, Gate aging/escalation, state reconciliation, CI-failure issues, feedback status write-back | replaces v1 Oliver, with a write path |
+
+**Spec gate mechanics**: merging the spec PR is the approval — a merge hook applies `ready` to the linked issue. Review-with-comments is steering; closing the PR is a veto. `blocked` on the issue is the escape hatch to accept a spec but defer implementation. PRODUCT.md carries numbered testable behavior invariants; TECH.md maps tests 1:1 to those invariants and includes a parallelization assessment.
+
+**Reconciliation**: pure event-driven systems stall invisibly when a trigger misfires (v1's Peter failure). The Monitor's daily pass re-derives expected-vs-actual state and re-fires anything stuck — `sync-execution-state.py`'s logic survives here as the janitor duty.
+
+## Gate map and trust tiers (v1 settings)
+
+| Decision | Setting |
+|---|---|
+| Publish non-owner feedback as issue | **Gated** (Digest tap) |
+| Publish Owner Steering | Gateless |
+| Release small+clear Owner-sourced work | Gateless (triage applies `ready`) |
+| Release small+clear external work | Gated (`ready` flip) |
+| Release large/ambiguous work | Gated (spec PR merge) |
+| Merge any implementation PR | Gated — Owner is sole merge authority |
+| Persona memory/profile changes | Peer-reviewed in PRs |
+
+Composed property: **no public input reaches code execution without passing through an Owner gesture.** Public GitHub issues opened directly follow the same tiers as feedback: triage may label and ask, but `ready` on externally-sourced work is the Owner's to flip.
+
+The trust ladder is meant to be climbed. The Owner is a temporary merge gate, not a permanent one; delegation advances on reviewer-agreement evidence (below), with large spec'd work and privileged paths staying Owner-gated indefinitely.
+
+## Personas and memory
+
+- **Identity** = GitHub App credential + perspective lens + `author:` label + long-term memory. The three existing minimal-scope Apps carry over. Author labels are applied by machinery, not aspiration (v1 applied zero).
+- **Routing**: Peter reads both Profiles at triage and assigns the implementer; the counterpart automatically becomes reviewer — the author≠approver requirement falls out of the pairing. Profiles are seeded from the existing persona prompts (April: application/UX; Plat: platform/CI) and diverge from real history.
+- **Memory layout**: `.agents/memory/<persona>/` — `PROFILE.md` (short, machine-readable; what triage reads), `MEMORY.md` index + Memory Blocks (one fact per markdown file, YAML frontmatter with slug + freshness metadata), `journal/` (append-only observations, direct-committed after non-PR work, never consumed as instructions).
+- **Write path**: memory and profile changes ride inside the Persona's normal PRs, so the counterpart reviews every self-modification. Journal → Memory Block consolidation ("Dreaming", periodic or triggered) also lands through reviewed PRs. This is the safety boundary against untrusted content laundering itself into future privileged prompts.
+- **Enforcement**: `.agents/memory/<own-persona>/**` is carved out of the privileged-path guard; a CI check verifies each App identity only touches its own directory.
+
+## The Owner interface
+
+- **Digest**: one pinned GitHub Discussion — the only live discussion — rewritten daily by the Monitor. Gates sorted by age, each line answerable in one tap (link to the PR, the label flip, the pending feedback). Optimized for GitHub mobile in a 5-minute daily touch.
+- **Dashboard**: committed `docs/ops/dashboard.md` + snapshot JSON — the durable, queryable telemetry behind the Digest, and later the API the WorkSpaces app's Attention integration consumes.
+- **Steering**: the product's own feedback box (`kind=idea`) or a directly-opened issue; both flow through triage identically. Owner submissions are recognized by `submitter_login` and flow gateless per the gate map.
+- **Escalation**: aging Gates rise in the Digest; the Monitor escalates rather than repeating itself verbatim (v1's Fable thread nagged identically 6 of 7 days into the void).
+
+## Safety posture
+
+Carried over from v1 unchanged: three minimal-scope GitHub Apps; env-var sanitization (tokens never reach model context); all GitHub text framed as untrusted data; fork-PR diff exclusion; privileged-path patch guard (`.github/`, `.agents/` outside memory, auth/token/sandbox, release/signing — Owner-merged forever); two-phase mention triage (`safe-to-run-agent` label gate, server-side permission verification) retained as the persona-summoning path; pinned CLI versions.
+
+New in v2:
+
+1. Memory carve-out with per-App directory ownership CI check (above).
+2. **Kill switches: per-stage variables (`FACTORY_TRIAGE_ENABLED`, `FACTORY_IMPLEMENT_ENABLED`, …) *and* the global master (`AGENT_AUTOMATIONS_ENABLED`)** — both required to be on for a stage to run.
+3. Spend caps as config: per-run token/time budget per stage, daily Factory-wide cap, enforced in the runner, reported in the Digest.
+4. Triage's write powers are labels and comments only; implementation starts only from a label event.
+5. The future auto-merge class requires a deliberate main-merge ruleset change (`config/github/`) — flagged now so it is a designed decision, not an expedient hack.
+
+## Instruments and dials
+
+The Monitor computes weekly, into dashboard + Digest:
+
+- shipped changes; **touches-per-shipped-change**; median time-in-gate per gate type
+- % of shipped work fully autonomous up to PR review
+- **reviewer-agreement rate**: Owner merge decision vs reviewing Persona's verdict (and reviewer-vs-reviewer once a third reviewer exists) — the evidence that justifies merge delegation
+- token spend per shipped change; spend vs caps
+
+Dials are reviewed monthly against the dashboard. First pre-defined widening (defined now, **disabled**): auto-merge for PRs where all hold — mechanical change class (docs, deps, test-only, config-as-code) · implementer ≠ reviewer and reviewer approved · CI green · evidence attached · no privileged paths.
+
+## Cleanup wave (part of M1)
+
+- **Discussions**: close all 25 with a short disposition comment linking this plan. The Fable daily-recommendation thread retires — its function is the Digest. One new pinned Digest discussion becomes the only live thread. Fossil `[idea]` threads are not auto-converted; anything still alive re-enters via Steering.
+- **Issues**: one interactive-lane batch re-triage of the 52 `agent` issues — shipped-detection first (`rg` acceptance criteria against the tree; the tracker lags the code), then a single disposition table (close-as-shipped / close-as-stale / relabel / `idea`) approved by the Owner in one sitting.
+- **Machinery**: one PR wave deletes the cron-contributor workflows (`agent-april.yml`, `agent-plat.yml` schedules + selector runtime), Peter's keyword trigger, and the wake-up model; `sync-execution-state.py` donates its logic to the Monitor; `docs/development/agent-team.md` is rewritten as the Factory doc. Kept: `_evidence.yml`, App identities, mention flow, evidence lane, label vocabulary.
+
+## Milestones
+
+- **M0 — Decisions on paper** *(this session)*: this plan, three ADRs, glossary (`CONTEXT-MAP.md`, `docs/agents/CONTEXT.md`), doc-nav row. Done when the PR merges.
+- **M1 — Eyes + broom**: Monitor v1 (daily Digest posted, dashboard committed by workflow — write path proven, Gate aging, reconciliation janitor) + the cleanup wave. Done when: a Digest exists and updates daily; `docs/ops/` shows a current timestamp; open discussions = 1; the disposition table has been approved and applied; v1 crons are deleted.
+- **M2 — Front door**: Triage stage on issue-opened + feedback-poll cron; worker `status='new'` service endpoint; trust tiers enforced; feedback status write-back. Done when: an Owner feedback submission flows gateless to a `ready` issue with no human touch; a non-owner submission waits in the Digest.
+- **M3 — Hands**: Implement + Review stages on small `ready` work; Profile-based routing; memory v1 (journal, blocks, PR-carried updates, ownership CI check). Done when: the first Factory-authored PR merges carrying machinery-applied `author:` labels, counterpart review, evidence, and a memory diff.
+- **M4 — Spec gate**: `spec` label, spec-only PRs, merge→`ready` hook. Done when one large item flows steering → spec PR → merge → `ready` → implementation PR.
+- **M5 — Instruments and dials**: full metric suite live; monthly dial-review ritual; auto-merge class formally specified, disabled.
+- **M6+ — Earned autonomy** (sequenced later, by evidence): third agent reviewer (codex; `codex-review-loop` machinery exists) → reviewer-quorum auto-approve on mechanical classes; Dreaming; app-integrated Digest via Attention; skill-optimization outer loop **with explicit exit criteria** (the named failure mode of graderless loops is token-burning local-maxima chasing); integration branches for large work; feedback-publication widening.
+
+The Factory never builds itself autonomously: M1–M4 are Interactive Lane work, and even at M6 the Factory's own code changes only through fully-gated PRs the Owner merges.
+
+## Experiment register (observe, don't design yet)
+
+- **Persona divergence** — a first-class research goal: rich journals, periodic published self-retrospectives (a Dreaming output), routing history as data. What does months of accumulated, peer-reviewed memory do to two initially-similar agents?
+- **Integration-branch approach** for large spec'd work — deliberately unresolved; observe where big PRs strain the single-PR flow and let the mechanism emerge.
+- **Third-reviewer quorum** — which change classes reach reviewer-agreement rates that justify delegation, and how fast.
+- **Feedback loop closure** — surfacing "your feedback shipped" back through the product once `status='resolved'` write-back exists.
+
+## References
+
+- Live-state audit, infra deep-dive, feedback-feature map: session artifacts, 2026-07-12 (summarized in "Why v1 stalled").
+- Warp: [the automatic triage skill](https://www.warp.dev/blog/how-to-build-a-cloud-software-factory-the-automatic-triage-skill) · [three skills for spec-driven development](https://www.warp.dev/blog/three-skills-for-spec-driven-development) · [skill optimization loop](https://www.warp.dev/blog/building-a-skill-optimization-loop) · [demo repo](https://github.com/warpdotdev-demos/cloud-factory-demo) · [common-skills](https://github.com/warpdotdev/common-skills)
+- Factory.ai: [Factory 2.0](https://factory.ai/news/software-factory) · [Signals](https://factory.ai/news/factory-signals)
