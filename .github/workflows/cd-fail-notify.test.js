@@ -1,3 +1,7 @@
+// Pins cd-fail-notify.js's two issue paths: reopen/update of the rolling CD
+// failure issue and first-failure creation. The mock exposes no Actions API,
+// so any return of the retired persona auto-dispatch fails these tests.
+// Run: node --test .github/workflows/cd-fail-notify.test.js (wired in ci-agents.yml).
 import assert from "node:assert/strict";
 import test from "node:test";
 
