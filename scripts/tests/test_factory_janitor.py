@@ -104,6 +104,15 @@ class FactoryJanitorTests(unittest.TestCase):
         self.assertEqual(source, "assignee event")
         self.assertNotIn(112, self.transitions)
 
+    def test_unlabeled_agent_task_issue_awaits_owner_release(self) -> None:
+        issue = next(issue for issue in self.inputs.issues if issue["number"] == 105)
+        handled_numbers = set(self.transitions) | {
+            anomaly.issue_number for anomaly in self.plan.anomalies
+        }
+
+        self.assertEqual(factory_janitor.current_states(issue), ())
+        self.assertNotIn(105, handled_numbers)
+
     def test_digest_factory_human_and_out_of_scope_issues_are_untouched(self) -> None:
         handled_numbers = set(self.transitions) | {
             anomaly.issue_number for anomaly in self.plan.anomalies
@@ -207,8 +216,9 @@ class FactoryJanitorTests(unittest.TestCase):
         self.assertIn("[transition] #103: review -> ready", result.stdout)
         self.assertIn("[anomaly] #110: multiple open PRs", result.stdout)
         self.assertIn(
-            "Dry run: 7 transition(s), 2 anomalies; no writes.", result.stdout
+            "Dry run: 6 transition(s), 2 anomalies; no writes.", result.stdout
         )
+        self.assertNotIn("none -> ready", result.stdout)
         self.assertNotIn("[applied]", result.stdout)
 
     def test_fixture_mode_rejects_apply(self) -> None:

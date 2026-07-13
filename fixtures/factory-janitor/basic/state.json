@@ -89,7 +89,7 @@
     {
       "id": "I_105",
       "number": 105,
-      "title": "Restore missing lifecycle state",
+      "title": "Await Owner release",
       "body": "",
       "state": "OPEN",
       "labels": [

@@ -567,7 +567,10 @@ def build_plan(inputs: JanitorInputs, *, now: datetime) -> ReconciliationPlan:
                         transitions.append(transition)
             continue
 
-        desired_state = states[0] if states else "ready"
+        if not states:
+            continue
+
+        desired_state = states[0]
         if desired_state == "claimed":
             claim = claim_timestamp(issue)
             if claim is None:
@@ -594,11 +597,7 @@ def build_plan(inputs: JanitorInputs, *, now: datetime) -> ReconciliationPlan:
                         transitions.append(transition)
                     continue
 
-        reason = (
-            "add missing lifecycle state"
-            if not states
-            else f"keep highest-priority lifecycle state {desired_state}"
-        )
+        reason = f"keep highest-priority lifecycle state {desired_state}"
         transition = _transition(issue, desired_state, reason)
         if transition is not None:
             transitions.append(transition)
