@@ -1,0 +1,56 @@
+[
+  {
+    "number": 101,
+    "title": "Mergeable implementation",
+    "url": "https://example.test/issues/101",
+    "state": "OPEN",
+    "createdAt": "2026-07-09T13:30:00Z",
+    "updatedAt": "2026-07-11T13:30:00Z",
+    "labels": [{"name": "mergeable"}]
+  },
+  {
+    "number": 102,
+    "title": "Available agent task",
+    "url": "https://example.test/issues/102",
+    "state": "OPEN",
+    "createdAt": "2026-07-06T13:30:00Z",
+    "updatedAt": "2026-07-09T13:30:00Z",
+    "labels": [{"name": "agent"}, {"name": "task"}, {"name": "ready"}]
+  },
+  {
+    "number": 103,
+    "title": "Owner decision needed",
+    "url": "https://example.test/issues/103",
+    "state": "OPEN",
+    "createdAt": "2026-07-05T13:30:00Z",
+    "updatedAt": "2026-07-07T13:30:00Z",
+    "labels": [{"name": "needs-human"}]
+  },
+  {
+    "number": 104,
+    "title": "Claim went quiet",
+    "url": "https://example.test/issues/104",
+    "state": "OPEN",
+    "createdAt": "2026-07-08T13:30:00Z",
+    "updatedAt": "2026-07-10T13:29:59Z",
+    "labels": [{"name": "claimed"}]
+  },
+  {
+    "number": 105,
+    "title": "Review went quiet",
+    "url": "https://example.test/issues/105",
+    "state": "OPEN",
+    "createdAt": "2026-07-02T13:30:00Z",
+    "updatedAt": "2026-07-12T12:00:00Z",
+    "labels": [{"name": "review"}]
+  },
+  {
+    "number": 106,
+    "title": "Recent claim",
+    "url": "https://example.test/issues/106",
+    "state": "OPEN",
+    "createdAt": "2026-07-11T13:30:00Z",
+    "updatedAt": "2026-07-12T00:00:00Z",
+    "labels": [{"name": "claimed"}]
+  }
+]

@@ -16,7 +16,7 @@ on:
 permissions:
   actions: read
   contents: write
-  discussions: read
+  discussions: write
   issues: read
   pull-requests: read
 
@@ -172,3 +172,18 @@ jobs:
           git add docs/ops/dashboard.md docs/ops/latest-summary.json docs/ops/timeline.csv
           git commit -m "chore(factory): update monitor telemetry"
           git push origin HEAD:factory/ops-data
+
+      - name: Update Factory Digest
+        shell: bash
+        env:
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          GH_TOKEN: ${{ github.token }}
+          DIGEST_TOKEN: ${{ secrets.PETER_DISCUSSION_TOKEN || github.token }}
+        run: |
+          set -euo pipefail
+          ARGS=(--summary "$GITHUB_WORKSPACE/ops-data/docs/ops/latest-summary.json")
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+
+          uv run --script "$GITHUB_WORKSPACE/source/scripts/factory-digest.py" "${ARGS[@]}"

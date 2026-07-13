@@ -1,0 +1,21 @@
+{
+  "generated_at": "2026-07-12T13:30:00Z",
+  "funnel": {
+    "ideas": 8,
+    "approved": 6,
+    "planned": 5,
+    "active": 3,
+    "merged": 2,
+    "stalled": 1
+  },
+  "breaches": [
+    {
+      "category": "ci",
+      "summary": "GitHub Actions failure rate crossed the alert threshold"
+    },
+    {
+      "category": "throughput",
+      "summary": "Planned discussions are sitting without linked PR activity"
+    }
+  ]
+}
