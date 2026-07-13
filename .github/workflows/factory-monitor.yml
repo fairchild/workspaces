@@ -1,0 +1,174 @@
+# Runs the Agent Factory monitor telemetry lane.
+# Live artifacts are written to factory/ops-data because main is PR-only.
+
+name: Factory Monitor
+
+on:
+  schedule:
+    - cron: "30 13 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Generate telemetry without committing or pushing"
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: write
+  discussions: read
+  issues: read
+  pull-requests: read
+
+concurrency:
+  group: factory-monitor
+  cancel-in-progress: false
+
+jobs:
+  run:
+    if: github.event_name == 'workflow_dispatch' || (vars.AGENT_AUTOMATIONS_ENABLED == 'true' && vars.FACTORY_MONITOR_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout main scripts
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: main
+          path: source
+          fetch-depth: 50
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+
+      - name: Check ops data branch
+        id: ops-data-branch
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          set +e
+          git ls-remote --exit-code --heads "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" factory/ops-data >/dev/null
+          status=$?
+          set -e
+
+          if [ "$status" -eq 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "factory/ops-data exists"
+          elif [ "$status" -eq 2 ]; then
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "factory/ops-data does not exist yet"
+          else
+            echo "Unable to check factory/ops-data; git ls-remote exited $status" >&2
+            exit "$status"
+          fi
+
+      - name: Checkout ops data branch
+        if: steps.ops-data-branch.outputs.exists == 'true'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: factory/ops-data
+          path: ops-data
+          fetch-depth: 1
+
+      - name: Seed ops data branch
+        if: steps.ops-data-branch.outputs.exists == 'false'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: main
+          path: ops-data
+          fetch-depth: 1
+
+      - name: Configure ops data checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/ops-data"
+
+          if git show-ref --verify --quiet refs/heads/factory/ops-data; then
+            git switch factory/ops-data
+          elif git show-ref --verify --quiet refs/remotes/origin/factory/ops-data; then
+            git switch --track -c factory/ops-data origin/factory/ops-data
+          else
+            # Orphan: a permanent public data branch must not carry a stale
+            # snapshot of main's source tree — telemetry and a README only.
+            git switch --orphan factory/ops-data
+            cat > README.md <<'MD'
+          # factory/ops-data
+
+          Telemetry data branch written by the Factory Monitor workflow
+          (`.github/workflows/factory-monitor.yml`). Contains only
+          `docs/ops/` artifacts; it shares no history with `main`, which is
+          PR-only and cannot receive telemetry commits directly.
+          MD
+            git add README.md
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Generate ops telemetry
+        shell: bash
+        env:
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ARGS=(--days 30 --output-dir "$GITHUB_WORKSPACE/ops-data/docs/ops")
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+
+          uv run --script "$GITHUB_WORKSPACE/source/scripts/ops-report.py" "${ARGS[@]}"
+
+      - name: Report threshold result
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$GITHUB_WORKSPACE/ops-data/docs/ops/latest-summary.json" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              summary = json.load(handle)
+
+          breaches = summary.get("breaches", [])
+          if not breaches:
+              print("No threshold breaches detected.")
+          else:
+              print("Threshold breaches detected:")
+              for breach in breaches:
+                  print(f"- {breach.get('category')}: {breach.get('summary')}")
+          PY
+
+      - name: Preview telemetry diff
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C "$GITHUB_WORKSPACE/ops-data" status --short docs/ops
+
+      - name: Commit telemetry changes
+        if: github.event_name != 'workflow_dispatch' || inputs.dry_run != true
+        shell: bash
+        env:
+          OPS_BRANCH_EXISTS: ${{ steps.ops-data-branch.outputs.exists }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/ops-data"
+
+          git status --short docs/ops
+          if [ -z "$(git status --porcelain -- docs/ops)" ]; then
+            if [ "$OPS_BRANCH_EXISTS" = "false" ]; then
+              echo "No telemetry changes; initializing factory/ops-data."
+              git commit --allow-empty -m "chore(factory): initialize ops-data branch"
+              git push origin HEAD:factory/ops-data
+            else
+              echo "No telemetry changes; nothing to commit."
+            fi
+            exit 0
+          fi
+
+          git add docs/ops/dashboard.md docs/ops/latest-summary.json docs/ops/timeline.csv
+          git commit -m "chore(factory): update monitor telemetry"
+          git push origin HEAD:factory/ops-data
