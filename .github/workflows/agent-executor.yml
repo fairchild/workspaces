@@ -259,7 +259,7 @@ jobs:
           TARGET_TYPE: ${{ needs.claim.outputs.target_type }}
         run: |
           set -euo pipefail
-          BODY="👋 Peter Planner here. I work on planning — converting approved \`[idea]\` discussions into actionable issues and milestones. Mention me in a **Discussion** where you'd like me to plan, or use \`workflow_dispatch\` on the \`agent-peter\` workflow to trigger planning for a specific discussion."
+          BODY="👋 Peter Planner here. My discussion-planning path is retired — work now enters through GitHub issues or the in-app feedback box and is triaged by the Factory pipeline. See \`docs/development/agent-factory-v2-plan.md\`."
           if [ "$TARGET_TYPE" = "pull_request" ]; then
             gh pr comment "$TARGET_NUMBER" --body "$BODY"
           else

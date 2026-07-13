@@ -2739,27 +2739,15 @@ class RunContributorTests(unittest.TestCase):
             ["swift build", "swift test --filter RunPlannerTests"],
         )
 
-    def test_agent_review_workflows_checkout_pr_head_into_model_workspace(self) -> None:
-        april_workflow = (REPO_ROOT / ".github" / "workflows" / "agent-april.yml").read_text(encoding="utf-8")
-        plat_workflow = (REPO_ROOT / ".github" / "workflows" / "agent-plat.yml").read_text(encoding="utf-8")
+    def test_agent_executor_checks_out_pr_head_into_model_workspace(self) -> None:
         executor_workflow = (REPO_ROOT / ".github" / "workflows" / "agent-executor.yml").read_text(encoding="utf-8")
-
-        self.assertIn("path: model-workspace", april_workflow)
-        self.assertIn("CONTRIBUTOR_MODEL_CWD", april_workflow)
-        self.assertIn("refs/pull/${{ steps.resolve-pr.outputs.pr_number }}/head", april_workflow)
-
-        self.assertIn("path: model-workspace", plat_workflow)
-        self.assertIn("CONTRIBUTOR_MODEL_CWD", plat_workflow)
-        self.assertIn("refs/pull/${{ steps.resolve-pr.outputs.pr_number }}/head", plat_workflow)
 
         self.assertIn("path: model-workspace", executor_workflow)
         self.assertIn("CONTRIBUTOR_MODEL_CWD", executor_workflow)
         self.assertIn("refs/pull/${{ steps.target-workspace.outputs.pr_number }}/head", executor_workflow)
 
-    def test_contributor_and_evidence_workflows_disable_persisted_credentials(self) -> None:
+    def test_mention_and_evidence_workflows_disable_persisted_credentials(self) -> None:
         workflow_paths = [
-            REPO_ROOT / ".github" / "workflows" / "agent-april.yml",
-            REPO_ROOT / ".github" / "workflows" / "agent-plat.yml",
             REPO_ROOT / ".github" / "workflows" / "agent-mention.yml",
             REPO_ROOT / ".github" / "workflows" / "_evidence.yml",
         ]
