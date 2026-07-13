@@ -164,18 +164,28 @@ jobs:
             echo "::error::VERCEL_AUTOMATION_BYPASS_SECRET is not set — validators would measure the Vercel SSO login page, not the app. Set the repo secret to the project's Protection-Bypass-for-Automation value (Vercel → spaces-web → Settings → Deployment Protection)."
             exit 1
           fi
-          read -r STATUS REDIRECT < <(
-            curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' \
-              -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
-              "$PREVIEW_URL/"
-          )
-          echo "preview probe: status=$STATUS redirect=${REDIRECT:-<none>}"
+          # Capture curl's exit explicitly: `curl -w` emits no trailing newline,
+          # so `read` would return non-zero at EOF and, under `set -e`, abort the
+          # job before the case ever runs (a false failure on every probe). A
+          # herestring re-adds the newline; the network-failure branch is its own.
+          set +e
+          PROBE=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' \
+            -H "x-vercel-protection-bypass: $VERCEL_AUTOMATION_BYPASS_SECRET" \
+            "$PREVIEW_URL/")
+          CURL_EXIT=$?
+          set -e
+          read -r STATUS REDIRECT <<< "$PROBE"
+          echo "preview probe: status=${STATUS:-<none>} redirect=${REDIRECT:-<none>} curl_exit=$CURL_EXIT"
+          if [ "$CURL_EXIT" -ne 0 ]; then
+            echo "::error::curl failed (exit $CURL_EXIT) probing $PREVIEW_URL/ — could not reach the preview deployment."
+            exit 1
+          fi
           case "$STATUS" in
             2*)
               echo "Protection-bypass honored — validators will see the app."
               ;;
             *)
-              if printf '%s' "$REDIRECT" | grep -qiE 'vercel\.com/(sso-api|login)'; then
+              if printf '%s' "$REDIRECT" | grep -qiE '^https://[^/]*vercel\.com/(sso-api|login)([/?#]|$)'; then
                 echo "::error::Deployment-protection bypass NOT honored: $PREVIEW_URL/ redirected to Vercel SSO ($REDIRECT). The repo secret VERCEL_AUTOMATION_BYPASS_SECRET does not match the project's Protection-Bypass-for-Automation secret, or that feature is disabled. Fix: Vercel → spaces-web → Settings → Deployment Protection → enable + copy the automation bypass secret, then 'gh secret set VERCEL_AUTOMATION_BYPASS_SECRET --repo fairchild/workspaces'."
               else
                 echo "::error::Unexpected status $STATUS probing $PREVIEW_URL/ with the bypass header (redirect=${REDIRECT:-<none>}); expected 2xx."
