@@ -25,7 +25,14 @@ from typing import Any
 
 FIXTURE_REQUIRED_FILES = ("discussions.json", "issues.json", "pulls.json")
 DIGEST_TITLE = "Factory Digest"
+DIGEST_MARKER = "<!-- factory-digest:v1 -->"
+DISCUSSION_WRITE_ACCESS_ERROR = (
+    "DIGEST_TOKEN lacks discussion write access — set the PETER_DISCUSSION_TOKEN repo secret "
+    "(a PAT with discussions write); the built-in Actions token has historically been unable "
+    "to update discussions in this repo."
+)
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
+MAX_TITLE_LENGTH = 80
 
 
 class FactoryDigestError(RuntimeError):
@@ -92,9 +99,9 @@ query FactoryDigestDiscussions($owner: String!, $name: String!, $after: String) 
   repository(owner: $owner, name: $name) {
     id
     discussionCategories(first: 25) { nodes { id name } }
-    discussions(first: 100, after: $after, states: OPEN) {
+    discussions(first: 100, after: $after, states: [OPEN, CLOSED]) {
       pageInfo { hasNextPage endCursor }
-      nodes { id number title url createdAt }
+      nodes { id number title body url state createdAt }
     }
   }
 }
@@ -237,6 +244,17 @@ def label_names(item: dict[str, Any]) -> set[str]:
     return {str(label.get("name", "")) for label in item.get("labels", []) or []}
 
 
+def render_title(value: Any) -> str:
+    sanitized = " ".join(str(value or "").splitlines()).replace("`", "'")
+    if len(sanitized) > MAX_TITLE_LENGTH:
+        sanitized = sanitized[: MAX_TITLE_LENGTH - 1] + "…"
+    return f"`{sanitized}`"
+
+
+def render_item_reference(item: dict[str, Any]) -> str:
+    return f"[#{item['number']}]({item.get('url', '')}) {render_title(item.get('title', ''))}"
+
+
 def render_stats(summary: dict[str, Any]) -> str:
     counts = summary.get("counts") or summary.get("funnel") or {}
     rendered = " · ".join(f"{key} {value}" for key, value in counts.items())
@@ -266,13 +284,13 @@ def render_digest(
         mergeable = any(
             issue is not None and "mergeable" in label_names(issue) for issue in linked_issues
         )
-        created_at = str(pull["createdAt"])
+        updated_at = str(pull["updatedAt"])
         line = (
-            f"- [{age_days(created_at, current_time)}d] "
-            f"[#{pull['number']} {pull['title']}]({pull['url']}): "
+            f"- no activity {age_days(updated_at, current_time)}d "
+            f"{render_item_reference(pull)}: "
             f"{'merge' if mergeable else 'review'}"
         )
-        merge_lines.append((not mergeable, parse_datetime(created_at), line))
+        merge_lines.append((not mergeable, parse_datetime(updated_at), line))
 
     sections: list[str] = []
     if merge_lines:
@@ -280,6 +298,8 @@ def render_digest(
         sections.append("## Needs your merge\n\n" + "\n".join(lines))
 
     release_lines: list[tuple[datetime, str]] = []
+    ready_issues: list[dict[str, Any]] = []
+    anomalies: list[int] = []
     aging_lines: list[tuple[datetime, str]] = []
     for issue in issues:
         if str(issue.get("state", "")).upper() != "OPEN":
@@ -287,21 +307,36 @@ def render_digest(
         labels = label_names(issue)
         updated_at = str(issue["updatedAt"])
         updated_time = parse_datetime(updated_at)
-        issue_link = f"[#{issue['number']} {issue.get('title', '')}]({issue.get('url', '')})"
+        issue_reference = render_item_reference(issue)
+        lifecycle_labels = labels.intersection({"review", "claimed", "ready"})
+        if len(lifecycle_labels) > 1:
+            anomalies.append(int(issue["number"]))
+            continue
+        lifecycle = next(
+            (state for state in ("review", "claimed", "ready") if state in lifecycle_labels),
+            None,
+        )
 
         if "needs-human" in labels:
             release_lines.append(
-                (updated_time, f"- [{age_days(updated_at, current_time)}d] {issue_link}: decide")
+                (
+                    updated_time,
+                    f"- no activity {age_days(updated_at, current_time)}d "
+                    f"{issue_reference}: decide",
+                )
             )
-        elif {"agent", "task", "ready"}.issubset(labels):
+        elif {"agent", "task"}.issubset(labels) and lifecycle is None:
             release_lines.append(
                 (
                     updated_time,
-                    f"- [{age_days(updated_at, current_time)}d] {issue_link}: available for claim",
+                    f"- no activity {age_days(updated_at, current_time)}d "
+                    f"{issue_reference}: triage/flip ready",
                 )
             )
 
-        if "review" in labels:
+        if lifecycle == "ready":
+            ready_issues.append(issue)
+        elif lifecycle == "review":
             candidates = [
                 pull
                 for pull in pulls_by_issue.get(int(issue["number"]), [])
@@ -312,21 +347,40 @@ def render_digest(
                 pull_updated_at = str(pull["updatedAt"])
                 pull_updated_time = parse_datetime(pull_updated_at)
                 if current_time - pull_updated_time > timedelta(days=3):
-                    pull_link = f"[#{pull['number']} {pull['title']}]({pull['url']})"
                     aging_lines.append(
                         (
                             pull_updated_time,
-                            f"- [{age_days(pull_updated_at, current_time)}d] {pull_link}: nudge",
+                            f"- no activity {age_days(pull_updated_at, current_time)}d "
+                            f"{render_item_reference(pull)}: nudge",
                         )
                     )
-        elif "claimed" in labels and current_time - updated_time > timedelta(hours=24):
+        elif lifecycle == "claimed" and current_time - updated_time > timedelta(hours=24):
+            # updatedAt measures inactivity; precise claim age belongs to reconciliation janitor #1064.
             aging_lines.append(
-                (updated_time, f"- [{age_days(updated_at, current_time)}d] {issue_link}: check")
+                (
+                    updated_time,
+                    f"- no activity {age_days(updated_at, current_time)}d "
+                    f"{issue_reference}: check",
+                )
             )
 
     if release_lines:
         lines = [line for _, line in sorted(release_lines, key=lambda item: item[0])]
-        sections.append("## Awaiting release\n\n" + "\n".join(lines))
+        sections.append("## Awaiting your release\n\n" + "\n".join(lines))
+    if ready_issues:
+        count = len(ready_issues)
+        noun = "issue" if count == 1 else "issues"
+        line = f"{count} {noun} ready for claim"
+        if count <= 3:
+            itemized = ", ".join(
+                render_item_reference(issue)
+                for issue in sorted(ready_issues, key=lambda item: int(item["number"]))
+            )
+            line += f": {itemized}"
+        sections.append(line)
+    if anomalies:
+        numbers = ", ".join(f"#{number}" for number in sorted(anomalies))
+        sections.append(f"State anomalies: {numbers} — janitor")
     if aging_lines:
         lines = [line for _, line in sorted(aging_lines, key=lambda item: item[0])]
         sections.append("## Aging\n\n" + "\n".join(lines))
@@ -339,7 +393,47 @@ def render_digest(
     if not sections:
         sections.append("No open gates. The factory is idle.")
     sections.append(render_stats(summary))
-    return "\n\n".join(sections)
+    return "\n\n".join([DIGEST_MARKER, *sections])
+
+
+def is_discussion_access_error(error: FactoryDigestError) -> bool:
+    message = str(error).lower()
+    indicators = (
+        "permission",
+        "forbidden",
+        "resource not accessible",
+        "required scope",
+        "insufficient scope",
+        "http 401",
+        "http 403",
+        "unknown argument",
+        "unknown type",
+        "is not defined",
+        "doesn't exist on type",
+        "cannot query field",
+        "expected type",
+        "invalid value",
+    )
+    return any(indicator in message for indicator in indicators)
+
+
+def run_discussion_write(
+    token: str,
+    mutation: str,
+    variables: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        return graphql(token, mutation, variables)
+    except FactoryDigestError as error:
+        if is_discussion_access_error(error):
+            raise FactoryDigestError(DISCUSSION_WRITE_ACCESS_ERROR) from error
+        raise
+
+
+def marked_body(body: str) -> str:
+    if body.startswith(DIGEST_MARKER):
+        return body
+    return f"{DIGEST_MARKER}\n\n{body}"
 
 
 def publish_digest(
@@ -348,10 +442,37 @@ def publish_digest(
     body: str,
     token: str,
 ) -> dict[str, Any]:
-    matches = [item for item in discussions if item.get("title") == DIGEST_TITLE]
-    if len(matches) > 1:
-        raise FactoryDigestError("multiple open Factory Digest discussions exist; refusing to choose")
+    body = marked_body(body)
+    matches = [item for item in discussions if DIGEST_MARKER in str(item.get("body", ""))]
     if matches:
+        matches.sort(
+            key=lambda item: (
+                parse_datetime(str(item["createdAt"])),
+                item.get("title") == DIGEST_TITLE,
+            ),
+            reverse=True,
+        )
+        selected = matches[0]
+        if len(matches) > 1:
+            others = ", ".join(f"#{item['number']}" for item in matches[1:])
+            print(
+                f"warning: multiple marked Factory Digest discussions found; using "
+                f"#{selected['number']} and leaving {others} untouched",
+                file=sys.stderr,
+            )
+        if str(selected.get("state", "OPEN")).upper() == "CLOSED":
+            reopen_mutation = """
+mutation ReopenFactoryDigest($input: ReopenDiscussionInput!) {
+  reopenDiscussion(input: $input) {
+    discussion { id number url }
+  }
+}
+"""
+            run_discussion_write(
+                token,
+                reopen_mutation,
+                {"input": {"discussionId": selected["id"]}},
+            )
         mutation = """
 mutation UpdateFactoryDigest($input: UpdateDiscussionInput!) {
   updateDiscussion(input: $input) {
@@ -359,10 +480,10 @@ mutation UpdateFactoryDigest($input: UpdateDiscussionInput!) {
   }
 }
 """
-        data = graphql(
+        data = run_discussion_write(
             token,
             mutation,
-            {"input": {"discussionId": matches[0]["id"], "body": body}},
+            {"input": {"discussionId": selected["id"], "body": body}},
         )
         return data["data"]["updateDiscussion"]["discussion"]
 
@@ -378,7 +499,7 @@ mutation CreateFactoryDigest($input: CreateDiscussionInput!) {
   }
 }
 """
-    data = graphql(
+    data = run_discussion_write(
         token,
         create_mutation,
         {
