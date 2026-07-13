@@ -101,7 +101,7 @@ query FactoryDigestDiscussions($owner: String!, $name: String!, $after: String) 
     discussionCategories(first: 25) { nodes { id name } }
     discussions(first: 100, after: $after, states: [OPEN, CLOSED]) {
       pageInfo { hasNextPage endCursor }
-      nodes { id number title body url state createdAt }
+      nodes { id number title body url closed createdAt }
     }
   }
 }
@@ -460,7 +460,7 @@ def publish_digest(
                 f"#{selected['number']} and leaving {others} untouched",
                 file=sys.stderr,
             )
-        if str(selected.get("state", "OPEN")).upper() == "CLOSED":
+        if bool(selected.get("closed")):
             reopen_mutation = """
 mutation ReopenFactoryDigest($input: ReopenDiscussionInput!) {
   reopenDiscussion(input: $input) {
