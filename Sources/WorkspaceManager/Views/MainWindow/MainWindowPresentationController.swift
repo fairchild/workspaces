@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import WorkspaceManagerCore
 
@@ -14,6 +15,11 @@ struct MainWindowToolbarTitle: Equatable {
 }
 
 struct MainWindowPresentationController {
+    @MainActor
+    func hideVisualTitle(in window: NSWindow) {
+        window.titleVisibility = .hidden
+    }
+
     func activeHostSession(
         activeSessionID: UUID?,
         sessions: [HostTerminalSession]

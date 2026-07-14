@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import WorkspaceManagerCore
@@ -7,6 +8,18 @@ import WorkspaceManagerCore
 @Suite("MainWindowPresentationController")
 struct MainWindowPresentationControllerTests {
     private let controller = MainWindowPresentationController()
+
+    @Test("Main window hides its visual title without clearing its system title")
+    @MainActor
+    func mainWindowHidesVisualTitleWithoutClearingSystemTitle() {
+        let window = NSWindow()
+        window.title = "pi-mono / gentle-frog"
+
+        controller.hideVisualTitle(in: window)
+
+        #expect(window.titleVisibility == .hidden)
+        #expect(window.title == "pi-mono / gentle-frog")
+    }
 
     @Test("Active host session falls back to the last session when active is missing")
     func activeHostSessionFallsBackToLastSession() {

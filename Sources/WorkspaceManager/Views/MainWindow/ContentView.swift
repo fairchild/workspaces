@@ -780,6 +780,7 @@ struct ContentView: View {
         }
         .background(
             MainWindowHandleReader { window in
+                presentationController.hideVisualTitle(in: window)
                 terminalFocusCoordinator.bind(window: window)
             }
         )
