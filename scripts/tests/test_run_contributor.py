@@ -227,7 +227,7 @@ class RunContributorEvidenceTests(unittest.TestCase):
             "author:plat",
         )
 
-    def test_approved_review_labels_pull_request_and_linked_issue_mergeable(self) -> None:
+    def test_approved_review_uses_only_admitted_linked_issue(self) -> None:
         execution = sys.modules["execution"]
         commands: list[list[str]] = []
 
@@ -252,10 +252,27 @@ class RunContributorEvidenceTests(unittest.TestCase):
                 side_effect=fake_run_checked,
             ),
         ):
-            run_contributor._update_mergeable_label(77, "approve", {"GH_TOKEN": "token"})
+            run_contributor._update_mergeable_label(
+                77,
+                "approve",
+                {
+                    "GH_TOKEN": "token",
+                    "FACTORY_EXPECTED_LINKED_ISSUE": "42",
+                },
+            )
 
         self.assertIn(["gh", "pr", "edit", "77", "--add-label", "mergeable"], commands)
         self.assertIn(["gh", "issue", "edit", "42", "--add-label", "mergeable"], commands)
+
+        commands.clear()
+        with (
+            mock.patch.object(execution, "ensure_label_exists"),
+            mock.patch.object(execution, "run_checked", side_effect=fake_run_checked),
+        ):
+            run_contributor._update_mergeable_label(77, "approve", {"GH_TOKEN": "token"})
+
+        self.assertIn(["gh", "pr", "edit", "77", "--add-label", "mergeable"], commands)
+        self.assertFalse(any(command[:3] == ["gh", "issue", "edit"] for command in commands))
 
     def test_claude_runs_bare_in_untrusted_review_workspace(self) -> None:
         with mock.patch.object(

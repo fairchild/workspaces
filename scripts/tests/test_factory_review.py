@@ -11,6 +11,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -125,6 +126,32 @@ class FactoryReviewTests(unittest.TestCase):
         self.assertEqual(requested.action, "review")
         self.assertEqual(requested.reviewer, "april")
 
+    def test_daily_review_budget_counts_reruns_and_fails_closed(self) -> None:
+        runs = [
+            {"id": 100, "run_attempt": 2},
+            {"id": 101, "run_attempt": 1},
+        ]
+        self.assertEqual(factory_review.count_daily_runs(runs, "101"), 3)
+        self.assertEqual(factory_review.count_daily_runs(runs, "102", 3), 6)
+
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "4 run attempts"):
+            factory_review.authorize_execution(client, 3, "102", 1)
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "positive integer"):
+            factory_review.parse_daily_cap("0")
+
+        api_client = factory_review.GitHubClient("fairchild/workspaces", "token")
+        with mock.patch.object(
+            api_client,
+            "request",
+            return_value={"workflow_runs": runs},
+        ):
+            self.assertEqual(
+                api_client.workflow_runs_on("factory-review-execute.yml", "2026-07-14"),
+                runs,
+            )
+
     def test_human_or_draft_pull_request_does_not_enter_review_lane(self) -> None:
         files = [{"filename": "Sources/Feature.swift"}]
         human = self.pull_request(label="quality")
@@ -159,6 +186,8 @@ class FactoryReviewTests(unittest.TestCase):
         self.assertIn("ref: ${{ needs.admit.outputs.head_sha }}", executor)
         self.assertIn("--expected-head", executor)
         self.assertIn("FACTORY_EXPECTED_PR_HEAD_SHA", executor)
+        self.assertIn("FACTORY_REVIEW_DAILY_CAP", executor)
+        self.assertIn("factory-review.py --authorize", executor)
 
 
 if __name__ == "__main__":

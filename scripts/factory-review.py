@@ -13,8 +13,10 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -32,6 +34,7 @@ REVIEWER_BOTS = {
     "plat": "workspace-agents[bot]",
 }
 PLATFORM_PREFIXES = (".github/", "infra/")
+DEFAULT_DAILY_REVIEW_CAP = 12
 CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
@@ -77,6 +80,24 @@ class GitHubClient:
 
     def pull_request_reviews(self, number: int) -> list[dict[str, Any]]:
         return self._paginated(f"/repos/{self.repository}/pulls/{number}/reviews")
+
+    def workflow_runs_on(self, workflow: str, day: str) -> list[dict[str, Any]]:
+        runs: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            query = urllib.parse.urlencode(
+                {"created": day, "per_page": 100, "page": page}
+            )
+            payload = dict(
+                self.request(
+                    f"/repos/{self.repository}/actions/workflows/{workflow}/runs?{query}"
+                )
+            )
+            batch = list(payload.get("workflow_runs") or [])
+            runs.extend(dict(run) for run in batch)
+            if len(batch) < 100:
+                return runs
+            page += 1
 
     def _paginated(self, path: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -147,6 +168,57 @@ def linked_issue_number(pull_request: dict[str, Any]) -> int | None:
     return int(match.group("number")) if match else None
 
 
+def parse_daily_cap(value: str | None) -> int:
+    raw = (value or str(DEFAULT_DAILY_REVIEW_CAP)).strip()
+    try:
+        cap = int(raw)
+    except ValueError as error:
+        raise FactoryReviewError(
+            f"FACTORY_REVIEW_DAILY_CAP must be a positive integer, got {raw!r}"
+        ) from error
+    if cap <= 0:
+        raise FactoryReviewError("FACTORY_REVIEW_DAILY_CAP must be a positive integer")
+    return cap
+
+
+def count_daily_runs(
+    runs: list[dict[str, Any]],
+    current_run_id: str,
+    current_run_attempt: int = 1,
+) -> int:
+    attempts_by_run = {
+        str(run["id"]): max(1, int(run.get("run_attempt") or 1))
+        for run in runs
+        if isinstance(run, dict) and run.get("id") is not None
+    }
+    if current_run_id:
+        attempts_by_run[current_run_id] = max(
+            attempts_by_run.get(current_run_id, 0),
+            current_run_attempt,
+        )
+    return sum(attempts_by_run.values())
+
+
+def authorize_execution(
+    client: GitHubClient,
+    daily_cap: int,
+    current_run_id: str,
+    current_run_attempt: int,
+) -> None:
+    day = datetime.now(UTC).date().isoformat()
+    daily_run_count = count_daily_runs(
+        client.workflow_runs_on("factory-review-execute.yml", day),
+        current_run_id,
+        current_run_attempt,
+    )
+    print(f"Factory review execution budget: {daily_run_count}/{daily_cap}")
+    if daily_run_count > daily_cap:
+        raise FactoryReviewError(
+            f"daily review cap of {daily_cap} is exceeded "
+            f"({daily_run_count} run attempts)"
+        )
+
+
 def evaluate_review(
     pull_request: dict[str, Any],
     files: list[dict[str, Any]],
@@ -186,7 +258,9 @@ def write_output(name: str, value: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--pr", type=int, required=True)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--pr", type=int)
+    target.add_argument("--authorize", action="store_true")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--expected-head", default="")
     parser.add_argument("--expected-reviewer", choices=sorted(REVIEWER_BOTS))
@@ -207,6 +281,16 @@ def main() -> int:
         require_env("GH_TOKEN"),
         os.environ.get("GITHUB_API_URL", "https://api.github.com"),
     )
+    if args.authorize:
+        authorize_execution(
+            client,
+            parse_daily_cap(os.environ.get("FACTORY_REVIEW_DAILY_CAP")),
+            require_env("GITHUB_RUN_ID"),
+            int(require_env("GITHUB_RUN_ATTEMPT")),
+        )
+        return 0
+
+    assert args.pr is not None
     pull_request = client.pull_request(args.pr)
     files = client.pull_request_files(args.pr)
     reviews = client.pull_request_reviews(args.pr)

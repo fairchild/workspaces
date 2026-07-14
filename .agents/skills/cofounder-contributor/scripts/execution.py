@@ -315,7 +315,7 @@ def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -
     current_linked_issue, _ = extract_pr_issue_reference(pr_body)
     expected_linked_issue_text = env.get("FACTORY_EXPECTED_LINKED_ISSUE", "").strip()
     expected_linked_issue = int(expected_linked_issue_text) if expected_linked_issue_text else None
-    linked_issue = expected_linked_issue or current_linked_issue
+    linked_issue = expected_linked_issue
     if expected_linked_issue is not None and current_linked_issue != expected_linked_issue:
         print(
             f"error: PR #{pr_number} linked issue changed during Factory review",
@@ -352,20 +352,26 @@ def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -
                 )
         return
 
-    if linked_issue is None:
-        return
     ensure_label_exists(
         env,
         AGENT_MERGEABLE_LABEL,
         AGENT_MERGEABLE_LABEL_COLOR,
         AGENT_MERGEABLE_LABEL_DESCRIPTION,
     )
-    run_checked(
-        ["gh", "issue", "edit", str(linked_issue), "--add-label", AGENT_MERGEABLE_LABEL],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-    )
+    if linked_issue is not None:
+        run_checked(
+            [
+                "gh",
+                "issue",
+                "edit",
+                str(linked_issue),
+                "--add-label",
+                AGENT_MERGEABLE_LABEL,
+            ],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
     run_checked(
         ["gh", "pr", "edit", str(pr_number), "--add-label", AGENT_MERGEABLE_LABEL],
         timeout=GITHUB_API_TIMEOUT,
