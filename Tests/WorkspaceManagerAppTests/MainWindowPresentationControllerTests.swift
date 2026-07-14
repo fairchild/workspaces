@@ -9,9 +9,13 @@ import WorkspaceManagerCore
 struct MainWindowPresentationControllerTests {
     private let controller = MainWindowPresentationController()
 
-    @Test("Declarative main window style hides its visual title without clearing its system title")
+    @Test("Presentation constant requests a hidden visual title; NSWindow.title is untouched by it")
     @MainActor
-    func mainWindowHidesVisualTitleWithoutClearingSystemTitle() {
+    func visualTitleConstantIsHiddenAndDoesNotMutateSystemTitle() {
+        // Smoke check on the constant + title independence only. The claim that
+        // .unifiedCompact(showsTitle: false) preserves NSWindow.title in the live
+        // scene rests on the standalone AppKit probe recorded in PR #1086, which
+        // is not part of this regression suite.
         let window = NSWindow()
         window.title = "pi-mono / gentle-frog"
 
