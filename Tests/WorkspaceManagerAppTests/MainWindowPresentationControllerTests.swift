@@ -9,16 +9,37 @@ import WorkspaceManagerCore
 struct MainWindowPresentationControllerTests {
     private let controller = MainWindowPresentationController()
 
-    @Test("Main window hides its visual title without clearing its system title")
+    @Test("Declarative main window style hides its visual title without clearing its system title")
     @MainActor
     func mainWindowHidesVisualTitleWithoutClearingSystemTitle() {
         let window = NSWindow()
         window.title = "pi-mono / gentle-frog"
 
-        controller.hideVisualTitle(in: window)
-
-        #expect(window.titleVisibility == .hidden)
+        #expect(!MainWindowPresentationController.showsVisualWindowTitle)
         #expect(window.title == "pi-mono / gentle-frog")
+    }
+
+    @Test("Development badge remains visible beside a repo breadcrumb")
+    func developmentBadgeRemainsVisibleBesideRepoBreadcrumb() {
+        let toolbarTitle = MainWindowToolbarTitle(
+            repoName: "pi-mono",
+            workspaceName: "gentle-frog"
+        )
+        let buildIdentity = AppBuildIdentity(
+            channel: .development,
+            displayPath: "worktrees/codex-title-bar/workspaces",
+            fullPath: "/tmp/worktrees/codex-title-bar/workspaces",
+            launchPath: "/tmp/worktrees/codex-title-bar/workspaces/.build/debug/WorkspaceManager",
+            hueDegrees: 120
+        )
+
+        let presentation = controller.principalToolbarPresentation(
+            toolbarTitle: toolbarTitle,
+            buildIdentity: buildIdentity
+        )
+
+        #expect(presentation.toolbarTitle == toolbarTitle)
+        #expect(presentation.showsDevelopmentBadge)
     }
 
     @Test("Active host session falls back to the last session when active is missing")

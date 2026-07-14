@@ -720,17 +720,26 @@ struct ContentView: View {
 
     @ViewBuilder
     private var principalToolbarContent: some View {
-        if let title = toolbarTitle,
-            let repo = selectedRepoForToolbar
-        {
-            MainToolbarTitleBreadcrumb(
-                title: title,
-                faviconSource: preferredToolbarIconSource(for: repo),
-                onOpenRepoOverview: { handleRepoSelection(repo) },
-                onOpenRepoTerminal: { handleRepoTerminalSelection(repo) }
-            )
-        } else {
-            AppBuildIdentityBadge(identity: buildIdentity)
+        let presentation = presentationController.principalToolbarPresentation(
+            toolbarTitle: toolbarTitle,
+            buildIdentity: buildIdentity
+        )
+
+        HStack(spacing: 8) {
+            if presentation.showsDevelopmentBadge {
+                AppBuildIdentityBadge(identity: buildIdentity)
+            }
+
+            if let title = presentation.toolbarTitle,
+                let repo = selectedRepoForToolbar
+            {
+                MainToolbarTitleBreadcrumb(
+                    title: title,
+                    faviconSource: preferredToolbarIconSource(for: repo),
+                    onOpenRepoOverview: { handleRepoSelection(repo) },
+                    onOpenRepoTerminal: { handleRepoTerminalSelection(repo) }
+                )
+            }
         }
     }
 
@@ -780,7 +789,6 @@ struct ContentView: View {
         }
         .background(
             MainWindowHandleReader { window in
-                presentationController.hideVisualTitle(in: window)
                 terminalFocusCoordinator.bind(window: window)
             }
         )
