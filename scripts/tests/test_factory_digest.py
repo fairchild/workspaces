@@ -107,12 +107,19 @@ class FactoryDigestTests(unittest.TestCase):
                 {
                     "event": "issues",
                     "display_title": "Factory Implement ready #42",
-                }
+                    "actor": {"login": "fairchild"},
+                },
+                "fairchild",
             )
         )
         self.assertTrue(
             factory_digest.is_factory_implement_dispatch(
-                {"event": "workflow_dispatch", "display_title": "manual"}
+                {
+                    "event": "workflow_dispatch",
+                    "display_title": "manual",
+                    "actor": {"login": "fairchild"},
+                },
+                "fairchild",
             )
         )
         self.assertFalse(
@@ -120,7 +127,19 @@ class FactoryDigestTests(unittest.TestCase):
                 {
                     "event": "issues",
                     "display_title": "Factory Implement claimed #42",
-                }
+                    "actor": {"login": "fairchild"},
+                },
+                "fairchild",
+            )
+        )
+        self.assertFalse(
+            factory_digest.is_factory_implement_dispatch(
+                {
+                    "event": "workflow_dispatch",
+                    "display_title": "manual",
+                    "actor": {"login": "april-clearwater[bot]"},
+                },
+                "fairchild",
             )
         )
         self.assertEqual(
@@ -130,14 +149,26 @@ class FactoryDigestTests(unittest.TestCase):
                         "event": "issues",
                         "display_title": "Factory Implement ready #42",
                         "run_attempt": 2,
+                        "actor": {"login": "fairchild"},
                     },
-                    {"event": "workflow_dispatch", "run_attempt": 1},
+                    {
+                        "event": "workflow_dispatch",
+                        "run_attempt": 1,
+                        "actor": {"login": "fairchild"},
+                    },
+                    {
+                        "event": "workflow_dispatch",
+                        "run_attempt": 9,
+                        "actor": {"login": "april-clearwater[bot]"},
+                    },
                     {
                         "event": "issues",
                         "display_title": "Factory Implement claimed #42",
                         "run_attempt": 5,
+                        "actor": {"login": "fairchild"},
                     },
-                ]
+                ],
+                "fairchild",
             ),
             3,
         )

@@ -203,18 +203,25 @@ def count_successful_steps(
     return count
 
 
-def is_factory_implement_dispatch(run: dict[str, Any]) -> bool:
-    return (
+def is_factory_implement_dispatch(
+    run: dict[str, Any],
+    repository_owner: str,
+) -> bool:
+    actor = str((run.get("actor") or {}).get("login") or "")
+    return actor.casefold() == repository_owner.casefold() and (
         str(run.get("event", "")) == "workflow_dispatch"
         or str(run.get("display_title", "")).startswith("Factory Implement ready #")
     )
 
 
-def count_factory_implement_runs(runs: list[dict[str, Any]]) -> int:
+def count_factory_implement_runs(
+    runs: list[dict[str, Any]],
+    repository_owner: str,
+) -> int:
     return sum(
         max(1, int(run.get("run_attempt") or 1))
         for run in runs
-        if is_factory_implement_dispatch(run)
+        if is_factory_implement_dispatch(run, repository_owner)
     )
 
 
@@ -237,6 +244,7 @@ def fetch_factory_activity(
     current_time: datetime,
     implement_daily_cap: int,
 ) -> FactoryActivity:
+    repository_owner, _repository_name = split_repo_slug(repo_slug)
     day = current_time.astimezone(UTC).date().isoformat()
     implement_runs = fetch_workflow_runs(
         repo_slug,
@@ -259,7 +267,10 @@ def fetch_factory_activity(
     )
 
     return FactoryActivity(
-        implement_runs=count_factory_implement_runs(implement_runs),
+        implement_runs=count_factory_implement_runs(
+            implement_runs,
+            repository_owner,
+        ),
         review_verdicts=count_successful_steps(
             repo_slug,
             token,
