@@ -704,6 +704,10 @@ struct ContentView: View {
                     .toolbar {
 
                         ToolbarItemGroup(placement: .primaryAction) {
+                            // Spacer keeps this group pinned trailing now that no
+                            // .principal item occupies the center (#1086 owner steer).
+                            Spacer()
+
                             NeedsYouToolbarPill(
                                 repos: repos,
                                 onActivateWorkspace: handleWorkspaceSelection,
