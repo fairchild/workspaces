@@ -362,6 +362,45 @@ class RunContributorEvidenceTests(unittest.TestCase):
             "see workflow artifacts\n",
         )
 
+    def test_factory_visual_evidence_is_explicitly_blocked_until_capture_lane(self) -> None:
+        rendered, errors = run_contributor.build_execution_summary_body(
+            {
+                "body": "## Summary\nVisual change\n\n## Validation\n- downstream evidence",
+            },
+            requested_evidence=["screenshot of the main window"],
+            visual_evidence_available=False,
+        )
+
+        self.assertEqual(errors, [])
+        self.assertIn("- [blocked] screenshot of the main window", rendered)
+        self.assertIn("Xcode Cloud capture lane #1088 is not available", rendered)
+        self.assertIn("blocked on evidence", rendered)
+
+    def test_reconcile_test_evidence_includes_uploaded_log_url(self) -> None:
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] `swift test --filter FeatureTests` -- CI will run tests\n"
+        )
+
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            test_output="$ swift test --filter FeatureTests\nAll tests passed\n",
+            text_upload_required=True,
+            text_upload_succeeded=True,
+            text_urls=[
+                ("test-output", "https://evidence.example/workspaces/pr-42/test-output.txt")
+            ],
+        )
+
+        self.assertIn("- [complete] `swift test --filter FeatureTests`", reconciled)
+        self.assertIn(
+            "[test-output](https://evidence.example/workspaces/pr-42/test-output.txt)",
+            reconciled,
+        )
+
 
 class EvidenceValidationTests(unittest.TestCase):
     maxDiff = None

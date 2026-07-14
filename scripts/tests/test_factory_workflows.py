@@ -355,6 +355,11 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("scripts/factory-implement.py rollback", workflow)
         self.assertIn("needs.claim.result == 'failure'", workflow)
         self.assertIn("needs.claim.result == 'cancelled'", workflow)
+        self.assertIn('FACTORY_VISUAL_EVIDENCE_AVAILABLE: "false"', workflow)
+        self.assertIn("uses: ./.github/workflows/_evidence.yml", workflow)
+        self.assertIn("upload_text_evidence: true", workflow)
+        self.assertIn("needs_screenshot_evidence: false", workflow)
+        self.assertIn("secrets.EVIDENCE_UPLOAD_TOKEN", workflow)
 
         monitor = (
             REPO_ROOT / ".github" / "workflows" / "factory-monitor.yml"

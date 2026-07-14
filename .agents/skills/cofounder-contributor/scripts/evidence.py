@@ -597,6 +597,8 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
 
 def synthesize_initial_execution_evidence(
     requested_evidence: list[str],
+    *,
+    visual_evidence_available: bool = True,
 ) -> tuple[list[str], list[str], list[str]]:
     evidence_complete: list[str] = []
     evidence_blocked: list[str] = []
@@ -613,9 +615,14 @@ def synthesize_initial_execution_evidence(
                 f"{index} -- self-hosted macOS evidence workflow will run `{normalized}` from the exact commit under review"
             )
         elif kind == "screenshot":
-            evidence_pending_ci.append(
-                f"{index} -- self-hosted macOS evidence workflow will capture this evidence from the exact commit under review"
-            )
+            if visual_evidence_available:
+                evidence_pending_ci.append(
+                    f"{index} -- self-hosted macOS evidence workflow will capture this evidence from the exact commit under review"
+                )
+            else:
+                evidence_blocked.append(
+                    f"{index} -- Xcode Cloud capture lane #1088 is not available; orchestrator or owner must provide the documented visual-evidence handshake"
+                )
         else:
             evidence_blocked.append(
                 f"{index} -- automation cannot reconcile this evidence item automatically; owner follow-up required"
@@ -763,19 +770,43 @@ def _pending_ci_resolution(
     test_output: str = "",
     screenshot_upload_succeeded: bool = False,
     screenshot_urls: list[tuple[str, str]] | None = None,
+    text_upload_required: bool = False,
+    text_upload_succeeded: bool = False,
+    text_urls: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str]:
     kind = _evidence_item_kind(item)
     normalized = _normalize_evidence_item(item)
     uploaded_screenshot_urls = screenshot_urls or []
+    uploaded_text_urls = text_urls or []
+
+    def text_link(prefix: str) -> str | None:
+        match = next(
+            ((label, url) for label, url in uploaded_text_urls if label.startswith(prefix)),
+            None,
+        )
+        if match is None:
+            return None
+        label, url = match
+        return f"[{label}]({url})"
 
     if kind == "build":
         if build_succeeded:
+            if text_upload_required:
+                link = text_link("build-output")
+                if text_upload_succeeded and link:
+                    return "complete", f"`swift build` succeeded on self-hosted macOS CI: {link}"
+                return "blocked", "self-hosted macOS CI build log upload failed"
             return "complete", "`swift build` succeeded on self-hosted macOS CI"
         return "blocked", "self-hosted macOS CI `swift build` failed; see workflow logs"
     if kind == "test":
         if tests_succeeded:
             if _test_output_has_no_matching_tests(normalized, test_output):
                 return "blocked", f"self-hosted macOS CI `{normalized}` matched no tests; see test-output.txt"
+            if text_upload_required:
+                link = text_link("test-output")
+                if text_upload_succeeded and link:
+                    return "complete", f"`{normalized}` succeeded on self-hosted macOS CI: {link}"
+                return "blocked", "self-hosted macOS CI test log upload failed"
             return "complete", f"`{normalized}` succeeded on self-hosted macOS CI"
         return "blocked", f"self-hosted macOS CI `{normalized}` failed; see test-output.txt"
     if kind == "screenshot":
@@ -799,6 +830,9 @@ def reconcile_pending_ci_evidence(
     test_output: str = "",
     screenshot_upload_succeeded: bool = False,
     screenshot_urls: list[tuple[str, str]] | None = None,
+    text_upload_required: bool = False,
+    text_upload_succeeded: bool = False,
+    text_urls: list[tuple[str, str]] | None = None,
 ) -> str:
     """Resolve pending-ci evidence lines after the macOS evidence job finishes."""
     metadata = _extract_evidence_metadata(body)
@@ -819,6 +853,9 @@ def reconcile_pending_ci_evidence(
                     test_output=test_output,
                     screenshot_upload_succeeded=screenshot_upload_succeeded,
                     screenshot_urls=screenshot_urls,
+                    text_upload_required=text_upload_required,
+                    text_upload_succeeded=text_upload_succeeded,
+                    text_urls=text_urls,
                 )
                 entry["status"] = status
                 entry["detail"] = detail
@@ -884,6 +921,9 @@ def reconcile_pending_ci_evidence(
                     test_output=test_output,
                     screenshot_upload_succeeded=screenshot_upload_succeeded,
                     screenshot_urls=screenshot_urls,
+                    text_upload_required=text_upload_required,
+                    text_upload_succeeded=text_upload_succeeded,
+                    text_urls=text_urls,
                 )
                 updated.append(f"- [{status}] {item} -- {detail}")
                 continue

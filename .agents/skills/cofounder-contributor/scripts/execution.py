@@ -61,6 +61,9 @@ from github_state import (
 _label_cache: set[str] | None = None
 AUTHOR_LABEL_COLOR = "BFD4F2"
 AUTHOR_LABEL_DESCRIPTION = "PRs authored by the {agent} agent"
+EVIDENCE_BLOCK_LABEL = "blocked:evidence"
+EVIDENCE_BLOCK_LABEL_COLOR = "B60205"
+EVIDENCE_BLOCK_LABEL_DESCRIPTION = "Required merge evidence is unavailable"
 
 APP_BOT_GIT_IDENTITIES = {
     # PR authorship comes from the GitHub App token; commit/contributor
@@ -215,12 +218,14 @@ def build_execution_summary_body(
     data: dict[str, object],
     *,
     requested_evidence: list[str],
+    visual_evidence_available: bool = True,
 ) -> tuple[str, list[str]]:
     summary_body = str(data.get("body", "")).strip()
     if not requested_evidence:
         return summary_body, []
     evidence_complete, evidence_blocked, evidence_pending_ci = synthesize_initial_execution_evidence(
-        requested_evidence
+        requested_evidence,
+        visual_evidence_available=visual_evidence_available,
     )
     return render_execution_summary_body(
         summary_body,
@@ -423,6 +428,30 @@ def _write_github_outputs(
     )
 
 
+def _mark_factory_visual_evidence_blocked(
+    pull_request: str,
+    *,
+    requested_evidence: list[str],
+    env: dict[str, str],
+) -> None:
+    if env.get("FACTORY_VISUAL_EVIDENCE_AVAILABLE", "true").casefold() != "false":
+        return
+    if not _needs_screenshot_evidence(requested_evidence):
+        return
+    ensure_label_exists(
+        env,
+        EVIDENCE_BLOCK_LABEL,
+        EVIDENCE_BLOCK_LABEL_COLOR,
+        EVIDENCE_BLOCK_LABEL_DESCRIPTION,
+    )
+    run_checked(
+        ["gh", "pr", "edit", pull_request, "--add-label", EVIDENCE_BLOCK_LABEL],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    )
+
+
 def route_execution_action(
     data: dict[str, object],
     env: dict[str, str],
@@ -510,6 +539,9 @@ def route_execution_action(
     summary_body, summary_errors = build_execution_summary_body(
         data,
         requested_evidence=requested_evidence,
+        visual_evidence_available=(
+            env.get("FACTORY_VISUAL_EVIDENCE_AVAILABLE", "true").casefold() != "false"
+        ),
     )
     if summary_errors:
         print(
@@ -629,6 +661,11 @@ def route_execution_action(
             cwd=REPO_ROOT,
             env=env,
         )
+        _mark_factory_visual_evidence_blocked(
+            str(own_pr["number"]),
+            requested_evidence=requested_evidence,
+            env=env,
+        )
         return 0
 
     run_checked(
@@ -649,6 +686,11 @@ def route_execution_action(
         ],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
+        env=env,
+    )
+    _mark_factory_visual_evidence_blocked(
+        branch,
+        requested_evidence=requested_evidence,
         env=env,
     )
     return 0
