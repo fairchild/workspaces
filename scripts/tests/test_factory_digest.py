@@ -123,6 +123,24 @@ class FactoryDigestTests(unittest.TestCase):
                 }
             )
         )
+        self.assertEqual(
+            factory_digest.count_factory_implement_runs(
+                [
+                    {
+                        "event": "issues",
+                        "display_title": "Factory Implement ready #42",
+                        "run_attempt": 2,
+                    },
+                    {"event": "workflow_dispatch", "run_attempt": 1},
+                    {
+                        "event": "issues",
+                        "display_title": "Factory Implement claimed #42",
+                        "run_attempt": 5,
+                    },
+                ]
+            ),
+            3,
+        )
 
     def test_render_digest_orders_mergeable_linked_prs_first(self) -> None:
         summary = {

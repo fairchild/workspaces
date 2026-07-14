@@ -149,7 +149,7 @@ def fetch_run_jobs(
 ) -> list[dict[str, Any]]:
     url = (
         f"{GITHUB_API_URL}/repos/{repo_slug}/actions/runs/{run_id}/jobs"
-        "?filter=latest&per_page=100"
+        "?filter=all&per_page=100"
     )
     request = urllib.request.Request(
         url,
@@ -210,6 +210,14 @@ def is_factory_implement_dispatch(run: dict[str, Any]) -> bool:
     )
 
 
+def count_factory_implement_runs(runs: list[dict[str, Any]]) -> int:
+    return sum(
+        max(1, int(run.get("run_attempt") or 1))
+        for run in runs
+        if is_factory_implement_dispatch(run)
+    )
+
+
 def parse_daily_implement_cap(value: str | None) -> int:
     raw = (value or str(DEFAULT_DAILY_IMPLEMENT_CAP)).strip()
     try:
@@ -251,7 +259,7 @@ def fetch_factory_activity(
     )
 
     return FactoryActivity(
-        implement_runs=sum(1 for run in implement_runs if is_factory_implement_dispatch(run)),
+        implement_runs=count_factory_implement_runs(implement_runs),
         review_verdicts=count_successful_steps(
             repo_slug,
             token,
