@@ -435,16 +435,22 @@ def _write_github_outputs(
     )
 
 
-def _mark_factory_visual_evidence_blocked(
+def _factory_evidence_should_block(
+    *,
+    factory_requires_evidence: bool,
+    needs_macos_evidence: bool,
+    visual_evidence_blocked: bool,
+) -> bool:
+    return visual_evidence_blocked or (
+        factory_requires_evidence and not needs_macos_evidence
+    )
+
+
+def _mark_factory_evidence_blocked(
     pull_request: str,
     *,
-    requested_evidence: list[str],
     env: dict[str, str],
 ) -> None:
-    if env.get("FACTORY_VISUAL_EVIDENCE_AVAILABLE", "true").casefold() != "false":
-        return
-    if not _needs_screenshot_evidence(requested_evidence):
-        return
     ensure_label_exists(
         env,
         EVIDENCE_BLOCK_LABEL,
@@ -539,6 +545,7 @@ def route_execution_action(
         )
         log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(test_command_errors), "issue": issue_number}))
         return 1
+    evidence_needed = _needs_macos_evidence(requested_evidence)
     if other_pr is not None:
         print(
             f"error: issue #{issue_number} already has open PR #{other_pr['number']} by another agent",
@@ -604,6 +611,11 @@ def route_execution_action(
     factory_visual_blocked = (
         env.get("FACTORY_VISUAL_EVIDENCE_AVAILABLE", "true").casefold() == "false"
         and _needs_screenshot_evidence(requested_evidence)
+    )
+    factory_evidence_blocked = _factory_evidence_should_block(
+        factory_requires_evidence=factory_requires_evidence,
+        needs_macos_evidence=evidence_needed,
+        visual_evidence_blocked=factory_visual_blocked,
     )
     if factory_visual_blocked and not factory_requires_evidence:
         ensure_label_exists(
@@ -678,7 +690,6 @@ def route_execution_action(
         env=env,
     )
 
-    evidence_needed = _needs_macos_evidence(requested_evidence)
     screenshot_evidence_needed = _needs_screenshot_evidence(requested_evidence)
     test_commands = _extract_test_commands(requested_evidence)
     pr_head_sha = run_checked(
@@ -690,10 +701,9 @@ def route_execution_action(
 
     if own_pr is not None:
         pr_number = int(own_pr["number"])
-        if factory_visual_blocked:
-            _mark_factory_visual_evidence_blocked(
+        if factory_evidence_blocked:
+            _mark_factory_evidence_blocked(
                 str(pr_number),
-                requested_evidence=requested_evidence,
                 env=env,
             )
         run_checked(
@@ -736,7 +746,7 @@ def route_execution_action(
         "--label",
         author_label,
     ]
-    if factory_visual_blocked:
+    if factory_evidence_blocked:
         create_args.extend(["--label", EVIDENCE_BLOCK_LABEL])
     created = run_checked(
         create_args,

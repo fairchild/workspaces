@@ -221,6 +221,8 @@ jobs:
               echo "PR #$PR_NUMBER advanced after evidence dispatch" >&2
               exit 1
             fi
+          else
+            echo "::warning title=Evidence identity is not SHA-bound::pr_head_sha was not provided; reconciliation is using the mutable branch fallback"
           fi
 
       - name: Upload screenshot evidence to R2

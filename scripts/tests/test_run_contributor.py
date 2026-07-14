@@ -385,6 +385,31 @@ class RunContributorEvidenceTests(unittest.TestCase):
             with self.subTest(request=request):
                 self.assertTrue(run_contributor._needs_screenshot_evidence([request]))
 
+    def test_factory_other_only_evidence_requires_blocking_label(self) -> None:
+        execution = sys.modules["execution"]
+        requested = ["Other proof recorded by the implementer"]
+        needs_macos_evidence = run_contributor._needs_macos_evidence(requested)
+
+        self.assertFalse(needs_macos_evidence)
+        self.assertTrue(
+            execution._factory_evidence_should_block(
+                factory_requires_evidence=True,
+                needs_macos_evidence=needs_macos_evidence,
+                visual_evidence_blocked=False,
+            )
+        )
+        with (
+            mock.patch.object(execution, "ensure_label_exists") as ensure_label,
+            mock.patch.object(execution, "run_checked") as run_checked,
+        ):
+            execution._mark_factory_evidence_blocked("77", env={"GH_TOKEN": "token"})
+
+        ensure_label.assert_called_once()
+        self.assertEqual(
+            run_checked.call_args.args[0],
+            ["gh", "pr", "edit", "77", "--add-label", "blocked:evidence"],
+        )
+
     def test_candidate_code_environment_excludes_workflow_credentials(self) -> None:
         sanitized = run_contributor.sanitized_candidate_code_env(
             {

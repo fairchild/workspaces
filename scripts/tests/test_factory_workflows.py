@@ -370,6 +370,7 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("ref: ${{ inputs.pr_head_sha || inputs.pr_branch }}", evidence_workflow)
         self.assertIn('EXPECTED_HEAD_SHA: ${{ inputs.pr_head_sha }}', evidence_workflow)
         self.assertIn("headRefOid", evidence_workflow)
+        self.assertIn("Evidence identity is not SHA-bound", evidence_workflow)
         self.assertIn("--add-label blocked:evidence", evidence_workflow)
 
         monitor = (

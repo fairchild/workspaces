@@ -95,10 +95,22 @@ def load_json(path: str | None, default: Any) -> Any:
 
 def extract_section(body: str, heading: str) -> str:
     pattern = re.compile(
-        rf"(?ims)^##+\s+{re.escape(heading)}\s*$\n(?P<section>.*?)(?=^##+\s+\S|\Z)"
+        rf"(?ms)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""
+
+
+def evidence_status_heading_failure(body: str) -> str | None:
+    headings = re.findall(r"(?m)^#+[ \t]+Evidence[ \t]+Status[ \t]*$", body)
+    exact_count = sum(heading == "## Evidence Status" for heading in headings)
+    variant_count = len(headings) - exact_count
+    if exact_count > 1 or variant_count:
+        return (
+            "Ambiguous Evidence Status headings; use at most one exact "
+            "'## Evidence Status' heading and no variants."
+        )
+    return None
 
 
 def field_value(section: str, label: str) -> str | None:
@@ -191,6 +203,8 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if has_checked_box(body, "Blocked on evidence"):
         failures.append("PR is checked as blocked on evidence.")
 
+    if heading_failure := evidence_status_heading_failure(body):
+        failures.append(heading_failure)
     evidence_status = extract_section(body, "Evidence Status")
     if re.search(r"(?im)^\s*-\s*\[(?:blocked|pending-ci)\]\s+", evidence_status):
         failures.append("Requested evidence is blocked or still pending CI.")

@@ -93,6 +93,35 @@ class PRReadinessTests(unittest.TestCase):
                     result.failures,
                 )
 
+    def test_shadow_or_duplicate_evidence_status_headings_fail_closed(self) -> None:
+        for shadow in ("### Evidence Status", "##  Evidence Status"):
+            with self.subTest(shadow=shadow):
+                body = (
+                    GOOD_BODY
+                    + f"\n{shadow}\n- [complete] other -- self-attested\n"
+                    + "\n## Evidence Status\n- [blocked] other -- reconciliation required\n"
+                )
+                result = pr_readiness.evaluate(pr(body), [])
+                self.assertIn(
+                    "Ambiguous Evidence Status headings; use at most one exact "
+                    "'## Evidence Status' heading and no variants.",
+                    result.failures,
+                )
+                self.assertIn(
+                    "Requested evidence is blocked or still pending CI.",
+                    result.failures,
+                )
+
+        duplicate = GOOD_BODY + (
+            "\n## Evidence Status\n- [complete] other -- first\n"
+            "\n## Evidence Status\n- [complete] other -- duplicate\n"
+        )
+        self.assertIn(
+            "Ambiguous Evidence Status headings; use at most one exact "
+            "'## Evidence Status' heading and no variants.",
+            pr_readiness.evaluate(pr(duplicate), []).failures,
+        )
+
     def test_template_guidance_does_not_trigger_merge_stop(self) -> None:
         body = GOOD_BODY + "\nUI-affecting work needs explicit approval before shipping without visual proof.\n"
         result = pr_readiness.evaluate(pr(body), [])
