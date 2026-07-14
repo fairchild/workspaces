@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import WorkspaceManagerCore
@@ -7,6 +8,67 @@ import WorkspaceManagerCore
 @Suite("MainWindowPresentationController")
 struct MainWindowPresentationControllerTests {
     private let controller = MainWindowPresentationController()
+
+    @Test("Presentation constant requests a hidden visual title; NSWindow.title is untouched by it")
+    @MainActor
+    func visualTitleConstantIsHiddenAndDoesNotMutateSystemTitle() {
+        // Smoke check on the constant + title independence only. The claim that
+        // .unifiedCompact(showsTitle: false) preserves NSWindow.title in the live
+        // scene rests on the standalone AppKit probe recorded in PR #1086, which
+        // is not part of this regression suite.
+        let window = NSWindow()
+        window.title = "pi-mono / gentle-frog"
+
+        #expect(!MainWindowPresentationController.showsVisualWindowTitle)
+        #expect(window.title == "pi-mono / gentle-frog")
+    }
+
+    @Test("Development badge remains visible beside a repo breadcrumb")
+    func developmentBadgeRemainsVisibleBesideRepoBreadcrumb() {
+        let toolbarTitle = MainWindowToolbarTitle(
+            repoName: "pi-mono",
+            workspaceName: "gentle-frog"
+        )
+        let buildIdentity = AppBuildIdentity(
+            channel: .development,
+            displayPath: "worktrees/codex-title-bar/workspaces",
+            fullPath: "/tmp/worktrees/codex-title-bar/workspaces",
+            launchPath: "/tmp/worktrees/codex-title-bar/workspaces/.build/debug/WorkspaceManager",
+            hueDegrees: 120
+        )
+
+        let presentation = controller.principalToolbarPresentation(
+            toolbarTitle: toolbarTitle,
+            buildIdentity: buildIdentity
+        )
+
+        #expect(presentation.toolbarTitle == toolbarTitle)
+        #expect(presentation.showsDevelopmentBadge)
+    }
+
+    @Test("Production builds show no development badge beside the breadcrumb")
+    func productionBuildShowsNoDevelopmentBadge() {
+        let toolbarTitle = MainWindowToolbarTitle(
+            repoName: "pi-mono",
+            workspaceName: "gentle-frog"
+        )
+
+        let buildIdentity = AppBuildIdentity(
+            channel: .installed,
+            displayPath: nil,
+            fullPath: "/Applications/WorkSpaces.app",
+            launchPath: "/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager",
+            hueDegrees: 0
+        )
+
+        let presentation = controller.principalToolbarPresentation(
+            toolbarTitle: toolbarTitle,
+            buildIdentity: buildIdentity
+        )
+
+        #expect(presentation.toolbarTitle == toolbarTitle)
+        #expect(!presentation.showsDevelopmentBadge)
+    }
 
     @Test("Active host session falls back to the last session when active is missing")
     func activeHostSessionFallsBackToLastSession() {

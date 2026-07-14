@@ -102,7 +102,11 @@ struct WorkspaceManagerApp: App {
         .keyboardShortcut(nil)
         .windowResizability(.contentSize)
         .windowStyle(.automatic)
-        .windowToolbarStyle(.unifiedCompact(showsTitle: true))
+        .windowToolbarStyle(
+            .unifiedCompact(
+                showsTitle: MainWindowPresentationController.showsVisualWindowTitle
+            )
+        )
         .commands {
             CommandGroup(after: .appInfo) {
                 Button("Check for Updates...") {
@@ -447,15 +451,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return "DEV"
             }
         }
-
-        var windowSubtitle: String? {
-            switch self {
-            case .standard:
-                return nil
-            case .development:
-                return "Development Build"
-            }
-        }
     }
 
     private var isCI: Bool {
@@ -503,7 +498,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Register existing windows with focus manager
         for window in NSApp.windows {
             TerminalFocusManager.shared.registerWindow(window)
-            applyVariantPresentation(to: window)
         }
 
         // Observe new window creation to register with focus manager
@@ -516,7 +510,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 if let window {
                     TerminalFocusManager.shared.registerWindow(window)
-                    self.applyVariantPresentation(to: window)
                 }
             }
         }
@@ -598,11 +591,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let variant = appVariant
         NSApp.dockTile.badgeLabel = variant.dockBadgeLabel
         NSApp.dockTile.display()
-    }
-
-    private func applyVariantPresentation(to window: NSWindow) {
-        let variant = appVariant
-        window.subtitle = variant.windowSubtitle ?? ""
     }
 
     private var appVariant: AppVariant {

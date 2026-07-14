@@ -13,7 +13,24 @@ struct MainWindowToolbarTitle: Equatable {
     }
 }
 
+struct MainWindowPrincipalToolbarPresentation: Equatable {
+    let toolbarTitle: MainWindowToolbarTitle?
+    let showsDevelopmentBadge: Bool
+}
+
 struct MainWindowPresentationController {
+    static let showsVisualWindowTitle = false
+
+    func principalToolbarPresentation(
+        toolbarTitle: MainWindowToolbarTitle?,
+        buildIdentity: AppBuildIdentity
+    ) -> MainWindowPrincipalToolbarPresentation {
+        MainWindowPrincipalToolbarPresentation(
+            toolbarTitle: toolbarTitle,
+            showsDevelopmentBadge: buildIdentity.isDevelopment
+        )
+    }
+
     func activeHostSession(
         activeSessionID: UUID?,
         sessions: [HostTerminalSession]

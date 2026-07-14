@@ -682,6 +682,16 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
             detailContent
+                .toolbar {
+                    // Owner steer on #1086: repo/branch sits at the detail column's
+                    // leading edge (left-aligned by the terminal). Declared on the
+                    // detail view so the sidebar column's own controls stay intact.
+                    if !minimalToolbarEnabled {
+                        ToolbarItem(placement: .navigation) {
+                            principalToolbarContent
+                        }
+                    }
+                }
         }
     }
 
@@ -692,11 +702,12 @@ struct ContentView: View {
             } else {
                 splitViewBody
                     .toolbar {
-                        ToolbarItem(placement: .principal) {
-                            principalToolbarContent
-                        }
 
                         ToolbarItemGroup(placement: .primaryAction) {
+                            // Spacer keeps this group pinned trailing now that no
+                            // .principal item occupies the center (#1086 owner steer).
+                            Spacer()
+
                             NeedsYouToolbarPill(
                                 repos: repos,
                                 onActivateWorkspace: handleWorkspaceSelection,
@@ -720,17 +731,26 @@ struct ContentView: View {
 
     @ViewBuilder
     private var principalToolbarContent: some View {
-        if let title = toolbarTitle,
-            let repo = selectedRepoForToolbar
-        {
-            MainToolbarTitleBreadcrumb(
-                title: title,
-                faviconSource: preferredToolbarIconSource(for: repo),
-                onOpenRepoOverview: { handleRepoSelection(repo) },
-                onOpenRepoTerminal: { handleRepoTerminalSelection(repo) }
-            )
-        } else {
-            AppBuildIdentityBadge(identity: buildIdentity)
+        let presentation = presentationController.principalToolbarPresentation(
+            toolbarTitle: toolbarTitle,
+            buildIdentity: buildIdentity
+        )
+
+        HStack(spacing: 8) {
+            if presentation.showsDevelopmentBadge {
+                AppBuildIdentityBadge(identity: buildIdentity)
+            }
+
+            if let title = presentation.toolbarTitle,
+                let repo = selectedRepoForToolbar
+            {
+                MainToolbarTitleBreadcrumb(
+                    title: title,
+                    faviconSource: preferredToolbarIconSource(for: repo),
+                    onOpenRepoOverview: { handleRepoSelection(repo) },
+                    onOpenRepoTerminal: { handleRepoTerminalSelection(repo) }
+                )
+            }
         }
     }
 
