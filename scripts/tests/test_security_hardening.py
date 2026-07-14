@@ -367,8 +367,10 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_release_change_validator_covers_release_manifest_and_appcast_verifier(self) -> None:
         validator = (REPO_ROOT / "scripts/validate-release-changes.py").read_text()
-        self.assertIn('"scripts/release-manifest.sh"', validator)
-        self.assertIn('"scripts/verify-sparkle-appcast.swift"', validator)
+        policy = (REPO_ROOT / "scripts/release_policy.py").read_text()
+        self.assertIn("from release_policy import RELEASE_PATHS", validator)
+        self.assertIn('"scripts/release-manifest.sh"', policy)
+        self.assertIn('"scripts/verify-sparkle-appcast.swift"', policy)
         self.assertIn("validate_swift_parse", validator)
 
     def test_web_terminal_status_does_not_return_direct_ttyd_urls(self) -> None:

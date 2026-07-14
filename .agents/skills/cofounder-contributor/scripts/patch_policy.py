@@ -5,30 +5,35 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
+from pathlib import Path
 from pathlib import PurePosixPath
+
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_SCRIPTS = REPO_ROOT / "scripts"
+if str(REPO_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(REPO_SCRIPTS))
+
+from release_policy import RELEASE_PATHS  # noqa: E402
 
 
 SENSITIVE_PATH_PREFIXES = (
     ".github/",
     ".agents/",
 )
-SENSITIVE_RELEASE_SCRIPT_PATHS = {
-    "scripts/build-release.sh",
-    "scripts/notarize.sh",
-    "scripts/prepare-release.sh",
-    "scripts/release-preflight.sh",
-    "scripts/release-version.sh",
-    "scripts/setup-release-secrets.sh",
+SENSITIVE_RELEASE_SCRIPT_PATHS = RELEASE_PATHS | {
     "scripts/signing-config.sh.template",
     "scripts/validate-release-changes.py",
-    "scripts/verify-app-keychain-signing.sh",
-    "scripts/verify-release-bundle.sh",
 }
 SENSITIVE_NAME_MARKERS = (
     "auth",
     "credential",
+    "entitlement",
+    "keychain",
     "secret",
     "sandbox",
+    "signing",
     "token",
 )
 MARKDOWN_DESTINATION_RE = re.compile(r"\]\((?P<path>[^)\s]+)\)")
@@ -59,6 +64,9 @@ def sensitive_agent_patch_paths(changed_files: list[str]) -> list[str]:
         lower_path = rel_path.casefold()
         lower_parts = PurePosixPath(lower_path).parts
 
+        if lower_path.endswith(".entitlements"):
+            sensitive.append(rel_path)
+            continue
         if lower_path in SENSITIVE_RELEASE_SCRIPT_PATHS:
             sensitive.append(rel_path)
             continue

@@ -21,6 +21,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -43,14 +44,16 @@ from patch_policy import (  # noqa: E402
 
 
 FACTORY_WIP_CAP = 2
+DEFAULT_DAILY_IMPLEMENT_CAP = 6
 PRIVILEGED_PATCH_LABEL = "privileged-agent-patch"
 API_ATTEMPTS = 3
 API_BACKOFF_SECONDS = 1.0
-PRIVILEGED_COMMENT = (
+APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
+PRIVILEGED_COMMENT = APRIL_ATTRIBUTION + (
     "Factory implementation skipped: this issue indicates privileged-path scope "
     "and requires the orchestrator lane."
 )
-WIP_COMMENT = (
+WIP_COMMENT = APRIL_ATTRIBUTION + (
     f"Factory implementation is waiting: the {FACTORY_WIP_CAP}-issue factory WIP "
     "cap is full; leaving this issue ready."
 )
@@ -146,6 +149,22 @@ class GitHubClient:
                 return comments
             page += 1
 
+    def timeline(self, number: int) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            batch = list(
+                self.request(
+                    "GET",
+                    f"/repos/{self.repository}/issues/{number}/timeline"
+                    f"?per_page=100&page={page}",
+                )
+            )
+            events.extend(dict(event) for event in batch)
+            if len(batch) < 100:
+                return events
+            page += 1
+
     def claimed_issues(self) -> list[dict[str, Any]]:
         labels = urllib.parse.quote("agent,task,claimed")
         items = self.request(
@@ -180,6 +199,25 @@ class GitHubClient:
             {"ref": "main", "inputs": {"issue_number": str(number)}},
         )
 
+    def workflow_runs_on(self, workflow: str, day: str) -> list[dict[str, Any]]:
+        runs: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            query = urllib.parse.urlencode(
+                {"created": day, "per_page": 100, "page": page}
+            )
+            payload = dict(
+                self.request(
+                    "GET",
+                    f"/repos/{self.repository}/actions/workflows/{workflow}/runs?{query}",
+                )
+            )
+            batch = list(payload.get("workflow_runs") or [])
+            runs.extend(dict(run) for run in batch)
+            if len(batch) < 100:
+                return runs
+            page += 1
+
 
 def label_names(issue: dict[str, Any]) -> set[str]:
     return {
@@ -192,19 +230,39 @@ def label_names(issue: dict[str, Any]) -> set[str]:
 def privileged_scope(issue: dict[str, Any]) -> bool:
     if PRIVILEGED_PATCH_LABEL in label_names(issue):
         return True
-    candidates = issue_body_path_candidates(str(issue.get("body") or ""))
+    issue_text = "\n".join(
+        (str(issue.get("title") or ""), str(issue.get("body") or ""))
+    )
+    candidates = issue_body_path_candidates(issue_text)
     return bool(sensitive_agent_patch_paths(candidates))
 
 
-def evaluate_claim(issue: dict[str, Any], claimed_count: int) -> ClaimDecision:
+def evaluate_claim(
+    issue: dict[str, Any],
+    claimed_count: int,
+    *,
+    daily_run_count: int = 0,
+    daily_cap: int = DEFAULT_DAILY_IMPLEMENT_CAP,
+) -> ClaimDecision:
     labels = label_names(issue)
     if str(issue.get("state", "")).casefold() != "open":
         return ClaimDecision("skip", "issue is not open")
     missing = {"agent", "task", "ready"} - labels
     if missing:
         return ClaimDecision("skip", f"issue is missing labels: {', '.join(sorted(missing))}")
+    conflicting = {"claimed", "review"} & labels
+    if conflicting:
+        return ClaimDecision(
+            "skip",
+            f"issue has conflicting labels: {', '.join(sorted(conflicting))}",
+        )
     if privileged_scope(issue):
         return ClaimDecision("privileged", "issue indicates privileged-path scope")
+    if daily_run_count > daily_cap:
+        return ClaimDecision(
+            "budget",
+            f"daily implementation cap of {daily_cap} is exceeded ({daily_run_count} runs)",
+        )
     if claimed_count >= FACTORY_WIP_CAP:
         return ClaimDecision("wip", f"factory WIP cap of {FACTORY_WIP_CAP} is full")
     return ClaimDecision("claim", "issue is eligible for unattended implementation")
@@ -238,6 +296,92 @@ def comment_once(client: GitHubClient, issue_number: int, body: str) -> None:
     if any(body in str(comment.get("body", "")) for comment in client.comments(issue_number)):
         return
     client.comment(issue_number, body)
+
+
+def parse_daily_cap(value: str | None) -> int:
+    raw = (value or str(DEFAULT_DAILY_IMPLEMENT_CAP)).strip()
+    try:
+        cap = int(raw)
+    except ValueError as error:
+        raise FactoryImplementError(
+            f"FACTORY_IMPLEMENT_DAILY_CAP must be a positive integer, got {raw!r}"
+        ) from error
+    if cap <= 0:
+        raise FactoryImplementError("FACTORY_IMPLEMENT_DAILY_CAP must be a positive integer")
+    return cap
+
+
+def is_factory_implement_dispatch(
+    run: dict[str, Any],
+    repository_owner: str = "",
+) -> bool:
+    actor = str((run.get("actor") or {}).get("login") or "")
+    actor_matches = not repository_owner or actor.casefold() == repository_owner.casefold()
+    return actor_matches and (
+        str(run.get("event", "")) == "workflow_dispatch"
+        or str(run.get("display_title", "")).startswith("Factory Implement ready #")
+    )
+
+
+def count_daily_runs(
+    runs: list[dict[str, Any]],
+    current_run_id: str,
+    current_run_attempt: int = 1,
+    repository_owner: str = "",
+) -> int:
+    attempts_by_run = {
+        str(run["id"]): max(1, int(run.get("run_attempt") or 1))
+        for run in runs
+        if isinstance(run, dict)
+        and run.get("id") is not None
+        and is_factory_implement_dispatch(run, repository_owner)
+    }
+    if current_run_id:
+        attempts_by_run[current_run_id] = max(
+            attempts_by_run.get(current_run_id, 0),
+            current_run_attempt,
+        )
+    return sum(attempts_by_run.values())
+
+
+def require_automation_switches(global_switch: str, stage_switch: str) -> None:
+    if global_switch.casefold() != "true" or stage_switch.casefold() != "true":
+        raise FactoryImplementError(
+            "Factory implementation is disabled by AGENT_AUTOMATIONS_ENABLED "
+            "or FACTORY_IMPLEMENT_ENABLED"
+        )
+
+
+def latest_ready_actor(events: list[dict[str, Any]]) -> str | None:
+    for event in reversed(events):
+        if str(event.get("event", "")).casefold() != "labeled":
+            continue
+        if str((event.get("label") or {}).get("name", "")).casefold() != "ready":
+            continue
+        return str((event.get("actor") or {}).get("login") or "") or None
+    return None
+
+
+def verify_release_actor(
+    events: list[dict[str, Any]],
+    trigger_actor: str,
+    repository_owner: str,
+) -> str:
+    owner = repository_owner.strip()
+    if not owner:
+        raise FactoryImplementError("FACTORY_REPOSITORY_OWNER is required")
+    if trigger_actor.casefold() != owner.casefold():
+        raise FactoryImplementError(
+            f"Factory implementation trigger actor {trigger_actor!r} is not repository owner"
+        )
+    ready_actor = latest_ready_actor(events)
+    if ready_actor is None:
+        raise FactoryImplementError("issue timeline has no ready label event")
+    if ready_actor.casefold() != owner.casefold():
+        raise FactoryImplementError(
+            f"most recent ready label actor {ready_actor!r} is not repository owner"
+        )
+    return ready_actor
 
 
 def write_output(name: str, value: str) -> None:
@@ -274,9 +418,15 @@ def claim_comment(issue: dict[str, Any], run_url: str) -> str:
     )
 
 
-def latest_factory_claim_run(comments: list[dict[str, Any]]) -> str | None:
+def latest_factory_claim_run(
+    comments: list[dict[str, Any]],
+    trusted_author: str,
+) -> str | None:
     prefix = "Workflow run: "
     for comment in reversed(comments):
+        author = str((comment.get("user") or {}).get("login") or "")
+        if author.casefold() != trusted_author.casefold():
+            continue
         body = str(comment.get("body") or "")
         if "agent=april-clearwater;branch=" not in body:
             continue
@@ -287,29 +437,92 @@ def latest_factory_claim_run(comments: list[dict[str, Any]]) -> str | None:
 
 def claim(
     client: GitHubClient,
+    actions_client: GitHubClient,
     issue_number: int,
     run_url: str,
     assignee: str,
+    trigger_actor: str,
+    repository_owner: str,
+    global_switch: str,
+    stage_switch: str,
+    daily_cap: int,
+    current_run_id: str,
+    current_run_attempt: int,
 ) -> None:
+    require_automation_switches(global_switch, stage_switch)
     issue = client.issue(issue_number)
+    verified_actor = verify_release_actor(
+        client.timeline(issue_number),
+        trigger_actor,
+        repository_owner,
+    )
     claimed_count = len(client.claimed_issues())
-    decision = evaluate_claim(issue, claimed_count)
+    day = datetime.now(UTC).date().isoformat()
+    daily_run_count = count_daily_runs(
+        actions_client.workflow_runs_on("factory-implement.yml", day),
+        current_run_id,
+        current_run_attempt,
+        repository_owner,
+    )
+    decision = evaluate_claim(
+        issue,
+        claimed_count,
+        daily_run_count=daily_run_count,
+        daily_cap=daily_cap,
+    )
     print(f"Factory implement decision for #{issue_number}: {decision.action} ({decision.reason})")
     write_output("issue_number", str(issue_number))
     write_output("matched", "false")
     write_output("issue_scope_digest", issue_scope_digest(issue))
+    write_output("verified_actor", verified_actor)
     if decision.action == "privileged":
         comment_once(client, issue_number, PRIVILEGED_COMMENT)
         return
     if decision.action == "wip":
         comment_once(client, issue_number, WIP_COMMENT)
         return
+    if decision.action == "budget":
+        comment_once(
+            client,
+            issue_number,
+            APRIL_ATTRIBUTION
+            + "Factory implementation skipped: "
+            + f"{daily_run_count} implementation runs have started today, above the "
+            + f"configured daily cap of {daily_cap}; leaving this issue ready. "
+            + "The workflow log records the skip.",
+        )
+        return
     if decision.action == "skip":
         return
 
-    client.update_issue(issue_number, claim_payload(issue, assignee))
     client.comment(issue_number, claim_comment(issue, run_url))
+    client.update_issue(issue_number, claim_payload(issue, assignee))
     write_output("matched", "true")
+
+
+def authorize_execution(
+    actions_client: GitHubClient,
+    daily_cap: int,
+    current_run_id: str,
+    current_run_attempt: int,
+    global_switch: str,
+    stage_switch: str,
+    repository_owner: str,
+) -> None:
+    require_automation_switches(global_switch, stage_switch)
+    day = datetime.now(UTC).date().isoformat()
+    daily_run_count = count_daily_runs(
+        actions_client.workflow_runs_on("factory-implement.yml", day),
+        current_run_id,
+        current_run_attempt,
+        repository_owner,
+    )
+    print(f"Factory implement execution budget: {daily_run_count}/{daily_cap}")
+    if daily_run_count > daily_cap:
+        raise FactoryImplementError(
+            f"daily implementation cap of {daily_cap} is exceeded "
+            f"({daily_run_count} run attempts)"
+        )
 
 
 def rollback(
@@ -322,29 +535,55 @@ def rollback(
     if "claimed" not in label_names(issue):
         print(f"Factory implement rollback for #{issue_number}: claim is no longer active")
         return
-    if latest_factory_claim_run(client.comments(issue_number)) != run_url:
+    if latest_factory_claim_run(client.comments(issue_number), assignee) != run_url:
         print(f"Factory implement rollback for #{issue_number}: claim belongs to another run")
         return
     client.update_issue(issue_number, rollback_payload(issue, assignee))
     comment_once(
         client,
         issue_number,
-        f"Factory implementation run failed and restored ready: {run_url}",
+        APRIL_ATTRIBUTION
+        + f"Factory implementation run failed and restored ready: {run_url}",
     )
 
 
 def ready_dispatch_numbers(
     ready_issues: list[dict[str, Any]],
     claimed_count: int,
+    *,
+    remaining_daily_runs: int | None = None,
 ) -> list[int]:
     capacity = max(0, FACTORY_WIP_CAP - claimed_count)
+    if remaining_daily_runs is not None:
+        capacity = min(capacity, max(0, remaining_daily_runs))
     eligible = [issue for issue in ready_issues if not privileged_scope(issue)]
     return sorted(int(issue["number"]) for issue in eligible)[:capacity]
 
 
-def dispatch_ready(client: GitHubClient, *, dry_run: bool) -> None:
+def dispatch_ready(
+    client: GitHubClient,
+    *,
+    dry_run: bool,
+    daily_cap: int,
+    repository_owner: str,
+) -> None:
     claimed_count = len(client.claimed_issues())
-    numbers = ready_dispatch_numbers(client.ready_issues(), claimed_count)
+    day = datetime.now(UTC).date().isoformat()
+    daily_run_count = count_daily_runs(
+        client.workflow_runs_on("factory-implement.yml", day),
+        "",
+        repository_owner=repository_owner,
+    )
+    numbers = ready_dispatch_numbers(
+        client.ready_issues(),
+        claimed_count,
+        remaining_daily_runs=daily_cap - daily_run_count,
+    )
+    if daily_run_count >= daily_cap:
+        print(
+            "Factory implement recovery dispatch skipped: "
+            f"daily cap {daily_run_count}/{daily_cap} reached"
+        )
     for number in numbers:
         print(f"Factory implement recovery dispatch for ready issue #{number}")
         if not dry_run:
@@ -360,6 +599,7 @@ def parse_args() -> argparse.Namespace:
         subparser.add_argument("--run-url", required=True)
     dispatch = subparsers.add_parser("dispatch-ready")
     dispatch.add_argument("--dry-run", action="store_true")
+    subparsers.add_parser("authorize")
     return parser.parse_args()
 
 
@@ -372,15 +612,56 @@ def require_env(name: str) -> str:
 
 def main() -> int:
     args = parse_args()
-    client = GitHubClient(require_env("GITHUB_REPOSITORY"), require_env("GH_TOKEN"))
+    repository = require_env("GITHUB_REPOSITORY")
+    daily_cap = parse_daily_cap(os.environ.get("FACTORY_IMPLEMENT_DAILY_CAP"))
+    current_run_id = os.environ.get("GITHUB_RUN_ID", "").strip()
+    current_run_attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1"))
+    global_switch = os.environ.get("AGENT_AUTOMATIONS_ENABLED", "")
+    stage_switch = os.environ.get("FACTORY_IMPLEMENT_ENABLED", "")
+    if args.command == "authorize":
+        authorize_execution(
+            GitHubClient(repository, require_env("FACTORY_ACTIONS_TOKEN")),
+            daily_cap,
+            current_run_id,
+            current_run_attempt,
+            global_switch,
+            stage_switch,
+            require_env("FACTORY_REPOSITORY_OWNER"),
+        )
+        return 0
+
+    client = GitHubClient(repository, require_env("GH_TOKEN"))
     if args.command == "claim":
         assignee = require_env("FACTORY_CLAIM_ASSIGNEE")
-        claim(client, args.issue, args.run_url, assignee)
+        actions_client = GitHubClient(
+            repository,
+            require_env("FACTORY_ACTIONS_TOKEN"),
+        )
+        claim(
+            client,
+            actions_client,
+            args.issue,
+            args.run_url,
+            assignee,
+            require_env("FACTORY_TRIGGER_ACTOR"),
+            require_env("FACTORY_REPOSITORY_OWNER"),
+            global_switch,
+            stage_switch,
+            daily_cap,
+            current_run_id,
+            current_run_attempt,
+        )
     elif args.command == "rollback":
         assignee = require_env("FACTORY_CLAIM_ASSIGNEE")
         rollback(client, args.issue, args.run_url, assignee)
     else:
-        dispatch_ready(client, dry_run=args.dry_run)
+        require_automation_switches(global_switch, stage_switch)
+        dispatch_ready(
+            client,
+            dry_run=args.dry_run,
+            daily_cap=daily_cap,
+            repository_owner=require_env("FACTORY_REPOSITORY_OWNER"),
+        )
     return 0
 
 
