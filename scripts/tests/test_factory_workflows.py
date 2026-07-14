@@ -307,32 +307,25 @@ class FactoryImplementTests(unittest.TestCase):
             ["comment", "update_issue"],
         )
 
-    def test_operator_recovery_dispatch_respects_capacity_and_privileged_scope(self) -> None:
-        ready = [
-            {**self.issue(), "number": 43},
-            {
-                **self.issue(body="Change `.github/workflows/ci.yml`"),
-                "number": 42,
-            },
-            {**self.issue(), "number": 41},
-        ]
+    def test_budget_skip_comment_dedupes_across_changing_run_counts(self) -> None:
+        first = factory_implement.budget_skip_comment(7, 6)
+        second = factory_implement.budget_skip_comment(8, 6)
+        client = mock.Mock()
+        client.comments.return_value = [{"body": first}]
 
-        self.assertEqual(
-            factory_implement.ready_dispatch_numbers(ready, claimed_count=1),
-            [41],
+        factory_implement.comment_once(
+            client,
+            42,
+            second,
+            dedupe_key=factory_implement.BUDGET_COMMENT_MARKER,
         )
-        self.assertEqual(
-            factory_implement.ready_dispatch_numbers(ready, claimed_count=2),
-            [],
+
+        self.assertIn("7 implementation runs", first)
+        self.assertIn("8 implementation runs", second)
+        self.assertTrue(
+            first.startswith(factory_implement.BUDGET_COMMENT_MARKER + "\n")
         )
-        self.assertEqual(
-            factory_implement.ready_dispatch_numbers(
-                ready,
-                claimed_count=0,
-                remaining_daily_runs=1,
-            ),
-            [41],
-        )
+        client.comment.assert_not_called()
 
     def test_workflow_contract_is_event_gated_and_uses_april_identity(self) -> None:
         workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")

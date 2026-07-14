@@ -70,6 +70,8 @@ MERGEABILITY_TEMPLATE = """## Mergeability
 - Residual risk or follow-up: <what could still break or is deferred, or "None">"""
 DOC_EVIDENCE_EXEMPT_SUFFIXES = (".md", ".mdx", ".markdown", ".txt")
 DOC_EVIDENCE_EXEMPT_PREFIXES = ("docs/", "backlog/")
+
+
 @dataclass(frozen=True)
 class Result:
     failures: list[str]

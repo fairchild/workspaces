@@ -57,6 +57,7 @@ WIP_COMMENT = APRIL_ATTRIBUTION + (
     f"Factory implementation is waiting: the {FACTORY_WIP_CAP}-issue factory WIP "
     "cap is full; leaving this issue ready."
 )
+BUDGET_COMMENT_MARKER = "<!-- factory-implement-budget-skip -->"
 
 
 class FactoryImplementError(RuntimeError):
@@ -173,14 +174,6 @@ class GitHubClient:
         )
         return [dict(item) for item in items if "pull_request" not in item]
 
-    def ready_issues(self) -> list[dict[str, Any]]:
-        labels = urllib.parse.quote("agent,task,ready")
-        items = self.request(
-            "GET",
-            f"/repos/{self.repository}/issues?state=open&labels={labels}&per_page=100",
-        )
-        return [dict(item) for item in items if "pull_request" not in item]
-
     def update_issue(self, number: int, payload: dict[str, Any]) -> None:
         self.request("PATCH", f"/repos/{self.repository}/issues/{number}", payload)
 
@@ -189,14 +182,6 @@ class GitHubClient:
             "POST",
             f"/repos/{self.repository}/issues/{number}/comments",
             {"body": body},
-        )
-
-    def dispatch_issue(self, number: int) -> None:
-        self.request(
-            "POST",
-            f"/repos/{self.repository}/actions/workflows/"
-            "factory-implement.yml/dispatches",
-            {"ref": "main", "inputs": {"issue_number": str(number)}},
         )
 
     def workflow_runs_on(self, workflow: str, day: str) -> list[dict[str, Any]]:
@@ -292,10 +277,32 @@ def rollback_payload(issue: dict[str, Any], assignee: str) -> dict[str, Any]:
     return {"labels": labels, "assignees": assignees}
 
 
-def comment_once(client: GitHubClient, issue_number: int, body: str) -> None:
-    if any(body in str(comment.get("body", "")) for comment in client.comments(issue_number)):
+def comment_once(
+    client: GitHubClient,
+    issue_number: int,
+    body: str,
+    *,
+    dedupe_key: str | None = None,
+) -> None:
+    identity = dedupe_key or body
+    if any(
+        identity in str(comment.get("body", ""))
+        for comment in client.comments(issue_number)
+    ):
         return
     client.comment(issue_number, body)
+
+
+def budget_skip_comment(daily_run_count: int, daily_cap: int) -> str:
+    return (
+        BUDGET_COMMENT_MARKER
+        + "\n"
+        + APRIL_ATTRIBUTION
+        + "Factory implementation skipped: "
+        + f"{daily_run_count} implementation runs have started today, above the "
+        + f"configured daily cap of {daily_cap}; leaving this issue ready. "
+        + "The workflow log records the skip."
+    )
 
 
 def parse_daily_cap(value: str | None) -> int:
@@ -485,11 +492,8 @@ def claim(
         comment_once(
             client,
             issue_number,
-            APRIL_ATTRIBUTION
-            + "Factory implementation skipped: "
-            + f"{daily_run_count} implementation runs have started today, above the "
-            + f"configured daily cap of {daily_cap}; leaving this issue ready. "
-            + "The workflow log records the skip.",
+            budget_skip_comment(daily_run_count, daily_cap),
+            dedupe_key=BUDGET_COMMENT_MARKER,
         )
         return
     if decision.action == "skip":
@@ -547,49 +551,6 @@ def rollback(
     )
 
 
-def ready_dispatch_numbers(
-    ready_issues: list[dict[str, Any]],
-    claimed_count: int,
-    *,
-    remaining_daily_runs: int | None = None,
-) -> list[int]:
-    capacity = max(0, FACTORY_WIP_CAP - claimed_count)
-    if remaining_daily_runs is not None:
-        capacity = min(capacity, max(0, remaining_daily_runs))
-    eligible = [issue for issue in ready_issues if not privileged_scope(issue)]
-    return sorted(int(issue["number"]) for issue in eligible)[:capacity]
-
-
-def dispatch_ready(
-    client: GitHubClient,
-    *,
-    dry_run: bool,
-    daily_cap: int,
-    repository_owner: str,
-) -> None:
-    claimed_count = len(client.claimed_issues())
-    day = datetime.now(UTC).date().isoformat()
-    daily_run_count = count_daily_runs(
-        client.workflow_runs_on("factory-implement.yml", day),
-        "",
-        repository_owner=repository_owner,
-    )
-    numbers = ready_dispatch_numbers(
-        client.ready_issues(),
-        claimed_count,
-        remaining_daily_runs=daily_cap - daily_run_count,
-    )
-    if daily_run_count >= daily_cap:
-        print(
-            "Factory implement recovery dispatch skipped: "
-            f"daily cap {daily_run_count}/{daily_cap} reached"
-        )
-    for number in numbers:
-        print(f"Factory implement recovery dispatch for ready issue #{number}")
-        if not dry_run:
-            client.dispatch_issue(number)
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -597,8 +558,6 @@ def parse_args() -> argparse.Namespace:
         subparser = subparsers.add_parser(command)
         subparser.add_argument("--issue", type=int, required=True)
         subparser.add_argument("--run-url", required=True)
-    dispatch = subparsers.add_parser("dispatch-ready")
-    dispatch.add_argument("--dry-run", action="store_true")
     subparsers.add_parser("authorize")
     return parser.parse_args()
 
@@ -654,14 +613,6 @@ def main() -> int:
     elif args.command == "rollback":
         assignee = require_env("FACTORY_CLAIM_ASSIGNEE")
         rollback(client, args.issue, args.run_url, assignee)
-    else:
-        require_automation_switches(global_switch, stage_switch)
-        dispatch_ready(
-            client,
-            dry_run=args.dry_run,
-            daily_cap=daily_cap,
-            repository_owner=require_env("FACTORY_REPOSITORY_OWNER"),
-        )
     return 0
 
 
