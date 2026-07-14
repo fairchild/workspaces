@@ -9,6 +9,12 @@ on:
       - "scripts/agent-triage-request.py"
       - "scripts/tests/test_agent_triage.py"
       - "scripts/tests/test_run_contributor.py"
+      - "scripts/tests/test_validate_agent_output.py"
+      - ".github/workflows/factory-*.yml"
+      - "scripts/factory-implement.py"
+      - "scripts/factory-review.py"
+      - "scripts/tests/test_factory_workflows.py"
+      - "scripts/tests/test_factory_review.py"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
@@ -26,6 +32,12 @@ on:
       - "scripts/agent-triage-request.py"
       - "scripts/tests/test_agent_triage.py"
       - "scripts/tests/test_run_contributor.py"
+      - "scripts/tests/test_validate_agent_output.py"
+      - ".github/workflows/factory-*.yml"
+      - "scripts/factory-implement.py"
+      - "scripts/factory-review.py"
+      - "scripts/tests/test_factory_workflows.py"
+      - "scripts/tests/test_factory_review.py"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
@@ -68,6 +80,14 @@ jobs:
 
       - name: Run contributor runner policy tests
         run: uv run --script scripts/tests/test_run_contributor.py
+
+      - name: Run contributor output validation tests
+        run: uv run --script scripts/tests/test_validate_agent_output.py
+
+      - name: Run Factory workflow policy tests
+        run: |
+          uv run --script scripts/tests/test_factory_workflows.py
+          uv run --script scripts/tests/test_factory_review.py
 
       - name: Run Fable orchestrator tests
         run: uv run --script scripts/tests/test_fable_orchestrator.py

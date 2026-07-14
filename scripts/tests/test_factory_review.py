@@ -16,6 +16,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "factory-review.py"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "factory-review.yml"
+EXECUTOR_PATH = REPO_ROOT / ".github" / "workflows" / "factory-review-execute.yml"
 
 
 def load_module(name: str, path: Path):
@@ -62,7 +63,7 @@ class FactoryReviewTests(unittest.TestCase):
             {"filename": "scripts/helper.py"},
         ]
 
-        for label in ("author:codex", "author:fable-orchestrator"):
+        for label in ("author:claude-code", "author:codex", "author:fable-orchestrator"):
             with self.subTest(label=label):
                 self.assertEqual(
                     factory_review.counterpart_reviewer(label, application_files),
@@ -72,6 +73,29 @@ class FactoryReviewTests(unittest.TestCase):
                     factory_review.counterpart_reviewer(label, platform_files),
                     "plat",
                 )
+
+    def test_app_cannot_review_its_own_mislabeled_pull_request(self) -> None:
+        pull_request = {
+            **self.pull_request(label="author:codex"),
+            "user": {"login": "april-clearwater[bot]"},
+        }
+
+        decision = factory_review.evaluate_review(
+            pull_request,
+            [{"filename": "Sources/Feature.swift"}],
+            [],
+            force=False,
+        )
+
+        self.assertEqual(decision.action, "skip")
+        self.assertIn("cannot review its own", decision.reason)
+
+    def test_linked_issue_is_derived_from_closing_reference(self) -> None:
+        self.assertEqual(
+            factory_review.linked_issue_number({"body": "Summary\n\nCloses #1091"}),
+            1091,
+        )
+        self.assertIsNone(factory_review.linked_issue_number({"body": "Related to #1091"}))
 
     def test_automatic_review_deduplicates_reviewer_and_head_sha(self) -> None:
         reviews = [
@@ -117,19 +141,24 @@ class FactoryReviewTests(unittest.TestCase):
 
     def test_workflow_uses_isolated_apps_kill_switches_and_no_review_trigger(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("types: [opened, ready_for_review]", workflow)
+        self.assertIn("types: [opened, ready_for_review, synchronize]", workflow)
         self.assertNotIn("pull_request_review:", workflow)
         self.assertIn("vars.AGENT_AUTOMATIONS_ENABLED == 'true'", workflow)
         self.assertIn("vars.FACTORY_REVIEW_ENABLED == 'true'", workflow)
-        self.assertIn("secrets.APRIL_APP_ID", workflow)
-        self.assertIn("secrets.APRIL_PRIVATE_KEY", workflow)
-        self.assertIn("secrets.WORKSPACE_AGENTS_APP_ID", workflow)
-        self.assertIn("secrets.WORKSPACE_AGENTS_PRIVATE_KEY", workflow)
-        self.assertIn("GH_APP_SLUG: april-clearwater", workflow)
-        self.assertIn("GH_APP_SLUG: workspace-agents", workflow)
-        self.assertIn("mentioned you in PR #${PR_NUMBER}", workflow)
-        self.assertIn("github.event.pull_request.base.sha || github.sha", workflow)
+        self.assertNotIn("secrets.", workflow)
+        self.assertIn("workflow_run:", executor)
+        self.assertIn("secrets.APRIL_APP_ID", executor)
+        self.assertIn("secrets.APRIL_PRIVATE_KEY", executor)
+        self.assertIn("secrets.WORKSPACE_AGENTS_APP_ID", executor)
+        self.assertIn("secrets.WORKSPACE_AGENTS_PRIVATE_KEY", executor)
+        self.assertIn("GH_APP_SLUG: april-clearwater", executor)
+        self.assertIn("GH_APP_SLUG: workspace-agents", executor)
+        self.assertIn("mentioned you in PR #${PR_NUMBER}", executor)
+        self.assertIn("ref: ${{ needs.admit.outputs.head_sha }}", executor)
+        self.assertIn("--expected-head", executor)
+        self.assertIn("FACTORY_EXPECTED_PR_HEAD_SHA", executor)
 
 
 if __name__ == "__main__":

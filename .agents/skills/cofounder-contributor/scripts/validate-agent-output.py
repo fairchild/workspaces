@@ -39,7 +39,7 @@ REQUIRED_FIELDS: dict[str, list[str]] = {
     "propose": ["title", "body", "persona"],
     "comment": ["discussion_number", "body", "persona"],
     "recommend_close": ["discussion_number", "body", "persona"],
-    "review_pr": ["pr_number", "body", "persona"],
+    "review_pr": ["pr_number", "body", "persona", "verdict"],
     "execute_issue": ["issue_number", "pr_title", "commit_message", "body", "persona"],
     "advance_pr": ["pr_number", "issue_number", "pr_title", "commit_message", "body", "persona"],
     "plan": ["discussion_number", "issues"],
@@ -215,6 +215,14 @@ def validate_data(data: dict[str, Any]) -> dict[str, Any]:
             pr_number = data.get("pr_number")
             if not isinstance(pr_number, int) or pr_number <= 0:
                 raise ValidationError("field 'pr_number' must be a positive integer")
+
+    if action == "review_pr":
+        verdict = require_non_empty_string(data.get("verdict"), "verdict").casefold()
+        if verdict not in {"approve", "approve_with_followups", "request_changes"}:
+            raise ValidationError(
+                "field 'verdict' must be approve, approve_with_followups, or request_changes"
+            )
+        data["verdict"] = verdict
 
     return data
 

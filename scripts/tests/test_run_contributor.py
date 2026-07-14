@@ -231,19 +231,51 @@ class RunContributorEvidenceTests(unittest.TestCase):
         execution = sys.modules["execution"]
         commands: list[list[str]] = []
 
+        def fake_run_checked(command, **_kwargs):
+            commands.append(command)
+            if command[:4] == ["gh", "pr", "view", "77"]:
+                return mock.Mock(
+                    stdout=json.dumps(
+                        {
+                            "body": "Closes #42",
+                            "labels": [{"name": "author:codex"}],
+                        }
+                    )
+                )
+            return mock.Mock(stdout="")
+
         with (
-            mock.patch.object(execution, "run_optional", return_value="Closes #42"),
             mock.patch.object(execution, "ensure_label_exists"),
             mock.patch.object(
                 execution,
                 "run_checked",
-                side_effect=lambda command, **_kwargs: commands.append(command),
+                side_effect=fake_run_checked,
             ),
         ):
             run_contributor._update_mergeable_label(77, "approve", {"GH_TOKEN": "token"})
 
         self.assertIn(["gh", "pr", "edit", "77", "--add-label", "mergeable"], commands)
         self.assertIn(["gh", "issue", "edit", "42", "--add-label", "mergeable"], commands)
+
+    def test_claude_runs_bare_in_untrusted_review_workspace(self) -> None:
+        with mock.patch.object(
+            run_contributor,
+            "run_checked",
+            return_value=mock.Mock(stdout="review"),
+        ) as run_checked:
+            output = run_contributor.run_claude(
+                "system",
+                "task",
+                {"PATH": "/usr/bin", "CLAUDE_CODE_OAUTH_TOKEN": "token"},
+                mode="cli",
+                tools=run_contributor.READ_ONLY_MODEL_TOOLS,
+                cwd=Path("/tmp/model-workspace"),
+            )
+
+        command = run_checked.call_args.args[0]
+        self.assertEqual(output, "review")
+        self.assertIn("--bare", command)
+        self.assertEqual(run_checked.call_args.kwargs["cwd"], Path("/tmp/model-workspace"))
 
     def test_reconcile_pending_ci_evidence_includes_uploaded_screenshot_links(self) -> None:
         body = "\n".join(

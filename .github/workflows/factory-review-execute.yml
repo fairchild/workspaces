@@ -1,0 +1,227 @@
+# Executes counterpart review only from trusted default-branch workflow code.
+# Every artifact and current PR field is revalidated before reviewer secrets load.
+
+name: Factory Review Executor
+
+on:
+  workflow_run:
+    workflows: [Factory Review]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  admit:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      (github.event.workflow_run.event == 'workflow_dispatch' ||
+      (vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_REVIEW_ENABLED == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      force_review: ${{ steps.context.outputs.force_review }}
+      matched: ${{ steps.admit.outputs.matched }}
+      pr_number: ${{ steps.admit.outputs.pr_number }}
+      reviewer: ${{ steps.admit.outputs.reviewer }}
+      head_sha: ${{ steps.admit.outputs.head_sha }}
+      linked_issue: ${{ steps.admit.outputs.linked_issue }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          path: source
+          persist-credentials: false
+      - name: Download untrusted review context
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: factory-review-context
+          path: context
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Resolve trusted review context
+        id: context
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+        run: |
+          set -euo pipefail
+          PR_NUMBER="$(jq -er '.pr_number | select(type == "number")' context/factory-review-context.json)"
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          FORCE_REVIEW=false
+          if [ "$RUN_EVENT" = "workflow_dispatch" ]; then
+            if [ "$RUN_ACTOR" != "$REPOSITORY_OWNER" ]; then
+              echo "Only the repository owner may manually re-request Factory review." >&2
+              exit 1
+            fi
+            FORCE_REVIEW=true
+          fi
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "force_review=$FORCE_REVIEW" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Admit counterpart review
+        id: admit
+        working-directory: source
+        env:
+          FORCE_REVIEW: ${{ steps.context.outputs.force_review }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          ARGS=(--pr "$PR_NUMBER")
+          if [ "$FORCE_REVIEW" = "true" ]; then
+            ARGS+=(--force)
+          fi
+          uv run --script scripts/factory-review.py "${ARGS[@]}"
+
+  april:
+    needs: admit
+    if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'april'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: factory-review-april-${{ needs.admit.outputs.pr_number }}-${{ needs.admit.outputs.head_sha }}
+      cancel-in-progress: false
+    steps:
+      - name: Generate April app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 50
+          path: source
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Revalidate serialized April review
+        id: preflight
+        working-directory: source
+        env:
+          FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          ARGS=(--pr "${{ needs.admit.outputs.pr_number }}")
+          ARGS+=(--expected-head "${{ needs.admit.outputs.head_sha }}")
+          ARGS+=(--expected-reviewer april)
+          if [ "$FORCE_REVIEW" = "true" ]; then
+            ARGS+=(--force)
+          fi
+          uv run --script scripts/factory-review.py "${ARGS[@]}"
+      - name: Checkout admitted pull request head
+        if: steps.preflight.outputs.matched == 'true'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.admit.outputs.head_sha }}
+          fetch-depth: 1
+          path: model-workspace
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Remove PR-controlled execution configuration
+        if: steps.preflight.outputs.matched == 'true'
+        run: |
+          find model-workspace -type l -delete
+          rm -f model-workspace/.npmrc
+      - name: Run April counterpart review
+        if: steps.preflight.outputs.matched == 'true'
+        working-directory: source
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
+          FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
+          FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          GH_APP_SLUG: april-clearwater
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          MESSAGE="@${REPOSITORY_OWNER} mentioned you in PR #${PR_NUMBER}"
+          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
+            --prompt-file .agents/skills/cofounder-contributor/references/april-clearwater.md \
+            --mode cli \
+            --message "$MESSAGE"
+
+  plat:
+    needs: admit
+    if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'plat'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: factory-review-plat-${{ needs.admit.outputs.pr_number }}-${{ needs.admit.outputs.head_sha }}
+      cancel-in-progress: false
+    steps:
+      - name: Generate Plat app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
+          private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 50
+          path: source
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Revalidate serialized Plat review
+        id: preflight
+        working-directory: source
+        env:
+          FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          ARGS=(--pr "${{ needs.admit.outputs.pr_number }}")
+          ARGS+=(--expected-head "${{ needs.admit.outputs.head_sha }}")
+          ARGS+=(--expected-reviewer plat)
+          if [ "$FORCE_REVIEW" = "true" ]; then
+            ARGS+=(--force)
+          fi
+          uv run --script scripts/factory-review.py "${ARGS[@]}"
+      - name: Checkout admitted pull request head
+        if: steps.preflight.outputs.matched == 'true'
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ needs.admit.outputs.head_sha }}
+          fetch-depth: 1
+          path: model-workspace
+          persist-credentials: false
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Remove PR-controlled execution configuration
+        if: steps.preflight.outputs.matched == 'true'
+        run: |
+          find model-workspace -type l -delete
+          rm -f model-workspace/.npmrc
+      - name: Run Plat counterpart review
+        if: steps.preflight.outputs.matched == 'true'
+        working-directory: source
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
+          FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
+          FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          GH_APP_SLUG: workspace-agents
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          MESSAGE="@${REPOSITORY_OWNER} mentioned you in PR #${PR_NUMBER}"
+          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
+            --prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md \
+            --mode cli \
+            --message "$MESSAGE"

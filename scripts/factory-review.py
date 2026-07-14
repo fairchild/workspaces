@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -22,6 +23,7 @@ AUTHOR_REVIEWERS = {
     "author:plat": "april",
 }
 APPLICATION_DEFAULT_AUTHORS = {
+    "author:claude-code",
     "author:codex",
     "author:fable-orchestrator",
 }
@@ -30,6 +32,9 @@ REVIEWER_BOTS = {
     "plat": "workspace-agents[bot]",
 }
 PLATFORM_PREFIXES = (".github/", "infra/")
+CLOSING_REFERENCE_RE = re.compile(
+    r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
+)
 
 
 class FactoryReviewError(RuntimeError):
@@ -137,6 +142,11 @@ def reviewed_head(
     )
 
 
+def linked_issue_number(pull_request: dict[str, Any]) -> int | None:
+    match = CLOSING_REFERENCE_RE.search(str(pull_request.get("body") or ""))
+    return int(match.group("number")) if match else None
+
+
 def evaluate_review(
     pull_request: dict[str, Any],
     files: list[dict[str, Any]],
@@ -154,6 +164,9 @@ def evaluate_review(
     reviewer = counterpart_reviewer(author, files)
     if reviewer is None:
         return ReviewDecision("skip", f"author label {author} has no counterpart route")
+    pull_request_author = str((pull_request.get("user") or {}).get("login") or "").casefold()
+    if pull_request_author == REVIEWER_BOTS[reviewer].casefold():
+        return ReviewDecision("skip", f"{reviewer} cannot review its own pull request")
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
     if not head_sha:
         return ReviewDecision("skip", "pull request has no head SHA")
@@ -175,6 +188,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--expected-head", default="")
+    parser.add_argument("--expected-reviewer", choices=sorted(REVIEWER_BOTS))
     return parser.parse_args()
 
 
@@ -197,11 +212,20 @@ def main() -> int:
     reviews = client.pull_request_reviews(args.pr)
     decision = evaluate_review(pull_request, files, reviews, force=args.force)
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
+    if args.expected_head and args.expected_head != head_sha:
+        decision = ReviewDecision("skip", "pull request head changed after admission")
+    if (
+        args.expected_reviewer
+        and decision.action == "review"
+        and args.expected_reviewer != decision.reviewer
+    ):
+        decision = ReviewDecision("skip", "counterpart route changed after admission")
     print(f"Factory review decision for #{args.pr}: {decision.action} ({decision.reason})")
     write_output("matched", "true" if decision.action == "review" else "false")
     write_output("pr_number", str(args.pr))
     write_output("reviewer", decision.reviewer)
     write_output("head_sha", head_sha)
+    write_output("linked_issue", str(linked_issue_number(pull_request) or ""))
     return 0
 
 

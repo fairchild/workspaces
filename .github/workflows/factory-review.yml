@@ -1,11 +1,11 @@
-# Routes agent-authored pull requests to a counterpart App for substantive review.
-# Automatic runs deduplicate by reviewer and head SHA; manual dispatch is a re-request.
+# Emits a secret-free signal when an agent-authored pull request needs review.
+# The default-branch-controlled Factory Review Executor owns privileged execution.
 
 name: Factory Review
 
 on:
   pull_request:
-    types: [opened, ready_for_review]
+    types: [opened, ready_for_review, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -15,145 +15,26 @@ on:
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
-  admit:
+  signal:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
       vars.FACTORY_REVIEW_ENABLED == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      matched: ${{ steps.admit.outputs.matched }}
-      pr_number: ${{ steps.admit.outputs.pr_number }}
-      reviewer: ${{ steps.admit.outputs.reviewer }}
-      head_sha: ${{ steps.admit.outputs.head_sha }}
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          fetch-depth: 1
-          path: source
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-      - name: Admit counterpart review
-        id: admit
+      - name: Write untrusted review context
         env:
-          FORCE_REVIEW: ${{ github.event_name == 'workflow_dispatch' }}
-          GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
-        shell: bash
         run: |
           set -euo pipefail
-          if [ ! -f source/scripts/factory-review.py ]; then
-            echo "Factory review machinery is not present on the trusted base yet; skipping bootstrap PR."
-            echo "matched=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          ARGS=(--pr "$PR_NUMBER")
-          if [ "$FORCE_REVIEW" = "true" ]; then
-            ARGS+=(--force)
-          fi
-          uv run --script source/scripts/factory-review.py "${ARGS[@]}"
-
-  april:
-    needs: admit
-    if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'april'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: factory-review-april-${{ needs.admit.outputs.pr_number }}-${{ needs.admit.outputs.head_sha }}
-      cancel-in-progress: false
-    steps:
-      - name: Generate April app token
-        id: app-token
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          printf '{"pr_number":%s}\n' "$PR_NUMBER" > "$RUNNER_TEMP/factory-review-context.json"
+      - name: Upload review context
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          app-id: ${{ secrets.APRIL_APP_ID }}
-          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
-          permission-contents: read
-          permission-issues: write
-          permission-pull-requests: write
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          fetch-depth: 50
-          path: source
-          persist-credentials: false
-          token: ${{ steps.app-token.outputs.token }}
-      - name: Checkout pull request workspace
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: refs/pull/${{ needs.admit.outputs.pr_number }}/head
-          fetch-depth: 1
-          path: model-workspace
-          persist-credentials: false
-          token: ${{ steps.app-token.outputs.token }}
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-      - name: Run April counterpart review
-        working-directory: source
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
-          GH_APP_SLUG: april-clearwater
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          MESSAGE="@${REPOSITORY_OWNER} mentioned you in PR #${PR_NUMBER}"
-          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
-            --prompt-file .agents/skills/cofounder-contributor/references/april-clearwater.md \
-            --mode cli \
-            --message "$MESSAGE"
-
-  plat:
-    needs: admit
-    if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'plat'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    concurrency:
-      group: factory-review-plat-${{ needs.admit.outputs.pr_number }}-${{ needs.admit.outputs.head_sha }}
-      cancel-in-progress: false
-    steps:
-      - name: Generate Plat app token
-        id: app-token
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
-        with:
-          app-id: ${{ secrets.WORKSPACE_AGENTS_APP_ID }}
-          private-key: ${{ secrets.WORKSPACE_AGENTS_PRIVATE_KEY }}
-          permission-contents: read
-          permission-issues: write
-          permission-pull-requests: write
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
-          fetch-depth: 50
-          path: source
-          persist-credentials: false
-          token: ${{ steps.app-token.outputs.token }}
-      - name: Checkout pull request workspace
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          ref: refs/pull/${{ needs.admit.outputs.pr_number }}/head
-          fetch-depth: 1
-          path: model-workspace
-          persist-credentials: false
-          token: ${{ steps.app-token.outputs.token }}
-      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-      - name: Run Plat counterpart review
-        working-directory: source
-        env:
-          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
-          GH_APP_SLUG: workspace-agents
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
-          REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: |
-          MESSAGE="@${REPOSITORY_OWNER} mentioned you in PR #${PR_NUMBER}"
-          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
-            --prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md \
-            --mode cli \
-            --message "$MESSAGE"
+          name: factory-review-context
+          path: ${{ runner.temp }}/factory-review-context.json
+          retention-days: 1

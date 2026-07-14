@@ -670,6 +670,7 @@ def run_claude(
         "--yes",
         CLAUDE_CODE_PACKAGE,
         "--print",
+        "--bare",
         "--system-prompt",
         prompt_text,
     ]
