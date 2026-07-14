@@ -102,7 +102,10 @@ def extract_section(body: str, heading: str) -> str:
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
-    headings = re.findall(r"(?m)^#+[ \t]+Evidence[ \t]+Status[ \t]*$", body)
+    headings = re.findall(
+        r"(?im)^#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
+        body,
+    )
     exact_count = sum(heading == "## Evidence Status" for heading in headings)
     variant_count = len(headings) - exact_count
     if exact_count > 1 or variant_count:

@@ -94,7 +94,11 @@ class PRReadinessTests(unittest.TestCase):
                 )
 
     def test_shadow_or_duplicate_evidence_status_headings_fail_closed(self) -> None:
-        for shadow in ("### Evidence Status", "##  Evidence Status"):
+        for shadow in (
+            "### Evidence Status",
+            "##  Evidence Status",
+            "## evidence status ##",
+        ):
             with self.subTest(shadow=shadow):
                 body = (
                     GOOD_BODY
