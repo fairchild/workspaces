@@ -13,6 +13,7 @@ Work is mergeable when it is correct, coherent with the product, reviewable, ver
 - Cover the non-happy paths a reviewer would expect: empty, loading, error, permissions, timing, focus, and recovery states.
 - Preserve clear service contracts, observable failure modes, useful logs or diagnostics, and explicit production assumptions.
 - Match tests and evidence to the risk and blast radius. For docs-only changes, `git diff --check` plus a clear note is usually enough.
+- Visual changes ship visual evidence: before/after screenshots (or after-only when the before state is gone or irrelevant) for any user-visible UI change, captured via the fixture lane, the capture-only handshake, or a VM lane. Narrative-only claims do not clear the gate; if capture is genuinely blocked, mark `blocked:evidence` with the reason.
 - State what changed, how it was verified, and what residual risk or follow-up remains.
 - If evidence is blocked, say so explicitly before merge and explain what approval or environment is needed.
 - Use machine-readable blocker labels when a PR is not merge-ready: `blocked:ci`, `blocked:secrets`, `blocked:evidence`, or `blocked:review`.
