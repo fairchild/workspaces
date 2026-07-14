@@ -692,7 +692,9 @@ struct ContentView: View {
             } else {
                 splitViewBody
                     .toolbar {
-                        ToolbarItem(placement: .principal) {
+                        // Owner steer on #1086: the surviving repo/branch display sits
+                        // left-aligned by the terminal, not centered (.principal centers).
+                        ToolbarItem(placement: .navigation) {
                             principalToolbarContent
                         }
 
