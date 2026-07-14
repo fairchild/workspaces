@@ -14,7 +14,7 @@ on:
         default: false
 
 permissions:
-  actions: read
+  actions: write
   contents: write
   # ops-report.py still reads legacy discussion telemetry.
   discussions: read
@@ -187,6 +187,18 @@ jobs:
           fi
 
           uv run --script "$GITHUB_WORKSPACE/source/scripts/factory-janitor.py" "${ARGS[@]}"
+
+      - name: Re-fire ready implementation work
+        if: >-
+          github.event_name != 'workflow_dispatch' &&
+          vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+          vars.FACTORY_IMPLEMENT_ENABLED == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          uv run --script
+          "$GITHUB_WORKSPACE/source/scripts/factory-implement.py" dispatch-ready
 
       - name: Update Factory Digest
         shell: bash

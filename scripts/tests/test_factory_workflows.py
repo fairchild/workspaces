@@ -49,6 +49,7 @@ class FactoryImplementTests(unittest.TestCase):
         privileged = (
             ".github/workflows/ci.yml",
             ".agents/memory/april/PROFILE.md",
+            "Auth.swift",
             "scripts/notarize.sh",
             "Sources/Auth/Session.swift",
             "infra/service/private-key.ts",
@@ -58,6 +59,11 @@ class FactoryImplementTests(unittest.TestCase):
             with self.subTest(path=path):
                 issue = self.issue(body=f"Change `{path}`")
                 self.assertTrue(factory_implement.privileged_scope(issue))
+
+        markdown_link = self.issue(
+            body="Change [the CI workflow](.github/workflows/ci.yml)"
+        )
+        self.assertTrue(factory_implement.privileged_scope(markdown_link))
 
         self.assertFalse(factory_implement.privileged_scope(self.issue()))
 
@@ -83,7 +89,7 @@ class FactoryImplementTests(unittest.TestCase):
     def test_claim_and_rollback_payloads_preserve_unrelated_state(self) -> None:
         issue = self.issue(labels=("agent", "task", "ready", "quality"))
 
-        claim = factory_implement.claim_payload(issue, "april-clearwater")
+        claim = factory_implement.claim_payload(issue, "april-clearwater[bot]")
         self.assertEqual(claim["labels"], ["agent", "claimed", "quality", "task"])
         self.assertEqual(
             claim["assignees"],
@@ -95,9 +101,44 @@ class FactoryImplementTests(unittest.TestCase):
             "labels": [{"name": name} for name in claim["labels"]],
             "assignees": [{"login": login} for login in claim["assignees"]],
         }
-        rollback = factory_implement.rollback_payload(claimed_issue, "april-clearwater")
+        rollback = factory_implement.rollback_payload(
+            claimed_issue,
+            "april-clearwater[bot]",
+        )
         self.assertEqual(rollback["labels"], ["agent", "quality", "ready", "task"])
         self.assertEqual(rollback["assignees"], ["fairchild"])
+
+    def test_claim_comment_binds_runtime_identity_branch_and_run(self) -> None:
+        issue = {**self.issue(), "title": "Fix a subtle bug"}
+
+        body = factory_implement.claim_comment(issue, "https://example.test/runs/7")
+
+        self.assertIn("Workflow run: https://example.test/runs/7", body)
+        self.assertIn("agent=april-clearwater", body)
+        self.assertIn("branch=codex/april-clearwater-issue-42-fix-a-subtle-bug", body)
+        self.assertEqual(
+            factory_implement.latest_factory_claim_run([{"body": body}]),
+            "https://example.test/runs/7",
+        )
+
+    def test_monitor_recovery_dispatch_respects_capacity_and_privileged_scope(self) -> None:
+        ready = [
+            {**self.issue(), "number": 43},
+            {
+                **self.issue(body="Change `.github/workflows/ci.yml`"),
+                "number": 42,
+            },
+            {**self.issue(), "number": 41},
+        ]
+
+        self.assertEqual(
+            factory_implement.ready_dispatch_numbers(ready, claimed_count=1),
+            [41],
+        )
+        self.assertEqual(
+            factory_implement.ready_dispatch_numbers(ready, claimed_count=2),
+            [],
+        )
 
     def test_workflow_contract_is_event_gated_and_uses_april_identity(self) -> None:
         workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
@@ -115,8 +156,20 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("secrets.APRIL_PRIVATE_KEY", workflow)
         self.assertIn("secrets.CLAUDE_CODE_OAUTH_TOKEN", workflow)
         self.assertIn("GH_APP_SLUG: april-clearwater", workflow)
+        self.assertIn("FACTORY_EXPECTED_ISSUE_SCOPE_DIGEST", workflow)
+        self.assertIn("mentioned you in issue #${ISSUE_NUMBER}", workflow)
+        self.assertIn("permission-contents: write", workflow)
+        self.assertIn("permission-pull-requests: write", workflow)
         self.assertIn("scripts/factory-implement.py rollback", workflow)
         self.assertIn("needs.claim.result == 'failure'", workflow)
+        self.assertIn("needs.claim.result == 'cancelled'", workflow)
+
+        monitor = (
+            REPO_ROOT / ".github" / "workflows" / "factory-monitor.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("actions: write", monitor)
+        self.assertIn("FACTORY_IMPLEMENT_ENABLED == 'true'", monitor)
+        self.assertIn("factory-implement.py\" dispatch-ready", monitor)
 
 
 if __name__ == "__main__":

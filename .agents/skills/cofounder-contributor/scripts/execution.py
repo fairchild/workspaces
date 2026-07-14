@@ -58,6 +58,8 @@ from github_state import (
 )
 
 _label_cache: set[str] | None = None
+AUTHOR_LABEL_COLOR = "BFD4F2"
+AUTHOR_LABEL_DESCRIPTION = "PRs authored by the {agent} agent"
 
 APP_BOT_GIT_IDENTITIES = {
     # PR authorship comes from the GitHub App token; commit/contributor
@@ -157,6 +159,15 @@ def ensure_label_exists(env: dict[str, str], name: str, color: str, description:
 def ensure_claim_label(env: dict[str, str]) -> None:
     ensure_label_exists(env, AGENT_LANE_LABEL, AGENT_LANE_LABEL_COLOR, AGENT_LANE_LABEL_DESCRIPTION)
     ensure_label_exists(env, AGENT_CLAIM_LABEL, AGENT_CLAIM_LABEL_COLOR, AGENT_CLAIM_LABEL_DESCRIPTION)
+
+
+def author_label_for_persona(persona: str) -> str:
+    labels = {
+        "april-clearwater": "author:april",
+        "plat-ironwood": "author:plat",
+    }
+    slug = persona_slug(persona)
+    return labels.get(slug, f"author:{slug}")
 
 
 def claim_marker(issue_number: int, persona: str, branch: str) -> str:
@@ -445,6 +456,13 @@ def route_execution_action(
         log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(evidence_errors), "issue": issue_number}))
         return 1
     pr_body = compose_pr_body(issue_number, persona, summary_body)
+    author_label = author_label_for_persona(persona)
+    ensure_label_exists(
+        env,
+        author_label,
+        AUTHOR_LABEL_COLOR,
+        AUTHOR_LABEL_DESCRIPTION.format(agent=author_label.removeprefix("author:")),
+    )
 
     branch = current_branch(env)
     if own_pr is not None:
@@ -552,6 +570,8 @@ def route_execution_action(
             str(data["pr_title"]).strip(),
             "--body",
             pr_body,
+            "--label",
+            author_label,
         ],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
