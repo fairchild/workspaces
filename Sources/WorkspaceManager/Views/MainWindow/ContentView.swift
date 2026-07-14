@@ -682,6 +682,16 @@ struct ContentView: View {
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
         } detail: {
             detailContent
+                .toolbar {
+                    // Owner steer on #1086: repo/branch sits at the detail column's
+                    // leading edge (left-aligned by the terminal). Declared on the
+                    // detail view so the sidebar column's own controls stay intact.
+                    if !minimalToolbarEnabled {
+                        ToolbarItem(placement: .navigation) {
+                            principalToolbarContent
+                        }
+                    }
+                }
         }
     }
 
@@ -692,11 +702,6 @@ struct ContentView: View {
             } else {
                 splitViewBody
                     .toolbar {
-                        // Owner steer on #1086: the surviving repo/branch display sits
-                        // left-aligned by the terminal, not centered (.principal centers).
-                        ToolbarItem(placement: .navigation) {
-                            principalToolbarContent
-                        }
 
                         ToolbarItemGroup(placement: .primaryAction) {
                             NeedsYouToolbarPill(
