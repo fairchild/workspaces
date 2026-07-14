@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -100,6 +101,24 @@ class FactoryDigestTests(unittest.TestCase):
 
         self.assertEqual(count, 1)
         self.assertEqual(fetch_jobs.call_count, 2)
+
+    def test_fetch_run_jobs_paginates_all_attempt_jobs(self) -> None:
+        responses = []
+        for payload in (
+            {"jobs": [{"id": number} for number in range(100)]},
+            {"jobs": [{"id": 100}]},
+        ):
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+            responses.append(response)
+
+        with mock.patch("urllib.request.urlopen", side_effect=responses) as urlopen:
+            jobs = factory_digest.fetch_run_jobs("fairchild/workspaces", "token", 42)
+
+        self.assertEqual([job["id"] for job in jobs], list(range(101)))
+        requested_urls = [call.args[0].full_url for call in urlopen.call_args_list]
+        self.assertIn("page=1", requested_urls[0])
+        self.assertIn("page=2", requested_urls[1])
 
     def test_implement_activity_ignores_unrelated_label_event_runs(self) -> None:
         self.assertTrue(
@@ -328,8 +347,9 @@ class FactoryDigestTests(unittest.TestCase):
             markdown,
         )
         self.assertIn(
-            "1 issue ready for claim: "
-            "[#11](https://example.test/issues/11) `Available task`",
+            "## Ready but unclaimed\n\n"
+            "- no activity 3d [#11](https://example.test/issues/11) "
+            "`Available task`: ready for claim",
             markdown,
         )
         self.assertIn(
@@ -472,7 +492,7 @@ class FactoryDigestTests(unittest.TestCase):
                 self.assertNotIn("State anomalies", markdown)
                 self.assertIn("No open gates. The factory is idle.", markdown)
 
-    def test_render_digest_does_not_itemize_more_than_three_ready_issues(self) -> None:
+    def test_render_digest_itemizes_age_for_every_ready_unclaimed_issue(self) -> None:
         summary = {
             "generated_at": "2026-07-12T13:30:00Z",
             "funnel": {},
@@ -492,8 +512,13 @@ class FactoryDigestTests(unittest.TestCase):
 
         markdown = factory_digest.render_digest(issues, [], summary)
 
-        self.assertIn("4 issues ready for claim", markdown)
-        self.assertNotIn("#40", markdown)
+        self.assertIn("## Ready but unclaimed", markdown)
+        for number in range(40, 44):
+            self.assertIn(
+                f"- no activity 0d [#{number}](https://example.test/issues/{number}) "
+                f"`Ready {number}`: ready for claim",
+                markdown,
+            )
 
     def test_cli_renders_basic_fixture_without_network_access(self) -> None:
         result = subprocess.run(
