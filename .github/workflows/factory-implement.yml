@@ -84,6 +84,8 @@ jobs:
       needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
       needs_screenshot_evidence: ${{ steps.contributor.outputs.needs_screenshot_evidence }}
       pr_branch: ${{ steps.contributor.outputs.pr_branch }}
+      pr_number: ${{ steps.contributor.outputs.pr_number }}
+      pr_head_sha: ${{ steps.contributor.outputs.pr_head_sha }}
       test_commands_json: ${{ steps.contributor.outputs.test_commands_json }}
     steps:
       - name: Checkout safety gate
@@ -118,8 +120,8 @@ jobs:
         id: contributor
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
           FACTORY_EXPECTED_ISSUE_SCOPE_DIGEST: ${{ needs.claim.outputs.issue_scope_digest }}
+          FACTORY_REQUIRE_EXPLICIT_EVIDENCE: "true"
           FACTORY_VISUAL_EVIDENCE_AVAILABLE: "false"
           GH_APP_SLUG: april-clearwater
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -175,6 +177,8 @@ jobs:
     uses: ./.github/workflows/_evidence.yml
     with:
       pr_branch: ${{ needs.implement.outputs.pr_branch }}
+      pr_number: ${{ needs.implement.outputs.pr_number }}
+      pr_head_sha: ${{ needs.implement.outputs.pr_head_sha }}
       test_commands_json: ${{ needs.implement.outputs.test_commands_json }}
       needs_screenshot_evidence: false
       upload_screenshots: false

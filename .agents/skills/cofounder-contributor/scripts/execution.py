@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -409,6 +410,8 @@ def _write_github_outputs(
     needs_screenshot_evidence: bool,
     branch: str,
     test_commands: list[str],
+    pr_number: int,
+    pr_head_sha: str,
 ) -> None:
     output_file = os.environ.get("GITHUB_OUTPUT", "")
     if not output_file:
@@ -418,12 +421,16 @@ def _write_github_outputs(
         f.write(f"needs_macos_evidence={str(needs_evidence).lower()}\n")
         f.write(f"needs_screenshot_evidence={str(needs_screenshot_evidence).lower()}\n")
         f.write(f"pr_branch={branch}\n")
+        f.write(f"pr_number={pr_number}\n")
+        f.write(f"pr_head_sha={pr_head_sha}\n")
         f.write(f"test_commands_json={json.dumps(test_commands, separators=(',', ':'))}\n")
     log(
         "Emitted outputs: "
         f"needs_macos_evidence={needs_evidence}, "
         f"needs_screenshot_evidence={needs_screenshot_evidence}, "
         f"pr_branch={branch}, "
+        f"pr_number={pr_number}, "
+        f"pr_head_sha={pr_head_sha}, "
         f"test_commands={test_commands}"
     )
 
@@ -506,6 +513,24 @@ def route_execution_action(
         return 1
 
     requested_evidence = list(state.get("requested_evidence", []))
+    factory_requires_evidence = (
+        env.get("FACTORY_REQUIRE_EXPLICIT_EVIDENCE", "false").casefold() == "true"
+    )
+    if factory_requires_evidence and not requested_evidence:
+        print(
+            "error: Factory execution requires an explicit Requested Evidence contract",
+            file=sys.stderr,
+        )
+        log(
+            json.dumps(
+                {
+                    "error_class": "evidence_validation",
+                    "detail": "missing explicit Requested Evidence contract",
+                    "issue": issue_number,
+                }
+            )
+        )
+        return 1
     test_command_errors = validate_requested_test_commands(requested_evidence, env)
     if test_command_errors:
         print(
@@ -569,6 +594,24 @@ def route_execution_action(
         AUTHOR_LABEL_COLOR,
         AUTHOR_LABEL_DESCRIPTION.format(agent=author_label.removeprefix("author:")),
     )
+    if factory_requires_evidence:
+        ensure_label_exists(
+            env,
+            EVIDENCE_BLOCK_LABEL,
+            EVIDENCE_BLOCK_LABEL_COLOR,
+            EVIDENCE_BLOCK_LABEL_DESCRIPTION,
+        )
+    factory_visual_blocked = (
+        env.get("FACTORY_VISUAL_EVIDENCE_AVAILABLE", "true").casefold() == "false"
+        and _needs_screenshot_evidence(requested_evidence)
+    )
+    if factory_visual_blocked and not factory_requires_evidence:
+        ensure_label_exists(
+            env,
+            EVIDENCE_BLOCK_LABEL,
+            EVIDENCE_BLOCK_LABEL_COLOR,
+            EVIDENCE_BLOCK_LABEL_DESCRIPTION,
+        )
 
     branch = current_branch(env)
     if own_pr is not None:
@@ -638,20 +681,27 @@ def route_execution_action(
     evidence_needed = _needs_macos_evidence(requested_evidence)
     screenshot_evidence_needed = _needs_screenshot_evidence(requested_evidence)
     test_commands = _extract_test_commands(requested_evidence)
-    _write_github_outputs(
-        evidence_needed,
-        screenshot_evidence_needed,
-        branch,
-        test_commands,
-    )
+    pr_head_sha = run_checked(
+        ["git", "rev-parse", "HEAD"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    ).stdout.strip()
 
     if own_pr is not None:
+        pr_number = int(own_pr["number"])
+        if factory_visual_blocked:
+            _mark_factory_visual_evidence_blocked(
+                str(pr_number),
+                requested_evidence=requested_evidence,
+                env=env,
+            )
         run_checked(
             [
                 "gh",
                 "pr",
                 "edit",
-                str(own_pr["number"]),
+                str(pr_number),
                 "--title",
                 str(data["pr_title"]).strip(),
                 "--body",
@@ -661,37 +711,51 @@ def route_execution_action(
             cwd=REPO_ROOT,
             env=env,
         )
-        _mark_factory_visual_evidence_blocked(
-            str(own_pr["number"]),
-            requested_evidence=requested_evidence,
-            env=env,
+        _write_github_outputs(
+            evidence_needed,
+            screenshot_evidence_needed,
+            branch,
+            test_commands,
+            pr_number,
+            pr_head_sha,
         )
         return 0
 
-    run_checked(
-        [
-            "gh",
-            "pr",
-            "create",
-            "--base",
-            default_branch(env),
-            "--head",
-            branch,
-            "--title",
-            str(data["pr_title"]).strip(),
-            "--body",
-            pr_body,
-            "--label",
-            author_label,
-        ],
+    create_args = [
+        "gh",
+        "pr",
+        "create",
+        "--base",
+        default_branch(env),
+        "--head",
+        branch,
+        "--title",
+        str(data["pr_title"]).strip(),
+        "--body",
+        pr_body,
+        "--label",
+        author_label,
+    ]
+    if factory_visual_blocked:
+        create_args.extend(["--label", EVIDENCE_BLOCK_LABEL])
+    created = run_checked(
+        create_args,
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
     )
-    _mark_factory_visual_evidence_blocked(
+    number_match = re.search(r"/pull/(?P<number>\d+)", created.stdout)
+    if number_match is None:
+        print("error: could not parse created PR number", file=sys.stderr)
+        return 1
+    pr_number = int(number_match.group("number"))
+    _write_github_outputs(
+        evidence_needed,
+        screenshot_evidence_needed,
         branch,
-        requested_evidence=requested_evidence,
-        env=env,
+        test_commands,
+        pr_number,
+        pr_head_sha,
     )
     return 0
 

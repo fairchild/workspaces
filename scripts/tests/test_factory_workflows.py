@@ -350,6 +350,7 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("@${VERIFIED_ACTOR} mentioned you in issue #${ISSUE_NUMBER}", workflow)
         self.assertNotIn("@${GITHUB_REPOSITORY_OWNER} mentioned you", workflow)
         self.assertIn("factory-implement.py authorize", workflow)
+        self.assertIn('FACTORY_REQUIRE_EXPLICIT_EVIDENCE: "true"', workflow)
         self.assertIn("permission-contents: write", workflow)
         self.assertIn("permission-pull-requests: write", workflow)
         self.assertIn("scripts/factory-implement.py rollback", workflow)
@@ -360,6 +361,16 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("upload_text_evidence: true", workflow)
         self.assertIn("needs_screenshot_evidence: false", workflow)
         self.assertIn("secrets.EVIDENCE_UPLOAD_TOKEN", workflow)
+        self.assertIn("pr_number: ${{ needs.implement.outputs.pr_number }}", workflow)
+        self.assertIn("pr_head_sha: ${{ needs.implement.outputs.pr_head_sha }}", workflow)
+
+        evidence_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("ref: ${{ inputs.pr_head_sha || inputs.pr_branch }}", evidence_workflow)
+        self.assertIn('EXPECTED_HEAD_SHA: ${{ inputs.pr_head_sha }}', evidence_workflow)
+        self.assertIn("headRefOid", evidence_workflow)
+        self.assertIn("--add-label blocked:evidence", evidence_workflow)
 
         monitor = (
             REPO_ROOT / ".github" / "workflows" / "factory-monitor.yml"

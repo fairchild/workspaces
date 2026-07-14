@@ -83,6 +83,23 @@ class UploadEvidenceTests(unittest.TestCase):
                     self.assertEqual(request.get_header("Content-length"), "14")
                     self.assertIn(f"hero-flow.{extension}", stdout)
 
+    def test_txt_upload_uses_utf8_plain_text_content_type(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp) / "swift-test.txt"
+            log.write_text("All tests passed\n", encoding="utf-8")
+            with patch.object(
+                upload_evidence, "urlopen", return_value=FakeResponse()
+            ) as urlopen:
+                result, stdout, stderr = self.run_main(log)
+
+            self.assertEqual(result, 0, stderr)
+            request = urlopen.call_args.args[0]
+            self.assertEqual(
+                request.get_header("Content-type"),
+                "text/plain; charset=utf-8",
+            )
+            self.assertIn("swift-test.txt", stdout)
+
     def test_rejects_files_over_the_upload_cap_before_reading_or_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             video = Path(tmp) / "too-large.webm"

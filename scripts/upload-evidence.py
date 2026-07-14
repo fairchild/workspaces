@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "webm", "mp4"}
+ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "webm", "mp4", "txt"}
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 DEFAULT_BASE_URL = "https://evidence.cloudcompute.com"
 
@@ -29,6 +29,7 @@ CONTENT_TYPES = {
     "svg": "image/svg+xml",
     "webm": "video/webm",
     "mp4": "video/mp4",
+    "txt": "text/plain; charset=utf-8",
 }
 
 

@@ -191,6 +191,10 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if has_checked_box(body, "Blocked on evidence"):
         failures.append("PR is checked as blocked on evidence.")
 
+    evidence_status = extract_section(body, "Evidence Status")
+    if re.search(r"(?im)^\s*-\s*\[(?:blocked|pending-ci)\]\s+", evidence_status):
+        failures.append("Requested evidence is blocked or still pending CI.")
+
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):
         failures.append("PR text contains a merge-stop instruction.")
 

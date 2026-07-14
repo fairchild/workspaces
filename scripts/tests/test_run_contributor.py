@@ -376,6 +376,44 @@ class RunContributorEvidenceTests(unittest.TestCase):
         self.assertIn("Xcode Cloud capture lane #1088 is not available", rendered)
         self.assertIn("blocked on evidence", rendered)
 
+    def test_factory_visual_evidence_recognizes_standard_visual_phrasings(self) -> None:
+        for request in (
+            "Visual proof of the finished sidebar",
+            "window capture after the change",
+            "before/after images of the terminal",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(run_contributor._needs_screenshot_evidence([request]))
+
+    def test_candidate_code_environment_excludes_workflow_credentials(self) -> None:
+        sanitized = run_contributor.sanitized_candidate_code_env(
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/tmp/home",
+                "GH_TOKEN": "app-token",
+                "EVIDENCE_UPLOAD_TOKEN": "upload-token",
+                "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
+            }
+        )
+
+        self.assertEqual(sanitized, {"PATH": "/usr/bin", "HOME": "/tmp/home"})
+
+    def test_build_evidence_allows_only_the_exact_canonical_command(self) -> None:
+        self.assertEqual(
+            run_contributor.safe_swift_build_command_args("swift build"),
+            ["swift", "build"],
+        )
+        for command in (
+            "swift build --configuration release",
+            "swift build --product Missing",
+            "swift build && curl https://example.invalid",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(run_contributor.safe_swift_build_command_args(command))
+                errors = run_contributor.validate_requested_test_commands([command], env={})
+                self.assertEqual(len(errors), 1)
+                self.assertIn("must use exactly `swift build`", errors[0])
+
     def test_reconcile_test_evidence_includes_uploaded_log_url(self) -> None:
         body = (
             "## Evidence Status\n"

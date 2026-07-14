@@ -31,6 +31,29 @@ STRUCTURED_EVIDENCE_UPDATE_RE = re.compile(
 EVIDENCE_METADATA_VERSION = 1
 EVIDENCE_FALLBACK_SENTENCE = "Follow the repo evidence bar for the touched surfaces."
 SWIFT_TEST_NO_MATCH_TEXT = "No matching test cases were run"
+VISUAL_EVIDENCE_RE = re.compile(
+    r"\b(?:screenshots?|screen recordings?|visual (?:proof|evidence)|"
+    r"(?:ui|interface|screen|window) captures?|before/after (?:images?|screenshots?))\b",
+    re.IGNORECASE,
+)
+SAFE_CANDIDATE_ENV_KEYS = {
+    "CI",
+    "COLORTERM",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "LOGNAME",
+    "NO_COLOR",
+    "PATH",
+    "SHELL",
+    "TEMP",
+    "TERM",
+    "TMP",
+    "TMPDIR",
+    "TZ",
+    "USER",
+    "XDG_CACHE_HOME",
+}
 
 
 def extract_requested_evidence(body: str) -> list[str]:
@@ -574,7 +597,7 @@ def _evidence_item_kind(item: str) -> str:
         return "test"
     if normalized.startswith("swift build"):
         return "build"
-    if "screenshot" in normalized or "screen recording" in normalized:
+    if VISUAL_EVIDENCE_RE.search(normalized):
         return "screenshot"
     return "other"
 
@@ -653,6 +676,24 @@ def safe_swift_test_command_args(command: str) -> list[str] | None:
     return None
 
 
+def safe_swift_build_command_args(command: str) -> list[str] | None:
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return None
+    return parts if parts == ["swift", "build"] else None
+
+
+def sanitized_candidate_code_env(env: dict[str, str]) -> dict[str, str]:
+    """Keep credentials out of commands that evaluate an agent-authored tree."""
+
+    return {
+        key: value
+        for key, value in env.items()
+        if key in SAFE_CANDIDATE_ENV_KEYS and value
+    }
+
+
 def _swift_test_filter_selector(command: str) -> str | None:
     parts = safe_swift_test_command_args(command)
     if parts is None or len(parts) < 3:
@@ -693,6 +734,11 @@ def validate_requested_test_commands(
     env: dict[str, str],
 ) -> list[str]:
     commands = _extract_test_commands(requested_evidence)
+    build_commands = [
+        _normalize_evidence_item(item)
+        for item in requested_evidence
+        if _evidence_item_kind(item) == "build"
+    ]
     errors = [
         "requested test evidence "
         f"`{command}` must use `swift test` or `swift test --filter <selector>`; "
@@ -700,6 +746,12 @@ def validate_requested_test_commands(
         for command in commands
         if safe_swift_test_command_args(command) is None
     ]
+    errors.extend(
+        "requested build evidence "
+        f"`{command}` must use exactly `swift build`; extra flags and shell operators are not allowed"
+        for command in build_commands
+        if safe_swift_build_command_args(command) is None
+    )
 
     swift_filter_commands = [
         command
@@ -711,7 +763,7 @@ def validate_requested_test_commands(
 
     # Look up through the entrypoint module to allow mock.patch.object patching.
     _mod = sys.modules.get("run_contributor", sys.modules[__name__])
-    listed_tests = _mod._listed_swift_tests(env)
+    listed_tests = _mod._listed_swift_tests(sanitized_candidate_code_env(env))
     if not listed_tests:
         log(
             "skipping `swift test list` evidence selector preflight because no Swift Testing "

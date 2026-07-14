@@ -12,6 +12,14 @@ on:
       pr_branch:
         required: true
         type: string
+      pr_number:
+        required: false
+        type: string
+        default: ""
+      pr_head_sha:
+        required: false
+        type: string
+        default: ""
       test_commands_json:
         required: true
         type: string
@@ -43,6 +51,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -56,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ inputs.pr_branch }}
+          ref: ${{ inputs.pr_head_sha || inputs.pr_branch }}
           fetch-depth: 50
           persist-credentials: false
 
@@ -167,6 +176,9 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
 
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -184,22 +196,36 @@ jobs:
 
       - name: Resolve PR number
         id: pr
+        if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXPECTED_HEAD_SHA: ${{ inputs.pr_head_sha }}
           PR_BRANCH: ${{ inputs.pr_branch }}
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          PR_NUMBER=$(gh pr list --head "$PR_BRANCH" --json number --jq '.[0].number')
+          PR_NUMBER="$PR_NUMBER_INPUT"
+          if [ -z "$PR_NUMBER" ]; then
+            PR_NUMBER=$(gh pr list --head "$PR_BRANCH" --state open --json number \
+              --jq 'if length == 1 then .[0].number else empty end')
+          fi
           if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
-            echo "Could not resolve a PR number for branch: $PR_BRANCH" >&2
+            echo "Could not resolve exactly one PR for branch: $PR_BRANCH" >&2
             exit 1
           fi
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          if [ -n "$EXPECTED_HEAD_SHA" ]; then
+            CURRENT_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+            if [ "$CURRENT_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+              echo "PR #$PR_NUMBER advanced after evidence dispatch" >&2
+              exit 1
+            fi
+          fi
 
       - name: Upload screenshot evidence to R2
         id: upload
-        if: inputs.upload_screenshots && inputs.needs_screenshot_evidence
+        if: steps.pr.outcome == 'success' && inputs.upload_screenshots && inputs.needs_screenshot_evidence
         continue-on-error: true
         shell: bash
         env:
@@ -226,7 +252,7 @@ jobs:
 
       - name: Upload text evidence to R2
         id: text-upload
-        if: inputs.upload_text_evidence
+        if: steps.pr.outcome == 'success' && inputs.upload_text_evidence
         continue-on-error: true
         shell: bash
         env:
@@ -253,6 +279,7 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
       - name: Reconcile pending-ci evidence
+        id: reconcile
         if: always() && steps.pr.outcome == 'success'
         shell: bash
         env:
@@ -333,8 +360,14 @@ jobs:
           NEEDS_SCREENSHOT_EVIDENCE: ${{ inputs.needs_screenshot_evidence }}
           UPLOAD_SCREENSHOTS: ${{ inputs.upload_screenshots }}
           UPLOAD_TEXT_EVIDENCE: ${{ inputs.upload_text_evidence }}
+          PR_RESOLUTION_OUTCOME: ${{ steps.pr.outcome }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
         run: |
           set -euo pipefail
+          if [ "$PR_RESOLUTION_OUTCOME" != "success" ]; then
+            echo "PR identity or immutable head verification failed"
+            exit 1
+          fi
           if [ "$GATHER_RESULT" != "success" ]; then
             echo "Evidence gather job failed unexpectedly"
             exit 1
@@ -365,3 +398,18 @@ jobs:
               exit 1
             fi
           fi
+          if [ "$RECONCILE_OUTCOME" != "success" ]; then
+            echo "Evidence reconciliation failed"
+            exit 1
+          fi
+
+      - name: Mark PR blocked when evidence fails
+        if: failure() && steps.pr.outputs.number != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh label create blocked:evidence --color B60205 \
+            --description "Required merge evidence is unavailable" --force
+          gh pr edit "$PR_NUMBER" --add-label blocked:evidence
