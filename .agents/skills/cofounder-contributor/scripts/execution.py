@@ -310,12 +310,25 @@ def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -
     if verdict in ("approve", "approve_with_followups"):
         ensure_label_exists(env, AGENT_MERGEABLE_LABEL, AGENT_MERGEABLE_LABEL_COLOR, AGENT_MERGEABLE_LABEL_DESCRIPTION)
         run_checked(
+            ["gh", "pr", "edit", str(pr_number), "--add-label", AGENT_MERGEABLE_LABEL],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        run_checked(
             ["gh", "issue", "edit", str(linked_issue), "--add-label", AGENT_MERGEABLE_LABEL],
             timeout=GITHUB_API_TIMEOUT,
             cwd=REPO_ROOT,
             env=env,
         )
     else:
+        run_optional(
+            ["gh", "pr", "edit", str(pr_number), "--remove-label", AGENT_MERGEABLE_LABEL],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
         run_optional(
             ["gh", "issue", "edit", str(linked_issue), "--remove-label", AGENT_MERGEABLE_LABEL],
             timeout=GITHUB_API_TIMEOUT,

@@ -227,6 +227,24 @@ class RunContributorEvidenceTests(unittest.TestCase):
             "author:plat",
         )
 
+    def test_approved_review_labels_pull_request_and_linked_issue_mergeable(self) -> None:
+        execution = sys.modules["execution"]
+        commands: list[list[str]] = []
+
+        with (
+            mock.patch.object(execution, "run_optional", return_value="Closes #42"),
+            mock.patch.object(execution, "ensure_label_exists"),
+            mock.patch.object(
+                execution,
+                "run_checked",
+                side_effect=lambda command, **_kwargs: commands.append(command),
+            ),
+        ):
+            run_contributor._update_mergeable_label(77, "approve", {"GH_TOKEN": "token"})
+
+        self.assertIn(["gh", "pr", "edit", "77", "--add-label", "mergeable"], commands)
+        self.assertIn(["gh", "issue", "edit", "42", "--add-label", "mergeable"], commands)
+
     def test_reconcile_pending_ci_evidence_includes_uploaded_screenshot_links(self) -> None:
         body = "\n".join(
             [
