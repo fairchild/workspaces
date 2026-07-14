@@ -46,6 +46,30 @@ struct MainWindowPresentationControllerTests {
         #expect(presentation.showsDevelopmentBadge)
     }
 
+    @Test("Production builds show no development badge beside the breadcrumb")
+    func productionBuildShowsNoDevelopmentBadge() {
+        let toolbarTitle = MainWindowToolbarTitle(
+            repoName: "pi-mono",
+            workspaceName: "gentle-frog"
+        )
+
+        let buildIdentity = AppBuildIdentity(
+            channel: .installed,
+            displayPath: nil,
+            fullPath: "/Applications/WorkSpaces.app",
+            launchPath: "/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager",
+            hueDegrees: 0
+        )
+
+        let presentation = controller.principalToolbarPresentation(
+            toolbarTitle: toolbarTitle,
+            buildIdentity: buildIdentity
+        )
+
+        #expect(presentation.toolbarTitle == toolbarTitle)
+        #expect(!presentation.showsDevelopmentBadge)
+    }
+
     @Test("Active host session falls back to the last session when active is missing")
     func activeHostSessionFallsBackToLastSession() {
         let first = HostTerminalSession(
