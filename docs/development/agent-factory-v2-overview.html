@@ -285,7 +285,7 @@
       <rect class="box-untr" x="420" y="420" width="240" height="88" rx="3"/>
       <text class="lbl" x="540" y="442" text-anchor="middle">counterpart review</text>
       <text class="sub" x="436" y="462">· secret-free signal → trusted executor</text>
-      <text class="sub" x="436" y="477">· claude --bare in stripped checkout</text>
+      <text class="sub" x="436" y="477">· untrusted checkout: no hooks/config</text>
       <text class="sub" x="436" y="492">· review pinned to admitted head SHA</text>
       <line class="wire" x1="330" y1="464" x2="420" y2="464"/>
       <text class="edge-lbl" x="375" y="456" text-anchor="middle">agent PR</text>
@@ -329,7 +329,7 @@
   <p>No factory PR exists without evidence, and evidence cannot be self-attested: a credential-less job builds and tests the model-authored tree, a separate reconcile job — which never executes model code — uploads results and binds them to the PR number and head SHA, failing closed if the head drifted. The readiness gate parses the evidence section with the same exact-heading discipline the synthesizer writes, and rejects variant or duplicate headings outright, so a model cannot shadow the real accounting with a fabricated one.</p>
 
   <h3>Review-lane isolation</h3>
-  <p>The PR event fires a secret-free signal workflow; a trusted executor running default-branch code re-derives everything from the API before any secret loads, then runs the counterpart reviewer with <code>claude --bare</code> (no hooks, no project config) in a symlink-stripped checkout of the admitted SHA. Reviews post pinned to that SHA. The counterpart routing itself — April's PRs to Plat, Plat's to April — exists so no agent ever approves its own work.</p>
+  <p>The PR event fires a secret-free signal workflow; a trusted executor running default-branch code re-derives everything from the API before any secret loads, then runs the counterpart reviewer headless in a symlink-stripped, deliberately <em>untrusted</em> checkout of the admitted SHA — headless Claude skips an untrusted project's settings, hooks, and CLAUDE.md, and every tool cap is file-scoped, so PR-authored config is inert (<code>--bare</code> was tried first and abandoned: it restricts auth to API keys and never reads the runtime's OAuth token). Reviews post pinned to that SHA. The counterpart routing itself — April's PRs to Plat, Plat's to April — exists so no agent ever approves its own work.</p>
 </section>
 
 <section id="s5">
