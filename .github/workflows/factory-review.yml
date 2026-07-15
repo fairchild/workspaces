@@ -1,0 +1,40 @@
+# Emits a secret-free signal when an agent-authored pull request needs review.
+# The default-branch-controlled Factory Review Executor owns privileged execution.
+
+name: Factory Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Agent-authored pull request to review"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  signal:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_REVIEW_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Write untrusted review context
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          printf '{"pr_number":%s}\n' "$PR_NUMBER" > "$RUNNER_TEMP/factory-review-context.json"
+      - name: Upload review context
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-review-context
+          path: ${{ runner.temp }}/factory-review-context.json
+          retention-days: 1

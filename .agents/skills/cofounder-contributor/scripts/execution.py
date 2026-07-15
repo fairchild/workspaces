@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import subprocess
@@ -297,32 +298,105 @@ def ensure_issue_claimed(
 def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -> None:
     if verdict not in ("approve", "approve_with_followups", "request_changes"):
         return
-    pr_body = run_optional(
-        ["gh", "pr", "view", str(pr_number), "--json", "body", "--jq", ".body"],
+    pr_data = json.loads(
+        run_checked(
+            ["gh", "pr", "view", str(pr_number), "--json", "body,labels"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        ).stdout
+    )
+    pr_body = str(pr_data.get("body") or "")
+    pr_labels = {
+        str(label.get("name") or "")
+        for label in pr_data.get("labels", [])
+        if isinstance(label, dict)
+    }
+    current_linked_issue, _ = extract_pr_issue_reference(pr_body)
+    expected_linked_issue_text = env.get("FACTORY_EXPECTED_LINKED_ISSUE", "").strip()
+    expected_linked_issue = int(expected_linked_issue_text) if expected_linked_issue_text else None
+    linked_issue = expected_linked_issue
+    if expected_linked_issue is not None and current_linked_issue != expected_linked_issue:
+        print(
+            f"error: PR #{pr_number} linked issue changed during Factory review",
+            file=sys.stderr,
+        )
+        return
+
+    if verdict == "request_changes":
+        if AGENT_MERGEABLE_LABEL in pr_labels:
+            run_checked(
+                ["gh", "pr", "edit", str(pr_number), "--remove-label", AGENT_MERGEABLE_LABEL],
+                timeout=GITHUB_API_TIMEOUT,
+                cwd=REPO_ROOT,
+                env=env,
+            )
+        if linked_issue is not None:
+            issue_labels = json.loads(
+                run_checked(
+                    ["gh", "issue", "view", str(linked_issue), "--json", "labels"],
+                    timeout=GITHUB_API_TIMEOUT,
+                    cwd=REPO_ROOT,
+                    env=env,
+                ).stdout
+            ).get("labels", [])
+            if any(
+                isinstance(label, dict) and label.get("name") == AGENT_MERGEABLE_LABEL
+                for label in issue_labels
+            ):
+                run_checked(
+                    ["gh", "issue", "edit", str(linked_issue), "--remove-label", AGENT_MERGEABLE_LABEL],
+                    timeout=GITHUB_API_TIMEOUT,
+                    cwd=REPO_ROOT,
+                    env=env,
+                )
+        return
+
+    ensure_label_exists(
+        env,
+        AGENT_MERGEABLE_LABEL,
+        AGENT_MERGEABLE_LABEL_COLOR,
+        AGENT_MERGEABLE_LABEL_DESCRIPTION,
+    )
+    if linked_issue is not None:
+        run_checked(
+            [
+                "gh",
+                "issue",
+                "edit",
+                str(linked_issue),
+                "--add-label",
+                AGENT_MERGEABLE_LABEL,
+            ],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+    run_checked(
+        ["gh", "pr", "edit", str(pr_number), "--add-label", AGENT_MERGEABLE_LABEL],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
         env=env,
-        default="",
     )
-    linked_issue, _ = extract_pr_issue_reference(pr_body)
-    if linked_issue is None:
-        return
-    if verdict in ("approve", "approve_with_followups"):
-        ensure_label_exists(env, AGENT_MERGEABLE_LABEL, AGENT_MERGEABLE_LABEL_COLOR, AGENT_MERGEABLE_LABEL_DESCRIPTION)
-        run_checked(
-            ["gh", "issue", "edit", str(linked_issue), "--add-label", AGENT_MERGEABLE_LABEL],
-            timeout=GITHUB_API_TIMEOUT,
-            cwd=REPO_ROOT,
-            env=env,
-        )
-    else:
-        run_optional(
-            ["gh", "issue", "edit", str(linked_issue), "--remove-label", AGENT_MERGEABLE_LABEL],
-            timeout=GITHUB_API_TIMEOUT,
-            cwd=REPO_ROOT,
-            env=env,
-            default="",
-        )
+
+
+def _factory_expected_pr_head_is_current(pr_number: int, env: dict[str, str]) -> bool:
+    expected = env.get("FACTORY_EXPECTED_PR_HEAD_SHA", "").strip()
+    if not expected:
+        return True
+    current = run_checked(
+        ["gh", "pr", "view", str(pr_number), "--json", "headRefOid", "--jq", ".headRefOid"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+    ).stdout.strip()
+    if hmac.compare_digest(current, expected):
+        return True
+    print(
+        f"error: PR #{pr_number} head changed during Factory review",
+        file=sys.stderr,
+    )
+    return False
 
 
 def _write_github_outputs(
@@ -689,6 +763,8 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
         if action == "review_pr":
             verdict = str(data.get("verdict", "")).lower()
             pr_number = int(data["pr_number"])
+            if not _factory_expected_pr_head_is_current(pr_number, env):
+                return 1
             review_state = _mod.find_pr_review_state(pr_number, env)
             if review_state is not None:
                 evidence_gate_error = review_evidence_gate_error(
@@ -718,16 +794,45 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                 "--body-file",
                 body_file,
             ]
-            _mod.run_checked(
-                review_cmd,
-                timeout=GITHUB_API_TIMEOUT,
-                cwd=REPO_ROOT,
-                env=env,
-            )
+            expected_head = env.get("FACTORY_EXPECTED_PR_HEAD_SHA", "").strip()
+            if expected_head:
+                owner, name = repo_owner_name(env)
+                review_event = {
+                    "approve": "APPROVE",
+                    "approve_with_followups": "APPROVE",
+                    "request_changes": "REQUEST_CHANGES",
+                }.get(verdict, "COMMENT")
+                _mod.run_checked(
+                    [
+                        "gh",
+                        "api",
+                        f"repos/{owner}/{name}/pulls/{pr_number}/reviews",
+                        "--method",
+                        "POST",
+                        "--field",
+                        f"body=@{body_file}",
+                        "--field",
+                        f"commit_id={expected_head}",
+                        "--field",
+                        f"event={review_event}",
+                    ],
+                    timeout=GITHUB_API_TIMEOUT,
+                    cwd=REPO_ROOT,
+                    env=env,
+                )
+            else:
+                _mod.run_checked(
+                    review_cmd,
+                    timeout=GITHUB_API_TIMEOUT,
+                    cwd=REPO_ROOT,
+                    env=env,
+                )
             if review_flag == "--approve":
                 bot = detect_bot_login(env)
                 if bot:
                     _dismiss_own_blocking_reviews(pr_number, bot, env)
+            if not _factory_expected_pr_head_is_current(pr_number, env):
+                return 1
             _mod._update_mergeable_label(int(data["pr_number"]), verdict, env)
             return 0
         if action == "execute_issue":

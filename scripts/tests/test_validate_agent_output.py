@@ -61,6 +61,9 @@ Looks safe.
         self.assertEqual(data["pr_number"], 571)
         self.assertIn("Looks safe.", data["body"])
 
+        validated = validate_agent_output.validate_data(data)
+        self.assertEqual(validated["verdict"], "approve_with_followups")
+
     def test_extract_structured_accepts_frontmatter_inside_yaml_fence(self) -> None:
         raw = """Analysis before final output.
 
@@ -80,6 +83,18 @@ verdict: approve
 
         self.assertEqual(data["action"], "review_pr")
         self.assertEqual(data["verdict"], "approve")
+
+    def test_review_verdict_rejects_non_decisions(self) -> None:
+        with self.assertRaisesRegex(validate_agent_output.ValidationError, "verdict"):
+            validate_agent_output.validate_data(
+                {
+                    "action": "review_pr",
+                    "persona": "April Clearwater, Application Lead",
+                    "pr_number": 571,
+                    "verdict": "comment",
+                    "body": "Looks mostly fine.",
+                }
+            )
 
 
 if __name__ == "__main__":
