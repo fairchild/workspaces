@@ -274,6 +274,46 @@ class RunContributorEvidenceTests(unittest.TestCase):
         self.assertIn(["gh", "pr", "edit", "77", "--add-label", "mergeable"], commands)
         self.assertFalse(any(command[:3] == ["gh", "issue", "edit"] for command in commands))
 
+    def test_scratch_workspace_preserves_symlinks_and_yields_empty_diff(self) -> None:
+        env = dict(run_contributor.os.environ)
+        workspace = run_contributor.create_scratch_workspace(env)
+        try:
+            symlinks = [p for p in workspace.scratch_dir.rglob("*") if p.is_symlink()]
+            artifact = run_contributor.build_scratch_patch_artifact(workspace, env)
+        finally:
+            run_contributor.shutil.rmtree(workspace.temp_root, ignore_errors=True)
+
+        # The repo contains symlinks (e.g. CLAUDE.md); the scratch must mirror
+        # them or every linked path becomes a phantom diff the patch refuses.
+        self.assertTrue(symlinks)
+        self.assertEqual(artifact.changed_files, [])
+
+    def test_scratch_diff_detects_symlink_target_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            baseline = root / "baseline"
+            scratch = root / "scratch"
+            for tree, target in ((baseline, "AGENTS.md"), (scratch, "README.md")):
+                tree.mkdir()
+                (tree / "AGENTS.md").write_text("agents\n")
+                (tree / "README.md").write_text("agents\n")
+                (tree / "CLAUDE.md").symlink_to(target)
+            workspace = run_contributor.ScratchPatchArtifact(
+                temp_root=root,
+                baseline_dir=baseline,
+                scratch_dir=scratch,
+                changed_files=[],
+                patch_text="",
+            )
+
+            artifact = run_contributor.build_scratch_patch_artifact(
+                workspace, dict(run_contributor.os.environ)
+            )
+
+        # Both link targets hold identical bytes, so a comparison that follows
+        # symlinks would call this unchanged; the target path itself moved.
+        self.assertEqual(artifact.changed_files, ["CLAUDE.md"])
+
     def test_review_workspace_stays_untrusted_and_oauth_compatible(self) -> None:
         with (
             tempfile.TemporaryDirectory() as home,

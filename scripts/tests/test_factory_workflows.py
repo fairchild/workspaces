@@ -56,6 +56,8 @@ class FactoryImplementTests(unittest.TestCase):
         privileged = (
             ".github/workflows/ci.yml",
             ".agents/memory/april/PROFILE.md",
+            ".claude/settings.json",
+            ".claude/skills/chat-sdk/SKILL.md",
             "Auth.swift",
             "scripts/notarize.sh",
             "scripts/generate-sparkle-appcast.sh",
@@ -87,6 +89,11 @@ class FactoryImplementTests(unittest.TestCase):
             )
         )
 
+        self.assertFalse(
+            factory_implement.privileged_scope(
+                self.issue(body="Change `myclaude/config.json`")
+            )
+        )
         self.assertFalse(factory_implement.privileged_scope(self.issue()))
 
     def test_claim_requires_open_released_non_privileged_issue_and_capacity(self) -> None:
