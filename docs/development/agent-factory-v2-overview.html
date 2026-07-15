@@ -346,13 +346,13 @@
     <tr><td>review TOCTOU</td><td>the pinned-commit approval posts before the final head re-check; a mid-window push can leave an APPROVE anchored to the old SHA</td><td>branch protection dismisses stale reviews; the run fails visibly</td></tr>
     <tr><td>self-hosted gather</td><td>the evidence job builds model-authored code on <code>lume-macos</code> runners</td><td>zero secrets or credentials on that job — exfil-resistant; host persistence rests on runner ephemerality</td></tr>
     <tr><td>semantic evidence trust</td><td>tests are authored by the same model whose change they verify</td><td>counterpart review + owner merge; binding guarantees provenance, not meaning</td></tr>
-    <tr><td>first live run</td><td>App assignment and the contributor runtime are integration-proven only by a real dispatch</td><td>supervised first run (§07)</td></tr>
+    <tr><td>first live run</td><td>the contributor runtime is integration-proven only by a real dispatch (run 1 proved the gates and found that App tokens cannot assign agent accounts — assignment is now best-effort visibility; the claim comment is the record)</td><td>supervised first run (§07)</td></tr>
   </table>
 </section>
 
 <section id="s7">
   <h2><span class="sn">§07 · Operations</span>Operating the factory</h2>
-  <p>To turn the hands on: set <code>FACTORY_IMPLEMENT_ENABLED</code> and <code>FACTORY_REVIEW_ENABLED</code> alongside the existing master switch, optionally tune the two daily caps, then run one supervised pass — label a trivial, non-privileged issue <code>ready</code> yourself and watch the whole chain (claim comment, assignment, PR, evidence, counterpart review) before trusting the label path unattended.</p>
+  <p>To turn the hands on: set <code>FACTORY_IMPLEMENT_ENABLED</code> and <code>FACTORY_REVIEW_ENABLED</code> alongside the existing master switch, optionally tune the two daily caps, then run one supervised pass — label a trivial, non-privileged issue <code>ready</code> yourself and watch the whole chain (claim comment, claimed label, PR, evidence, counterpart review) before trusting the label path unattended.</p>
   <p>Observability lives in three places: the pinned Factory Digest issue (label-state funnel, run budgets, ready-but-unclaimed ageing, per-stage activity), the telemetry branch <code>factory/ops-data</code> the monitor writes, and the workflow runs themselves — every dispatch names its issue in the run title. When something looks wrong, the kill switches stop the factory in one variable flip, and the janitor's next pass repairs label drift.</p>
 </section>
 

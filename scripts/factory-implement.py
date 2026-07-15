@@ -177,6 +177,20 @@ class GitHubClient:
     def update_issue(self, number: int, payload: dict[str, Any]) -> None:
         self.request("PATCH", f"/repos/{self.repository}/issues/{number}", payload)
 
+    def add_assignees(self, number: int, assignees: list[str]) -> None:
+        self.request(
+            "POST",
+            f"/repos/{self.repository}/issues/{number}/assignees",
+            {"assignees": assignees},
+        )
+
+    def remove_assignees(self, number: int, assignees: list[str]) -> None:
+        self.request(
+            "DELETE",
+            f"/repos/{self.repository}/issues/{number}/assignees",
+            {"assignees": assignees},
+        )
+
     def comment(self, number: int, body: str) -> None:
         self.request(
             "POST",
@@ -253,28 +267,36 @@ def evaluate_claim(
     return ClaimDecision("claim", "issue is eligible for unattended implementation")
 
 
-def claim_payload(issue: dict[str, Any], assignee: str) -> dict[str, Any]:
+def claim_payload(issue: dict[str, Any]) -> dict[str, Any]:
     labels = sorted((label_names(issue) - {"ready", "claimed"}) | {"claimed"})
-    assignees = {
-        str(assignee.get("login", ""))
-        for assignee in issue.get("assignees", []) or []
-        if isinstance(assignee, dict) and assignee.get("login")
-    }
-    assignees.add(assignee)
-    return {"labels": labels, "assignees": sorted(assignees)}
+    return {"labels": labels}
 
 
-def rollback_payload(issue: dict[str, Any], assignee: str) -> dict[str, Any]:
+def rollback_payload(issue: dict[str, Any]) -> dict[str, Any]:
     labels = sorted((label_names(issue) - {"claimed", "ready"}) | {"ready"})
-    claim_assignee = assignee.casefold()
-    assignees = sorted(
-        str(assignee.get("login"))
-        for assignee in issue.get("assignees", []) or []
-        if isinstance(assignee, dict)
-        and assignee.get("login")
-        and str(assignee["login"]).casefold() != claim_assignee
-    )
-    return {"labels": labels, "assignees": assignees}
+    return {"labels": labels}
+
+
+def sync_claim_assignee(
+    client: GitHubClient,
+    issue_number: int,
+    assignee: str,
+    *,
+    add: bool,
+) -> None:
+    # Best-effort visibility only: GitHub rejects agent-account assignment from
+    # App installation tokens, and claim state lives in the label + bot comment.
+    try:
+        if add:
+            client.add_assignees(issue_number, [assignee])
+        else:
+            client.remove_assignees(issue_number, [assignee])
+    except FactoryImplementError as error:
+        verb = "assignment" if add else "unassignment"
+        print(
+            f"Factory implement {verb} of {assignee} on #{issue_number} skipped: {error}",
+            file=sys.stderr,
+        )
 
 
 def comment_once(
@@ -500,7 +522,8 @@ def claim(
         return
 
     client.comment(issue_number, claim_comment(issue, run_url))
-    client.update_issue(issue_number, claim_payload(issue, assignee))
+    client.update_issue(issue_number, claim_payload(issue))
+    sync_claim_assignee(client, issue_number, assignee, add=True)
     write_output("matched", "true")
 
 
@@ -542,7 +565,8 @@ def rollback(
     if latest_factory_claim_run(client.comments(issue_number), assignee) != run_url:
         print(f"Factory implement rollback for #{issue_number}: claim belongs to another run")
         return
-    client.update_issue(issue_number, rollback_payload(issue, assignee))
+    client.update_issue(issue_number, rollback_payload(issue))
+    sync_claim_assignee(client, issue_number, assignee, add=False)
     comment_once(
         client,
         issue_number,

@@ -163,14 +163,18 @@ def check_review_pr_consistency(issues: list[dict[str, Any]], prs_by_issue: dict
 
 
 def check_claim_assignment_consistency(issues: list[dict[str, Any]]) -> dict[str, Any]:
+    # App installation tokens cannot assign agent accounts, so assignment is
+    # best-effort visibility; the claim-marker comment is the canonical record.
     problems = []
     for issue in issues:
         n = issue["number"]
         labels = label_names(issue)
+        if "claimed" not in labels:
+            continue
         bots = bot_assignees(issue)
-
-        if "claimed" in labels and not bots:
-            problems.append({"number": n, "problem": "claimed but no bot assignee"})
+        comments = issue.get("comments", {}).get("nodes", [])
+        if not bots and latest_claim(n, comments) is None:
+            problems.append({"number": n, "problem": "claimed but no bot assignee or claim comment"})
     return {"name": "claim_assignment_consistency", "pass": len(problems) == 0, "issues": problems}
 
 
