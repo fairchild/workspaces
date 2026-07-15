@@ -64,9 +64,14 @@ def run_checked(
         sys.exit(1)
     if result.returncode != 0:
         command = " ".join(cmd)
-        print(f"error: command failed: {command}", file=sys.stderr)
+        print(f"error: command failed (exit {result.returncode}): {command}", file=sys.stderr)
         if result.stderr.strip():
-            print(result.stderr.strip(), file=sys.stderr)
+            print("--- stderr ---", file=sys.stderr)
+            print(result.stderr.strip()[:8000], file=sys.stderr)
+        if result.stdout.strip():
+            # Print-mode CLIs (claude --print) report errors on stdout.
+            print("--- stdout ---", file=sys.stderr)
+            print(result.stdout.strip()[:8000], file=sys.stderr)
         sys.exit(result.returncode or 1)
     return result
 
