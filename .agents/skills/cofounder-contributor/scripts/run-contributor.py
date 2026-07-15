@@ -650,6 +650,22 @@ def compose_system_prompt(persona_prompt: str) -> str:
     )
 
 
+def ensure_claude_project_trust(cwd: Path, env: dict[str, str]) -> None:
+    # Headless Claude Code ignores permissions.allow for untrusted project
+    # paths; the runtime's tool allowlist only loads once the cwd is trusted.
+    config_path = Path(env.get("HOME") or Path.home()) / ".claude.json"
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    projects = data.setdefault("projects", {})
+    entry = projects.setdefault(str(cwd), {})
+    if entry.get("hasTrustDialogAccepted") is True:
+        return
+    entry["hasTrustDialogAccepted"] = True
+    config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
 def run_claude(
     system_prompt: str | Path,
     task: str,
@@ -667,6 +683,7 @@ def run_claude(
         else str(system_prompt)
     )
     log(f"Running Claude Code (mode={mode})")
+    ensure_claude_project_trust(cwd or REPO_ROOT, env)
     cmd = [
         "npx",
         "--yes",
