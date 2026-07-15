@@ -21,6 +21,7 @@ from release_policy import RELEASE_PATHS  # noqa: E402
 SENSITIVE_PATH_PREFIXES = (
     ".github/",
     ".agents/",
+    ".claude/",
 )
 SENSITIVE_RELEASE_SCRIPT_PATHS = RELEASE_PATHS | {
     "scripts/signing-config.sh.template",

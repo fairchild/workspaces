@@ -441,7 +441,9 @@ def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
     baseline_dir = temp_root / "baseline"
     scratch_dir = temp_root / "scratch"
     export_head_tree(baseline_dir, env)
-    shutil.copytree(baseline_dir, scratch_dir)
+    # symlinks=True keeps repo symlinks as symlinks; following them turns
+    # every linked path into a phantom mode-change diff that git apply refuses.
+    shutil.copytree(baseline_dir, scratch_dir, symlinks=True)
     return ScratchPatchArtifact(
         temp_root=temp_root,
         baseline_dir=baseline_dir,

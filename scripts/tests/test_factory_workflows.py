@@ -56,6 +56,8 @@ class FactoryImplementTests(unittest.TestCase):
         privileged = (
             ".github/workflows/ci.yml",
             ".agents/memory/april/PROFILE.md",
+            ".claude/settings.json",
+            ".claude/skills/chat-sdk/SKILL.md",
             "Auth.swift",
             "scripts/notarize.sh",
             "scripts/generate-sparkle-appcast.sh",
