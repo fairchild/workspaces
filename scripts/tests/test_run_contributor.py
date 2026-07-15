@@ -362,6 +362,108 @@ class RunContributorEvidenceTests(unittest.TestCase):
             "see workflow artifacts\n",
         )
 
+    def test_factory_visual_evidence_is_explicitly_blocked_until_capture_lane(self) -> None:
+        rendered, errors = run_contributor.build_execution_summary_body(
+            {
+                "body": "## Summary\nVisual change\n\n## Validation\n- downstream evidence",
+            },
+            requested_evidence=["screenshot of the main window"],
+            visual_evidence_available=False,
+        )
+
+        self.assertEqual(errors, [])
+        self.assertIn("- [blocked] screenshot of the main window", rendered)
+        self.assertIn("Xcode Cloud capture lane #1088 is not available", rendered)
+        self.assertIn("blocked on evidence", rendered)
+
+    def test_factory_visual_evidence_recognizes_standard_visual_phrasings(self) -> None:
+        for request in (
+            "Visual proof of the finished sidebar",
+            "window capture after the change",
+            "before/after images of the terminal",
+        ):
+            with self.subTest(request=request):
+                self.assertTrue(run_contributor._needs_screenshot_evidence([request]))
+
+    def test_factory_other_only_evidence_requires_blocking_label(self) -> None:
+        execution = sys.modules["execution"]
+        requested = ["Other proof recorded by the implementer"]
+        needs_macos_evidence = run_contributor._needs_macos_evidence(requested)
+
+        self.assertFalse(needs_macos_evidence)
+        self.assertTrue(
+            execution._factory_evidence_should_block(
+                factory_requires_evidence=True,
+                needs_macos_evidence=needs_macos_evidence,
+                visual_evidence_blocked=False,
+            )
+        )
+        with (
+            mock.patch.object(execution, "ensure_label_exists") as ensure_label,
+            mock.patch.object(execution, "run_checked") as run_checked,
+        ):
+            execution._mark_factory_evidence_blocked("77", env={"GH_TOKEN": "token"})
+
+        ensure_label.assert_called_once()
+        self.assertEqual(
+            run_checked.call_args.args[0],
+            ["gh", "pr", "edit", "77", "--add-label", "blocked:evidence"],
+        )
+
+    def test_candidate_code_environment_excludes_workflow_credentials(self) -> None:
+        sanitized = run_contributor.sanitized_candidate_code_env(
+            {
+                "PATH": "/usr/bin",
+                "HOME": "/tmp/home",
+                "GH_TOKEN": "app-token",
+                "EVIDENCE_UPLOAD_TOKEN": "upload-token",
+                "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
+            }
+        )
+
+        self.assertEqual(sanitized, {"PATH": "/usr/bin", "HOME": "/tmp/home"})
+
+    def test_build_evidence_allows_only_the_exact_canonical_command(self) -> None:
+        self.assertEqual(
+            run_contributor.safe_swift_build_command_args("swift build"),
+            ["swift", "build"],
+        )
+        for command in (
+            "swift build --configuration release",
+            "swift build --product Missing",
+            "swift build && curl https://example.invalid",
+        ):
+            with self.subTest(command=command):
+                self.assertIsNone(run_contributor.safe_swift_build_command_args(command))
+                errors = run_contributor.validate_requested_test_commands([command], env={})
+                self.assertEqual(len(errors), 1)
+                self.assertIn("must use exactly `swift build`", errors[0])
+
+    def test_reconcile_test_evidence_includes_uploaded_log_url(self) -> None:
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] `swift test --filter FeatureTests` -- CI will run tests\n"
+        )
+
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            test_output="$ swift test --filter FeatureTests\nAll tests passed\n",
+            text_upload_required=True,
+            text_upload_succeeded=True,
+            text_urls=[
+                ("test-output", "https://evidence.example/workspaces/pr-42/test-output.txt")
+            ],
+        )
+
+        self.assertIn("- [complete] `swift test --filter FeatureTests`", reconciled)
+        self.assertIn(
+            "[test-output](https://evidence.example/workspaces/pr-42/test-output.txt)",
+            reconciled,
+        )
+
 
 class EvidenceValidationTests(unittest.TestCase):
     maxDiff = None

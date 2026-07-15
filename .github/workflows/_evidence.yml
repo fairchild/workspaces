@@ -12,10 +12,17 @@ on:
       pr_branch:
         required: true
         type: string
+      pr_number:
+        required: false
+        type: string
+        default: ""
+      pr_head_sha:
+        required: false
+        type: string
+        default: ""
       test_commands_json:
         required: true
         type: string
-        default: '[]'
       needs_screenshot_evidence:
         required: false
         type: boolean
@@ -25,6 +32,11 @@ on:
         type: boolean
         default: false
         description: "Upload screenshots to R2. When false, the workflow still gathers smoke artifacts."
+      upload_text_evidence:
+        required: false
+        type: boolean
+        default: false
+        description: "Upload build and test logs to the standard evidence store."
       artifact_name:
         required: false
         type: string
@@ -39,6 +51,7 @@ on:
 
 permissions:
   contents: read
+  issues: write
   pull-requests: write
 
 jobs:
@@ -52,7 +65,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
-          ref: ${{ inputs.pr_branch }}
+          ref: ${{ inputs.pr_head_sha || inputs.pr_branch }}
           fetch-depth: 50
           persist-credentials: false
 
@@ -67,7 +80,9 @@ jobs:
         id: build
         if: steps.ghosttykit.outcome == 'success'
         continue-on-error: true
-        run: swift build
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee build-output.txt
 
       - name: Run requested tests
         id: tests
@@ -145,6 +160,7 @@ jobs:
           if-no-files-found: ignore
           path: |
             output/
+            build-output.txt
             test-output.txt
             dev-smoke-output.txt
 
@@ -160,6 +176,9 @@ jobs:
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.PRIVATE_KEY }}
+          permission-contents: read
+          permission-issues: write
+          permission-pull-requests: write
 
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
@@ -177,22 +196,38 @@ jobs:
 
       - name: Resolve PR number
         id: pr
+        if: always()
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          EXPECTED_HEAD_SHA: ${{ inputs.pr_head_sha }}
           PR_BRANCH: ${{ inputs.pr_branch }}
+          PR_NUMBER_INPUT: ${{ inputs.pr_number }}
         run: |
           set -euo pipefail
-          PR_NUMBER=$(gh pr list --head "$PR_BRANCH" --json number --jq '.[0].number')
+          PR_NUMBER="$PR_NUMBER_INPUT"
+          if [ -z "$PR_NUMBER" ]; then
+            PR_NUMBER=$(gh pr list --head "$PR_BRANCH" --state open --json number \
+              --jq 'if length == 1 then .[0].number else empty end')
+          fi
           if [ -z "$PR_NUMBER" ] || [ "$PR_NUMBER" = "null" ]; then
-            echo "Could not resolve a PR number for branch: $PR_BRANCH" >&2
+            echo "Could not resolve exactly one PR for branch: $PR_BRANCH" >&2
             exit 1
           fi
           echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          if [ -n "$EXPECTED_HEAD_SHA" ]; then
+            CURRENT_HEAD_SHA=$(gh pr view "$PR_NUMBER" --json headRefOid --jq '.headRefOid')
+            if [ "$CURRENT_HEAD_SHA" != "$EXPECTED_HEAD_SHA" ]; then
+              echo "PR #$PR_NUMBER advanced after evidence dispatch" >&2
+              exit 1
+            fi
+          else
+            echo "::warning title=Evidence identity is not SHA-bound::pr_head_sha was not provided; reconciliation is using the mutable branch fallback"
+          fi
 
       - name: Upload screenshot evidence to R2
         id: upload
-        if: inputs.upload_screenshots && inputs.needs_screenshot_evidence
+        if: steps.pr.outcome == 'success' && inputs.upload_screenshots && inputs.needs_screenshot_evidence
         continue-on-error: true
         shell: bash
         env:
@@ -217,7 +252,36 @@ jobs:
           done
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
+      - name: Upload text evidence to R2
+        id: text-upload
+        if: steps.pr.outcome == 'success' && inputs.upload_text_evidence
+        continue-on-error: true
+        shell: bash
+        env:
+          EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          : > uploaded-text-urls.tsv
+          count=0
+          for f in evidence-artifacts/build-output.txt evidence-artifacts/test-output.txt; do
+            if [ ! -f "$f" ]; then
+              continue
+            fi
+            slug=$(basename "$f" .txt)
+            url=$(uv run scripts/upload-evidence.py "$f" \
+              --repo workspaces --pr "$PR_NUMBER" --name "$slug")
+            printf '%s\t%s\n' "$slug" "$url" >> uploaded-text-urls.tsv
+            count=$((count + 1))
+          done
+          if [ "$count" -eq 0 ]; then
+            echo "No build or test logs were available to upload." >&2
+            exit 1
+          fi
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
       - name: Reconcile pending-ci evidence
+        id: reconcile
         if: always() && steps.pr.outcome == 'success'
         shell: bash
         env:
@@ -227,6 +291,8 @@ jobs:
           TESTS_SUCCEEDED: ${{ needs.gather.outputs.tests_succeeded }}
           SMOKE_SUCCEEDED: ${{ needs.gather.outputs.smoke_succeeded }}
           SCREENSHOT_UPLOAD_SUCCEEDED: ${{ !inputs.upload_screenshots || !inputs.needs_screenshot_evidence || steps.upload.outcome == 'success' }}
+          TEXT_UPLOAD_REQUIRED: ${{ inputs.upload_text_evidence }}
+          TEXT_UPLOAD_SUCCEEDED: ${{ !inputs.upload_text_evidence || steps.text-upload.outcome == 'success' }}
           UPLOAD_SCREENSHOTS: ${{ inputs.upload_screenshots }}
         run: |
           set -euo pipefail
@@ -263,6 +329,18 @@ jobs:
                       uploaded_urls.append((label, url))
               kwargs["screenshot_urls"] = uploaded_urls
 
+          kwargs["text_upload_required"] = os.environ["TEXT_UPLOAD_REQUIRED"] == "true"
+          kwargs["text_upload_succeeded"] = os.environ["TEXT_UPLOAD_SUCCEEDED"] == "true"
+          uploaded_text_urls = []
+          uploaded_text_urls_path = Path("uploaded-text-urls.tsv")
+          if uploaded_text_urls_path.exists():
+              for line in uploaded_text_urls_path.read_text().splitlines():
+                  if not line.strip():
+                      continue
+                  label, url = line.split("\t", 1)
+                  uploaded_text_urls.append((label, url))
+          kwargs["text_urls"] = uploaded_text_urls
+
           reconciled = module.reconcile_pending_ci_evidence(body_path.read_text(), **kwargs)
           body_path.write_text(reconciled)
           PY
@@ -278,11 +356,20 @@ jobs:
           SMOKE_SUCCEEDED: ${{ needs.gather.outputs.smoke_succeeded }}
           UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
           UPLOADED_SCREENSHOT_COUNT: ${{ steps.upload.outputs.count }}
+          TEXT_UPLOAD_OUTCOME: ${{ steps.text-upload.outcome }}
+          UPLOADED_TEXT_COUNT: ${{ steps.text-upload.outputs.count }}
           TEST_COMMANDS_JSON: ${{ inputs.test_commands_json }}
           NEEDS_SCREENSHOT_EVIDENCE: ${{ inputs.needs_screenshot_evidence }}
           UPLOAD_SCREENSHOTS: ${{ inputs.upload_screenshots }}
+          UPLOAD_TEXT_EVIDENCE: ${{ inputs.upload_text_evidence }}
+          PR_RESOLUTION_OUTCOME: ${{ steps.pr.outcome }}
+          RECONCILE_OUTCOME: ${{ steps.reconcile.outcome }}
         run: |
           set -euo pipefail
+          if [ "$PR_RESOLUTION_OUTCOME" != "success" ]; then
+            echo "PR identity or immutable head verification failed"
+            exit 1
+          fi
           if [ "$GATHER_RESULT" != "success" ]; then
             echo "Evidence gather job failed unexpectedly"
             exit 1
@@ -307,3 +394,24 @@ jobs:
               fi
             fi
           fi
+          if [ "$UPLOAD_TEXT_EVIDENCE" = "true" ]; then
+            if [ "$TEXT_UPLOAD_OUTCOME" != "success" ] || [ "${UPLOADED_TEXT_COUNT:-0}" -lt 1 ]; then
+              echo "Text evidence upload failed"
+              exit 1
+            fi
+          fi
+          if [ "$RECONCILE_OUTCOME" != "success" ]; then
+            echo "Evidence reconciliation failed"
+            exit 1
+          fi
+
+      - name: Mark PR blocked when evidence fails
+        if: failure() && steps.pr.outputs.number != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          gh label create blocked:evidence --color B60205 \
+            --description "Required merge evidence is unavailable" --force
+          gh pr edit "$PR_NUMBER" --add-label blocked:evidence

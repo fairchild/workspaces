@@ -84,6 +84,8 @@ jobs:
       needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
       needs_screenshot_evidence: ${{ steps.contributor.outputs.needs_screenshot_evidence }}
       pr_branch: ${{ steps.contributor.outputs.pr_branch }}
+      pr_number: ${{ steps.contributor.outputs.pr_number }}
+      pr_head_sha: ${{ steps.contributor.outputs.pr_head_sha }}
       test_commands_json: ${{ steps.contributor.outputs.test_commands_json }}
     steps:
       - name: Checkout safety gate
@@ -118,8 +120,9 @@ jobs:
         id: contributor
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
           FACTORY_EXPECTED_ISSUE_SCOPE_DIGEST: ${{ needs.claim.outputs.issue_scope_digest }}
+          FACTORY_REQUIRE_EXPLICIT_EVIDENCE: "true"
+          FACTORY_VISUAL_EVIDENCE_AVAILABLE: "false"
           GH_APP_SLUG: april-clearwater
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE_NUMBER: ${{ needs.claim.outputs.issue_number }}
@@ -164,3 +167,24 @@ jobs:
         run: >-
           uv run --script scripts/factory-implement.py rollback
           --issue "$ISSUE_NUMBER" --run-url "$RUN_URL"
+
+  evidence:
+    needs: [claim, implement]
+    if: >-
+      needs.claim.outputs.matched == 'true' &&
+      needs.implement.result == 'success' &&
+      needs.implement.outputs.needs_macos_evidence == 'true'
+    uses: ./.github/workflows/_evidence.yml
+    with:
+      pr_branch: ${{ needs.implement.outputs.pr_branch }}
+      pr_number: ${{ needs.implement.outputs.pr_number }}
+      pr_head_sha: ${{ needs.implement.outputs.pr_head_sha }}
+      test_commands_json: ${{ needs.implement.outputs.test_commands_json }}
+      needs_screenshot_evidence: false
+      upload_screenshots: false
+      upload_text_evidence: true
+      artifact_name: factory-implement-evidence
+    secrets:
+      APP_ID: ${{ secrets.APRIL_APP_ID }}
+      PRIVATE_KEY: ${{ secrets.APRIL_PRIVATE_KEY }}
+      EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}

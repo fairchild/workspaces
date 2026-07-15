@@ -1,0 +1,7 @@
+self-hosted-runner:
+  labels:
+    - lume-macos
+    - signing-host
+    - tart-ui
+
+config-variables: null
