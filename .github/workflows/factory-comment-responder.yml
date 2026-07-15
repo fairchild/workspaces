@@ -1,0 +1,156 @@
+# Reply-only invariant: the model receives bounded untrusted text and no tools or
+# GitHub token; this workflow alone appends the marker and posts to the gated
+# comment's hardwired issue/PR conversation target.
+# PR review-thread comments are deliberately omitted from this first slice.
+name: "Factory: Owner Comment Responder"
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      comment_url:
+        description: "Same-repository issue or PR conversation comment URL"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  manual-comment-gate:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_RESPONDER_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      comment_id: ${{ steps.gate.outputs.comment_id }}
+      human_author: ${{ steps.gate.outputs.human_author }}
+      issue_number: ${{ steps.gate.outputs.issue_number }}
+      marker_absent: ${{ steps.gate.outputs.marker_absent }}
+      owner_match: ${{ steps.gate.outputs.owner_match }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Resolve and gate manual comment
+        id: gate
+        env:
+          COMMENT_URL: ${{ inputs.comment_url }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: uv run --script scripts/factory-responder-payload.py manual-gate
+
+  respond:
+    needs: manual-comment-gate
+    # The author-type checks are the primary loop defense. Marker parsing is
+    # rechecked from the comment payload so a blockquoted marker cannot suppress
+    # a fresh owner comment.
+    if: >-
+      always() &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_RESPONDER_ENABLED == 'true' && (
+        (
+          github.event_name == 'issue_comment' &&
+          github.event.comment.user.login == github.repository_owner &&
+          github.event.comment.user.type != 'Bot' &&
+          !endsWith(github.event.comment.user.login, '[bot]')
+        ) || (
+          github.event_name == 'workflow_dispatch' &&
+          needs.manual-comment-gate.result == 'success' &&
+          needs.manual-comment-gate.outputs.owner_match == 'true' &&
+          needs.manual-comment-gate.outputs.human_author == 'true' &&
+          needs.manual-comment-gate.outputs.marker_absent == 'true'
+        )
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: factory-responder-${{ github.event.comment.id || needs.manual-comment-gate.outputs.comment_id }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Install pinned Claude Code CLI
+        run: npm install --global @anthropic-ai/claude-code@2.1.200
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+      - name: Gate target and build bounded prompt file
+        id: payload
+        env:
+          COMMENT_URL: ${{ inputs.comment_url }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+          PROMPT_FILE: ${{ runner.temp }}/factory-responder-prompt.txt
+        run: uv run --script scripts/factory-responder-payload.py prepare
+      - name: Draft reply text
+        if: steps.payload.outputs.matched == 'true' && steps.payload.outputs.already_replied == 'false'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          PROMPT_FILE: ${{ runner.temp }}/factory-responder-prompt.txt
+          REPLY_FILE: ${{ runner.temp }}/factory-responder-reply.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout --signal=TERM 5m \
+            claude -p --max-turns 1 --disallowedTools "*" \
+            < "$PROMPT_FILE" > "$REPLY_FILE"
+          test -s "$REPLY_FILE"
+      - name: Recheck comment-id idempotency before posting
+        id: dedup
+        if: steps.payload.outputs.matched == 'true' && steps.payload.outputs.already_replied == 'false'
+        env:
+          COMMENT_ID: ${{ steps.payload.outputs.comment_id }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_API_URL: ${{ github.api_url }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TARGET_NUMBER: ${{ steps.payload.outputs.target_number }}
+        run: uv run --script scripts/factory-responder-payload.py dedup
+      - name: Append mechanical anti-loop marker
+        if: steps.dedup.outputs.already_replied == 'false'
+        env:
+          COMMENT_ID: ${{ steps.payload.outputs.comment_id }}
+          POST_BODY_FILE: ${{ runner.temp }}/factory-responder-post.md
+          REPLY_FILE: ${{ runner.temp }}/factory-responder-reply.txt
+        run: uv run --script scripts/factory-responder-payload.py finalize
+      - name: Post reply to gated target
+        if: steps.dedup.outputs.already_replied == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          POST_BODY_FILE: ${{ runner.temp }}/factory-responder-post.md
+          TARGET_NUMBER: ${{ steps.payload.outputs.target_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh api --method POST "repos/$GITHUB_REPOSITORY/issues/$TARGET_NUMBER/comments" \
+            -F "body=@$POST_BODY_FILE" >/dev/null
+          echo "posted reply for comment-id:${{ steps.payload.outputs.comment_id }} to target #$TARGET_NUMBER"
