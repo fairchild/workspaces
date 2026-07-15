@@ -89,6 +89,11 @@ class FactoryImplementTests(unittest.TestCase):
             )
         )
 
+        self.assertFalse(
+            factory_implement.privileged_scope(
+                self.issue(body="Change `myclaude/config.json`")
+            )
+        )
         self.assertFalse(factory_implement.privileged_scope(self.issue()))
 
     def test_claim_requires_open_released_non_privileged_issue_and_capacity(self) -> None:

@@ -454,11 +454,28 @@ def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
 
 
 def _tree_files(root: Path) -> dict[str, Path]:
+    # Symlinks are entries in their own right: is_file() alone would follow
+    # them (hiding target-path changes) and drop links to dirs entirely.
     files: dict[str, Path] = {}
     for path in root.rglob("*"):
-        if path.is_file():
+        if path.is_symlink() or path.is_file():
             files[path.relative_to(root).as_posix()] = path
     return files
+
+
+def _tree_entries_identical(baseline_path: Path, scratch_path: Path) -> bool:
+    baseline_is_link = baseline_path.is_symlink()
+    scratch_is_link = scratch_path.is_symlink()
+    if baseline_is_link or scratch_is_link:
+        return (
+            baseline_is_link == scratch_is_link
+            and os.readlink(baseline_path) == os.readlink(scratch_path)
+        )
+    return (
+        baseline_path.stat().st_mode == scratch_path.stat().st_mode
+        and hashlib.sha256(baseline_path.read_bytes()).digest()
+        == hashlib.sha256(scratch_path.read_bytes()).digest()
+    )
 
 
 def _run_binary_diff(cmd: list[str], *, cwd: Path, env: dict[str, str]) -> str:
@@ -514,10 +531,7 @@ def build_scratch_patch_artifact(
             patch_chunks.append(chunk)
             continue
         assert baseline_path is not None and scratch_path is not None
-        if (
-            baseline_path.stat().st_mode == scratch_path.stat().st_mode
-            and hashlib.sha256(baseline_path.read_bytes()).digest() == hashlib.sha256(scratch_path.read_bytes()).digest()
-        ):
+        if _tree_entries_identical(baseline_path, scratch_path):
             continue
         chunk = _run_binary_diff(
             [
