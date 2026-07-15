@@ -192,6 +192,7 @@ jobs:
         shell: bash
         env:
           DRY_RUN: ${{ inputs.dry_run || false }}
+          FACTORY_IMPLEMENT_DAILY_CAP: ${{ vars.FACTORY_IMPLEMENT_DAILY_CAP || '6' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail

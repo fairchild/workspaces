@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import sys
@@ -41,6 +42,155 @@ factory_digest = load_module("factory_digest", SCRIPT_PATH)
 
 class FactoryDigestTests(unittest.TestCase):
     maxDiff = None
+
+    def test_render_digest_reports_factory_activity_and_cap_skip(self) -> None:
+        summary = {
+            "generated_at": "2026-07-14T13:30:00Z",
+            "funnel": {},
+            "breaches": [],
+        }
+        activity = factory_digest.FactoryActivity(
+            implement_runs=7,
+            review_verdicts=3,
+            responder_replies=2,
+            implement_daily_cap=6,
+        )
+
+        markdown = factory_digest.render_digest([], [], summary, activity)
+
+        self.assertIn(
+            "Factory activity: implement runs today 7/6 "
+            "(cap exceeded; dispatches skipped) · review verdicts 3 · responder replies 2",
+            markdown,
+        )
+
+    def test_count_successful_steps_counts_only_completed_target_steps(self) -> None:
+        runs = [
+            {"id": 1, "status": "completed"},
+            {"id": 2, "status": "completed"},
+            {"id": 3, "status": "in_progress"},
+        ]
+        jobs = {
+            1: [
+                {
+                    "steps": [
+                        {"name": "Post reply to gated target", "conclusion": "success"}
+                    ]
+                }
+            ],
+            2: [
+                {
+                    "steps": [
+                        {"name": "Post reply to gated target", "conclusion": "skipped"}
+                    ]
+                }
+            ],
+        }
+
+        with mock.patch.object(
+            factory_digest,
+            "fetch_run_jobs",
+            side_effect=lambda _repo, _token, run_id: jobs[run_id],
+        ) as fetch_jobs:
+            count = factory_digest.count_successful_steps(
+                "fairchild/workspaces",
+                "token",
+                runs,
+                {"Post reply to gated target"},
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(fetch_jobs.call_count, 2)
+
+    def test_fetch_run_jobs_paginates_all_attempt_jobs(self) -> None:
+        responses = []
+        for payload in (
+            {"jobs": [{"id": number} for number in range(100)]},
+            {"jobs": [{"id": 100}]},
+        ):
+            response = mock.MagicMock()
+            response.__enter__.return_value.read.return_value = json.dumps(payload).encode()
+            responses.append(response)
+
+        with mock.patch("urllib.request.urlopen", side_effect=responses) as urlopen:
+            jobs = factory_digest.fetch_run_jobs("fairchild/workspaces", "token", 42)
+
+        self.assertEqual([job["id"] for job in jobs], list(range(101)))
+        requested_urls = [call.args[0].full_url for call in urlopen.call_args_list]
+        self.assertIn("page=1", requested_urls[0])
+        self.assertIn("page=2", requested_urls[1])
+
+    def test_implement_activity_ignores_unrelated_label_event_runs(self) -> None:
+        self.assertTrue(
+            factory_digest.is_factory_implement_dispatch(
+                {
+                    "event": "issues",
+                    "display_title": "Factory Implement ready #42",
+                    "actor": {"login": "fairchild"},
+                },
+                "fairchild",
+            )
+        )
+        self.assertTrue(
+            factory_digest.is_factory_implement_dispatch(
+                {
+                    "event": "workflow_dispatch",
+                    "display_title": "manual",
+                    "actor": {"login": "fairchild"},
+                },
+                "fairchild",
+            )
+        )
+        self.assertFalse(
+            factory_digest.is_factory_implement_dispatch(
+                {
+                    "event": "issues",
+                    "display_title": "Factory Implement claimed #42",
+                    "actor": {"login": "fairchild"},
+                },
+                "fairchild",
+            )
+        )
+        self.assertFalse(
+            factory_digest.is_factory_implement_dispatch(
+                {
+                    "event": "workflow_dispatch",
+                    "display_title": "manual",
+                    "actor": {"login": "april-clearwater[bot]"},
+                },
+                "fairchild",
+            )
+        )
+        self.assertEqual(
+            factory_digest.count_factory_implement_runs(
+                [
+                    {
+                        "event": "issues",
+                        "display_title": "Factory Implement ready #42",
+                        "run_attempt": 2,
+                        "actor": {"login": "fairchild"},
+                    },
+                    {
+                        "event": "workflow_dispatch",
+                        "run_attempt": 1,
+                        "actor": {"login": "fairchild"},
+                    },
+                    {
+                        "event": "workflow_dispatch",
+                        "run_attempt": 9,
+                        "actor": {"login": "april-clearwater[bot]"},
+                    },
+                    {
+                        "event": "issues",
+                        "display_title": "Factory Implement claimed #42",
+                        "run_attempt": 5,
+                        "actor": {"login": "fairchild"},
+                    },
+                ],
+                "fairchild",
+            ),
+            3,
+        )
 
     def test_render_digest_orders_mergeable_linked_prs_first(self) -> None:
         summary = {
@@ -197,8 +347,9 @@ class FactoryDigestTests(unittest.TestCase):
             markdown,
         )
         self.assertIn(
-            "1 issue ready for claim: "
-            "[#11](https://example.test/issues/11) `Available task`",
+            "## Ready but unclaimed\n\n"
+            "- no activity 3d [#11](https://example.test/issues/11) "
+            "`Available task`: ready for claim",
             markdown,
         )
         self.assertIn(
@@ -341,7 +492,7 @@ class FactoryDigestTests(unittest.TestCase):
                 self.assertNotIn("State anomalies", markdown)
                 self.assertIn("No open gates. The factory is idle.", markdown)
 
-    def test_render_digest_does_not_itemize_more_than_three_ready_issues(self) -> None:
+    def test_render_digest_itemizes_age_for_every_ready_unclaimed_issue(self) -> None:
         summary = {
             "generated_at": "2026-07-12T13:30:00Z",
             "funnel": {},
@@ -361,8 +512,13 @@ class FactoryDigestTests(unittest.TestCase):
 
         markdown = factory_digest.render_digest(issues, [], summary)
 
-        self.assertIn("4 issues ready for claim", markdown)
-        self.assertNotIn("#40", markdown)
+        self.assertIn("## Ready but unclaimed", markdown)
+        for number in range(40, 44):
+            self.assertIn(
+                f"- no activity 0d [#{number}](https://example.test/issues/{number}) "
+                f"`Ready {number}`: ready for claim",
+                markdown,
+            )
 
     def test_cli_renders_basic_fixture_without_network_access(self) -> None:
         result = subprocess.run(
@@ -409,6 +565,8 @@ class FactoryDigestTests(unittest.TestCase):
             result.stdout,
             "<!-- factory-digest:v1 -->\n\n"
             "No open gates. The factory is idle.\n\n"
+            "Factory activity: implement runs today 0/6 · review verdicts 0 · "
+            "responder replies 0\n\n"
             "Stats: ideas 0 · approved 0 · planned 0 · active 0 · merged 0 · stalled 0 "
             "· generated 2026-07-12T13:30:00Z\n",
         )
@@ -818,16 +976,24 @@ class FactoryDigestTests(unittest.TestCase):
             with mock.patch.object(factory_digest, "fetch_live_inputs", return_value=inputs):
                 with mock.patch.object(
                     factory_digest,
-                    "publish_digest",
-                    side_effect=AssertionError("publish_digest called"),
+                    "fetch_factory_activity",
+                    return_value=factory_digest.FactoryActivity(),
                 ):
-                    with mock.patch.dict(
-                        os.environ,
-                        {"GITHUB_REPOSITORY": "fairchild/workspaces", "GH_TOKEN": "read-token"},
-                        clear=True,
+                    with mock.patch.object(
+                        factory_digest,
+                        "publish_digest",
+                        side_effect=AssertionError("publish_digest called"),
                     ):
-                        with mock.patch("sys.stdout", stdout):
-                            result = factory_digest.main()
+                        with mock.patch.dict(
+                            os.environ,
+                            {
+                                "GITHUB_REPOSITORY": "fairchild/workspaces",
+                                "GH_TOKEN": "read-token",
+                            },
+                            clear=True,
+                        ):
+                            with mock.patch("sys.stdout", stdout):
+                                result = factory_digest.main()
 
         self.assertEqual(result, 0)
         self.assertIn("No open gates. The factory is idle.", stdout.getvalue())
@@ -854,19 +1020,24 @@ class FactoryDigestTests(unittest.TestCase):
             ) as fetch:
                 with mock.patch.object(
                     factory_digest,
-                    "publish_digest",
-                    return_value={"url": "https://example.test/issues/1"},
-                ) as publish:
-                    with mock.patch.dict(
-                        os.environ,
-                        {
-                            "GITHUB_REPOSITORY": "fairchild/workspaces",
-                            "GH_TOKEN": "actions-token",
-                        },
-                        clear=True,
-                    ):
-                        with mock.patch("sys.stdout", io.StringIO()):
-                            result = factory_digest.main()
+                    "fetch_factory_activity",
+                    return_value=factory_digest.FactoryActivity(),
+                ):
+                    with mock.patch.object(
+                        factory_digest,
+                        "publish_digest",
+                        return_value={"url": "https://example.test/issues/1"},
+                    ) as publish:
+                        with mock.patch.dict(
+                            os.environ,
+                            {
+                                "GITHUB_REPOSITORY": "fairchild/workspaces",
+                                "GH_TOKEN": "actions-token",
+                            },
+                            clear=True,
+                        ):
+                            with mock.patch("sys.stdout", io.StringIO()):
+                                result = factory_digest.main()
 
         self.assertEqual(result, 0)
         fetch.assert_called_once_with("fairchild/workspaces", "actions-token")

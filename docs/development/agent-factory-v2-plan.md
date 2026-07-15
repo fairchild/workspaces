@@ -107,6 +107,16 @@ New in v2:
 4. Triage's write powers are labels and comments only; implementation starts only from a label event.
 5. The future auto-merge class requires a deliberate main-merge ruleset change (`config/github/`) — flagged now so it is a designed decision, not an expedient hack.
 
+The code-writing stages use the following operating switches. Scheduled, event-driven, and manual implementation dispatch requires both the global master and the stage switch; implementation `workflow_dispatch` is owner-only but does not bypass either switch. `FACTORY_IMPLEMENT_DAILY_CAP` defaults to 6 UTC-day workflow attempts: the claim gate counts only repository-owner-authorized `factory-implement.yml` runs through the Actions API, leaves over-budget issues `ready`, and reports the skip in the Digest. `FACTORY_REVIEW_DAILY_CAP` defaults to 12 UTC-day executor attempts, including reruns; the default-branch admit job counts `factory-review-execute.yml` through the Actions API and fails closed before counterpart routing.
+
+| Stage | Global switch | Stage switch | Daily attempt cap | Off behavior |
+| --- | --- | --- | --- | --- |
+| Implement | `AGENT_AUTOMATIONS_ENABLED` | `FACTORY_IMPLEMENT_ENABLED` | `FACTORY_IMPLEMENT_DAILY_CAP` (6) | No issue-label or manual dispatch reaches the contributor runtime; the Monitor does not bypass the release gate |
+| Review | `AGENT_AUTOMATIONS_ENABLED` | `FACTORY_REVIEW_ENABLED` | `FACTORY_REVIEW_DAILY_CAP` (12) | No automatic PR review signal reaches a counterpart reviewer |
+| Responder | `AGENT_AUTOMATIONS_ENABLED` | `FACTORY_RESPONDER_ENABLED` | Not yet defined | No automatic owner-comment reply is generated or posted |
+
+Attribution is a runtime invariant: autonomous PR creation applies exactly one `author:<agent>` label, while autonomous reviews and comments begin with the acting persona or carry the responder's mechanical anti-loop marker. Shared GitHub account authorship is never treated as sufficient attribution.
+
 ## Instruments and dials
 
 The Monitor computes weekly, into dashboard + Digest:

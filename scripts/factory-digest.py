@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -28,6 +29,8 @@ DIGEST_TITLE = "Factory Digest"
 DIGEST_MARKER = "<!-- factory-digest:v1 -->"
 FACTORY_LABEL_COLOR = "BFD4F2"
 FACTORY_LABEL_DESCRIPTION = "Agent Factory observability and operations"
+DEFAULT_DAILY_IMPLEMENT_CAP = 6
+GITHUB_API_URL = "https://api.github.com"
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_TITLE_LENGTH = 80
 
@@ -49,6 +52,14 @@ class DigestInputs:
     repo: RepoInfo
     issues: list[dict[str, Any]]
     pulls: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class FactoryActivity:
+    implement_runs: int = 0
+    review_verdicts: int = 0
+    responder_replies: int = 0
+    implement_daily_cap: int = DEFAULT_DAILY_IMPLEMENT_CAP
 
 
 def graphql(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]:
@@ -78,6 +89,211 @@ def graphql(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]
         messages = "; ".join(str(item.get("message", item)) for item in payload["errors"])
         raise FactoryDigestError(f"GitHub GraphQL error: {messages}")
     return payload
+
+
+def fetch_workflow_runs(
+    repo_slug: str,
+    token: str,
+    workflow: str,
+    day: str,
+    *,
+    missing_ok: bool = False,
+) -> list[dict[str, Any]]:
+    runs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        query = urllib.parse.urlencode({"created": day, "per_page": 100, "page": page})
+        url = (
+            f"{GITHUB_API_URL}/repos/{repo_slug}/actions/workflows/"
+            f"{urllib.parse.quote(workflow, safe='')}/runs?{query}"
+        )
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "workspaces-factory-digest",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            if missing_ok and error.code == 404:
+                return []
+            detail = error.read().decode("utf-8", errors="replace")
+            raise FactoryDigestError(
+                f"GitHub workflow runs request for {workflow} failed with HTTP "
+                f"{error.code}: {detail}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise FactoryDigestError(
+                f"GitHub workflow runs request for {workflow} failed: {error.reason}"
+            ) from error
+        except json.JSONDecodeError as error:
+            raise FactoryDigestError(
+                f"GitHub workflow runs request for {workflow} returned invalid JSON"
+            ) from error
+        batch = list(payload.get("workflow_runs") or [])
+        runs.extend(dict(run) for run in batch)
+        if len(batch) < 100:
+            return runs
+        page += 1
+
+
+def fetch_run_jobs(
+    repo_slug: str,
+    token: str,
+    run_id: int,
+) -> list[dict[str, Any]]:
+    jobs: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        query = urllib.parse.urlencode(
+            {"filter": "all", "per_page": 100, "page": page}
+        )
+        url = (
+            f"{GITHUB_API_URL}/repos/{repo_slug}/actions/runs/{run_id}/jobs?{query}"
+        )
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "workspaces-factory-digest",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise FactoryDigestError(
+                f"GitHub jobs request for run {run_id} failed with HTTP "
+                f"{error.code}: {detail}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise FactoryDigestError(
+                f"GitHub jobs request for run {run_id} failed: {error.reason}"
+            ) from error
+        except json.JSONDecodeError as error:
+            raise FactoryDigestError(
+                f"GitHub jobs request for run {run_id} returned invalid JSON"
+            ) from error
+        batch = list(payload.get("jobs") or [])
+        jobs.extend(dict(job) for job in batch)
+        if len(batch) < 100:
+            return jobs
+        page += 1
+
+
+def count_successful_steps(
+    repo_slug: str,
+    token: str,
+    runs: list[dict[str, Any]],
+    step_names: set[str],
+) -> int:
+    count = 0
+    for run in runs:
+        if str(run.get("status", "")).casefold() != "completed":
+            continue
+        run_id = int(run["id"])
+        jobs = fetch_run_jobs(repo_slug, token, run_id)
+        if any(
+            str(step.get("name", "")) in step_names
+            and str(step.get("conclusion", "")).casefold() == "success"
+            for job in jobs
+            for step in job.get("steps") or []
+            if isinstance(step, dict)
+        ):
+            count += 1
+    return count
+
+
+def is_factory_implement_dispatch(
+    run: dict[str, Any],
+    repository_owner: str,
+) -> bool:
+    actor = str((run.get("actor") or {}).get("login") or "")
+    return actor.casefold() == repository_owner.casefold() and (
+        str(run.get("event", "")) == "workflow_dispatch"
+        or str(run.get("display_title", "")).startswith("Factory Implement ready #")
+    )
+
+
+def count_factory_implement_runs(
+    runs: list[dict[str, Any]],
+    repository_owner: str,
+) -> int:
+    return sum(
+        max(1, int(run.get("run_attempt") or 1))
+        for run in runs
+        if is_factory_implement_dispatch(run, repository_owner)
+    )
+
+
+def parse_daily_implement_cap(value: str | None) -> int:
+    raw = (value or str(DEFAULT_DAILY_IMPLEMENT_CAP)).strip()
+    try:
+        cap = int(raw)
+    except ValueError as error:
+        raise FactoryDigestError(
+            f"FACTORY_IMPLEMENT_DAILY_CAP must be a positive integer, got {raw!r}"
+        ) from error
+    if cap <= 0:
+        raise FactoryDigestError("FACTORY_IMPLEMENT_DAILY_CAP must be a positive integer")
+    return cap
+
+
+def fetch_factory_activity(
+    repo_slug: str,
+    token: str,
+    current_time: datetime,
+    implement_daily_cap: int,
+) -> FactoryActivity:
+    repository_owner, _repository_name = split_repo_slug(repo_slug)
+    day = current_time.astimezone(UTC).date().isoformat()
+    implement_runs = fetch_workflow_runs(
+        repo_slug,
+        token,
+        "factory-implement.yml",
+        day,
+    )
+    review_runs = fetch_workflow_runs(
+        repo_slug,
+        token,
+        "factory-review-execute.yml",
+        day,
+    )
+    responder_runs = fetch_workflow_runs(
+        repo_slug,
+        token,
+        "factory-comment-responder.yml",
+        day,
+        missing_ok=True,
+    )
+
+    return FactoryActivity(
+        implement_runs=count_factory_implement_runs(
+            implement_runs,
+            repository_owner,
+        ),
+        review_verdicts=count_successful_steps(
+            repo_slug,
+            token,
+            review_runs,
+            {"Run April counterpart review", "Run Plat counterpart review"},
+        ),
+        responder_replies=count_successful_steps(
+            repo_slug,
+            token,
+            responder_runs,
+            {"Post reply to gated target"},
+        ),
+        implement_daily_cap=implement_daily_cap,
+    )
 
 
 def split_repo_slug(slug: str) -> tuple[str, str]:
@@ -238,6 +454,20 @@ def render_stats(summary: dict[str, Any]) -> str:
     return f"Stats: {rendered} · generated {summary['generated_at']}"
 
 
+def render_factory_activity(activity: FactoryActivity) -> str:
+    cap_note = ""
+    if activity.implement_runs > activity.implement_daily_cap:
+        cap_note = " (cap exceeded; dispatches skipped)"
+    elif activity.implement_runs == activity.implement_daily_cap:
+        cap_note = " (cap reached; further dispatches skipped)"
+    return (
+        "Factory activity: "
+        f"implement runs today {activity.implement_runs}/{activity.implement_daily_cap}"
+        f"{cap_note} · review verdicts {activity.review_verdicts} · "
+        f"responder replies {activity.responder_replies}"
+    )
+
+
 def body_has_digest_marker(body: Any) -> bool:
     return str(body or "").lstrip().startswith(DIGEST_MARKER)
 
@@ -284,6 +514,7 @@ def render_digest(
     issues: list[dict[str, Any]],
     pulls: list[dict[str, Any]],
     summary: dict[str, Any],
+    activity: FactoryActivity | None = None,
 ) -> str:
     digest_issue = select_digest_issue(issues)
     digest_issue_number = int(digest_issue["number"]) if digest_issue is not None else None
@@ -392,16 +623,15 @@ def render_digest(
         lines = [line for _, line in sorted(release_lines, key=lambda item: item[0])]
         sections.append("## Awaiting your release\n\n" + "\n".join(lines))
     if ready_issues:
-        count = len(ready_issues)
-        noun = "issue" if count == 1 else "issues"
-        line = f"{count} {noun} ready for claim"
-        if count <= 3:
-            itemized = ", ".join(
-                render_item_reference(issue)
-                for issue in sorted(ready_issues, key=lambda item: int(item["number"]))
+        lines = [
+            f"- no activity {age_days(str(issue['updatedAt']), current_time)}d "
+            f"{render_item_reference(issue)}: ready for claim"
+            for issue in sorted(
+                ready_issues,
+                key=lambda item: parse_datetime(str(item["updatedAt"])),
             )
-            line += f": {itemized}"
-        sections.append(line)
+        ]
+        sections.append("## Ready but unclaimed\n\n" + "\n".join(lines))
     if anomalies:
         numbers = ", ".join(f"#{number}" for number in sorted(anomalies))
         sections.append(f"State anomalies: {numbers} — janitor")
@@ -416,6 +646,7 @@ def render_digest(
 
     if not sections:
         sections.append("No open gates. The factory is idle.")
+    sections.append(render_factory_activity(activity or FactoryActivity()))
     sections.append(render_stats(summary))
     return "\n\n".join([DIGEST_MARKER, *sections])
 
@@ -537,7 +768,13 @@ def main() -> int:
     if not token:
         raise FactoryDigestError("GH_TOKEN is required for live GitHub access")
     inputs = fetch_live_inputs(repo_slug, token)
-    markdown = render_digest(inputs.issues, inputs.pulls, summary)
+    activity = fetch_factory_activity(
+        repo_slug,
+        token,
+        parse_datetime(str(summary["generated_at"])),
+        parse_daily_implement_cap(os.environ.get("FACTORY_IMPLEMENT_DAILY_CAP")),
+    )
+    markdown = render_digest(inputs.issues, inputs.pulls, summary, activity)
     if args.dry_run:
         print(markdown)
         return 0
