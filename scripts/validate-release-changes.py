@@ -15,26 +15,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from release_policy import RELEASE_PATHS
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RELEASE_PATHS = {
-    ".github/workflows/release.yml",
-    "scripts/build-release.sh",
-    "scripts/generate-sparkle-appcast.sh",
-    "scripts/install-local.sh",
-    "scripts/notarize.sh",
-    "scripts/prepare-prerelease.sh",
-    "scripts/prepare-release.sh",
-    "scripts/release-manifest.sh",
-    "scripts/release-preflight.sh",
-    "scripts/release-version.sh",
-    "scripts/setup-release-secrets.sh",
-    "scripts/verify-app-keychain-signing.sh",
-    "scripts/verify-installed-perf.sh",
-    "scripts/verify-p12.sh",
-    "scripts/verify-release-bundle.sh",
-    "scripts/verify-sparkle-appcast.swift",
-}
 
 
 def load_files(path: str | None) -> list[str]:

@@ -16,6 +16,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+from release_policy import RELEASE_PATHS
+
 
 DEFAULT_SURFACE = "desktop / web / agent-runtime / infra / docs"
 
@@ -64,22 +70,6 @@ MERGEABILITY_TEMPLATE = """## Mergeability
 - Residual risk or follow-up: <what could still break or is deferred, or "None">"""
 DOC_EVIDENCE_EXEMPT_SUFFIXES = (".md", ".mdx", ".markdown", ".txt")
 DOC_EVIDENCE_EXEMPT_PREFIXES = ("docs/", "backlog/")
-RELEASE_PATHS = {
-    ".github/workflows/release.yml",
-    "scripts/build-release.sh",
-    "scripts/generate-sparkle-appcast.sh",
-    "scripts/install-local.sh",
-    "scripts/notarize.sh",
-    "scripts/prepare-prerelease.sh",
-    "scripts/prepare-release.sh",
-    "scripts/release-preflight.sh",
-    "scripts/release-version.sh",
-    "scripts/setup-release-secrets.sh",
-    "scripts/verify-app-keychain-signing.sh",
-    "scripts/verify-installed-perf.sh",
-    "scripts/verify-p12.sh",
-    "scripts/verify-release-bundle.sh",
-}
 
 
 @dataclass(frozen=True)

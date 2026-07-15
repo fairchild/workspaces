@@ -1,0 +1,166 @@
+# Dispatches released Agent Factory issues to April's contributor runtime.
+# Claim admission is serialized globally; execution is serialized per issue.
+
+name: Factory Implement
+run-name: "Factory Implement ${{ github.event.label.name || 'manual' }} #${{ github.event.issue.number || inputs.issue_number }}"
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: "Released issue to implement"
+        required: true
+        type: number
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  claim:
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      github.actor == github.repository_owner &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_IMPLEMENT_ENABLED == 'true') ||
+      (github.event_name == 'issues' &&
+      github.event.label.name == 'ready' &&
+      github.event.sender.login == github.repository_owner &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_IMPLEMENT_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: factory-implement-claim
+      cancel-in-progress: false
+    outputs:
+      matched: ${{ steps.claim.outputs.matched }}
+      issue_number: ${{ steps.claim.outputs.issue_number }}
+      issue_scope_digest: ${{ steps.claim.outputs.issue_scope_digest }}
+      verified_actor: ${{ steps.claim.outputs.verified_actor }}
+    steps:
+      - name: Generate April app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          permission-issues: write
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Admit and claim issue
+        id: claim
+        env:
+          AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
+          FACTORY_CLAIM_ASSIGNEE: april-clearwater[bot]
+          FACTORY_ACTIONS_TOKEN: ${{ github.token }}
+          FACTORY_IMPLEMENT_DAILY_CAP: ${{ vars.FACTORY_IMPLEMENT_DAILY_CAP || '6' }}
+          FACTORY_IMPLEMENT_ENABLED: ${{ vars.FACTORY_IMPLEMENT_ENABLED }}
+          FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          FACTORY_TRIGGER_ACTOR: ${{ github.event_name == 'workflow_dispatch' && github.actor || github.event.sender.login }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || inputs.issue_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          uv run --script scripts/factory-implement.py claim
+          --issue "$ISSUE_NUMBER" --run-url "$RUN_URL"
+
+  implement:
+    needs: claim
+    if: needs.claim.outputs.matched == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    concurrency:
+      group: factory-implement-${{ needs.claim.outputs.issue_number }}
+      cancel-in-progress: false
+    outputs:
+      needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
+      needs_screenshot_evidence: ${{ steps.contributor.outputs.needs_screenshot_evidence }}
+      pr_branch: ${{ steps.contributor.outputs.pr_branch }}
+      test_commands_json: ${{ steps.contributor.outputs.test_commands_json }}
+    steps:
+      - name: Checkout safety gate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Revalidate implementation budget and switches
+        env:
+          AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
+          FACTORY_ACTIONS_TOKEN: ${{ github.token }}
+          FACTORY_IMPLEMENT_DAILY_CAP: ${{ vars.FACTORY_IMPLEMENT_DAILY_CAP || '6' }}
+          FACTORY_IMPLEMENT_ENABLED: ${{ vars.FACTORY_IMPLEMENT_ENABLED }}
+          FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: uv run --script scripts/factory-implement.py authorize
+      - name: Generate April app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 50
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      - name: Run directed contributor
+        id: contributor
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
+          FACTORY_EXPECTED_ISSUE_SCOPE_DIGEST: ${{ needs.claim.outputs.issue_scope_digest }}
+          GH_APP_SLUG: april-clearwater
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ISSUE_NUMBER: ${{ needs.claim.outputs.issue_number }}
+          VERIFIED_ACTOR: ${{ needs.claim.outputs.verified_actor }}
+        run: |
+          set -euo pipefail
+          MESSAGE="@${VERIFIED_ACTOR} mentioned you in issue #${ISSUE_NUMBER}"
+          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
+            --prompt-file .agents/skills/cofounder-contributor/references/april-clearwater.md \
+            --mode cli \
+            --message "$MESSAGE"
+
+  rollback:
+    needs: [claim, implement]
+    if: >-
+      always() && needs.claim.outputs.issue_number != '' &&
+      (needs.claim.result == 'failure' || needs.claim.result == 'cancelled' ||
+      (needs.claim.result == 'success' &&
+      needs.claim.outputs.matched == 'true' &&
+      needs.implement.result != 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Generate April app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          permission-issues: write
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Restore ready after failed implementation
+        env:
+          FACTORY_CLAIM_ASSIGNEE: april-clearwater[bot]
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          ISSUE_NUMBER: ${{ needs.claim.outputs.issue_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          uv run --script scripts/factory-implement.py rollback
+          --issue "$ISSUE_NUMBER" --run-url "$RUN_URL"

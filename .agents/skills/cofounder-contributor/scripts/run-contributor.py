@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -158,6 +159,13 @@ from github_state import (  # noqa: E402, F401
     planned_comment_has_owner_approval,
     repo_owner_name,
 )
+from patch_policy import (  # noqa: E402, F401
+    SENSITIVE_NAME_MARKERS,
+    SENSITIVE_PATH_PREFIXES,
+    SENSITIVE_RELEASE_SCRIPT_PATHS,
+    issue_scope_digest,
+    sensitive_agent_patch_paths,
+)
 
 from triage import (  # noqa: E402, F401
     DISCUSSION_WIP_CAP,
@@ -198,6 +206,7 @@ from execution import (  # noqa: E402, F401
     _update_mergeable_label,
     _write_github_outputs,
     app_bot_git_identity,
+    author_label_for_persona,
     build_body,
     build_execution_summary_body,
     claim_marker,
@@ -281,30 +290,6 @@ CLAUDE_CODE_VERSION = os.environ.get(
     "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
 ).strip() or "2.1.200"
 CLAUDE_CODE_PACKAGE = f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"
-
-SENSITIVE_PATH_PREFIXES = (
-    ".github/",
-    ".agents/",
-)
-SENSITIVE_RELEASE_SCRIPT_PATHS = {
-    "scripts/build-release.sh",
-    "scripts/notarize.sh",
-    "scripts/prepare-release.sh",
-    "scripts/release-preflight.sh",
-    "scripts/release-version.sh",
-    "scripts/setup-release-secrets.sh",
-    "scripts/signing-config.sh.template",
-    "scripts/validate-release-changes.py",
-    "scripts/verify-app-keychain-signing.sh",
-    "scripts/verify-release-bundle.sh",
-}
-SENSITIVE_NAME_MARKERS = (
-    "auth",
-    "credential",
-    "secret",
-    "sandbox",
-    "token",
-)
 
 ALLOWED_SELECTION_KINDS = {
     "review_followup_pr",
@@ -567,36 +552,6 @@ def _normal_patch_path(raw_path: str) -> str | None:
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         return None
     return path.as_posix()
-
-
-def sensitive_agent_patch_paths(changed_files: list[str]) -> list[str]:
-    sensitive: list[str] = []
-    for raw_path in changed_files:
-        rel_path = _normal_patch_path(raw_path)
-        if rel_path is None:
-            sensitive.append(raw_path)
-            continue
-        lower_path = rel_path.lower()
-        lower_parts = PurePosixPath(lower_path).parts
-        lower_name = lower_parts[-1] if lower_parts else lower_path
-
-        if lower_path in SENSITIVE_RELEASE_SCRIPT_PATHS:
-            sensitive.append(rel_path)
-            continue
-        if any(lower_path == prefix.rstrip("/") or lower_path.startswith(prefix) for prefix in SENSITIVE_PATH_PREFIXES):
-            sensitive.append(rel_path)
-            continue
-        if any(marker in part for part in lower_parts for marker in SENSITIVE_NAME_MARKERS):
-            sensitive.append(rel_path)
-            continue
-        if lower_path.startswith("infra/") and any(
-            marker in part
-            for part in lower_parts
-            for marker in ("credential", "secret", "token", "key")
-        ):
-            sensitive.append(rel_path)
-            continue
-    return sensitive
 
 
 def privileged_patch_allowed(selection_item: dict[str, object] | None, env: dict[str, str], *, cli_override: bool) -> bool:
@@ -1221,6 +1176,7 @@ def build_action_phase_inputs(
         issue = fetch_detailed_issue(owner, name, issue_number, env)
         if issue is None:
             raise ValueError(f"issue #{issue_number} not found")
+        verify_expected_issue_scope(issue, env)
         payloads.append(_issue_untrusted_payload(issue, owner))
         discussion_number = extract_issue_discussion_number(str(issue.get("body", "")))
         if discussion_number is not None:
@@ -1241,7 +1197,8 @@ def selection_kind_requires_selected_number(selection_kind: str) -> bool:
 
 
 def validate_selected_action(validated_json: str, choice: SelectionChoice) -> None:
-    action = str(json.loads(validated_json).get("action", ""))
+    data = json.loads(validated_json)
+    action = str(data.get("action", ""))
     allowed = {
         "review_followup_pr": {"review_pr"},
         "review_pr": {"review_pr"},
@@ -1255,6 +1212,29 @@ def validate_selected_action(validated_json: str, choice: SelectionChoice) -> No
         raise ValueError(
             f"selection_kind '{choice.selection_kind}' requires one of {sorted(allowed)}, got '{action}'"
         )
+    number_field = {
+        "review_followup_pr": "pr_number",
+        "review_pr": "pr_number",
+        "advance_pr": "pr_number",
+        "execute_claimed_issue": "issue_number",
+        "execute_ready_issue": "issue_number",
+        "comment_discussion": "discussion_number",
+        "propose": None,
+    }[choice.selection_kind]
+    if number_field is not None and int(data.get(number_field) or 0) != choice.number:
+        raise ValueError(
+            f"selection_kind '{choice.selection_kind}' requires {number_field}="
+            f"{choice.number}, got {data.get(number_field)!r}"
+        )
+
+
+def verify_expected_issue_scope(issue: dict[str, object], env: dict[str, str]) -> None:
+    expected = env.get("FACTORY_EXPECTED_ISSUE_SCOPE_DIGEST", "").strip()
+    if not expected:
+        return
+    actual = issue_scope_digest(issue)
+    if not hmac.compare_digest(actual, expected):
+        raise ValueError("issue title or body changed after Factory admission")
 
 
 def phase_task_for_selection(

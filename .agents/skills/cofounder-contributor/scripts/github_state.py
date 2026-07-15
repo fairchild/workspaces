@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from _helpers import (
+    AGENT_CLAIM_LABEL,
     AGENT_READY_LABEL,
     GITHUB_API_TIMEOUT,
     REPO_ROOT,
@@ -816,14 +817,24 @@ def find_issue_execution_state(
     stale_claim = claim_is_stale(latest_claim, has_open_pr=bool(linked_prs))
     if stale_claim:
         latest_claim = None
+    claimed_by_current_agent = bool(
+        AGENT_CLAIM_LABEL in labels
+        and latest_claim is not None
+        and latest_claim.get("agent") == current_agent
+    )
+    approved = AGENT_READY_LABEL in labels or claimed_by_current_agent
 
     return {
         "issue": issue,
-        "approved": AGENT_READY_LABEL in labels,
+        "approved": approved,
         "approval_reason": (
             f"{AGENT_READY_LABEL} label present"
             if AGENT_READY_LABEL in labels
-            else f"issue #{issue_number} is missing {AGENT_READY_LABEL}"
+            else (
+                "trusted current-agent claim present"
+                if claimed_by_current_agent
+                else f"issue #{issue_number} is missing {AGENT_READY_LABEL}"
+            )
         ),
         "blockers": blockers,
         "requested_evidence": extract_requested_evidence(str(issue.get("body", ""))),

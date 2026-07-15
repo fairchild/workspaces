@@ -144,6 +144,89 @@ class RunContributorEvidenceTests(unittest.TestCase):
                 cli_override=True,
             )
 
+    def test_directed_action_is_bound_to_selected_number(self) -> None:
+        directed = run_contributor.parse_directed_message(
+            "@fairchild mentioned you in issue #42"
+        )
+        self.assertIsNotNone(directed)
+        self.assertEqual(directed["number"], 42)
+
+        choice = run_contributor.SelectionChoice(
+            selection_kind="execute_ready_issue",
+            number=42,
+        )
+        matching = json.dumps({"action": "execute_issue", "issue_number": 42})
+        mismatched = json.dumps({"action": "execute_issue", "issue_number": 43})
+
+        run_contributor.validate_selected_action(matching, choice)
+        with self.assertRaisesRegex(ValueError, "requires issue_number=42"):
+            run_contributor.validate_selected_action(mismatched, choice)
+
+    def test_factory_issue_scope_digest_rejects_post_admission_edits(self) -> None:
+        issue = {"number": 42, "title": "Fix it", "body": "Original scope"}
+        digest = run_contributor.issue_scope_digest(issue)
+
+        run_contributor.verify_expected_issue_scope(
+            issue,
+            {"FACTORY_EXPECTED_ISSUE_SCOPE_DIGEST": digest},
+        )
+        with self.assertRaisesRegex(ValueError, "changed after Factory admission"):
+            run_contributor.verify_expected_issue_scope(
+                {**issue, "body": "Changed scope"},
+                {"FACTORY_EXPECTED_ISSUE_SCOPE_DIGEST": digest},
+            )
+
+    def test_factory_claim_keeps_selected_issue_approved_for_current_agent(self) -> None:
+        github_state = sys.modules["github_state"]
+        issue = {
+            "number": 42,
+            "title": "Fix it",
+            "body": "",
+            "labels": {"nodes": [{"name": "agent"}, {"name": "task"}, {"name": "claimed"}]},
+            "comments": {
+                "nodes": [
+                    {
+                        "body": (
+                            "<!-- contributor:issue=42;status=claimed;"
+                            "agent=april-clearwater;branch=codex/april-clearwater-issue-42-fix-it -->"
+                        ),
+                        "createdAt": "2026-07-14T12:00:00Z",
+                        "author": {"login": "april-clearwater[bot]"},
+                        "authorAssociation": "NONE",
+                    }
+                ]
+            },
+        }
+
+        with (
+            mock.patch.object(
+                github_state,
+                "fetch_work_state",
+                return_value={"issues": [issue], "pull_requests": []},
+            ),
+            mock.patch.object(github_state, "fetch_issue_state_map", return_value={}),
+        ):
+            state = run_contributor.find_issue_execution_state(
+                42,
+                {"GITHUB_REPOSITORY": "fairchild/workspaces", "GH_APP_SLUG": "april-clearwater"},
+                persona="April Clearwater, Application Lead",
+                bot_login="april-clearwater[bot]",
+            )
+
+        self.assertIsNotNone(state)
+        self.assertTrue(state["approved"])
+        self.assertEqual(state["approval_reason"], "trusted current-agent claim present")
+
+    def test_author_labels_are_machinery_owned(self) -> None:
+        self.assertEqual(
+            run_contributor.author_label_for_persona("April Clearwater, Application Lead"),
+            "author:april",
+        )
+        self.assertEqual(
+            run_contributor.author_label_for_persona("Plat Ironwood, Platform Lead"),
+            "author:plat",
+        )
+
     def test_reconcile_pending_ci_evidence_includes_uploaded_screenshot_links(self) -> None:
         body = "\n".join(
             [
