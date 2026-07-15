@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<!--
+  Agent Factory v2 — system overview and trust model.
+  Self-contained reference: how the factory works, why it's shaped this way,
+  and what to hold in your head when reviewing or operating it.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Factory v2 — System Overview</title>
+<style>
+  :root {
+    --paper: #f6f2ea;
+    --paper-raised: #fdfaf4;
+    --ink: #26221c;
+    --ink-soft: #5c554a;
+    --hairline: #d8d0c0;
+    --gate: #b45f06;          /* owner authority / gates */
+    --gate-soft: #f3e2cb;
+    --verified: #1f6f63;      /* mechanical verification */
+    --verified-soft: #d9e9e4;
+    --untrusted: #8a4a52;     /* model-controlled surfaces */
+    --untrusted-soft: #f0dfe0;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --serif: Charter, "Iowan Old Style", Georgia, serif;
+    --sans: "Avenir Next", Avenir, Futura, "Century Gothic", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #1c1a17;
+      --paper-raised: #26231e;
+      --ink: #e8e2d6;
+      --ink-soft: #a89f8f;
+      --hairline: #3d382f;
+      --gate: #e0a458;
+      --gate-soft: #3a2e1d;
+      --verified: #6fbfae;
+      --verified-soft: #1e332e;
+      --untrusted: #cf8891;
+      --untrusted-soft: #362226;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--serif);
+    font-size: 17px;
+    line-height: 1.6;
+  }
+  .sheet { max-width: 46rem; margin: 0 auto; padding: 3rem 1.5rem 6rem; }
+  header.masthead { border-bottom: 3px double var(--hairline); padding-bottom: 1.5rem; margin-bottom: 2.5rem; }
+  .kicker {
+    font-family: var(--mono); font-size: .72rem; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--gate); margin: 0 0 .75rem;
+  }
+  h1 {
+    font-family: var(--sans); font-weight: 600; font-size: 2.1rem;
+    line-height: 1.15; margin: 0 0 .75rem; letter-spacing: -.01em;
+  }
+  .dek { color: var(--ink-soft); font-size: 1.05rem; margin: 0; max-width: 38rem; }
+  .status-strip {
+    display: flex; flex-wrap: wrap; gap: .4rem 1.5rem; margin-top: 1.25rem;
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-soft);
+  }
+  .status-strip b { color: var(--ink); font-weight: 600; }
+  nav.toc {
+    font-family: var(--mono); font-size: .78rem; line-height: 2;
+    columns: 2; column-gap: 2rem; margin: 0 0 3rem; padding: 1rem 1.25rem;
+    background: var(--paper-raised); border: 1px solid var(--hairline);
+  }
+  nav.toc a { color: var(--ink-soft); text-decoration: none; display: block; }
+  nav.toc a:hover { color: var(--gate); }
+  nav.toc .n { color: var(--gate); margin-right: .5em; }
+  section { margin: 0 0 3.25rem; }
+  h2 {
+    font-family: var(--sans); font-weight: 600; font-size: 1.35rem;
+    margin: 0 0 1rem; padding-top: 1.25rem; border-top: 1px solid var(--hairline);
+  }
+  h2 .sn {
+    display: block; font-family: var(--mono); font-weight: 400; font-size: .7rem;
+    letter-spacing: .18em; color: var(--gate); margin-bottom: .35rem;
+  }
+  h3 { font-family: var(--sans); font-size: 1.02rem; font-weight: 600; margin: 1.75rem 0 .5rem; }
+  p { margin: 0 0 1rem; }
+  code {
+    font-family: var(--mono); font-size: .82em;
+    background: var(--paper-raised); border: 1px solid var(--hairline);
+    padding: .08em .35em; border-radius: 3px; white-space: nowrap;
+  }
+  a { color: var(--verified); }
+  table { width: 100%; border-collapse: collapse; font-size: .88rem; margin: 1rem 0 1.5rem; }
+  th {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--ink-soft); text-align: left; font-weight: 500;
+    border-bottom: 2px solid var(--hairline); padding: .4rem .75rem .4rem 0;
+  }
+  td { border-bottom: 1px solid var(--hairline); padding: .55rem .75rem .55rem 0; vertical-align: top; }
+  td:first-child { font-family: var(--mono); font-size: .8rem; white-space: nowrap; }
+  .legend {
+    display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: .75rem 0 1rem;
+    font-family: var(--mono); font-size: .72rem; color: var(--ink-soft);
+  }
+  .legend span::before {
+    content: ""; display: inline-block; width: .85em; height: .85em; margin-right: .45em;
+    vertical-align: -.08em; border-radius: 2px;
+  }
+  .legend .lg-gate::before { background: var(--gate); }
+  .legend .lg-ver::before { background: var(--verified); }
+  .legend .lg-untr::before { background: transparent; border: 1.5px dashed var(--untrusted); }
+  figure { margin: 1.5rem 0 2rem; }
+  figure .frame {
+    background: var(--paper-raised); border: 1px solid var(--hairline);
+    padding: 1rem .75rem; overflow-x: auto;
+  }
+  figcaption {
+    font-family: var(--mono); font-size: .72rem; color: var(--ink-soft);
+    margin-top: .6rem; letter-spacing: .04em;
+  }
+  svg { display: block; margin: 0 auto; }
+  svg text { font-family: var(--mono); fill: var(--ink); }
+  svg .lbl { font-size: 11.5px; }
+  svg .sub { font-size: 9.5px; fill: var(--ink-soft); }
+  svg .edge-lbl { font-size: 9.5px; fill: var(--gate); }
+  svg .ver-lbl { font-size: 9.5px; fill: var(--verified); }
+  svg .box { fill: var(--paper); stroke: var(--ink-soft); stroke-width: 1.2; }
+  svg .box-gate { fill: var(--gate-soft); stroke: var(--gate); stroke-width: 1.5; }
+  svg .box-ver { fill: var(--verified-soft); stroke: var(--verified); stroke-width: 1.5; }
+  svg .box-untr { fill: var(--untrusted-soft); stroke: var(--untrusted); stroke-width: 1.3; stroke-dasharray: 5 3; }
+  svg .wire { stroke: var(--ink-soft); stroke-width: 1.2; fill: none; }
+  svg .band { fill: none; stroke: var(--verified); stroke-width: 1; stroke-dasharray: 2 3; }
+  .aside {
+    border-left: 3px solid var(--gate); background: var(--paper-raised);
+    padding: 1rem 1.25rem; margin: 1.5rem 0; font-size: .95rem;
+  }
+  .aside .tag {
+    font-family: var(--mono); font-size: .68rem; letter-spacing: .15em;
+    text-transform: uppercase; color: var(--gate); display: block; margin-bottom: .4rem;
+  }
+  ol.principles { counter-reset: pr; list-style: none; padding: 0; margin: 1rem 0; }
+  ol.principles li {
+    counter-increment: pr; padding: .9rem 0 .9rem 3.2rem; position: relative;
+    border-bottom: 1px solid var(--hairline);
+  }
+  ol.principles li::before {
+    content: counter(pr, decimal-leading-zero);
+    position: absolute; left: 0; top: 1rem;
+    font-family: var(--mono); font-size: .95rem; color: var(--gate);
+  }
+  ol.principles b { font-family: var(--sans); font-weight: 600; }
+  footer {
+    border-top: 3px double var(--hairline); margin-top: 4rem; padding-top: 1.25rem;
+    font-family: var(--mono); font-size: .74rem; color: var(--ink-soft); line-height: 1.9;
+  }
+  @media (max-width: 640px) { nav.toc { columns: 1; } h1 { font-size: 1.7rem; } }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<header class="masthead">
+  <p class="kicker">Workspaces · System Documentation</p>
+  <h1>The Agent Factory</h1>
+  <p class="dek">An event-driven pipeline that turns owner-released GitHub issues into reviewed, evidence-backed pull requests — autonomously, inside a trust model built to fail closed.</p>
+  <div class="status-strip">
+    <span>plan: <b>agent-factory-v2-plan.md</b></span>
+    <span>glossary: <b>docs/agents/CONTEXT.md</b></span>
+    <span>M3 lands via: <b>#1096 → #1097 → #1098 → #1099</b></span>
+  </div>
+</header>
+
+<nav class="toc">
+  <a href="#s1"><span class="n">§01</span>What the factory is</a>
+  <a href="#s2"><span class="n">§02</span>The stage map</a>
+  <a href="#s3"><span class="n">§03</span>The life of an issue</a>
+  <a href="#s4"><span class="n">§04</span>The trust model</a>
+  <a href="#s5"><span class="n">§05</span>Failure and recovery</a>
+  <a href="#s6"><span class="n">§06</span>Accepted residuals</a>
+  <a href="#s7"><span class="n">§07</span>Operating the factory</a>
+  <a href="#s8"><span class="n">§08</span>Design principles</a>
+  <a href="#s9"><span class="n">§09</span>Reviewing M3</a>
+</nav>
+
+<section id="s1">
+  <h2><span class="sn">§01 · Premise</span>What the factory is</h2>
+  <p>The factory exists so that well-specified work can move from issue to merged PR without a human driving each step — while the repository owner keeps exclusive authority over what gets worked on and what lands. It replaced a v1 built on scheduled persona wake-ups and Discussion keyword gates, which an audit showed had quietly stopped converting: agents talked, nothing shipped.</p>
+  <p>v2's core commitment is that <b>labels and pull requests are the only control plane</b>. A gate is a label flip, a PR review, or a merge — never a keyword, a reaction, or a comment convention. Every stage fires from a GitHub event, which means an idle factory does nothing, costs nothing, and has no background process to drift. The corollary: anything that can apply a label is a release authority, so the machinery authenticates <em>who</em> flipped the label, not merely that it flipped.</p>
+  <p>Personas divide the work: <b>April Clearwater</b> (application lead) and <b>Plat Ironwood</b> (platform lead) implement and review as counterparts, <b>Peter</b> handles triage and spec, and <b>Oliver</b> is a deterministic monitor — telemetry, janitor, digest, no model in the loop. The factory never builds itself: changes to factory machinery stay in the owner-supervised orchestrator lane.</p>
+</section>
+
+<section id="s2">
+  <h2><span class="sn">§02 · Topology</span>The stage map</h2>
+  <p>Six stages, each fired by an event, each ending in an artifact the next stage can gate on. The monitor is not a stage in the chain — it is a daily heartbeat that observes all of them and repairs state, never advances it.</p>
+  <figure>
+    <div class="frame">
+    <svg width="680" height="200" viewBox="0 0 680 200" role="img" aria-label="Pipeline: Triage, Spec, Implement, Review, Verify, with Monitor observing all stages">
+      <!-- stage boxes -->
+      <rect class="box" x="8"   y="52" width="104" height="44" rx="3"/>
+      <rect class="box" x="146" y="52" width="104" height="44" rx="3"/>
+      <rect class="box-untr" x="284" y="52" width="104" height="44" rx="3"/>
+      <rect class="box-untr" x="422" y="52" width="104" height="44" rx="3"/>
+      <rect class="box-ver" x="560" y="52" width="104" height="44" rx="3"/>
+      <text class="lbl" x="60"  y="71" text-anchor="middle">Triage</text>
+      <text class="sub" x="60"  y="86" text-anchor="middle">labels only</text>
+      <text class="lbl" x="198" y="71" text-anchor="middle">Spec</text>
+      <text class="sub" x="198" y="86" text-anchor="middle">spec PR</text>
+      <text class="lbl" x="336" y="71" text-anchor="middle">Implement</text>
+      <text class="sub" x="336" y="86" text-anchor="middle">April writes code</text>
+      <text class="lbl" x="474" y="71" text-anchor="middle">Review</text>
+      <text class="sub" x="474" y="86" text-anchor="middle">counterpart</text>
+      <text class="lbl" x="612" y="71" text-anchor="middle">Verify</text>
+      <text class="sub" x="612" y="86" text-anchor="middle">evidence gates</text>
+      <!-- wires -->
+      <line class="wire" x1="112" y1="74" x2="146" y2="74"/>
+      <line class="wire" x1="250" y1="74" x2="284" y2="74"/>
+      <line class="wire" x1="388" y1="74" x2="422" y2="74"/>
+      <line class="wire" x1="526" y1="74" x2="560" y2="74"/>
+      <!-- event labels -->
+      <text class="edge-lbl" x="129" y="46" text-anchor="middle">issue</text>
+      <text class="edge-lbl" x="267" y="40" text-anchor="middle">merge applies</text>
+      <text class="edge-lbl" x="267" y="50" text-anchor="middle">ready</text>
+      <text class="edge-lbl" x="405" y="46" text-anchor="middle">agent PR</text>
+      <text class="edge-lbl" x="543" y="46" text-anchor="middle">push</text>
+      <!-- monitor band -->
+      <rect class="band" x="8" y="128" width="656" height="40" rx="3"/>
+      <text class="lbl" x="336" y="146" text-anchor="middle">Monitor — deterministic heartbeat</text>
+      <text class="sub" x="336" y="160" text-anchor="middle">telemetry branch · daily janitor · pinned digest issue · observes, repairs, never advances</text>
+      <line class="wire" x1="336" y1="96" x2="336" y2="128" stroke-dasharray="2 3"/>
+    </svg>
+    </div>
+    <figcaption>fig. 1 — the stage chain. dashed boxes run a model against untrusted input; the verify stage is mechanical.</figcaption>
+  </figure>
+  <p>M1 shipped the monitor (eyes and broom). M2's triage inlet runs owner-supervised. <b>M3 — the subject of the current PR stack — is the hands</b>: the implement dispatcher, the counterpart review stage, evidence integration, and the safety rails around all three. Hands are the highest-blast-radius surface the factory has, which is why the trust model below is most of this document.</p>
+</section>
+
+<section id="s3">
+  <h2><span class="sn">§03 · Flow</span>The life of an issue</h2>
+  <p>The end-to-end path an issue takes, with every gate it must pass. The load-bearing property: a single authenticated chokepoint decides release, and everything downstream binds to what was admitted — not to what the model, the issue body, or a later edit claims.</p>
+  <div class="legend">
+    <span class="lg-gate">owner authority</span>
+    <span class="lg-ver">mechanical verification</span>
+    <span class="lg-untr">model-controlled</span>
+  </div>
+  <figure>
+    <div class="frame">
+    <svg width="680" height="560" viewBox="0 0 680 560" role="img" aria-label="Issue lifecycle with gates from ready label to owner merge">
+      <!-- 1 owner releases -->
+      <rect class="box-gate" x="20" y="16" width="200" height="46" rx="3"/>
+      <text class="lbl" x="120" y="36" text-anchor="middle">owner applies ready</text>
+      <text class="sub" x="120" y="50" text-anchor="middle">the only release act</text>
+      <!-- 2 claim -->
+      <rect class="box-ver" x="20" y="110" width="310" height="118" rx="3"/>
+      <text class="lbl" x="175" y="132" text-anchor="middle">claim — the chokepoint</text>
+      <text class="sub" x="36" y="152">· sender + timeline actor == owner</text>
+      <text class="sub" x="36" y="167">· both kill switches on</text>
+      <text class="sub" x="36" y="182">· daily cap · WIP cap ≤ 2</text>
+      <text class="sub" x="36" y="197">· privileged-path scan (title+body)</text>
+      <text class="sub" x="36" y="212">· scope digest pinned · claim comment → label</text>
+      <line class="wire" x1="120" y1="62" x2="120" y2="110"/>
+      <text class="edge-lbl" x="132" y="90">issues:labeled</text>
+      <!-- privileged exit -->
+      <rect class="box-gate" x="420" y="126" width="240" height="46" rx="3"/>
+      <text class="lbl" x="540" y="146" text-anchor="middle">privileged scope?</text>
+      <text class="sub" x="540" y="160" text-anchor="middle">stays in orchestrator lane, never claimed</text>
+      <line class="wire" x1="330" y1="149" x2="420" y2="149"/>
+      <!-- 3 implement -->
+      <rect class="box-untr" x="20" y="276" width="310" height="96" rx="3"/>
+      <text class="lbl" x="175" y="298" text-anchor="middle">implement — April + Claude runtime</text>
+      <text class="sub" x="36" y="318">· App token scoped to this job</text>
+      <text class="sub" x="36" y="333">· scope digest re-verified before acting</text>
+      <text class="sub" x="36" y="348">· output bound to admitted issue number</text>
+      <text class="sub" x="36" y="363">· patch guard blocks privileged paths — authoritative</text>
+      <line class="wire" x1="175" y1="228" x2="175" y2="276"/>
+      <text class="ver-lbl" x="187" y="256">budget re-check, then credentials</text>
+      <!-- 4 PR + evidence -->
+      <rect class="box-ver" x="20" y="420" width="310" height="88" rx="3"/>
+      <text class="lbl" x="175" y="442" text-anchor="middle">PR + evidence</text>
+      <text class="sub" x="36" y="462">· author label machinery-owned</text>
+      <text class="sub" x="36" y="477">· gather job: builds model code, zero credentials</text>
+      <text class="sub" x="36" y="492">· reconcile: uploads, binds to PR # + head SHA</text>
+      <line class="wire" x1="175" y1="372" x2="175" y2="420"/>
+      <!-- 5 review -->
+      <rect class="box-untr" x="420" y="420" width="240" height="88" rx="3"/>
+      <text class="lbl" x="540" y="442" text-anchor="middle">counterpart review</text>
+      <text class="sub" x="436" y="462">· secret-free signal → trusted executor</text>
+      <text class="sub" x="436" y="477">· claude --bare in stripped checkout</text>
+      <text class="sub" x="436" y="492">· review pinned to admitted head SHA</text>
+      <line class="wire" x1="330" y1="464" x2="420" y2="464"/>
+      <text class="edge-lbl" x="375" y="456" text-anchor="middle">agent PR</text>
+      <!-- 6 merge -->
+      <rect class="box-gate" x="420" y="276" width="240" height="60" rx="3"/>
+      <text class="lbl" x="540" y="300" text-anchor="middle">owner merges</text>
+      <text class="sub" x="540" y="316" text-anchor="middle">mergeable label is a signal, never authority</text>
+      <line class="wire" x1="540" y1="420" x2="540" y2="336"/>
+      <text class="ver-lbl" x="552" y="384">verdict → mergeable</text>
+    </svg>
+    </div>
+    <figcaption>fig. 2 — one issue, six stations. amber boxes are the two places a human decides; everything between them is verified machinery.</figcaption>
+  </figure>
+</section>
+
+<section id="s4">
+  <h2><span class="sn">§04 · Invariants</span>The trust model</h2>
+
+  <h3>One authenticated chokepoint</h3>
+  <p>The recurring failure class in early M3 slices — found three times across independently written surfaces — was checking that <code>ready</code> was <em>present</em> and then fabricating an owner-directed request from it. The fix is structural, not per-surface: the claim script is the single place release is authenticated. It verifies the workflow trigger actor <em>and</em> independently confirms, via the issue timeline, that the most recent <code>ready</code> application was the repository owner's act. The directed message the model receives is built from that verified actor. New stages consume this chokepoint; they do not reimplement it.</p>
+
+  <h3>Kill switches</h3>
+  <p>Two variables gate every entry path — including owner <code>workflow_dispatch</code>, so there is no break-glass lane that bypasses them; the operator path is flipping the variable back on. Switches are checked at trigger time and re-checked at execution time before credentials are minted.</p>
+  <table>
+    <tr><th>stage</th><th>switch (with master <code>AGENT_AUTOMATIONS_ENABLED</code>)</th><th>off behavior</th></tr>
+    <tr><td>implement</td><td><code>FACTORY_IMPLEMENT_ENABLED</code></td><td>no label or manual dispatch reaches the contributor runtime</td></tr>
+    <tr><td>review</td><td><code>FACTORY_REVIEW_ENABLED</code></td><td>no review signal reaches a counterpart reviewer</td></tr>
+    <tr><td>responder</td><td><code>FACTORY_RESPONDER_ENABLED</code></td><td>no owner-comment reply is generated or posted</td></tr>
+  </table>
+
+  <h3>Privileged paths, two layers, one list</h3>
+  <p><code>scripts/release_policy.py</code> is the canonical set of release and repo-control paths, consumed by release validation, PR readiness, and the contributor patch policy — one list so the guards cannot drift apart. Admission scans the issue title and body for privileged scope and routes hits to the orchestrator lane; the post-generation patch guard then checks what the model actually touched, and that second layer is the authoritative one, because admission reads intent while the guard reads the diff. Entitlements, signing, keychain, and workflow paths are all in scope.</p>
+
+  <h3>Budgets that fail closed</h3>
+  <p>Spend is bounded even when everything else goes wrong: a WIP cap of two claimed issues, a daily implement cap (<code>FACTORY_IMPLEMENT_DAILY_CAP</code>, default 6) counting owner-attributed runs and rerun attempts through the Actions API, and a matching review cap (<code>FACTORY_REVIEW_DAILY_CAP</code>, default 12). Counting only owner-attributed runs means a non-owner cannot burn the budget by relabeling. Every cap check raises on API failure rather than assuming zero — the factory stops when it cannot see.</p>
+
+  <h3>Identity and attribution</h3>
+  <p>Agents act through GitHub Apps (<code>april-clearwater</code>, <code>workspace-agents</code>) with per-job token scopes, never a shared human token. Because the git account is shared, attribution is a runtime invariant rather than a convention: autonomous PRs carry exactly one machinery-applied <code>author:&lt;agent&gt;</code> label, claim markers are only trusted when the App bot authored them, and reviews open with the acting persona.</p>
+
+  <h3>Evidence bound to immutable identity</h3>
+  <p>No factory PR exists without evidence, and evidence cannot be self-attested: a credential-less job builds and tests the model-authored tree, a separate reconcile job — which never executes model code — uploads results and binds them to the PR number and head SHA, failing closed if the head drifted. The readiness gate parses the evidence section with the same exact-heading discipline the synthesizer writes, and rejects variant or duplicate headings outright, so a model cannot shadow the real accounting with a fabricated one.</p>
+
+  <h3>Review-lane isolation</h3>
+  <p>The PR event fires a secret-free signal workflow; a trusted executor running default-branch code re-derives everything from the API before any secret loads, then runs the counterpart reviewer with <code>claude --bare</code> (no hooks, no project config) in a symlink-stripped checkout of the admitted SHA. Reviews post pinned to that SHA. The counterpart routing itself — April's PRs to Plat, Plat's to April — exists so no agent ever approves its own work.</p>
+</section>
+
+<section id="s5">
+  <h2><span class="sn">§05 · Repair</span>Failure and recovery</h2>
+  <p>A failed implementation run rolls the issue back to <code>ready</code> — but only its own claim: rollback verifies the claim comment was authored by the App bot and names this run before touching anything, and the claim writes its comment before mutating labels so a partial failure leaves nothing wedged. The rollback re-fires the label event, which is why the daily cap exists: a persistently failing issue burns its budget and parks, rather than looping forever.</p>
+  <p>The daily janitor repairs label-state drift under a total invariant — unlabeled agent/task issues receive no transition, ever. The digest (a pinned issue, updated in place by the monitor) itemizes ready-but-unclaimed issues with their inactivity age, because the one recovery lane v2 deliberately dropped is automated re-dispatch: an automated dispatcher cannot satisfy the owner-actor gate, so a <code>ready</code> event displaced by GitHub's concurrency queueing stays dropped until the owner re-toggles the label. The digest makes that visible instead of silent — the tradeoff is a rare manual toggle in exchange for keeping release authority unambiguous.</p>
+</section>
+
+<section id="s6">
+  <h2><span class="sn">§06 · Honesty</span>Accepted residuals</h2>
+  <p>Documented risk the design carries on purpose, each with its mitigation and owner:</p>
+  <table>
+    <tr><th>residual</th><th>why accepted</th><th>backstop</th></tr>
+    <tr><td>review TOCTOU</td><td>the pinned-commit approval posts before the final head re-check; a mid-window push can leave an APPROVE anchored to the old SHA</td><td>branch protection dismisses stale reviews; the run fails visibly</td></tr>
+    <tr><td>self-hosted gather</td><td>the evidence job builds model-authored code on <code>lume-macos</code> runners</td><td>zero secrets or credentials on that job — exfil-resistant; host persistence rests on runner ephemerality</td></tr>
+    <tr><td>semantic evidence trust</td><td>tests are authored by the same model whose change they verify</td><td>counterpart review + owner merge; binding guarantees provenance, not meaning</td></tr>
+    <tr><td>first live run</td><td>App assignment and the contributor runtime are integration-proven only by a real dispatch</td><td>supervised first run (§07)</td></tr>
+  </table>
+</section>
+
+<section id="s7">
+  <h2><span class="sn">§07 · Operations</span>Operating the factory</h2>
+  <p>To turn the hands on: set <code>FACTORY_IMPLEMENT_ENABLED</code> and <code>FACTORY_REVIEW_ENABLED</code> alongside the existing master switch, optionally tune the two daily caps, then run one supervised pass — label a trivial, non-privileged issue <code>ready</code> yourself and watch the whole chain (claim comment, assignment, PR, evidence, counterpart review) before trusting the label path unattended.</p>
+  <p>Observability lives in three places: the pinned Factory Digest issue (label-state funnel, run budgets, ready-but-unclaimed ageing, per-stage activity), the telemetry branch <code>factory/ops-data</code> the monitor writes, and the workflow runs themselves — every dispatch names its issue in the run title. When something looks wrong, the kill switches stop the factory in one variable flip, and the janitor's next pass repairs label drift.</p>
+</section>
+
+<section id="s8">
+  <h2><span class="sn">§08 · Doctrine</span>Design principles</h2>
+  <p>The rules the factory is built to — worth internalizing because every future stage gets judged against them:</p>
+  <ol class="principles">
+    <li><b>Labels and PRs are the only control plane.</b> If a behavior can't be expressed as a label flip, a PR review, or a merge, the factory doesn't do it.</li>
+    <li><b>Authenticate the actor, not the artifact.</b> A label's presence is a claim; the timeline actor is a fact. Release authority lives in one verified chokepoint that downstream stages consume.</li>
+    <li><b>Fail closed.</b> Every gate raises on ambiguity, API failure, or drift — the factory stops when it cannot see, and an idle factory is the safe state.</li>
+    <li><b>Mechanical enforcement over prompted behavior.</b> Anything that must hold is enforced by workflows and scripts, never by asking the model nicely.</li>
+    <li><b>One source of truth per policy.</b> Privileged paths, release paths, evidence formats — each lives in exactly one module that every guard imports, so guards cannot drift apart.</li>
+    <li><b>Bind to immutable identity.</b> Scope digests, head SHAs, admitted issue numbers — decisions bind to what was admitted, and re-verify before acting, so nothing trusts a value that something untrusted could have edited in between.</li>
+    <li><b>No agent judges its own work.</b> Counterpart review by construction, and adversarial directed review before anything autonomous ships — the M3 stack itself was held, reviewed, and hardened through two passes before reaching the owner.</li>
+    <li><b>The factory never builds itself.</b> Factory machinery is privileged-path scope; changes to it stay in the owner-supervised lane.</li>
+  </ol>
+</section>
+
+<section id="s9">
+  <h2><span class="sn">§09 · Current Review</span>Reviewing M3</h2>
+  <div class="aside">
+    <span class="tag">Time-scoped — the M3 stack, July 2026</span>
+    <p>Four stacked PRs, merge order <b>#1096 → #1097 → #1098 → #1099</b>: the implement dispatcher, the counterpart review stage, evidence integration, and safety rails. Each PR's diff against its base shows only its own slice.</p>
+    <p>Where review effort pays: <b>#1096</b>'s workflow conditions and <code>verify_release_actor</code> — the release gate everything else assumes; <b>#1098</b>'s readiness parsing and evidence blocking — the gate the model itself is subject to; <b>#1097</b>'s per-job <code>env</code> blocks — which token each job holds. <b>#1099</b> is observability only and reads lightest.</p>
+    <p style="margin-bottom:0">The stack went through directed review (2 blockers, 3 majors), an orchestrator verification pass, three independent delta reviews (2 further majors, both empirically confirmed), and two hardening passes closing all 12 items — the findings ledger and per-fix commits live in the review-guide comment on #1096.</p>
+  </div>
+</section>
+
+<footer>
+  <div>related: docs/development/agent-factory-v2-plan.md · docs/agents/CONTEXT.md · docs/decisions/factory-*.md · docs/agents/triage-labels.md</div>
+  <div>maintained alongside the factory — when a stage, switch, or invariant changes, this page changes in the same PR.</div>
+</footer>
+
+</div>
+</body>
+</html>
