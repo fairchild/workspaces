@@ -274,7 +274,7 @@ class RunContributorEvidenceTests(unittest.TestCase):
         self.assertIn(["gh", "pr", "edit", "77", "--add-label", "mergeable"], commands)
         self.assertFalse(any(command[:3] == ["gh", "issue", "edit"] for command in commands))
 
-    def test_claude_runs_bare_in_untrusted_review_workspace(self) -> None:
+    def test_review_workspace_stays_untrusted_and_oauth_compatible(self) -> None:
         with (
             tempfile.TemporaryDirectory() as home,
             mock.patch.object(
@@ -291,13 +291,15 @@ class RunContributorEvidenceTests(unittest.TestCase):
                 tools=run_contributor.READ_ONLY_MODEL_TOOLS,
                 cwd=Path("/tmp/model-workspace"),
             )
-            trust = json.loads((Path(home) / ".claude.json").read_text())
+            trust_file_written = (Path(home) / ".claude.json").exists()
 
         command = run_checked.call_args.args[0]
         self.assertEqual(output, "review")
-        self.assertIn("--bare", command)
+        # --bare restricts auth to ANTHROPIC_API_KEY; the runtime authenticates
+        # with CLAUDE_CODE_OAUTH_TOKEN, so it must never be passed.
+        self.assertNotIn("--bare", command)
         self.assertEqual(run_checked.call_args.kwargs["cwd"], Path("/tmp/model-workspace"))
-        self.assertTrue(trust["projects"]["/tmp/model-workspace"]["hasTrustDialogAccepted"])
+        self.assertFalse(trust_file_written)
 
     def test_project_trust_seeding_preserves_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as home:

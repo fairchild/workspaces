@@ -683,13 +683,16 @@ def run_claude(
         else str(system_prompt)
     )
     log(f"Running Claude Code (mode={mode})")
-    ensure_claude_project_trust(cwd or REPO_ROOT, env)
+    # No --bare: it restricts Anthropic auth to ANTHROPIC_API_KEY and never
+    # reads CLAUDE_CODE_OAUTH_TOKEN. Untrusted-workspace isolation comes from
+    # project trust instead: only the implement scratch (repo HEAD export) is
+    # seeded trusted; PR-head review checkouts stay untrusted, so headless
+    # Claude skips their settings, hooks, and CLAUDE.md.
     cmd = [
         "npx",
         "--yes",
         CLAUDE_CODE_PACKAGE,
         "--print",
-        "--bare",
         "--system-prompt",
         prompt_text,
     ]
@@ -1360,6 +1363,9 @@ def main() -> int:
         if selection_uses_isolated_workspace(choice.selection_kind):
             scratch_workspace = create_scratch_workspace(env)
             claude_cwd = scratch_workspace.scratch_dir
+            # The scratch is the repo's own HEAD export — trusted content by
+            # construction. Review checkouts of PR heads are never seeded.
+            ensure_claude_project_trust(claude_cwd, claude_env)
         raw_output = run_claude(
             compose_system_prompt(prompt_file.read_text(encoding="utf-8")),
             phase_task_for_selection(choice, task_envelope, payloads, message=args.message),
