@@ -441,7 +441,9 @@ def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
     baseline_dir = temp_root / "baseline"
     scratch_dir = temp_root / "scratch"
     export_head_tree(baseline_dir, env)
-    shutil.copytree(baseline_dir, scratch_dir)
+    # symlinks=True keeps repo symlinks as symlinks; following them turns
+    # every linked path into a phantom mode-change diff that git apply refuses.
+    shutil.copytree(baseline_dir, scratch_dir, symlinks=True)
     return ScratchPatchArtifact(
         temp_root=temp_root,
         baseline_dir=baseline_dir,
@@ -452,11 +454,28 @@ def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
 
 
 def _tree_files(root: Path) -> dict[str, Path]:
+    # Symlinks are entries in their own right: is_file() alone would follow
+    # them (hiding target-path changes) and drop links to dirs entirely.
     files: dict[str, Path] = {}
     for path in root.rglob("*"):
-        if path.is_file():
+        if path.is_symlink() or path.is_file():
             files[path.relative_to(root).as_posix()] = path
     return files
+
+
+def _tree_entries_identical(baseline_path: Path, scratch_path: Path) -> bool:
+    baseline_is_link = baseline_path.is_symlink()
+    scratch_is_link = scratch_path.is_symlink()
+    if baseline_is_link or scratch_is_link:
+        return (
+            baseline_is_link == scratch_is_link
+            and os.readlink(baseline_path) == os.readlink(scratch_path)
+        )
+    return (
+        baseline_path.stat().st_mode == scratch_path.stat().st_mode
+        and hashlib.sha256(baseline_path.read_bytes()).digest()
+        == hashlib.sha256(scratch_path.read_bytes()).digest()
+    )
 
 
 def _run_binary_diff(cmd: list[str], *, cwd: Path, env: dict[str, str]) -> str:
@@ -512,10 +531,7 @@ def build_scratch_patch_artifact(
             patch_chunks.append(chunk)
             continue
         assert baseline_path is not None and scratch_path is not None
-        if (
-            baseline_path.stat().st_mode == scratch_path.stat().st_mode
-            and hashlib.sha256(baseline_path.read_bytes()).digest() == hashlib.sha256(scratch_path.read_bytes()).digest()
-        ):
+        if _tree_entries_identical(baseline_path, scratch_path):
             continue
         chunk = _run_binary_diff(
             [
@@ -650,6 +666,22 @@ def compose_system_prompt(persona_prompt: str) -> str:
     )
 
 
+def ensure_claude_project_trust(cwd: Path, env: dict[str, str]) -> None:
+    # Headless Claude Code ignores permissions.allow for untrusted project
+    # paths; the runtime's tool allowlist only loads once the cwd is trusted.
+    config_path = Path(env.get("HOME") or Path.home()) / ".claude.json"
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8")) if config_path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    projects = data.setdefault("projects", {})
+    entry = projects.setdefault(str(cwd), {})
+    if entry.get("hasTrustDialogAccepted") is True:
+        return
+    entry["hasTrustDialogAccepted"] = True
+    config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
 def run_claude(
     system_prompt: str | Path,
     task: str,
@@ -667,12 +699,16 @@ def run_claude(
         else str(system_prompt)
     )
     log(f"Running Claude Code (mode={mode})")
+    # No --bare: it restricts Anthropic auth to ANTHROPIC_API_KEY and never
+    # reads CLAUDE_CODE_OAUTH_TOKEN. Untrusted-workspace isolation comes from
+    # project trust instead: only the implement scratch (repo HEAD export) is
+    # seeded trusted; PR-head review checkouts stay untrusted, so headless
+    # Claude skips their settings, hooks, and CLAUDE.md.
     cmd = [
         "npx",
         "--yes",
         CLAUDE_CODE_PACKAGE,
         "--print",
-        "--bare",
         "--system-prompt",
         prompt_text,
     ]
@@ -1343,6 +1379,9 @@ def main() -> int:
         if selection_uses_isolated_workspace(choice.selection_kind):
             scratch_workspace = create_scratch_workspace(env)
             claude_cwd = scratch_workspace.scratch_dir
+            # The scratch is the repo's own HEAD export — trusted content by
+            # construction. Review checkouts of PR heads are never seeded.
+            ensure_claude_project_trust(claude_cwd, claude_env)
         raw_output = run_claude(
             compose_system_prompt(prompt_file.read_text(encoding="utf-8")),
             phase_task_for_selection(choice, task_envelope, payloads, message=args.message),

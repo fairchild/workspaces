@@ -274,25 +274,89 @@ class RunContributorEvidenceTests(unittest.TestCase):
         self.assertIn(["gh", "pr", "edit", "77", "--add-label", "mergeable"], commands)
         self.assertFalse(any(command[:3] == ["gh", "issue", "edit"] for command in commands))
 
-    def test_claude_runs_bare_in_untrusted_review_workspace(self) -> None:
-        with mock.patch.object(
-            run_contributor,
-            "run_checked",
-            return_value=mock.Mock(stdout="review"),
-        ) as run_checked:
+    def test_scratch_workspace_preserves_symlinks_and_yields_empty_diff(self) -> None:
+        env = dict(run_contributor.os.environ)
+        workspace = run_contributor.create_scratch_workspace(env)
+        try:
+            symlinks = [p for p in workspace.scratch_dir.rglob("*") if p.is_symlink()]
+            artifact = run_contributor.build_scratch_patch_artifact(workspace, env)
+        finally:
+            run_contributor.shutil.rmtree(workspace.temp_root, ignore_errors=True)
+
+        # The repo contains symlinks (e.g. CLAUDE.md); the scratch must mirror
+        # them or every linked path becomes a phantom diff the patch refuses.
+        self.assertTrue(symlinks)
+        self.assertEqual(artifact.changed_files, [])
+
+    def test_scratch_diff_detects_symlink_target_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            baseline = root / "baseline"
+            scratch = root / "scratch"
+            for tree, target in ((baseline, "AGENTS.md"), (scratch, "README.md")):
+                tree.mkdir()
+                (tree / "AGENTS.md").write_text("agents\n")
+                (tree / "README.md").write_text("agents\n")
+                (tree / "CLAUDE.md").symlink_to(target)
+            workspace = run_contributor.ScratchPatchArtifact(
+                temp_root=root,
+                baseline_dir=baseline,
+                scratch_dir=scratch,
+                changed_files=[],
+                patch_text="",
+            )
+
+            artifact = run_contributor.build_scratch_patch_artifact(
+                workspace, dict(run_contributor.os.environ)
+            )
+
+        # Both link targets hold identical bytes, so a comparison that follows
+        # symlinks would call this unchanged; the target path itself moved.
+        self.assertEqual(artifact.changed_files, ["CLAUDE.md"])
+
+    def test_review_workspace_stays_untrusted_and_oauth_compatible(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as home,
+            mock.patch.object(
+                run_contributor,
+                "run_checked",
+                return_value=mock.Mock(stdout="review"),
+            ) as run_checked,
+        ):
             output = run_contributor.run_claude(
                 "system",
                 "task",
-                {"PATH": "/usr/bin", "CLAUDE_CODE_OAUTH_TOKEN": "token"},
+                {"HOME": home, "PATH": "/usr/bin", "CLAUDE_CODE_OAUTH_TOKEN": "token"},
                 mode="cli",
                 tools=run_contributor.READ_ONLY_MODEL_TOOLS,
                 cwd=Path("/tmp/model-workspace"),
             )
+            trust_file_written = (Path(home) / ".claude.json").exists()
 
         command = run_checked.call_args.args[0]
         self.assertEqual(output, "review")
-        self.assertIn("--bare", command)
+        # --bare restricts auth to ANTHROPIC_API_KEY; the runtime authenticates
+        # with CLAUDE_CODE_OAUTH_TOKEN, so it must never be passed.
+        self.assertNotIn("--bare", command)
         self.assertEqual(run_checked.call_args.kwargs["cwd"], Path("/tmp/model-workspace"))
+        self.assertFalse(trust_file_written)
+
+    def test_project_trust_seeding_preserves_existing_config(self) -> None:
+        with tempfile.TemporaryDirectory() as home:
+            config = Path(home) / ".claude.json"
+            config.write_text(json.dumps({
+                "projects": {"/existing": {"hasTrustDialogAccepted": True, "other": 1}},
+                "theme": "dark",
+            }))
+
+            run_contributor.ensure_claude_project_trust(Path("/scratch/ws"), {"HOME": home})
+            run_contributor.ensure_claude_project_trust(Path("/scratch/ws"), {"HOME": home})
+
+            data = json.loads(config.read_text())
+
+        self.assertEqual(data["theme"], "dark")
+        self.assertEqual(data["projects"]["/existing"], {"hasTrustDialogAccepted": True, "other": 1})
+        self.assertTrue(data["projects"]["/scratch/ws"]["hasTrustDialogAccepted"])
 
     def test_reconcile_pending_ci_evidence_includes_uploaded_screenshot_links(self) -> None:
         body = "\n".join(

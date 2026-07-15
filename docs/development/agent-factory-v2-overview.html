@@ -285,7 +285,7 @@
       <rect class="box-untr" x="420" y="420" width="240" height="88" rx="3"/>
       <text class="lbl" x="540" y="442" text-anchor="middle">counterpart review</text>
       <text class="sub" x="436" y="462">· secret-free signal → trusted executor</text>
-      <text class="sub" x="436" y="477">· claude --bare in stripped checkout</text>
+      <text class="sub" x="436" y="477">· untrusted checkout: no hooks/config</text>
       <text class="sub" x="436" y="492">· review pinned to admitted head SHA</text>
       <line class="wire" x1="330" y1="464" x2="420" y2="464"/>
       <text class="edge-lbl" x="375" y="456" text-anchor="middle">agent PR</text>
@@ -329,7 +329,7 @@
   <p>No factory PR exists without evidence, and evidence cannot be self-attested: a credential-less job builds and tests the model-authored tree, a separate reconcile job — which never executes model code — uploads results and binds them to the PR number and head SHA, failing closed if the head drifted. The readiness gate parses the evidence section with the same exact-heading discipline the synthesizer writes, and rejects variant or duplicate headings outright, so a model cannot shadow the real accounting with a fabricated one.</p>
 
   <h3>Review-lane isolation</h3>
-  <p>The PR event fires a secret-free signal workflow; a trusted executor running default-branch code re-derives everything from the API before any secret loads, then runs the counterpart reviewer with <code>claude --bare</code> (no hooks, no project config) in a symlink-stripped checkout of the admitted SHA. Reviews post pinned to that SHA. The counterpart routing itself — April's PRs to Plat, Plat's to April — exists so no agent ever approves its own work.</p>
+  <p>The PR event fires a secret-free signal workflow; a trusted executor running default-branch code re-derives everything from the API before any secret loads, then runs the counterpart reviewer headless in a symlink-stripped, deliberately <em>untrusted</em> checkout of the admitted SHA — headless Claude skips an untrusted project's settings, hooks, and CLAUDE.md, and every tool cap is file-scoped, so PR-authored config is inert (<code>--bare</code> was tried first and abandoned: it restricts auth to API keys and never reads the runtime's OAuth token). Reviews post pinned to that SHA. The counterpart routing itself — April's PRs to Plat, Plat's to April — exists so no agent ever approves its own work.</p>
 </section>
 
 <section id="s5">
@@ -346,13 +346,13 @@
     <tr><td>review TOCTOU</td><td>the pinned-commit approval posts before the final head re-check; a mid-window push can leave an APPROVE anchored to the old SHA</td><td>branch protection dismisses stale reviews; the run fails visibly</td></tr>
     <tr><td>self-hosted gather</td><td>the evidence job builds model-authored code on <code>lume-macos</code> runners</td><td>zero secrets or credentials on that job — exfil-resistant; host persistence rests on runner ephemerality</td></tr>
     <tr><td>semantic evidence trust</td><td>tests are authored by the same model whose change they verify</td><td>counterpart review + owner merge; binding guarantees provenance, not meaning</td></tr>
-    <tr><td>first live run</td><td>App assignment and the contributor runtime are integration-proven only by a real dispatch</td><td>supervised first run (§07)</td></tr>
+    <tr><td>first live run</td><td>the contributor runtime is integration-proven only by a real dispatch (run 1 proved the gates and found that App tokens cannot assign agent accounts — assignment is now best-effort visibility; the claim comment is the record)</td><td>supervised first run (§07)</td></tr>
   </table>
 </section>
 
 <section id="s7">
   <h2><span class="sn">§07 · Operations</span>Operating the factory</h2>
-  <p>To turn the hands on: set <code>FACTORY_IMPLEMENT_ENABLED</code> and <code>FACTORY_REVIEW_ENABLED</code> alongside the existing master switch, optionally tune the two daily caps, then run one supervised pass — label a trivial, non-privileged issue <code>ready</code> yourself and watch the whole chain (claim comment, assignment, PR, evidence, counterpart review) before trusting the label path unattended.</p>
+  <p>To turn the hands on: set <code>FACTORY_IMPLEMENT_ENABLED</code> and <code>FACTORY_REVIEW_ENABLED</code> alongside the existing master switch, optionally tune the two daily caps, then run one supervised pass — label a trivial, non-privileged issue <code>ready</code> yourself and watch the whole chain (claim comment, claimed label, PR, evidence, counterpart review) before trusting the label path unattended.</p>
   <p>Observability lives in three places: the pinned Factory Digest issue (label-state funnel, run budgets, ready-but-unclaimed ageing, per-stage activity), the telemetry branch <code>factory/ops-data</code> the monitor writes, and the workflow runs themselves — every dispatch names its issue in the run title. When something looks wrong, the kill switches stop the factory in one variable flip, and the janitor's next pass repairs label drift.</p>
 </section>
 

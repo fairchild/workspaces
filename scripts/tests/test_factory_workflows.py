@@ -29,6 +29,10 @@ def load_module(name: str, path: Path):
 
 
 factory_implement = load_module("factory_implement", IMPLEMENT_SCRIPT)
+lifecycle_health = load_module(
+    "lifecycle_health_check",
+    REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "lifecycle-health-check.py",
+)
 
 
 class FactoryImplementTests(unittest.TestCase):
@@ -52,6 +56,8 @@ class FactoryImplementTests(unittest.TestCase):
         privileged = (
             ".github/workflows/ci.yml",
             ".agents/memory/april/PROFILE.md",
+            ".claude/settings.json",
+            ".claude/skills/chat-sdk/SKILL.md",
             "Auth.swift",
             "scripts/notarize.sh",
             "scripts/generate-sparkle-appcast.sh",
@@ -83,6 +89,11 @@ class FactoryImplementTests(unittest.TestCase):
             )
         )
 
+        self.assertFalse(
+            factory_implement.privileged_scope(
+                self.issue(body="Change `myclaude/config.json`")
+            )
+        )
         self.assertFalse(factory_implement.privileged_scope(self.issue()))
 
     def test_claim_requires_open_released_non_privileged_issue_and_capacity(self) -> None:
@@ -232,24 +243,111 @@ class FactoryImplementTests(unittest.TestCase):
     def test_claim_and_rollback_payloads_preserve_unrelated_state(self) -> None:
         issue = self.issue(labels=("agent", "task", "ready", "quality"))
 
-        claim = factory_implement.claim_payload(issue, "april-clearwater[bot]")
+        claim = factory_implement.claim_payload(issue)
         self.assertEqual(claim["labels"], ["agent", "claimed", "quality", "task"])
-        self.assertEqual(
-            claim["assignees"],
-            ["april-clearwater[bot]", "fairchild"],
-        )
+        self.assertNotIn("assignees", claim)
 
         claimed_issue = {
             **issue,
             "labels": [{"name": name} for name in claim["labels"]],
-            "assignees": [{"login": login} for login in claim["assignees"]],
         }
-        rollback = factory_implement.rollback_payload(
-            claimed_issue,
+        rollback = factory_implement.rollback_payload(claimed_issue)
+        self.assertEqual(rollback["labels"], ["agent", "quality", "ready", "task"])
+        self.assertNotIn("assignees", rollback)
+
+    def test_claim_survives_unsupported_agent_assignment(self) -> None:
+        client = mock.Mock()
+        client.issue.return_value = self.issue()
+        client.timeline.return_value = [
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "fairchild"},
+            }
+        ]
+        client.claimed_issues.return_value = []
+        client.add_assignees.side_effect = factory_implement.FactoryImplementError(
+            "GitHub API POST /assignees failed with HTTP 403: "
+            "Assigning agents is not supported with GitHub App installation tokens."
+        )
+        actions_client = mock.Mock()
+        actions_client.workflow_runs_on.return_value = []
+        outputs: list[str] = []
+
+        with mock.patch.object(
+            factory_implement, "write_output", lambda name, value: outputs.append(f"{name}={value}")
+        ):
+            factory_implement.claim(
+                client,
+                actions_client,
+                42,
+                "https://example.test/runs/7",
+                "april-clearwater[bot]",
+                "fairchild",
+                "fairchild",
+                "true",
+                "true",
+                6,
+                "7",
+                1,
+            )
+
+        client.update_issue.assert_called_once_with(42, {"labels": mock.ANY})
+        client.add_assignees.assert_called_once_with(42, ["april-clearwater[bot]"])
+        self.assertIn("matched=true", outputs)
+
+    def test_health_check_accepts_claim_comment_without_assignee(self) -> None:
+        marker = factory_implement.claim_comment(
+            {**self.issue(), "title": "Fix it"},
+            "https://example.test/runs/7",
+        )
+
+        def health_issue(*, assignees=(), comments=()):
+            return {
+                "number": 42,
+                "labels": {"nodes": [{"name": name} for name in ("agent", "task", "claimed")]},
+                "assignees": {"nodes": [{"login": login} for login in assignees]},
+                "comments": {"nodes": [{"body": body, "createdAt": "2026-07-15T00:00:00Z"} for body in comments]},
+            }
+
+        assigned = lifecycle_health.check_claim_assignment_consistency(
+            [health_issue(assignees=["april-clearwater[bot]"])]
+        )
+        commented = lifecycle_health.check_claim_assignment_consistency(
+            [health_issue(comments=[marker])]
+        )
+        orphaned = lifecycle_health.check_claim_assignment_consistency(
+            [health_issue()]
+        )
+
+        self.assertTrue(assigned["pass"])
+        self.assertTrue(commented["pass"])
+        self.assertFalse(orphaned["pass"])
+
+    def test_rollback_removes_assignee_best_effort(self) -> None:
+        claim_body = factory_implement.claim_comment(
+            self.issue(labels=("agent", "task", "claimed")),
+            "https://example.test/runs/7",
+        )
+        client = mock.Mock()
+        client.issue.return_value = self.issue(labels=("agent", "task", "claimed"))
+        client.comments.return_value = [
+            {"body": claim_body, "user": {"login": "april-clearwater[bot]"}}
+        ]
+        client.remove_assignees.side_effect = factory_implement.FactoryImplementError(
+            "GitHub API DELETE /assignees failed with HTTP 403"
+        )
+
+        factory_implement.rollback(
+            client,
+            42,
+            "https://example.test/runs/7",
             "april-clearwater[bot]",
         )
-        self.assertEqual(rollback["labels"], ["agent", "quality", "ready", "task"])
-        self.assertEqual(rollback["assignees"], ["fairchild"])
+
+        client.update_issue.assert_called_once_with(42, {"labels": mock.ANY})
+        client.remove_assignees.assert_called_once_with(42, ["april-clearwater[bot]"])
+        client.comment.assert_called_once()
 
     def test_claim_comment_binds_runtime_identity_branch_and_run(self) -> None:
         issue = {**self.issue(), "title": "Fix a subtle bug"}
