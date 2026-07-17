@@ -5,8 +5,9 @@
 # ///
 """Reconcile Agent Factory issue lifecycle state during the daily monitor.
 
-The janitor derives expected labels from issue, claim, and pull-request state.
-It is dry-run by default; only an explicit ``--apply`` mutates GitHub.
+The janitor derives expected labels from issue, claim, and pull-request state,
+and strips stale lifecycle labels from closed issues. It is dry-run by
+default; only an explicit ``--apply`` mutates GitHub.
 """
 
 from __future__ import annotations
@@ -32,6 +33,11 @@ MUTATION_ATTEMPTS = 3
 MUTATION_BACKOFF_SECONDS = 1.0
 MANAGED_STATES = frozenset({"ready", "claimed", "review"})
 STATE_PRIORITY = ("review", "claimed", "ready")
+# Lifecycle labels describe open work; on a closed issue every one of them —
+# the managed trio plus the additive `mergeable` review signal — is stale.
+# The janitor only removes these from closed issues; applying `ready` remains
+# Owner-only, so the release-gate invariant is untouched.
+CLOSED_LIFECYCLE_LABELS = STATE_PRIORITY + ("mergeable",)
 DIGEST_MARKER = "<!-- " + "-".join(("factory", "digest:v1")) + " -->"
 JANITOR_MARKER_PREFIX = "factory-janitor"
 CLAIM_MARKER_RE = re.compile(
@@ -84,6 +90,27 @@ query FactoryJanitorIssues($owner: String!, $name: String!, $after: String) {
 """
 
 
+CLOSED_ISSUES_QUERY = """
+query FactoryJanitorClosedIssues($owner: String!, $name: String!, $label: String!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(
+      first: 100
+      after: $after
+      states: CLOSED
+      labels: [$label]
+      orderBy: {field: UPDATED_AT, direction: DESC}
+    ) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id number title state
+        labels(first: 50) { nodes { id name } }
+      }
+    }
+  }
+}
+"""
+
+
 PULLS_QUERY = """
 query FactoryJanitorPulls($owner: String!, $name: String!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -129,6 +156,7 @@ class JanitorInputs:
     repo: RepoInfo
     issues: list[dict[str, Any]]
     pulls: list[dict[str, Any]]
+    closed_issues: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -294,10 +322,37 @@ def fetch_live_inputs(repo_slug: str, token: str) -> JanitorInputs:
             break
         cursor = connection["pageInfo"]["endCursor"]
 
+    closed_issues: list[dict[str, Any]] = []
+    seen_closed: set[int] = set()
+    for label_name in CLOSED_LIFECYCLE_LABELS:
+        cursor = None
+        while True:
+            payload = graphql(
+                token,
+                CLOSED_ISSUES_QUERY,
+                {**common_variables, "label": label_name, "after": cursor},
+            )
+            repository = payload.get("data", {}).get("repository")
+            if repository is None:
+                raise FactoryJanitorError(f"repository {repo_slug} was not found")
+            connection = repository["issues"]
+            for node in connection["nodes"]:
+                number = int(node["number"])
+                if number in seen_closed:
+                    continue
+                seen_closed.add(number)
+                closed_issues.append(
+                    {**node, "labels": list(node.get("labels", {}).get("nodes", []))}
+                )
+            if not connection["pageInfo"]["hasNextPage"]:
+                break
+            cursor = connection["pageInfo"]["endCursor"]
+
     return JanitorInputs(
         repo=RepoInfo(owner, name, repository_id, label_ids),
         issues=issues,
         pulls=pulls,
+        closed_issues=closed_issues,
     )
 
 
@@ -351,6 +406,7 @@ def load_fixture_inputs(fixtures_dir: Path) -> tuple[JanitorInputs, datetime]:
         ),
         issues=list(payload["issues"]),
         pulls=list(payload["pulls"]),
+        closed_issues=list(payload.get("closedIssues", [])),
     )
     return inputs, parse_datetime(str(payload["now"]))
 
@@ -555,6 +611,29 @@ def _transition(
     )
 
 
+def closed_lifecycle_transition(issue: dict[str, Any]) -> Transition | None:
+    if str(issue.get("state", "")).upper() != "CLOSED":
+        return None
+    label_ids = {
+        str(label["name"]): str(label["id"])
+        for label in issue.get("labels", []) or []
+        if label.get("name") in CLOSED_LIFECYCLE_LABELS and label.get("id")
+    }
+    if not label_ids:
+        return None
+    return Transition(
+        issue_id=str(issue["id"]),
+        issue_number=int(issue["number"]),
+        title=str(issue.get("title", "")),
+        current_states=tuple(
+            state for state in CLOSED_LIFECYCLE_LABELS if state in label_ids
+        ),
+        desired_state=None,
+        reason="issue is closed",
+        current_label_ids=label_ids,
+    )
+
+
 def _newest_pull(pulls: list[dict[str, Any]]) -> dict[str, Any]:
     return max(
         pulls,
@@ -706,6 +785,11 @@ def build_plan(inputs: JanitorInputs, *, now: datetime) -> ReconciliationPlan:
 
         reason = f"keep highest-priority lifecycle state {desired_state}"
         transition = _transition(issue, desired_state, reason)
+        if transition is not None:
+            transitions.append(transition)
+
+    for issue in sorted(inputs.closed_issues, key=lambda item: int(item["number"])):
+        transition = closed_lifecycle_transition(issue)
         if transition is not None:
             transitions.append(transition)
 

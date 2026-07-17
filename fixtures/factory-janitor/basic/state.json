@@ -469,5 +469,39 @@
       "mergedAt": null,
       "closingIssuesReferences": [{"number": 118}]
     }
+  ],
+  "closedIssues": [
+    {
+      "id": "I_120",
+      "number": 120,
+      "title": "Closed issue retains claimed and mergeable",
+      "state": "CLOSED",
+      "labels": [
+        {"id": "L_agent", "name": "agent"},
+        {"id": "L_task", "name": "task"},
+        {"id": "L_claimed", "name": "claimed"},
+        {"id": "L_mergeable", "name": "mergeable"}
+      ]
+    },
+    {
+      "id": "I_121",
+      "number": 121,
+      "title": "Closed issue retains ready outside the agent lane",
+      "state": "CLOSED",
+      "labels": [
+        {"id": "L_human", "name": "human"},
+        {"id": "L_ready", "name": "ready"}
+      ]
+    },
+    {
+      "id": "I_122",
+      "number": 122,
+      "title": "Closed issue without lifecycle labels",
+      "state": "CLOSED",
+      "labels": [
+        {"id": "L_agent", "name": "agent"},
+        {"id": "L_dogfood", "name": "dogfood"}
+      ]
+    }
   ]
 }

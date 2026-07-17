@@ -255,6 +255,126 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertEqual(rollback["labels"], ["agent", "quality", "ready", "task"])
         self.assertNotIn("assignees", rollback)
 
+        decline = factory_implement.decline_payload(issue)
+        self.assertEqual(decline["labels"], ["agent", "quality", "task"])
+        self.assertNotIn("assignees", decline)
+
+    def test_negative_outcomes_partition_terminal_and_transient(self) -> None:
+        self.assertEqual(
+            factory_implement.TERMINAL_DECLINES | factory_implement.TRANSIENT_DEFERRALS,
+            {"privileged", "wip", "budget"},
+        )
+        self.assertEqual(
+            factory_implement.TERMINAL_DECLINES & factory_implement.TRANSIENT_DEFERRALS,
+            frozenset(),
+        )
+
+    def claim_client(self, issue) -> mock.Mock:
+        client = mock.Mock()
+        client.issue.return_value = issue
+        client.timeline.return_value = [
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "fairchild"},
+            }
+        ]
+        client.claimed_issues.return_value = []
+        client.comments.return_value = []
+        return client
+
+    def run_claim(self, client, actions_client, *, daily_cap: int = 6) -> list[str]:
+        outputs: list[str] = []
+        with mock.patch.object(
+            factory_implement,
+            "write_output",
+            lambda name, value: outputs.append(f"{name}={value}"),
+        ):
+            factory_implement.claim(
+                client,
+                actions_client,
+                42,
+                "https://example.test/runs/7",
+                "april-clearwater[bot]",
+                "fairchild",
+                "fairchild",
+                "true",
+                "true",
+                daily_cap,
+                "7",
+                1,
+            )
+        return outputs
+
+    def test_privileged_decline_is_terminal_and_withdraws_ready(self) -> None:
+        client = self.claim_client(
+            self.issue(
+                body="Change `.github/workflows/ci.yml`",
+                labels=("agent", "task", "ready", "quality"),
+            )
+        )
+        actions_client = mock.Mock()
+        actions_client.workflow_runs_on.return_value = []
+
+        outputs = self.run_claim(client, actions_client)
+
+        client.comment.assert_called_once_with(
+            42, factory_implement.PRIVILEGED_COMMENT
+        )
+        client.update_issue.assert_called_once_with(
+            42, {"labels": ["agent", "quality", "task"]}
+        )
+        client.add_assignees.assert_not_called()
+        self.assertIn("matched=false", outputs)
+        self.assertNotIn("matched=true", outputs)
+
+    def test_transient_deferrals_leave_ready_for_retry(self) -> None:
+        wip_client = self.claim_client(self.issue())
+        wip_client.claimed_issues.return_value = [{"number": 1}, {"number": 2}]
+        idle_actions = mock.Mock()
+        idle_actions.workflow_runs_on.return_value = []
+
+        self.run_claim(wip_client, idle_actions)
+
+        wip_client.comment.assert_called_once_with(42, factory_implement.WIP_COMMENT)
+        wip_client.update_issue.assert_not_called()
+
+        budget_client = self.claim_client(self.issue())
+        busy_actions = mock.Mock()
+        busy_actions.workflow_runs_on.return_value = [
+            {
+                "id": run_id,
+                "event": "workflow_dispatch",
+                "run_attempt": 1,
+                "actor": {"login": "fairchild"},
+            }
+            for run_id in range(100, 107)
+        ]
+
+        self.run_claim(budget_client, busy_actions)
+
+        budget_client.comment.assert_called_once()
+        self.assertIn(
+            "leaving this issue ready", budget_client.comment.call_args.args[1]
+        )
+        budget_client.update_issue.assert_not_called()
+
+    def test_admission_comments_speak_as_the_stage_not_a_persona(self) -> None:
+        budget = factory_implement.budget_skip_comment(7, 6)
+
+        for body in (
+            factory_implement.PRIVILEGED_COMMENT,
+            factory_implement.WIP_COMMENT,
+            budget,
+        ):
+            with self.subTest(body=body):
+                self.assertNotIn("April Clearwater", body)
+                self.assertIn("Factory admission:", body)
+        self.assertTrue(
+            factory_implement.PRIVILEGED_COMMENT.startswith("Factory admission:")
+        )
+        self.assertTrue(factory_implement.WIP_COMMENT.startswith("Factory admission:"))
+
     def test_claim_survives_unsupported_agent_assignment(self) -> None:
         client = mock.Mock()
         client.issue.return_value = self.issue()

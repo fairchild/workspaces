@@ -159,7 +159,7 @@ class FactoryJanitorTests(unittest.TestCase):
     ) -> None:
         issue = copy.deepcopy(self.issue(104))
         del issue["comments"][-1]["createdAt"]
-        inputs = replace(self.inputs, issues=[issue], pulls=[])
+        inputs = replace(self.inputs, issues=[issue], pulls=[], closed_issues=[])
 
         plan = factory_janitor.build_plan(inputs, now=self.now)
 
@@ -244,15 +244,19 @@ class FactoryJanitorTests(unittest.TestCase):
 
     def test_second_plan_after_state_repairs_is_idempotent(self) -> None:
         replay = copy.deepcopy(self.inputs)
-        by_number = {int(issue["number"]): issue for issue in replay.issues}
+        by_number = {
+            int(issue["number"]): issue
+            for issue in replay.issues + replay.closed_issues
+        }
         for transition in self.plan.transitions:
             issue = by_number[transition.issue_number]
+            removed = set(transition.current_label_ids) - {transition.desired_state}
             issue["labels"] = [
-                label
-                for label in issue["labels"]
-                if label["name"] not in factory_janitor.MANAGED_STATES
+                label for label in issue["labels"] if label["name"] not in removed
             ]
-            if transition.desired_state is not None:
+            if transition.desired_state is not None and transition.desired_state not in {
+                label["name"] for label in issue["labels"]
+            }:
                 issue["labels"].append(
                     {
                         "id": replay.repo.label_ids[transition.desired_state],
@@ -260,11 +264,12 @@ class FactoryJanitorTests(unittest.TestCase):
                     }
                 )
             removed_ids = {assignee_id for assignee_id, _ in transition.assignees}
-            issue["assignees"] = [
-                assignee
-                for assignee in issue["assignees"]
-                if assignee["id"] not in removed_ids
-            ]
+            if removed_ids:
+                issue["assignees"] = [
+                    assignee
+                    for assignee in issue["assignees"]
+                    if assignee["id"] not in removed_ids
+                ]
             if transition.comment:
                 issue["comments"].append(
                     {
@@ -281,6 +286,89 @@ class FactoryJanitorTests(unittest.TestCase):
         self.assertEqual(
             [anomaly.issue_number for anomaly in second_plan.anomalies],
             [110, 113, 119],
+        )
+
+    def test_closed_issues_shed_lifecycle_labels_without_comment(self) -> None:
+        stale = self.transitions[120]
+        human_lane = self.transitions[121]
+
+        self.assertEqual(stale.current_states, ("claimed", "mergeable"))
+        self.assertIsNone(stale.desired_state)
+        self.assertEqual(stale.reason, "issue is closed")
+        self.assertIsNone(stale.comment)
+        self.assertEqual(stale.assignees, ())
+        self.assertEqual(human_lane.current_states, ("ready",))
+        self.assertIsNone(human_lane.desired_state)
+
+    def test_closed_issue_without_lifecycle_labels_is_untouched(self) -> None:
+        self.assertNotIn(122, self.handled_numbers())
+
+    def test_closed_cleanup_rejects_open_issue_defensively(self) -> None:
+        open_issue = copy.deepcopy(self.issue(101))
+
+        self.assertIn("claimed", factory_janitor.label_names(open_issue))
+        self.assertIsNone(factory_janitor.closed_lifecycle_transition(open_issue))
+
+    def test_closed_issue_mutations_only_remove_labels(self) -> None:
+        operations = factory_janitor._mutations_for_transition(
+            self.transitions[120], self.inputs.repo.label_ids
+        )
+
+        self.assertEqual([operation.name for operation in operations], ["remove-labels"])
+        self.assertEqual(
+            operations[0].variables["input"]["labelIds"],
+            ["L_claimed", "L_mergeable"],
+        )
+
+    def test_live_fetch_dedupes_closed_issues_across_label_queries(self) -> None:
+        closed_node = {
+            "id": "I_900",
+            "number": 900,
+            "title": "Closed with claimed and mergeable",
+            "state": "CLOSED",
+            "labels": {
+                "nodes": [
+                    {"id": "L_claimed", "name": "claimed"},
+                    {"id": "L_mergeable", "name": "mergeable"},
+                ]
+            },
+        }
+        page = {"pageInfo": {"hasNextPage": False, "endCursor": None}}
+        queried_labels: list[str] = []
+
+        def fake_graphql(_token, query, variables):
+            if "FactoryJanitorIssues" in query:
+                repository = {
+                    "id": "R_1",
+                    "readyLabel": {"id": "L_ready", "name": "ready"},
+                    "claimedLabel": {"id": "L_claimed", "name": "claimed"},
+                    "reviewLabel": {"id": "L_review", "name": "review"},
+                    "issues": {**page, "nodes": []},
+                }
+            elif "FactoryJanitorPulls" in query:
+                repository = {"pullRequests": {**page, "nodes": []}}
+            else:
+                queried_labels.append(variables["label"])
+                nodes = (
+                    [closed_node]
+                    if variables["label"] in {"claimed", "mergeable"}
+                    else []
+                )
+                repository = {"issues": {**page, "nodes": nodes}}
+            return {"data": {"repository": repository}}
+
+        with mock.patch.object(factory_janitor, "graphql", side_effect=fake_graphql):
+            inputs = factory_janitor.fetch_live_inputs("fairchild/workspaces", "token")
+
+        self.assertEqual(
+            queried_labels, list(factory_janitor.CLOSED_LIFECYCLE_LABELS)
+        )
+        self.assertEqual(
+            [issue["number"] for issue in inputs.closed_issues], [900]
+        )
+        self.assertEqual(
+            [label["name"] for label in inputs.closed_issues[0]["labels"]],
+            ["claimed", "mergeable"],
         )
 
     def test_mutations_are_ordered_labels_unassign_then_comment(self) -> None:
@@ -391,9 +479,13 @@ class FactoryJanitorTests(unittest.TestCase):
         self.assertIn("[transition] #102: ready -> review", result.stdout)
         self.assertIn("[transition] #103: review -> ready", result.stdout)
         self.assertIn("[transition] #117: review -> none", result.stdout)
+        self.assertIn(
+            "[transition] #120: claimed+mergeable -> none (issue is closed)",
+            result.stdout,
+        )
         self.assertIn("[anomaly] #110: multiple open PRs", result.stdout)
         self.assertIn(
-            "Dry run: 9 transition(s), 3 anomalies; no writes.", result.stdout
+            "Dry run: 11 transition(s), 3 anomalies; no writes.", result.stdout
         )
         self.assertNotRegex(result.stdout, r"\[transition\].*: none ->")
         self.assertNotIn("[applied]", result.stdout)
