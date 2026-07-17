@@ -19,6 +19,7 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -190,7 +191,9 @@ class RunContributorEvidenceTests(unittest.TestCase):
                             "<!-- contributor:issue=42;status=claimed;"
                             "agent=april-clearwater;branch=codex/april-clearwater-issue-42-fix-it -->"
                         ),
-                        "createdAt": "2026-07-14T12:00:00Z",
+                        # A fixed date goes stale once STALE_CLAIM_HOURS passes
+                        # in real time; the fixture must stay a fresh claim.
+                        "createdAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "author": {"login": "april-clearwater[bot]"},
                         "authorAssociation": "NONE",
                     }
@@ -340,6 +343,34 @@ class RunContributorEvidenceTests(unittest.TestCase):
         self.assertNotIn("--bare", command)
         self.assertEqual(run_checked.call_args.kwargs["cwd"], Path("/tmp/model-workspace"))
         self.assertFalse(trust_file_written)
+
+    def test_cli_mode_pre_approves_every_exposed_tool(self) -> None:
+        with mock.patch.object(
+            run_contributor,
+            "run_checked",
+            return_value=mock.Mock(stdout="ok"),
+        ) as run_checked:
+            run_contributor.run_claude(
+                "system",
+                "task",
+                {"HOME": "/tmp", "PATH": "/usr/bin"},
+                mode="cli",
+                tools=run_contributor.EXECUTION_TOOLS,
+            )
+
+        command = run_checked.call_args.args[0]
+        # --tools only controls which tools are available; --allowedTools is
+        # the permission allowlist. Headless --print runs cannot answer
+        # permission prompts, so every exposed tool must be pre-approved or
+        # Edit/Write calls are silently denied and execution runs produce
+        # zero file changes.
+        self.assertIn("--tools", command)
+        self.assertEqual(command[command.index("--tools") + 1], run_contributor.EXECUTION_TOOLS)
+        self.assertIn("--allowedTools", command)
+        self.assertEqual(
+            command[command.index("--allowedTools") + 1],
+            run_contributor.EXECUTION_TOOLS,
+        )
 
     def test_project_trust_seeding_preserves_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as home:

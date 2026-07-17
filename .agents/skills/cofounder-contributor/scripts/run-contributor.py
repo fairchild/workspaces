@@ -715,7 +715,12 @@ def run_claude(
     effective_timeout = timeout or CLAUDE_TIMEOUT
     if mode == "cli":
         if tools:
-            cmd.extend(["--tools", tools])
+            # --tools only restricts which tools are AVAILABLE; permission to
+            # use them is a separate gate. In --print mode nothing can answer
+            # permission prompts, so without --allowedTools every Edit/Write
+            # call is silently denied and execution runs finish with prose
+            # instead of file changes.
+            cmd.extend(["--tools", tools, "--allowedTools", tools])
         cmd.extend(["--max-budget-usd", budget])
         effective_timeout = timeout or 1200
     cmd.append(task)
@@ -1410,6 +1415,12 @@ def main() -> int:
         if scratch_workspace is not None and not args.dry_run:
             artifact = build_scratch_patch_artifact(scratch_workspace, env)
             log(f"Applying scratch patch with {len(artifact.changed_files)} changed files")
+            if not artifact.changed_files:
+                # Downstream routing fails on execution actions without file
+                # changes; surface what the model actually did so CI logs show
+                # tool denials or prose-only runs instead of swallowing them.
+                print("--- Model output (tail) ---", file=sys.stderr)
+                print(raw_output[-4000:], file=sys.stderr)
             enforce_agent_patch_policy(
                 artifact,
                 env,
