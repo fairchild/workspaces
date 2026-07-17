@@ -159,6 +159,10 @@ For VM and provider-backed workspace architecture, see:
 
 The Lume validation flow uses isolated WorkSpaces-managed VM storage and a standalone validated-base manifest before the app will reuse a macOS base VM.
 
+For the Agent Factory (autonomous pipeline) system overview and trust model, browser-openable directly, see:
+
+- [docs/development/agent-factory-v2-overview.html](./docs/development/agent-factory-v2-overview.html)
+
 For UI smoke/capture script entry points, see:
 
 - [scripts/README.md](./scripts/README.md)
