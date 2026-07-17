@@ -57,7 +57,12 @@ async function buildSessionDataCookie(opts: {
 		JSON.stringify({ ...session, expiresAt: opts.expiresAt }),
 	);
 	if (opts.tamper) {
-		signature = `${signature.slice(0, -1)}${signature.endsWith("A") ? "B" : "A"}`;
+		// Flip the first char, not the last: base64url-no-pad of a 32-byte HMAC
+		// is 43 chars, so the final char carries only 4 significant bits (2 of
+		// which are padding a lenient decoder discards). Flipping it can be a
+		// no-op ~1/16 of the time. The first char always carries full payload
+		// bits, so flipping it reliably corrupts the signature.
+		signature = `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
 	}
 	return base64UrlEncodeString(
 		JSON.stringify({ session, expiresAt: opts.expiresAt, signature }),
