@@ -15,10 +15,29 @@ export { RepoUnavailableError };
 // GitHub's rules, loosely: owner and name from [A-Za-z0-9_.-], no slashes
 // beyond the separator. This is the shape check only; existence + access are
 // confirmed against GitHub by resolveRepo() below.
+//
+// `.` and `..` are excluded even though they match the charset: interpolated
+// into a GitHub API URL (`/repos/<owner>/<name>/...`) a `..` segment
+// normalizes away a path component (e.g. `/repos/acme/../installation` ->
+// `/repos/installation`), and an unescaped repo name can also smuggle extra
+// query params into deep-linked URLs built from `owner/name` (e.g.
+// `repo=acme/repo&title=pwn`). Rejecting `.`/`..` segments closes the
+// traversal vector; the charset restriction already blocks `&`, `?`, and
+// other URL-significant characters.
 const REPO_FULL_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]*\/[A-Za-z0-9_.-]+$/;
 
+function isDotSegment(segment: string): boolean {
+	return segment === "." || segment === "..";
+}
+
 export function isValidRepoFullName(value: string): boolean {
-	return REPO_FULL_NAME.test(value);
+	if (!REPO_FULL_NAME.test(value)) {
+		return false;
+	}
+	const slashIndex = value.indexOf("/");
+	const owner = value.slice(0, slashIndex);
+	const name = value.slice(slashIndex + 1);
+	return !isDotSegment(owner) && !isDotSegment(name);
 }
 
 /**

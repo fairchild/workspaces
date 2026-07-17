@@ -29,6 +29,7 @@ describe("isValidRepoFullName", () => {
 	test("accepts owner/name shapes", () => {
 		expect(isValidRepoFullName("fairchild/workspaces")).toBe(true);
 		expect(isValidRepoFullName("a-b.c_d/e.f-g_h")).toBe(true);
+		expect(isValidRepoFullName("acme/my.tool")).toBe(true);
 	});
 
 	test("rejects everything else", () => {
@@ -41,6 +42,14 @@ describe("isValidRepoFullName", () => {
 			"owner/name with spaces",
 			"-leading/dash",
 			"owner/name\n",
+			// Path traversal: a `..` name segment collapses a path component
+			// when interpolated into a GitHub API URL.
+			"acme/..",
+			// Same idea, single-dot segment.
+			"acme/.",
+			// URL-significant characters outside the allowed charset.
+			"a&b/c",
+			"a/b?c",
 		]) {
 			expect(isValidRepoFullName(bad), bad).toBe(false);
 		}
