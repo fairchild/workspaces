@@ -213,7 +213,13 @@ from triage import (  # noqa: E402, F401
 from execution import (  # noqa: E402, F401
     APP_BOT_GIT_IDENTITIES,
     _changed_surface_files,
+    _complete_diff_evidence_after_approval,
+    _edit_pr_body,
+    _latest_approving_review,
+    _live_ci_evidence_gate_error,
     _mergeability_surface,
+    _pr_body_and_head,
+    _pr_evidence_entries,
     _update_mergeable_label,
     _write_github_outputs,
     app_bot_git_identity,

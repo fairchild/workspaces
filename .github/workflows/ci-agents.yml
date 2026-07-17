@@ -17,6 +17,7 @@ on:
       - "scripts/factory-evidence-verify.py"
       - "scripts/tests/test_factory_evidence_kinds.py"
       - "scripts/tests/test_factory_evidence_verify.py"
+      - "scripts/tests/test_factory_evidence_review.py"
       - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
       - "scripts/tests/test_factory_janitor.py"
@@ -48,6 +49,7 @@ on:
       - "scripts/factory-evidence-verify.py"
       - "scripts/tests/test_factory_evidence_kinds.py"
       - "scripts/tests/test_factory_evidence_verify.py"
+      - "scripts/tests/test_factory_evidence_review.py"
       - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
       - "scripts/tests/test_factory_janitor.py"
@@ -110,6 +112,7 @@ jobs:
         run: |
           uv run --script scripts/tests/test_factory_evidence_kinds.py
           uv run --script scripts/tests/test_factory_evidence_verify.py
+          uv run --script scripts/tests/test_factory_evidence_review.py
           uv run --script scripts/tests/test_factory_comment_responder.py
 
       - name: Run Fable orchestrator tests
