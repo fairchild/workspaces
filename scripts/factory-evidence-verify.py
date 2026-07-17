@@ -1,0 +1,304 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = []
+# ///
+"""Complete named-CI evidence items on factory PRs (#1120).
+
+Trusted-lane verifier: reads the live conclusion of each named check on the
+PR head, flips matching evidence entries complete/pending in the PR body, and
+clears a machine-applied blocked:evidence label only when every entry is
+complete and SHA-current. Fail-closed: unknown shapes are skipped and
+human-applied labels are never removed.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CONTRIBUTOR_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts"
+if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(CONTRIBUTOR_SCRIPTS))
+
+from evidence import (  # noqa: E402
+    _ci_check_name,
+    _evidence_item_kind,
+    _extract_evidence_metadata,
+    latest_completed_check_run,
+    update_evidence_entries,
+)
+from execution import APP_BOT_GIT_IDENTITIES  # noqa: E402
+
+FACTORY_PR_MARKER = "<!-- contributor:issue="
+BLOCKED_EVIDENCE_LABEL = "blocked:evidence"
+GH_TIMEOUT = 60
+VALID_STATUSES = {"complete", "blocked", "pending-ci"}
+
+# Identities whose label application counts as machine-applied. Derived from
+# the contributor identity table so reviewer-only apps never qualify.
+FACTORY_LABEL_ACTORS = frozenset(
+    identity["login"] for identity in APP_BOT_GIT_IDENTITIES.values()
+)
+
+
+def log(message: str) -> None:
+    print(f"[factory-evidence-verify] {message}", file=sys.stderr)
+
+
+def _gh(args: list[str], env: dict[str, str]) -> bool:
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=GH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    if result.returncode != 0 and result.stderr.strip():
+        log(result.stderr.strip())
+    return result.returncode == 0
+
+
+def _gh_json(args: list[str], env: dict[str, str]) -> object | None:
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=GH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def open_prs_for_head(head_sha: str, env: dict[str, str]) -> list[dict[str, object]]:
+    payload = _gh_json(
+        ["api", f"repos/{{owner}}/{{repo}}/commits/{head_sha}/pulls"],
+        env,
+    )
+    if not isinstance(payload, list):
+        return []
+    return [
+        pr
+        for pr in payload
+        if isinstance(pr, dict)
+        and pr.get("state") == "open"
+        and isinstance(pr.get("head"), dict)
+        and pr["head"].get("sha") == head_sha
+    ]
+
+
+def evidence_entries(body: str) -> list[object] | None:
+    metadata = _extract_evidence_metadata(body)
+    if not isinstance(metadata, dict):
+        return None
+    entries = metadata.get("entries")
+    return entries if isinstance(entries, list) else None
+
+
+def ci_entries_needing_verification(
+    entries: list[object],
+    head_sha: str,
+) -> list[tuple[int, str]]:
+    """(index, check name) for `ci` entries pending or stale against head."""
+    needed: list[tuple[int, str]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        item = str(entry.get("item", "")).strip()
+        if _evidence_item_kind(item) != "ci":
+            continue
+        check_name = _ci_check_name(item)
+        if check_name is None:
+            continue
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        status = str(entry.get("status", "")).strip()
+        recorded_sha = str(entry.get("verified_head_sha", "")).strip()
+        if status == "pending-ci" or (status == "complete" and recorded_sha != head_sha):
+            needed.append((index, check_name))
+    return needed
+
+
+def entry_update_for_check_run(
+    check_name: str,
+    head_sha: str,
+    run: dict[str, object] | None,
+) -> dict[str, object]:
+    short = head_sha[:12]
+    base: dict[str, object] = {"kind": "ci", "check_name": check_name}
+    if run is None:
+        return {
+            **base,
+            "status": "pending-ci",
+            "detail": f"no completed run of `{check_name}` found on head {short}; waiting for checks",
+        }
+    url = str(run.get("html_url", "") or "").strip()
+    link = f" — {url}" if url else ""
+    conclusion = str(run.get("conclusion", "") or "").strip()
+    if conclusion == "success":
+        return {
+            **base,
+            "status": "complete",
+            "detail": f"`{check_name}` green on head {short}{link}",
+            "verified_head_sha": head_sha,
+            "proof_url": url,
+        }
+    return {
+        **base,
+        "status": "pending-ci",
+        "detail": f"latest `{check_name}` run on head {short} concluded {conclusion or 'unknown'}{link}",
+    }
+
+
+def should_clear_blocked_label(entries: list[object] | None, head_sha: str) -> bool:
+    """Provably-safe auto-clear: every entry complete, every ci entry bound
+    to the current head. Anything unexpected keeps the label."""
+    if not entries:
+        return False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return False
+        if str(entry.get("status", "")).strip() != "complete":
+            return False
+        item = str(entry.get("item", "")).strip()
+        if (
+            _evidence_item_kind(item) == "ci"
+            and str(entry.get("verified_head_sha", "")).strip() != head_sha
+        ):
+            return False
+    return True
+
+
+def blocked_label_applied_by_factory(pr_number: int, env: dict[str, str]) -> bool:
+    events = _gh_json(
+        [
+            "api",
+            "-X", "GET",
+            f"repos/{{owner}}/{{repo}}/issues/{pr_number}/timeline",
+            "-f", "per_page=100",
+        ],
+        env,
+    )
+    if not isinstance(events, list):
+        return False
+    last_actor = ""
+    for event in events:
+        if not isinstance(event, dict) or event.get("event") != "labeled":
+            continue
+        label = event.get("label")
+        if not isinstance(label, dict) or label.get("name") != BLOCKED_EVIDENCE_LABEL:
+            continue
+        actor = event.get("actor")
+        last_actor = str(actor.get("login", "")) if isinstance(actor, dict) else ""
+    return last_actor in FACTORY_LABEL_ACTORS
+
+
+def _write_pr_body(pr_number: int, body: str, env: dict[str, str]) -> bool:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+        handle.write(body)
+        body_file = handle.name
+    try:
+        return _gh(["pr", "edit", str(pr_number), "--body-file", body_file], env)
+    finally:
+        try:
+            os.unlink(body_file)
+        except OSError:
+            pass
+
+
+def process_pr(pr_number: int, env: dict[str, str]) -> None:
+    pr = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
+    if not isinstance(pr, dict) or pr.get("state") != "open":
+        return
+    body = str(pr.get("body") or "")
+    if FACTORY_PR_MARKER not in body:
+        return
+    head = pr.get("head")
+    head_sha = str(head.get("sha", "")) if isinstance(head, dict) else ""
+    if not head_sha:
+        return
+    entries = evidence_entries(body)
+    if entries is None:
+        return
+
+    needed = ci_entries_needing_verification(entries, head_sha)
+    if needed:
+        updates: dict[int, dict[str, object]] = {}
+        for index, check_name in needed:
+            run = latest_completed_check_run(check_name, head_sha, env)
+            updates[index] = entry_update_for_check_run(check_name, head_sha, run)
+        new_body = update_evidence_entries(body, updates)
+        if new_body != body:
+            current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
+            current_head = current.get("head") if isinstance(current, dict) else None
+            current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
+            if current_sha != head_sha:
+                log(f"PR #{pr_number} advanced during verification; skipping write")
+                return
+            if not _write_pr_body(pr_number, new_body, env):
+                log(f"PR #{pr_number} body update failed")
+                return
+            log(f"PR #{pr_number}: updated {len(updates)} ci evidence entries")
+            body = new_body
+
+    label_names = {
+        str(label.get("name", ""))
+        for label in pr.get("labels", [])
+        if isinstance(label, dict)
+    }
+    if BLOCKED_EVIDENCE_LABEL not in label_names:
+        return
+    if not should_clear_blocked_label(evidence_entries(body), head_sha):
+        return
+    if not blocked_label_applied_by_factory(pr_number, env):
+        log(f"PR #{pr_number}: {BLOCKED_EVIDENCE_LABEL} was not machine-applied; leaving for the owner")
+        return
+    if _gh(["pr", "edit", str(pr_number), "--remove-label", BLOCKED_EVIDENCE_LABEL], env):
+        log(f"PR #{pr_number}: cleared machine-applied {BLOCKED_EVIDENCE_LABEL}")
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--head-sha", help="Verify open factory PRs whose head is this commit.")
+    group.add_argument("--pr", type=int, help="Re-verify one PR by number.")
+    args = parser.parse_args(argv)
+    env = dict(os.environ)
+
+    if args.pr is not None:
+        process_pr(args.pr, env)
+        return 0
+
+    prs = open_prs_for_head(args.head_sha, env)
+    if not prs:
+        log("no open PRs at this head; nothing to verify")
+        return 0
+    for pr in prs:
+        try:
+            process_pr(int(pr["number"]), env)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

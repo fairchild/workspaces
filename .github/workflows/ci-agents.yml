@@ -13,6 +13,9 @@ on:
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
       - "scripts/factory-review.py"
+      - "scripts/factory-evidence-verify.py"
+      - "scripts/tests/test_factory_evidence_kinds.py"
+      - "scripts/tests/test_factory_evidence_verify.py"
       - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
       - "scripts/tests/test_factory_review.py"
@@ -38,6 +41,9 @@ on:
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
       - "scripts/factory-review.py"
+      - "scripts/factory-evidence-verify.py"
+      - "scripts/tests/test_factory_evidence_kinds.py"
+      - "scripts/tests/test_factory_evidence_verify.py"
       - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
       - "scripts/tests/test_factory_review.py"
@@ -92,6 +98,11 @@ jobs:
         run: |
           uv run --script scripts/tests/test_factory_workflows.py
           uv run --script scripts/tests/test_factory_review.py
+
+      - name: Run Factory evidence tests
+        run: |
+          uv run --script scripts/tests/test_factory_evidence_kinds.py
+          uv run --script scripts/tests/test_factory_evidence_verify.py
           uv run --script scripts/tests/test_factory_comment_responder.py
 
       - name: Run Fable orchestrator tests

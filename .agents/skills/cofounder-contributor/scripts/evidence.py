@@ -36,6 +36,23 @@ VISUAL_EVIDENCE_RE = re.compile(
     r"(?:ui|interface|screen|window) captures?|before/after (?:images?|screenshots?))\b",
     re.IGNORECASE,
 )
+# A `ci` item names one check in backticks immediately before "green"
+# (no intervening backticks), alongside a CI keyword — e.g.
+# "CI: `Lint, Test, Build` green on the PR head". Name-after-green phrasing
+# ("job green ... (`someFunction` cases)") deliberately does not classify:
+# extracting a wrong check name is worse than staying `other`.
+CI_EVIDENCE_NAME_RE = re.compile(r"(?i)`(?P<check>[^`]+)`[^`]*\bgreen\b")
+CI_EVIDENCE_KEYWORD_RE = re.compile(r"(?i)\b(?:ci|check|workflow|job)\b")
+DIFF_EVIDENCE_RE = re.compile(
+    r"(?i)^diff:"
+    r"|readable from the (?:pr )?diff"
+    r"|verifiable by reading the (?:pr )?diff"
+    r"|the pr diff (?:shows|proves|demonstrates)"
+)
+# Kinds the self-hosted macOS evidence lane can gather; `ci` and `diff`
+# complete through the verifier workflow and review lane instead (#1120).
+MACOS_EVIDENCE_KINDS = frozenset({"test", "build", "screenshot"})
+EVENT_COMPLETED_KINDS = frozenset({"ci", "diff"})
 SAFE_CANDIDATE_ENV_KEYS = {
     "CI",
     "COLORTERM",
@@ -537,6 +554,7 @@ def render_execution_summary_body(
             "item": entry["item"],
             "status": entry["status"],
             "detail": entry["detail"],
+            "kind": _evidence_item_kind(str(entry["item"])),
         }
         for _, entry in sorted(evidence_map.items())
     ]
@@ -591,6 +609,25 @@ def _normalize_evidence_item(item: str) -> str:
     return item.strip().strip("`").strip()
 
 
+def _ci_check_name(item: str) -> str | None:
+    """The CI check an evidence item requires green on the PR head, or None.
+
+    Fail-closed: CI-ish phrasing without an extractable backticked name
+    stays kind `other` (blocked, owner follow-up) rather than guessing.
+    """
+    text = item.strip()
+    if not CI_EVIDENCE_KEYWORD_RE.search(text):
+        return None
+    match = CI_EVIDENCE_NAME_RE.search(text)
+    if match is None:
+        return None
+    return match.group("check").strip() or None
+
+
+def _is_diff_evidence(item: str) -> bool:
+    return DIFF_EVIDENCE_RE.search(_normalize_evidence_item(item)) is not None
+
+
 def _evidence_item_kind(item: str) -> str:
     normalized = _normalize_evidence_item(item).casefold()
     if normalized.startswith("swift test"):
@@ -599,11 +636,19 @@ def _evidence_item_kind(item: str) -> str:
         return "build"
     if VISUAL_EVIDENCE_RE.search(normalized):
         return "screenshot"
+    if _ci_check_name(item) is not None:
+        return "ci"
+    if _is_diff_evidence(item):
+        return "diff"
     return "other"
 
 
 def _needs_macos_evidence(requested_evidence: list[str]) -> bool:
-    return any(_evidence_item_kind(item) != "other" for item in requested_evidence)
+    return any(_evidence_item_kind(item) in MACOS_EVIDENCE_KINDS for item in requested_evidence)
+
+
+def _has_unautomatable_evidence(requested_evidence: list[str]) -> bool:
+    return any(_evidence_item_kind(item) == "other" for item in requested_evidence)
 
 
 def _needs_screenshot_evidence(requested_evidence: list[str]) -> bool:
@@ -646,6 +691,15 @@ def synthesize_initial_execution_evidence(
                 evidence_blocked.append(
                     f"{index} -- Xcode Cloud capture lane #1088 is not available; orchestrator or owner must provide the documented visual-evidence handshake"
                 )
+        elif kind == "ci":
+            evidence_pending_ci.append(
+                f"{index} -- named CI check `{_ci_check_name(item)}` must be green on the PR head; "
+                "the factory evidence verifier completes this automatically when checks finish"
+            )
+        elif kind == "diff":
+            evidence_pending_ci.append(
+                f"{index} -- verifiable by reading the PR diff; completed by the counterpart review of the current head"
+            )
         else:
             evidence_blocked.append(
                 f"{index} -- automation cannot reconcile this evidence item automatically; owner follow-up required"
@@ -873,6 +927,133 @@ def _pending_ci_resolution(
     return "blocked", "self-hosted macOS CI cannot reconcile this evidence item automatically"
 
 
+def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
+    """Re-render the Evidence Status section and hidden metadata from entries."""
+    rendered_entries: list[dict[str, object]] = []
+    for entry in updated_entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        item = str(entry.get("item", "")).strip()
+        status = str(entry.get("status", "")).strip()
+        detail = str(entry.get("detail", "")).strip()
+        if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
+            continue
+        rendered_entries.append(
+            {
+                "index": index,
+                "item": item,
+                "status": status,
+                "detail": detail,
+            }
+        )
+
+    if rendered_entries:
+        reconciled = insert_markdown_section(
+            _strip_evidence_metadata(body),
+            "Evidence Status",
+            "\n".join(
+                f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
+                for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
+            ),
+            before_heading="Validation",
+        )
+    else:
+        reconciled = body
+    reconciled = _insert_evidence_metadata(
+        reconciled,
+        {
+            "entries": updated_entries,
+        },
+    )
+    if body.endswith("\n"):
+        reconciled += "\n"
+    return reconciled
+
+
+def update_evidence_entries(body: str, updates: dict[int, dict[str, object]]) -> str:
+    """Apply per-index status/detail updates to structured evidence entries.
+
+    Trusted-lane writers (the CI evidence verifier, review-time completion)
+    use this to flip entries without hand-editing markdown. Fail-closed:
+    bodies without valid structured metadata, unknown indexes, and invalid
+    statuses are left unchanged.
+    """
+    metadata = _extract_evidence_metadata(body)
+    if not isinstance(metadata, dict) or not isinstance(metadata.get("entries"), list):
+        return body
+    updated_entries: list[object] = []
+    changed = False
+    for raw_entry in metadata["entries"]:
+        if not isinstance(raw_entry, dict):
+            updated_entries.append(raw_entry)
+            continue
+        entry = dict(raw_entry)
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError):
+            updated_entries.append(entry)
+            continue
+        update = updates.get(index)
+        if update is not None:
+            status = str(update.get("status", entry.get("status", ""))).strip()
+            detail = str(update.get("detail", entry.get("detail", ""))).strip()
+            if status in {"complete", "blocked", "pending-ci"} and detail:
+                entry["status"] = status
+                entry["detail"] = detail
+                for key in ("kind", "check_name", "verified_head_sha", "proof_url"):
+                    if key in update:
+                        entry[key] = update[key]
+                changed = True
+        updated_entries.append(entry)
+    if not changed:
+        return body
+    return _render_structured_entries(body, updated_entries)
+
+
+def latest_completed_check_run(
+    check_name: str,
+    head_sha: str,
+    env: dict[str, str],
+) -> dict[str, object] | None:
+    """Most recently completed run of a named check on a commit, or None.
+
+    Queries live check-run state so callers never trust conclusions recorded
+    in a PR body. Requires GH_REPO or a repo-resolving checkout for `gh api`.
+    """
+    raw = run_optional(
+        [
+            "gh", "api",
+            "-X", "GET",
+            f"repos/{{owner}}/{{repo}}/commits/{head_sha}/check-runs",
+            "-f", f"check_name={check_name}",
+            "-f", "filter=latest",
+        ],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    runs = payload.get("check_runs") if isinstance(payload, dict) else None
+    if not isinstance(runs, list):
+        return None
+    completed = [
+        run
+        for run in runs
+        if isinstance(run, dict) and str(run.get("status", "")) == "completed"
+    ]
+    if not completed:
+        return None
+    return max(completed, key=lambda run: str(run.get("completed_at", "")))
+
+
 def reconcile_pending_ci_evidence(
     body: str,
     *,
@@ -886,19 +1067,26 @@ def reconcile_pending_ci_evidence(
     text_upload_succeeded: bool = False,
     text_urls: list[tuple[str, str]] | None = None,
 ) -> str:
-    """Resolve pending-ci evidence lines after the macOS evidence job finishes."""
+    """Resolve pending-ci evidence lines after the macOS evidence job finishes.
+
+    `ci` and `diff` kind entries are left untouched: they complete through the
+    evidence verifier workflow and the review lane, not the macOS lane.
+    """
     metadata = _extract_evidence_metadata(body)
     if isinstance(metadata, dict) and isinstance(metadata.get("entries"), list):
         updated_entries: list[object] = []
-        rendered_entries: list[dict[str, object]] = []
         for raw_entry in metadata["entries"]:
             if not isinstance(raw_entry, dict):
                 updated_entries.append(raw_entry)
                 continue
             entry = dict(raw_entry)
-            if str(entry.get("status", "")).strip() == "pending-ci":
+            item = str(entry.get("item", "")).strip()
+            if (
+                str(entry.get("status", "")).strip() == "pending-ci"
+                and _evidence_item_kind(item) not in EVENT_COMPLETED_KINDS
+            ):
                 status, detail = _pending_ci_resolution(
-                    str(entry.get("item", "")).strip(),
+                    item,
                     build_succeeded=build_succeeded,
                     tests_succeeded=tests_succeeded,
                     smoke_succeeded=smoke_succeeded,
@@ -912,45 +1100,7 @@ def reconcile_pending_ci_evidence(
                 entry["status"] = status
                 entry["detail"] = detail
             updated_entries.append(entry)
-            try:
-                index = int(entry["index"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            item = str(entry.get("item", "")).strip()
-            status = str(entry.get("status", "")).strip()
-            detail = str(entry.get("detail", "")).strip()
-            if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
-                continue
-            rendered_entries.append(
-                {
-                    "index": index,
-                    "item": item,
-                    "status": status,
-                    "detail": detail,
-                }
-            )
-
-        if rendered_entries:
-            reconciled = insert_markdown_section(
-                _strip_evidence_metadata(body),
-                "Evidence Status",
-                "\n".join(
-                    f"- [{str(entry.get('status', '')).strip()}] {str(entry.get('item', '')).strip()} -- {str(entry.get('detail', '')).strip()}"
-                    for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
-                ),
-                before_heading="Validation",
-            )
-        else:
-            reconciled = body
-        reconciled = _insert_evidence_metadata(
-            reconciled,
-            {
-                "entries": updated_entries,
-            },
-        )
-        if body.endswith("\n"):
-            reconciled += "\n"
-        return reconciled
+        return _render_structured_entries(body, updated_entries)
 
     lines = body.splitlines()
     updated: list[str] = []
@@ -963,7 +1113,11 @@ def reconcile_pending_ci_evidence(
             continue
         if in_evidence_status:
             match = EVIDENCE_STATUS_LINE_RE.match(line)
-            if match and match.group("status") == "pending-ci":
+            if (
+                match
+                and match.group("status") == "pending-ci"
+                and _evidence_item_kind(match.group("item").strip()) not in EVENT_COMPLETED_KINDS
+            ):
                 item = match.group("item").strip()
                 status, detail = _pending_ci_resolution(
                     item,

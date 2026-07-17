@@ -1,0 +1,62 @@
+# Completes named-CI evidence items on factory PRs (#1120).
+# Trusted lane: runs main's scripts only — no untrusted checkout, no model.
+# The script early-exits unless the head belongs to an open factory PR with
+# pending ci evidence entries; label auto-clear is restricted to labels the
+# factory itself applied.
+
+name: Factory Evidence Verify
+
+on:
+  check_suite:
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to re-verify"
+        required: true
+        type: string
+
+permissions:
+  checks: read # read named check conclusions on the PR head
+  contents: read
+  issues: write # PR labels ride the issues API
+  pull-requests: write # evidence body updates + label removal
+
+concurrency:
+  group: factory-evidence-verify-${{ github.event.check_suite.head_sha || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: >-
+      (github.event_name == 'workflow_dispatch' ||
+      (vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_EVIDENCE_VERIFY_ENABLED == 'true')) &&
+      (github.event_name != 'check_suite' ||
+      github.event.check_suite.pull_requests[0] != null)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted scripts
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+
+      - name: Verify named CI evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.check_suite.head_sha }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if [ -n "${PR_NUMBER:-}" ]; then
+            uv run --script scripts/factory-evidence-verify.py --pr "$PR_NUMBER"
+          else
+            uv run --script scripts/factory-evidence-verify.py --head-sha "$HEAD_SHA"
+          fi

@@ -43,6 +43,7 @@ from _helpers import (
 )
 from evidence import (
     _extract_test_commands,
+    _has_unautomatable_evidence,
     _needs_macos_evidence,
     _needs_screenshot_evidence,
     classify_evidence_errors,
@@ -584,9 +585,20 @@ def _factory_evidence_should_block(
     factory_requires_evidence: bool,
     needs_macos_evidence: bool,
     visual_evidence_blocked: bool,
+    has_unautomatable_evidence: bool | None = None,
 ) -> bool:
+    """blocked:evidence at open means no automation can ever complete the
+    contract: `other`-kind items, or a required visual lane that is offline.
+    `ci`/`diff`/macOS kinds ride on Evidence Status pending-ci redness and
+    complete through their own lanes (#1120).
+
+    has_unautomatable_evidence=None preserves the pre-#1120 rule (any
+    contract with no macOS-verifiable items blocks) for older callers.
+    """
+    if has_unautomatable_evidence is None:
+        has_unautomatable_evidence = not needs_macos_evidence
     return visual_evidence_blocked or (
-        factory_requires_evidence and not needs_macos_evidence
+        factory_requires_evidence and has_unautomatable_evidence
     )
 
 
@@ -764,6 +776,7 @@ def route_execution_action(
         factory_requires_evidence=factory_requires_evidence,
         needs_macos_evidence=evidence_needed,
         visual_evidence_blocked=factory_visual_blocked,
+        has_unautomatable_evidence=_has_unautomatable_evidence(requested_evidence),
     )
     if factory_visual_blocked and not factory_requires_evidence:
         ensure_label_exists(
