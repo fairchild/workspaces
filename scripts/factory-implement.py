@@ -49,12 +49,25 @@ PRIVILEGED_PATCH_LABEL = "privileged-agent-patch"
 API_ATTEMPTS = 3
 API_BACKOFF_SECONDS = 1.0
 APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
-PRIVILEGED_COMMENT = APRIL_ATTRIBUTION + (
-    "Factory implementation skipped: this issue indicates privileged-path scope "
-    "and requires the orchestrator lane."
+
+# Negative admission outcomes split on whether a retry can ever succeed.
+# Terminal declines strip `ready` so the release cannot refire a run the
+# factory will always refuse; transient deferrals keep `ready` because the
+# blocking condition (WIP capacity, daily budget) clears on its own and the
+# Owner's release stays valid. Admission only ever removes `ready` — applying
+# it remains Owner-only, matching the janitor's release-gate invariant.
+TERMINAL_DECLINES = frozenset({"privileged"})
+TRANSIENT_DEFERRALS = frozenset({"wip", "budget"})
+
+# Admission comments speak as the pipeline stage, not as a contributor
+# persona: no contributor ran, so persona attribution would misattribute.
+PRIVILEGED_COMMENT = (
+    "Factory admission: declined — this issue indicates privileged-path scope "
+    "and requires the orchestrator lane. Removing `ready`; the factory cannot "
+    "take this issue."
 )
-WIP_COMMENT = APRIL_ATTRIBUTION + (
-    f"Factory implementation is waiting: the {FACTORY_WIP_CAP}-issue factory WIP "
+WIP_COMMENT = (
+    f"Factory admission: deferred — the {FACTORY_WIP_CAP}-issue factory WIP "
     "cap is full; leaving this issue ready."
 )
 BUDGET_COMMENT_MARKER = "<!-- factory-implement-budget-skip -->"
@@ -277,6 +290,10 @@ def rollback_payload(issue: dict[str, Any]) -> dict[str, Any]:
     return {"labels": labels}
 
 
+def decline_payload(issue: dict[str, Any]) -> dict[str, Any]:
+    return {"labels": sorted(label_names(issue) - {"ready"})}
+
+
 def sync_claim_assignee(
     client: GitHubClient,
     issue_number: int,
@@ -319,8 +336,7 @@ def budget_skip_comment(daily_run_count: int, daily_cap: int) -> str:
     return (
         BUDGET_COMMENT_MARKER
         + "\n"
-        + APRIL_ATTRIBUTION
-        + "Factory implementation skipped: "
+        + "Factory admission: deferred — "
         + f"{daily_run_count} implementation runs have started today, above the "
         + f"configured daily cap of {daily_cap}; leaving this issue ready. "
         + "The workflow log records the skip."
@@ -504,19 +520,20 @@ def claim(
     write_output("matched", "false")
     write_output("issue_scope_digest", issue_scope_digest(issue))
     write_output("verified_actor", verified_actor)
-    if decision.action == "privileged":
+    if decision.action in TERMINAL_DECLINES:
         comment_once(client, issue_number, PRIVILEGED_COMMENT)
+        client.update_issue(issue_number, decline_payload(issue))
         return
-    if decision.action == "wip":
-        comment_once(client, issue_number, WIP_COMMENT)
-        return
-    if decision.action == "budget":
-        comment_once(
-            client,
-            issue_number,
-            budget_skip_comment(daily_run_count, daily_cap),
-            dedupe_key=BUDGET_COMMENT_MARKER,
-        )
+    if decision.action in TRANSIENT_DEFERRALS:
+        if decision.action == "wip":
+            comment_once(client, issue_number, WIP_COMMENT)
+        else:
+            comment_once(
+                client,
+                issue_number,
+                budget_skip_comment(daily_run_count, daily_cap),
+                dedupe_key=BUDGET_COMMENT_MARKER,
+            )
         return
     if decision.action == "skip":
         return

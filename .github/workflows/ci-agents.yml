@@ -12,11 +12,14 @@ on:
       - "scripts/tests/test_validate_agent_output.py"
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
+      - "scripts/factory-janitor.py"
       - "scripts/factory-review.py"
       - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
+      - "scripts/tests/test_factory_janitor.py"
       - "scripts/tests/test_factory_review.py"
       - "scripts/tests/test_factory_comment_responder.py"
+      - "fixtures/factory-janitor/**"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
@@ -37,11 +40,14 @@ on:
       - "scripts/tests/test_validate_agent_output.py"
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
+      - "scripts/factory-janitor.py"
       - "scripts/factory-review.py"
       - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
+      - "scripts/tests/test_factory_janitor.py"
       - "scripts/tests/test_factory_review.py"
       - "scripts/tests/test_factory_comment_responder.py"
+      - "fixtures/factory-janitor/**"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
@@ -91,6 +97,7 @@ jobs:
       - name: Run Factory workflow policy tests
         run: |
           uv run --script scripts/tests/test_factory_workflows.py
+          uv run --script scripts/tests/test_factory_janitor.py
           uv run --script scripts/tests/test_factory_review.py
           uv run --script scripts/tests/test_factory_comment_responder.py
 
