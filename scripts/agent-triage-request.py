@@ -26,18 +26,18 @@ SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / ".agents" / "scripts"
 if str(SHARED_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
 
+from mention_detection import (  # noqa: E402
+    MENTION_PATTERNS,
+    SUPPORTED_AGENTS,
+    find_agent_mentions,
+)
 from prompt_context import normalize_trust_level  # noqa: E402
 
 APPROVAL_LABEL = "safe-to-run-agent"
 PRIVILEGED_PATCH_LABEL = "privileged-agent-patch"
 TRIAGE_COMMENT_AUTHOR = "github-actions[bot]"
 TRIAGE_MARKER_RE = re.compile(r"<!-- agent-triage-request:v1:([A-Za-z0-9_\-=]+) -->")
-SUPPORTED_AGENTS = ("april-clearwater", "plat", "peter", "claude")
 ISSUE_BODY_AGENTS = ("claude",)
-MENTION_PATTERNS = {
-    agent: re.compile(rf"(?<![A-Za-z0-9_-])@{re.escape(agent)}(?![A-Za-z0-9_-])", re.IGNORECASE)
-    for agent in SUPPORTED_AGENTS
-}
 UNSAFE_SUMMARY_PATTERNS = (
     re.compile(r"\bignore (all|every|previous|prior)\b", re.IGNORECASE),
     re.compile(r"\bsystem override\b", re.IGNORECASE),
@@ -155,7 +155,7 @@ def find_requested_agents(context: EventContext) -> list[str]:
         candidates = ISSUE_BODY_AGENTS
     else:
         candidates = SUPPORTED_AGENTS
-    return [agent for agent in candidates if MENTION_PATTERNS[agent].search(context.source_text or "")]
+    return find_agent_mentions(context.source_text or "", candidates)
 
 
 def build_request_payload(context: EventContext, repo_owner: str, requested_agent: str) -> dict[str, Any]:
