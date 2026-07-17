@@ -38,6 +38,7 @@ def load_module(name: str, path: Path):
 
 
 run_contributor = load_module("run_contributor", SCRIPT_PATH)
+pr_readiness = load_module("pr_readiness", REPO_ROOT / "scripts" / "pr-readiness.py")
 
 
 class RunContributorEvidenceTests(unittest.TestCase):
@@ -938,6 +939,140 @@ class ClaudeCodePinTests(unittest.TestCase):
         self.assertTrue(package.startswith("@anthropic-ai/claude-code@"))
         version = package.rsplit("@", 1)[1]
         self.assertRegex(version, r"^\d+\.\d+\.\d+")
+
+
+class MergeabilitySeedTests(unittest.TestCase):
+    """Factory-composed PR bodies must clear the pr-readiness Mergeability
+    gate at open time (#1119): seeded from changed files and the agent's own
+    Summary/Validation/Risks, honest placeholders where nothing is known."""
+
+    maxDiff = None
+
+    SUMMARY_BODY = (
+        "## Summary\n"
+        "- Reject dot-only segments in repo names before URL interpolation\n"
+        "- All call sites consume the boolean return unchanged\n\n"
+        "## Validation\n"
+        "- vitest exercises the new validator rows\n\n"
+        "## Risks\n"
+        "- Client-side pattern hint intentionally unchanged\n"
+    )
+    CHANGED_FILES = [
+        "web-next/src/lib/db/start-session.ts",
+        "web-next/src/lib/db/start-session.test.ts",
+    ]
+
+    def readiness_result(self, body: str, files: list[str]):
+        pr = {
+            "title": "feat: example",
+            "body": body,
+            "draft": False,
+            "labels": [],
+        }
+        return pr_readiness.evaluate(pr, files)
+
+    def test_seeded_pr_body_passes_readiness_mergeability_checks(self) -> None:
+        seeded = run_contributor.seed_mergeability_section(
+            self.SUMMARY_BODY, changed_files=self.CHANGED_FILES
+        )
+        body = run_contributor.compose_pr_body(
+            1032, "April Clearwater, Application Lead", seeded
+        )
+        result = self.readiness_result(body, self.CHANGED_FILES)
+
+        self.assertEqual(
+            [failure for failure in result.failures if "Mergeability" in failure],
+            [],
+        )
+
+    def test_seed_prefills_surface_and_agent_sections(self) -> None:
+        seeded = run_contributor.seed_mergeability_section(
+            self.SUMMARY_BODY, changed_files=self.CHANGED_FILES
+        )
+        section = pr_readiness.extract_section(seeded, "Mergeability")
+
+        surface = pr_readiness.field_value(section, "Surface")
+        self.assertIn("web", surface)
+        self.assertIn("start-session.ts", surface)
+        self.assertIn(
+            "Reject dot-only segments",
+            pr_readiness.field_value(section, "User-facing behavior changed"),
+        )
+        self.assertIn(
+            "vitest exercises",
+            pr_readiness.field_value(section, "Non-happy paths considered"),
+        )
+        self.assertIn(
+            "pattern hint intentionally unchanged",
+            pr_readiness.field_value(section, "Residual risk or follow-up"),
+        )
+
+    def test_seed_uses_non_blank_placeholders_when_agent_says_nothing(self) -> None:
+        seeded = run_contributor.seed_mergeability_section("", changed_files=[])
+        section = pr_readiness.extract_section(seeded, "Mergeability")
+
+        for field in (
+            "Surface",
+            "User-facing behavior changed",
+            "Non-happy paths considered",
+            "Residual risk or follow-up",
+        ):
+            with self.subTest(field=field):
+                value = pr_readiness.field_value(section, field)
+                default = pr_readiness.DEFAULT_SURFACE if field == "Surface" else None
+                self.assertFalse(pr_readiness.is_blank_value(value, default=default))
+
+    def test_seed_keeps_agent_authored_mergeability_section(self) -> None:
+        authored = (
+            "## Summary\n- change\n\n"
+            "## Mergeability\n"
+            "- Surface: desktop — SidebarView hover affordance\n"
+            "- User-facing behavior changed: hover-visible actions\n"
+            "- Non-happy paths considered: empty repo list\n"
+            "- Residual risk or follow-up: none\n"
+        )
+
+        self.assertEqual(
+            run_contributor.seed_mergeability_section(
+                authored, changed_files=["Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift"]
+            ),
+            authored,
+        )
+
+    def test_seed_classifies_surfaces_by_path_prefix(self) -> None:
+        surface = run_contributor._mergeability_surface(
+            [
+                "Sources/WorkspaceManager/App/AppActivationPolicy.swift",
+                "web/src/lib/agent-runtime/pr-review.ts",
+                "infra/cloudflare-evidence-store/worker.ts",
+                "docs/development/evidence.md",
+            ]
+        )
+
+        for label in ("desktop", "agent-runtime", "infra", "docs"):
+            self.assertIn(label, surface)
+        self.assertIn("(+1 more)", surface)
+
+    def test_seed_does_not_disturb_evidence_status_rendering(self) -> None:
+        rendered, errors = run_contributor.build_execution_summary_body(
+            {
+                "body": self.SUMMARY_BODY,
+            },
+            requested_evidence=["swift test --filter WorkspaceServiceTests"],
+        )
+        self.assertEqual(errors, [])
+
+        seeded = run_contributor.seed_mergeability_section(
+            rendered, changed_files=self.CHANGED_FILES
+        )
+        _, evidence_errors = run_contributor.validate_evidence_accounting(
+            seeded, ["swift test --filter WorkspaceServiceTests"]
+        )
+
+        self.assertEqual(evidence_errors, [])
+        self.assertLess(
+            seeded.index("## Evidence Status"), seeded.index("## Mergeability")
+        )
 
 
 if __name__ == "__main__":

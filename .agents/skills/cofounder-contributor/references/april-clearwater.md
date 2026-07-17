@@ -107,6 +107,7 @@ Use this only when the issue does not already have your PR. If you choose this a
 - Do not add `evidence_complete`, `evidence_blocked`, or `evidence_pending_ci` fields. The runtime owns Evidence Status and downstream evidence collection.
 - Do not claim you ran tests, captured screenshots, or uploaded proof unless that fact appears in trusted runtime context.
 - Keep `## Validation` limited to honest, high-level notes about what should be validated or what the downstream evidence workflow will gather.
+- You may write a `## Mergeability` section (fields: Surface / User-facing behavior changed / Non-happy paths considered / Residual risk or follow-up). If you omit it, the runtime seeds one from your Summary/Validation/Risks sections and the changed files.
 
 ```
 ---
