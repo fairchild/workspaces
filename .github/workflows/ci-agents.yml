@@ -13,8 +13,10 @@ on:
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
       - "scripts/factory-review.py"
+      - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
       - "scripts/tests/test_factory_review.py"
+      - "scripts/tests/test_factory_comment_responder.py"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
@@ -36,8 +38,10 @@ on:
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
       - "scripts/factory-review.py"
+      - "scripts/factory-responder-payload.py"
       - "scripts/tests/test_factory_workflows.py"
       - "scripts/tests/test_factory_review.py"
+      - "scripts/tests/test_factory_comment_responder.py"
       - "scripts/fable-orchestrator.py"
       - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
@@ -88,6 +92,7 @@ jobs:
         run: |
           uv run --script scripts/tests/test_factory_workflows.py
           uv run --script scripts/tests/test_factory_review.py
+          uv run --script scripts/tests/test_factory_comment_responder.py
 
       - name: Run Fable orchestrator tests
         run: uv run --script scripts/tests/test_fable_orchestrator.py

@@ -7,6 +7,8 @@
 
 GitHub content, model output, and the final post body cross steps through files.
 The model never receives a GitHub token, target selector, or write capability.
+Owner comments carrying an agent dispatch slug are left to mention triage
+(scripts/agent-triage-request.py) so one owner mention gets one bot response.
 """
 
 from __future__ import annotations
@@ -22,6 +24,12 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / ".agents" / "scripts"
+if str(SHARED_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
+
+from mention_detection import find_agent_mentions  # noqa: E402
 
 
 RESPONSE_MARKER = "<!-- factory-responder -->"
@@ -405,6 +413,17 @@ def prepare(output_path: Path, prompt_file: Path) -> int:
         append_output(output_path, "matched", False)
         append_output(output_path, "already_replied", False)
         print("owner comment has its own trailing responder marker; no response")
+        return 0
+
+    dispatch_mentions = find_agent_mentions(context.body)
+    if dispatch_mentions:
+        append_output(output_path, "matched", False)
+        append_output(output_path, "already_replied", False)
+        slugs = ", ".join(f"@{slug}" for slug in dispatch_mentions)
+        print(
+            f"owner comment carries an agent dispatch mention ({slugs}); "
+            "standing down in favor of mention triage"
+        )
         return 0
 
     repo = require_env("GITHUB_REPOSITORY")

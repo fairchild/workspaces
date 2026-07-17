@@ -217,6 +217,88 @@ class FactoryCommentResponderTests(unittest.TestCase):
         self.assertGreaterEqual(prompt.count("[truncated to 16384 UTF-8 bytes]"), 3)
         self.assertNotIn(payload.response_marker(4242), prompt)
 
+    def run_prepare_with_body(self, body: str):
+        event = {
+            "comment": {
+                "id": 4242,
+                "user": {"login": "fairchild", "type": "User"},
+                "body": body,
+            },
+            "issue": {"number": 1089},
+        }
+        target = {
+            "title": "Responder",
+            "body": "Target body",
+            "html_url": "https://github.com/fairchild/workspaces/issues/1089",
+            "labels": [{"name": "agent"}],
+            "comments": 0,
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            event_path = root / "event.json"
+            output_path = root / "output.txt"
+            prompt_path = root / "prompt.txt"
+            event_path.write_text(json.dumps(event), encoding="utf-8")
+            env = {
+                "GITHUB_EVENT_NAME": "issue_comment",
+                "GITHUB_EVENT_PATH": str(event_path),
+                "GITHUB_REPOSITORY": "fairchild/workspaces",
+                "GITHUB_REPOSITORY_OWNER": "fairchild",
+                "GITHUB_API_URL": "https://api.github.com",
+                "GH_TOKEN": "not-a-real-token",
+            }
+            with (
+                mock.patch.dict(os.environ, env, clear=True),
+                mock.patch.object(
+                    payload, "github_get", side_effect=[target, []]
+                ) as github_get,
+            ):
+                result = payload.prepare(output_path, prompt_path)
+            outputs = dict(
+                line.split("=", 1)
+                for line in output_path.read_text(encoding="utf-8").splitlines()
+            )
+            prompt_exists = prompt_path.exists()
+        return result, outputs, prompt_exists, github_get
+
+    def test_responder_defers_to_mention_triage_without_touching_the_target(
+        self,
+    ) -> None:
+        result, outputs, prompt_exists, github_get = self.run_prepare_with_body(
+            "@april-clearwater please rerun the desktop smoke"
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(outputs["matched"], "false")
+        self.assertEqual(outputs["already_replied"], "false")
+        self.assertFalse(prompt_exists)
+        github_get.assert_not_called()
+
+    def test_responder_deference_truth_table_uses_code_stripped_detection(
+        self,
+    ) -> None:
+        cases = [
+            ("dispatch mention stands down", "@april-clearwater please rerun the smoke", False),
+            ("plain owner comment replies", "Please also update the state label.", True),
+            ("backticked slug does not suppress", "Evidence quoted `@april-clearwater` in the log.", True),
+            (
+                "fenced slug does not suppress",
+                "The run log said:\n```\n@april-clearwater fired here\n```\nThoughts?",
+                True,
+            ),
+            (
+                "bare mention next to a backticked one stands down",
+                "@claude please review the run that quoted `@april-clearwater`",
+                False,
+            ),
+        ]
+        for name, body, expect_reply in cases:
+            with self.subTest(name):
+                result, outputs, prompt_exists, _ = self.run_prepare_with_body(body)
+                self.assertEqual(result, 0)
+                self.assertEqual(outputs["matched"], str(expect_reply).lower())
+                self.assertEqual(prompt_exists, expect_reply)
+
     def test_prepare_hardwires_comment_and_target_ids_and_detects_duplicate(
         self,
     ) -> None:

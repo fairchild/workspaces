@@ -38,6 +38,9 @@ def load_fixture(name: str) -> dict:
     return json.loads((FIXTURES_DIR / name).read_text(encoding="utf-8"))
 
 
+mention_detection = load_module(
+    "mention_detection", REPO_ROOT / ".agents" / "scripts" / "mention_detection.py"
+)
 triage = load_module("agent_triage_request", REPO_ROOT / "scripts" / "agent-triage-request.py")
 
 
@@ -205,6 +208,83 @@ class AgentTriageTests(unittest.TestCase):
             }
         )
         self.assertEqual(triage.find_requested_agents(short_context), [])
+
+    def test_mention_detection_strips_code_spans_and_fences_before_matching(self) -> None:
+        cases = [
+            ("bare mention fires", "@april-clearwater please review", ["april-clearwater"]),
+            ("backticked slug is quoting", "the run quoted `@april-clearwater` here", []),
+            ("double-backtick span with inner backtick", "``quoting `@april-clearwater` inside``", []),
+            ("fenced block", "```\n@april-clearwater\n```\ndone", []),
+            ("fenced block with info string", "```text\n@april-clearwater\n```", []),
+            ("tilde fence", "~~~\n@april-clearwater\n~~~", []),
+            ("unterminated fence swallows the rest", "evidence:\n```\n@april-clearwater ran", []),
+            (
+                "shorter fence markers stay inside a longer fence",
+                "````\n```\n@april-clearwater\n```\n````\n@claude go",
+                ["claude"],
+            ),
+            (
+                "closing fence must be at least opening length",
+                "````\n@april-clearwater\n```\nstill code\n````\nafter",
+                [],
+            ),
+            (
+                "fence line with trailing text does not close",
+                "```\n@april-clearwater\n``` not-a-close\nstill code",
+                [],
+            ),
+            (
+                "inline triple-backtick one-liner is a span, not a fence",
+                "```@april-clearwater``` quoted, and more prose after",
+                [],
+            ),
+            (
+                "mixed bare and backticked fires on the bare one",
+                "@claude please check the run that quoted `@april-clearwater`",
+                ["claude"],
+            ),
+            ("bare mention before a fence still fires", "@peter look:\n```\n@claude\n```", ["peter"]),
+            (
+                "lone backtick does not hide later paragraphs",
+                "odd ` backtick\n\n@claude please review",
+                ["claude"],
+            ),
+            ("unmatched backtick in the same paragraph keeps the mention", "` @claude please review", ["claude"]),
+            (
+                "CRLF bodies from the GitHub API still strip fences",
+                "quote:\r\n```\r\n@april-clearwater\r\n```\r\ndone",
+                [],
+            ),
+            ("empty text matches nothing", "", []),
+        ]
+        for name, text, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(mention_detection.find_agent_mentions(text), expected)
+
+    def test_find_requested_agents_ignores_slug_quoted_in_code(self) -> None:
+        context = triage.EventContext(
+            event_name="issue_comment",
+            action="created",
+            target_type="issue",
+            target_number=1110,
+            source_type="issue_comment",
+            source_id="issue_comment:1",
+            source_url="https://github.com/fairchild/workspaces/issues/1110#issuecomment-1",
+            author_login="fairchild",
+            author_association="OWNER",
+            source_text="Evidence: the triage run matched `@april-clearwater` in this comment.",
+            requested_at="2026-07-17T16:00:00Z",
+        )
+
+        self.assertEqual(triage.find_requested_agents(context), [])
+
+        bare_context = triage.EventContext(
+            **{
+                **context.__dict__,
+                "source_text": "@april-clearwater please rerun the smoke",
+            }
+        )
+        self.assertEqual(triage.find_requested_agents(bare_context), ["april-clearwater"])
 
     def test_april_clearwater_mention_requires_exact_slug_boundary(self) -> None:
         context = triage.EventContext(
