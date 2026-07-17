@@ -42,14 +42,19 @@ from _helpers import (
     short_persona_name,
 )
 from evidence import (
+    _ci_check_name,
+    _evidence_item_kind,
+    _extract_evidence_metadata,
     _extract_test_commands,
     _has_unautomatable_evidence,
     _needs_macos_evidence,
     _needs_screenshot_evidence,
     classify_evidence_errors,
+    latest_completed_check_run,
     render_execution_summary_body,
     review_evidence_gate_error,
     synthesize_initial_execution_evidence,
+    update_evidence_entries,
     validate_evidence_accounting,
     validate_requested_test_commands,
 )
@@ -529,6 +534,153 @@ def _update_mergeable_label(pr_number: int, verdict: str, env: dict[str, str]) -
         cwd=REPO_ROOT,
         env=env,
     )
+
+
+def _pr_body_and_head(pr_number: int, env: dict[str, str]) -> tuple[str, str]:
+    pr = json.loads(
+        run_checked(
+            ["gh", "pr", "view", str(pr_number), "--json", "body,headRefOid"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        ).stdout
+    )
+    return str(pr.get("body") or ""), str(pr.get("headRefOid") or "")
+
+
+def _pr_evidence_entries(body: str) -> list[dict[str, object]]:
+    metadata = _extract_evidence_metadata(body)
+    entries = metadata.get("entries") if isinstance(metadata, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _live_ci_evidence_gate_error(pr_number: int, env: dict[str, str]) -> str | None:
+    """The PR body is untrusted at review time: before an approve counts,
+    every named-check evidence entry is re-verified against the live
+    check-run state on the current head, never the recorded conclusion."""
+    body, head_sha = _pr_body_and_head(pr_number, env)
+    expected = env.get("FACTORY_EXPECTED_PR_HEAD_SHA", "").strip()
+    if expected and not hmac.compare_digest(head_sha, expected):
+        return "PR head changed during Factory review"
+    if not head_sha:
+        return "PR head could not be resolved for live CI verification"
+    for entry in _pr_evidence_entries(body):
+        item = str(entry.get("item", "")).strip()
+        if _evidence_item_kind(item) != "ci":
+            continue
+        check_name = _ci_check_name(item)
+        if check_name is None:
+            return f"ci evidence entry has no extractable check name: {item!r}"
+        run = latest_completed_check_run(check_name, head_sha, env)
+        conclusion = str(run.get("conclusion", "") or "").strip() if isinstance(run, dict) else ""
+        if conclusion != "success":
+            return (
+                f"named check `{check_name}` is not green on head {head_sha[:12]} "
+                f"(live conclusion: {conclusion or 'none'})"
+            )
+    return None
+
+
+def _latest_approving_review(
+    pr_number: int,
+    head_sha: str,
+    env: dict[str, str],
+) -> dict[str, object] | None:
+    """Most recent APPROVED review bound to exactly this head, or None."""
+    owner, name = repo_owner_name(env)
+    raw = run_optional(
+        ["gh", "api", f"repos/{owner}/{name}/pulls/{pr_number}/reviews"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    try:
+        reviews = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(reviews, list):
+        return None
+    approved = [
+        review
+        for review in reviews
+        if isinstance(review, dict)
+        and review.get("state") == "APPROVED"
+        and str(review.get("commit_id", "")) == head_sha
+    ]
+    if not approved:
+        return None
+    return max(approved, key=lambda review: str(review.get("submitted_at", "")))
+
+
+def _edit_pr_body(pr_number: int, body: str, env: dict[str, str]) -> None:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+        handle.write(body)
+        body_file = handle.name
+    try:
+        run_checked(
+            ["gh", "pr", "edit", str(pr_number), "--body-file", body_file],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+    finally:
+        try:
+            os.unlink(body_file)
+        except OSError:
+            pass
+
+
+def _complete_diff_evidence_after_approval(pr_number: int, env: dict[str, str]) -> None:
+    """The approving review is the verification act for diff-kind evidence:
+    bind the completion to the review URL and the exact reviewed head.
+
+    Best-effort by design — if anything here fails, the entries stay
+    pending-ci and the readiness gate stays red (fail-closed)."""
+    body, head_sha = _pr_body_and_head(pr_number, env)
+    if not head_sha:
+        return
+    pending_diff = [
+        entry
+        for entry in _pr_evidence_entries(body)
+        if _evidence_item_kind(str(entry.get("item", "")).strip()) == "diff"
+        and str(entry.get("status", "")).strip() == "pending-ci"
+    ]
+    if not pending_diff:
+        return
+    review = _latest_approving_review(pr_number, head_sha, env)
+    if review is None:
+        log(
+            f"PR #{pr_number}: no approving review bound to head {head_sha[:12]}; "
+            "leaving diff evidence pending"
+        )
+        return
+    review_url = str(review.get("html_url", "") or "").strip()
+    link = f" — {review_url}" if review_url else ""
+    updates: dict[int, dict[str, object]] = {}
+    for entry in pending_diff:
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        updates[index] = {
+            "status": "complete",
+            "detail": f"diff-verified by the counterpart approving review on head {head_sha[:12]}{link}",
+            "kind": "diff",
+            "verified_head_sha": head_sha,
+            "proof_url": review_url,
+        }
+    if not updates:
+        return
+    new_body = update_evidence_entries(body, updates)
+    if new_body == body:
+        return
+    if not _factory_expected_pr_head_is_current(pr_number, env):
+        return
+    _edit_pr_body(pr_number, new_body, env)
+    log(f"PR #{pr_number}: completed {len(updates)} diff evidence entries from the approving review")
 
 
 def _factory_expected_pr_head_is_current(pr_number: int, env: dict[str, str]) -> bool:
@@ -1057,6 +1209,15 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     categories = [c["category"] for c in classify_evidence_errors(review_state["evidence_errors"])]
                     log(json.dumps({"error_class": "evidence_gate", "categories": categories, "pr": pr_number, "verdict": verdict}))
                     return 1
+            if verdict in ("approve", "approve_with_followups"):
+                live_gate_error = _mod._live_ci_evidence_gate_error(pr_number, env)
+                if live_gate_error is not None:
+                    print(
+                        f"error: PR #{pr_number} cannot be approved: {live_gate_error}",
+                        file=sys.stderr,
+                    )
+                    log(json.dumps({"error_class": "evidence_gate", "categories": ["ci_live_verification"], "pr": pr_number, "verdict": verdict}))
+                    return 1
             review_flag = {
                 "approve": "--approve",
                 "approve_with_followups": "--approve",
@@ -1110,6 +1271,8 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     _dismiss_own_blocking_reviews(pr_number, bot, env)
             if not _factory_expected_pr_head_is_current(pr_number, env):
                 return 1
+            if review_flag == "--approve":
+                _mod._complete_diff_evidence_after_approval(pr_number, env)
             _mod._update_mergeable_label(int(data["pr_number"]), verdict, env)
             return 0
         if action == "execute_issue":

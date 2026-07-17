@@ -293,6 +293,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("types: [completed]", workflow)
         self.assertIn("vars.AGENT_AUTOMATIONS_ENABLED == 'true'", workflow)
         self.assertIn("vars.FACTORY_EVIDENCE_VERIFY_ENABLED == 'true'", workflow)
+        # M3 hardening norm: manual dispatch respects kill switches on every
+        # factory entry — no event path may bypass the vars gates.
+        self.assertNotIn("github.event_name == 'workflow_dispatch' ||", workflow)
         self.assertIn("github.event.check_suite.pull_requests[0] != null", workflow)
         self.assertIn("runs-on: ubuntu-latest", workflow)
         self.assertIn("ref: main", workflow)

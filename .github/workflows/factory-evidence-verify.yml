@@ -28,10 +28,11 @@ concurrency:
 
 jobs:
   verify:
+    # Kill switches gate every entry path, manual dispatch included
+    # (M3 hardening norm: no factory lane runs while switched off).
     if: >-
-      (github.event_name == 'workflow_dispatch' ||
-      (vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
-      vars.FACTORY_EVIDENCE_VERIFY_ENABLED == 'true')) &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_EVIDENCE_VERIFY_ENABLED == 'true' &&
       (github.event_name != 'check_suite' ||
       github.event.check_suite.pull_requests[0] != null)
     runs-on: ubuntu-latest

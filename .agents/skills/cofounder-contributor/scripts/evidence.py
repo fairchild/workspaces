@@ -595,7 +595,14 @@ def review_evidence_gate_error(verdict: str, accounting: dict[str, object], erro
             "requested evidence is still blocked and review must stay in request_changes; "
             f"blocked: {preview}"
         )
-    pending_ci_items = accounting.get("pending_ci_items", [])
+    # Pending `diff` items do not block approve: the approving review IS the
+    # verification act, and the review lane writes the completion (bound to
+    # the review URL and head SHA) immediately after the approval lands.
+    pending_ci_items = [
+        item
+        for item in accounting.get("pending_ci_items", [])
+        if _evidence_item_kind(str(item)) != "diff"
+    ]
     if pending_ci_items:
         preview = "; ".join(str(item) for item in pending_ci_items[:3])
         return (
