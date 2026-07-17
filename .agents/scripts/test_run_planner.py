@@ -614,7 +614,7 @@ class RunPlannerTests(unittest.TestCase):
         self.assertEqual(payload[1]["trust_level"], "owner")
         self.assertEqual(payload[2]["trust_level"], "public")
 
-    def test_run_planner_claude_invocation_uses_static_system_prompt_without_tools(self) -> None:
+    def test_run_planner_claude_invocation_uses_static_system_prompt_and_read_only_tools(self) -> None:
         fixture = load_fixture("planner-prompt-injection.json")
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
         with (
@@ -624,11 +624,35 @@ class RunPlannerTests(unittest.TestCase):
             run_planner.run_claude(fixture["discussion"], CATALOG, {}, mode="cli")
         cmd = run_checked.call_args.kwargs["cmd"] if "cmd" in run_checked.call_args.kwargs else run_checked.call_args.args[0]
         self.assertNotIn("--append-system-prompt", cmd)
-        self.assertNotIn("--tools", cmd)
         self.assertNotIn("--permission-mode", cmd)
+        # Read-only spec drafting: exposure (--tools) and permission
+        # (--allowedTools) are separate gates and must carry the same list.
+        self.assertEqual(cmd[cmd.index("--tools") + 1], run_planner.PLANNER_TOOLS)
+        self.assertEqual(cmd[cmd.index("--allowedTools") + 1], run_planner.PLANNER_TOOLS)
+        self.assertNotIn("Edit", run_planner.PLANNER_TOOLS)
+        self.assertNotIn("Write", run_planner.PLANNER_TOOLS)
+        self.assertNotIn("Bash", run_planner.PLANNER_TOOLS)
         self.assertIn("Trust policy:", cmd[-1])
         self.assertIn("PROMPT INJECTION", cmd[-1])
         self.assertNotIn("PROMPT INJECTION", cmd[cmd.index("--system-prompt") + 1])
+
+    def test_run_planner_claude_cli_package_is_version_pinned(self) -> None:
+        # The planner fetches the CLI with GH_TOKEN in the environment, so it
+        # must never resolve `@latest`. Same guard as the contributor lane.
+        fixture = load_fixture("planner-prompt-injection.json")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        with (
+            mock.patch.object(run_planner, "repo_owner_name", return_value=("fairchild", "workspaces")),
+            mock.patch.object(run_planner, "run_checked", return_value=completed) as run_checked,
+        ):
+            run_planner.run_claude(fixture["discussion"], CATALOG, {}, mode="cli")
+        cmd = run_checked.call_args.args[0]
+        self.assertNotIn("@anthropic-ai/claude-code", cmd)
+        self.assertIn(run_planner.CLAUDE_CODE_PACKAGE, cmd)
+        package = run_planner.CLAUDE_CODE_PACKAGE
+        self.assertTrue(package.startswith("@anthropic-ai/claude-code@"))
+        self.assertRegex(package.rsplit("@", 1)[1], r"^\d+\.\d+\.\d+")
+        self.assertEqual(package, run_contributor.CLAUDE_CODE_PACKAGE)
 
 
 class RunContributorTests(unittest.TestCase):

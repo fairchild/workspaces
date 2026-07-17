@@ -40,6 +40,21 @@ PLANNER_TASK_CLI = (
 )
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
+# Pin the Claude Code CLI to an exact version so a compromised `@latest` release
+# can't run in the planner job (GH_TOKEN is in the environment). Shares the
+# contributor lane's bump var so one env/repo-var moves both lanes together.
+CLAUDE_CODE_VERSION = os.environ.get(
+    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
+).strip() or "2.1.200"
+CLAUDE_CODE_PACKAGE = f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"
+
+# The planner drafts issue specs and is asked to reference relevant source
+# files, so it gets read-only repo access — never Edit/Write/Bash. --tools
+# only controls exposure; --allowedTools is the separate permission gate, and
+# headless --print runs cannot answer permission prompts, so both must carry
+# the same list or every tool call is silently denied.
+PLANNER_TOOLS = "Read,Grep,Glob"
+
 # Timeouts (seconds) — every external call must declare its budget
 GITHUB_API_TIMEOUT = 30
 CLAUDE_TIMEOUT = 300
@@ -861,10 +876,14 @@ def run_claude(
     cmd = [
         "npx",
         "--yes",
-        "@anthropic-ai/claude-code",
+        CLAUDE_CODE_PACKAGE,
         "--print",
         "--system-prompt",
         PROMPT_FILE.read_text(encoding="utf-8"),
+        "--tools",
+        PLANNER_TOOLS,
+        "--allowedTools",
+        PLANNER_TOOLS,
     ]
     timeout = CLAUDE_TIMEOUT
     if mode == "cli":
