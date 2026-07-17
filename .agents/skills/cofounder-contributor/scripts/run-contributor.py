@@ -205,6 +205,8 @@ from triage import (  # noqa: E402, F401
 
 from execution import (  # noqa: E402, F401
     APP_BOT_GIT_IDENTITIES,
+    _changed_surface_files,
+    _mergeability_surface,
     _update_mergeable_label,
     _write_github_outputs,
     app_bot_git_identity,
@@ -220,6 +222,7 @@ from execution import (  # noqa: E402, F401
     pr_marker,
     route_action,
     route_execution_action,
+    seed_mergeability_section,
     set_git_identity,
     validate_output,
     working_tree_dirty,

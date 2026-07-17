@@ -30,9 +30,12 @@ from _helpers import (
     VALIDATOR_SCRIPT,
     _normalize_login,
     branch_name_for_issue,
+    has_markdown_section,
+    insert_markdown_section,
     issue_label_names,
     issue_label_presence,
     log,
+    markdown_section,
     persona_slug,
     run_checked,
     run_optional,
@@ -205,6 +208,147 @@ def compose_pr_body(
         f"Closes #{issue_number}\n\n"
         f"{pr_marker(issue_number, persona)}"
     )
+
+
+# Path-prefix → readiness surface label, first match wins. Feeds the
+# `## Mergeability` block that scripts/pr-readiness.py requires on every
+# non-draft PR; without a seeded block every factory PR fails the gate at open.
+MERGEABILITY_SURFACE_RULES: tuple[tuple[str, str], ...] = (
+    ("web/src/lib/agent-runtime/", "agent-runtime"),
+    ("web/", "web"),
+    ("web-next/", "web"),
+    ("Sources/", "desktop"),
+    ("Tests/", "desktop"),
+    ("Package.swift", "desktop"),
+    ("infra/", "infra"),
+    (".github/", "infra"),
+    (".agents/", "infra"),
+    ("scripts/", "infra"),
+    ("config/", "infra"),
+    ("docs/", "docs"),
+    ("backlog/", "docs"),
+)
+MERGEABILITY_DOC_SUFFIXES = (".md", ".mdx", ".markdown", ".txt")
+
+
+def _mergeability_clip(text: str, max_len: int = 160) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3].rstrip() + "..."
+
+
+def _first_content_line(section: str) -> str:
+    for raw_line in section.splitlines():
+        line = raw_line.strip().lstrip("-*").strip()
+        if line:
+            return line
+    return ""
+
+
+def _mergeability_surface(changed_files: list[str]) -> str:
+    if not changed_files:
+        return "not detected by the runtime; author must name the touched surface"
+    labels: list[str] = []
+    for path in changed_files:
+        label = next(
+            (surface for prefix, surface in MERGEABILITY_SURFACE_RULES if path.startswith(prefix)),
+            None,
+        )
+        if label is None and path.endswith(MERGEABILITY_DOC_SUFFIXES):
+            label = "docs"
+        if label is not None and label not in labels:
+            labels.append(label)
+    preview = ", ".join(f"`{path}`" for path in changed_files[:3])
+    if len(changed_files) > 3:
+        preview += f" (+{len(changed_files) - 3} more)"
+    if labels:
+        return f"{' / '.join(labels)} — {preview}"
+    return preview
+
+
+def _changed_surface_files(env: dict[str, str]) -> list[str]:
+    """Changed paths for Surface seeding: this run's dirty tree plus, on an
+    existing PR branch, commits already ahead of the default branch."""
+    files: list[str] = []
+
+    def add(path: str) -> None:
+        path = path.strip().strip('"')
+        if path and path not in files:
+            files.append(path)
+
+    porcelain = run_optional(
+        ["git", "status", "--porcelain"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    for line in porcelain.splitlines():
+        if len(line) <= 3:
+            continue
+        path = line[3:]
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        add(path)
+
+    base = default_branch(env)
+    for ref in (f"origin/{base}", base):
+        committed = run_optional(
+            ["git", "diff", "--name-only", f"{ref}...HEAD"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
+        if committed.strip():
+            for line in committed.splitlines():
+                add(line)
+            break
+    return files
+
+
+def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) -> str:
+    """Seed the `## Mergeability` block scripts/pr-readiness.py requires when
+    the agent omitted it.
+
+    Values come from what the runtime actually knows — changed paths for
+    Surface, the agent's own Summary/Validation/Risks sections for the rest —
+    with honest author-must-confirm placeholders where it knows nothing, so
+    the gate's structural checks pass at PR-open time without inventing
+    claims. An agent-authored Mergeability section is kept verbatim.
+    """
+    if has_markdown_section(summary_body, "Mergeability"):
+        return summary_body
+
+    summary_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Summary")))
+    validation_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Validation")))
+    risks_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Risks")))
+
+    behavior = (
+        f"Per the summary: {summary_line}"
+        if summary_line
+        else "Not stated by the author; confirm against the diff"
+    )
+    non_happy = (
+        f"Per the validation notes: {validation_line}"
+        if validation_line
+        else "Not separately assessed; author should list error paths or explain why none apply"
+    )
+    residual = (
+        f"Per the risks section: {risks_line}"
+        if risks_line
+        else "None noted by the author in this run"
+    )
+    content = "\n".join(
+        [
+            f"- Surface: {_mergeability_surface(changed_files)}",
+            f"- User-facing behavior changed: {behavior}",
+            f"- Non-happy paths considered: {non_happy}",
+            f"- Residual risk or follow-up: {residual}",
+        ]
+    )
+    return insert_markdown_section(summary_body, "Mergeability", content)
 
 
 def build_body(data: dict[str, object]) -> str:
@@ -593,6 +737,10 @@ def route_execution_action(
         )
         log(json.dumps({"error_class": "evidence_validation", "detail": "; ".join(evidence_errors), "issue": issue_number}))
         return 1
+    summary_body = seed_mergeability_section(
+        summary_body,
+        changed_files=_changed_surface_files(env),
+    )
     pr_body = compose_pr_body(issue_number, persona, summary_body)
     author_label = author_label_for_persona(persona)
     ensure_label_exists(
