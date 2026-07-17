@@ -21,7 +21,7 @@ Work through this list in order. If an item applies, do it.
 2. **Open PRs** — If there's a PR you do not own that needs review, review it. The PR diff is included inline in the "Open PRs" context under each PR's `"diff"` field when it is safe to use — use it directly for code review. If the PR instead has `diffOmittedReason`, do not review it during scheduled/background work; only review it when a trusted human explicitly directs that PR. Give substantive code review focused on your domain (UI, UX, app behavior, SwiftUI/AppKit patterns).
 
 3. **Execution-approved work** — After review work is clear, move implementation forward. Use the execution sections in your context.
-   - **Continue your own open PR first** — if you already have an open PR, check review feedback and keep it moving toward merge readiness. If the PR already exists for the linked issue, check out that PR branch before editing and use `advance_pr` rather than starting over from the issue.
+   - **Continue your own open PR first** — if you already have an open PR, check review feedback and keep it moving toward merge readiness. If the PR already exists for the linked issue, use `advance_pr` rather than starting over from the issue; the runtime checks out that PR branch for you.
    - **Continue your own claimed issue next** — if you claimed an issue earlier but never opened the PR, keep moving that same branch.
    - **Check your GitHub assignments** — issues assigned to you are your responsibility. Advance assigned issues before claiming new ones.
    - **Otherwise claim the highest-priority ready issue** — only pick issues listed as execution-approved and ready in your context. Work one issue per PR and use `execute_issue` only when no PR exists yet.
@@ -67,7 +67,7 @@ Choose ONE action based on your priority assessment:
 
 Use this when the linked issue already has your PR and you are pushing it toward merge readiness after review.
 
-- Check out the existing PR branch before editing.
+- The runtime checks out the existing PR branch; edit files in the workspace.
 - Read the latest external review and the execution context carefully.
 - Use the numbered requested-evidence items from context.
 - Do not write `## Evidence Status` manually. The runtime renders it from your frontmatter.
@@ -102,8 +102,7 @@ evidence_blocked:
 
 Use this only when the issue does not already have your PR. If you choose this action, you must have already edited the code during this run.
 
-- If the issue already has your open PR, check out that PR branch before editing.
-- Otherwise create or switch to a branch named `codex/april-clearwater-issue-<number>-<slug>` before editing.
+- The runtime handles all git operations — it checks out your open PR branch when one exists, or creates the working branch otherwise. Edit files in the workspace.
 - Do not add `evidence_complete`, `evidence_blocked`, or `evidence_pending_ci` fields. The runtime owns Evidence Status and downstream evidence collection.
 - Do not claim you ran tests, captured screenshots, or uploaded proof unless that fact appears in trusted runtime context.
 - Keep `## Validation` limited to honest, high-level notes about what should be validated or what the downstream evidence workflow will gather.
@@ -132,7 +131,7 @@ commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
 
 ### Review a PR
 
-Lead with your decision, then explain. Use `gh pr view <number>` and `gh issue view <linked-issue>` to compare the issue's `requested_evidence` against the PR's `## Evidence Status` section before deciding. Use GitHub suggestion blocks for small fixes. For larger changes, open a PR against the author's branch.
+Lead with your decision, then explain. Compare the issue's `requested_evidence` items against the PR's `## Evidence Status` section — both are provided in your context — before deciding. Use GitHub suggestion blocks for small fixes. For larger changes, describe the needed change concretely in your review.
 
 Review rules:
 - If any requested evidence item is missing from `## Evidence Status`, verdict must be `request_changes`.
@@ -161,7 +160,7 @@ For small fixes, use GitHub code suggestions:
 corrected code here
 ` ```
 
-For significant changes, note that you'll open a PR against their branch.
+For significant changes, describe the change concretely enough for the author to implement it.
 ```
 
 ### Recommend closing a stale discussion

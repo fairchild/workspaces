@@ -354,6 +354,7 @@
   <h2><span class="sn">§07 · Operations</span>Operating the factory</h2>
   <p>To turn the hands on: set <code>FACTORY_IMPLEMENT_ENABLED</code> and <code>FACTORY_REVIEW_ENABLED</code> alongside the existing master switch, optionally tune the two daily caps, then run one supervised pass — label a trivial, non-privileged issue <code>ready</code> yourself and watch the whole chain (claim comment, claimed label, PR, evidence, counterpart review) before trusting the label path unattended.</p>
   <p>Observability lives in three places: the pinned Factory Digest issue (label-state funnel, run budgets, ready-but-unclaimed ageing, per-stage activity), the telemetry branch <code>factory/ops-data</code> the monitor writes, and the workflow runs themselves — every dispatch names its issue in the run title. When something looks wrong, the kill switches stop the factory in one variable flip, and the janitor's next pass repairs label drift.</p>
+  <p>Owner-side close-out procedures learned in live operation — superseding a stale counterpart verdict by re-dispatch, pre-flighting label-triggered workflows against the default branch, attesting blocked evidence in the PR body — are catalogued in the plan's <a href="agent-factory-v2-plan.md">operational lessons</a>.</p>
 </section>
 
 <section id="s8">

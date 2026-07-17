@@ -153,6 +153,14 @@ The Factory never builds itself autonomously: M1–M4 are Interactive Lane work,
 - **Third-reviewer quorum** — which change classes reach reviewer-agreement rates that justify delegation, and how fast.
 - **Feedback loop closure** — surfacing "your feedback shipped" back through the product once `status='resolved'` write-back exists.
 
+## Operational lessons
+
+Close-out procedures learned in live operation (2026-07-17 dogfood). These are owner-side runbook entries, not design changes.
+
+1. **A stale CHANGES_REQUESTED is superseded by re-dispatch, not dismissal.** A counterpart verdict anchors to the state it reviewed; a fix that only edits the PR body (evidence attestation, Mergeability fields) fires no event that would prompt a re-review, so the verdict sits stale. The remedy is `gh workflow run factory-review.yml -f pr_number=<N>` — the counterpart re-reviews and supersedes its own verdict, keeping the reviewer-agreement record intact. Dismissing the review through the owner API is the anti-pattern (and is blocked): it erases the reviewer's verdict instead of letting the reviewer replace it.
+2. **Comment- and label-triggered workflows execute from the default branch.** `issue_comment`, label events, and `workflow_dispatch` all run the workflow definition on `main`, not the one in your checkout. Pre-flight a workflow change against what `main` currently contains; triggering the event from a feature branch exercises the old definition, and the new one only takes effect at merge.
+3. **The evidence-status body block is the owner's attestation surface.** When evidence items sit `[blocked]` and the owner has verified them out of band, the close-out is: edit the item statuses in the PR's `## Evidence Status` block, strip the `blocked` label, and re-dispatch the review (lesson 1). On the counterpart's superseding approval, the runtime applies `mergeable` to the PR and its source issue — no manual label flip needed beyond removing `blocked`.
+
 ## References
 
 - Live-state audit, infra deep-dive, feedback-feature map: session artifacts, 2026-07-12 (summarized in "Why v1 stalled").
