@@ -440,7 +440,10 @@ def export_head_tree(destination: Path, env: dict[str, str]) -> None:
 
 
 def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
-    temp_root = Path(tempfile.mkdtemp(prefix="contributor-scratch-"))
+    # resolve(): macOS mkdtemp returns symlinked paths (/var -> /private/var);
+    # project trust and path-scoped permission rules must both use the real
+    # path or the runtime's permission matcher never recognizes the scratch.
+    temp_root = Path(tempfile.mkdtemp(prefix="contributor-scratch-")).resolve()
     baseline_dir = temp_root / "baseline"
     scratch_dir = temp_root / "scratch"
     export_head_tree(baseline_dir, env)
@@ -685,6 +688,88 @@ def ensure_claude_project_trust(cwd: Path, env: dict[str, str]) -> None:
     config_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
+WRITE_SCOPED_TOOLS = ("Edit", "Write", "MultiEdit")
+
+
+def scoped_tool_rules(tools: str, write_scope: Path | None) -> str:
+    """Permission rules for --allowedTools. With a write scope, the write
+    tools become path-scoped rules (`Tool(//abs/path/**)` — claude-code's
+    absolute-path rule syntax) so the grant is bound to the scratch; read
+    tools stay bare. Proven against the pinned CLI (#1117): in-scope edits
+    land, out-of-scope edits are permission-denied and recorded in
+    stream-json `permission_denials`."""
+    if write_scope is None:
+        return tools
+    pattern = f"//{str(write_scope.resolve()).lstrip('/')}/**"
+    return ",".join(
+        f"{tool}({pattern})" if tool in WRITE_SCOPED_TOOLS else tool
+        for tool in tools.split(",")
+    )
+
+
+@dataclass(frozen=True)
+class StreamRunSummary:
+    result_text: str | None
+    result_subtype: str
+    tool_uses: list[dict[str, Any]]
+    permission_denials: list[dict[str, Any]]
+
+
+def summarize_stream_json(raw_output: str) -> StreamRunSummary:
+    """Fold a `--output-format stream-json` transcript into the final result
+    text plus the telemetry CI needs: every tool attempt and every permission
+    denial. Non-stream output yields result_text=None so callers can fall
+    back to the raw text."""
+    result_text: str | None = None
+    result_subtype = ""
+    tool_uses: list[dict[str, Any]] = []
+    permission_denials: list[dict[str, Any]] = []
+    for line in raw_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "assistant":
+            for block in (event.get("message") or {}).get("content", []):
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_uses.append(
+                        {"name": block.get("name"), "input": block.get("input") or {}}
+                    )
+        elif event.get("type") == "result":
+            result_text = str(event.get("result") or "")
+            result_subtype = str(event.get("subtype") or "")
+            denials = event.get("permission_denials")
+            if isinstance(denials, list):
+                permission_denials = [d for d in denials if isinstance(d, dict)]
+    return StreamRunSummary(
+        result_text=result_text,
+        result_subtype=result_subtype,
+        tool_uses=tool_uses,
+        permission_denials=permission_denials,
+    )
+
+
+def emit_stream_telemetry(summary: StreamRunSummary) -> None:
+    if summary.result_subtype:
+        log(f"Model run finished: {summary.result_subtype}")
+    log(f"Tool attempts: {len(summary.tool_uses)}")
+    for use in summary.tool_uses:
+        rendered_input = json.dumps(use.get("input", {}), ensure_ascii=False)[:200]
+        log(f"  tool_use: {use.get('name')} {rendered_input}")
+    if summary.permission_denials:
+        log(f"Permission denials: {len(summary.permission_denials)}")
+        for denial in summary.permission_denials:
+            rendered_input = json.dumps(denial.get("tool_input", {}), ensure_ascii=False)[:200]
+            log(f"  denied: {denial.get('tool_name')} {rendered_input}")
+    else:
+        log("Permission denials: none")
+
+
 def run_claude(
     system_prompt: str | Path,
     task: str,
@@ -695,6 +780,7 @@ def run_claude(
     timeout: int | None = None,
     budget: str = "2.50",
     cwd: Path | None = None,
+    write_scope: Path | None = None,
 ) -> str:
     prompt_text = (
         system_prompt.read_text(encoding="utf-8")
@@ -707,11 +793,18 @@ def run_claude(
     # project trust instead: only the implement scratch (repo HEAD export) is
     # seeded trusted; PR-head review checkouts stay untrusted, so headless
     # Claude skips their settings, hooks, and CLAUDE.md.
+    #
+    # stream-json (+ --verbose, required with --print): tool attempts and
+    # permission_denials land in CI logs on every run; the model's final text
+    # is extracted from the `result` event, preserving the return contract.
     cmd = [
         "npx",
         "--yes",
         CLAUDE_CODE_PACKAGE,
         "--print",
+        "--output-format",
+        "stream-json",
+        "--verbose",
         "--system-prompt",
         prompt_text,
     ]
@@ -722,12 +815,19 @@ def run_claude(
             # use them is a separate gate. In --print mode nothing can answer
             # permission prompts, so without --allowedTools every Edit/Write
             # call is silently denied and execution runs finish with prose
-            # instead of file changes.
-            cmd.extend(["--tools", tools, "--allowedTools", tools])
+            # instead of file changes. The write tools' permission rules are
+            # path-scoped to the scratch when one is given.
+            cmd.extend(["--tools", tools, "--allowedTools", scoped_tool_rules(tools, write_scope)])
         cmd.extend(["--max-budget-usd", budget])
         effective_timeout = timeout or 1200
     cmd.append(task)
-    return run_checked(cmd, timeout=effective_timeout, cwd=cwd or REPO_ROOT, env=env).stdout
+    raw_output = run_checked(cmd, timeout=effective_timeout, cwd=cwd or REPO_ROOT, env=env).stdout
+    summary = summarize_stream_json(raw_output)
+    emit_stream_telemetry(summary)
+    if summary.result_text is None:
+        log("stream-json result event missing; returning raw model output")
+        return raw_output
+    return summary.result_text
 
 
 def contributor_model_cwd(selection_kind: str, env: dict[str, str]) -> Path:
@@ -1397,6 +1497,9 @@ def main() -> int:
             mode=args.mode,
             tools=contributor_tools_for_selection(choice.selection_kind),
             cwd=claude_cwd,
+            write_scope=(
+                scratch_workspace.scratch_dir if scratch_workspace is not None else None
+            ),
         )
         exit_code, validated_json, error_text = validate_output(raw_output, env)
 
@@ -1420,10 +1523,12 @@ def main() -> int:
             log(f"Applying scratch patch with {len(artifact.changed_files)} changed files")
             if not artifact.changed_files:
                 # Downstream routing fails on execution actions without file
-                # changes; surface what the model actually did so CI logs show
-                # tool denials or prose-only runs instead of swallowing them.
-                print("--- Model output (tail) ---", file=sys.stderr)
-                print(raw_output[-4000:], file=sys.stderr)
+                # changes; the per-run stream-json telemetry above already
+                # shows every tool attempt and permission denial.
+                log(
+                    "Scratch has zero changed files; see the stream-json "
+                    "telemetry above for tool attempts and permission denials"
+                )
             enforce_agent_patch_policy(
                 artifact,
                 env,

@@ -291,6 +291,9 @@ class RunContributorEvidenceTests(unittest.TestCase):
         # them or every linked path becomes a phantom diff the patch refuses.
         self.assertTrue(symlinks)
         self.assertEqual(artifact.changed_files, [])
+        # Trust seeding and path-scoped permission rules both key on the real
+        # path, so the workspace root must come pre-resolved.
+        self.assertEqual(workspace.temp_root, workspace.temp_root.resolve())
 
     def test_scratch_diff_detects_symlink_target_changes(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -372,6 +375,150 @@ class RunContributorEvidenceTests(unittest.TestCase):
             command[command.index("--allowedTools") + 1],
             run_contributor.EXECUTION_TOOLS,
         )
+
+    def test_write_grant_is_scoped_to_the_scratch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            scratch = Path(tmpdir).resolve()
+            with mock.patch.object(
+                run_contributor,
+                "run_checked",
+                return_value=mock.Mock(stdout="ok"),
+            ) as run_checked:
+                run_contributor.run_claude(
+                    "system",
+                    "task",
+                    {"HOME": "/tmp", "PATH": "/usr/bin"},
+                    mode="cli",
+                    tools=run_contributor.EXECUTION_TOOLS,
+                    write_scope=scratch,
+                )
+
+        command = run_checked.call_args.args[0]
+        pattern = f"//{str(scratch).lstrip('/')}/**"
+        # Exposure stays bare tool names; the permission rules bind every
+        # write tool to the scratch while read tools stay unscoped.
+        self.assertEqual(command[command.index("--tools") + 1], run_contributor.EXECUTION_TOOLS)
+        self.assertEqual(
+            command[command.index("--allowedTools") + 1],
+            f"Read,Grep,Glob,Edit({pattern}),Write({pattern}),MultiEdit({pattern})",
+        )
+
+    def test_scoped_tool_rules_resolve_symlinked_scratch_paths(self) -> None:
+        # macOS mkdtemp hands out symlinked paths (/var -> /private/var); the
+        # permission matcher compares real paths, so an unresolved pattern
+        # would deny every in-scratch edit.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            real_dir = Path(tmpdir).resolve() / "real"
+            real_dir.mkdir()
+            alias = Path(tmpdir).resolve() / "alias"
+            alias.symlink_to(real_dir)
+
+            rules = run_contributor.scoped_tool_rules("Read,Edit", alias)
+
+        self.assertEqual(
+            rules,
+            f"Read,Edit(//{str(real_dir).lstrip('/')}/**)",
+        )
+        self.assertEqual(
+            run_contributor.scoped_tool_rules(run_contributor.EXECUTION_TOOLS, None),
+            run_contributor.EXECUTION_TOOLS,
+        )
+
+    def test_run_claude_requests_stream_json_telemetry(self) -> None:
+        for mode in ("cli", "print"):
+            with self.subTest(mode=mode):
+                with mock.patch.object(
+                    run_contributor,
+                    "run_checked",
+                    return_value=mock.Mock(stdout="ok"),
+                ) as run_checked:
+                    run_contributor.run_claude(
+                        "system",
+                        "task",
+                        {"HOME": "/tmp", "PATH": "/usr/bin"},
+                        mode=mode,
+                        tools=run_contributor.EXECUTION_TOOLS,
+                    )
+                command = run_checked.call_args.args[0]
+                self.assertEqual(
+                    command[command.index("--output-format") + 1], "stream-json"
+                )
+                # --print requires --verbose for stream-json output.
+                self.assertIn("--verbose", command)
+
+    def test_run_claude_extracts_result_text_and_logs_denials(self) -> None:
+        stream = "\n".join(
+            [
+                json.dumps({"type": "system", "subtype": "init"}),
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "message": {
+                            "content": [
+                                {
+                                    "type": "tool_use",
+                                    "name": "Edit",
+                                    "input": {"file_path": "/outside/forbidden.txt"},
+                                }
+                            ]
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "result",
+                        "subtype": "success",
+                        "result": "---\naction: propose\n---\nfinal text",
+                        "permission_denials": [
+                            {
+                                "tool_name": "Edit",
+                                "tool_input": {"file_path": "/outside/forbidden.txt"},
+                            }
+                        ],
+                    }
+                ),
+            ]
+        )
+
+        with io.StringIO() as stderr, contextlib.redirect_stderr(stderr):
+            with mock.patch.object(
+                run_contributor,
+                "run_checked",
+                return_value=mock.Mock(stdout=stream),
+            ):
+                output = run_contributor.run_claude(
+                    "system",
+                    "task",
+                    {"HOME": "/tmp", "PATH": "/usr/bin"},
+                    mode="cli",
+                    tools=run_contributor.EXECUTION_TOOLS,
+                )
+            telemetry = stderr.getvalue()
+
+        # Downstream parses the model's final text: the return contract is the
+        # `result` event payload, not the raw stream transcript.
+        self.assertEqual(output, "---\naction: propose\n---\nfinal text")
+        self.assertIn("Tool attempts: 1", telemetry)
+        self.assertIn("tool_use: Edit", telemetry)
+        self.assertIn("Permission denials: 1", telemetry)
+        self.assertIn("denied: Edit", telemetry)
+        self.assertIn("/outside/forbidden.txt", telemetry)
+
+    def test_run_claude_falls_back_to_raw_output_without_result_event(self) -> None:
+        with mock.patch.object(
+            run_contributor,
+            "run_checked",
+            return_value=mock.Mock(stdout="plain prose output"),
+        ):
+            output = run_contributor.run_claude(
+                "system",
+                "task",
+                {"HOME": "/tmp", "PATH": "/usr/bin"},
+                mode="cli",
+                tools=run_contributor.READ_ONLY_MODEL_TOOLS,
+            )
+
+        self.assertEqual(output, "plain prose output")
 
     def test_project_trust_seeding_preserves_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as home:
