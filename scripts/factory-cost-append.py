@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -40,6 +41,12 @@ def die(message: str) -> None:
     raise SystemExit(1)
 
 
+def scrub_credentials(text: str) -> str:
+    """Redact userinfo from embedded remote URLs — git echoes the clone/push
+    URL (token included) into stderr on failure, and job logs are public."""
+    return re.sub(r"//[^/@\s]+@", "//[REDACTED]@", text)
+
+
 def run_git(args: list[str], *, cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         ["git", *args],
@@ -48,8 +55,7 @@ def run_git(args: list[str], *, cwd: Path | None = None, check: bool = True) -> 
         text=True,
     )
     if check and result.returncode != 0:
-        # Never surface the remote URL (it carries the token) in error text.
-        raise RuntimeError(result.stderr.strip() or f"git {args[0]} failed")
+        raise RuntimeError(scrub_credentials(result.stderr.strip()) or f"git {args[0]} failed")
     return result
 
 
@@ -110,7 +116,7 @@ def existing_ids(runs_file: Path) -> set[str]:
 def branch_exists(url: str) -> bool:
     result = run_git(["ls-remote", "--heads", url, BRANCH], check=False)
     if result.returncode not in (0, 2):
-        raise RuntimeError(result.stderr.strip() or "git ls-remote failed")
+        raise RuntimeError(scrub_credentials(result.stderr.strip()) or "git ls-remote failed")
     return bool(result.stdout.strip())
 
 
@@ -155,7 +161,7 @@ def append_and_push(url: str, candidate_rows: list[dict[str, Any]], workdir: Pat
     if push.returncode != 0:
         if is_push_rejection(push.stderr):
             raise RuntimeError("push rejected")
-        raise RuntimeError(push.stderr.strip() or "git push failed")
+        raise RuntimeError(scrub_credentials(push.stderr.strip()) or "git push failed")
     log(f"appended {len(new_rows)} cost row(s) to {RUNS_PATH}")
     return True
 

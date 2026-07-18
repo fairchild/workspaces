@@ -153,6 +153,32 @@ class FactoryCostAppendTests(unittest.TestCase):
             result = run_script(rows_file, str(origin))
             self.assertNotEqual(result.returncode, 0)
 
+    def test_git_errors_never_leak_remote_credentials(self) -> None:
+        # Job logs are public: no git failure may echo the token. Modern git
+        # strips URL userinfo itself; the script's scrub is the backstop for
+        # git versions and messages that don't.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            rows_file = root / "cost-rows.jsonl"
+            write_rows(rows_file, [{"id": "a"}])
+
+            remote = "https://x-access-token:sekret-token-value@localhost:1/none.git"
+            result = run_script(rows_file, remote)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("sekret-token-value", result.stdout + result.stderr)
+
+    def test_scrub_credentials_redacts_url_userinfo(self) -> None:
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("factory_cost_append", SCRIPT)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        scrubbed = module.scrub_credentials(
+            "fatal: unable to access 'https://x-access-token:tok123@github.com/o/r.git/'"
+        )
+        self.assertNotIn("tok123", scrubbed)
+        self.assertIn("//[REDACTED]@github.com", scrubbed)
+
 
 if __name__ == "__main__":
     unittest.main()
