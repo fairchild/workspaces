@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -17,6 +18,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[2]
 IMPLEMENT_SCRIPT = REPO_ROOT / "scripts" / "factory-implement.py"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "factory-implement.yml"
+REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "factory-review-execute.yml"
 
 
 def load_module(name: str, path: Path):
@@ -26,6 +28,61 @@ def load_module(name: str, path: Path):
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def parse_jobs(text: str) -> dict[str, str]:
+    """Split a workflow into per-job text blocks keyed by job name.
+
+    Jobs are the 2-space-indented keys under the top-level ``jobs:`` mapping.
+    Stdlib-only (no YAML dependency) — indentation is enough to isolate the
+    text of each job for permission and env assertions.
+    """
+    jobs: dict[str, str] = {}
+    in_jobs = False
+    current: str | None = None
+    buffer: list[str] = []
+    for line in text.splitlines():
+        if re.match(r"^jobs:\s*$", line):
+            in_jobs = True
+            continue
+        if not in_jobs:
+            continue
+        if re.match(r"^\S", line):  # a new top-level key ends the jobs section
+            break
+        header = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
+        if header:
+            if current is not None:
+                jobs[current] = "\n".join(buffer)
+            current = header.group(1)
+            buffer = [line]
+        elif current is not None:
+            buffer.append(line)
+    if current is not None:
+        jobs[current] = "\n".join(buffer)
+    return jobs
+
+
+def workflow_permissions_block(text: str) -> str:
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r"^permissions:\s*$", line):
+            block = [line]
+            for follow in lines[i + 1 :]:
+                if re.match(r"^\S", follow):
+                    break
+                block.append(follow)
+            return "\n".join(block)
+    return ""
+
+
+def grants_contents_write(block: str) -> bool:
+    """True when a `permissions:` entry grants GITHUB_TOKEN `contents: write`.
+
+    Line-anchored so it does not match `permission-contents: write` — the input
+    to actions/create-github-app-token, which mints a separately-scoped App
+    installation token rather than widening the job's GITHUB_TOKEN.
+    """
+    return re.search(r"(?m)^\s*contents:\s*write\s*$", block) is not None
 
 
 factory_implement = load_module("factory_implement", IMPLEMENT_SCRIPT)
@@ -596,6 +653,43 @@ class FactoryImplementTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("actions: read", monitor)
         self.assertNotIn("Re-fire ready implementation work", monitor)
+
+
+class FactoryTelemetryContractTests(unittest.TestCase):
+    def test_implement_lane_keeps_model_job_readonly_and_grants_telemetry_write(self) -> None:
+        text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+        self.assertFalse(grants_contents_write(workflow_permissions_block(text)))
+        jobs = parse_jobs(text)
+
+        self.assertIn("implement", jobs)
+        self.assertFalse(grants_contents_write(jobs["implement"]))
+        self.assertIn("FACTORY_TELEMETRY_DIR:", jobs["implement"])
+        self.assertIn("FACTORY_TELEMETRY_LANE: implement", jobs["implement"])
+        self.assertIn("factory-implement-telemetry", jobs["implement"])
+
+        self.assertIn("telemetry", jobs)
+        self.assertTrue(grants_contents_write(jobs["telemetry"]))
+        self.assertIn("actions: read", jobs["telemetry"])
+        self.assertIn("scripts/factory-cost-append.py", jobs["telemetry"])
+
+    def test_review_lane_keeps_reviewer_jobs_readonly_and_grants_telemetry_write(self) -> None:
+        text = REVIEW_WORKFLOW.read_text(encoding="utf-8")
+        self.assertFalse(grants_contents_write(workflow_permissions_block(text)))
+        jobs = parse_jobs(text)
+
+        for reviewer, label in (("april", "april"), ("plat", "plat")):
+            self.assertIn(reviewer, jobs)
+            self.assertFalse(grants_contents_write(jobs[reviewer]))
+            self.assertIn("FACTORY_TELEMETRY_DIR:", jobs[reviewer])
+            self.assertIn("FACTORY_TELEMETRY_LANE: review", jobs[reviewer])
+            self.assertIn(f"FACTORY_TELEMETRY_REVIEWER: {label}", jobs[reviewer])
+            self.assertIn(f"factory-review-telemetry-{label}", jobs[reviewer])
+
+        self.assertIn("telemetry", jobs)
+        self.assertTrue(grants_contents_write(jobs["telemetry"]))
+        self.assertIn("actions: read", jobs["telemetry"])
+        self.assertIn("needs: [admit, april, plat]", jobs["telemetry"])
+        self.assertIn("scripts/factory-cost-append.py", jobs["telemetry"])
 
 
 if __name__ == "__main__":
