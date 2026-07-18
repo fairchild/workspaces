@@ -393,10 +393,22 @@ def _later(a: str | None, b: str | None) -> str | None:
     return max(candidates) if candidates else None
 
 
-def _effective_since(cursor: str | None, floor: str) -> str:
-    # min(cursor, floor): a saved cursor never narrows a wider --days request,
-    # so increasing --days backfills; upserts make the re-fetched overlap a no-op.
-    return floor if cursor is None else min(cursor, floor)
+def _sync_window(conn: sqlite3.Connection, source: str, floor: str) -> str:
+    """Fetch-from point for a source: the cursor when the request stays within
+    already-covered history, the floor when --days widens past it. Coverage is
+    the earliest floor ever fully synced, so widening backfills exactly once
+    and same-window re-syncs stay incremental."""
+    cursor = get_cursor(conn, source)
+    covered_from = get_cursor(conn, f"{source}.covered_from")
+    if cursor is None or covered_from is None or floor < covered_from:
+        return floor
+    return cursor
+
+
+def _mark_covered(conn: sqlite3.Connection, source: str, floor: str) -> None:
+    covered_from = get_cursor(conn, f"{source}.covered_from")
+    if covered_from is None or floor < covered_from:
+        set_cursor(conn, f"{source}.covered_from", floor)
 
 
 # --------------------------------------------------------------------------- #
@@ -413,7 +425,7 @@ def sync_runs(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
     # Cursor advances once, after the whole batch lands, to the max timestamp
     # seen — a mid-batch sub-fetch failure raises before any advance, so the
     # next sync re-reads from the same floor rather than skipping unfetched rows.
-    since = _effective_since(get_cursor(conn, "workflow_runs"), floor)[:10]
+    since = _sync_window(conn, "workflow_runs", floor)[:10]
     total = 0
     batch_max: str | None = None
     for workflow_name, workflow_id in fetcher.workflow_ids().items():
@@ -426,11 +438,12 @@ def sync_runs(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
                     _upsert(conn, "jobs", "job_id", job)
             total += 1
     advance_cursor(conn, "workflow_runs", batch_max)
+    _mark_covered(conn, "workflow_runs", floor)
     return total
 
 
 def sync_issues(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
-    since = _effective_since(get_cursor(conn, "issues"), floor)
+    since = _sync_window(conn, "issues", floor)
     issues = fetcher.issues_since(since[:10])
     batch_max: str | None = None
     for issue in issues:
@@ -441,11 +454,12 @@ def sync_issues(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
                 _upsert(conn, "label_events", "id", {**event, "issue_number": issue["number"]})
         batch_max = _later(batch_max, issue.get("updated_at"))
     advance_cursor(conn, "issues", batch_max)
+    _mark_covered(conn, "issues", floor)
     return len(issues)
 
 
 def sync_prs(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
-    since = _effective_since(get_cursor(conn, "prs"), floor)
+    since = _sync_window(conn, "prs", floor)
     prs = fetcher.prs_since(since[:10])
     batch_max: str | None = None
     for pr in prs:
@@ -472,6 +486,7 @@ def sync_prs(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
                 _upsert(conn, "reviews", "id", {**review, "pr_number": pr["number"]})
         batch_max = _later(batch_max, pr.get("updated_at"))
     advance_cursor(conn, "prs", batch_max)
+    _mark_covered(conn, "prs", floor)
     return len(prs)
 
 

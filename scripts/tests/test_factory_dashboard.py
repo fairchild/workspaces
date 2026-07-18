@@ -331,6 +331,30 @@ class CursorTests(unittest.TestCase):
             self.assertEqual(wide, 3, "widening --days backfills the older runs")
             conn.close()
 
+    def test_same_window_resync_fetches_from_cursor_not_floor(self) -> None:
+        # Within already-covered history the cursor drives the fetch, so a
+        # same-window re-sync is an incremental delta, not a full re-fetch.
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = dashboard.connect(Path(tmp) / "cache.sqlite3")
+
+            class Recording(FakeFetcher):
+                def __init__(self) -> None:
+                    super().__init__()
+                    self.run_since: list[str] = []
+
+                def runs_for_workflow(self, workflow_id, since_date):
+                    self.run_since.append(since_date)
+                    return super().runs_for_workflow(workflow_id, since_date)
+
+            fake = Recording()
+            dashboard.sync_all(conn, fake, days=30)
+            dashboard.sync_all(conn, fake, days=30)
+            first, second = fake.run_since[0], fake.run_since[-1]
+            self.assertGreater(second, first, "second sync starts at the cursor")
+            totals = conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0]
+            self.assertEqual(totals, 3, "re-sync never shrinks stored rows")
+            conn.close()
+
     def test_partial_failure_isolates_and_leaves_cursor_unmoved(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             conn = dashboard.connect(Path(tmp) / "cache.sqlite3")
