@@ -41,8 +41,9 @@ PLANNER_TASK_CLI = (
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 # Pin the Claude Code CLI to an exact version so a compromised `@latest` release
-# can't run in the planner job (GH_TOKEN is in the environment). Shares the
-# contributor lane's bump var so one env/repo-var moves both lanes together.
+# can't run in the planner job (the model subprocess env is sanitized, but the
+# npx fetch itself is supply chain). Shares the contributor lane's bump var so
+# one env/repo-var moves both lanes together.
 CLAUDE_CODE_VERSION = os.environ.get(
     "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
 ).strip() or "2.1.200"
@@ -190,6 +191,42 @@ def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
         if fallback:
             normalized["OPENAI_API_KEY"] = fallback
     return normalized
+
+
+def sanitized_claude_env(env: dict[str, str]) -> dict[str, str]:
+    """Env for the model subprocess only: benign vars plus its Anthropic auth,
+    never GH_TOKEN/GITHUB_TOKEN or other CI/GitHub context. Same allowlist as
+    the contributor lane's sanitized_claude_env.
+    """
+    allowed = {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "CI",
+        "TZ",
+        "XDG_CACHE_HOME",
+        "NPM_CONFIG_CACHE",
+        "npm_config_cache",
+        "NO_COLOR",
+        "COLORTERM",
+    }
+    sanitized = {
+        key: value
+        for key, value in env.items()
+        if key in allowed and value
+    }
+    claude_token = env.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if claude_token:
+        sanitized["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
+    return sanitized
 
 
 def run_checked(
@@ -890,7 +927,11 @@ def run_claude(
         cmd.extend(["--max-budget-usd", "0.50"])
         timeout = 600
     cmd.append(f"{task}\n\n{prompt_context}")
-    return run_checked(cmd, timeout=timeout, cwd=REPO_ROOT, env=env).stdout
+    # GH_TOKEN lives in the planner's env for gh/git calls; the model subprocess
+    # gets a sanitized env that keeps only its provider auth.
+    return run_checked(
+        cmd, timeout=timeout, cwd=REPO_ROOT, env=sanitized_claude_env(env)
+    ).stdout
 
 
 def load_plan_output(

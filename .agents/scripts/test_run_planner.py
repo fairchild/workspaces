@@ -637,8 +637,9 @@ class RunPlannerTests(unittest.TestCase):
         self.assertNotIn("PROMPT INJECTION", cmd[cmd.index("--system-prompt") + 1])
 
     def test_run_planner_claude_cli_package_is_version_pinned(self) -> None:
-        # The planner fetches the CLI with GH_TOKEN in the environment, so it
-        # must never resolve `@latest`. Same guard as the contributor lane.
+        # A compromised `@latest` must never run in the planner job; the model
+        # subprocess env is sanitized but the npx fetch itself is supply chain.
+        # Same guard as the contributor lane.
         fixture = load_fixture("planner-prompt-injection.json")
         completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
         with (
@@ -653,6 +654,58 @@ class RunPlannerTests(unittest.TestCase):
         self.assertTrue(package.startswith("@anthropic-ai/claude-code@"))
         self.assertRegex(package.rsplit("@", 1)[1], r"^\d+\.\d+\.\d+")
         self.assertEqual(package, run_contributor.CLAUDE_CODE_PACKAGE)
+
+    def test_sanitized_claude_env_excludes_github_tokens_and_keeps_auth(self) -> None:
+        env = run_planner.sanitized_claude_env(
+            {
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": os.environ.get("HOME", ""),
+                "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
+                "OPENAI_API_KEY": "openai-key",
+                "GH_TOKEN": "gh-token",
+                "GITHUB_TOKEN": "github-token",
+                "GITHUB_REPOSITORY": "fairchild/workspaces",
+                "EVIDENCE_UPLOAD_TOKEN": "evidence-token",
+            }
+        )
+        self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "claude-token")
+        self.assertNotIn("OPENAI_API_KEY", env)
+        self.assertIn("PATH", env)
+        self.assertNotIn("GH_TOKEN", env)
+        self.assertNotIn("GITHUB_TOKEN", env)
+        self.assertNotIn("GITHUB_REPOSITORY", env)
+        self.assertNotIn("EVIDENCE_UPLOAD_TOKEN", env)
+
+    def test_run_claude_sanitizes_model_subprocess_env(self) -> None:
+        # GH_TOKEN must reach the gh lookup inside run_claude but never the
+        # model subprocess — sanitizing at the top of run_claude instead of at
+        # the model call must fail this test. GITHUB_REPOSITORY stays unset so
+        # repo_owner_name takes its gh-subprocess fallback.
+        fixture = load_fixture("planner-prompt-injection.json")
+        gh_completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout='{"owner": {"login": "fairchild"}, "name": "workspaces"}',
+            stderr="",
+        )
+        model_completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        planner_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
+            "GH_TOKEN": "gh-token",
+            "GITHUB_TOKEN": "github-token",
+        }
+        with mock.patch.object(
+            run_planner, "run_checked", side_effect=[gh_completed, model_completed]
+        ) as run_checked:
+            run_planner.run_claude(fixture["discussion"], CATALOG, planner_env, mode="cli")
+        self.assertEqual(run_checked.call_count, 2)
+        gh_env = run_checked.call_args_list[0].kwargs["env"]
+        self.assertEqual(gh_env["GH_TOKEN"], "gh-token")
+        model_env = run_checked.call_args_list[1].kwargs["env"]
+        self.assertEqual(model_env["CLAUDE_CODE_OAUTH_TOKEN"], "claude-token")
+        self.assertNotIn("GH_TOKEN", model_env)
+        self.assertNotIn("GITHUB_TOKEN", model_env)
 
 
 class RunContributorTests(unittest.TestCase):
