@@ -45,8 +45,8 @@ REPO_ROOT = Path(__file__).resolve().parents[4]
 # npx fetch itself is supply chain). Shares the contributor lane's bump var so
 # one env/repo-var moves both lanes together.
 CLAUDE_CODE_VERSION = os.environ.get(
-    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
-).strip() or "2.1.200"
+    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.212"
+).strip() or "2.1.212"
 CLAUDE_CODE_PACKAGE = f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"
 
 # The planner drafts issue specs and is asked to reference relevant source

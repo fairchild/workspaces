@@ -315,8 +315,8 @@ PRIVILEGED_PATCH_ENV = "AGENT_ALLOW_PRIVILEGED_PATCHES"
 # can't run in the contributor job (where GH_TOKEN is still in the environment).
 # Bump via the CONTRIBUTOR_CLAUDE_CODE_VERSION env/repo-var — no code change needed.
 CLAUDE_CODE_VERSION = os.environ.get(
-    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
-).strip() or "2.1.200"
+    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.212"
+).strip() or "2.1.212"
 CLAUDE_CODE_PACKAGE = f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"
 
 ALLOWED_SELECTION_KINDS = {
