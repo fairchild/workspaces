@@ -1376,6 +1376,43 @@ class CostTelemetryTests(unittest.TestCase):
             # Must not raise even though the telemetry dir cannot be created.
             self.assertIsNone(run_contributor.record_run_telemetry(raw, phase="action", env=env))
 
+    def test_redaction_scrubs_encoded_secret_variants(self) -> None:
+        import base64 as b64mod
+        from urllib.parse import quote as urlquote
+
+        secret = "sekret%value+12345"
+        encodings = [
+            b64mod.b64encode(secret.encode()).decode(),
+            b64mod.b64encode(secret.encode()).decode().rstrip("="),
+            b64mod.urlsafe_b64encode(secret.encode()).decode(),
+            secret.encode().hex(),
+            urlquote(secret, safe=""),
+        ]
+        raw = (
+            _stream_transcript(total_cost_usd=6.0, model_usage=self.HAIKU_1M)
+            + json.dumps({"leaks": encodings})
+            + "\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "CLAUDE_CODE_OAUTH_TOKEN": secret}
+            run_contributor.record_run_telemetry(raw, phase="action", env=env)
+            transcript = (Path(tmp) / "transcripts" / "0001-action.jsonl").read_text(
+                encoding="utf-8"
+            )
+        for encoded in encodings:
+            self.assertNotIn(encoded, transcript)
+
+    def test_run_checked_reports_failure_output(self) -> None:
+        captured: list[str] = []
+        with self.assertRaises(SystemExit):
+            run_contributor.run_checked(
+                [sys.executable, "-c", "print('partial stream'); raise SystemExit(3)"],
+                timeout=30,
+                on_failure_output=captured.append,
+            )
+        self.assertEqual(len(captured), 1)
+        self.assertIn("partial stream", captured[0])
+
 
 if __name__ == "__main__":
     unittest.main()

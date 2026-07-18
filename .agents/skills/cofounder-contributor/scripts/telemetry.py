@@ -11,6 +11,7 @@ models (anthropics/claude-code#53371); the row keeps both values.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -19,6 +20,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from _helpers import log
 
@@ -230,12 +232,35 @@ def _disagrees(reported: float, derived: float) -> bool:
     return ratio > COST_DISAGREEMENT_FACTOR or ratio < 1 / COST_DISAGREEMENT_FACTOR
 
 
+def _secret_variants(value: str) -> list[str]:
+    """The literal secret plus its common reversible encodings. A model driven
+    by untrusted content can re-encode a secret it can read before emitting
+    it; redacting these variants raises the bar (arbitrary transforms and
+    fragmentation remain out of reach for any redaction pass)."""
+    raw = value.encode("utf-8")
+    b64 = base64.b64encode(raw).decode("ascii")
+    b64url = base64.urlsafe_b64encode(raw).decode("ascii")
+    variants = [
+        value,
+        b64,
+        b64.rstrip("="),
+        b64url,
+        b64url.rstrip("="),
+        raw.hex(),
+        quote(value, safe=""),
+    ]
+    return [v for v in dict.fromkeys(variants) if len(v) >= 8]
+
+
 def redact_secrets(text: str, env: Mapping[str, str]) -> str:
-    """Scrub known secret env values and credential-shaped patterns from text."""
+    """Scrub known secret env values (and their common encodings) plus
+    credential-shaped patterns from text."""
     for name in SECRET_ENV_VARS:
         value = (env.get(name) or "").strip()
-        if len(value) >= 8:
-            text = text.replace(value, REDACTED)
+        if len(value) < 8:
+            continue
+        for variant in _secret_variants(value):
+            text = text.replace(variant, REDACTED)
     for pattern in CREDENTIAL_PATTERNS:
         text = pattern.sub(REDACTED, text)
     return text

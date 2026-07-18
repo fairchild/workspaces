@@ -845,7 +845,14 @@ def run_claude(
         cmd.extend(["--max-budget-usd", budget])
         effective_timeout = timeout or 1200
     cmd.append(task)
-    raw_output = run_checked(cmd, timeout=effective_timeout, cwd=cwd or REPO_ROOT, env=env).stdout
+    raw_output = run_checked(
+        cmd,
+        timeout=effective_timeout,
+        cwd=cwd or REPO_ROOT,
+        env=env,
+        # Timeouts and nonzero exits still leave a (partial) durable record.
+        on_failure_output=lambda partial: record_run_telemetry(partial, phase=phase),
+    ).stdout
     summary = summarize_stream_json(raw_output)
     emit_stream_telemetry(summary)
     record_run_telemetry(raw_output, phase=phase)
