@@ -17,7 +17,6 @@ banner and placeholders rather than crashing.
 from __future__ import annotations
 
 import argparse
-import base64
 import html
 import json
 import sqlite3
@@ -220,28 +219,40 @@ class GitHubFetcher:
             "updated_at": item.get("updatedAt"),
         }
 
-    def ops_file(self, path: str) -> tuple[str, str] | None:
+    def ops_branch_head(self) -> str | None:
+        """Head commit SHA of factory/ops-data, or None if the branch is absent.
+        Caching on this (not a per-file blob sha) means one call decides whether
+        any ops-data file changed."""
         code, out, err = _run_gh(
-            ["api", "-X", "GET", f"repos/{self.repo}/contents/{path}", "-f", f"ref={OPS_BRANCH}"]
+            ["api", "-X", "GET", f"repos/{self.repo}/commits/{OPS_BRANCH}", "--jq", ".sha"]
+        )
+        if code != 0:
+            if "Not Found" in (out + err) or "404" in (out + err):
+                return None
+            raise FetchError(f"gh api commits/{OPS_BRANCH}: {err.strip() or 'failed'}")
+        return out.strip() or None
+
+    def ops_file(self, path: str) -> str | None:
+        # Raw media type, not the Contents JSON representation: runs.jsonl is
+        # append-only and will grow past the 1MB JSON-representation ceiling.
+        code, out, err = _run_gh(
+            [
+                "api", "-X", "GET", f"repos/{self.repo}/contents/{path}",
+                "-f", f"ref={OPS_BRANCH}", "-H", "Accept: application/vnd.github.raw",
+            ]
         )
         if code != 0:
             if "Not Found" in (out + err) or "404" in (out + err):
                 return None
             raise FetchError(f"gh api contents/{path}: {err.strip() or 'failed'}")
-        payload = json.loads(out)
-        content = payload.get("content") or ""
-        decoded = base64.b64decode(content).decode("utf-8") if content else ""
-        return str(payload.get("sha") or ""), decoded
+        return out
 
     def repo_variables(self) -> dict[str, str]:
-        try:
-            rows = self._api_lines(
-                "actions/variables",
-                "per_page=100",
-                jq=".variables[] | {name: .name, value: .value}",
-            )
-        except FetchError:
-            return {}
+        rows = self._api_lines(
+            "actions/variables",
+            "per_page=100",
+            jq=".variables[] | {name: .name, value: .value}",
+        )
         return {row["name"]: row["value"] for row in rows}
 
 
@@ -284,9 +295,10 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS sync_state (source TEXT PRIMARY KEY, cursor TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS workflow_runs (
-  run_id INTEGER PRIMARY KEY, workflow_name TEXT, event TEXT, head_branch TEXT,
+  run_id INTEGER, workflow_name TEXT, event TEXT, head_branch TEXT,
   status TEXT, conclusion TEXT, run_attempt INTEGER, display_title TEXT, url TEXT,
-  created_at TEXT, updated_at TEXT
+  created_at TEXT, updated_at TEXT,
+  PRIMARY KEY (run_id, run_attempt)
 );
 CREATE TABLE IF NOT EXISTS jobs (
   job_id INTEGER PRIMARY KEY, run_id INTEGER, name TEXT, conclusion TEXT,
@@ -308,7 +320,8 @@ CREATE TABLE IF NOT EXISTS reviews (
   id INTEGER PRIMARY KEY, pr_number INTEGER, state TEXT, author TEXT, submitted_at TEXT
 );
 CREATE TABLE IF NOT EXISTS cost_rows (
-  id TEXT PRIMARY KEY, ts TEXT, lane TEXT, phase TEXT, issue INTEGER, pr INTEGER,
+  id TEXT PRIMARY KEY, schema INTEGER, ts TEXT, lane TEXT, workflow TEXT,
+  run_id INTEGER, run_attempt INTEGER, phase TEXT, issue INTEGER, pr INTEGER,
   reviewer TEXT, model TEXT, input_tokens INTEGER, output_tokens INTEGER,
   cache_creation_input_tokens INTEGER, cache_read_input_tokens INTEGER,
   cost_usd REAL, cost_usd_reported REAL, cost_usd_derived REAL, cost_source TEXT,
@@ -363,15 +376,27 @@ def meta_set(conn: sqlite3.Connection, key: str, value: str) -> None:
     )
 
 
-def _upsert(conn: sqlite3.Connection, table: str, key: str, row: dict[str, Any]) -> None:
+def _upsert(conn: sqlite3.Connection, table: str, key: str | tuple[str, ...], row: dict[str, Any]) -> None:
+    keys = (key,) if isinstance(key, str) else tuple(key)
     cols = list(row)
     placeholders = ",".join("?" for _ in cols)
-    updates = ",".join(f"{col}=excluded.{col}" for col in cols if col != key)
+    updates = ",".join(f"{col}=excluded.{col}" for col in cols if col not in keys)
     conn.execute(
         f"INSERT INTO {table}({','.join(cols)}) VALUES({placeholders}) "
-        f"ON CONFLICT({key}) DO UPDATE SET {updates}",
+        f"ON CONFLICT({','.join(keys)}) DO UPDATE SET {updates}",
         [row[col] for col in cols],
     )
+
+
+def _later(a: str | None, b: str | None) -> str | None:
+    candidates = [value for value in (a, b) if value]
+    return max(candidates) if candidates else None
+
+
+def _effective_since(cursor: str | None, floor: str) -> str:
+    # min(cursor, floor): a saved cursor never narrows a wider --days request,
+    # so increasing --days backfills; upserts make the re-fetched overlap a no-op.
+    return floor if cursor is None else min(cursor, floor)
 
 
 # --------------------------------------------------------------------------- #
@@ -384,47 +409,45 @@ def _author_agent(labels: list[str]) -> str | None:
     return None
 
 
-def sync_runs(conn: sqlite3.Connection, fetcher: Any, floor_date: str) -> int:
-    since = (get_cursor(conn, "workflow_runs") or floor_date)[:10]
+def sync_runs(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
+    # Cursor advances once, after the whole batch lands, to the max timestamp
+    # seen — a mid-batch sub-fetch failure raises before any advance, so the
+    # next sync re-reads from the same floor rather than skipping unfetched rows.
+    since = _effective_since(get_cursor(conn, "workflow_runs"), floor)[:10]
     total = 0
+    batch_max: str | None = None
     for workflow_name, workflow_id in fetcher.workflow_ids().items():
         for run in fetcher.runs_for_workflow(workflow_id, since):
             run = {**run, "workflow_name": workflow_name}
-            _upsert(conn, "workflow_runs", "run_id", run)
-            advance_cursor(conn, "workflow_runs", run.get("created_at"))
+            _upsert(conn, "workflow_runs", ("run_id", "run_attempt"), run)
+            batch_max = _later(batch_max, run.get("created_at"))
             if run.get("status") == "completed":
                 for job in fetcher.jobs_for_run(run["run_id"]):
                     _upsert(conn, "jobs", "job_id", job)
             total += 1
+    advance_cursor(conn, "workflow_runs", batch_max)
     return total
 
 
-def sync_issues(conn: sqlite3.Connection, fetcher: Any, floor_date: str) -> int:
-    since = get_cursor(conn, "issues") or floor_date
+def sync_issues(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
+    since = _effective_since(get_cursor(conn, "issues"), floor)
     issues = fetcher.issues_since(since[:10])
+    batch_max: str | None = None
     for issue in issues:
         labels = issue.get("labels") or []
-        _upsert(
-            conn,
-            "issues",
-            "number",
-            {**issue, "labels": json.dumps(labels)},
-        )
-        advance_cursor(conn, "issues", issue.get("updated_at"))
+        _upsert(conn, "issues", "number", {**issue, "labels": json.dumps(labels)})
         if any(label in STATE_LABELS for label in labels):
             for event in fetcher.label_events(issue["number"]):
-                _upsert(
-                    conn,
-                    "label_events",
-                    "id",
-                    {**event, "issue_number": issue["number"]},
-                )
+                _upsert(conn, "label_events", "id", {**event, "issue_number": issue["number"]})
+        batch_max = _later(batch_max, issue.get("updated_at"))
+    advance_cursor(conn, "issues", batch_max)
     return len(issues)
 
 
-def sync_prs(conn: sqlite3.Connection, fetcher: Any, floor_date: str) -> int:
-    since = get_cursor(conn, "prs") or floor_date
+def sync_prs(conn: sqlite3.Connection, fetcher: Any, floor: str) -> int:
+    since = _effective_since(get_cursor(conn, "prs"), floor)
     prs = fetcher.prs_since(since[:10])
+    batch_max: str | None = None
     for pr in prs:
         labels = pr.get("labels") or []
         author = _author_agent(labels)
@@ -444,28 +467,24 @@ def sync_prs(conn: sqlite3.Connection, fetcher: Any, floor_date: str) -> int:
                 "updated_at": pr.get("updated_at"),
             },
         )
-        advance_cursor(conn, "prs", pr.get("updated_at"))
         if author:
             for review in fetcher.pr_reviews(pr["number"]):
-                _upsert(
-                    conn,
-                    "reviews",
-                    "id",
-                    {**review, "pr_number": pr["number"]},
-                )
+                _upsert(conn, "reviews", "id", {**review, "pr_number": pr["number"]})
+        batch_max = _later(batch_max, pr.get("updated_at"))
+    advance_cursor(conn, "prs", batch_max)
     return len(prs)
 
 
 def sync_ops_data(conn: sqlite3.Connection, fetcher: Any) -> int:
-    fetched = fetcher.ops_file(COST_RUNS_PATH)
-    if fetched is None:
-        return 0
-    sha, text = fetched
+    head = fetcher.ops_branch_head()
+    if head is None:
+        return 0  # branch not created yet; cost panels render the placeholder
     prior = conn.execute("SELECT sha FROM ops_files WHERE path = ?", (COST_RUNS_PATH,)).fetchone()
-    if prior and prior["sha"] == sha:
+    if prior and prior["sha"] == head:
         return 0
+    text = fetcher.ops_file(COST_RUNS_PATH)
     appended = 0
-    for line in text.splitlines():
+    for line in (text or "").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -481,7 +500,7 @@ def sync_ops_data(conn: sqlite3.Connection, fetcher: Any) -> int:
         conn,
         "ops_files",
         "path",
-        {"path": COST_RUNS_PATH, "sha": sha, "fetched_at": now_utc().isoformat()},
+        {"path": COST_RUNS_PATH, "sha": head, "fetched_at": now_utc().isoformat()},
     )
     return appended
 
@@ -494,10 +513,16 @@ def _cost_row_columns(row: dict[str, Any]) -> dict[str, Any]:
         except (TypeError, ValueError):
             return 0
 
+    # model_usage (the per-model token breakdown) is intentionally not stored —
+    # no panel consumes it yet; the scalar token totals below suffice.
     return {
         "id": str(row["id"]),
+        "schema": num("schema", int),
         "ts": row.get("ts"),
         "lane": row.get("lane"),
+        "workflow": row.get("workflow"),
+        "run_id": row.get("run_id"),
+        "run_attempt": row.get("run_attempt"),
         "phase": row.get("phase"),
         "issue": row.get("issue"),
         "pr": row.get("pr"),
@@ -526,19 +551,19 @@ def sync_settings(conn: sqlite3.Connection, fetcher: Any) -> None:
 
 
 def sync_all(conn: sqlite3.Connection, fetcher: Any, *, days: int) -> dict[str, Any]:
-    floor_date = (now_utc() - timedelta(days=days)).isoformat()
+    floor = (now_utc() - timedelta(days=days)).isoformat().replace("+00:00", "Z")
     stats: dict[str, Any] = {"errors": []}
     steps: list[tuple[str, Callable[[], int | None]]] = [
-        ("runs", lambda: sync_runs(conn, fetcher, floor_date)),
-        ("issues", lambda: sync_issues(conn, fetcher, floor_date)),
-        ("prs", lambda: sync_prs(conn, fetcher, floor_date)),
+        ("runs", lambda: sync_runs(conn, fetcher, floor)),
+        ("issues", lambda: sync_issues(conn, fetcher, floor)),
+        ("prs", lambda: sync_prs(conn, fetcher, floor)),
         ("cost_rows", lambda: sync_ops_data(conn, fetcher)),
         ("settings", lambda: sync_settings(conn, fetcher)),
     ]
     for name, step in steps:
         try:
             stats[name] = step()
-        except FetchError as error:
+        except Exception as error:  # per-source isolation; KeyboardInterrupt/SystemExit propagate
             stats["errors"].append(f"{name}: {error}")
             print(f"[factory-dashboard] {name} sync failed: {error}", file=sys.stderr)
     ok = not stats["errors"]
@@ -611,8 +636,10 @@ def rolling_efficiency(
         key = day_key(pr.get("merged_at"))
         if key:
             ships_by_day[key] = ships_by_day.get(key, 0) + 1
+    # Compare date-to-date: day keys parse as UTC midnight, so an exact-time
+    # floor would drop the first partial day of the window.
     days_span = sorted({*cost_by_day, *ships_by_day})
-    days_span = [d for d in days_span if parse_dt(d) and parse_dt(d) >= floor]
+    days_span = [d for d in days_span if parse_dt(d) and parse_dt(d).date() >= floor.date()]
     series: list[dict[str, Any]] = []
     cum_cost = 0.0
     cum_ships = 0
@@ -633,8 +660,10 @@ def rolling_efficiency(
 def stage_latencies(label_events: list[dict[str, Any]]) -> dict[str, Any]:
     """Median hours between state-machine label transitions, per stage.
 
-    For each issue: ready is the latest release (re-dispatch resets the clock);
-    each downstream label is the first application at-or-after the prior stage.
+    Per issue, a `ready` label opens a fresh cycle (a re-dispatch clears the
+    earlier cycle's claimed/review/mergeable), and each downstream label is its
+    first application within that cycle — so latencies come from one lifecycle,
+    not a mix of an abandoned attempt and its retry.
     """
     by_issue: dict[int, list[dict[str, Any]]] = {}
     for event in label_events:
@@ -669,7 +698,6 @@ def _stage_timestamps(events: list[dict[str, Any]]) -> dict[str, datetime]:
         key=lambda e: parse_dt(e["created_at"]),  # type: ignore[arg-type]
     )
     stamps: dict[str, datetime] = {}
-    ready_at: datetime | None = None
     for event in ordered:
         if event.get("event") != "labeled":
             continue
@@ -678,11 +706,9 @@ def _stage_timestamps(events: list[dict[str, Any]]) -> dict[str, datetime]:
         if when is None or label not in STATE_LABELS:
             continue
         if label == "ready":
-            ready_at = when  # latest release wins
-            stamps["ready"] = when
+            stamps = {"ready": when}  # re-dispatch: start a fresh cycle
         elif label not in stamps:
-            if ready_at is None or when >= ready_at:
-                stamps[label] = when
+            stamps[label] = when
     return stamps
 
 
@@ -754,7 +780,7 @@ def cap_utilization(
         return counts
 
     def lane(counts: dict[str, int], cap: int) -> dict[str, Any]:
-        floor = now - timedelta(days=min(days, 14))
+        floor = now - timedelta(days=days)
         series = []
         cursor = floor
         while cursor.date() <= now.date():
@@ -833,7 +859,9 @@ def build_metrics(conn: sqlite3.Connection, *, days: int, now: datetime) -> dict
         jobs_by_run.setdefault(job["run_id"], []).append(dict(job))
 
     issues = [dict(r) for r in conn.execute("SELECT * FROM issues")]
-    label_events = [dict(r) for r in conn.execute("SELECT * FROM label_events")]
+    label_events = [dict(r) for r in conn.execute(
+        "SELECT * FROM label_events WHERE created_at >= ?", (floor_iso,)
+    )]
     cost_rows = [
         dict(r) for r in conn.execute("SELECT * FROM cost_rows WHERE ts >= ?", (floor_iso,))
     ]
@@ -1038,7 +1066,7 @@ def render_html(metrics: dict[str, Any]) -> str:
         )
         phase_bars = hbar_chart(
             [
-                (phase, data["cost"], f'{fmt_usd(data["cost"])} · {int(data["count"])} runs', "gate")
+                (phase, data["cost"], f'{fmt_usd(data["cost"])} · {int(data["count"])} invocations', "gate")
                 for phase, data in phase_rows
             ]
         )
@@ -1047,6 +1075,9 @@ def render_html(metrics: dict[str, Any]) -> str:
             f'<div class="tiles">{cost_tiles}</div>'
             f'<h3>Spend by phase</h3>{phase_bars}'
             f'<h3>Rolling efficiency (cumulative ships ÷ spend)</h3>{spark}'
+            '<p class="footnote">Denominator is every merged <code>author:*</code> PR in '
+            'the window — factory-attributed or not; no PR-level factory provenance signal '
+            'exists yet, so agent PRs opened outside the factory are counted as ships.</p>'
         )
 
     stage_items = []
@@ -1261,6 +1292,8 @@ DASHBOARD_CSS = """
   .empty { font-family: var(--mono); font-size: .82rem; color: var(--ink-soft);
     background: var(--paper-raised); border: 1px dashed var(--hairline);
     padding: .9rem 1rem; border-radius: 4px; }
+  .footnote { font-size: .8rem; color: var(--ink-soft); margin: .75rem 0 0;
+    padding-left: .9rem; border-left: 2px solid var(--hairline); }
   ul.plain { font-size: .9rem; padding-left: 1.1rem; }
   ul.plain li { margin: .2rem 0; }
   footer { border-top: 3px double var(--hairline); margin-top: 3rem; padding-top: 1.25rem;

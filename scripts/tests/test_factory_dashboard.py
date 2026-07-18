@@ -127,8 +127,16 @@ class FakeFetcher:
         )
         self.calls: dict[str, int] = {}
 
+        self.ops_head = "head-sha-1"
+
     def _tick(self, name: str) -> None:
         self.calls[name] = self.calls.get(name, 0) + 1
+
+    @staticmethod
+    def _after(items, field, since_date):
+        # Mirror the API `created=>=`/`updated:>=` date-granular inclusive filter
+        # so cursor/backfill tests exercise real narrowing.
+        return [x for x in items if (x.get(field) or "")[:10] >= since_date]
 
     def workflow_ids(self):
         self._tick("workflow_ids")
@@ -136,7 +144,8 @@ class FakeFetcher:
 
     def runs_for_workflow(self, workflow_id, since_date):
         self._tick("runs_for_workflow")
-        return [dict(run) for run in self.runs_by_workflow.get(workflow_id, [])]
+        runs = [dict(run) for run in self.runs_by_workflow.get(workflow_id, [])]
+        return self._after(runs, "created_at", since_date)
 
     def jobs_for_run(self, run_id):
         self._tick("jobs_for_run")
@@ -144,7 +153,7 @@ class FakeFetcher:
 
     def issues_since(self, since_date):
         self._tick("issues_since")
-        return list(self.issues)
+        return self._after([dict(i) for i in self.issues], "updated_at", since_date)
 
     def label_events(self, issue_number):
         self._tick("label_events")
@@ -152,15 +161,19 @@ class FakeFetcher:
 
     def prs_since(self, since_date):
         self._tick("prs_since")
-        return list(self.prs)
+        return self._after([dict(p) for p in self.prs], "updated_at", since_date)
 
     def pr_reviews(self, pr_number):
         self._tick("pr_reviews")
         return list(self.reviews.get(pr_number, []))
 
+    def ops_branch_head(self):
+        self._tick("ops_branch_head")
+        return self.ops_head
+
     def ops_file(self, path):
         self._tick("ops_file")
-        return "sha-fixed", self.cost_text
+        return self.cost_text
 
     def repo_variables(self):
         self._tick("repo_variables")
@@ -211,18 +224,24 @@ class StageLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(stages["review → mergeable"]["median_hours"], 1.0)
         self.assertEqual(stages["ready → claimed"]["count"], 1)
 
-    def test_redispatch_resets_ready_clock(self) -> None:
-        base = NOW - timedelta(hours=10)
+    def test_redispatch_uses_the_second_full_lifecycle(self) -> None:
+        # A complete first cycle (1h/2h/1h), then a re-dispatch and a full second
+        # cycle (1h/3h/2h). Latencies must come from the second cycle alone, not a
+        # mix of the abandoned first attempt and its retry.
+        base = NOW - timedelta(hours=40)
+
+        def ev(seq, label, hours):
+            return {"issue_number": 7, "id": seq, "event": "labeled", "label": label,
+                    "actor": "o", "created_at": iso(base + timedelta(hours=hours))}
+
         events = [
-            {"issue_number": 7, "id": 1, "event": "labeled", "label": "ready",
-             "actor": "o", "created_at": iso(base)},
-            {"issue_number": 7, "id": 2, "event": "labeled", "label": "ready",
-             "actor": "o", "created_at": iso(base + timedelta(hours=5))},
-            {"issue_number": 7, "id": 3, "event": "labeled", "label": "claimed",
-             "actor": "o", "created_at": iso(base + timedelta(hours=6))},
+            ev(1, "ready", 0), ev(2, "claimed", 1), ev(3, "review", 3), ev(4, "mergeable", 4),
+            ev(5, "ready", 10), ev(6, "claimed", 11), ev(7, "review", 14), ev(8, "mergeable", 16),
         ]
         stages = {s["name"]: s for s in dashboard.stage_latencies(events)["stages"]}
         self.assertAlmostEqual(stages["ready → claimed"]["median_hours"], 1.0)
+        self.assertAlmostEqual(stages["claimed → review"]["median_hours"], 3.0)
+        self.assertAlmostEqual(stages["review → mergeable"]["median_hours"], 2.0)
 
 
 class SyncTests(unittest.TestCase):
@@ -293,6 +312,88 @@ class RenderTests(unittest.TestCase):
             html = dashboard.render_html(metrics)
             self.assertIn("Rendered from cache", html)
             conn.close()
+
+
+class CursorTests(unittest.TestCase):
+    def test_widening_days_backfills_via_min_cursor_floor(self) -> None:
+        # A narrow first window fetches only the most recent rows; widening the
+        # window must backfill older rows the cursor sits ahead of.
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = dashboard.connect(Path(tmp) / "cache.sqlite3")
+            fake = FakeFetcher()
+
+            dashboard.sync_all(conn, fake, days=1)
+            narrow = conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0]
+            self.assertEqual(narrow, 1, "days=1 excludes the two runs from 2 days ago")
+
+            dashboard.sync_all(conn, fake, days=30)
+            wide = conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0]
+            self.assertEqual(wide, 3, "widening --days backfills the older runs")
+            conn.close()
+
+    def test_partial_failure_isolates_and_leaves_cursor_unmoved(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = dashboard.connect(Path(tmp) / "cache.sqlite3")
+
+            class Boom(FakeFetcher):
+                def prs_since(self, since_date):
+                    raise ValueError("rate limited")  # non-FetchError
+
+            stats = dashboard.sync_all(conn, Boom(), days=30)
+            self.assertTrue(any("prs" in e for e in stats["errors"]))
+            # Other sources still synced despite the PR-source failure.
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0], 3)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM prs").fetchone()[0], 0)
+            self.assertIsNone(dashboard.get_cursor(conn, "prs"))
+
+            metrics = dashboard.build_metrics(conn, days=30, now=NOW)
+            self.assertFalse(metrics["last_sync_ok"])
+            self.assertIn("Rendered from cache", dashboard.render_html(metrics))
+            conn.close()
+
+    def test_settings_failure_degrades_like_a_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = dashboard.connect(Path(tmp) / "cache.sqlite3")
+
+            class NoVars(FakeFetcher):
+                def repo_variables(self):
+                    raise dashboard.FetchError("variables unreadable")
+
+            stats = dashboard.sync_all(conn, NoVars(), days=30)
+            self.assertTrue(any("settings" in e for e in stats["errors"]))
+            self.assertEqual(dashboard.meta_get(conn, "last_sync_ok"), "0")
+            conn.close()
+
+
+class CapUtilizationTests(unittest.TestCase):
+    def test_window_beyond_14_days_is_not_truncated(self) -> None:
+        runs = [
+            {"run_id": 1, "run_attempt": 1, "workflow_name": "Factory Implement",
+             "status": "completed", "conclusion": "success",
+             "created_at": iso(NOW - timedelta(days=20))},
+        ]
+        caps = dashboard.cap_utilization(
+            runs, cap_implement=6, cap_review=12, days=30, now=NOW
+        )
+        series = caps["implement"]["series"]
+        self.assertEqual(len(series), 31)  # floor..today inclusive over 30 days
+        day20 = (NOW - timedelta(days=20)).date().isoformat()
+        self.assertEqual(next(p["count"] for p in series if p["date"] == day20), 1)
+
+
+class BoundaryEfficiencyTests(unittest.TestCase):
+    def test_first_partial_day_is_kept(self) -> None:
+        # A ship+spend earlier in the day than the exact floor time must still
+        # land in the series (date-to-date comparison, not exact-time).
+        floor_day = (NOW - timedelta(days=2))
+        early = floor_day.replace(hour=6, minute=0)
+        series = dashboard.rolling_efficiency(
+            [{"cost_usd": 1.0, "ts": iso(early)}],
+            [{"merged_at": iso(early)}],
+            days=2,
+            now=NOW,
+        )
+        self.assertEqual([p["date"] for p in series], [floor_day.date().isoformat()])
 
 
 if __name__ == "__main__":
