@@ -193,9 +193,9 @@ def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
 
 
 def sanitized_claude_env(env: dict[str, str]) -> dict[str, str]:
-    """Env for the model subprocess only: benign vars plus its provider auth,
-    never GH_TOKEN/GITHUB_TOKEN or other CI/GitHub context. Runs after
-    normalize_provider_env so the OPENAI_API_KEY it resolves is carried through.
+    """Env for the model subprocess only: benign vars plus its Anthropic auth,
+    never GH_TOKEN/GITHUB_TOKEN or other CI/GitHub context. Same allowlist as
+    the contributor lane's sanitized_claude_env.
     """
     allowed = {
         "PATH",
@@ -222,10 +222,9 @@ def sanitized_claude_env(env: dict[str, str]) -> dict[str, str]:
         for key, value in env.items()
         if key in allowed and value
     }
-    for auth_var in ("CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY"):
-        value = env.get(auth_var, "").strip()
-        if value:
-            sanitized[auth_var] = value
+    claude_token = env.get("CLAUDE_CODE_OAUTH_TOKEN", "").strip()
+    if claude_token:
+        sanitized["CLAUDE_CODE_OAUTH_TOKEN"] = claude_token
     return sanitized
 
 

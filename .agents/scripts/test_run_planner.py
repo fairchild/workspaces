@@ -668,7 +668,7 @@ class RunPlannerTests(unittest.TestCase):
             }
         )
         self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "claude-token")
-        self.assertEqual(env["OPENAI_API_KEY"], "openai-key")
+        self.assertNotIn("OPENAI_API_KEY", env)
         self.assertIn("PATH", env)
         self.assertNotIn("GH_TOKEN", env)
         self.assertNotIn("GITHUB_TOKEN", env)
