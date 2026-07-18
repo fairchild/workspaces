@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 
@@ -47,6 +48,7 @@ def run_checked(
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
     input: str | None = None,
+    on_failure_output: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
@@ -61,6 +63,12 @@ def run_checked(
     except subprocess.TimeoutExpired as exc:
         command = " ".join(cmd)
         print(f"error: command timed out after {exc.timeout}s: {command}", file=sys.stderr)
+        if on_failure_output is not None:
+            # TimeoutExpired can carry bytes even in text mode.
+            partial = exc.stdout
+            if isinstance(partial, bytes):
+                partial = partial.decode("utf-8", errors="replace")
+            on_failure_output(partial or "")
         sys.exit(1)
     if result.returncode != 0:
         command = " ".join(cmd)
@@ -72,6 +80,8 @@ def run_checked(
             # Print-mode CLIs (claude --print) report errors on stdout.
             print("--- stdout ---", file=sys.stderr)
             print(result.stdout.strip()[:8000], file=sys.stderr)
+        if on_failure_output is not None:
+            on_failure_output(result.stdout or "")
         sys.exit(result.returncode or 1)
     return result
 

@@ -148,6 +148,9 @@ jobs:
           CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
           FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
           FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          FACTORY_TELEMETRY_DIR: ${{ runner.temp }}/factory-telemetry
+          FACTORY_TELEMETRY_LANE: review
+          FACTORY_TELEMETRY_REVIEWER: april
           GH_APP_SLUG: april-clearwater
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
@@ -158,6 +161,14 @@ jobs:
             --prompt-file .agents/skills/cofounder-contributor/references/april-clearwater.md \
             --mode cli \
             --message "$MESSAGE"
+      - name: Upload April review telemetry
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-review-telemetry-april
+          path: ${{ runner.temp }}/factory-telemetry
+          if-no-files-found: ignore
+          retention-days: 14
 
   plat:
     needs: admit
@@ -221,6 +232,9 @@ jobs:
           CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
           FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
           FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          FACTORY_TELEMETRY_DIR: ${{ runner.temp }}/factory-telemetry
+          FACTORY_TELEMETRY_LANE: review
+          FACTORY_TELEMETRY_REVIEWER: plat
           GH_APP_SLUG: workspace-agents
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
@@ -231,3 +245,48 @@ jobs:
             --prompt-file .agents/skills/cofounder-contributor/references/plat-ironwood.md \
             --mode cli \
             --message "$MESSAGE"
+      - name: Upload Plat review telemetry
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-review-telemetry-plat
+          path: ${{ runner.temp }}/factory-telemetry
+          if-no-files-found: ignore
+          retention-days: 14
+
+  telemetry:
+    needs: [admit, april, plat]
+    # Runs when either reviewer ran (success or failure); skipped-both means no
+    # artifact can exist, so don't spin up a write-capable runner for nothing.
+    if: always() && !(needs.april.result == 'skipped' && needs.plat.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The reviewer jobs stay read-only; only this job may write factory/ops-data.
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Download review telemetry
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          pattern: factory-review-telemetry-*
+          path: telemetry
+          merge-multiple: true
+          github-token: ${{ github.token }}
+      - name: Append cost telemetry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ROWS="$GITHUB_WORKSPACE/telemetry/cost-rows.jsonl"
+          if [ ! -f "$ROWS" ]; then
+            echo "No telemetry cost rows found; nothing to append."
+            exit 0
+          fi
+          uv run --script scripts/factory-cost-append.py --rows "$ROWS"

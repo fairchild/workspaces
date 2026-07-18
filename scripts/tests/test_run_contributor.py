@@ -1222,5 +1222,197 @@ class MergeabilitySeedTests(unittest.TestCase):
         )
 
 
+def _stream_transcript(
+    *,
+    total_cost_usd: float,
+    model_usage: dict[str, dict[str, int]],
+    subtype: str = "success",
+    assistant_model: str | None = None,
+) -> str:
+    lines = []
+    if assistant_model is not None:
+        lines.append(
+            json.dumps(
+                {"type": "assistant", "message": {"model": assistant_model, "content": []}}
+            )
+        )
+    aggregate = {
+        "input_tokens": sum(u.get("inputTokens", 0) for u in model_usage.values()),
+        "output_tokens": sum(u.get("outputTokens", 0) for u in model_usage.values()),
+        "cache_creation_input_tokens": sum(
+            u.get("cacheCreationInputTokens", 0) for u in model_usage.values()
+        ),
+        "cache_read_input_tokens": sum(
+            u.get("cacheReadInputTokens", 0) for u in model_usage.values()
+        ),
+    }
+    lines.append(
+        json.dumps(
+            {
+                "type": "result",
+                "subtype": subtype,
+                "total_cost_usd": total_cost_usd,
+                "usage": aggregate,
+                "modelUsage": model_usage,
+                "duration_ms": 4321,
+                "num_turns": 3,
+            }
+        )
+    )
+    return "\n".join(lines) + "\n"
+
+
+class CostTelemetryTests(unittest.TestCase):
+    HAIKU_1M = {
+        "claude-haiku-4-5": {
+            "inputTokens": 1_000_000,
+            "outputTokens": 1_000_000,
+            "cacheReadInputTokens": 0,
+            "cacheCreationInputTokens": 0,
+        }
+    }
+
+    def test_derived_cost_wins_when_reported_is_inflated(self) -> None:
+        # Haiku at 1M in + 1M out prices to $1 + $5 = $6; a ~10x-high report
+        # (the known upstream bug) must fall back to the derived value.
+        raw = _stream_transcript(total_cost_usd=60.0, model_usage=self.HAIKU_1M)
+        row = run_contributor.build_cost_row(raw, "action", {})
+        self.assertEqual(row["cost_source"], "derived")
+        self.assertAlmostEqual(row["cost_usd"], 6.0)
+        self.assertAlmostEqual(row["cost_usd_derived"], 6.0)
+        self.assertAlmostEqual(row["cost_usd_reported"], 60.0)
+        self.assertEqual(row["model"], "claude-haiku-4-5")
+        self.assertEqual(row["input_tokens"], 1_000_000)
+
+    def test_reported_cost_kept_when_values_agree(self) -> None:
+        raw = _stream_transcript(total_cost_usd=6.2, model_usage=self.HAIKU_1M)
+        row = run_contributor.build_cost_row(raw, "action", {})
+        self.assertEqual(row["cost_source"], "reported")
+        self.assertAlmostEqual(row["cost_usd"], 6.2)
+        self.assertAlmostEqual(row["cost_usd_derived"], 6.0)
+
+    def test_unknown_model_marks_reported_unpriced(self) -> None:
+        raw = _stream_transcript(
+            total_cost_usd=3.0,
+            model_usage={"claude-zeta-9": {"inputTokens": 1_000_000, "outputTokens": 0}},
+        )
+        row = run_contributor.build_cost_row(raw, "action", {})
+        self.assertEqual(row["cost_source"], "reported_unpriced")
+        self.assertAlmostEqual(row["cost_usd"], 3.0)
+
+    def test_zero_derivation_with_positive_report_keeps_reported(self) -> None:
+        # An empty modelUsage entry derives $0; that means missing usage data,
+        # not the inflation bug — the positive reported cost must survive.
+        raw = _stream_transcript(
+            total_cost_usd=2.5,
+            model_usage={"claude-haiku-4-5": {}},
+        )
+        row = run_contributor.build_cost_row(raw, "action", {})
+        self.assertEqual(row["cost_source"], "reported_unpriced")
+        self.assertAlmostEqual(row["cost_usd"], 2.5)
+        self.assertAlmostEqual(row["cost_usd_derived"], 0.0)
+
+    def test_telemetry_dir_writes_transcript_and_row(self) -> None:
+        raw = _stream_transcript(total_cost_usd=6.0, model_usage=self.HAIKU_1M)
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {
+                "FACTORY_TELEMETRY_DIR": tmp,
+                "FACTORY_TELEMETRY_LANE": "implement",
+                "GITHUB_RUN_ID": "42",
+                "GITHUB_RUN_ATTEMPT": "1",
+                "GITHUB_WORKFLOW": "Factory Implement",
+                "ISSUE_NUMBER": "1138",
+            }
+            run_contributor.record_run_telemetry(raw, phase="action", env=env)
+
+            transcript = Path(tmp) / "transcripts" / "0001-action.jsonl"
+            self.assertTrue(transcript.is_file())
+
+            rows_file = Path(tmp) / "cost-rows.jsonl"
+            lines = rows_file.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 1)
+            row = json.loads(lines[0])
+            self.assertEqual(row["id"], "42-1-action")
+            self.assertEqual(row["phase"], "action")
+            self.assertEqual(row["lane"], "implement")
+            self.assertEqual(row["issue"], 1138)
+            self.assertIsNone(row["pr"])
+
+    def test_telemetry_unset_writes_nothing(self) -> None:
+        raw = _stream_transcript(total_cost_usd=6.0, model_usage=self.HAIKU_1M)
+        with tempfile.TemporaryDirectory() as tmp:
+            result = run_contributor.record_run_telemetry(
+                raw, phase="action", env={"FACTORY_TELEMETRY_LANE": "implement"}
+            )
+            self.assertIsNone(result)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_redaction_scrubs_env_value_and_credential_patterns(self) -> None:
+        secret = "SECRETVALUE12345"
+        ghp = "ghp_" + "a" * 36
+        bearer = "Bearer " + "b" * 25
+        raw = (
+            _stream_transcript(total_cost_usd=6.0, model_usage=self.HAIKU_1M)
+            + json.dumps({"leak": f"{secret} {ghp} {bearer}"})
+            + "\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "GH_TOKEN": secret}
+            run_contributor.record_run_telemetry(raw, phase="action", env=env)
+            transcript = (Path(tmp) / "transcripts" / "0001-action.jsonl").read_text(
+                encoding="utf-8"
+            )
+        self.assertNotIn(secret, transcript)
+        self.assertNotIn(ghp, transcript)
+        self.assertNotIn(bearer, transcript)
+        self.assertIn("[REDACTED]", transcript)
+
+    def test_telemetry_write_failure_is_swallowed(self) -> None:
+        raw = _stream_transcript(total_cost_usd=6.0, model_usage=self.HAIKU_1M)
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker = Path(tmp) / "blocker"
+            blocker.write_text("not a directory", encoding="utf-8")
+            env = {"FACTORY_TELEMETRY_DIR": str(blocker / "telemetry")}
+            # Must not raise even though the telemetry dir cannot be created.
+            self.assertIsNone(run_contributor.record_run_telemetry(raw, phase="action", env=env))
+
+    def test_redaction_scrubs_encoded_secret_variants(self) -> None:
+        import base64 as b64mod
+        from urllib.parse import quote as urlquote
+
+        secret = "sekret%value+12345"
+        encodings = [
+            b64mod.b64encode(secret.encode()).decode(),
+            b64mod.b64encode(secret.encode()).decode().rstrip("="),
+            b64mod.urlsafe_b64encode(secret.encode()).decode(),
+            secret.encode().hex(),
+            urlquote(secret, safe=""),
+        ]
+        raw = (
+            _stream_transcript(total_cost_usd=6.0, model_usage=self.HAIKU_1M)
+            + json.dumps({"leaks": encodings})
+            + "\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "CLAUDE_CODE_OAUTH_TOKEN": secret}
+            run_contributor.record_run_telemetry(raw, phase="action", env=env)
+            transcript = (Path(tmp) / "transcripts" / "0001-action.jsonl").read_text(
+                encoding="utf-8"
+            )
+        for encoded in encodings:
+            self.assertNotIn(encoded, transcript)
+
+    def test_run_checked_reports_failure_output(self) -> None:
+        captured: list[str] = []
+        with self.assertRaises(SystemExit):
+            run_contributor.run_checked(
+                [sys.executable, "-c", "print('partial stream'); raise SystemExit(3)"],
+                timeout=30,
+                on_failure_output=captured.append,
+            )
+        self.assertEqual(len(captured), 1)
+        self.assertIn("partial stream", captured[0])
+
+
 if __name__ == "__main__":
     unittest.main()

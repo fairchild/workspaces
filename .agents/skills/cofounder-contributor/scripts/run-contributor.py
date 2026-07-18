@@ -241,6 +241,16 @@ from execution import (  # noqa: E402, F401
     working_tree_dirty,
 )
 
+from telemetry import (  # noqa: E402, F401
+    COST_DISAGREEMENT_FACTOR,
+    MODEL_PRICING,
+    build_cost_row,
+    derive_cost,
+    parse_result_event,
+    record_run_telemetry,
+    redact_secrets,
+)
+
 # ---------------------------------------------------------------------------
 # Constants and helpers used only by main()
 # ---------------------------------------------------------------------------
@@ -305,8 +315,8 @@ PRIVILEGED_PATCH_ENV = "AGENT_ALLOW_PRIVILEGED_PATCHES"
 # can't run in the contributor job (where GH_TOKEN is still in the environment).
 # Bump via the CONTRIBUTOR_CLAUDE_CODE_VERSION env/repo-var — no code change needed.
 CLAUDE_CODE_VERSION = os.environ.get(
-    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
-).strip() or "2.1.200"
+    "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.212"
+).strip() or "2.1.212"
 CLAUDE_CODE_PACKAGE = f"@anthropic-ai/claude-code@{CLAUDE_CODE_VERSION}"
 
 ALLOWED_SELECTION_KINDS = {
@@ -794,6 +804,7 @@ def run_claude(
     budget: str = "2.50",
     cwd: Path | None = None,
     write_scope: Path | None = None,
+    phase: str = "action",
 ) -> str:
     prompt_text = (
         system_prompt.read_text(encoding="utf-8")
@@ -834,9 +845,17 @@ def run_claude(
         cmd.extend(["--max-budget-usd", budget])
         effective_timeout = timeout or 1200
     cmd.append(task)
-    raw_output = run_checked(cmd, timeout=effective_timeout, cwd=cwd or REPO_ROOT, env=env).stdout
+    raw_output = run_checked(
+        cmd,
+        timeout=effective_timeout,
+        cwd=cwd or REPO_ROOT,
+        env=env,
+        # Timeouts and nonzero exits still leave a (partial) durable record.
+        on_failure_output=lambda partial: record_run_telemetry(partial, phase=phase),
+    ).stdout
     summary = summarize_stream_json(raw_output)
     emit_stream_telemetry(summary)
+    record_run_telemetry(raw_output, phase=phase)
     if summary.result_text is None:
         log("stream-json result event missing; returning raw model output")
         return raw_output
@@ -1068,6 +1087,7 @@ def choose_next_task(
         tools=SELECTOR_TOOLS,
         timeout=300,
         budget="0.25",
+        phase="selector",
     )
     return parse_selection_output(raw_output)
 
@@ -1513,6 +1533,7 @@ def main() -> int:
             write_scope=(
                 scratch_workspace.scratch_dir if scratch_workspace is not None else None
             ),
+            phase="action",
         )
         exit_code, validated_json, error_text = validate_output(raw_output, env)
 
