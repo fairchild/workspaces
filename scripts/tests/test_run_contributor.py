@@ -1300,6 +1300,18 @@ class CostTelemetryTests(unittest.TestCase):
         self.assertEqual(row["cost_source"], "reported_unpriced")
         self.assertAlmostEqual(row["cost_usd"], 3.0)
 
+    def test_zero_derivation_with_positive_report_keeps_reported(self) -> None:
+        # An empty modelUsage entry derives $0; that means missing usage data,
+        # not the inflation bug — the positive reported cost must survive.
+        raw = _stream_transcript(
+            total_cost_usd=2.5,
+            model_usage={"claude-haiku-4-5": {}},
+        )
+        row = run_contributor.build_cost_row(raw, "action", {})
+        self.assertEqual(row["cost_source"], "reported_unpriced")
+        self.assertAlmostEqual(row["cost_usd"], 2.5)
+        self.assertAlmostEqual(row["cost_usd_derived"], 0.0)
+
     def test_telemetry_dir_writes_transcript_and_row(self) -> None:
         raw = _stream_transcript(total_cost_usd=6.0, model_usage=self.HAIKU_1M)
         with tempfile.TemporaryDirectory() as tmp:

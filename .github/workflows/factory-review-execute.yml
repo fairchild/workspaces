@@ -256,7 +256,9 @@ jobs:
 
   telemetry:
     needs: [admit, april, plat]
-    if: always()
+    # Runs when either reviewer ran (success or failure); skipped-both means no
+    # artifact can exist, so don't spin up a write-capable runner for nothing.
+    if: always() && !(needs.april.result == 'skipped' && needs.plat.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The reviewer jobs stay read-only; only this job may write factory/ops-data.

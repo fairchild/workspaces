@@ -80,8 +80,11 @@ def grants_contents_write(block: str) -> bool:
 
     Line-anchored so it does not match `permission-contents: write` — the input
     to actions/create-github-app-token, which mints a separately-scoped App
-    installation token rather than widening the job's GITHUB_TOKEN.
+    installation token rather than widening the job's GITHUB_TOKEN. The scalar
+    `permissions: write-all` form grants contents write too.
     """
+    if re.search(r"(?m)^\s*permissions:\s*write-all\s*$", block) is not None:
+        return True
     return re.search(r"(?m)^\s*contents:\s*write\s*$", block) is not None
 
 

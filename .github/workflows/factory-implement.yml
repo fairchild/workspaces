@@ -201,7 +201,10 @@ jobs:
 
   telemetry:
     needs: [implement]
-    if: always()
+    # Runs after success or failure (rows can exist either way), but not when
+    # the model job never started — no artifact can exist, so don't spin up a
+    # write-capable runner for nothing.
+    if: always() && needs.implement.result != 'skipped' && needs.implement.result != 'cancelled'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # The model job stays read-only; only this job may write factory/ops-data.

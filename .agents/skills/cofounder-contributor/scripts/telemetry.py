@@ -211,6 +211,11 @@ def derive_cost(
 def _select_cost(reported: float, derived: float, all_priced: bool) -> tuple[float, str]:
     if not all_priced:
         return reported, "reported_unpriced"
+    if derived <= 0 < reported:
+        # A zero derivation against a positive reported cost means missing
+        # usage data (e.g. an empty modelUsage entry), not the inflation bug —
+        # inflation shows as reported far above a nonzero derived value.
+        return reported, "reported_unpriced"
     if _disagrees(reported, derived):
         return derived, "derived"
     return reported, "reported"
