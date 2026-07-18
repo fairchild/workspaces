@@ -192,6 +192,43 @@ def normalize_provider_env(env: dict[str, str]) -> dict[str, str]:
     return normalized
 
 
+def sanitized_claude_env(env: dict[str, str]) -> dict[str, str]:
+    """Env for the model subprocess only: benign vars plus its provider auth,
+    never GH_TOKEN/GITHUB_TOKEN or other CI/GitHub context. Runs after
+    normalize_provider_env so the OPENAI_API_KEY it resolves is carried through.
+    """
+    allowed = {
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "LANG",
+        "LC_ALL",
+        "TERM",
+        "CI",
+        "TZ",
+        "XDG_CACHE_HOME",
+        "NPM_CONFIG_CACHE",
+        "npm_config_cache",
+        "NO_COLOR",
+        "COLORTERM",
+    }
+    sanitized = {
+        key: value
+        for key, value in env.items()
+        if key in allowed and value
+    }
+    for auth_var in ("CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY"):
+        value = env.get(auth_var, "").strip()
+        if value:
+            sanitized[auth_var] = value
+    return sanitized
+
+
 def run_checked(
     cmd: list[str],
     *,
@@ -890,7 +927,11 @@ def run_claude(
         cmd.extend(["--max-budget-usd", "0.50"])
         timeout = 600
     cmd.append(f"{task}\n\n{prompt_context}")
-    return run_checked(cmd, timeout=timeout, cwd=REPO_ROOT, env=env).stdout
+    # GH_TOKEN lives in the planner's env for gh/git calls; the model subprocess
+    # gets a sanitized env that keeps only its provider auth.
+    return run_checked(
+        cmd, timeout=timeout, cwd=REPO_ROOT, env=sanitized_claude_env(env)
+    ).stdout
 
 
 def load_plan_output(

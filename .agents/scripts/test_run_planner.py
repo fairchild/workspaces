@@ -654,6 +654,47 @@ class RunPlannerTests(unittest.TestCase):
         self.assertRegex(package.rsplit("@", 1)[1], r"^\d+\.\d+\.\d+")
         self.assertEqual(package, run_contributor.CLAUDE_CODE_PACKAGE)
 
+    def test_sanitized_claude_env_excludes_github_tokens_and_keeps_auth(self) -> None:
+        env = run_planner.sanitized_claude_env(
+            {
+                "PATH": os.environ.get("PATH", ""),
+                "HOME": os.environ.get("HOME", ""),
+                "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
+                "OPENAI_API_KEY": "openai-key",
+                "GH_TOKEN": "gh-token",
+                "GITHUB_TOKEN": "github-token",
+                "GITHUB_REPOSITORY": "fairchild/workspaces",
+                "EVIDENCE_UPLOAD_TOKEN": "evidence-token",
+            }
+        )
+        self.assertEqual(env["CLAUDE_CODE_OAUTH_TOKEN"], "claude-token")
+        self.assertEqual(env["OPENAI_API_KEY"], "openai-key")
+        self.assertIn("PATH", env)
+        self.assertNotIn("GH_TOKEN", env)
+        self.assertNotIn("GITHUB_TOKEN", env)
+        self.assertNotIn("GITHUB_REPOSITORY", env)
+        self.assertNotIn("EVIDENCE_UPLOAD_TOKEN", env)
+
+    def test_run_claude_sanitizes_model_subprocess_env(self) -> None:
+        # GH_TOKEN reaches gh/git calls but must never reach the model subprocess.
+        fixture = load_fixture("planner-prompt-injection.json")
+        completed = subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+        planner_env = {
+            "PATH": os.environ.get("PATH", ""),
+            "CLAUDE_CODE_OAUTH_TOKEN": "claude-token",
+            "GH_TOKEN": "gh-token",
+            "GITHUB_TOKEN": "github-token",
+        }
+        with (
+            mock.patch.object(run_planner, "repo_owner_name", return_value=("fairchild", "workspaces")),
+            mock.patch.object(run_planner, "run_checked", return_value=completed) as run_checked,
+        ):
+            run_planner.run_claude(fixture["discussion"], CATALOG, planner_env, mode="cli")
+        model_env = run_checked.call_args.kwargs["env"]
+        self.assertEqual(model_env["CLAUDE_CODE_OAUTH_TOKEN"], "claude-token")
+        self.assertNotIn("GH_TOKEN", model_env)
+        self.assertNotIn("GITHUB_TOKEN", model_env)
+
 
 class RunContributorTests(unittest.TestCase):
     def test_sanitized_claude_env_strips_runtime_credentials(self) -> None:
