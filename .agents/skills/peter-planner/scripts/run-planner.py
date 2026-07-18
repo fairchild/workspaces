@@ -41,8 +41,9 @@ PLANNER_TASK_CLI = (
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 # Pin the Claude Code CLI to an exact version so a compromised `@latest` release
-# can't run in the planner job (GH_TOKEN is in the environment). Shares the
-# contributor lane's bump var so one env/repo-var moves both lanes together.
+# can't run in the planner job (the model subprocess env is sanitized, but the
+# npx fetch itself is supply chain). Shares the contributor lane's bump var so
+# one env/repo-var moves both lanes together.
 CLAUDE_CODE_VERSION = os.environ.get(
     "CONTRIBUTOR_CLAUDE_CODE_VERSION", "2.1.200"
 ).strip() or "2.1.200"
