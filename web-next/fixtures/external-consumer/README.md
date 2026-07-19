@@ -21,7 +21,8 @@ The fixture covers:
 - host-owned conversation creation and durable reload;
 - ordered send/stream projection;
 - conversation-scoped cursors, disconnect at a durable cursor, duplicate-free
-  resume, and restore-time event-log validation;
+  resume, and restore-time cursor sequence/order validation (event content
+  remains host-owned and trusted);
 - cancellation and fail-closed errors;
 - transitional stop/active-turn invariants plus queued-message, approval,
   review, workspace, and publication authority; and

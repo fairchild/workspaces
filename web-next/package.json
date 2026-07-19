@@ -16,6 +16,7 @@
 		"clean": "node scripts/clean.mjs",
 		"folio:build": "pnpm --filter @fairchild/folio build",
 		"folio:package": "node scripts/folio-artifact.mjs",
+		"folio:package:candidate": "node scripts/folio-artifact.mjs --candidate",
 		"evidence": "node scripts/evidence.mjs",
 		"evidence:upload": "bash scripts/upload-evidence.sh",
 		"demo:scroll-turn": "playwright test --config=playwright.scroll-turn.config.ts",

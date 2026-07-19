@@ -15,6 +15,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { execFile } from "node:child_process";
@@ -37,9 +38,28 @@ const STAGE_A = path.join(ARTIFACTS, "stage-a");
 const STAGE_B = path.join(ARTIFACTS, "stage-b");
 const RUN_A = path.join(ARTIFACTS, "pack-a");
 const RUN_B = path.join(ARTIFACTS, "pack-b");
+const CANONICAL_GIT_REMOTE = "https://github.com/fairchild/workspaces.git";
+const RELEASE_BASE_URL = "https://github.com/fairchild/workspaces/releases/download";
 const PNPM = process.env.npm_execpath;
+const candidateMode = process.argv.includes("--candidate");
 
 if (!PNPM) throw new Error("run this script through pnpm so npm_execpath is defined");
+if (candidateMode && process.env.CI) {
+	throw new Error("Folio candidate packaging is operator-only and cannot run in CI");
+}
+
+async function withRetry(label, operation) {
+	let lastError;
+	for (let attempt = 1; attempt <= 2; attempt += 1) {
+		try {
+			return await operation();
+		} catch (error) {
+			lastError = error;
+			if (attempt < 2) await delay(500);
+		}
+	}
+	throw new Error(`${label} failed after two attempts`, { cause: lastError });
+}
 
 async function runPnpm(args, options = {}) {
 	const javascriptEntrypoint = /\.[cm]?js$/.test(PNPM);
@@ -64,16 +84,18 @@ async function verifyAcceptedRelease(tarball, manifest, filename) {
 	if (recordErrors.length > 0) throw new Error(recordErrors.join("\n"));
 
 	const repo = path.resolve(WEB_NEXT, "..");
-	const { stdout: remoteTags } = await exec(
-		"git",
-		[
-			"ls-remote",
-			"--tags",
-			"origin",
-			`refs/tags/${accepted.release}`,
-			`refs/tags/${accepted.release}^{}`,
-		],
-		{ cwd: repo, timeout: 20_000 },
+	const { stdout: remoteTags } = await withRetry("canonical Folio tag lookup", () =>
+		exec(
+			"git",
+			[
+				"ls-remote",
+				"--tags",
+				CANONICAL_GIT_REMOTE,
+				`refs/tags/${accepted.release}`,
+				`refs/tags/${accepted.release}^{}`,
+			],
+			{ cwd: repo, timeout: 20_000 },
+		),
 	);
 	const remoteCommit = remoteTags
 		.trim()
@@ -90,21 +112,21 @@ async function verifyAcceptedRelease(tarball, manifest, filename) {
 	const localPayloadSha256 = bufferSha256(gunzipSync(await readFile(tarball)));
 	if (localPayloadSha256 !== accepted.tarPayloadSha256) {
 		throw new Error(
-			`Folio ${manifest.version} tar payload ${localPayloadSha256} differs from accepted release ${accepted.tarPayloadSha256}`,
+			`Folio ${manifest.version} tar payload ${localPayloadSha256} differs from accepted release ${accepted.tarPayloadSha256}; check source changes and pack-toolchain drift (accepted Node ${accepted.packToolchain.nodeMajor}, pnpm ${accepted.packToolchain.pnpmMajor}; current ${process.version}, ${process.env.npm_config_user_agent ?? "unknown pnpm"})`,
 		);
 	}
 
-	const releaseUrl = `https://github.com/fairchild/workspaces/releases/download/${encodeURIComponent(accepted.release)}/${encodeURIComponent(filename)}`;
-	const response = await fetch(releaseUrl, {
-		redirect: "follow",
-		signal: AbortSignal.timeout(20_000),
+	const releaseUrl = `${RELEASE_BASE_URL}/${encodeURIComponent(accepted.release)}/${encodeURIComponent(filename)}`;
+	const canonicalBytes = await withRetry("accepted Folio asset download", async () => {
+		const result = await fetch(releaseUrl, {
+			redirect: "follow",
+			signal: AbortSignal.timeout(20_000),
+		});
+		if (!result.ok) {
+			throw new Error(`HTTP ${result.status} ${result.statusText}`);
+		}
+		return Buffer.from(await result.arrayBuffer());
 	});
-	if (!response.ok) {
-		throw new Error(
-			`could not download accepted Folio release (${response.status} ${response.statusText})`,
-		);
-	}
-	const canonicalBytes = Buffer.from(await response.arrayBuffer());
 	const canonicalCompressedSha256 = bufferSha256(canonicalBytes);
 	if (canonicalCompressedSha256 !== accepted.compressedSha256) {
 		throw new Error(
@@ -124,6 +146,35 @@ async function verifyAcceptedRelease(tarball, manifest, filename) {
 		assetUrl: releaseUrl,
 		canonicalTarball,
 		localPayloadSha256,
+	};
+}
+
+async function describeReleaseCandidate(tarball, manifest) {
+	const accepted = JSON.parse(await readFile(ACCEPTED_RELEASE, "utf8"));
+	if (accepted.packageVersion === manifest.version) {
+		throw new Error(
+			`Folio ${manifest.version} is already accepted; use the strict folio:package gate`,
+		);
+	}
+	const repo = path.resolve(WEB_NEXT, "..");
+	const { stdout: status } = await exec(
+		"git",
+		["status", "--porcelain", "--untracked-files=no"],
+		{ cwd: repo },
+	);
+	if (status.trim()) {
+		throw new Error("commit the Folio candidate before packaging so its source SHA is stable");
+	}
+	const { stdout: sourceCommit } = await exec("git", ["rev-parse", "HEAD"], {
+		cwd: repo,
+	});
+	return {
+		candidate: true,
+		packageVersion: manifest.version,
+		sourceCommit: sourceCommit.trim(),
+		compressedSha256: await sha256(tarball),
+		tarPayloadSha256: bufferSha256(gunzipSync(await readFile(tarball))),
+		canonicalTarball: tarball,
 	};
 }
 
@@ -344,7 +395,9 @@ if (errors.length > 0) throw new Error(errors.join("\n"));
 
 const finalTarball = path.join(ARTIFACTS, filename);
 await cp(first, finalTarball);
-const acceptedRelease = await verifyAcceptedRelease(finalTarball, manifest, filename);
+const releaseProof = candidateMode
+	? await describeReleaseCandidate(finalTarball, manifest)
+	: await verifyAcceptedRelease(finalTarball, manifest, filename);
 await writeFile(path.join(ARTIFACTS, "files.txt"), `${files.join("\n")}\n`);
 await writeFile(
 	path.join(ARTIFACTS, "manifest.json"),
@@ -356,32 +409,56 @@ await writeFile(
 			sha256: firstSha256,
 			packedBytes: packedStat.size,
 			files,
-			acceptedRelease: {
-				tag: acceptedRelease.release,
-				sourceCommit: acceptedRelease.sourceCommit,
-				assetUrl: acceptedRelease.assetUrl,
-				compressedSha256: acceptedRelease.compressedSha256,
-				tarPayloadSha256: acceptedRelease.tarPayloadSha256,
-			},
+			...(releaseProof.candidate
+				? {
+					candidateRelease: {
+						packageVersion: releaseProof.packageVersion,
+						sourceCommit: releaseProof.sourceCommit,
+						compressedSha256: releaseProof.compressedSha256,
+						tarPayloadSha256: releaseProof.tarPayloadSha256,
+					},
+				}
+				: {
+					acceptedRelease: {
+						tag: releaseProof.release,
+						sourceCommit: releaseProof.sourceCommit,
+						assetUrl: releaseProof.assetUrl,
+						compressedSha256: releaseProof.compressedSha256,
+						tarPayloadSha256: releaseProof.tarPayloadSha256,
+						packToolchain: releaseProof.packToolchain,
+					},
+				}),
 		},
 		null,
 		"\t",
 	)}\n`,
 );
 await verifyCleanConsumer(
-	acceptedRelease.canonicalTarball,
-	`downloaded ${acceptedRelease.release} from its public release asset; tag, source commit, compressed checksum, and tar payload verified`,
+	releaseProof.canonicalTarball,
+	releaseProof.candidate
+		? `UNACCEPTED CANDIDATE ${releaseProof.packageVersion} at ${releaseProof.sourceCommit}; local checks only`
+		: `downloaded ${releaseProof.release} from its public release asset; tag, source commit, compressed checksum, and tar payload verified`,
 );
 
 console.log(`packed ${path.relative(WEB_NEXT, finalTarball)}`);
 console.log(`sha256 ${firstSha256}`);
-console.log(
-	`tar payload sha256 ${acceptedRelease.localPayloadSha256} matches ${acceptedRelease.release}`,
-);
-console.log(
-	`accepted asset sha256 ${acceptedRelease.compressedSha256} downloaded and verified at source commit ${acceptedRelease.sourceCommit}`,
-);
+if (releaseProof.candidate) {
+	console.log(
+		`UNACCEPTED CANDIDATE ${releaseProof.packageVersion} at ${releaseProof.sourceCommit}`,
+	);
+	console.log(`candidate asset sha256 ${releaseProof.compressedSha256}`);
+	console.log(`candidate tar payload sha256 ${releaseProof.tarPayloadSha256}`);
+} else {
+	console.log(
+		`tar payload sha256 ${releaseProof.localPayloadSha256} matches ${releaseProof.release}`,
+	);
+	console.log(
+		`accepted asset sha256 ${releaseProof.compressedSha256} downloaded and verified at source commit ${releaseProof.sourceCommit}`,
+	);
+}
 console.log(`${packedStat.size} bytes, ${files.length} intentional files`);
 console.log(
-	"clean standalone Next fixture installed the canonical release asset without a workspace link, passed the external-host contract, and built successfully",
+	releaseProof.candidate
+		? "clean standalone Next fixture installed the local unaccepted candidate without a workspace link, passed the external-host contract, and built successfully"
+		: "clean standalone Next fixture installed the canonical release asset without a workspace link, passed the external-host contract, and built successfully",
 );
