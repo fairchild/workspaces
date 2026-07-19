@@ -7,6 +7,7 @@ import {
 	PACKED_FILES,
 	runtimeImports,
 	tarballFilename,
+	validateAcceptedReleaseRecord,
 	validateBuildOutput,
 	validatePackedArtifact,
 } from "./folio-artifact-core.mjs";
@@ -59,6 +60,38 @@ describe("Folio artifact contract", () => {
 		expect(tarballFilename("@fairchild/folio", "0.1.0")).toBe(
 			"fairchild-folio-0.1.0.tgz",
 		);
+	});
+
+	test("fails closed until package provenance has an accepted release record", () => {
+		const manifest = createArtifactManifest(sourceManifest);
+		const accepted = {
+			release: "folio-v0.1.0",
+			packageVersion: "0.1.0",
+			sourceCommit: "a".repeat(40),
+			compressedSha256: "b".repeat(64),
+			tarPayloadSha256: "c".repeat(64),
+		};
+
+		expect(validateAcceptedReleaseRecord(accepted, manifest)).toEqual([]);
+		expect(
+			validateAcceptedReleaseRecord(
+				{
+					...accepted,
+					release: "wrong-tag",
+					packageVersion: "0.2.0",
+					sourceCommit: "short",
+					compressedSha256: "invalid",
+					tarPayloadSha256: "invalid",
+				},
+				manifest,
+			),
+		).toEqual([
+			"Folio 0.1.0 has no accepted release record (found 0.2.0)",
+			"accepted release tag must match its package version",
+			"accepted release source commit must be a full lowercase SHA-1",
+			"accepted release compressedSha256 must be a full lowercase SHA-256",
+			"accepted release tarPayloadSha256 must be a full lowercase SHA-256",
+		]);
 	});
 
 	test("detects undeclared imports, uncompiled CSS, unpacked assets, and incomplete maps", () => {

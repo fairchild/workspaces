@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import {
 	createArtifactManifest,
 	tarballFilename,
+	validateAcceptedReleaseRecord,
 	validateBuildOutput,
 	validatePackedArtifact,
 } from "./folio-artifact-core.mjs";
@@ -53,18 +54,77 @@ async function sha256(file) {
 	return createHash("sha256").update(await readFile(file)).digest("hex");
 }
 
-async function verifyAcceptedReleasePayload(tarball, manifest) {
+function bufferSha256(buffer) {
+	return createHash("sha256").update(buffer).digest("hex");
+}
+
+async function verifyAcceptedRelease(tarball, manifest, filename) {
 	const accepted = JSON.parse(await readFile(ACCEPTED_RELEASE, "utf8"));
-	if (accepted.packageVersion !== manifest.version) return null;
-	const payloadSha256 = createHash("sha256")
-		.update(gunzipSync(await readFile(tarball)))
-		.digest("hex");
-	if (payloadSha256 !== accepted.tarPayloadSha256) {
+	const recordErrors = validateAcceptedReleaseRecord(accepted, manifest);
+	if (recordErrors.length > 0) throw new Error(recordErrors.join("\n"));
+
+	const repo = path.resolve(WEB_NEXT, "..");
+	const { stdout: remoteTags } = await exec(
+		"git",
+		[
+			"ls-remote",
+			"--tags",
+			"origin",
+			`refs/tags/${accepted.release}`,
+			`refs/tags/${accepted.release}^{}`,
+		],
+		{ cwd: repo, timeout: 20_000 },
+	);
+	const remoteCommit = remoteTags
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.find((line) => line.endsWith("^{}"))
+		?.split(/\s+/)[0] ?? remoteTags.trim().split(/\s+/)[0];
+	if (remoteCommit !== accepted.sourceCommit) {
 		throw new Error(
-			`Folio ${manifest.version} tar payload ${payloadSha256} differs from accepted release ${accepted.tarPayloadSha256}`,
+			`accepted release ${accepted.release} resolves to ${remoteCommit || "no remote tag"}, not ${accepted.sourceCommit}`,
 		);
 	}
-	return payloadSha256;
+
+	const localPayloadSha256 = bufferSha256(gunzipSync(await readFile(tarball)));
+	if (localPayloadSha256 !== accepted.tarPayloadSha256) {
+		throw new Error(
+			`Folio ${manifest.version} tar payload ${localPayloadSha256} differs from accepted release ${accepted.tarPayloadSha256}`,
+		);
+	}
+
+	const releaseUrl = `https://github.com/fairchild/workspaces/releases/download/${encodeURIComponent(accepted.release)}/${encodeURIComponent(filename)}`;
+	const response = await fetch(releaseUrl, {
+		redirect: "follow",
+		signal: AbortSignal.timeout(20_000),
+	});
+	if (!response.ok) {
+		throw new Error(
+			`could not download accepted Folio release (${response.status} ${response.statusText})`,
+		);
+	}
+	const canonicalBytes = Buffer.from(await response.arrayBuffer());
+	const canonicalCompressedSha256 = bufferSha256(canonicalBytes);
+	if (canonicalCompressedSha256 !== accepted.compressedSha256) {
+		throw new Error(
+			`accepted release asset checksum ${canonicalCompressedSha256} differs from ${accepted.compressedSha256}`,
+		);
+	}
+	const canonicalPayloadSha256 = bufferSha256(gunzipSync(canonicalBytes));
+	if (canonicalPayloadSha256 !== accepted.tarPayloadSha256) {
+		throw new Error(
+			`accepted release asset payload ${canonicalPayloadSha256} differs from ${accepted.tarPayloadSha256}`,
+		);
+	}
+	const canonicalTarball = path.join(ARTIFACTS, `accepted-${filename}`);
+	await writeFile(canonicalTarball, canonicalBytes);
+	return {
+		...accepted,
+		assetUrl: releaseUrl,
+		canonicalTarball,
+		localPayloadSha256,
+	};
 }
 
 async function stagePackage(destination) {
@@ -194,9 +254,9 @@ function fixtureFiles(tarballName) {
 	};
 }
 
-async function verifyCleanConsumer(tarball) {
+async function verifyCleanConsumer(tarball, provenance) {
 	const fixture = await mkdtemp(path.join(os.tmpdir(), "folio-clean-consumer-"));
-	const log = [];
+	const log = [`PROVENANCE\n${provenance}`];
 	let stage = "install";
 	try {
 		const fixtureRoot = await realpath(fixture);
@@ -284,7 +344,7 @@ if (errors.length > 0) throw new Error(errors.join("\n"));
 
 const finalTarball = path.join(ARTIFACTS, filename);
 await cp(first, finalTarball);
-const acceptedPayloadSha256 = await verifyAcceptedReleasePayload(finalTarball, manifest);
+const acceptedRelease = await verifyAcceptedRelease(finalTarball, manifest, filename);
 await writeFile(path.join(ARTIFACTS, "files.txt"), `${files.join("\n")}\n`);
 await writeFile(
 	path.join(ARTIFACTS, "manifest.json"),
@@ -296,19 +356,32 @@ await writeFile(
 			sha256: firstSha256,
 			packedBytes: packedStat.size,
 			files,
+			acceptedRelease: {
+				tag: acceptedRelease.release,
+				sourceCommit: acceptedRelease.sourceCommit,
+				assetUrl: acceptedRelease.assetUrl,
+				compressedSha256: acceptedRelease.compressedSha256,
+				tarPayloadSha256: acceptedRelease.tarPayloadSha256,
+			},
 		},
 		null,
 		"\t",
 	)}\n`,
 );
-await verifyCleanConsumer(finalTarball);
+await verifyCleanConsumer(
+	acceptedRelease.canonicalTarball,
+	`downloaded ${acceptedRelease.release} from its public release asset; tag, source commit, compressed checksum, and tar payload verified`,
+);
 
 console.log(`packed ${path.relative(WEB_NEXT, finalTarball)}`);
 console.log(`sha256 ${firstSha256}`);
-if (acceptedPayloadSha256) {
-	console.log(`tar payload sha256 ${acceptedPayloadSha256} matches the accepted release`);
-}
+console.log(
+	`tar payload sha256 ${acceptedRelease.localPayloadSha256} matches ${acceptedRelease.release}`,
+);
+console.log(
+	`accepted asset sha256 ${acceptedRelease.compressedSha256} downloaded and verified at source commit ${acceptedRelease.sourceCommit}`,
+);
 console.log(`${packedStat.size} bytes, ${files.length} intentional files`);
 console.log(
-	"clean standalone Next fixture installed without a workspace link, passed the external-host contract, and built successfully",
+	"clean standalone Next fixture installed the canonical release asset without a workspace link, passed the external-host contract, and built successfully",
 );

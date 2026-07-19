@@ -91,6 +91,27 @@ export function tarballFilename(name, version) {
 	return `${name.replace(/^@/, "").replaceAll("/", "-")}-${version}.tgz`;
 }
 
+export function validateAcceptedReleaseRecord(accepted, manifest) {
+	const errors = [];
+	if (accepted?.packageVersion !== manifest.version) {
+		errors.push(
+			`Folio ${manifest.version} has no accepted release record (found ${accepted?.packageVersion ?? "none"})`,
+		);
+	}
+	if (accepted?.release !== `folio-v${accepted?.packageVersion}`) {
+		errors.push("accepted release tag must match its package version");
+	}
+	if (!/^[0-9a-f]{40}$/.test(accepted?.sourceCommit ?? "")) {
+		errors.push("accepted release source commit must be a full lowercase SHA-1");
+	}
+	for (const field of ["compressedSha256", "tarPayloadSha256"]) {
+		if (!/^[0-9a-f]{64}$/.test(accepted?.[field] ?? "")) {
+			errors.push(`accepted release ${field} must be a full lowercase SHA-256`);
+		}
+	}
+	return errors;
+}
+
 function packageName(specifier) {
 	if (specifier.startsWith("@")) return specifier.split("/").slice(0, 2).join("/");
 	return specifier.split("/")[0];
