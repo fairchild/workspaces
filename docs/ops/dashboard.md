@@ -1,13 +1,13 @@
 # Ops Dashboard
 
-Last updated: `2026-07-18T13:59:09.960885Z`
+Last updated: `2026-07-19T14:01:37.948941Z`
 Source: `live`
 
 ## Funnel
 
 | Ideas | Approved | Planned | Active | Merged | Stalled |
 |---:|---:|---:|---:|---:|---:|
-| 12 | 3 | 2 | 0 | 0 | 2 |
+| 12 | 3 | 2 | 0 | 0 | 1 |
 
 ## Lead Times
 
@@ -23,24 +23,27 @@ Source: `live`
 | Metric | Value |
 |---|---:|
 | Completed runs | 499 |
-| Failure rate | 3.01% |
+| Failure rate | 10.62% |
 | Rerun rate | 0.00% |
 
 Top failing workflows:
-- `Managed Reviewer Health` — 13 failure(s)
+- `Managed Reviewer Health` — 49 failure(s)
 - `PR Readiness` — 2 failure(s)
+- `Agent: Carl Community` — 1 failure(s)
+- `Milestone Legibility` — 1 failure(s)
 
 ## Agent Health
 
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
-| Approved Mention Execution | 41 | 0 | 0.00% | 0 | 0.00% |
-| Mention Triage | 25 | 0 | 0.00% | 0 | 0.00% |
+| Approved Mention Execution | 39 | 0 | 0.00% | 0 | 0.00% |
+| Carl Community | 1 | 1 | 100.00% | 0 | 0.00% |
+| Mention Triage | 19 | 0 | 0.00% | 0 | 0.00% |
 
 ## Perf Snapshot
 
 Latest perf snapshot: `2026-03-22T10:29:08-0700`
-Freshness: 117.9 days
+Freshness: 118.9 days
 
 | Metric | Latest Median (ms) | Target (ms) | Delta vs Previous | Status |
 |---|---:|---:|---:|---|
@@ -49,17 +52,15 @@ Freshness: 117.9 days
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (68.7 days idle)
-- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (68.7 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (69.7 days idle)
 
 ## Current Breaches
 
 - `perf` — Performance targets regressed or exceeded threshold
-- `throughput` — Planned discussions are sitting without linked PR activity
 
 ## Latest Discussions
 
-- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (`stalled`)
+- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (`planned`)
 - #111 — [idea] Split release.yml into three jobs: build-sign-notarize → validate-artifact → publish (`idea`)
 - #112 — [idea] Archive xcresult bundles from CI and surface test failure summaries (`idea`)
 - #195 — [idea] [ops] Investigate performance regression (`idea`)
