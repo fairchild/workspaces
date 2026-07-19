@@ -20,9 +20,11 @@ The fixture covers:
 
 - host-owned conversation creation and durable reload;
 - ordered send/stream projection;
-- disconnect at a durable cursor and duplicate-free resume;
+- conversation-scoped cursors, disconnect at a durable cursor, duplicate-free
+  resume, and restore-time event-log validation;
 - cancellation and fail-closed errors;
-- queued-message, review, workspace, and publication authority; and
+- transitional stop/active-turn invariants plus queued-message, approval,
+  review, workspace, and publication authority; and
 - foreign-cursor and abort handling.
 
 The real private-consumer browser evidence is summarized in

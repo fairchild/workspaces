@@ -10,10 +10,16 @@ import {
 
 const clone = (value) => structuredClone(value);
 
-function initialSnapshot() {
+const DEFAULT_CONVERSATION_ID = "conversation-external-1";
+
+function cursorFor(conversationId, ordinal) {
+	return `${conversationId}:generation-1:${ordinal}`;
+}
+
+function initialSnapshot(conversationId = DEFAULT_CONVERSATION_ID) {
 	return {
-		conversationId: "conversation-external-1",
-		cursor: "external:0",
+		conversationId,
+		cursor: cursorFor(conversationId, 0),
 		view: {
 			masthead: {
 				repo: "example/private-host",
@@ -68,17 +74,31 @@ function initialSnapshot() {
 }
 
 export class AnonymizedDurableHost {
+	#initialSnapshot;
 	#snapshot;
 	#events;
 
 	constructor(state) {
-		this.#snapshot = clone(state?.snapshot ?? initialSnapshot());
+		this.#initialSnapshot = clone(state?.initialSnapshot ?? initialSnapshot());
 		this.#events = clone(state?.events ?? []);
 		this.calls = clone(state?.calls ?? []);
+		if (
+			this.#initialSnapshot.cursor !== cursorFor(this.#initialSnapshot.conversationId, 0)
+		) {
+			throw new Error("external host initial cursor does not match its conversation");
+		}
+		this.#snapshot = clone(this.#initialSnapshot);
+		for (const [index, event] of this.#events.entries()) {
+			const expected = cursorFor(this.#initialSnapshot.conversationId, index + 1);
+			if (event.cursor !== expected) {
+				throw new Error(`external host event cursor ${event.cursor} does not match ${expected}`);
+			}
+			this.#snapshot = applyConversationEvent(this.#snapshot, event);
+		}
 	}
 
-	static createConversation() {
-		return new AnonymizedDurableHost();
+	static createConversation(conversationId = DEFAULT_CONVERSATION_ID) {
+		return new AnonymizedDurableHost({ initialSnapshot: initialSnapshot(conversationId) });
 	}
 
 	static createActiveConversation() {
@@ -93,16 +113,16 @@ export class AnonymizedDurableHost {
 			},
 		});
 		host.#append({
-			type: "capabilities",
-			capabilities: { ...host.#snapshot.capabilities, stop: true },
-		});
-		host.#append({
 			type: "active-turn",
 			activeTurn: {
 				agentName: "Host agent",
 				action: "Working",
 				details: ["Awaiting a host stop command"],
 			},
+		});
+		host.#append({
+			type: "capabilities",
+			capabilities: { ...host.#snapshot.capabilities, stop: true },
 		});
 		return host;
 	}
@@ -113,7 +133,7 @@ export class AnonymizedDurableHost {
 
 	serialize() {
 		return JSON.stringify({
-			snapshot: this.#snapshot,
+			initialSnapshot: this.#initialSnapshot,
 			events: this.#events,
 			calls: this.calls,
 		});
@@ -143,7 +163,10 @@ export class AnonymizedDurableHost {
 			async *readEvents(after, signal) {
 				signal?.throwIfAborted();
 				host.calls.push({ command: "readEvents", payload: after });
-				const cursors = ["external:0", ...host.#events.map((event) => event.cursor)];
+				const cursors = [
+					host.#initialSnapshot.cursor,
+					...host.#events.map((event) => event.cursor),
+				];
 				const cursorIndex = cursors.indexOf(after);
 				if (cursorIndex < 0) {
 					throw new FolioUnknownCursorError(`unknown external cursor: ${after}`);
@@ -177,16 +200,16 @@ export class AnonymizedDurableHost {
 					},
 				});
 				host.#append({
-					type: "capabilities",
-					capabilities: { ...host.#snapshot.capabilities, stop: true },
-				});
-				host.#append({
 					type: "active-turn",
 					activeTurn: {
 						agentName: "Host agent",
 						action: "Working",
 						details: ["Streaming through the host adapter"],
 					},
+				});
+				host.#append({
+					type: "capabilities",
+					capabilities: { ...host.#snapshot.capabilities, stop: true },
 				});
 				host.#append({
 					type: "message-upsert",
@@ -225,11 +248,11 @@ export class AnonymizedDurableHost {
 			async stop(signal) {
 				host.#require(host.#snapshot.capabilities.stop, "stop", signal);
 				host.calls.push({ command: "stop" });
-				host.#append({ type: "failure", message: "Turn stopped by the host" });
 				host.#append({
 					type: "capabilities",
 					capabilities: { ...host.#snapshot.capabilities, stop: false },
 				});
+				host.#append({ type: "failure", message: "Turn stopped by the host" });
 				host.#append({ type: "complete" });
 				return host.#receipt();
 			},
@@ -335,7 +358,10 @@ export class AnonymizedDurableHost {
 	#append(event) {
 		const durableEvent = {
 			...clone(event),
-			cursor: `external:${this.#events.length + 1}`,
+			cursor: cursorFor(
+				this.#initialSnapshot.conversationId,
+				this.#events.length + 1,
+			),
 		};
 		this.#events.push(durableEvent);
 		this.#snapshot = applyConversationEvent(this.#snapshot, durableEvent);

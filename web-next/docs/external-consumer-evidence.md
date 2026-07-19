@@ -1,6 +1,6 @@
 # Folio 0.1 External Consumer Evidence
 
-Status: accepted compatibility proof for W7 (2026-07-12)
+Status: accepted compatibility proof for W7 (2026-07-18)
 
 ## Artifact under test
 
@@ -31,8 +31,12 @@ only the portable contract evidence.
 | Stop and terminal failure | Passed with host-calculated capabilities | External fixture stop/failure test |
 | Artifact and review projection | Passed with consumer-owned evidence | External fixture artifact/review test |
 | Workspace and publication authority | Passed without package-side credentials or Git access | External fixture authority-command test |
-| Responsive and accessible session surface | Passed at desktop and 390 by 844 phone viewports | Folio browser suite plus standalone consumer build |
+| Responsive session layout | Owner-observed private browser pass at desktop and 390 by 844 phone viewports | `tests/e2e/mobile.spec.ts` verifies 375 by 812 overflow, hit areas, compose, streaming, and actionable failure behavior |
+| Keyboard and semantic accessibility | Owner-observed role, accessible-name, focus, and keyboard-flow pass; private artifacts withheld | `tests/e2e/sessions-demo.spec.ts` verifies semantic heading and keyboard-revealed controls; the standalone consumer build verifies integration |
 | Workspaces strict consumer | Passed with the same `0.1.0` API | Workspaces adapter and package-boundary tests |
+
+The accessibility result is deliberately limited to the exercised browser
+flows above. It does not claim a screen-reader session or automated WCAG audit.
 
 ## Outcome
 

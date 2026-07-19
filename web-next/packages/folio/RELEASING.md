@@ -15,8 +15,12 @@ It independently clean-builds and stages the compiled ESM, declarations,
 JavaScript/CSS source maps, and standalone stylesheet twice; packs both staging
 trees and requires identical SHA-256 checksums; enforces the file and size
 allowlists; then copies the tarball and the anonymized external-host fixture into
-a temporary project, installs with no workspace link, runs the public port
-contract, and runs a production Next build. Review artifacts are written under
+a temporary project. For an accepted package version, the gate fails closed
+unless the checked-in release receipt matches the remote Git tag, downloaded
+release-asset checksum, and uncompressed tar payload. It installs that canonical
+release asset with no workspace link, runs the public port contract, and runs a
+production Next build. This provenance step requires network access to the
+public Git remote and GitHub release. Review artifacts are written under
 `artifacts/folio/`.
 
 The artifact remains `private: true`. The first external-consumer proof (#1055)
