@@ -87,7 +87,8 @@ both production and test imports for package-private paths.
 3. #1052 makes Folio styles and assets independently installable.
 4. #1053 proves Workspaces has no privileged internal path.
 5. #1054 creates the versioned install artifact and clean fixture.
-6. #1055 proves a real external consumer without publishing private details.
+6. #1055 proves a real external consumer and checks in only its anonymized
+   compatibility fixture and evidence summary.
 
 ## Non-goals
 
