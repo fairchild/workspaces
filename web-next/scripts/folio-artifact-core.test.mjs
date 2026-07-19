@@ -70,6 +70,7 @@ describe("Folio artifact contract", () => {
 			sourceCommit: "a".repeat(40),
 			compressedSha256: "b".repeat(64),
 			tarPayloadSha256: "c".repeat(64),
+			packToolchain: { nodeMajor: 22, pnpmMajor: 10 },
 		};
 
 		expect(validateAcceptedReleaseRecord(accepted, manifest)).toEqual([]);
@@ -82,6 +83,7 @@ describe("Folio artifact contract", () => {
 					sourceCommit: "short",
 					compressedSha256: "invalid",
 					tarPayloadSha256: "invalid",
+					packToolchain: {},
 				},
 				manifest,
 			),
@@ -91,6 +93,8 @@ describe("Folio artifact contract", () => {
 			"accepted release source commit must be a full lowercase SHA-1",
 			"accepted release compressedSha256 must be a full lowercase SHA-256",
 			"accepted release tarPayloadSha256 must be a full lowercase SHA-256",
+			"accepted release packToolchain.nodeMajor must be an integer",
+			"accepted release packToolchain.pnpmMajor must be an integer",
 		]);
 	});
 

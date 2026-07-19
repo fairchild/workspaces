@@ -3,5 +3,9 @@
 	"packageVersion": "0.1.0",
 	"sourceCommit": "ac2b5bb8bd74dbba34401d50eeb4304eb87c55e0",
 	"compressedSha256": "f5da5f28ee25e952681fca92b183700958670483215fde6436fed67c5238bde4",
-	"tarPayloadSha256": "68b1383f7ce3ceb4db682b271a9ead9f5032fc50c49404cc334a582418c175a9"
+	"tarPayloadSha256": "68b1383f7ce3ceb4db682b271a9ead9f5032fc50c49404cc334a582418c175a9",
+	"packToolchain": {
+		"nodeMajor": 22,
+		"pnpmMajor": 10
+	}
 }

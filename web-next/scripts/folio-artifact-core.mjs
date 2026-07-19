@@ -109,6 +109,12 @@ export function validateAcceptedReleaseRecord(accepted, manifest) {
 			errors.push(`accepted release ${field} must be a full lowercase SHA-256`);
 		}
 	}
+	if (!Number.isInteger(accepted?.packToolchain?.nodeMajor)) {
+		errors.push("accepted release packToolchain.nodeMajor must be an integer");
+	}
+	if (!Number.isInteger(accepted?.packToolchain?.pnpmMajor)) {
+		errors.push("accepted release packToolchain.pnpmMajor must be an integer");
+	}
 	return errors;
 }
 

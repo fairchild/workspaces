@@ -151,6 +151,7 @@ test("rejects foreign cursors and aborted commands without guessing", async () =
 
 	const abort = new AbortController();
 	abort.abort();
+	const beforeAbort = host.serialize();
 	await assert.rejects(
 		host.port().send(
 			{ text: "Do not send", requestId: "request-aborted" },
@@ -158,4 +159,5 @@ test("rejects foreign cursors and aborted commands without guessing", async () =
 		),
 		(error) => error?.name === "AbortError",
 	);
+	assert.equal(host.serialize(), beforeAbort);
 });
