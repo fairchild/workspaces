@@ -16,6 +16,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { gunzipSync } from "node:zlib";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
@@ -28,6 +29,8 @@ import {
 const exec = promisify(execFile);
 const WEB_NEXT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PACKAGE = path.join(WEB_NEXT, "packages", "folio");
+const EXTERNAL_FIXTURE = path.join(WEB_NEXT, "fixtures", "external-consumer");
+const ACCEPTED_RELEASE = path.join(EXTERNAL_FIXTURE, "accepted-release.json");
 const ARTIFACTS = path.join(WEB_NEXT, "artifacts", "folio");
 const STAGE_A = path.join(ARTIFACTS, "stage-a");
 const STAGE_B = path.join(ARTIFACTS, "stage-b");
@@ -48,6 +51,20 @@ async function runPnpm(args, options = {}) {
 
 async function sha256(file) {
 	return createHash("sha256").update(await readFile(file)).digest("hex");
+}
+
+async function verifyAcceptedReleasePayload(tarball, manifest) {
+	const accepted = JSON.parse(await readFile(ACCEPTED_RELEASE, "utf8"));
+	if (accepted.packageVersion !== manifest.version) return null;
+	const payloadSha256 = createHash("sha256")
+		.update(gunzipSync(await readFile(tarball)))
+		.digest("hex");
+	if (payloadSha256 !== accepted.tarPayloadSha256) {
+		throw new Error(
+			`Folio ${manifest.version} tar payload ${payloadSha256} differs from accepted release ${accepted.tarPayloadSha256}`,
+		);
+	}
+	return payloadSha256;
 }
 
 async function stagePackage(destination) {
@@ -130,7 +147,10 @@ function fixtureFiles(tarballName) {
 				version: "0.0.0",
 				private: true,
 				type: "module",
-				scripts: { build: "next build" },
+				scripts: {
+					build: "next build",
+					test: "node --test test/*.test.mjs",
+				},
 				dependencies: {
 					"@fairchild/folio": `file:./${tarballName}`,
 					ai: "7.0.15",
@@ -187,6 +207,10 @@ async function verifyCleanConsumer(tarball) {
 			await mkdir(path.dirname(target), { recursive: true });
 			await writeFile(target, contents);
 		}
+		await mkdir(path.join(fixture, "test"), { recursive: true });
+		for (const file of ["host-adapter.mjs", "contract.test.mjs"]) {
+			await cp(path.join(EXTERNAL_FIXTURE, file), path.join(fixture, "test", file));
+		}
 		const install = await runPnpm(["install", "--prefer-offline", "--ignore-workspace"], {
 			cwd: fixture,
 		});
@@ -210,6 +234,11 @@ async function verifyCleanConsumer(tarball) {
 		log.push(
 			`IDENTITY\n${identity.stdout}${identity.stderr}shared conversation runtime identity verified`,
 		);
+		stage = "external contract";
+		const contract = await runPnpm(["--ignore-workspace", "test"], {
+			cwd: fixture,
+		});
+		log.push(`EXTERNAL CONTRACT\n${contract.stdout}${contract.stderr}`);
 		stage = "build";
 		const build = await runPnpm(["--ignore-workspace", "run", "build"], {
 			cwd: fixture,
@@ -255,6 +284,7 @@ if (errors.length > 0) throw new Error(errors.join("\n"));
 
 const finalTarball = path.join(ARTIFACTS, filename);
 await cp(first, finalTarball);
+const acceptedPayloadSha256 = await verifyAcceptedReleasePayload(finalTarball, manifest);
 await writeFile(path.join(ARTIFACTS, "files.txt"), `${files.join("\n")}\n`);
 await writeFile(
 	path.join(ARTIFACTS, "manifest.json"),
@@ -275,5 +305,10 @@ await verifyCleanConsumer(finalTarball);
 
 console.log(`packed ${path.relative(WEB_NEXT, finalTarball)}`);
 console.log(`sha256 ${firstSha256}`);
+if (acceptedPayloadSha256) {
+	console.log(`tar payload sha256 ${acceptedPayloadSha256} matches the accepted release`);
+}
 console.log(`${packedStat.size} bytes, ${files.length} intentional files`);
-console.log("clean standalone Next fixture installed without a workspace link and built successfully");
+console.log(
+	"clean standalone Next fixture installed without a workspace link, passed the external-host contract, and built successfully",
+);

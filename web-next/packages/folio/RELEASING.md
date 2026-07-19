@@ -14,12 +14,13 @@ pnpm folio:package
 It independently clean-builds and stages the compiled ESM, declarations,
 JavaScript/CSS source maps, and standalone stylesheet twice; packs both staging
 trees and requires identical SHA-256 checksums; enforces the file and size
-allowlists; then copies the tarball into a temporary project, installs with no
-workspace link, and runs a production Next build. Review artifacts are written
-under `artifacts/folio/`.
+allowlists; then copies the tarball and the anonymized external-host fixture into
+a temporary project, installs with no workspace link, runs the public port
+contract, and runs a production Next build. Review artifacts are written under
+`artifacts/folio/`.
 
-The artifact remains `private: true`. Public-registry publication is a separate
-owner decision after the first external-consumer proof (#1055). That gate must
+The artifact remains `private: true`. The first external-consumer proof (#1055)
+does not itself authorize registry publication. A future publication gate must
 decide package scope/ownership, provenance signing, npm trusted publishing, and
 support expectations before removing `private` or adding a publish command.
 
