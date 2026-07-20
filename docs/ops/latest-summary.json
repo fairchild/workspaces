@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-19T14:01:37.948941Z",
+  "generated_at": "2026-07-20T14:15:22.730682Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -19,49 +19,49 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-06-19T14:01:37.948941Z",
+    "window_start": "2026-06-20T14:15:22.730682Z",
     "completed_runs": 499,
-    "failure_runs": 53,
-    "failure_rate": 10.62124248496994,
+    "failure_runs": 85,
+    "failure_rate": 17.034068136272545,
     "rerun_runs": 0,
     "rerun_rate": 0.0,
     "top_failing_workflows": [
       {
         "workflow_name": "Managed Reviewer Health",
-        "failures": 49
+        "failures": 79
+      },
+      {
+        "workflow_name": "Agent: Carl Community",
+        "failures": 2
+      },
+      {
+        "workflow_name": "Milestone Legibility",
+        "failures": 2
       },
       {
         "workflow_name": "PR Readiness",
         "failures": 2
-      },
-      {
-        "workflow_name": "Agent: Carl Community",
-        "failures": 1
-      },
-      {
-        "workflow_name": "Milestone Legibility",
-        "failures": 1
       }
     ],
     "agents": {
+      "Carl Community": {
+        "completed_runs": 2,
+        "failure_runs": 2,
+        "failure_rate": 100.0,
+        "rerun_runs": 0,
+        "rerun_rate": 0.0
+      },
       "Approved Mention Execution": {
-        "completed_runs": 39,
+        "completed_runs": 30,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
         "rerun_rate": 0.0
       },
       "Mention Triage": {
-        "completed_runs": 19,
+        "completed_runs": 16,
         "failure_runs": 0,
         "failure_rate": 0.0,
-        "rerun_runs": 0,
-        "rerun_rate": 0.0
-      },
-      "Carl Community": {
-        "completed_runs": 1,
-        "failure_runs": 1,
-        "failure_rate": 100.0,
         "rerun_runs": 0,
         "rerun_rate": 0.0
       }
@@ -70,7 +70,7 @@
   "perf": {
     "available": true,
     "latest_timestamp": "2026-03-22T10:29:08-0700",
-    "freshness_days": 118.85590218681713,
+    "freshness_days": 119.86544827178241,
     "metrics": {
       "launch_to_first_prompt": {
         "latest_median_ms": 1468.205,
@@ -92,7 +92,7 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 69.73585589052082,
+      "days_since_activity": 70.7454019754861,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
     }
   ],
