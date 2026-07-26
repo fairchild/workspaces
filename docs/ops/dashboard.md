@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-07-25T14:05:24.006080Z`
+Last updated: `2026-07-26T14:04:01.182758Z`
 Source: `live`
 
 ## Funnel
@@ -23,26 +23,24 @@ Source: `live`
 | Metric | Value |
 |---|---:|
 | Completed runs | 499 |
-| Failure rate | 17.43% |
+| Failure rate | 15.23% |
 | Rerun rate | 0.00% |
 
 Top failing workflows:
-- `Managed Reviewer Health` — 77 failure(s)
-- `Milestone Legibility` — 6 failure(s)
+- `Managed Reviewer Health` — 65 failure(s)
+- `Milestone Legibility` — 7 failure(s)
 - `Agent: Carl Community` — 4 failure(s)
 
 ## Agent Health
 
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
-| Approved Mention Execution | 7 | 0 | 0.00% | 0 | 0.00% |
-| Carl Community | 6 | 4 | 66.67% | 0 | 0.00% |
-| Mention Triage | 1 | 0 | 0.00% | 0 | 0.00% |
+| Carl Community | 7 | 4 | 57.14% | 0 | 0.00% |
 
 ## Perf Snapshot
 
 Latest perf snapshot: `2026-03-22T10:29:08-0700`
-Freshness: 124.9 days
+Freshness: 125.9 days
 
 | Metric | Latest Median (ms) | Target (ms) | Delta vs Previous | Status |
 |---|---:|---:|---:|---|
@@ -51,7 +49,7 @@ Freshness: 124.9 days
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (75.7 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (76.7 days idle)
 
 ## Current Breaches
 
