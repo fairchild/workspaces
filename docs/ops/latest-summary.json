@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-27T14:17:18.482946Z",
+  "generated_at": "2026-07-28T14:15:31.044229Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -19,16 +19,16 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-06-27T14:17:18.482946Z",
+    "window_start": "2026-06-28T14:15:31.044229Z",
     "completed_runs": 499,
-    "failure_runs": 45,
-    "failure_rate": 9.01803607214429,
+    "failure_runs": 17,
+    "failure_rate": 3.406813627254509,
     "rerun_runs": 0,
     "rerun_rate": 0.0,
     "top_failing_workflows": [
       {
         "workflow_name": "Managed Reviewer Health",
-        "failures": 35
+        "failures": 8
       },
       {
         "workflow_name": "Milestone Legibility",
@@ -36,14 +36,14 @@
       },
       {
         "workflow_name": "Agent: Carl Community",
-        "failures": 3
+        "failures": 2
       }
     ],
     "agents": {
       "Carl Community": {
         "completed_runs": 7,
-        "failure_runs": 3,
-        "failure_rate": 42.857142857142854,
+        "failure_runs": 2,
+        "failure_rate": 28.57142857142857,
         "rerun_runs": 0,
         "rerun_rate": 0.0
       }
@@ -52,7 +52,7 @@
   "perf": {
     "available": true,
     "latest_timestamp": "2026-03-22T10:29:08-0700",
-    "freshness_days": 126.86678799706017,
+    "freshness_days": 127.86554449339121,
     "metrics": {
       "launch_to_first_prompt": {
         "latest_median_ms": 1468.205,
@@ -74,7 +74,7 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 77.74674170076389,
+      "days_since_activity": 78.7454981970949,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
     }
   ],
@@ -101,8 +101,8 @@
         {
           "agent": "Carl Community",
           "completed_runs": 7,
-          "failure_runs": 3,
-          "failure_rate": 42.857142857142854,
+          "failure_runs": 2,
+          "failure_rate": 28.57142857142857,
           "rerun_runs": 0,
           "rerun_rate": 0.0
         }
