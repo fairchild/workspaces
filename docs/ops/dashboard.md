@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-07-29T14:15:22.964780Z`
+Last updated: `2026-07-30T14:15:07.925007Z`
 Source: `live`
 
 ## Funnel
@@ -28,18 +28,18 @@ Source: `live`
 
 Top failing workflows:
 - `Milestone Legibility` — 7 failure(s)
-- `Agent: Carl Community` — 1 failure(s)
+- `Managed Reviewer Ingress` — 1 failure(s)
 
 ## Agent Health
 
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
-| Carl Community | 7 | 1 | 14.29% | 0 | 0.00% |
+| Carl Community | 7 | 0 | 0.00% | 0 | 0.00% |
 
 ## Perf Snapshot
 
 Latest perf snapshot: `2026-03-22T10:29:08-0700`
-Freshness: 128.9 days
+Freshness: 129.9 days
 
 | Metric | Latest Median (ms) | Target (ms) | Delta vs Previous | Status |
 |---|---:|---:|---:|---|
@@ -48,7 +48,7 @@ Freshness: 128.9 days
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (79.7 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (80.7 days idle)
 
 ## Current Breaches
 
