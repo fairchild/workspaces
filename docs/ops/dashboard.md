@@ -1,6 +1,6 @@
 # Ops Dashboard
 
-Last updated: `2026-07-30T14:15:07.925007Z`
+Last updated: `2026-07-31T14:15:33.449546Z`
 Source: `live`
 
 ## Funnel
@@ -39,7 +39,7 @@ Top failing workflows:
 ## Perf Snapshot
 
 Latest perf snapshot: `2026-03-22T10:29:08-0700`
-Freshness: 129.9 days
+Freshness: 130.9 days
 
 | Metric | Latest Median (ms) | Target (ms) | Delta vs Previous | Status |
 |---|---:|---:|---:|---|
@@ -48,7 +48,7 @@ Freshness: 129.9 days
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (80.7 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (81.7 days idle)
 
 ## Current Breaches
 
