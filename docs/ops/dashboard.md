@@ -1,13 +1,13 @@
 # Ops Dashboard
 
-Last updated: `2026-07-31T14:15:33.449546Z`
+Last updated: `2026-08-01T14:03:10.443830Z`
 Source: `live`
 
 ## Funnel
 
 | Ideas | Approved | Planned | Active | Merged | Stalled |
 |---:|---:|---:|---:|---:|---:|
-| 12 | 3 | 2 | 0 | 0 | 1 |
+| 12 | 3 | 2 | 0 | 0 | 2 |
 
 ## Lead Times
 
@@ -23,10 +23,11 @@ Source: `live`
 | Metric | Value |
 |---|---:|
 | Completed runs | 499 |
-| Failure rate | 1.60% |
+| Failure rate | 4.01% |
 | Rerun rate | 0.00% |
 
 Top failing workflows:
+- `Managed Reviewer Health` — 12 failure(s)
 - `Milestone Legibility` — 7 failure(s)
 - `Managed Reviewer Ingress` — 1 failure(s)
 
@@ -35,11 +36,12 @@ Top failing workflows:
 | Agent | Runs | Failures | Rate | Reruns | Rerun Rate |
 |---|---:|---:|---:|---:|---:|
 | Carl Community | 7 | 0 | 0.00% | 0 | 0.00% |
+| Mention Triage | 2 | 0 | 0.00% | 0 | 0.00% |
 
 ## Perf Snapshot
 
 Latest perf snapshot: `2026-03-22T10:29:08-0700`
-Freshness: 130.9 days
+Freshness: 131.9 days
 
 | Metric | Latest Median (ms) | Target (ms) | Delta vs Previous | Status |
 |---|---:|---:|---:|---|
@@ -48,15 +50,17 @@ Freshness: 130.9 days
 
 ## Stale Planned Work
 
-- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (81.7 days idle)
+- #43 — [task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane (82.7 days idle)
+- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (14.0 days idle)
 
 ## Current Breaches
 
 - `perf` — Performance targets regressed or exceeded threshold
+- `throughput` — Planned discussions are sitting without linked PR activity
 
 ## Latest Discussions
 
-- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (`planned`)
+- #110 — [idea][endorsed] Fix environment status color semantics in New Workspace sheet (`stalled`)
 - #111 — [idea] Split release.yml into three jobs: build-sign-notarize → validate-artifact → publish (`idea`)
 - #112 — [idea] Archive xcresult bundles from CI and surface test failure summaries (`idea`)
 - #195 — [idea] [ops] Investigate performance regression (`idea`)

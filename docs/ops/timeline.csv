@@ -6,7 +6,7 @@ discussion_number,discussion_title,discussion_url,discussion_created_at,approved
 104,[idea] Run agent script tests in CI on every .agents/ change,https://github.com/fairchild/workspaces/discussions/104,2026-03-15T03:08:49Z,,,,,,0,0,0,,0,0,,,2026-03-21T18:17:24Z,idea
 105,[idea] Commit to pane-tree tiling as the primary multiplexing model,https://github.com/fairchild/workspaces/discussions/105,2026-03-15T16:11:21Z,2026-03-22T15:45:28Z,,,,,0,0,0,,0,0,,,2026-07-13T07:24:39Z,idea
 109,[idea] Fix remote workspace identity before Lume work compounds the debt,https://github.com/fairchild/workspaces/discussions/109,2026-03-15T16:25:01Z,,,,,,0,0,0,,0,0,,,2026-07-13T07:24:42Z,idea
-110,[idea][endorsed] Fix environment status color semantics in New Workspace sheet,https://github.com/fairchild/workspaces/discussions/110,2026-03-15T16:49:20Z,2026-03-16T07:50:42Z,2026-03-16T07:51:31Z,,,116,1,0,1,,0,0,,,2026-07-18T13:59:42Z,planned
+110,[idea][endorsed] Fix environment status color semantics in New Workspace sheet,https://github.com/fairchild/workspaces/discussions/110,2026-03-15T16:49:20Z,2026-03-16T07:50:42Z,2026-03-16T07:51:31Z,,,116,1,0,1,,0,0,,,2026-07-18T13:59:42Z,stalled
 111,[idea] Split release.yml into three jobs: build-sign-notarize → validate-artifact → publish,https://github.com/fairchild/workspaces/discussions/111,2026-03-15T20:46:59Z,,,,,,0,0,0,,0,0,,,2026-07-13T07:24:46Z,idea
 112,[idea] Archive xcresult bundles from CI and surface test failure summaries,https://github.com/fairchild/workspaces/discussions/112,2026-03-16T01:29:43Z,,,,,,0,0,0,,0,0,,,2026-07-13T07:24:49Z,idea
 195,[idea] [ops] Investigate performance regression,https://github.com/fairchild/workspaces/discussions/195,2026-03-23T14:00:14Z,,,,,,0,0,0,,0,0,,,2026-07-13T07:24:52Z,idea

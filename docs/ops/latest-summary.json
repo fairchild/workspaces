@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-31T14:15:33.449546Z",
+  "generated_at": "2026-08-01T14:03:10.443830Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -9,7 +9,7 @@
     "planned": 2,
     "active": 0,
     "merged": 0,
-    "stalled": 1
+    "stalled": 2
   },
   "lead_times": {
     "idea_to_approved_days": 0.9416782407407407,
@@ -19,13 +19,17 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-07-01T14:15:33.449546Z",
+    "window_start": "2026-07-02T14:03:10.443830Z",
     "completed_runs": 499,
-    "failure_runs": 8,
-    "failure_rate": 1.6032064128256511,
+    "failure_runs": 20,
+    "failure_rate": 4.008016032064128,
     "rerun_runs": 0,
     "rerun_rate": 0.0,
     "top_failing_workflows": [
+      {
+        "workflow_name": "Managed Reviewer Health",
+        "failures": 12
+      },
       {
         "workflow_name": "Milestone Legibility",
         "failures": 7
@@ -36,6 +40,13 @@
       }
     ],
     "agents": {
+      "Mention Triage": {
+        "completed_runs": 2,
+        "failure_runs": 0,
+        "failure_rate": 0.0,
+        "rerun_runs": 0,
+        "rerun_rate": 0.0
+      },
       "Carl Community": {
         "completed_runs": 7,
         "failure_runs": 0,
@@ -48,7 +59,7 @@
   "perf": {
     "available": true,
     "latest_timestamp": "2026-03-22T10:29:08-0700",
-    "freshness_days": 130.86557233270833,
+    "freshness_days": 131.8569727295139,
     "metrics": {
       "launch_to_first_prompt": {
         "latest_median_ms": 1468.205,
@@ -70,8 +81,14 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 81.74552603641203,
+      "days_since_activity": 82.73692643321759,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
+    },
+    {
+      "discussion_number": 110,
+      "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
+      "days_since_activity": 14.002412544328704,
+      "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
     }
   ],
   "breaches": [
@@ -88,6 +105,26 @@
         }
       ],
       "suggested_direction": "Re-run the affected benchmarks, isolate the regression window, and harden the slow path before adding new surface area."
+    },
+    {
+      "category": "throughput",
+      "title": "[idea] [ops] Unblock planned work from execution",
+      "summary": "Planned discussions are sitting without linked PR activity",
+      "details": [
+        {
+          "discussion_number": 43,
+          "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
+          "days_since_activity": 82.73692643321759,
+          "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
+        },
+        {
+          "discussion_number": 110,
+          "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
+          "days_since_activity": 14.002412544328704,
+          "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
+        }
+      ],
+      "suggested_direction": "Pick the oldest planned work, assign an execution owner, and tighten the path from endorsed idea to first PR."
     }
   ]
 }
