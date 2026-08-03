@@ -223,6 +223,125 @@ class FactoryImplementTests(unittest.TestCase):
         ):
             factory_implement.verify_release_actor(events, "fairchild", "fairchild")
 
+    def test_non_owner_editor_is_flagged_owner_edits_are_not(self) -> None:
+        # No edits at all.
+        self.assertIsNone(factory_implement.latest_non_owner_editor([], "fairchild"))
+        # The owner's own edit is trusted.
+        self.assertIsNone(
+            factory_implement.latest_non_owner_editor(
+                [{"editor": {"login": "fairchild"}}], "fairchild"
+            )
+        )
+        # A non-owner edit is the whole point of the check.
+        self.assertEqual(
+            factory_implement.latest_non_owner_editor(
+                [{"editor": {"login": "contributor"}}], "fairchild"
+            ),
+            "contributor",
+        )
+        # The LATEST non-owner edit wins when there are several — `edits` is
+        # newest-first (matching GitHubClient.user_content_edits_since), so
+        # that's the FIRST non-owner match, not the last.
+        self.assertEqual(
+            factory_implement.latest_non_owner_editor(
+                [
+                    {"editor": {"login": "second-contributor"}},
+                    {"editor": {"login": "fairchild"}},
+                    {"editor": {"login": "first-contributor"}},
+                ],
+                "fairchild",
+            ),
+            "second-contributor",
+        )
+        # A deleted/anonymized editor can't be verified as the owner — fail closed.
+        self.assertEqual(
+            factory_implement.latest_non_owner_editor([{"editor": None}], "fairchild"),
+            "an unidentified editor",
+        )
+
+    def test_user_content_edits_since_excludes_edits_strictly_before_the_boundary(
+        self,
+    ) -> None:
+        client = factory_implement.GitHubClient("fairchild/workspaces", "token")
+        # userContentEdits is newest-first (verified live against this repo's
+        # own GraphQL API — the opposite of most GitHub connections).
+        page = {
+            "userContentEdits": {
+                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                "nodes": [
+                    {"editor": {"login": "fairchild"}, "editedAt": "2026-07-16T00:00:00Z"},
+                    # Same second as `since`: must count as at-or-after, not before —
+                    # GitHub timestamps are second-precision.
+                    {"editor": {"login": "contributor"}, "editedAt": "2026-07-15T00:00:00Z"},
+                    {"editor": {"login": "contributor"}, "editedAt": "2026-07-14T00:00:00Z"},
+                ],
+            }
+        }
+        with mock.patch.object(
+            client, "graphql", return_value={"data": {"repository": {"issue": page}}}
+        ):
+            edits = client.user_content_edits_since(42, "2026-07-15T00:00:00Z")
+
+        self.assertEqual(
+            [edit["editedAt"] for edit in edits],
+            ["2026-07-16T00:00:00Z", "2026-07-15T00:00:00Z"],
+        )
+
+    def test_user_content_edits_since_paginates_past_a_full_page_of_newer_edits(
+        self,
+    ) -> None:
+        # A hostile edit sitting behind 50 even-newer (e.g. owner) edits must
+        # not silently fall outside a single `first: 50` page.
+        client = factory_implement.GitHubClient("fairchild/workspaces", "token")
+        newest_page = {
+            "pageInfo": {"hasNextPage": True, "endCursor": "cursor-1"},
+            "nodes": [
+                {"editor": {"login": "fairchild"}, "editedAt": f"2026-08-{i + 1:02d}T00:00:00Z"}
+                for i in range(50)
+            ],
+        }
+        older_page = {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": [
+                {"editor": {"login": "contributor"}, "editedAt": "2026-07-15T12:00:00Z"},
+            ],
+        }
+        responses = [
+            {"data": {"repository": {"issue": {"userContentEdits": newest_page}}}},
+            {"data": {"repository": {"issue": {"userContentEdits": older_page}}}},
+        ]
+        with mock.patch.object(client, "graphql", side_effect=responses) as graphql:
+            edits = client.user_content_edits_since(42, "2026-07-15T00:00:00Z")
+
+        self.assertEqual(graphql.call_count, 2)
+        self.assertEqual(graphql.call_args_list[1].args[1]["after"], "cursor-1")
+        self.assertIn(
+            {"editor": {"login": "contributor"}, "editedAt": "2026-07-15T12:00:00Z"},
+            edits,
+        )
+
+    def test_user_content_edits_since_fails_closed_on_null_connection_or_nodes(
+        self,
+    ) -> None:
+        client = factory_implement.GitHubClient("fairchild/workspaces", "token")
+        # A null connection or null nodes list is not the same as a genuinely
+        # empty history (which GitHub renders as nodes: []) — must raise, not
+        # silently degrade to "no edits".
+        for issue_payload in (
+            {"userContentEdits": None},
+            {"userContentEdits": {"nodes": None, "pageInfo": {}}},
+        ):
+            with self.subTest(issue_payload=issue_payload):
+                with mock.patch.object(
+                    client,
+                    "graphql",
+                    return_value={"data": {"repository": {"issue": issue_payload}}},
+                ):
+                    with self.assertRaisesRegex(
+                        factory_implement.FactoryImplementError, "was null"
+                    ):
+                        client.user_content_edits_since(42, "2026-07-15T00:00:00Z")
+
     def test_daily_budget_counts_reruns_and_execution_rechecks_switches(self) -> None:
         runs = [
             {
@@ -246,6 +365,9 @@ class FactoryImplementTests(unittest.TestCase):
                 "actor": {"login": "fairchild"},
             },
             {
+                # The Monitor sweep's own dispatch identity (#1148) — must
+                # count toward budget just like an owner-triggered dispatch,
+                # or the sweep could blow past the daily cap unnoticed.
                 "id": 98,
                 "event": "workflow_dispatch",
                 "run_attempt": 9,
@@ -258,7 +380,7 @@ class FactoryImplementTests(unittest.TestCase):
                 "101",
                 repository_owner="fairchild",
             ),
-            3,
+            12,
         )
         self.assertEqual(
             factory_implement.count_daily_runs(
@@ -267,7 +389,7 @@ class FactoryImplementTests(unittest.TestCase):
                 3,
                 "fairchild",
             ),
-            6,
+            15,
         )
 
         actions_client = mock.Mock()
@@ -288,7 +410,7 @@ class FactoryImplementTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             factory_implement.FactoryImplementError,
-            "7 run attempts",
+            "16 run attempts",
         ):
             factory_implement.authorize_execution(
                 actions_client,
@@ -337,10 +459,12 @@ class FactoryImplementTests(unittest.TestCase):
                 "event": "labeled",
                 "label": {"name": "ready"},
                 "actor": {"login": "fairchild"},
+                "created_at": "2026-07-15T00:00:00Z",
             }
         ]
         client.claimed_issues.return_value = []
         client.comments.return_value = []
+        client.user_content_edits_since.return_value = []
         return client
 
     def run_claim(self, client, actions_client, *, daily_cap: int = 6) -> list[str]:
@@ -384,6 +508,28 @@ class FactoryImplementTests(unittest.TestCase):
         client.update_issue.assert_called_once_with(
             42, {"labels": ["agent", "quality", "task"]}
         )
+        client.add_assignees.assert_not_called()
+        self.assertIn("matched=false", outputs)
+        self.assertNotIn("matched=true", outputs)
+
+    def test_claim_defers_and_never_touches_labels_when_content_edited_after_release(
+        self,
+    ) -> None:
+        client = self.claim_client(self.issue())
+        client.user_content_edits_since.return_value = [
+            {"editor": {"login": "issue-author"}, "editedAt": "2026-07-16T00:00:00Z"}
+        ]
+        actions_client = mock.Mock()
+        actions_client.workflow_runs_on.return_value = []
+
+        outputs = self.run_claim(client, actions_client)
+
+        client.comment.assert_called_once()
+        comment_body = client.comment.call_args.args[1]
+        self.assertIn("edited", comment_body)
+        self.assertIn("@issue-author", comment_body)
+        self.assertIn(factory_implement.STALE_SCOPE_COMMENT_MARKER, comment_body)
+        client.update_issue.assert_not_called()
         client.add_assignees.assert_not_called()
         self.assertIn("matched=false", outputs)
         self.assertNotIn("matched=true", outputs)
@@ -443,9 +589,11 @@ class FactoryImplementTests(unittest.TestCase):
                 "event": "labeled",
                 "label": {"name": "ready"},
                 "actor": {"login": "fairchild"},
+                "created_at": "2026-07-15T00:00:00Z",
             }
         ]
         client.claimed_issues.return_value = []
+        client.user_content_edits_since.return_value = []
         client.add_assignees.side_effect = factory_implement.FactoryImplementError(
             "GitHub API POST /assignees failed with HTTP 403: "
             "Assigning agents is not supported with GitHub App installation tokens."
@@ -559,9 +707,11 @@ class FactoryImplementTests(unittest.TestCase):
                 "event": "labeled",
                 "label": {"name": "ready"},
                 "actor": {"login": "fairchild"},
+                "created_at": "2026-07-15T00:00:00Z",
             }
         ]
         client.claimed_issues.return_value = []
+        client.user_content_edits_since.return_value = []
         actions_client = mock.Mock()
         actions_client.workflow_runs_on.return_value = []
 
@@ -605,12 +755,46 @@ class FactoryImplementTests(unittest.TestCase):
         )
         client.comment.assert_not_called()
 
+    def test_stale_scope_comment_dedup_is_scoped_per_release_cycle(self) -> None:
+        first_cycle = factory_implement.stale_scope_comment(
+            "contributor", "2026-07-15T00:00:00Z"
+        )
+        second_cycle = factory_implement.stale_scope_comment(
+            "contributor", "2026-07-20T00:00:00Z"
+        )
+        client = mock.Mock()
+        client.comments.return_value = [{"body": first_cycle}]
+
+        # A hostile edit against the OLD release cycle is correctly suppressed...
+        factory_implement.comment_once(
+            client,
+            42,
+            first_cycle,
+            dedupe_key=factory_implement.stale_scope_marker("2026-07-15T00:00:00Z"),
+        )
+        client.comment.assert_not_called()
+
+        # ...but a hostile edit against a NEW release cycle (the owner
+        # re-reviewed and re-applied ready since) must still get its own
+        # warning, not be silently swallowed by the earlier marker.
+        factory_implement.comment_once(
+            client,
+            42,
+            second_cycle,
+            dedupe_key=factory_implement.stale_scope_marker("2026-07-20T00:00:00Z"),
+        )
+        client.comment.assert_called_once_with(42, second_cycle)
+
     def test_workflow_contract_is_event_gated_and_uses_april_identity(self) -> None:
         workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
 
         self.assertIn("issues:\n    types: [labeled]", workflow)
         self.assertIn("github.event.sender.login == github.repository_owner", workflow)
         self.assertIn("github.actor == github.repository_owner", workflow)
+        # The Monitor sweep's own workflow_dispatch identity (#1148) — trusted
+        # to *trigger* a claim attempt, never to grant admission itself; see
+        # verify_release_actor for the actual (unchanged) owner-only gate.
+        self.assertIn("github.actor == 'github-actions[bot]'", workflow)
         self.assertIn("github.event.label.name == 'ready'", workflow)
         self.assertIn("vars.AGENT_AUTOMATIONS_ENABLED == 'true'", workflow)
         self.assertIn("vars.FACTORY_IMPLEMENT_ENABLED == 'true'", workflow)
@@ -654,8 +838,125 @@ class FactoryImplementTests(unittest.TestCase):
         monitor = (
             REPO_ROOT / ".github" / "workflows" / "factory-monitor.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn("actions: read", monitor)
+        # write, not read: the standing-queue sweep dispatches
+        # factory-implement.yml through the Actions API (#1148).
+        self.assertIn("actions: write", monitor)
+        self.assertNotIn("actions: read", monitor)
+        self.assertIn("scripts/factory-sweep.py", monitor)
+        self.assertIn(
+            "vars.AGENT_AUTOMATIONS_ENABLED == 'true' && vars.FACTORY_IMPLEMENT_ENABLED == 'true'",
+            monitor,
+        )
+        # Pinned regression guard: the level-triggered sweep this issue adds
+        # is a properly re-authenticated design (owner-only admission is
+        # re-verified independently in verify_release_actor), not a revival
+        # of the unauthenticated re-fire lane retired in #1096.
         self.assertNotIn("Re-fire ready implementation work", monitor)
+
+    def test_sweep_trigger_actor_is_trusted_but_never_grants_admission(self) -> None:
+        owner_ready_events = [
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "fairchild"},
+            }
+        ]
+
+        self.assertEqual(
+            factory_implement.verify_release_actor(
+                owner_ready_events, "github-actions[bot]", "fairchild"
+            ),
+            "fairchild",
+        )
+        with self.assertRaisesRegex(
+            factory_implement.FactoryImplementError,
+            "trigger actor",
+        ):
+            factory_implement.verify_release_actor(
+                owner_ready_events, "some-other-app[bot]", "fairchild"
+            )
+
+        collaborator_ready_events = [
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "collaborator"},
+            }
+        ]
+        with self.assertRaisesRegex(
+            factory_implement.FactoryImplementError,
+            "most recent ready label actor",
+        ):
+            factory_implement.verify_release_actor(
+                collaborator_ready_events, "github-actions[bot]", "fairchild"
+            )
+
+    def test_user_content_edits_since_parses_a_single_page_response(self) -> None:
+        client = factory_implement.GitHubClient("fairchild/workspaces", "token")
+        with mock.patch.object(
+            client,
+            "graphql",
+            return_value={
+                "data": {
+                    "repository": {
+                        "issue": {
+                            "userContentEdits": {
+                                "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                "nodes": [
+                                    {
+                                        "editor": {"login": "fairchild"},
+                                        "editedAt": "2026-07-16T00:00:00Z",
+                                    }
+                                ],
+                            }
+                        }
+                    }
+                }
+            },
+        ) as graphql:
+            edits = client.user_content_edits_since(42, "2026-07-15T00:00:00Z")
+
+        self.assertEqual(
+            edits, [{"editor": {"login": "fairchild"}, "editedAt": "2026-07-16T00:00:00Z"}]
+        )
+        variables = graphql.call_args.args[1]
+        self.assertEqual(
+            variables,
+            {"owner": "fairchild", "name": "workspaces", "number": 42, "after": None},
+        )
+
+    def test_user_content_edits_since_fails_closed_on_a_missing_issue_or_repository(
+        self,
+    ) -> None:
+        client = factory_implement.GitHubClient("fairchild/workspaces", "token")
+        with mock.patch.object(
+            client, "graphql", return_value={"data": {"repository": {"issue": None}}}
+        ):
+            with self.assertRaisesRegex(
+                factory_implement.FactoryImplementError, "was not found"
+            ):
+                client.user_content_edits_since(42, "2026-07-15T00:00:00Z")
+        with mock.patch.object(
+            client, "graphql", return_value={"data": {"repository": None}}
+        ):
+            with self.assertRaisesRegex(
+                factory_implement.FactoryImplementError, "was not found"
+            ):
+                client.user_content_edits_since(42, "2026-07-15T00:00:00Z")
+
+    def test_daily_budget_counts_sweep_dispatches_alongside_owner_dispatches(self) -> None:
+        self.assertTrue(
+            factory_implement.is_factory_implement_dispatch(
+                {"event": "workflow_dispatch", "actor": {"login": "github-actions[bot]"}},
+                "fairchild",
+            )
+        )
+        self.assertFalse(
+            factory_implement.is_factory_implement_dispatch(
+                {"event": "workflow_dispatch", "actor": {"login": "some-other-app[bot]"}},
+                "fairchild",
+            )
+        )
 
 
 class FactoryTelemetryContractTests(unittest.TestCase):

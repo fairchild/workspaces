@@ -192,6 +192,111 @@ class FactoryDigestTests(unittest.TestCase):
             3,
         )
 
+    def test_implement_activity_counts_the_monitor_sweep_actor(self) -> None:
+        self.assertTrue(
+            factory_digest.is_factory_implement_dispatch(
+                {"event": "workflow_dispatch", "actor": {"login": "github-actions[bot]"}},
+                "fairchild",
+            )
+        )
+        self.assertFalse(
+            factory_digest.is_factory_implement_dispatch(
+                {"event": "workflow_dispatch", "actor": {"login": "some-other-app[bot]"}},
+                "fairchild",
+            )
+        )
+
+    def test_ready_since_prefers_the_latest_ready_labeled_event(self) -> None:
+        issue = {
+            "createdAt": "2026-06-01T00:00:00Z",
+            "timelineItems": [
+                {
+                    "__typename": "LabeledEvent",
+                    "createdAt": "2026-07-01T00:00:00Z",
+                    "label": {"name": "ready"},
+                },
+                {
+                    "__typename": "LabeledEvent",
+                    "createdAt": "2026-07-05T00:00:00Z",
+                    "label": {"name": "claimed"},
+                },
+                {
+                    "__typename": "LabeledEvent",
+                    "createdAt": "2026-07-10T00:00:00Z",
+                    "label": {"name": "ready"},
+                },
+            ],
+        }
+
+        self.assertEqual(factory_digest.ready_since(issue), "2026-07-10T00:00:00Z")
+
+    def test_ready_since_falls_back_through_created_at_to_updated_at(self) -> None:
+        self.assertEqual(
+            factory_digest.ready_since(
+                {"createdAt": "2026-06-01T00:00:00Z", "updatedAt": "2026-07-01T00:00:00Z"}
+            ),
+            "2026-06-01T00:00:00Z",
+        )
+        self.assertEqual(
+            factory_digest.ready_since({"updatedAt": "2026-07-01T00:00:00Z"}),
+            "2026-07-01T00:00:00Z",
+        )
+
+    def test_render_digest_flags_a_stale_ready_issue_as_a_queue_age_fault(self) -> None:
+        summary = {"generated_at": "2026-07-12T13:30:00Z", "funnel": {}, "breaches": []}
+        issues = [
+            {
+                "number": 60,
+                "title": "Stuck in queue",
+                "url": "https://example.test/issues/60",
+                "state": "OPEN",
+                "updatedAt": "2026-07-12T00:00:00Z",
+                "labels": [{"name": name} for name in ("agent", "task", "ready")],
+                "timelineItems": [
+                    {
+                        "__typename": "LabeledEvent",
+                        "createdAt": "2026-07-09T13:30:00Z",
+                        "label": {"name": "ready"},
+                    }
+                ],
+            }
+        ]
+
+        markdown = factory_digest.render_digest(issues, [], summary)
+
+        self.assertIn(
+            "## Threshold breaches\n\n"
+            "- **queue-age**: [#60](https://example.test/issues/60) `Stuck in queue` "
+            "has been ready 3d without moving to claimed or review — check the sweep "
+            "(or a claim/rollback loop) rather than assuming it was never dispatched",
+            markdown,
+        )
+
+    def test_render_digest_does_not_flag_a_freshly_ready_issue(self) -> None:
+        summary = {"generated_at": "2026-07-12T13:30:00Z", "funnel": {}, "breaches": []}
+        issues = [
+            {
+                "number": 61,
+                "title": "Just released",
+                "url": "https://example.test/issues/61",
+                "state": "OPEN",
+                "updatedAt": "2026-07-12T00:00:00Z",
+                "labels": [{"name": name} for name in ("agent", "task", "ready")],
+                "timelineItems": [
+                    {
+                        "__typename": "LabeledEvent",
+                        "createdAt": "2026-07-12T00:00:00Z",
+                        "label": {"name": "ready"},
+                    }
+                ],
+            }
+        ]
+
+        markdown = factory_digest.render_digest(issues, [], summary)
+
+        self.assertNotIn("## Threshold breaches", markdown)
+        self.assertNotIn("queue-age", markdown)
+
     def test_render_digest_orders_mergeable_linked_prs_first(self) -> None:
         summary = {
             "generated_at": "2026-07-12T13:30:00Z",
@@ -950,10 +1055,15 @@ class FactoryDigestTests(unittest.TestCase):
         self.assertEqual(len(issue_queries), 2)
         self.assertIn("states: [OPEN, CLOSED]", issue_queries[0])
         self.assertIn("id number title body url state", issue_queries[0])
+        self.assertIn("itemTypes: [LABELED_EVENT]", issue_queries[0])
         self.assertEqual(inputs.repo.label_ids, {"factory": "L_factory", "human": "L_human"})
         self.assertEqual(inputs.issues[1]["state"], "CLOSED")
         self.assertIn(factory_digest.DIGEST_MARKER, inputs.issues[1]["body"])
         self.assertEqual(inputs.issues[0]["labels"], [{"name": "ready"}])
+        # The mocked response omits timelineItems entirely (as real callers
+        # predating #1148 would); flattening must default to [] rather than
+        # raising, matching ready_since's own fallback.
+        self.assertEqual(inputs.issues[0]["timelineItems"], [])
         self.assertEqual(inputs.pulls[0]["closingIssuesReferences"], [{"number": 10}])
         self.assertFalse(
             any("Discussion" in query or "discussion" in query for _, query, _ in calls)

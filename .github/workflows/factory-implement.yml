@@ -22,9 +22,16 @@ permissions:
 
 jobs:
   claim:
+    # workflow_dispatch accepts two trigger actors: the owner (manual dispatch)
+    # and github-actions[bot] (the Monitor's standing-queue sweep in
+    # factory-monitor.yml, which calls this dispatch endpoint with its own
+    # GITHUB_TOKEN). Either way the claim step below independently re-verifies
+    # via the issue timeline that the most recent `ready` label was actually
+    # applied by the owner — the sweep only re-fires standing admission, it
+    # never grants it.
     if: >-
       (github.event_name == 'workflow_dispatch' &&
-      github.actor == github.repository_owner &&
+      (github.actor == github.repository_owner || github.actor == 'github-actions[bot]') &&
       vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
       vars.FACTORY_IMPLEMENT_ENABLED == 'true') ||
       (github.event_name == 'issues' &&
