@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "test": "bun test test/forwarding.test.ts",
     "test:e2e": "bun run test/e2e.ts"
   },
   "devDependencies": {
