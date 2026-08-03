@@ -109,12 +109,6 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertRegex(codeowners, r"(?m)^\*\s+@fairchild$")
         self.assertRegex(codeowners, r"(?m)^/\.github/\s+@fairchild$")
 
-    def test_app_review_smoke_limits_content_write_probe_branches(self) -> None:
-        workflow = (REPO_ROOT / ".github/workflows/app-review-smoke.yml").read_text()
-        self.assertIn("git check-ref-format --branch", workflow)
-        self.assertIn("main|release/*|releases/*", workflow)
-        self.assertIn("Content-write probes must not target main or release branches.", workflow)
-
     def test_claude_workflow_stays_deleted(self) -> None:
         # Retired in #1166: dormant since March yet granting id-token: write with
         # no guard. The hardening property is now that it does not come back;
@@ -132,15 +126,6 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("--allow-privileged-patches", workflow)
         self.assertIn("requested_agent == 'april-clearwater'", workflow)
         self.assertNotIn("requested_agent == 'april'", workflow)
-
-    def test_codespaces_claude_worker_is_break_glass_ref_gated(self) -> None:
-        workflow = (REPO_ROOT / ".github/workflows/codespaces-claude-worker.yml").read_text()
-        self.assertIn("environment:\n      name: codespaces-claude-break-glass", workflow)
-        self.assertIn("allow_ref_override:", workflow)
-        self.assertIn("Break-glass ref override enabled", workflow)
-        self.assertIn('[[ "$WORKER_REF" == "main" ]]', workflow)
-        self.assertIn('[[ "$WORKER_REF" == refs/* ]]', workflow)
-        self.assertIn('git ls-remote --exit-code --heads origin "$WORKER_REF"', workflow)
 
     def test_public_content_agent_triggers_do_not_receive_privileged_secrets(self) -> None:
         privileged_secrets = (

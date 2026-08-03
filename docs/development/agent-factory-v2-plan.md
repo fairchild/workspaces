@@ -1,6 +1,7 @@
 ---
-status: approved
+status: design-record
 date: 2026-07-12
+current-state: docs/development/factory-current-state.md
 supersedes: docs/development/agent-team.md (architecture; file to be rewritten in M1)
 related:
   - docs/agents/CONTEXT.md
@@ -10,6 +11,8 @@ related:
 ---
 
 # Agent Factory v2
+
+> **Design record.** This document captures the decisions, rationale, and milestone roadmap behind the Factory pipeline as of 2026-07-12. For what's actually live today — which lanes run, their trigger/guard/status, the `FACTORY_*` switch inventory, how to enable or disable a lane, the `factory/ops-data` branch contract, and dashboard usage — see [`docs/development/factory-current-state.md`](./factory-current-state.md).
 
 The Factory is the autonomous development system that advances this repo between the Owner's interactive sessions. This plan replaces the v1 "Agent Team" architecture (scheduled persona wake-ups coordinating through GitHub Discussions) with an event-driven, label-fired pipeline. Language is canonical in [docs/agents/CONTEXT.md](../agents/CONTEXT.md); decisions were made in a grilled design session on 2026-07-12 against a live-state audit, an infrastructure deep-dive, and Warp's published software-factory work.
 
