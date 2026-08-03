@@ -65,6 +65,8 @@ Validation signals:
 
 ## Commands Used
 
+Historical — `tart-webview-memory-benchmark.sh` was a one-time investigation script and has since been removed; these commands are not runnable as-is.
+
 ```bash
 swift build
 swift build -c release

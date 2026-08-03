@@ -412,8 +412,6 @@ For testing or when CI isn't available.
 
    ```bash
    ./scripts/notarize.sh --no-staple
-   # or via mask:
-   mask release near-prod
    ```
 
 4. **Exceptional Manual Upload**

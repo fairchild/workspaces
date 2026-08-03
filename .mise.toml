@@ -73,6 +73,40 @@ description = "Run the interactive Claude Code integration smoke and evidence ca
 run = "./scripts/claude-integration-smoke.sh"
 usage = "--pr <number> [--no-build] [--fixture-home] [--post-comment]"
 
+[tasks."verify-shortcuts"]
+description = "Smoke-test Ghostty shortcut pass-through (Cmd+D, Cmd+[ and Cmd+]) with log evidence."
+run = "./scripts/shortcut-pass-through-smoke.sh"
+
+[tasks."verify-open-shortcut"]
+description = "Smoke-test Cmd+Shift+O editor launch shortcut flows (repo-only + file-selected)."
+run = "./scripts/open-in-editor-shortcut-smoke.sh"
+
+[tasks."verify-dev"]
+description = "Run the debug verification loop (build, pinned launch, process-path check, capture)."
+run = """
+set -euo pipefail
+./scripts/build-ghosttykit.sh
+swift build
+if pgrep -f '/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
+  echo "ERROR: /Applications/WorkSpaces.app is running; quit it before verify-dev"
+  exit 1
+fi
+./scripts/launch-dev.sh --no-build --no-activate
+if pgrep -f '/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager' >/dev/null 2>&1; then
+  echo "ERROR: /Applications/WorkSpaces.app started unexpectedly during verify-dev"
+  exit 1
+fi
+ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'
+./scripts/capture-window.sh
+echo "Manual checks:"
+echo "  Cmd+B toggles left sidebar"
+echo "  Cmd+D creates a visible right split"
+"""
+
+[tasks.install]
+description = "Install app to /Applications using the install script."
+run = "./scripts/install-local.sh"
+
 [tasks."docs:serve"]
 description = "Serve the local WorkSpaces docs site."
 run = "uv run --script docs/server.py"

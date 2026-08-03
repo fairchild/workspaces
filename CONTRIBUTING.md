@@ -182,6 +182,10 @@ brew install --cask swiftbar
 | `runner-notify-complete.sh` | Runner hook: logs job completion to activity log |
 | `install-runner-hooks.sh` | Installs hooks on all runners (copies scripts, updates .env) |
 
+Parked, revival intended (owner decision 2026-08-02): kept despite low day-to-day use while the primary CI lane is GitHub-hosted/Lume-backed — do not re-flag as dead code in future cleanup passes.
+
+The Daytona remote-workspace surface (`Sources/WorkspaceManagerCore/Services/DaytonaBackend.swift`, `scripts/daytona-sandbox-manager.py`, `web/src/lib/agent-runtime/daytona.ts` stub provider) is parked under the same 2026-08-02 owner decision — see `docs/daytona-vm.md`.
+
 ## Agent Self-Verification
 
 A bundled [tart-gui-automation](.agents/skills/tart-gui-automation/) skill lets Claude Code (or any coding agent) build and launch the app in an ephemeral Tart macOS VM, capture screenshots, and verify UI behavior without touching the host. See the CLAUDE.md "Dev Verification Practice" section for the workflow.

@@ -292,7 +292,7 @@ cache is a purge via the named entrypoint:
 2. Rebuild framework:
    `./scripts/build-ghosttykit.sh`
 3. Run validation:
-   - `mask ci`
+   - `mise run check`
    - `swift run WorkspaceManager` and manual terminal smoke checks
 4. Manual smoke checklist:
    - terminal appears for selected workspace
@@ -349,7 +349,7 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - `Cmd+D` create split pane
    - optional: trigger configured resize/equalize bindings and confirm divider movement / 50:50 reset
    - `./scripts/shortcut-pass-through-smoke.sh` is intentionally not shared-desktop-safe and requires `Ghostty Splits` mode
-   - Optional scripted smoke: `mask verify-shortcuts`
+   - Optional scripted smoke: `mise run verify-shortcuts`
 8. Verify split runtime path in logs:
    - `tail -n 80 .dev-data/logs/launch-dev-*.log`
    - Expect `"[GhosttyAppManager] action=new_split direction="`

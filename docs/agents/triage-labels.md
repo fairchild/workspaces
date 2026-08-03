@@ -110,14 +110,6 @@ April, Plat, and Peter are label-driven:
 
 See `docs/development/agent-team.md` for the full agent lifecycle.
 
-## Live Label Migration
+## Live Label Migration (historical)
 
-The repository no longer uses `agent:*` labels as the canonical model. After this code is on the default branch, migrate GitHub issue labels with:
-
-```bash
-uv run --script scripts/migrate-agent-labels.py
-uv run --script scripts/migrate-agent-labels.py --apply
-uv run --script scripts/migrate-agent-labels.py --apply --delete-legacy
-```
-
-The script is dry-run by default. Do not delete legacy labels until the dry run shows the expected issue updates.
+The repository no longer uses `agent:*` labels as the canonical model; that one-shot migration is complete and `scripts/migrate-agent-labels.py` has been removed.

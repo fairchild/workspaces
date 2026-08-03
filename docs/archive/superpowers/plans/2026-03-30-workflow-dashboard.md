@@ -8,7 +8,7 @@
 
 **Tech Stack:** Node `http` module, vanilla HTML/CSS/JS, DBOSClient from `@dbos-inc/dbos-sdk`
 
-**Spec:** `docs/superpowers/specs/2026-03-30-workflow-dashboard-design.md`
+**Spec:** `docs/archive/superpowers/specs/2026-03-30-workflow-dashboard-design.md`
 
 ---
 
