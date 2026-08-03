@@ -13,5 +13,5 @@ Repo-local skill for running the shared contributor workflow with the Workspaces
 
 ## Notes
 
-Existing automation may still call `.agents/scripts/run-contributor.py`; that path is retained as a compatibility shim.
+The `.agents/scripts/run-contributor.py` compatibility shim was removed 2026-08 (nothing referenced it; every caller already used this skill path directly).
 The skill-local `references/` prompts are the source of truth for workflow/runtime use.

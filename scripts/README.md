@@ -65,8 +65,7 @@ Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks
   - Runs stdlib tests for the launcher path.
 - `./scripts/codespaces-claude-worker.sh --help`
   - Shows the Codespace-side Claude runner contract.
-- Full operator documentation:
-  - `./docs/development/codespaces-claude-worker.md`
+- No manual dispatch entrypoint: `.github/workflows/codespaces-claude-worker.yml` and its operator doc were retired 2026-08 (zero runs since it shipped). Run the launcher scripts above directly from a Codespace shell.
 
 ## Release Helpers
 

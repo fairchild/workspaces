@@ -152,6 +152,10 @@ description = "Capture screenshot and upload to R2 evidence store."
 run = "./scripts/evidence.sh"
 usage = "--pr <number> --name <slug> [--file <path>] [--no-capture]"
 
+[tasks."factory-dashboard"]
+description = "Sync Factory telemetry and render the local ops dashboard (docs/development/factory-current-state.md)."
+run = "uv run --script scripts/factory-dashboard.py --sync --render"
+
 [tasks."repo-settings-check"]
 description = "Diff live GitHub repo settings (rulesets) against config/github/; exit 1 on drift."
 run = "uv run --script scripts/github-settings.py check"

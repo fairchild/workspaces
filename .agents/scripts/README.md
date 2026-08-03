@@ -1,13 +1,10 @@
 # `.agents/scripts`
 
-Compatibility entrypoints and tests for the agent automation flows in this repo. The skill directories under `.agents/skills/` are now the source of truth for the actual runtimes.
+Compatibility entrypoints and tests for the agent automation flows in this repo. The skill directories under `.agents/skills/` are the source of truth for the actual runtimes.
 
 ## What’s here
 
-- `run-contributor.py` — compatibility shim that delegates to `.agents/skills/cofounder-contributor/scripts/run-contributor.py`.
-- `run-planner.py` — compatibility shim that delegates to `.agents/skills/peter-planner/scripts/run-planner.py`.
-- `validate-agent-output.py` — compatibility shim that delegates to the shared validator implementation in the contributor skill.
-- `parse-frontmatter.py` — compatibility shim that delegates to the shared frontmatter parser implementation in the contributor skill.
+- `run-planner.py` — compatibility shim that delegates to `.agents/skills/peter-planner/scripts/run-planner.py`. Kept because Peter is parked, not deleted — see `docs/development/factory-current-state.md`. The `run-contributor.py`, `validate-agent-output.py`, and `parse-frontmatter.py` shims were removed 2026-08 (nothing referenced them; live callers already use the skill paths directly).
 
 ## Tests
 

@@ -33,7 +33,7 @@ The single rolling surface where the Factory presents its open Gates to the Owne
 _Avoid_: dashboard (the committed telemetry artifact behind it), notification feed
 
 **Stage**:
-One event-fired step of the Factory's pipeline: Triage, Spec, Implement, Review, Verify, or Monitor.
+One event-fired step of the Factory's pipeline: Triage, Spec, Implement, Review, Verify, or Monitor. **Triage and Spec are aspirational** — designed in the v2 plan (M2) but no workflow currently fires either; Implement, Review, Verify, and Monitor are live. See `docs/development/factory-current-state.md` for what's actually wired.
 _Avoid_: phase (roadmap term), agent (an identity may run several stages)
 
 **Spec**:
@@ -82,5 +82,5 @@ _Avoid_: garbage collection, compaction (mechanical framings)
 ## Flagged ambiguities
 
 - "Gate" vs the "gate label" category in `docs/agents/triage-labels.md`: a **Gate** is the human decision point; gate labels (`safe-to-run-agent`, `needs-human`, `privileged-agent-patch`) are one mechanism that implements certain Gates.
-- "Agent team" named the personas (April, Plat, Peter, Oliver); **Factory** names the whole system. Resolved: Personas survive as role-bound identities — April and Plat as the implement/review pair (each reviews the other's work), Peter as triage and spec author, Oliver as the deterministic Monitor's name. No Persona is ever scheduled to "find something to do."
+- "Agent team" named the personas (April, Plat, Peter, Oliver); **Factory** names the whole system. Resolved: Personas survive as role-bound identities — April and Plat as the implement/review pair (each reviews the other's work), Peter as triage and spec author, Oliver as the deterministic Monitor's name. No Persona is ever scheduled to "find something to do." Peter's role is parked, not live: `run-planner.py` is hardened and tested, but no workflow trigger invokes it (see `docs/development/factory-current-state.md`).
 - "Heartbeat" is resolved: the Monitor's daily pulse is the Factory's only heartbeat; work moves by label events, and an idle Factory does nothing. Avoid using "heartbeat" to mean scheduled contributor wake-ups — that model is retired.

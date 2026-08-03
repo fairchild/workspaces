@@ -23,7 +23,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_RUNNER_LABELS = {"signing-host", "lume-macos"}
 ADVISORY_RUNNER_LABELS = {"tart-ui"}
-EXPECTED_ENVIRONMENTS = {"release", "codespaces-claude-break-glass"}
+EXPECTED_ENVIRONMENTS = {"release"}
 EXPECTED_REPO_SECRETS = {
     "APPLE_API_ISSUER_ID",
     "APPLE_API_KEY_BASE64",
@@ -98,16 +98,6 @@ def local_workflow_checks() -> list[Check]:
         )
     )
 
-    codespaces = (workflow_dir / "codespaces-claude-worker.yml").read_text(encoding="utf-8")
-    checks.append(
-        Check(
-            "pass" if "codespaces-claude-break-glass" in codespaces else "fail",
-            "Codespaces worker is protected",
-            "break-glass environment referenced"
-            if "codespaces-claude-break-glass" in codespaces
-            else "missing",
-        )
-    )
     return checks
 
 
