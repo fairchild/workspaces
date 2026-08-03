@@ -663,14 +663,6 @@ public struct AutomationWorkspaceCreateRequest: Codable, Sendable, Equatable {
     }
 }
 
-public struct AutomationWorkspaceArchiveRequest: Codable, Sendable, Equatable {
-    public let workspaceID: String
-
-    public init(workspaceID: String) {
-        self.workspaceID = workspaceID
-    }
-}
-
 public struct AutomationWorkspaceCreateCommand: Sendable, Equatable {
     public let repoID: UUID
     public let name: String

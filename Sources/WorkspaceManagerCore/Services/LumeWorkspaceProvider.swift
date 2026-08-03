@@ -1220,22 +1220,10 @@ private struct LumeCreateVMRequest: Encodable {
     let storage: String?
 }
 
-private struct LumePullImageRequest: Encodable {
-    let image: String
-    let name: String
-    let registry: String
-    let organization: String
-    let storage: String?
-}
-
 private struct LumeRunVMRequest: Encodable {
     let noDisplay: Bool
     let storage: String?
     let sharedDirectories: [LumeSharedDirectoryRequest]
-}
-
-private struct LumeStorageBody: Encodable {
-    let storage: String
 }
 
 private struct LumeSharedDirectoryRequest: Encodable {
@@ -1286,16 +1274,6 @@ private struct LumeAcceptedResponse: Decodable {
     let message: String
     let name: String?
     let status: String?
-}
-
-private struct LumePullImageResponse: Decodable {
-    let message: String
-    let image: String
-    let name: String
-}
-
-private struct LumeMessageResponse: Decodable {
-    let message: String
 }
 
 struct LumeProgressMessageBuilder {
@@ -1491,6 +1469,3 @@ extension LumeWorkspaceProvider: WorkspaceProviderSetupCapable {
         }
     }
 }
-
-private struct LumeEmptyBody: Encodable {}
-private struct LumeEmptyResponse: LumeHTTPEmptyResponse {}

@@ -878,14 +878,14 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         profile: LumeBaseVMProfile,
         imageResolution: LumeImageResolution
     ) async throws {
-        let request = LumeRuntimePullImageRequest(
+        let request = LumePullImageRequest(
             image: imageResolution.entry.imageReference,
             name: profile.vmName,
             registry: imageResolution.entry.registry,
             organization: imageResolution.entry.organization,
             storage: nil
         )
-        let _: LumeRuntimePullImageResponse = try await sendRequest(
+        let _: LumePullImageResponse = try await sendRequest(
             method: "POST",
             path: "/pull",
             body: request
@@ -945,7 +945,7 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                 method: "GET",
                 path: "/vms/\(vmName)",
                 queryItems: storagePath.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
-                body: Optional<LumeRuntimeEmptyBody>.none
+                body: Optional<LumeEmptyBody>.none
             )
         } catch {
             guard let storagePath else {
@@ -978,19 +978,19 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 
     private func stopVM(named vmName: String, storagePath: String? = nil) async throws {
-        let _: LumeRuntimeMessageResponse = try await sendRequest(
+        let _: LumeMessageResponse = try await sendRequest(
             method: "POST",
             path: "/vms/\(vmName)/stop",
-            body: storagePath.map(LumeRuntimeStorageBody.init(storage:))
+            body: storagePath.map(LumeStorageBody.init(storage:))
         )
     }
 
     private func deleteVM(named vmName: String, storagePath: String? = nil) async throws {
-        let _: LumeRuntimeEmptyResponse = try await sendRequest(
+        let _: LumeEmptyResponse = try await sendRequest(
             method: "DELETE",
             path: "/vms/\(vmName)",
             queryItems: storagePath.map { [URLQueryItem(name: "storage", value: $0)] } ?? [],
-            body: Optional<LumeRuntimeEmptyBody>.none
+            body: Optional<LumeEmptyBody>.none
         )
     }
 
@@ -1214,18 +1214,6 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     }
 }
 
-private struct LumeRuntimePullImageRequest: Encodable {
-    let image: String
-    let name: String
-    let registry: String
-    let organization: String
-    let storage: String?
-}
-
-private struct LumeRuntimeStorageBody: Encodable {
-    let storage: String
-}
-
 private struct LumeRuntimeVMDetails: Decodable, Sendable {
     let name: String
     let status: String
@@ -1237,19 +1225,6 @@ private struct LumeRuntimeVMDetails: Decodable, Sendable {
         LumeVMStatus(rawValue: status)
     }
 }
-
-private struct LumeRuntimePullImageResponse: Decodable {
-    let message: String
-    let image: String
-    let name: String
-}
-
-private struct LumeRuntimeMessageResponse: Decodable {
-    let message: String
-}
-
-private struct LumeRuntimeEmptyResponse: LumeHTTPEmptyResponse {}
-private struct LumeRuntimeEmptyBody: Encodable {}
 
 extension ProcessInfo {
     fileprivate var machineArchitecture: String {

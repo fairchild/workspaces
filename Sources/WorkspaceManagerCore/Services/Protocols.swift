@@ -266,17 +266,6 @@ public struct RuntimeCapabilities: Sendable, Equatable {
     }
 }
 
-public enum RemoteBackendCapabilityError: LocalizedError, Sendable {
-    case unsupportedOperation(backendIdentifier: String, operation: String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .unsupportedOperation(let backendIdentifier, let operation):
-            return "Remote backend '\(backendIdentifier)' does not support \(operation)."
-        }
-    }
-}
-
 public protocol RemoteBackendProtocol: Sendable {
     var identifier: String { get }
     var runtimeCapabilities: RuntimeCapabilities { get }
