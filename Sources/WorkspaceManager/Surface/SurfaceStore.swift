@@ -1,6 +1,9 @@
 import AppKit
 import WebKit
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "SurfaceStore")
 
 /// Owns the live `Surface` for each `TileID` in a tile tree: a `[TileID: any Surface]` map plus a
 /// session-keyed facade (surface-view → session lookup, terminal-by-session resolution, display
@@ -158,10 +161,9 @@ final class SurfaceStore {
             if !submitted {
                 self?.initialCommandDeliveredSessionIDs.remove(sessionID)
             }
-            NSLog(
-                "[SurfaceStore] initial command %@ for session %@",
-                submitted ? "delivered" : "DROPPED (will retry on a new surface)",
-                sessionID.uuidString)
+            log.info(
+                "[SurfaceStore] initial command \(submitted ? "delivered" : "DROPPED (will retry on a new surface)", privacy: .public) for session \(sessionID.uuidString, privacy: .public)"
+            )
         }
     }
 

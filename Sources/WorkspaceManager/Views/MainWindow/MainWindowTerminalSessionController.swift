@@ -1,5 +1,8 @@
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "MainWindowTerminalSessionController")
 
 @MainActor
 struct MainWindowTerminalSessionController {
@@ -132,7 +135,7 @@ struct MainWindowTerminalSessionController {
         repos: [Repo],
         normalizePath: (String) -> String
     ) -> SessionFocusResult? {
-        NSLog("[HostSession] Process exit detected for session %@", sessionID.uuidString)
+        log.info("[HostSession] Process exit detected for session \(sessionID.uuidString, privacy: .public)")
         guard
             let focusSessionID = tileTreeStore.handleProcessExitAndResolveFocusTarget(
                 for: sessionID,

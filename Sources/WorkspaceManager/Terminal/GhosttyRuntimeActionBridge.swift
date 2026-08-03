@@ -5,6 +5,9 @@
 
 import Foundation
 import GhosttyKit
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "GhosttyAppManager")
 
 enum GhosttyRuntimeActionBridge {
     enum SplitActionKind: String {
@@ -144,7 +147,7 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog("[GhosttyAppManager] action=new_tab")
+            log.info("[GhosttyAppManager] action=new_tab")
             return true
 
         case GHOSTTY_ACTION_CLOSE_TAB:
@@ -159,7 +162,7 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog("[GhosttyAppManager] action=close_tab mode=%d", closeModeRawValue)
+            log.info("[GhosttyAppManager] action=close_tab mode=\(closeModeRawValue, privacy: .public)")
             return true
 
         case GHOSTTY_ACTION_GOTO_TAB:
@@ -174,7 +177,7 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog("[GhosttyAppManager] action=goto_tab target=%d", gotoRawValue)
+            log.info("[GhosttyAppManager] action=goto_tab target=\(gotoRawValue, privacy: .public)")
             return true
 
         case GHOSTTY_ACTION_MOVE_TAB:
@@ -189,7 +192,7 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog("[GhosttyAppManager] action=move_tab amount=%d", moveAmount)
+            log.info("[GhosttyAppManager] action=move_tab amount=\(moveAmount, privacy: .public)")
             return true
 
         case GHOSTTY_ACTION_NEW_SPLIT:
@@ -202,7 +205,7 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog("[GhosttyAppManager] action=new_split direction=%d", directionRawValue)
+            log.info("[GhosttyAppManager] action=new_split direction=\(directionRawValue, privacy: .public)")
             return true
 
         case GHOSTTY_ACTION_GOTO_SPLIT:
@@ -215,7 +218,7 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog("[GhosttyAppManager] action=goto_split direction=%d", directionRawValue)
+            log.info("[GhosttyAppManager] action=goto_split direction=\(directionRawValue, privacy: .public)")
             return true
 
         case GHOSTTY_ACTION_RESIZE_SPLIT:
@@ -229,10 +232,8 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog(
-                "[GhosttyAppManager] action=resize_split direction=%d amount=%d",
-                directionRawValue,
-                amount
+            log.info(
+                "[GhosttyAppManager] action=resize_split direction=\(directionRawValue, privacy: .public) amount=\(amount, privacy: .public)"
             )
             return true
 
@@ -245,7 +246,7 @@ enum GhosttyRuntimeActionBridge {
                 resolveSurfaceView: resolveSurfaceView,
                 runOnMainAsync: runOnMainAsync
             )
-            NSLog("[GhosttyAppManager] action=equalize_splits")
+            log.info("[GhosttyAppManager] action=equalize_splits")
             return true
 
         case GHOSTTY_ACTION_SET_TITLE:

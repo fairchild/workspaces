@@ -7,6 +7,9 @@
 
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "HostLumeSmokeAutomation")
 
 struct HostLumeSmokeAutomationConfiguration: Equatable, Sendable {
     static let modeEnvironmentKey = "WORKSPACES_AUTOMATION_MODE"
@@ -187,7 +190,9 @@ actor HostLumeSmokeEventWriter {
             try handle.write(contentsOf: encoded)
             try handle.write(contentsOf: Data("\n".utf8))
         } catch {
-            NSLog("[HostLumeSmokeAutomation] Failed to write event: %@", error.localizedDescription)
+            log.error(
+                "[HostLumeSmokeAutomation] Failed to write event: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 }

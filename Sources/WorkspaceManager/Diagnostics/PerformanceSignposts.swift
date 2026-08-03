@@ -9,6 +9,8 @@ import Foundation
 import OSLog
 import WorkspaceManagerCore
 
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "PerformanceSignposts")
+
 enum PerformanceSignposts {
     #if DEBUG
         typealias NewWorkspaceSheetMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
@@ -80,10 +82,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("LaunchToFirstPrompt", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=launch_to_first_prompt duration_ms=%.2f trigger=%@",
-            durationMs,
-            trigger
+        log.info(
+            "[Perf] metric=launch_to_first_prompt duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) trigger=\(trigger, privacy: .public)"
         )
         recordDiagnostic(metric: "launch_to_first_prompt", durationMs: durationMs, labels: ["trigger": trigger])
     }
@@ -96,7 +96,7 @@ enum PerformanceSignposts {
 
         let state = signposter.beginInterval("RepoHydration")
         repoHydrationInterval = ActiveInterval(state: state, startedAt: clock.now)
-        NSLog("[Perf] metric=repo_hydration status=started root=%@", rootPath)
+        log.info("[Perf] metric=repo_hydration status=started root=\(rootPath, privacy: .public)")
     }
 
     static func endRepoHydrationIfNeeded(discoveredCount: Int, importedCount: Int) {
@@ -111,11 +111,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("RepoHydration", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=repo_hydration duration_ms=%.2f discovered=%ld imported=%ld",
-            durationMs,
-            discoveredCount,
-            importedCount
+        log.info(
+            "[Perf] metric=repo_hydration duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) discovered=\(discoveredCount, privacy: .public) imported=\(importedCount, privacy: .public)"
         )
         recordDiagnostic(
             metric: "repo_hydration",
@@ -131,19 +128,15 @@ enum PerformanceSignposts {
         if let existing = repoClickIntervals.removeValue(forKey: sessionID) {
             signposter.endInterval("RepoClickToFocusedInput", existing.state)
             let durationMs = milliseconds(since: existing.startedAt)
-            NSLog(
-                "[Perf] metric=repo_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
-                durationMs,
-                sessionID.uuidString
+            log.info(
+                "[Perf] metric=repo_click_to_focus duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
             )
         }
 
         let state = signposter.beginInterval("RepoClickToFocusedInput")
         repoClickIntervals[sessionID] = ActiveInterval(state: state, startedAt: clock.now)
-        NSLog(
-            "[Perf] metric=repo_click_to_focus status=started session=%@ path=%@",
-            sessionID.uuidString,
-            repoPath
+        log.info(
+            "[Perf] metric=repo_click_to_focus status=started session=\(sessionID.uuidString, privacy: .public) path=\(repoPath, privacy: .public)"
         )
     }
 
@@ -158,11 +151,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("RepoClickToFocusedInput", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=repo_click_to_focus duration_ms=%.2f session=%@ outcome=%@",
-            durationMs,
-            sessionID.uuidString,
-            outcome
+        log.info(
+            "[Perf] metric=repo_click_to_focus duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=\(outcome, privacy: .public)"
         )
     }
 
@@ -266,10 +256,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("WebViewInitialization", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=webview_initialization duration_ms=%.2f outcome=%@",
-            durationMs,
-            outcome
+        log.info(
+            "[Perf] metric=webview_initialization duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) outcome=\(outcome, privacy: .public)"
         )
     }
 
@@ -280,10 +268,8 @@ enum PerformanceSignposts {
         if let existing = webFirstLoadInterval {
             signposter.endInterval("WebFirstLoad", existing.state)
             let durationMs = milliseconds(since: existing.startedAt)
-            NSLog(
-                "[Perf] metric=web_first_load duration_ms=%.2f source=%@ outcome=superseded",
-                durationMs,
-                webFirstLoadSourceID?.uuidString ?? "unknown"
+            log.info(
+                "[Perf] metric=web_first_load duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) source=\(webFirstLoadSourceID?.uuidString ?? "unknown", privacy: .public) outcome=superseded"
             )
         }
 
@@ -307,11 +293,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("WebFirstLoad", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=web_first_load duration_ms=%.2f source=%@ outcome=%@",
-            durationMs,
-            sourceID?.uuidString ?? "unknown",
-            outcome
+        log.info(
+            "[Perf] metric=web_first_load duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) source=\(sourceID?.uuidString ?? "unknown", privacy: .public) outcome=\(outcome, privacy: .public)"
         )
     }
 

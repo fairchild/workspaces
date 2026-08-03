@@ -8,6 +8,9 @@
 import AppKit
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "SettingsView")
 
 struct SettingsView: View {
     @Environment(\.lumeRuntimeService) private var lumeRuntimeService
@@ -520,7 +523,7 @@ struct SettingsView: View {
                     }
                 }
             case .failure(let error):
-                print("Folder picker error: \(error)")
+                log.error("Folder picker error: \(error, privacy: .public)")
             }
         }
         .task {

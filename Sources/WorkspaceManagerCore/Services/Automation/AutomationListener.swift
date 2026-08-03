@@ -1,6 +1,9 @@
 import Darwin
 import Foundation
 import Network
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "AutomationListener")
 
 public actor AutomationListener {
     public enum ListenerError: Error, Sendable {
@@ -36,7 +39,10 @@ public actor AutomationListener {
         makeHealthServer: @escaping @Sendable (Date) -> AutomationServerDescriptor = {
             AutomationServerDescriptor.current(launchedAt: $0, experiments: [])
         },
-        logger: @escaping @Sendable (String) -> Void = { NSLog("[AutomationListener] %@", $0) }
+        logger: @escaping @Sendable (String) -> Void = { message in
+            Logger(subsystem: "com.cloudcompute.workspaces", category: "AutomationListener")
+                .info("[AutomationListener] \(message, privacy: .public)")
+        }
     ) {
         self.controller = controller
         self.auditLogger = auditLogger
@@ -137,7 +143,7 @@ public actor AutomationListener {
     private nonisolated func readRequest(connection: NWConnection, accumulated: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
             if let error {
-                NSLog("[AutomationListener] read error: %@", "\(error)")
+                log.error("[AutomationListener] read error: \(String(describing: error), privacy: .public)")
                 connection.cancel()
                 return
             }
@@ -159,7 +165,7 @@ public actor AutomationListener {
             }
 
             if buffer.count > 1_048_576 {
-                NSLog("[AutomationListener] oversized request, dropping")
+                log.error("[AutomationListener] oversized request, dropping")
                 connection.cancel()
                 return
             }

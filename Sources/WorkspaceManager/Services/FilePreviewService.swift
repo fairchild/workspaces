@@ -7,13 +7,17 @@
 
 import AppKit
 import Foundation
+import os.log
+
+private let previewLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "FilePreviewService")
 
 enum CodePreviewDiagnostics {
     private static let enabled = ProcessInfo.processInfo.environment["WORKSPACES_DEBUG_PREVIEW"] == "1"
 
     static func log(_ message: @autoclosure () -> String) {
         guard enabled else { return }
-        NSLog("[CodePreview] %@", message())
+        let text = message()
+        previewLog.info("[CodePreview] \(text, privacy: .public)")
     }
 }
 

@@ -1,5 +1,8 @@
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalReadinessDiagnostics")
 
 final class TerminalReadinessDiagnostics {
     enum Signal: String {
@@ -124,7 +127,7 @@ final class TerminalReadinessDiagnostics {
             components.append("\(sanitize(key))=\(sanitize(value))")
         }
 
-        NSLog("%@", components.joined(separator: " "))
+        log.info("\(components.joined(separator: " "), privacy: .public)")
 
         Task.detached {
             await StartupDiagnosticsStore.shared.record(

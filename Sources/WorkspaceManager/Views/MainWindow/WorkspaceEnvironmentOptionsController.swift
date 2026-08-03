@@ -1,5 +1,8 @@
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceEnvironmentOptionsController")
 
 struct WorkspaceProviderSheetState: Sendable, Equatable {
     let providerID: String
@@ -246,12 +249,8 @@ struct WorkspaceEnvironmentOptionsController {
 
         let unavailableCount = resolvedAvailability.values.filter { !$0.isAvailable }.count
         let durationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
-        NSLog(
-            "[Perf] metric=workspace_provider_availability_refresh duration_ms=%.2f trigger=%@ providers=%ld unavailable_count=%ld",
-            durationMs,
-            trigger,
-            registry.providers.count,
-            unavailableCount
+        log.info(
+            "[Perf] metric=workspace_provider_availability_refresh duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) trigger=\(trigger, privacy: .public) providers=\(registry.providers.count, privacy: .public) unavailable_count=\(unavailableCount, privacy: .public)"
         )
         await StartupDiagnosticsStore.shared.record(
             metric: "workspace_provider_availability_refresh",
@@ -285,13 +284,8 @@ struct WorkspaceEnvironmentOptionsController {
                 "success"
             }
         let durationMs = Date().timeIntervalSince(refreshStartedAt) * 1000
-        NSLog(
-            "[Perf] metric=lume_runtime_snapshot_refresh duration_ms=%.2f trigger=%@ outcome=%@ state=%@ base_vm_status=%@",
-            durationMs,
-            trigger,
-            outcome,
-            snapshot?.state.rawValue ?? "pending",
-            snapshot?.baseVM?.status.rawValue ?? "none"
+        log.info(
+            "[Perf] metric=lume_runtime_snapshot_refresh duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) trigger=\(trigger, privacy: .public) outcome=\(outcome, privacy: .public) state=\(snapshot?.state.rawValue ?? "pending", privacy: .public) base_vm_status=\(snapshot?.baseVM?.status.rawValue ?? "none", privacy: .public)"
         )
         await StartupDiagnosticsStore.shared.record(
             metric: "lume_runtime_snapshot_refresh",

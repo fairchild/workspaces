@@ -10,6 +10,9 @@
 //
 
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "AutomationOperatorCredentialStore")
 
 public enum AutomationOperatorCredentialStore {
     public static let fileName = "automation-operator.json"
@@ -81,7 +84,9 @@ public enum AutomationOperatorProvisioner {
             // credential for. Returning nil lets the caller log an honest "not minted".
             registry.remove(hostSessionID: entry.hostSessionID)
             AutomationOperatorCredentialStore.remove(at: credentialURL)
-            NSLog("[AutomationOperator] credential write failed, minting aborted: %@", "\(error)")
+            log.error(
+                "[AutomationOperator] credential write failed, minting aborted: \(String(describing: error), privacy: .public)"
+            )
             return nil
         }
         return credential

@@ -1,5 +1,8 @@
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "TileTreeStore")
 
 @MainActor
 final class TileTreeStore: ObservableObject {
@@ -982,11 +985,8 @@ final class TileTreeStore: ObservableObject {
     func automationEnvironment(for session: HostTerminalSession) -> AutomationTerminalEnvironment? {
         guard let automationHandleRegistry, let automationSocketPath else {
             if ExperimentalFeatures.isEnabled(.automationAPI) {
-                NSLog(
-                    "[TileTreeStore] automation environment unavailable for session %@ while Automation API is enabled (handleRegistry=%@ socketPath=%@)",
-                    session.id.uuidString,
-                    automationHandleRegistry == nil ? "nil" : "configured",
-                    automationSocketPath == nil ? "nil" : "configured"
+                log.error(
+                    "[TileTreeStore] automation environment unavailable for session \(session.id.uuidString, privacy: .public) while Automation API is enabled (handleRegistry=\(self.automationHandleRegistry == nil ? "nil" : "configured", privacy: .public) socketPath=\(self.automationSocketPath == nil ? "nil" : "configured", privacy: .public))"
                 )
             }
             return nil

@@ -8,6 +8,9 @@
 import AppKit
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "RightPaneView")
 
 struct RightPaneTabPolicy {
     let supportsFilesystemInspection: Bool
@@ -447,7 +450,7 @@ struct RightPaneView: View {
         do {
             return try await gitService.getFileTree(at: directoryURL)
         } catch {
-            print("Failed to load file tree: \(error)")
+            log.error("Failed to load file tree: \(error, privacy: .public)")
             return nil
         }
     }
@@ -457,7 +460,7 @@ struct RightPaneView: View {
         do {
             return try await gitService.getStatus(at: directoryURL)
         } catch {
-            print("Failed to load git status: \(error)")
+            log.error("Failed to load git status: \(error, privacy: .public)")
             return []
         }
     }

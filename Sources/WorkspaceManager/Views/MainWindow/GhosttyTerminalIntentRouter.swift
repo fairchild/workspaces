@@ -1,5 +1,8 @@
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "GhosttyTerminalIntentRouter")
 
 enum GhosttyTerminalIntent: Equatable {
     case split(GhosttySplitIntent)
@@ -40,9 +43,8 @@ struct GhosttyTerminalIntentRouter {
         switch intent {
         case .split(let splitIntent):
             guard terminalMultiplexingMode == .ghosttyManagedSplits else {
-                NSLog(
-                    "[SplitRouting] Ignored split action while terminal mode=%@",
-                    terminalMultiplexingMode.rawValue
+                log.error(
+                    "[SplitRouting] Ignored split action while terminal mode=\(terminalMultiplexingMode.rawValue, privacy: .public)"
                 )
                 return []
             }
@@ -103,7 +105,7 @@ struct GhosttyTerminalIntentRouter {
         switch intent {
         case .newTab:
             guard let session = tileTreeStore.createTab(from: sourceSessionID) else {
-                NSLog("[TabRouting] new_tab ignored: no source/active session")
+                log.error("[TabRouting] new_tab ignored: no source/active session")
                 return []
             }
             return [.focus(session.id)]
@@ -114,7 +116,7 @@ struct GhosttyTerminalIntentRouter {
                 sourceSessionID: sourceSessionID
             )
             guard !tabIDs.isEmpty else {
-                NSLog("[TabRouting] close_tab no-op mode=%@", String(describing: mode))
+                log.error("[TabRouting] close_tab no-op mode=\(String(describing: mode), privacy: .public)")
                 return []
             }
             return [.closeTabs(tabIDs)]
@@ -127,7 +129,7 @@ struct GhosttyTerminalIntentRouter {
                     sourceSessionID: sourceSessionID
                 )
             else {
-                NSLog("[TabRouting] goto_tab no-op target=%@", String(describing: target))
+                log.error("[TabRouting] goto_tab no-op target=\(String(describing: target), privacy: .public)")
                 return []
             }
             return [.focus(session.id)]
@@ -137,14 +139,14 @@ struct GhosttyTerminalIntentRouter {
             guard tileTreeStore.moveTab(containing: sourceSessionID, offset: resolvedAmount),
                 let activeSessionID = tileTreeStore.activeSessionID
             else {
-                NSLog("[TabRouting] move_tab no-op amount=%d", resolvedAmount)
+                log.error("[TabRouting] move_tab no-op amount=\(resolvedAmount, privacy: .public)")
                 return []
             }
             return [.focus(activeSessionID)]
 
         case .setTabTitle(let title):
             guard tileTreeStore.setTabTitle(title, for: sourceSessionID) else {
-                NSLog("[TabRouting] set_tab_title no-op")
+                log.error("[TabRouting] set_tab_title no-op")
                 return []
             }
             return []
@@ -158,23 +160,18 @@ struct GhosttyTerminalIntentRouter {
     ) -> [GhosttyTerminalRoutingEffect] {
         // Resolve which pane to split: the live source, or the active session when fired without one.
         guard let sourcePaneID = sourceSessionID ?? tileTreeStore.activeSessionID else {
-            NSLog("[SplitRouting] new_split ignored: no active/primary session")
+            log.error("[SplitRouting] new_split ignored: no active/primary session")
             return []
         }
         // Called for its tab-activation side effect only; the returned primary id is used for the log
         // line below, not threaded into the split — `splitFocusedTile` resolves its own primary.
         let primarySessionID = tileTreeStore.activatePrimarySession(containing: sourcePaneID)
-        NSLog(
-            "[SplitRouting] new_split source=%@ primary=%@",
-            sourcePaneID.uuidString,
-            primarySessionID?.uuidString ?? "nil"
+        log.info(
+            "[SplitRouting] new_split source=\(sourcePaneID.uuidString, privacy: .public) primary=\(primarySessionID?.uuidString ?? "nil", privacy: .public)"
         )
         let preferredLayout = splitLayout(for: direction)
-        NSLog(
-            "[SplitRouting] new_split layout axis=%@ splitBeforePrimary=%@ direction=%@",
-            preferredLayout.axis == .topBottom ? "topBottom" : "leadingTrailing",
-            preferredLayout.splitBeforePrimary ? "true" : "false",
-            String(describing: direction)
+        log.info(
+            "[SplitRouting] new_split layout axis=\(preferredLayout.axis == .topBottom ? "topBottom" : "leadingTrailing", privacy: .public) splitBeforePrimary=\(preferredLayout.splitBeforePrimary ? "true" : "false", privacy: .public) direction=\(String(describing: direction), privacy: .public)"
         )
 
         guard
@@ -221,7 +218,7 @@ struct GhosttyTerminalIntentRouter {
         guard let sourceSessionID,
             let direction
         else {
-            NSLog("[SplitRouting] goto_split ignored: missing source or direction")
+            log.error("[SplitRouting] goto_split ignored: missing source or direction")
             return []
         }
 
@@ -231,19 +228,14 @@ struct GhosttyTerminalIntentRouter {
                 direction: direction
             )
         else {
-            NSLog(
-                "[SplitRouting] goto_split no-op source=%@ direction=%@",
-                sourceSessionID.uuidString,
-                String(describing: direction)
+            log.error(
+                "[SplitRouting] goto_split no-op source=\(sourceSessionID.uuidString, privacy: .public) direction=\(String(describing: direction), privacy: .public)"
             )
             return []
         }
 
-        NSLog(
-            "[SplitRouting] goto_split source=%@ target=%@ direction=%@",
-            sourceSessionID.uuidString,
-            targetSessionID.uuidString,
-            String(describing: direction)
+        log.info(
+            "[SplitRouting] goto_split source=\(sourceSessionID.uuidString, privacy: .public) target=\(targetSessionID.uuidString, privacy: .public) direction=\(String(describing: direction), privacy: .public)"
         )
         return [.focus(targetSessionID)]
     }
@@ -257,7 +249,7 @@ struct GhosttyTerminalIntentRouter {
         guard let sourceSessionID,
             let direction
         else {
-            NSLog("[SplitRouting] resize_split ignored: missing source or direction")
+            log.error("[SplitRouting] resize_split ignored: missing source or direction")
             return
         }
 
@@ -269,20 +261,14 @@ struct GhosttyTerminalIntentRouter {
                 amount: resolvedAmount
             )
         else {
-            NSLog(
-                "[SplitRouting] resize_split no-op source=%@ direction=%@ amount=%d",
-                sourceSessionID.uuidString,
-                String(describing: direction),
-                resolvedAmount
+            log.error(
+                "[SplitRouting] resize_split no-op source=\(sourceSessionID.uuidString, privacy: .public) direction=\(String(describing: direction), privacy: .public) amount=\(resolvedAmount, privacy: .public)"
             )
             return
         }
 
-        NSLog(
-            "[SplitRouting] resize_split source=%@ direction=%@ amount=%d",
-            sourceSessionID.uuidString,
-            String(describing: direction),
-            resolvedAmount
+        log.info(
+            "[SplitRouting] resize_split source=\(sourceSessionID.uuidString, privacy: .public) direction=\(String(describing: direction), privacy: .public) amount=\(resolvedAmount, privacy: .public)"
         )
     }
 
@@ -291,16 +277,16 @@ struct GhosttyTerminalIntentRouter {
         tileTreeStore: TileTreeStore
     ) {
         guard let sourceSessionID else {
-            NSLog("[SplitRouting] equalize_splits ignored: missing source")
+            log.error("[SplitRouting] equalize_splits ignored: missing source")
             return
         }
 
         guard tileTreeStore.equalizeSplit(containing: sourceSessionID) else {
-            NSLog("[SplitRouting] equalize_splits no-op source=%@", sourceSessionID.uuidString)
+            log.error("[SplitRouting] equalize_splits no-op source=\(sourceSessionID.uuidString, privacy: .public)")
             return
         }
 
-        NSLog("[SplitRouting] equalize_splits source=%@", sourceSessionID.uuidString)
+        log.info("[SplitRouting] equalize_splits source=\(sourceSessionID.uuidString, privacy: .public)")
     }
 
     private func activateTab(

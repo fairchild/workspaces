@@ -1,6 +1,9 @@
 import AppKit
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalFocusCoordinator")
 
 /// Single entry point for all terminal focus restoration flows.
 ///
@@ -67,7 +70,7 @@ final class TerminalFocusCoordinator: ObservableObject, TerminalFocusWindowDeleg
 
     func focusTerminal(sessionID: UUID, surfaceStore: SurfaceStore) {
         guard let terminal = surfaceStore.terminal(for: sessionID) else {
-            NSLog("[SplitRouting] focus skipped: no terminal for session %@", sessionID.uuidString)
+            log.error("[SplitRouting] focus skipped: no terminal for session \(sessionID.uuidString, privacy: .public)")
             return
         }
         TerminalFocusManager.shared.requestFocus(for: terminal)

@@ -640,10 +640,8 @@ public actor LumeWorkspaceProvider: WorkspaceProviderProtocol {
         let logURL = detachedLaunchLogURL(for: vmName)
         do {
             try await lumeRunner().launchDetached(arguments: arguments, logURL: logURL)
-            NSLog(
-                "[LumeCLIRunner] action=launch_detached vm=%@ log=%@",
-                vmName,
-                logURL.path
+            log.info(
+                "[LumeCLIRunner] action=launch_detached vm=\(vmName, privacy: .public) log=\(logURL.path, privacy: .public)"
             )
         } catch {
             throw WorkspaceProviderError.unavailable("Failed to launch detached macOS VM '\(vmName)'.")

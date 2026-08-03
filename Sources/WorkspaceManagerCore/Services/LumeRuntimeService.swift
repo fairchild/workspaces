@@ -6,6 +6,9 @@
 //
 
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "LumeRuntimeService")
 
 public enum LumeRuntimeState: String, Sendable, Equatable {
     case unsupportedHost
@@ -498,12 +501,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             errorLogPath: errorLogPath
         )
 
-        NSLog(
-            "[Perf] metric=lume_runtime_snapshot duration_ms=%.2f state=%@ daemon_reachable=%@ base_vm_status=%@",
-            Date().timeIntervalSince(snapshotStartedAt) * 1000,
-            snapshot.state.rawValue,
-            daemonReachable ? "true" : "false",
-            snapshot.baseVM?.status.rawValue ?? "none"
+        log.info(
+            "[Perf] metric=lume_runtime_snapshot duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(snapshotStartedAt) * 1000), privacy: .public) state=\(snapshot.state.rawValue, privacy: .public) daemon_reachable=\(daemonReachable ? "true" : "false", privacy: .public) base_vm_status=\(snapshot.baseVM?.status.rawValue ?? "none", privacy: .public)"
         )
 
         return snapshot
@@ -532,17 +531,13 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
                 )
             )
 
-            NSLog(
-                "[Perf] metric=lume_runtime_host_profile duration_ms=%.2f outcome=success macos_family=%@ xcode=%@",
-                Date().timeIntervalSince(hostProfileStartedAt) * 1000,
-                profile.macOSFamily.rawValue,
-                profile.xcodeVersion == nil ? "absent" : "present"
+            log.info(
+                "[Perf] metric=lume_runtime_host_profile duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(hostProfileStartedAt) * 1000), privacy: .public) outcome=success macos_family=\(profile.macOSFamily.rawValue, privacy: .public) xcode=\(profile.xcodeVersion == nil ? "absent" : "present", privacy: .public)"
             )
             return profile
         } catch {
-            NSLog(
-                "[Perf] metric=lume_runtime_host_profile duration_ms=%.2f outcome=failure",
-                Date().timeIntervalSince(hostProfileStartedAt) * 1000
+            log.error(
+                "[Perf] metric=lume_runtime_host_profile duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(hostProfileStartedAt) * 1000), privacy: .public) outcome=failure"
             )
             throw error
         }
@@ -630,7 +625,9 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         do {
             imageResolution = try await defaultMacOSImageResolution()
         } catch {
-            NSLog("[LumeRuntime] Failed to resolve default macOS image: %@", error.localizedDescription)
+            log.error(
+                "[LumeRuntime] Failed to resolve default macOS image: \(error.localizedDescription, privacy: .public)"
+            )
             imageResolution = nil
         }
         let profile = await validatedBaseService.resolveBaseVMProfile(
@@ -733,11 +730,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         let inspectionStartedAt = Date()
         var snapshot: LumeBaseVMSnapshot?
         defer {
-            NSLog(
-                "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=%.2f vm_name=%@ status=%@",
-                Date().timeIntervalSince(inspectionStartedAt) * 1000,
-                profile.vmName,
-                snapshot?.status.rawValue ?? "none"
+            log.info(
+                "[Perf] metric=lume_runtime_base_vm_inspection duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(inspectionStartedAt) * 1000), privacy: .public) vm_name=\(profile.vmName, privacy: .public) status=\(snapshot?.status.rawValue ?? "none", privacy: .public)"
             )
         }
 
@@ -1124,10 +1118,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             reachable = await requestSucceeds(path: "/vms")
         }
 
-        NSLog(
-            "[Perf] metric=lume_runtime_daemon_reachability duration_ms=%.2f outcome=%@",
-            Date().timeIntervalSince(reachabilityStartedAt) * 1000,
-            reachable ? "reachable" : "unreachable"
+        log.info(
+            "[Perf] metric=lume_runtime_daemon_reachability duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(reachabilityStartedAt) * 1000), privacy: .public) outcome=\(reachable ? "reachable" : "unreachable", privacy: .public)"
         )
 
         return reachable
@@ -1181,21 +1173,15 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
         let commandStartedAt = Date()
         let result = try await ProcessRunner.run(executable: executable, arguments: arguments)
         guard result.success else {
-            NSLog(
-                "[Perf] metric=lume_runtime_host_command duration_ms=%.2f executable=%@ outcome=failure exit_code=%ld",
-                Date().timeIntervalSince(commandStartedAt) * 1000,
-                URL(fileURLWithPath: executable).lastPathComponent,
-                Int(result.exitCode)
+            log.error(
+                "[Perf] metric=lume_runtime_host_command duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(commandStartedAt) * 1000), privacy: .public) executable=\(URL(fileURLWithPath: executable).lastPathComponent, privacy: .public) outcome=failure exit_code=\(Int(result.exitCode), privacy: .public)"
             )
             throw LumeRuntimeError.invalidHostProfile(
                 result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
             )
         }
-        NSLog(
-            "[Perf] metric=lume_runtime_host_command duration_ms=%.2f executable=%@ outcome=success exit_code=%ld",
-            Date().timeIntervalSince(commandStartedAt) * 1000,
-            URL(fileURLWithPath: executable).lastPathComponent,
-            Int(result.exitCode)
+        log.info(
+            "[Perf] metric=lume_runtime_host_command duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(commandStartedAt) * 1000), privacy: .public) executable=\(URL(fileURLWithPath: executable).lastPathComponent, privacy: .public) outcome=success exit_code=\(Int(result.exitCode), privacy: .public)"
         )
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }

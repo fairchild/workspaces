@@ -2,6 +2,9 @@ import Foundation
 import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "ModelStoreStatus")
 
 enum ModelStoreMode: Codable, Equatable {
     case persistentAppSupport(path: String)
@@ -117,7 +120,7 @@ enum ModelStoreBootstrapper {
             } catch {
                 let message =
                     "Failed to use WORKSPACES_DATA_DIR '\(requestedURL.path)': \(String(describing: error))"
-                NSLog("[ModelStore] %@", message)
+                log.error("[ModelStore] \(message, privacy: .public)")
                 bootstrapErrors.append(message)
             }
         }
@@ -142,7 +145,7 @@ enum ModelStoreBootstrapper {
             )
         } catch {
             let message = "Falling back from app-support store: \(String(describing: error))"
-            NSLog("[ModelStore] %@", message)
+            log.error("[ModelStore] \(message, privacy: .public)")
             bootstrapErrors.append(message)
         }
 
@@ -171,11 +174,11 @@ enum ModelStoreBootstrapper {
         } catch {
             let message =
                 "Falling back from workspace-local store (\(fallbackDirectory.path)): \(String(describing: error))"
-            NSLog("[ModelStore] %@", message)
+            log.error("[ModelStore] \(message, privacy: .public)")
             bootstrapErrors.append(message)
         }
 
-        NSLog("[ModelStore] Falling back to in-memory store")
+        log.info("[ModelStore] Falling back to in-memory store")
         let inMemoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = makeContainer(
             schema: schema,

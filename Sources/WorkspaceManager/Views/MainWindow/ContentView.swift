@@ -15,6 +15,16 @@ private let creationLog = Logger(
     subsystem: "com.cloudcompute.workspaces",
     category: "WorkspaceCreation"
 )
+private let workspaceProviderLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceProvider")
+private let uiFixtureLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "UIFixture")
+private let archivedWorkspacePurgeLog = Logger(
+    subsystem: "com.cloudcompute.workspaces",
+    category: "ArchivedWorkspacePurge"
+)
+private let perfLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "Perf")
+private let terminalContinuityLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalContinuity")
+private let hostSessionLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "HostSession")
+private let restoreLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "Restore")
 
 private struct ModelSnapshot: Equatable {
     let repoIDs: [UUID]
@@ -1317,7 +1327,8 @@ struct ContentView: View {
             return
         }
 
-        NSLog("[WorkspaceProvider] Discarding pending remote connection (%@)", reason)
+        workspaceProviderLog.info(
+            "[WorkspaceProvider] Discarding pending remote connection (\(reason, privacy: .public))")
         viewState.connectingWorkspaceID = nil
         viewState.pendingRemoteWorkspace = nil
     }
@@ -1362,7 +1373,8 @@ struct ContentView: View {
             rightPaneStateStore.state(for: workspace).selectedTab = .diagnostics
             viewState.isRightPaneVisible = true
             viewState.didApplyFixtureDiagnosticsBootstrap = true
-            NSLog("[UIFixture] Diagnostics bootstrap applied (workspace=%@)", workspace.name)
+            uiFixtureLog.info(
+                "[UIFixture] Diagnostics bootstrap applied (workspace=\(workspace.name, privacy: .public))")
             return
         }
 
@@ -1371,7 +1383,7 @@ struct ContentView: View {
             rightPaneStateStore.state(for: repo).selectedTab = .diagnostics
             viewState.isRightPaneVisible = true
             viewState.didApplyFixtureDiagnosticsBootstrap = true
-            NSLog("[UIFixture] Diagnostics bootstrap applied (repo=%@)", repo.name)
+            uiFixtureLog.info("[UIFixture] Diagnostics bootstrap applied (repo=\(repo.name, privacy: .public))")
         }
     }
 
@@ -1383,7 +1395,7 @@ struct ContentView: View {
         viewState.didApplyFixtureSessionSwitcherBootstrap = true
         Task { @MainActor in
             presentSessionSwitcher()
-            NSLog("[UIFixture] Session switcher bootstrap applied")
+            uiFixtureLog.info("[UIFixture] Session switcher bootstrap applied")
         }
     }
 
@@ -1783,17 +1795,12 @@ struct ContentView: View {
                 surfaceStore: tileTreeStore.surfaceStore,
                 activeSessionID: tileTreeStore.activeSessionID
             )
-            NSLog(
-                "[WorkspaceProvider] Session created for %@ workspace %@",
-                workspace.backendIdentifier,
-                workspace.name
+            workspaceProviderLog.info(
+                "[WorkspaceProvider] Session created for \(workspace.backendIdentifier, privacy: .public) workspace \(workspace.name, privacy: .public)"
             )
         } catch {
-            NSLog(
-                "[WorkspaceProvider] Failed to connect to %@ workspace %@: %@",
-                workspace.backendIdentifier,
-                workspace.name,
-                error.localizedDescription
+            workspaceProviderLog.error(
+                "[WorkspaceProvider] Failed to connect to \(workspace.backendIdentifier, privacy: .public) workspace \(workspace.name, privacy: .public): \(error.localizedDescription, privacy: .public)"
             )
             guard viewState.connectingWorkspaceID == workspace.id else { return }
             viewState.connectingWorkspaceID = nil
@@ -2402,21 +2409,14 @@ struct ContentView: View {
                 }
                 purgedCount += 1
             } catch {
-                NSLog(
-                    "[ArchivedWorkspacePurge] Failed to purge '%@': %@",
-                    workspace.name,
-                    error.localizedDescription
+                archivedWorkspacePurgeLog.error(
+                    "[ArchivedWorkspacePurge] Failed to purge '\(workspace.name, privacy: .public)': \(error.localizedDescription, privacy: .public)"
                 )
             }
         }
 
-        NSLog(
-            "[Perf] metric=archived_workspace_purge duration_ms=%.2f trigger=%@ delay_days=%ld candidate_count=%ld purged_count=%ld",
-            Date().timeIntervalSince(startedAt) * 1000,
-            trigger,
-            delayDays,
-            candidates.count,
-            purgedCount
+        perfLog.info(
+            "[Perf] metric=archived_workspace_purge duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(startedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) delay_days=\(delayDays, privacy: .public) candidate_count=\(candidates.count, privacy: .public) purged_count=\(purgedCount, privacy: .public)"
         )
     }
 
@@ -2452,12 +2452,8 @@ struct ContentView: View {
                     guard let remoteID = workspace.remoteId else { continue }
                     let newStatus = statusesByRemoteID[remoteID] ?? .archived
                     if workspace.status != newStatus {
-                        NSLog(
-                            "[WorkspaceProvider] Syncing workspace '%@' (%@): %@ -> %@",
-                            workspace.name,
-                            providerID,
-                            workspace.status.rawValue,
-                            newStatus.rawValue
+                        workspaceProviderLog.info(
+                            "[WorkspaceProvider] Syncing workspace '\(workspace.name, privacy: .public)' (\(providerID, privacy: .public)): \(workspace.status.rawValue, privacy: .public) -> \(newStatus.rawValue, privacy: .public)"
                         )
                         workspace.status = newStatus
                         changed = true
@@ -2468,21 +2464,13 @@ struct ContentView: View {
             } catch {
                 outcome = "failure"
                 hadFailure = true
-                NSLog(
-                    "[WorkspaceProvider] Failed to sync %@ workspace statuses: %@",
-                    providerID,
-                    error.localizedDescription
+                workspaceProviderLog.error(
+                    "[WorkspaceProvider] Failed to sync \(providerID, privacy: .public) workspace statuses: \(error.localizedDescription, privacy: .public)"
                 )
             }
 
-            NSLog(
-                "[Perf] metric=workspace_status_sync_provider duration_ms=%.2f trigger=%@ provider=%@ workspace_count=%ld changed_count=%ld outcome=%@",
-                Date().timeIntervalSince(providerSyncStartedAt) * 1000,
-                trigger,
-                providerID,
-                providerWorkspaces.count,
-                providerChangedCount,
-                outcome
+            perfLog.info(
+                "[Perf] metric=workspace_status_sync_provider duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(providerSyncStartedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) provider=\(providerID, privacy: .public) workspace_count=\(providerWorkspaces.count, privacy: .public) changed_count=\(providerChangedCount, privacy: .public) outcome=\(outcome, privacy: .public)"
             )
         }
 
@@ -2490,14 +2478,8 @@ struct ContentView: View {
             try? modelContext.save()
         }
 
-        NSLog(
-            "[Perf] metric=workspace_status_sync duration_ms=%.2f trigger=%@ providers=%ld workspace_count=%ld changed_count=%ld outcome=%@",
-            Date().timeIntervalSince(syncStartedAt) * 1000,
-            trigger,
-            groupedWorkspaces.count,
-            nonLocalWorkspaces.count,
-            changedCount,
-            hadFailure ? "partial_failure" : "success"
+        perfLog.info(
+            "[Perf] metric=workspace_status_sync duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(syncStartedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) providers=\(groupedWorkspaces.count, privacy: .public) workspace_count=\(nonLocalWorkspaces.count, privacy: .public) changed_count=\(changedCount, privacy: .public) outcome=\(hadFailure ? "partial_failure" : "success", privacy: .public)"
         )
     }
 
@@ -2517,12 +2499,8 @@ struct ContentView: View {
         let currentIDs = Set(result.items.map(\.id))
         dismissedWorkspaceOrphanItemIDs = dismissedWorkspaceOrphanItemIDs.intersection(currentIDs)
 
-        NSLog(
-            "[Perf] metric=workspace_orphan_scan duration_ms=%.2f trigger=%@ repo_count=%ld item_count=%ld",
-            Date().timeIntervalSince(scanStartedAt) * 1000,
-            trigger,
-            snapshots.count,
-            result.items.count
+        perfLog.info(
+            "[Perf] metric=workspace_orphan_scan duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(scanStartedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) repo_count=\(snapshots.count, privacy: .public) item_count=\(result.items.count, privacy: .public)"
         )
     }
 
@@ -3043,14 +3021,8 @@ struct ContentView: View {
             activeSessionIDByScopeKey: continuityInputs.activeSessionIDByScopeKey
         )
         terminalContinuityManifestRawValue = manifest.rawValue
-        NSLog(
-            "[TerminalContinuity] persisted kind=%@ id=%@ root=%@ launch=%@ tmux_session=%@ mode=%@",
-            targetKind.rawValue,
-            targetID.uuidString,
-            manifest.rootPath,
-            manifest.launchPath,
-            manifest.tmuxSessionName,
-            manifest.terminalMode.rawValue
+        terminalContinuityLog.info(
+            "[TerminalContinuity] persisted kind=\(targetKind.rawValue, privacy: .public) id=\(targetID.uuidString, privacy: .public) root=\(manifest.rootPath, privacy: .public) launch=\(manifest.launchPath, privacy: .public) tmux_session=\(manifest.tmuxSessionName, privacy: .public) mode=\(manifest.terminalMode.rawValue, privacy: .public)"
         )
     }
 
@@ -3199,19 +3171,12 @@ struct ContentView: View {
             initialCommand: initialCommand
         )
         if result.created {
-            NSLog(
-                "[HostSession] Created session %@ key=%@ path=%@ (total sessions=%ld)",
-                result.session.id.uuidString,
-                key.debugDescription,
-                result.session.directoryPath,
-                tileTreeStore.sessions.count
+            hostSessionLog.info(
+                "[HostSession] Created session \(result.session.id.uuidString, privacy: .public) key=\(key.debugDescription, privacy: .public) path=\(result.session.directoryPath, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
             )
         } else {
-            NSLog(
-                "[HostSession] Reusing session %@ key=%@ path=%@",
-                result.session.id.uuidString,
-                key.debugDescription,
-                result.session.directoryPath
+            hostSessionLog.info(
+                "[HostSession] Reusing session \(result.session.id.uuidString, privacy: .public) key=\(key.debugDescription, privacy: .public) path=\(result.session.directoryPath, privacy: .public)"
             )
         }
 
@@ -3271,17 +3236,17 @@ struct ContentView: View {
             normalizePath: RestorePathNormalization.normalize
         ).makePlan(index: index)
         if plan.surfaces.isEmpty {
-            NSLog("[Restore] no restorable surfaces from previous run")
+            restoreLog.info("[Restore] no restorable surfaces from previous run")
         } else if plan.wasHandled(handledRunID: restoreHandledRunID.isEmpty ? nil : restoreHandledRunID) {
-            NSLog(
-                "[Restore] suppressed banner: previous run %@ already handled",
-                plan.previousRunID ?? "?")
+            restoreLog.info(
+                "[Restore] suppressed banner: previous run \(plan.previousRunID ?? "?", privacy: .public) already handled"
+            )
         } else if !plan.offersMoreThanLaunchSeed(
             seedKey: .defaultHome, seedDirectory: resolvedDefaultHostDirectory)
         {
-            NSLog("[Restore] suppressed banner: plan only duplicates the launch seed")
+            restoreLog.info("[Restore] suppressed banner: plan only duplicates the launch seed")
         } else {
-            NSLog("[Restore] planned %ld restorable surface(s)", plan.surfaces.count)
+            restoreLog.info("[Restore] planned \(plan.surfaces.count, privacy: .public) restorable surface(s)")
             pendingRestorePlan = plan
             autorunRestoreIfRequested(plan)
         }
@@ -3293,7 +3258,7 @@ struct ContentView: View {
     /// resume path without desktop input. No effect outside that environment.
     private func autorunRestoreIfRequested(_ plan: RestorePlan) {
         guard ProcessInfo.processInfo.environment["WORKSPACES_RESTORE_AUTORUN"] == "1" else { return }
-        NSLog("[Restore] autorun: executing planned restore after settle delay")
+        restoreLog.info("[Restore] autorun: executing planned restore after settle delay")
         Task { @MainActor in
             // Approximate a real banner click: let launch layout settle first.
             try? await Task.sleep(for: .seconds(3))
@@ -3361,7 +3326,7 @@ struct ContentView: View {
         if let selected = plan.selectedHostSessionID, let target = activatedByHostSessionID[selected] {
             _ = activateHostSession(key: target.key, directory: target.directoryURL)
         }
-        NSLog("[Restore] executed %ld surface(s)", plan.surfaces.count)
+        restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
     }
 
     /// Coalesces the high-frequency agent-event refresh path: bursts of status or
@@ -3464,10 +3429,8 @@ struct ContentView: View {
             }
         }
 
-        NSLog(
-            "[Perf] metric=main_window_terminal_surface_prewarm requested=%ld initialized=%ld",
-            surfaceCount,
-            initializedSurfaceCount
+        perfLog.info(
+            "[Perf] metric=main_window_terminal_surface_prewarm requested=\(surfaceCount, privacy: .public) initialized=\(initializedSurfaceCount, privacy: .public)"
         )
     }
 
