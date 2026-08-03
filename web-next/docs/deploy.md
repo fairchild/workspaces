@@ -107,8 +107,9 @@ Notes:
   the Sandbox authenticates via the auto-injected `VERCEL_OIDC_TOKEN`. Those
   tokens are only needed *off*-Vercel (the Mac and cloud-dev).
 - **Repo clone reuses the existing GitHub App** (installation tokens) rather than
-  a personal token — scoped and short-lived. The App id + private key are the
-  same credentials the `web/` managed PR reviewer already uses.
+  a personal token — scoped and short-lived. The App id + private key are those
+  of the `workspaces-claude-pr-reviewer` App, which is retained for this purpose
+  (see `docs/decisions/managed-reviewer-retirement.md`).
 - **OAuth app callback:** whichever OAuth app backs production login, its callback
   list must include `<BETTER_AUTH_URL>/api/auth/callback/github`.
 - Exact runtime var names are finalized when #750 lands; this is the canonical set

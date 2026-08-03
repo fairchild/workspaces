@@ -12,7 +12,7 @@ description: >
 
 Agents coordinate through GitHub Discussions — a durable, web-visible layer that works across worktrees, sessions, and tools.
 
-> **Orientation — which bus am I on?** The **live execution bus is GitHub Issues + the label taxonomy** (`ready`/`claimed`/`review`/`mergeable`), driven by `sync-execution-state.py` and the managed reviewer. Claim and work issues there — see `docs/agents/triage-labels.md` and `backlog/AGENTS.md`. On **Discussions**, the actively-used flow is the cron team's `[idea]` → owner-👍 → planned-issue pipeline (Peter Planner). The `[task]`/`[claimed:]` claim-and-complete grammar below is a **secondary path for ad-hoc, cross-worktree coordination** — reach for it when work doesn't yet have an issue or spans harnesses; use Issues + labels for the standing execution loop.
+> **Orientation — which bus am I on?** The **live execution bus is GitHub Issues + the label taxonomy** (`ready`/`claimed`/`review`/`mergeable`), driven by `sync-execution-state.py` and the Factory review lane. Claim and work issues there — see `docs/agents/triage-labels.md` and `backlog/AGENTS.md`. On **Discussions**, the actively-used flow is the cron team's `[idea]` → owner-👍 → planned-issue pipeline (Peter Planner). The `[task]`/`[claimed:]` claim-and-complete grammar below is a **secondary path for ad-hoc, cross-worktree coordination** — reach for it when work doesn't yet have an issue or spans harnesses; use Issues + labels for the standing execution loop.
 
 ## Script Location
 

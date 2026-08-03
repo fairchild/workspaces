@@ -8,8 +8,7 @@ not a broad public security stance.
 
 - Production agent runtime config fails closed when required compute/auth inputs
   are absent: `ALLOWED_AGENT_LOGINS`, `BETTER_AUTH_SECRET`,
-  `TTYD_TOKEN_SECRET`, provider credentials, and PR reviewer app credentials
-  when the reviewer is explicitly enabled.
+  `TTYD_TOKEN_SECRET`, and provider credentials.
 - Terminal compute remains allowlisted by GitHub login.
 - User-facing terminal shells do not receive the deployment
   `ANTHROPIC_API_KEY` unless `TERMINAL_ANTHROPIC_API_KEY=1` is set.

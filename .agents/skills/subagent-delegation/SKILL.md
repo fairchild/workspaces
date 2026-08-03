@@ -58,7 +58,7 @@ dispatch:
 ## The gate, before a PR leaves draft
 
 Calibrate depth to risk — default tiers until #733 lands: docs/test-only →
-diff read + CI + managed reviewer suffice; behavior → add an independent
+diff read + CI + a directed review pass suffice; behavior → add an independent
 suite re-run (don't trust reported counts); security/UI → add the
 adversarial/visual passes below.
 
