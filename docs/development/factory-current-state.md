@@ -6,21 +6,21 @@ What is actually wired and running today, verified against the workflow YAML and
 
 | Lane | Workflow | Trigger | Guard | Status |
 |---|---|---|---|---|
-| Implement | `factory-implement.yml` | issue labeled `ready` (owner-applied only); or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_IMPLEMENT_ENABLED`, capped by `FACTORY_IMPLEMENT_DAILY_CAP` | **Live** |
-| Review (signal) | `factory-review.yml` | PR opened / `ready_for_review` / synchronize; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_ENABLED` | **Live** — untrusted, writes a context artifact only |
-| Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same as above, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code |
-| Monitor | `factory-monitor.yml` | daily cron (13:30 UTC); or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_MONITOR_ENABLED` | **Live** — telemetry, Digest, reconciliation janitor |
-| Evidence Verify | `factory-evidence-verify.yml` | `check_suite` completed; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_EVIDENCE_VERIFY_ENABLED` | **Wired but effectively off** — `FACTORY_EVIDENCE_VERIFY_ENABLED` is unset in `gh variable list`, and an unset repo variable reads as empty in Actions expressions, so the guard never passes. Nothing currently sets this switch. |
-| Owner Comment Responder | `factory-comment-responder.yml` | `issue_comment` created by the owner; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_RESPONDER_ENABLED` | **Live** |
+| Implement | `factory-implement.yml` | issue labeled `ready` (owner-applied only); or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_IMPLEMENT_ENABLED`, both branches — capped by `FACTORY_IMPLEMENT_DAILY_CAP` | **Live** |
+| Review (signal) | `factory-review.yml` | PR opened / `ready_for_review` / synchronize; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_ENABLED` on the PR-event path only — **`workflow_dispatch` bypasses both switches** (the `if:` uses boolean OR, not AND) | **Live** — untrusted, writes a context artifact only |
+| Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same switches, same bypass — if the upstream Review run's triggering event was `workflow_dispatch`, this job runs regardless of either switch; otherwise gated, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code |
+| Monitor | `factory-monitor.yml` | daily cron (13:30 UTC); or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_MONITOR_ENABLED` on the cron path only — **`workflow_dispatch` bypasses both switches** (same OR-not-AND pattern) | **Live** — telemetry, Digest, reconciliation janitor |
+| Evidence Verify | `factory-evidence-verify.yml` | `check_suite` completed; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_EVIDENCE_VERIFY_ENABLED`, both branches (dispatch does not bypass here) | **Wired but effectively off** — `FACTORY_EVIDENCE_VERIFY_ENABLED` is unset in `gh variable list`, and an unset repo variable reads as empty in Actions expressions, so the guard never passes. Nothing currently sets this switch. |
+| Owner Comment Responder | `factory-comment-responder.yml` | `issue_comment` created by the owner; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_RESPONDER_ENABLED`, both branches (dispatch does not bypass here) | **Live** |
 | Mention Triage → Executor | `agent-mention.yml` → `agent-executor.yml` | `@april-clearwater` / `@plat` / `@peter` / `@claude` mentions on issues/PRs/reviews | `AGENT_AUTOMATIONS_ENABLED`; execution additionally requires the `safe-to-run-agent` label, server-verified | **Live** — this is a distinct lane from the "Triage" pipeline Stage below; naming collision, not the same code path |
 | Milestone Legibility | `milestone-legibility.yml` | daily cron (13:37 UTC); PR touching the check script; `workflow_dispatch` | none (no Factory switch — always runs) | **Live** |
-| Evidence Reminder | `evidence-reminder.yml` | PR opened/edited/`ready_for_review` | none | **Live** — plain CI gate, not part of the Factory pipeline |
+| Evidence Reminder | `evidence-reminder.yml` | PR opened/edited/`ready_for_review` | none | **Live** — non-blocking: it only posts a reminder comment when evidence looks absent, it never fails the check. Not part of the Factory pipeline. |
 | Triage / Spec (pipeline Stages) | none | — | — | **Aspirational.** `docs/agents/CONTEXT.md` names these as Factory Stages and assigns them to Peter, but no workflow triggers `run-planner.py` today. See "Peter planner: parked" below. |
 | Carl Community | — | — | — | **Deleted this PR.** Daily cron that only 429s or no-ops; never posted once; not a v2-plan persona. |
 | Codespaces Claude Worker | — | — | — | **Deleted this PR.** Manual break-glass dispatch; zero runs since it shipped. |
 | App Review Smoke | — | — | — | **Deleted this PR.** Manual dispatch; dormant since 2026-05-26. |
 
-`AGENT_AUTOMATIONS_ENABLED` is the global master switch — every Factory lane except Milestone Legibility and Evidence Reminder requires it `true` in addition to its own per-stage switch.
+`AGENT_AUTOMATIONS_ENABLED` is the global master switch, but it is not an unconditional kill for every lane: Implement, Evidence Verify, and the Owner Comment Responder `&&` it into every trigger path including `workflow_dispatch`, so it always gates them. Review (signal), Review (execute), and Monitor instead OR a bare `workflow_dispatch` check ahead of the switches — an owner-triggered manual dispatch runs those three regardless of `AGENT_AUTOMATIONS_ENABLED` or their own per-stage switch. Milestone Legibility and Evidence Reminder have no Factory switch at all. Treat "turn off `AGENT_AUTOMATIONS_ENABLED`" as "stops label/cron/comment-driven runs," not "nothing can run" — a manual dispatch on Review or Monitor still can.
 
 ## Peter planner: parked
 
@@ -32,7 +32,7 @@ Live values as of 2026-08-03 (`gh variable list --repo fairchild/workspaces`):
 
 | Variable | Value | Gates |
 |---|---|---|
-| `AGENT_AUTOMATIONS_ENABLED` | `true` | Global master — every lane above except Milestone Legibility / Evidence Reminder |
+| `AGENT_AUTOMATIONS_ENABLED` | `true` | Global master for Implement, Evidence Verify, and Owner Comment Responder on every trigger path; for Review and Monitor it only gates the non-`workflow_dispatch` path (see lane table above) |
 | `FACTORY_IMPLEMENT_ENABLED` | `true` | Implement lane |
 | `FACTORY_IMPLEMENT_DAILY_CAP` | `6` | Implement lane — max owner-authorized `factory-implement.yml` runs per UTC day |
 | `FACTORY_REVIEW_ENABLED` | `true` | Review (signal + execute) lanes |
@@ -52,11 +52,13 @@ gh variable set FACTORY_IMPLEMENT_ENABLED --body false --repo fairchild/workspac
 # Turn it back on:
 gh variable set FACTORY_IMPLEMENT_ENABLED --body true --repo fairchild/workspaces
 
-# Kill every Factory lane at once (Milestone Legibility and Evidence Reminder are unaffected):
+# Stop label/cron/comment-driven runs across every lane (Milestone Legibility and
+# Evidence Reminder are unaffected; owner workflow_dispatch on Review or Monitor
+# still runs — see the bypass note under the lane table):
 gh variable set AGENT_AUTOMATIONS_ENABLED --body false --repo fairchild/workspaces
 ```
 
-A disabled lane's `if:` guard simply evaluates false — the job is skipped, not queued, so flipping the switch back on does not replay missed events. `workflow_dispatch` from the repository owner bypasses the trigger condition but never the switch itself (see the `if:` blocks above): every lane still requires its guard variables to be `true`.
+A disabled lane's `if:` guard simply evaluates false — the job is skipped, not queued, so flipping the switch back on does not replay missed events. For Implement, Evidence Verify, and the Owner Comment Responder, `workflow_dispatch` still requires both switches to be `true` — there's no bypass. For Review (signal + execute) and Monitor, `workflow_dispatch` bypasses both switches entirely (boolean OR in the `if:`, not AND): an owner with dispatch access can run those three lanes even with `AGENT_AUTOMATIONS_ENABLED` off.
 
 ## `factory/ops-data` branch contract
 

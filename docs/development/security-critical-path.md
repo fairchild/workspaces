@@ -24,9 +24,6 @@ not a broad public security stance.
 - Agent-generated patches touching repo-control, release/signing, auth/token,
   sandbox, or infra secret paths require `privileged-agent-patch` or an explicit
   break-glass workflow input.
-- The Codespaces Claude worker is protected by the
-  `codespaces-claude-break-glass` environment and defaults to `main` or
-  owner-repository branches.
 
 ## Release And Update Chain
 
