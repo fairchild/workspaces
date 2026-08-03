@@ -115,18 +115,11 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("main|release/*|releases/*", workflow)
         self.assertIn("Content-write probes must not target main or release branches.", workflow)
 
-    def test_claude_workflow_is_manual_dispatch_only(self) -> None:
-        workflow = (REPO_ROOT / ".github/workflows/claude.yml").read_text()
-        on_block, _ = workflow.split("\njobs:\n", 1)
-        self.assertIn("workflow_dispatch:", on_block)
-        self.assertIn("prompt:", workflow)
-        for trigger in (
-            "issue_comment",
-            "pull_request_review_comment",
-            "pull_request_review",
-            "issues",
-        ):
-            self.assertIsNone(re.search(rf"(?m)^  {re.escape(trigger)}:$", on_block))
+    def test_claude_workflow_stays_deleted(self) -> None:
+        # Retired in #1166: dormant since March yet granting id-token: write with
+        # no guard. The hardening property is now that it does not come back;
+        # @claude mentions are handled by agent-mention.yml.
+        self.assertFalse((REPO_ROOT / ".github/workflows/claude.yml").exists())
 
     def test_agent_executor_is_label_gated(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/agent-executor.yml").read_text()
