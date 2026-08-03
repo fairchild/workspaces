@@ -500,7 +500,7 @@ try {
     );
   });
 
-  // Test 10: Non-review lifecycle events stay relay-local
+  // Test 7: Non-review lifecycle events stay relay-local
   await test("Non-review PR lifecycle events are not forwarded", async () => {
     forwardedRequests.length = 0;
     const payload = payloadForPR(9091, "Closed PR", "closed");
@@ -512,7 +512,7 @@ try {
     assert(forwardedRequests.length === 0, `Expected no forwarded requests, got ${forwardedRequests.length}`);
   });
 
-  // Test 11: Duplicate webhook delivery is ignored
+  // Test 8: Duplicate webhook delivery is ignored
   await test("Duplicate webhook payload only appears once", async () => {
     const jwt = await makeJWT();
     const payload = payloadForPR(4242, "Duplicate PR", "opened");
@@ -539,7 +539,7 @@ try {
     assert(duplicateEntries.length === 1, `Expected 1 duplicate-test event in catchup, got ${duplicateEntries.length}`);
   });
 
-  // Test 12: Equivalent payloads with different key order are deduped
+  // Test 9: Equivalent payloads with different key order are deduped
   await test("Semantically equivalent payloads only appear once", async () => {
     const jwt = await makeJWT();
     const payloadA = payloadForPR(4343, "Key Order PR", "opened");
@@ -572,7 +572,7 @@ try {
     assert(matching.length === 1, `Expected 1 key-order event in catchup, got ${matching.length}`);
   });
 
-  // Test 13: Distinct lifecycle events for the same PR are preserved
+  // Test 10: Distinct lifecycle events for the same PR are preserved
   await test("Distinct events for the same PR are not over-deduped", async () => {
     const jwt = await makeJWT();
     const openedPayload = payloadForPR(5151, "Lifecycle PR", "opened");
@@ -603,7 +603,7 @@ try {
     assert(matching.length === 2, `Expected 2 lifecycle events in catchup, got ${matching.length}`);
   });
 
-  // Test 14: Duplicate suppression survives worker restart
+  // Test 11: Duplicate suppression survives worker restart
   await test("Duplicate suppression survives worker restart", async () => {
     const jwt = await makeJWT();
     const payload = payloadForPR(6262, "Restart Stable PR", "opened");
@@ -633,7 +633,7 @@ try {
     assert(finalMatches.length === 1, `Expected 1 restarted event after duplicate resend, got ${finalMatches.length}`);
   });
 
-  // Test 15: Startup cleanup prunes legacy duplicate rows
+  // Test 12: Startup cleanup prunes legacy duplicate rows
   await test("Startup cleanup collapses legacy duplicate rows before catchup", async () => {
     const jwt = await makeJWT();
     const payload = payloadForPR(7373, "Legacy Cleanup PR", "opened");
@@ -678,7 +678,7 @@ try {
     assert(matching.length === 1, `Expected 1 legacy-cleanup event in catchup, got ${matching.length}`);
   });
 
-  // Test 16: Per-client repo filtering
+  // Test 13: Per-client repo filtering
   await test("Repo filtering: ghp_repo_b_only only receives repo-b events", async () => {
     const jwt = await makeJWT();
     const bws = await connectWebSocket("test-org", jwt, "ghp_repo_b_only");

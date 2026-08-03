@@ -8,6 +8,7 @@ const GITHUB_API_HEADERS = {
   Accept: "application/vnd.github+json",
   "User-Agent": "WorkspaceManager-WebhookRelay",
 };
+
 function githubAPI(env: Env, path: string): string {
   return `${env.GITHUB_API_BASE ?? "https://api.github.com"}${path}`;
 }
