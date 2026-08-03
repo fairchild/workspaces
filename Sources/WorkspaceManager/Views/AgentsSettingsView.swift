@@ -14,10 +14,6 @@ import AppKit
 import SwiftUI
 import WorkspaceManagerCore
 
-private enum AgentsSettingsStorage {
-    static let bannerDismissedKey = "agents.claudeHooks.bannerDismissed"
-}
-
 struct AgentsSettingsView: View {
     let installer: (any ClaudeSettingsInstalling)?
 

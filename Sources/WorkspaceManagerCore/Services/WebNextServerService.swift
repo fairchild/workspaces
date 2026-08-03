@@ -382,7 +382,7 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     }
 
     private nonisolated static func writeRedactedLine(_ line: [UInt8], to logFD: Int32) {
-        var bytes = Array(redactSignInToken(in: String(decoding: line, as: UTF8.self)).utf8)
+        let bytes = Array(redactSignInToken(in: String(decoding: line, as: UTF8.self)).utf8)
         var offset = 0
         while offset < bytes.count {
             let written = bytes[offset...].withUnsafeBytes { buffer in

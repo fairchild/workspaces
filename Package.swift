@@ -32,7 +32,6 @@ let package = Package(
     products: [
         .executable(name: "WorkspaceManager", targets: ["WorkspaceManager"]),
         .executable(name: "workspaces", targets: ["WorkspaceManagerCLI"]),
-        .executable(name: "WorkspaceManagerCLI", targets: ["WorkspaceManagerCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.10.0"),

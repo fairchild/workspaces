@@ -10,14 +10,6 @@
 
 import Foundation
 
-/// Shared keys for the global default-agent setting. The Settings UI and the
-/// terminal launcher both read/write the same UserDefaults key.
-public enum DefaultAgentDefaults {
-    /// Project-wide fallback agent command (e.g. `claude --resume`). Empty or
-    /// whitespace-only values are treated as unset by `DefaultAgentResolver`.
-    public static let globalCommandKey = "workspaces.defaultAgentCommand"
-}
-
 public struct DefaultAgentResolver: Sendable {
     public init() {}
 

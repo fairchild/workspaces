@@ -3,7 +3,7 @@
 --
 -- This file is both documentation and a runnable SQLite schema for the native
 -- app's local state sidecar database. It mirrors LocalStateStore schema version
--- 1 in Sources/WorkspaceManagerCore/Services/LocalStateStore.swift.
+-- 2 in Sources/WorkspaceManagerCore/Services/LocalStateStore.swift.
 --
 -- Keep this file manually in sync whenever LocalStateStore migrations change.
 -- SwiftData remains the canonical store for Repository, Workspace, and Web
