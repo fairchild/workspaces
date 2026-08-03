@@ -14,7 +14,9 @@ on:
         default: false
 
 permissions:
-  actions: read
+  # write, not just read: the standing-queue sweep dispatches
+  # factory-implement.yml via the Actions API (write implies read).
+  actions: write
   contents: write
   # ops-report.py still reads legacy discussion telemetry.
   discussions: read
@@ -187,6 +189,24 @@ jobs:
           fi
 
           uv run --script "$GITHUB_WORKSPACE/source/scripts/factory-janitor.py" "${ARGS[@]}"
+
+      - name: Sweep standing ready queue
+        if: vars.AGENT_AUTOMATIONS_ENABLED == 'true' && vars.FACTORY_IMPLEMENT_ENABLED == 'true'
+        shell: bash
+        env:
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          FACTORY_IMPLEMENT_DAILY_CAP: ${{ vars.FACTORY_IMPLEMENT_DAILY_CAP || '6' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ARGS=(--ref main)
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS+=(--dry-run)
+          else
+            ARGS+=(--apply)
+          fi
+
+          uv run --script "$GITHUB_WORKSPACE/source/scripts/factory-sweep.py" "${ARGS[@]}"
 
       - name: Update Factory Digest
         shell: bash

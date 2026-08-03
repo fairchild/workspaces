@@ -33,6 +33,14 @@ DEFAULT_DAILY_IMPLEMENT_CAP = 6
 GITHUB_API_URL = "https://api.github.com"
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 MAX_TITLE_LENGTH = 80
+# Matches factory-implement.py's FACTORY_SWEEP_ACTOR: the actor GitHub assigns
+# a workflow_dispatch run triggered with the default GITHUB_TOKEN from inside
+# another Actions run (the Monitor's standing-queue sweep).
+FACTORY_SWEEP_ACTOR = "github-actions[bot]"
+# A ready+agent+task issue surviving past one daily sweep cycle without moving
+# to claimed/review means the sweep never got it out — surface that as a fault
+# rather than only a passive list entry (#1148).
+QUEUE_STALE_HOURS = 24
 
 
 class FactoryDigestError(RuntimeError):
@@ -217,7 +225,8 @@ def is_factory_implement_dispatch(
     repository_owner: str,
 ) -> bool:
     actor = str((run.get("actor") or {}).get("login") or "")
-    return actor.casefold() == repository_owner.casefold() and (
+    trusted = {repository_owner.casefold(), FACTORY_SWEEP_ACTOR.casefold()}
+    return actor.casefold() in trusted and (
         str(run.get("event", "")) == "workflow_dispatch"
         or str(run.get("display_title", "")).startswith("Factory Implement ready #")
     )
@@ -317,6 +326,12 @@ query FactoryDigestIssues($owner: String!, $name: String!, $after: String) {
       nodes {
         id number title body url state createdAt updatedAt
         labels(first: 50) { nodes { name } }
+        timelineItems(last: 100, itemTypes: [LABELED_EVENT]) {
+          nodes {
+            __typename
+            ... on LabeledEvent { createdAt label { name } }
+          }
+        }
       }
     }
   }
@@ -339,7 +354,15 @@ query FactoryDigestIssues($owner: String!, $name: String!, $after: String) {
                 label_ids[label_name] = str(label["id"])
         connection = repository["issues"]
         for node in connection["nodes"]:
-            issues.append({**node, "labels": list(node["labels"]["nodes"])})
+            issues.append(
+                {
+                    **node,
+                    "labels": list(node["labels"]["nodes"]),
+                    "timelineItems": list(
+                        node.get("timelineItems", {}).get("nodes", [])
+                    ),
+                }
+            )
         if not connection["pageInfo"]["hasNextPage"]:
             break
         cursor = connection["pageInfo"]["endCursor"]
@@ -434,6 +457,21 @@ def age_days(value: str, current_time: datetime) -> int:
 
 def label_names(item: dict[str, Any]) -> set[str]:
     return {str(label.get("name", "")) for label in item.get("labels", []) or []}
+
+
+def ready_since(issue: dict[str, Any]) -> str:
+    """Timestamp the issue most recently became `ready`.
+
+    Falls back to createdAt, then updatedAt, when no LabeledEvent timeline
+    data is available (older callers/fixtures that predate this field).
+    """
+    for event in reversed(issue.get("timelineItems", []) or []):
+        if not isinstance(event, dict) or event.get("__typename") != "LabeledEvent":
+            continue
+        label = event.get("label")
+        if isinstance(label, dict) and label.get("name") == "ready":
+            return str(event["createdAt"])
+    return str(issue.get("createdAt") or issue.get("updatedAt"))
 
 
 def render_title(value: Any) -> str:
@@ -558,6 +596,7 @@ def render_digest(
     ready_issues: list[dict[str, Any]] = []
     anomalies: list[int] = []
     aging_lines: list[tuple[datetime, str]] = []
+    queue_age_breaches: list[tuple[datetime, dict[str, str]]] = []
     for issue in issues:
         labels = label_names(issue)
         updated_at = str(issue["updatedAt"])
@@ -591,6 +630,23 @@ def render_digest(
 
         if lifecycle == "ready":
             ready_issues.append(issue)
+            ready_since_value = ready_since(issue)
+            ready_since_time = parse_datetime(ready_since_value)
+            if current_time - ready_since_time > timedelta(hours=QUEUE_STALE_HOURS):
+                queue_age_breaches.append(
+                    (
+                        ready_since_time,
+                        {
+                            "category": "queue-age",
+                            "summary": (
+                                f"{issue_reference} has been ready "
+                                f"{age_days(ready_since_value, current_time)}d without moving "
+                                "to claimed or review — check the sweep (or a claim/rollback "
+                                "loop) rather than assuming it was never dispatched"
+                            ),
+                        },
+                    )
+                )
         elif lifecycle == "review":
             candidates = [
                 pull
@@ -639,7 +695,10 @@ def render_digest(
         lines = [line for _, line in sorted(aging_lines, key=lambda item: item[0])]
         sections.append("## Aging\n\n" + "\n".join(lines))
 
-    breaches = summary.get("breaches") or []
+    breaches = list(summary.get("breaches") or []) + [
+        breach
+        for _, breach in sorted(queue_age_breaches, key=lambda item: item[0])
+    ]
     if breaches:
         lines = [f"- **{item['category']}**: {item['summary']}" for item in breaches]
         sections.append("## Threshold breaches\n\n" + "\n".join(lines))

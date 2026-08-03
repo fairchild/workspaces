@@ -50,6 +50,16 @@ API_ATTEMPTS = 3
 API_BACKOFF_SECONDS = 1.0
 APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
 
+# Identity GitHub assigns as `github.actor` when a workflow_dispatch call is
+# made with the default GITHUB_TOKEN from inside another Actions run — this is
+# how the Monitor's standing-queue sweep (scripts/factory-sweep.py) re-fires
+# factory-implement.yml. Trusting this trigger actor does not widen who can
+# get code executed: verify_release_actor still requires the issue timeline's
+# most recent `ready` label event to be actor-attributed to the repository
+# owner, and only the owner can make that event exist. The sweep only ever
+# re-evaluates standing admitted state; it never applies `ready` itself.
+FACTORY_SWEEP_ACTOR = "github-actions[bot]"
+
 # Negative admission outcomes split on whether a retry can ever succeed.
 # Terminal declines strip `ready` so the release cannot refire a run the
 # factory will always refuse; transient deferrals keep `ready` because the
@@ -71,6 +81,11 @@ WIP_COMMENT = (
     "cap is full; leaving this issue ready."
 )
 BUDGET_COMMENT_MARKER = "<!-- factory-implement-budget-skip -->"
+# No trailing "-->": stale_scope_marker() below scopes each marker to its
+# release cycle's ready timestamp, so a fresh hostile edit after a later
+# owner re-release gets its own comment instead of being deduped against an
+# earlier, now-superseded warning.
+STALE_SCOPE_COMMENT_MARKER = "<!-- factory-implement-stale-scope"
 
 
 class FactoryImplementError(RuntimeError):
@@ -178,6 +193,115 @@ class GitHubClient:
             if len(batch) < 100:
                 return events
             page += 1
+
+    def graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        request = urllib.request.Request(
+            "https://api.github.com/graphql",
+            data=json.dumps({"query": query, "variables": variables}).encode("utf-8"),
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+                "User-Agent": "workspaces-factory-implement",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise FactoryImplementError(
+                f"GitHub GraphQL HTTP {error.code}: {detail}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise FactoryImplementError(
+                f"GitHub GraphQL request failed: {error.reason}"
+            ) from error
+        except json.JSONDecodeError as error:
+            raise FactoryImplementError("GitHub GraphQL returned invalid JSON") from error
+        if payload.get("errors"):
+            messages = "; ".join(str(item.get("message", item)) for item in payload["errors"])
+            raise FactoryImplementError(f"GitHub GraphQL error: {messages}")
+        return payload
+
+    def user_content_edits_since(self, issue_number: int, since: str) -> list[dict[str, Any]]:
+        """All content edits at-or-after `since`, newest first.
+
+        REST's issue Timeline API has no event for body/title edits (only
+        `renamed` for titles) — userContentEdits is the only GitHub API that
+        exposes who last touched an issue's actual content, which is what
+        binds admission to the content the owner actually reviewed.
+        userContentEdits' natural connection order is newest-first (verified
+        live against this repo's own GraphQL API — the opposite of most
+        GitHub connections), so `first`/`after` is what pages forward from
+        the most recent edit toward the oldest; `last`/`before` would instead
+        walk toward *older* edits from an already-oldest starting point. A
+        single `first: 50` page isn't enough on its own: a hostile edit can
+        sit behind 50 even-newer (e.g. owner) edits, so this keeps paging
+        forward until it finds an edit strictly before `since` — nothing
+        further in the (still-descending) connection could be relevant
+        either — or history is exhausted.
+
+        `since`/`editedAt` comparisons use `<` as the exclusion boundary, not
+        `<=`: GitHub timestamps are second-precision, so an edit landing in
+        the same second as `since` must count as at-or-after it, not before.
+        """
+        owner, name = self.repository.split("/", 1)
+        query = """
+query FactoryImplementIssueEdits(
+  $owner: String!, $name: String!, $number: Int!, $after: String
+) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      userContentEdits(first: 50, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes { editor { login } editedAt }
+      }
+    }
+  }
+}
+"""
+        relevant: list[dict[str, Any]] = []
+        after: str | None = None
+        while True:
+            payload = self.graphql(
+                query,
+                {"owner": owner, "name": name, "number": issue_number, "after": after},
+            )
+            repository = (payload.get("data") or {}).get("repository")
+            if repository is None:
+                raise FactoryImplementError(f"repository {self.repository} was not found")
+            issue = repository.get("issue")
+            if issue is None:
+                raise FactoryImplementError(
+                    f"issue #{issue_number} was not found via GraphQL"
+                )
+            connection = issue.get("userContentEdits")
+            if connection is None:
+                # A genuinely empty edit history is a non-null connection
+                # with nodes: [] per GitHub's schema — null here means the
+                # query didn't resolve as expected, not "no edits".
+                raise FactoryImplementError(
+                    f"issue #{issue_number} userContentEdits was null"
+                )
+            nodes = connection.get("nodes")
+            if nodes is None:
+                raise FactoryImplementError(
+                    f"issue #{issue_number} userContentEdits.nodes was null"
+                )
+            crossed_boundary = False
+            for node in nodes:  # newest-first within the page
+                edited_at = str(node.get("editedAt") or "")
+                if edited_at and edited_at < since:
+                    crossed_boundary = True
+                    break
+                relevant.append(dict(node))
+            page_info = connection.get("pageInfo") or {}
+            if crossed_boundary or not page_info.get("hasNextPage"):
+                return relevant
+            after = page_info.get("endCursor")
 
     def claimed_issues(self) -> list[dict[str, Any]]:
         labels = urllib.parse.quote("agent,task,claimed")
@@ -343,6 +467,21 @@ def budget_skip_comment(daily_run_count: int, daily_cap: int) -> str:
     )
 
 
+def stale_scope_marker(ready_created_at: str) -> str:
+    return f"{STALE_SCOPE_COMMENT_MARKER}:{ready_created_at} -->"
+
+
+def stale_scope_comment(editor: str, ready_created_at: str) -> str:
+    return (
+        stale_scope_marker(ready_created_at)
+        + "\n"
+        + "Factory admission: deferred — this issue's title or body was edited "
+        + f"by @{editor} after the owner's most recent `ready` release; leaving "
+        + "this issue ready pending a fresh review. Re-apply `ready` after "
+        + "confirming the current content is still what should ship."
+    )
+
+
 def parse_daily_cap(value: str | None) -> int:
     raw = (value or str(DEFAULT_DAILY_IMPLEMENT_CAP)).strip()
     try:
@@ -361,7 +500,12 @@ def is_factory_implement_dispatch(
     repository_owner: str = "",
 ) -> bool:
     actor = str((run.get("actor") or {}).get("login") or "")
-    actor_matches = not repository_owner or actor.casefold() == repository_owner.casefold()
+    trusted_actors = (
+        {repository_owner.casefold(), FACTORY_SWEEP_ACTOR.casefold()}
+        if repository_owner
+        else set()
+    )
+    actor_matches = not repository_owner or actor.casefold() in trusted_actors
     return actor_matches and (
         str(run.get("event", "")) == "workflow_dispatch"
         or str(run.get("display_title", "")).startswith("Factory Implement ready #")
@@ -397,13 +541,43 @@ def require_automation_switches(global_switch: str, stage_switch: str) -> None:
         )
 
 
-def latest_ready_actor(events: list[dict[str, Any]]) -> str | None:
+def latest_ready_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     for event in reversed(events):
         if str(event.get("event", "")).casefold() != "labeled":
             continue
         if str((event.get("label") or {}).get("name", "")).casefold() != "ready":
             continue
-        return str((event.get("actor") or {}).get("login") or "") or None
+        return event
+    return None
+
+
+def latest_ready_actor(events: list[dict[str, Any]]) -> str | None:
+    event = latest_ready_event(events)
+    if event is None:
+        return None
+    return str((event.get("actor") or {}).get("login") or "") or None
+
+
+def latest_non_owner_editor(
+    edits: list[dict[str, Any]],
+    repository_owner: str,
+) -> str | None:
+    """The most recent non-owner editor among `edits`.
+
+    `edits` is expected already bounded to "at or after the release point"
+    and ordered newest-first, both by the caller (see
+    GitHubClient.user_content_edits_since) — so the first non-owner match
+    found here is the most recent one. Returns None when every edit belongs
+    to the owner (or there are none) — an edit with a missing/deleted editor
+    is treated as untrusted, since it can't be verified as the owner.
+    """
+    owner = repository_owner.casefold()
+    for edit in edits:
+        editor = edit.get("editor") or {}
+        login = str(editor.get("login") or "") if isinstance(editor, dict) else ""
+        if login.casefold() == owner:
+            continue
+        return login or "an unidentified editor"
     return None
 
 
@@ -415,9 +589,15 @@ def verify_release_actor(
     owner = repository_owner.strip()
     if not owner:
         raise FactoryImplementError("FACTORY_REPOSITORY_OWNER is required")
-    if trigger_actor.casefold() != owner.casefold():
+    # The trigger actor may be the owner (manual dispatch or the `ready` label
+    # event itself) or the Monitor sweep's automation identity. Either way,
+    # admission is decided below by the immutable ready-label timeline event,
+    # never by who happened to trigger this particular run.
+    trusted_triggers = {owner.casefold(), FACTORY_SWEEP_ACTOR.casefold()}
+    if trigger_actor.casefold() not in trusted_triggers:
         raise FactoryImplementError(
-            f"Factory implementation trigger actor {trigger_actor!r} is not repository owner"
+            f"Factory implementation trigger actor {trigger_actor!r} is not "
+            "repository owner or the factory sweep"
         )
     ready_actor = latest_ready_actor(events)
     if ready_actor is None:
@@ -496,11 +676,31 @@ def claim(
 ) -> None:
     require_automation_switches(global_switch, stage_switch)
     issue = client.issue(issue_number)
-    verified_actor = verify_release_actor(
-        client.timeline(issue_number),
-        trigger_actor,
+    events = client.timeline(issue_number)
+    verified_actor = verify_release_actor(events, trigger_actor, repository_owner)
+
+    # The owner reviewed and approved *content*, not just a label. A sweep can
+    # re-fire this issue long after that review, so a non-owner editing the
+    # title/body in between (issue authors and collaborators can both do
+    # this) must not ride the earlier owner approval — REST's issue timeline
+    # has no event for body/title edits, so userContentEdits is the only way
+    # to see who touched the content and when.
+    ready_event = latest_ready_event(events)
+    if ready_event is None:
+        # Unreachable: verify_release_actor above already raised unless a
+        # ready-labeled event exists in these same `events`.
+        raise FactoryImplementError("issue timeline has no ready label event")
+    hostile_editor = latest_non_owner_editor(
+        client.user_content_edits_since(
+            issue_number,
+            # `events` comes from client.timeline(), a REST call — REST uses
+            # snake_case (created_at), unlike the GraphQL createdAt this file
+            # otherwise doesn't use. Verified against a live timeline response.
+            str(ready_event["created_at"]),
+        ),
         repository_owner,
     )
+
     claimed_count = len(client.claimed_issues())
     day = datetime.now(UTC).date().isoformat()
     daily_run_count = count_daily_runs(
@@ -509,11 +709,15 @@ def claim(
         current_run_attempt,
         repository_owner,
     )
-    decision = evaluate_claim(
-        issue,
-        claimed_count,
-        daily_run_count=daily_run_count,
-        daily_cap=daily_cap,
+    decision = (
+        ClaimDecision("stale_scope", f"content edited by {hostile_editor} after release")
+        if hostile_editor is not None
+        else evaluate_claim(
+            issue,
+            claimed_count,
+            daily_run_count=daily_run_count,
+            daily_cap=daily_cap,
+        )
     )
     print(f"Factory implement decision for #{issue_number}: {decision.action} ({decision.reason})")
     write_output("issue_number", str(issue_number))
@@ -523,6 +727,15 @@ def claim(
     if decision.action in TERMINAL_DECLINES:
         comment_once(client, issue_number, PRIVILEGED_COMMENT)
         client.update_issue(issue_number, decline_payload(issue))
+        return
+    if decision.action == "stale_scope":
+        ready_created_at = str(ready_event["created_at"])
+        comment_once(
+            client,
+            issue_number,
+            stale_scope_comment(hostile_editor, ready_created_at),
+            dedupe_key=stale_scope_marker(ready_created_at),
+        )
         return
     if decision.action in TRANSIENT_DEFERRALS:
         if decision.action == "wip":

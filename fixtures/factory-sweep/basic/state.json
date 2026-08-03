@@ -1,0 +1,9 @@
+{
+  "daily_run_count": 4,
+  "daily_cap": 6,
+  "issues": [
+    { "number": 501, "has_open_linked_pull": false },
+    { "number": 502, "has_open_linked_pull": true },
+    { "number": 503, "has_open_linked_pull": false }
+  ]
+}
