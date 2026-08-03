@@ -69,18 +69,20 @@ jobs:
       - name: Run gh-discuss tests
         run: uv run .agents/skills/gh-discuss/scripts/test_gh_discuss.py
 
-      # Loops the whole directory instead of hand-enumerating scripts here so
+      # Recurses scripts/tests/ instead of hand-enumerating scripts here so
       # "add a test, forget the run step" can't leave a script gating nothing.
+      # find (not a glob) so a future nested scripts/tests/**/test_*.py — which
+      # the paths filter above already covers — isn't silently skipped.
       - name: Run scripts/tests/*.py
         run: |
           failed=()
-          for test_file in scripts/tests/*.py; do
+          while IFS= read -r -d '' test_file; do
             echo "::group::${test_file}"
             if ! uv run --script "$test_file"; then
               failed+=("$test_file")
             fi
             echo "::endgroup::"
-          done
+          done < <(find scripts/tests -type f -name '*.py' -print0 | sort -z)
           if [ "${#failed[@]}" -gt 0 ]; then
             echo "Failed: ${failed[*]}" >&2
             exit 1
