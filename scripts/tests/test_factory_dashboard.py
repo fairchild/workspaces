@@ -251,7 +251,7 @@ class SyncTests(unittest.TestCase):
             conn = dashboard.connect(db)
             fake = FakeFetcher()
 
-            dashboard.sync_all(conn, fake, days=30)
+            dashboard.sync_all(conn, fake, days=30, now=NOW)
             first = table_counts(conn)
             self.assertEqual(first["workflow_runs"], 3)
             self.assertEqual(first["jobs"], 3)
@@ -265,14 +265,14 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(runs_cursor, max(r["created_at"] for r in all_runs))
             self.assertEqual(dashboard.get_cursor(conn, "prs"), fake.prs[0]["updated_at"])
 
-            dashboard.sync_all(conn, fake, days=30)
+            dashboard.sync_all(conn, fake, days=30, now=NOW)
             self.assertEqual(table_counts(conn), first, "re-sync must not duplicate rows")
             conn.close()
 
     def test_metrics_reflect_synced_fixture(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             conn = dashboard.connect(Path(tmp) / "cache.sqlite3")
-            dashboard.sync_all(conn, FakeFetcher(), days=30)
+            dashboard.sync_all(conn, FakeFetcher(), days=30, now=NOW)
             metrics = dashboard.build_metrics(conn, days=30, now=NOW)
             self.assertEqual(metrics["throughput"]["agent_prs_merged"], 1)
             self.assertEqual(metrics["cost"]["row_count"], 2)
@@ -322,11 +322,11 @@ class CursorTests(unittest.TestCase):
             conn = dashboard.connect(Path(tmp) / "cache.sqlite3")
             fake = FakeFetcher()
 
-            dashboard.sync_all(conn, fake, days=1)
+            dashboard.sync_all(conn, fake, days=1, now=NOW)
             narrow = conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0]
             self.assertEqual(narrow, 1, "days=1 excludes the two runs from 2 days ago")
 
-            dashboard.sync_all(conn, fake, days=30)
+            dashboard.sync_all(conn, fake, days=30, now=NOW)
             wide = conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0]
             self.assertEqual(wide, 3, "widening --days backfills the older runs")
             conn.close()
@@ -347,8 +347,8 @@ class CursorTests(unittest.TestCase):
                     return super().runs_for_workflow(workflow_id, since_date)
 
             fake = Recording()
-            dashboard.sync_all(conn, fake, days=30)
-            dashboard.sync_all(conn, fake, days=30)
+            dashboard.sync_all(conn, fake, days=30, now=NOW)
+            dashboard.sync_all(conn, fake, days=30, now=NOW)
             first, second = fake.run_since[0], fake.run_since[-1]
             self.assertGreater(second, first, "second sync starts at the cursor")
             totals = conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0]
@@ -363,7 +363,7 @@ class CursorTests(unittest.TestCase):
                 def prs_since(self, since_date):
                     raise ValueError("rate limited")  # non-FetchError
 
-            stats = dashboard.sync_all(conn, Boom(), days=30)
+            stats = dashboard.sync_all(conn, Boom(), days=30, now=NOW)
             self.assertTrue(any("prs" in e for e in stats["errors"]))
             # Other sources still synced despite the PR-source failure.
             self.assertEqual(conn.execute("SELECT COUNT(*) FROM workflow_runs").fetchone()[0], 3)
@@ -383,7 +383,7 @@ class CursorTests(unittest.TestCase):
                 def repo_variables(self):
                     raise dashboard.FetchError("variables unreadable")
 
-            stats = dashboard.sync_all(conn, NoVars(), days=30)
+            stats = dashboard.sync_all(conn, NoVars(), days=30, now=NOW)
             self.assertTrue(any("settings" in e for e in stats["errors"]))
             self.assertEqual(dashboard.meta_get(conn, "last_sync_ok"), "0")
             conn.close()

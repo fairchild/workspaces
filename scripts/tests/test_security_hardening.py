@@ -19,6 +19,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -545,8 +546,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("WORKSPACES_WEBHOOK_CANARY_SECRET is required", result.stderr)
 
     def test_sparkle_appcast_verifier_accepts_valid_ed25519_signature(self) -> None:
-        if shutil.which("swift") is None:
-            self.skipTest("swift is required for Sparkle appcast verifier")
+        if sys.platform != "darwin" or shutil.which("swift") is None:
+            self.skipTest("verify-sparkle-appcast.swift imports CryptoKit, which is Apple-only")
 
         # RFC 8032 Ed25519 test vector 1: signature for an empty message.
         public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
@@ -597,6 +598,8 @@ class SecurityHardeningTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_release_manifest_script_validates_hash_bound_assets(self) -> None:
+        if not Path("/usr/libexec/PlistBuddy").exists():
+            self.skipTest("release-manifest.sh requires macOS's PlistBuddy")
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             app = tmp / "WorkSpaces.app"

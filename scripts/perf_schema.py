@@ -188,7 +188,10 @@ def detect_environment(
 
 
 def read_command_text(command: list[str]) -> str | None:
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        return None
     if result.returncode != 0:
         return None
     value = result.stdout.strip()

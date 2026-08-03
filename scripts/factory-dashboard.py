@@ -565,8 +565,9 @@ def sync_settings(conn: sqlite3.Connection, fetcher: Any) -> None:
         meta_set(conn, "cap_review", variables["FACTORY_REVIEW_DAILY_CAP"])
 
 
-def sync_all(conn: sqlite3.Connection, fetcher: Any, *, days: int) -> dict[str, Any]:
-    floor = (now_utc() - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+def sync_all(conn: sqlite3.Connection, fetcher: Any, *, days: int, now: datetime | None = None) -> dict[str, Any]:
+    now = now or now_utc()
+    floor = (now - timedelta(days=days)).isoformat().replace("+00:00", "Z")
     stats: dict[str, Any] = {"errors": []}
     steps: list[tuple[str, Callable[[], int | None]]] = [
         ("runs", lambda: sync_runs(conn, fetcher, floor)),

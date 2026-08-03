@@ -6,30 +6,18 @@ on:
     paths:
       - ".agents/**"
       - ".github/workflows/ci-agents.yml"
+      - "scripts/tests/**"
       - "scripts/agent-triage-request.py"
-      - "scripts/tests/test_agent_triage.py"
-      - "scripts/tests/test_run_contributor.py"
-      - "scripts/tests/test_validate_agent_output.py"
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
       - "scripts/factory-janitor.py"
       - "scripts/factory-review.py"
       - "scripts/factory-evidence-verify.py"
-      - "scripts/tests/test_factory_evidence_kinds.py"
-      - "scripts/tests/test_factory_evidence_verify.py"
-      - "scripts/tests/test_factory_evidence_review.py"
       - "scripts/factory-responder-payload.py"
-      - "scripts/tests/test_factory_workflows.py"
-      - "scripts/tests/test_factory_janitor.py"
-      - "scripts/tests/test_factory_review.py"
-      - "scripts/tests/test_factory_comment_responder.py"
       - "fixtures/factory-janitor/**"
       - "scripts/fable-orchestrator.py"
-      - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
-      - "scripts/tests/test_carl_community.py"
       - "scripts/close-v1-discussions.py"
-      - "scripts/tests/test_close_v1_discussions.py"
       - "fixtures/close-v1-discussions/**"
       - ".github/workflows/cd-fail-notify.js"
       - ".github/workflows/cd-fail-notify.test.js"
@@ -38,30 +26,18 @@ on:
     paths:
       - ".agents/**"
       - ".github/workflows/ci-agents.yml"
+      - "scripts/tests/**"
       - "scripts/agent-triage-request.py"
-      - "scripts/tests/test_agent_triage.py"
-      - "scripts/tests/test_run_contributor.py"
-      - "scripts/tests/test_validate_agent_output.py"
       - ".github/workflows/factory-*.yml"
       - "scripts/factory-implement.py"
       - "scripts/factory-janitor.py"
       - "scripts/factory-review.py"
       - "scripts/factory-evidence-verify.py"
-      - "scripts/tests/test_factory_evidence_kinds.py"
-      - "scripts/tests/test_factory_evidence_verify.py"
-      - "scripts/tests/test_factory_evidence_review.py"
       - "scripts/factory-responder-payload.py"
-      - "scripts/tests/test_factory_workflows.py"
-      - "scripts/tests/test_factory_janitor.py"
-      - "scripts/tests/test_factory_review.py"
-      - "scripts/tests/test_factory_comment_responder.py"
       - "fixtures/factory-janitor/**"
       - "scripts/fable-orchestrator.py"
-      - "scripts/tests/test_fable_orchestrator.py"
       - "scripts/carl-community.py"
-      - "scripts/tests/test_carl_community.py"
       - "scripts/close-v1-discussions.py"
-      - "scripts/tests/test_close_v1_discussions.py"
       - "fixtures/close-v1-discussions/**"
       - ".github/workflows/cd-fail-notify.js"
       - ".github/workflows/cd-fail-notify.test.js"
@@ -77,7 +53,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -93,36 +69,24 @@ jobs:
       - name: Run gh-discuss tests
         run: uv run .agents/skills/gh-discuss/scripts/test_gh_discuss.py
 
-      - name: Run public agent triage tests
-        run: uv run --script scripts/tests/test_agent_triage.py
-
-      - name: Run contributor runner policy tests
-        run: uv run --script scripts/tests/test_run_contributor.py
-
-      - name: Run contributor output validation tests
-        run: uv run --script scripts/tests/test_validate_agent_output.py
-
-      - name: Run Factory workflow policy tests
+      # Recurses scripts/tests/ instead of hand-enumerating scripts here so
+      # "add a test, forget the run step" can't leave a script gating nothing.
+      # find (not a glob) so a future nested scripts/tests/**/test_*.py — which
+      # the paths filter above already covers — isn't silently skipped.
+      - name: Run scripts/tests/*.py
         run: |
-          uv run --script scripts/tests/test_factory_workflows.py
-          uv run --script scripts/tests/test_factory_janitor.py
-          uv run --script scripts/tests/test_factory_review.py
-
-      - name: Run Factory evidence tests
-        run: |
-          uv run --script scripts/tests/test_factory_evidence_kinds.py
-          uv run --script scripts/tests/test_factory_evidence_verify.py
-          uv run --script scripts/tests/test_factory_evidence_review.py
-          uv run --script scripts/tests/test_factory_comment_responder.py
-
-      - name: Run Fable orchestrator tests
-        run: uv run --script scripts/tests/test_fable_orchestrator.py
-
-      - name: Run Carl community tests
-        run: uv run --script scripts/tests/test_carl_community.py
-
-      - name: Run v1 discussion cleanup tests
-        run: uv run --script scripts/tests/test_close_v1_discussions.py
+          failed=()
+          while IFS= read -r -d '' test_file; do
+            echo "::group::${test_file}"
+            if ! uv run --script "$test_file"; then
+              failed+=("$test_file")
+            fi
+            echo "::endgroup::"
+          done < <(find scripts/tests -type f -name '*.py' -print0 | sort -z)
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "Failed: ${failed[*]}" >&2
+            exit 1
+          fi
 
       - name: Run CD failure notifier tests
         run: node --test .github/workflows/cd-fail-notify.test.js
