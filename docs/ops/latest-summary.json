@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-02T14:03:50.365889Z",
+  "generated_at": "2026-08-03T14:17:29.090033Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -19,40 +19,44 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-07-03T14:03:50.365889Z",
+    "window_start": "2026-07-04T14:17:29.090033Z",
     "completed_runs": 499,
-    "failure_runs": 55,
-    "failure_rate": 11.022044088176353,
-    "rerun_runs": 0,
-    "rerun_rate": 0.0,
+    "failure_runs": 19,
+    "failure_rate": 3.807615230460922,
+    "rerun_runs": 1,
+    "rerun_rate": 0.2004008016032064,
     "top_failing_workflows": [
       {
         "workflow_name": "Managed Reviewer Health",
-        "failures": 47
+        "failures": 8
       },
       {
-        "workflow_name": "Milestone Legibility",
-        "failures": 6
+        "workflow_name": "Factory Review Executor",
+        "failures": 4
       },
       {
-        "workflow_name": "Agent: Carl Community",
-        "failures": 1
+        "workflow_name": "CI Fallback",
+        "failures": 3
       },
       {
-        "workflow_name": "Managed Reviewer Ingress",
+        "workflow_name": "CI",
+        "failures": 3
+      },
+      {
+        "workflow_name": "CI \u2014 Agent Scripts",
         "failures": 1
       }
     ],
     "agents": {
-      "Carl Community": {
-        "completed_runs": 7,
-        "failure_runs": 1,
-        "failure_rate": 14.285714285714285,
+      "Approved Mention Execution": {
+        "completed_runs": 49,
+        "failure_runs": 0,
+        "failure_rate": 0.0,
         "rerun_runs": 0,
         "rerun_rate": 0.0
       },
       "Mention Triage": {
-        "completed_runs": 2,
+        "completed_runs": 74,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
@@ -63,7 +67,7 @@
   "perf": {
     "available": true,
     "latest_timestamp": "2026-03-22T10:29:08-0700",
-    "freshness_days": 132.85743479038194,
+    "freshness_days": 133.86691076427084,
     "metrics": {
       "launch_to_first_prompt": {
         "latest_median_ms": 1468.205,
@@ -85,13 +89,13 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 83.73738849408565,
+      "days_since_activity": 84.74686446797455,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
     },
     {
       "discussion_number": 110,
       "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-      "days_since_activity": 15.002874605196759,
+      "days_since_activity": 16.01235057908565,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
     }
   ],
@@ -118,13 +122,13 @@
         {
           "discussion_number": 43,
           "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-          "days_since_activity": 83.73738849408565,
+          "days_since_activity": 84.74686446797455,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
         },
         {
           "discussion_number": 110,
           "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-          "days_since_activity": 15.002874605196759,
+          "days_since_activity": 16.01235057908565,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
         }
       ],
