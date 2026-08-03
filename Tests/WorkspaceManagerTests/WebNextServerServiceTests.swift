@@ -14,7 +14,12 @@ import Testing
 
 @testable import WorkspaceManagerCore
 
-@Suite("WebNextServerService")
+@Suite(
+    "WebNextServerService",
+    .disabled(
+        if: ProcessInfo.processInfo.environment["CI"] != nil,
+        "Spawn-heavy suite with wall-clock readiness budgets; loaded CI runners add 13-15s process-spawn overhead and blow every budget (see 2026-08-03 ci-fallback run). Runner-robust rework tracked in #1163."
+    ))
 struct WebNextServerServiceTests {
     // MARK: - Fixture
 
