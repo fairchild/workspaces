@@ -1,0 +1,44 @@
+name: Web Docs Sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "CONTEXT.md"
+      - "README.md"
+      - "docs/**"
+      - "web/scripts/docs-sync.mjs"
+      - "web/scripts/docs-sync-manifest.json"
+      - ".github/workflows/web-docs-sync.yml"
+  pull_request:
+    paths:
+      - "CONTEXT.md"
+      - "README.md"
+      - "docs/**"
+      - "web/scripts/docs-sync.mjs"
+      - "web/scripts/docs-sync-manifest.json"
+      - ".github/workflows/web-docs-sync.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-docs-sync-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docs-sync-check:
+    name: Docs Sync Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+
+      - name: Check docs sync
+        run: |
+          node web/scripts/docs-sync.mjs
+          node web/scripts/docs-sync.mjs --check

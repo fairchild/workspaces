@@ -1,5 +1,7 @@
 # Test Ledger — web/
 
+**Frozen alongside the maintenance-mode app (2026-08-03):** the old `web/` dashboard is in maintenance mode per #754 (no cutover; web-next is the primary session surface). Rows below are not being re-verified on a schedule — treat "Verified" dates as historical, not current, until `web/` sees active feature work again.
+
 A behavior → test mapping. The `qa-web-agent` reads this at the start of every run to know what's covered, and updates it at the end.
 
 **Measure coverage by the column labeled "Behaviors verified this week," not by line-coverage %.** Line coverage says nothing about whether users can do what they need to do.
