@@ -8,10 +8,15 @@ permissions:
   contents: read
   pull-requests: read
 
+concurrency:
+  group: pr-perf-evidence-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   enforce-perf-evidence:
     if: "!github.event.pull_request.draft"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Validate performance evidence fields
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7

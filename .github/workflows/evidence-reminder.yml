@@ -7,10 +7,15 @@ on:
 permissions:
   pull-requests: write
 
+concurrency:
+  group: evidence-reminder-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   check-evidence:
     if: "!github.event.pull_request.draft"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check for evidence in PR body
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7

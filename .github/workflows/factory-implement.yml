@@ -143,7 +143,7 @@ jobs:
           name: factory-implement-telemetry
           path: ${{ runner.temp }}/factory-telemetry
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 1
 
   rollback:
     needs: [claim, implement]

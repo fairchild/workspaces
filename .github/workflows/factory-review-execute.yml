@@ -168,7 +168,7 @@ jobs:
           name: factory-review-telemetry-april
           path: ${{ runner.temp }}/factory-telemetry
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 1
 
   plat:
     needs: admit
@@ -252,7 +252,7 @@ jobs:
           name: factory-review-telemetry-plat
           path: ${{ runner.temp }}/factory-telemetry
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 1
 
   telemetry:
     needs: [admit, april, plat]

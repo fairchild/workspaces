@@ -4,26 +4,25 @@ on:
   push:
     branches: [main]
     paths:
-      - "CONTEXT.md"
-      - "README.md"
-      - "docs/**"
       - "web/**"
       - ".github/workflows/web-ci.yml"
   pull_request:
     paths:
-      - "CONTEXT.md"
-      - "README.md"
-      - "docs/**"
       - "web/**"
       - ".github/workflows/web-ci.yml"
 
 permissions:
   contents: read
 
+concurrency:
+  group: web-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-test:
     name: Lint, Typecheck & Build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: web
