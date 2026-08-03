@@ -148,7 +148,6 @@ New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S u
 | Xcode Cloud harness + debugging (real logs, VM quirks) | docs/development/xcode-cloud.md | - |
 | Web local dev (mise tasks, auth bypass) | web/docs/local-dev.md | - |
 | Web architecture | web/docs/architecture.md | - |
-| PR reviewer agent | docs/pr-review/pr-reviewer.md | - |
 | Agent Factory (autonomous pipeline) plan + glossary | docs/development/agent-factory-v2-plan.md, docs/agents/CONTEXT.md | docs/development/agent-team.md (superseded architecture) |
 | Agent Factory system overview + trust model (browser doc) | docs/development/agent-factory-v2-overview.html | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
@@ -194,8 +193,6 @@ New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S u
 | Web terminal panel | web/src/app/dashboard/components/terminal-panel.tsx |
 | Web terminal API | web/src/app/api/terminal/ |
 | Web API auth helpers | web/src/lib/api-auth.ts |
-| Web PR reviewer agent | web/src/lib/agent-runtime/pr-review.ts |
-| PR reviewer status script | scripts/pr-reviewer-status.py |
 
 ## File Purpose Blocks
 

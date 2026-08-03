@@ -16,7 +16,7 @@ acceptable hosted evidence for remote sessions — cite it in the PR's Evidence
 section as `[Web CI passed on this branch](<run url>)` and say the token was
 unavailable. This satisfies the "no local-only proof" rule because the run is
 hosted and verifiable. Established across PRs #725/#727/#731/#732 and accepted
-by both the managed reviewer and human review.
+in review.
 
 Limits of the convention:
 
@@ -70,8 +70,7 @@ and CI. The `fast/unauth-*` specs still need production mode
   between paid the same workaround. An early issue gives the owner a chance to
   fix the environment mid-session.
 - **Wait on PR checks with `scripts/pr-wait.sh <sha>`** (blocks until check
-  runs + the managed-review status are terminal; exits 0 only if all latest
-  runs are green/skipped). Webhook subscription + a per-SHA wait beats a
+  runs are terminal; exits 0 only if all latest runs are green/skipped). Webhook subscription + a per-SHA wait beats a
   recurring cron for PR babysitting — and beats hand-rolled poll loops, one of
   which shipped with an early-exit bug before this script existed.
 - **Capture full command output to a file first, filter second.** A flaky test's

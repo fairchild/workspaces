@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Wait for a commit's CI check-runs and the WorkSpaces Managed Review status
-# to reach terminal states, then exit 0 (all green/skipped) or 1. Replaces the
-# ad-hoc curl/jq poll loops sessions kept reimplementing (one shipped with an
-# early-exit bug on 2026-07-02 — this is the tested single copy).
+# Wait for a commit's CI check-runs to reach terminal states, then exit 0 (all
+# green/skipped) or 1. Replaces the ad-hoc curl/jq poll loops sessions kept
+# reimplementing (one shipped with an early-exit bug on 2026-07-02 — this is
+# the tested single copy).
 set -euo pipefail
 
 usage() {
-  echo "Usage: $(basename "$0") <sha> [--repo owner/name] [--interval seconds] [--no-review]" >&2
-  echo "  Waits for all check-runs (and, unless --no-review, the 'WorkSpaces Managed" >&2
-  echo "  Review' commit status) on <sha> to complete. Requires GH_TOKEN." >&2
+  echo "Usage: $(basename "$0") <sha> [--repo owner/name] [--interval seconds]" >&2
+  echo "  Waits for all check-runs on <sha> to complete. Requires GH_TOKEN." >&2
 }
 
 SHA="${1:-}"
@@ -17,12 +16,10 @@ shift
 
 REPO="fairchild/workspaces"
 INTERVAL=45
-WAIT_REVIEW=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
     --interval) INTERVAL="$2"; shift 2 ;;
-    --no-review) WAIT_REVIEW=0; shift ;;
     *) usage; exit 2 ;;
   esac
 done
@@ -36,14 +33,7 @@ checks_settled() {
     jq -e '(.total_count > 0) and ([[.check_runs | group_by(.name)[] | max_by(.started_at)][] | select(.status != "completed")] | length == 0)' >/dev/null
 }
 
-review_settled() {
-  [[ "$WAIT_REVIEW" == "0" ]] && return 0
-  curl -sf "${AUTH[@]}" "${API}/status" |
-    jq -e '[.statuses[] | select(.context == "WorkSpaces Managed Review"
-            and (.state == "success" or .state == "failure" or .state == "error"))] | length > 0' >/dev/null
-}
-
-until checks_settled && review_settled; do
+until checks_settled; do
   sleep "$INTERVAL"
 done
 
@@ -54,17 +44,7 @@ LATEST='[.check_runs | group_by(.name)[] | max_by(.started_at)]'
 echo "== check runs (latest per name) =="
 curl -sf "${AUTH[@]}" "${API}/check-runs" |
   jq -r "${LATEST} | .[] | \"\(.name): \(.conclusion)\"" | sort -u
-if [[ "$WAIT_REVIEW" == "1" ]]; then
-  echo "== statuses =="
-  curl -sf "${AUTH[@]}" "${API}/status" |
-    jq -r '.statuses[] | "\(.context): \(.state)"' | sort -u
-fi
 
 BAD_CHECKS=$(curl -sf "${AUTH[@]}" "${API}/check-runs" |
   jq "${LATEST} | [.[] | select(.conclusion != null and .conclusion != \"success\" and .conclusion != \"skipped\" and .conclusion != \"neutral\")] | length")
-BAD_STATUS=0
-if [[ "$WAIT_REVIEW" == "1" ]]; then
-  BAD_STATUS=$(curl -sf "${AUTH[@]}" "${API}/status" |
-    jq '[.statuses[] | select(.context == "WorkSpaces Managed Review" and .state != "success")] | length')
-fi
-[[ "$BAD_CHECKS" == "0" && "$BAD_STATUS" == "0" ]]
+[[ "$BAD_CHECKS" == "0" ]]

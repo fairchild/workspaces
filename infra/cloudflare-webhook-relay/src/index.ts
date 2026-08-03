@@ -1,4 +1,5 @@
-import { verifyGitHubSignature, signGitHubSignature, signJWT, verifyJWT } from "./github-verify";
+import { shouldForwardToWebApp } from "./forwarding";
+import { verifyGitHubSignature, signJWT, verifyJWT } from "./github-verify";
 import { log } from "./log";
 import type { Env } from "./webhook-relay";
 
@@ -8,22 +9,9 @@ const GITHUB_API_HEADERS = {
   Accept: "application/vnd.github+json",
   "User-Agent": "WorkspaceManager-WebhookRelay",
 };
-const WEBHOOK_CANARY_HEADER = "X-Workspace-Webhook-Canary";
-const encoder = new TextEncoder();
 
 function githubAPI(env: Env, path: string): string {
   return `${env.GITHUB_API_BASE ?? "https://api.github.com"}${path}`;
-}
-
-function timingSafeStringEqual(actual: string | null, expected: string): boolean {
-  if (!actual || actual.length !== expected.length) return false;
-  const actualBytes = encoder.encode(actual);
-  const expectedBytes = encoder.encode(expected);
-  let result = 0;
-  for (let i = 0; i < actualBytes.length; i++) {
-    result |= actualBytes[i] ^ expectedBytes[i];
-  }
-  return result === 0;
 }
 
 function allowedForwardUrl(forwardUrl: string): URL | null {
@@ -62,10 +50,6 @@ export default {
 
     if (path === "/webhook" && request.method === "POST") {
       return handleWebhook(request, env, ctx);
-    }
-
-    if (path === "/canary/pr-review-ingress" && request.method === "POST") {
-      return handlePrReviewIngressCanary(request, env);
     }
 
     const wsMatch = path.match(/^\/ws\/([^/]+)$/);
@@ -156,48 +140,6 @@ async function handleAuthSession(request: Request, env: Env): Promise<Response> 
 // Webhook ingress — forward to org-level DO
 // ---------------------------------------------------------------------------
 
-const EVIDENCE_SIGNAL =
-  /(evidence\.cloudcompute\.com|^\s*(?:Evidence|Validation):)/im;
-
-function isBotSender(payload: Record<string, unknown>): boolean {
-  const sender = payload.sender as Record<string, unknown> | undefined;
-  const login = String(sender?.login ?? "");
-  if (login.endsWith("[bot]")) return true;
-  return String(sender?.type ?? "").toLowerCase() === "bot";
-}
-
-function shouldForwardToWebApp(
-  eventType: string,
-  payload: Record<string, unknown>
-): boolean {
-  if (isBotSender(payload)) return false;
-
-  const action = String(payload.action ?? "");
-  if (eventType === "pull_request") {
-    const pr = payload.pull_request as Record<string, unknown> | undefined;
-    if (!pr) return false;
-    const isDraft = Boolean(pr.draft);
-
-    if (["opened", "reopened", "synchronize", "edited"].includes(action)) {
-      if (isDraft) return false;
-      if (action !== "edited") return true;
-      const changes = payload.changes as Record<string, unknown> | undefined;
-      return Boolean(changes?.body !== undefined || changes?.base !== undefined);
-    }
-
-    return action === "ready_for_review";
-  }
-
-  if (eventType === "issue_comment" && action === "created") {
-    const issue = payload.issue as Record<string, unknown> | undefined;
-    const comment = payload.comment as Record<string, unknown> | undefined;
-    if (!issue?.pull_request) return false;
-    const body = String(comment?.body ?? "");
-    return EVIDENCE_SIGNAL.test(body);
-  }
-
-  return false;
-}
 
 async function forwardWebhookToWebApp(
   env: Env,
@@ -288,117 +230,6 @@ async function forwardWebhookToWebApp(
       detail: String(err),
     });
   }
-}
-
-function makePrReviewCanaryPayload(): Record<string, unknown> {
-  return {
-    action: "opened",
-    sender: { login: "workspaces-canary", type: "User" },
-    repository: {
-      full_name: "fairchild/workspaces",
-      html_url: "https://github.com/fairchild/workspaces",
-      name: "workspaces",
-    },
-    pull_request: {
-      number: 1,
-      title: "Managed reviewer ingress canary",
-      html_url: "https://github.com/fairchild/workspaces/pull/1",
-      body: "Managed reviewer ingress canary. No review should be posted.",
-      head: { ref: "canary/managed-reviewer-ingress", sha: "canaryheadsha" },
-      base: { ref: "main" },
-      draft: false,
-    },
-  };
-}
-
-async function handlePrReviewIngressCanary(
-  request: Request,
-  env: Env
-): Promise<Response> {
-  const canarySecret = env.WORKSPACES_WEBHOOK_CANARY_SECRET?.trim();
-  if (!canarySecret) {
-    log.warn("pr_review_canary_not_configured");
-    return Response.json(
-      { ok: false, canary: true, error: "canary_not_configured" },
-      { status: 404 }
-    );
-  }
-
-  if (!timingSafeStringEqual(request.headers.get(WEBHOOK_CANARY_HEADER), canarySecret)) {
-    log.warn("pr_review_canary_unauthorized");
-    return Response.json(
-      { ok: false, canary: true, error: "unauthorized" },
-      { status: 401 }
-    );
-  }
-
-  const forwardUrl = env.WEBHOOK_FORWARD_URL?.trim();
-  if (!forwardUrl) {
-    log.error("pr_review_canary_forward_not_configured");
-    return Response.json(
-      { ok: false, canary: true, error: "forward_not_configured" },
-      { status: 503 }
-    );
-  }
-
-  const parsedForwardUrl = allowedForwardUrl(forwardUrl);
-  if (!parsedForwardUrl) {
-    log.error("pr_review_canary_forward_url_rejected");
-    return Response.json(
-      { ok: false, canary: true, error: "forward_url_rejected" },
-      { status: 503 }
-    );
-  }
-
-  const body = JSON.stringify(makePrReviewCanaryPayload());
-  const deliveryId = `pr-review-canary-${crypto.randomUUID()}`;
-  const signature = await signGitHubSignature(env.GITHUB_WEBHOOK_SECRET, body);
-
-  const response = await fetch(parsedForwardUrl.toString(), {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-GitHub-Event": "pull_request",
-      "X-GitHub-Delivery": deliveryId,
-      "X-Hub-Signature-256": signature,
-      "User-Agent": "WorkspaceManager-WebhookRelay",
-      "X-Workspace-Webhook-Relay": "cloudflare",
-      [WEBHOOK_CANARY_HEADER]: canarySecret,
-    },
-    body,
-  });
-
-  const responseText = await response.text();
-  let upstream: Record<string, unknown> = {};
-  try {
-    upstream = JSON.parse(responseText) as Record<string, unknown>;
-  } catch {
-    upstream = {};
-  }
-
-  const wouldTrigger = upstream.wouldTrigger === true;
-  const ok = response.ok && wouldTrigger;
-  if (!ok) {
-    log.error("pr_review_canary_failed", {
-      status: response.status,
-      would_trigger: wouldTrigger,
-    });
-  } else {
-    log.info("pr_review_canary_ok", { status: response.status });
-  }
-
-  return Response.json(
-    {
-      ok,
-      canary: true,
-      upstreamStatus: response.status,
-      wouldTrigger,
-      triggerKind: upstream.triggerKind ?? null,
-      eventType: upstream.eventType ?? null,
-      action: upstream.action ?? null,
-    },
-    { status: ok ? 200 : 502 }
-  );
 }
 
 async function handleWebhook(

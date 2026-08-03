@@ -26,32 +26,6 @@ function hasVercelCredentials(env: Env): boolean {
 	);
 }
 
-function hasAnyPrReviewerCredential(env: Env): boolean {
-	return Boolean(
-		env.PR_REVIEWER_APP_ID ||
-			env.PR_REVIEWER_PRIVATE_KEY ||
-			env.PR_REVIEWER_INSTALLATION_ID,
-	);
-}
-
-function isPrReviewerConfigured(env: Env): boolean {
-	if (env.PR_REVIEWER_ENABLED === "0") return false;
-	if (env.PR_REVIEWER_ENABLED === "1") return true;
-	return hasAnyPrReviewerCredential(env);
-}
-
-/**
- * Gates the continuous-rerun trigger surface (reopened, ready_for_review,
- * synchronize, body/base edits, evidence comments) independently of the
- * managed reviewer as a whole. Reruns have been live in production for
- * weeks, so the default is enabled — only an explicit "0" disables them,
- * falling back to the original opened-only trigger. See
- * docs/pr-review/pr-reviewer.md.
- */
-export function isPrReviewerRerunsEnabled(env: Env = process.env): boolean {
-	return env.PR_REVIEWER_RERUNS_ENABLED !== "0";
-}
-
 function requireEnv(
 	env: Env,
 	name: string,
@@ -138,33 +112,6 @@ export function validateProductionAgentRuntimeConfig(
 			env,
 			"ANTHROPIC_API_KEY",
 			`for ${defaultProvider} agent sessions`,
-			errors,
-		);
-	}
-
-	if (isPrReviewerConfigured(env)) {
-		requireEnv(
-			env,
-			"PR_REVIEWER_APP_ID",
-			"when PR reviewer is configured",
-			errors,
-		);
-		requireEnv(
-			env,
-			"PR_REVIEWER_PRIVATE_KEY",
-			"when PR reviewer is configured",
-			errors,
-		);
-		requireEnv(
-			env,
-			"PR_REVIEWER_INSTALLATION_ID",
-			"when PR reviewer is configured",
-			errors,
-		);
-		requireEnv(
-			env,
-			"ANTHROPIC_API_KEY",
-			"when PR reviewer is configured",
 			errors,
 		);
 	}

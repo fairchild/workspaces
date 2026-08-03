@@ -12,6 +12,6 @@ Each test file should keep a module docstring that states:
   mutations
 
 Use this directory for root script tests such as release gates, PR readiness,
-security hardening, setup, Codespaces worker launch, performance tooling, and
-managed-reviewer health. Keep tests for `.agents/` skill internals next to those
+security hardening, setup, Codespaces worker launch, and performance
+tooling. Keep tests for `.agents/` skill internals next to those
 skills unless the test is explicitly validating a root `scripts/` entry point.

@@ -21,22 +21,6 @@ export async function verifyGitHubSignature(
   return timingSafeEqual(expected, signature);
 }
 
-export async function signGitHubSignature(
-  secret: string,
-  payload: string
-): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    encoder.encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
-
-  const signed = await crypto.subtle.sign("HMAC", key, encoder.encode(payload));
-  return "sha256=" + hexEncode(signed);
-}
-
 export async function signJWT(
   payload: Record<string, unknown>,
   secret: string

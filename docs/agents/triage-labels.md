@@ -93,7 +93,7 @@ These two labels keep the open backlog actionable without deleting history. They
 
 ## Dimension Labels
 
-Dimension labels are topical and should stay separate from triage state. The managed PR reviewer uses repository label history to apply these labels so PR history can be browsed by topic.
+Dimension labels are topical and should stay separate from triage state. Apply them from repository label history so PR history can be browsed by topic.
 
 Examples: `security`, `quality`, `devEx`, `documentation`, `enhancement`, `bug`, `area: ui`, `area: isolation`, `area: distribution`, `area: platform`, `web`.
 
