@@ -24,7 +24,7 @@ responders, and a run loop.
 
 ### Architecture at a Glance
 
-![Architecture Overview](assets/architecture-overview.jpg)
+![Architecture Overview](../assets/architecture-overview.jpg)
 
 The app has two SPM targets. The bottom layer (`WorkspaceManagerCore`) contains
 all logic and data — no UI imports. The top layer (`WorkspaceManager`) is the
@@ -227,7 +227,7 @@ the implementation in tests, previews, and potentially different parts of the UI
 
 ### How Environment Values Flow
 
-![DI Flow: Production vs Testing](assets/di-flow.jpg)
+![DI Flow: Production vs Testing](../assets/di-flow.jpg)
 
 ```mermaid
 graph TD

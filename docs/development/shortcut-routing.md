@@ -82,8 +82,8 @@ Do not broaden those commands here without updating the API docs and tests.
    - optional: configured Ghostty equalize binding resets divider to 50/50
    - `Cmd+Shift+O` opens selected repo/file in editor when target is available
    - `Cmd+]` / `Cmd+[` move focus across split when both panes exist
-   - or run `mask verify-shortcuts` for scripted smoke evidence
-   - and run `mask verify-open-shortcut` for Open-in-Editor shortcut coverage
+   - or run `mise run verify-shortcuts` for scripted smoke evidence
+   - and run `mise run verify-open-shortcut` for Open-in-Editor shortcut coverage
 5. Confirm logs include:
    - `[GhosttyAppManager] action=new_split ...`
    - `[GhosttyAppManager] action=goto_split ...`

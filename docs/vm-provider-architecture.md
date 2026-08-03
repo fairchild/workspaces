@@ -387,5 +387,5 @@ Embedding VM control in-process would couple VM ownership to the app process, wh
 
 - [Daytona Cloud Workspaces](daytona-vm.md)
 - [Lume Validation Runbook](development/lume-validation.md)
-- [Swift & macOS Patterns for Web Developers](patterns.md)
+- [Swift & macOS Patterns for Web Developers](archive/patterns.md)
 - [Product Overview](product_overview.md)

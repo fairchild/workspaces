@@ -314,30 +314,9 @@ swift run WorkspaceManager
 rg "\[Perf\]" <app-log-file>
 ```
 
-## WebView memory benchmark (isolated VM)
+## WebView memory benchmark (isolated VM, retired)
 
-Use Tart when you need memory numbers without shared-desktop noise.
-
-```bash
-swift build -c release
-./scripts/tart-webview-memory-benchmark.sh --base-vm sequoia-base --runs 5 --binary release
-```
-
-What it measures per run:
-
-1. `idle` memory (repo/terminal view active)
-2. `web_loaded` memory (after selecting the web entry and observing `metric=web_first_load`)
-
-Artifact output:
-
-- `output/tart-webview-benchmark/live/<timestamp>/benchmark.json`
-
-Notes:
-
-- Default mode is headless. Use `--open-vnc` only for live observation.
-- The JSON includes both:
-  - app process RSS only (`app_only`)
-  - WebKit helper process RSS (`webkit_processes`)
+The isolated-Tart memory benchmark script (`tart-webview-memory-benchmark.sh`) has been removed; it was a one-time investigation, not a recurring gate. Results from the run it produced are archived in `docs/performance/webview-memory-impact-2026-02-28.md`.
 
 ## Instruments / xctrace workflow
 

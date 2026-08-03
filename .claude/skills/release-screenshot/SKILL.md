@@ -1,6 +1,6 @@
 ---
 name: release-screenshot
-description: Capture deterministic screenshots of the WorkSpaces macOS app in a known UI state. Use when the user asks to "capture a release screenshot", "screenshot the app", "show the Phase 1 state", or wants evidence for a PR / release notes / design brief. Wraps the fixture-mode env vars (WORKSPACES_UI_FIXTURE, WORKSPACES_UI_FIXTURE_AGENT_STATES, and WORKSPACES_UI_FIXTURE_COMMAND_STATUSES) and the existing scripts/sidebar-capture.sh capture pipeline. Triggers on "release screenshot", "screenshot the app", "capture the app", "fixture screenshot", "ui evidence", "/release-screenshot".
+description: Capture deterministic screenshots of the WorkSpaces macOS app in a known UI state. Use when the user asks to "capture a release screenshot", "screenshot the app", "show the Phase 1 state", or wants evidence for a PR / release notes / design brief. Wraps the fixture-mode env vars (WORKSPACES_UI_FIXTURE, WORKSPACES_UI_FIXTURE_AGENT_STATES, and WORKSPACES_UI_FIXTURE_COMMAND_STATUSES) and the bundled scripts/capture.sh capture pipeline. Triggers on "release screenshot", "screenshot the app", "capture the app", "fixture screenshot", "ui evidence", "/release-screenshot".
 ---
 
 # release-screenshot

@@ -8,7 +8,6 @@ This directory contains build/release helpers plus UI test utilities.
 - `./scripts/setup` or `./scripts/setup --full` is the full bootstrap path. It runs fast setup, installs mise-managed tools from `mise.lock`, refreshes prek hooks, and installs dependencies when needed.
 - `./scripts/setup --env-only` refreshes local env-file links without running dependency setup.
 - `./scripts/setup --hooks-only` installs or refreshes the prek git hooks without running dependency setup.
-- `./scripts/install-git-hooks.sh` remains only as a compatibility wrapper around `./scripts/setup --hooks-only`; prefer `./scripts/setup` in new docs and task definitions.
 - mise security rules live in [docs/development/mise-security.md](../docs/development/mise-security.md). Run `./scripts/verify-mise-security.sh` after touching mise config, lockfiles, setup/build scripts, or the sandbox mise installer. Keep secrets and global trust bypasses out of mise config.
 - `web/.npmrc` enables pnpm's experimental global virtual store so repeated warm installs across Conductor workspaces reuse a shared virtual store.
 
@@ -134,19 +133,22 @@ Common examples:
 
 Use these scripts for day-to-day UI verification:
 
-0. `./scripts/pr-evidence.sh`
-- Profile-driven evidence capture for PRs.
-- Creates a local evidence bundle under `./output/evidence/pr-<number>/`.
-- Uploads artifacts through `./scripts/evidence.sh` and prints Markdown links.
-- Initial profiles:
-  - `swift-unit`: focused Swift tests, full Swift tests, and `git diff --check`.
-  - `ghostty-shortcuts`: GhosttyKit build, app build, watched debug launch, foreground `Cmd+D` / `Cmd+[` / `Cmd+]` shortcut smoke, runtime log summary, and window capture.
-  - `performance`: canonical before/after performance comparison rendered as uploadable PR evidence.
-- Examples:
-  - `./scripts/pr-evidence.sh --pr 387 --profile swift-unit --filter GhosttyRuntimeConfigFactory`
-  - `./scripts/pr-evidence.sh --pr 387 --profile ghostty-shortcuts`
-  - `./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate`
-  - `./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate --before-summary /tmp/before/summary.json --after-summary /tmp/after/summary.json --skip-before --skip-after`
+0. `./scripts/evidence.sh`
+- Canonical evidence capture + upload entry point (see `AGENTS.md` "Evidence-Driven Development").
+- `--fixture <scenario>` launches a fixture state and snapshots the main window via operator scope — first choice for macOS-app UI evidence, no activation, no focus steal.
+- `--name <slug>` captures test output, or `--file <path>` uploads an existing screenshot/log render.
+- `./scripts/pr-evidence.sh` is a profile-driven wrapper built on top of it for specific PR evidence bundles:
+  - Creates a local evidence bundle under `./output/evidence/pr-<number>/`.
+  - Uploads artifacts through `evidence.sh` and prints Markdown links.
+  - Initial profiles:
+    - `swift-unit`: focused Swift tests, full Swift tests, and `git diff --check`.
+    - `ghostty-shortcuts`: GhosttyKit build, app build, watched debug launch, foreground `Cmd+D` / `Cmd+[` / `Cmd+]` shortcut smoke, runtime log summary, and window capture.
+    - `performance`: canonical before/after performance comparison rendered as uploadable PR evidence.
+  - Examples:
+    - `./scripts/pr-evidence.sh --pr 387 --profile swift-unit --filter GhosttyRuntimeConfigFactory`
+    - `./scripts/pr-evidence.sh --pr 387 --profile ghostty-shortcuts`
+    - `./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate`
+    - `./scripts/pr-evidence.sh --pr 387 --profile performance --scenario debug_no_activate --before-summary /tmp/before/summary.json --after-summary /tmp/after/summary.json --skip-before --skip-after`
 
 1. `./scripts/launch-dev.sh`
 - Canonical local launch for active development.
@@ -193,32 +195,7 @@ Use these scripts for day-to-day UI verification:
 - Validates launch, focus, typing, and Enter behavior.
 - Writes artifacts to `/tmp/workspaces-ui-smoke-<timestamp>/`.
 
-6. `./scripts/ui-capture.sh`
-- Screenshot-focused flow capture.
-- Same core interaction path plus screenshot artifacts.
-- Writes artifacts to `/tmp/workspaces-ui-capture-<timestamp>/`.
-
-7. `./scripts/sidebar-capture.sh`
-- Fast deterministic sidebar-only capture loop for visual polish work.
-- Launches app in `WORKSPACES_UI_FIXTURE=1` mode (in-memory sample data).
-- Captures the WorkspaceManager window and writes:
-  - latest: `./output/sidebar/latest.png`
-  - timestamped snapshots: `./output/sidebar/sidebar-<timestamp>.png`
-- Also preserves raw run artifacts under `/tmp/workspaces-sidebar-capture-<timestamp>/`.
-
-8. `./scripts/preview-open-capture.sh`
-- Deterministic preview-open capture for `Open` header polish.
-- Launches with fixture bootstrap variables so a repo and target file open automatically:
-  - `WORKSPACES_UI_FIXTURE_OPEN_PREVIEW=1`
-  - `WORKSPACES_UI_FIXTURE_PREVIEW_REPO` (default: `skills`)
-  - `WORKSPACES_UI_FIXTURE_PREVIEW_PATH` (default: `README.md`)
-- Uses `capture-window.sh` first (window-id capture), then full-screen fallback.
-- Rejects effectively black captures and exits with guidance when Screen Recording permission is missing.
-- Captures the WorkspaceManager window and writes:
-  - latest: `./output/preview-open/latest.png`
-  - timestamped snapshots: `./output/preview-open/preview-open-<timestamp>.png`
-
-9. `./scripts/capture-window.sh`
+6. `./scripts/capture-window.sh`
 - One-shot window-only capture for shared-desktop workflows.
 - Captures by window id (`screencapture -l`) and **does not activate the app by default**.
 - Use `--pid <pid>` when multiple WorkSpaces/WorkspaceManager debug windows are visible.
@@ -227,14 +204,14 @@ Use these scripts for day-to-day UI verification:
   - timestamped: `./output/window/window-<timestamp>.png`
   - latest copy: `./output/window/latest.png`
 
-10. `./scripts/continuity-evidence.sh`
+7. `./scripts/continuity-evidence.sh`
 - App terminate/relaunch evidence for local repo/workspace terminal continuity.
 - Launches the debug app with isolated data, forces `tmux_per_session` through a dev-only environment override, captures before/closed/after proof, and writes artifacts under:
   - `./output/continuity-evidence/<timestamp>/`
 - Use for PRs that touch terminal continuity restore behavior:
   - `./scripts/continuity-evidence.sh --target "$HOME/code/workspaces" --no-build --trust-mise`
 
-11. `./scripts/open-in-editor-shortcut-smoke.sh`
+8. `./scripts/open-in-editor-shortcut-smoke.sh`
 - End-to-end regression smoke for `Cmd+Shift+O` editor launch.
 - Covers both target paths:
   - repo selected, no file preview -> open project root only
@@ -242,44 +219,7 @@ Use these scripts for day-to-day UI verification:
 - Uses fixture mode and a fake Zed CLI shim to verify launched arguments.
 - Verifies `[Perf] metric=open_in_editor_launch ... outcome=success` log evidence.
 
-12. `./scripts/tart-webview-demo.sh`
-- Runs the repo/webview transition flow inside an isolated Tart VM.
-- Clones a prepared base VM, boots it with this repo mounted, drives the guest
-  UI over SSH + VNC, and outputs capture artifacts under:
-  - `./output/tart-webview-demo/live/<timestamp>/frames/`
-  - `./output/tart-webview-demo/live/<timestamp>/webview-demo.mp4`
-- This is the recommended path when shared-desktop focus contention makes local
-  UI automation unreliable.
-
-### Tart VM Setup (One-Time)
-
-Before using `tart-webview-demo.sh`, prepare a base VM:
-
-1. Create/pull a macOS VM image.
-2. Ensure the guest has Remote Login enabled.
-3. Install required guest tools:
-   - `swift`
-   - `cliclick`
-4. In guest macOS privacy settings, grant:
-   - Accessibility
-5. Set base VM default:
-   - `export WORKSPACES_TART_BASE_VM=<your-base-vm-name>`
-
-Run example:
-
-```bash
-./scripts/tart-webview-demo.sh --base-vm "$WORKSPACES_TART_BASE_VM"
-```
-
-Optional flags:
-- `--ssh-host <ip>` bypasses SSH auto-discovery if your bridged network is noisy.
-- `--build-in-guest` builds inside the VM before launch.
-- `--keep-vm` keeps the cloned run VM after completion.
-- `--keep-running` leaves the run VM powered on after completion.
-- `--open-vnc` opens a live VNC viewer on the host while recording.
-  - default is headless (`--no-open-vnc`).
-
-10. `./scripts/lume-e2e-capture.sh`
+9. `./scripts/lume-e2e-capture.sh`
 - Deterministic evidence capture for the Lume first-use setup flow.
 - Launches in dedicated Lume fixture mode and captures the app window by
   CoreGraphics window id.
@@ -290,19 +230,7 @@ Optional flags:
 - Canonical runbook:
   - `docs/development/lume-validation.md`
 
-11. `./scripts/tart-webview-memory-benchmark.sh`
-- Runs a repeatable memory benchmark inside an isolated Tart VM.
-- For each run, it launches the app twice and samples memory in two states:
-  - fixture idle launch (no web bootstrap)
-  - fixture web launch (`WORKSPACES_UI_FIXTURE_SELECT_WEB_SOURCE=1`)
-- Emits JSON artifacts under:
-  - `./output/tart-webview-benchmark/live/<timestamp>/benchmark.json`
-- Headless by default. Add `--open-vnc` only when you want to observe.
-- Typical usage:
-  1. `swift build -c release`
-  2. `./scripts/tart-webview-memory-benchmark.sh --base-vm sequoia-base --runs 5 --binary release`
-
-UI automation scripts (`ui-smoke.sh`, `ui-capture.sh`, `sidebar-capture.sh`, `preview-open-capture.sh`):
+UI automation scripts (`ui-smoke.sh`):
 - fail fast on missing permissions
 - print artifact directory path at the end
 - use explicit app target launch (`swift run WorkspaceManager`)
@@ -354,7 +282,7 @@ Root `mise` equivalents for this loop:
 - `mise run dev-lume-standalone-validate`
 - `mise run dev-lume-macos-smoke`
 
-12. `./scripts/lume-host-preflight.sh`
+10. `./scripts/lume-host-preflight.sh`
 - Fast readiness check for a real-host Lume macOS VM run.
 - Verifies:
   - Apple Silicon host
@@ -365,7 +293,7 @@ Root `mise` equivalents for this loop:
 - foregrounds the app by default for deterministic launch verification; use `--no-activate` only for shared-desktop-safe manual checks
 - Use this before trying the full host-backed smoke.
 
-13. `./scripts/lume-standalone-validate.sh`
+11. `./scripts/lume-standalone-validate.sh`
 - Standalone Lume-only validation gate.
 - Uses the Lume CLI and daemon directly with no Swift app involvement.
 - Owns the trusted validated base namespace:
@@ -396,7 +324,7 @@ Root `mise` equivalents for this loop:
 - For the exact manual recovery and troubleshooting path:
   - `./docs/development/lume-recreate-runbook.md`
 
-14. `./scripts/lume-host-macos-smoke.sh`
+12. `./scripts/lume-host-macos-smoke.sh`
 - Long-running real-host smoke for the Lume macOS VM path.
 - Runs `lume-standalone-validate.sh` first so Lume defects are caught before the Swift app path.
 - Creates a disposable git repo under `~/code/`, launches the debug app with a dev-only automation mode, waits for a real Lume macOS workspace to become active, then validates `lume ssh`.
@@ -420,7 +348,7 @@ Full contract and troubleshooting details:
 - `docs/development/lume-integration.md`
 - `docs/development/lume-validation.md`
 
-15. `./scripts/lume-pr-validation.sh`
+13. `./scripts/lume-pr-validation.sh`
 - Aggregate PR evidence chain for the Lume integration.
 - Reuses an existing passing standalone bundle, then runs:
   - GhosttyKit build
@@ -436,7 +364,7 @@ Full contract and troubleshooting details:
 - Current passing bundle:
   - `./output/lume-pr-validation/20260311-194047/`
 
-16. `./scripts/lume-pr-evidence-prep.sh`
+14. `./scripts/lume-pr-evidence-prep.sh`
 - Prepares a GitHub-ready evidence bundle from a passing host-smoke run.
 - Verifies the host-smoke bundle has:
   - `workspace_active` in `events.jsonl`
@@ -451,11 +379,9 @@ Full contract and troubleshooting details:
   - `./scripts/lume-pr-evidence-prep.sh --pr 123`
   - `./scripts/lume-pr-evidence-prep.sh --pr 123 --host-smoke-dir ./output/lume-host-smoke/20260317-200226`
 
-## Legacy UI Scripts
+## Parked Scripts
 
-Older exploratory UI scripts are archived under:
+Kept intentionally despite low current usage — owner decision 2026-08-02, revival intended. Do not re-flag these as dead code in future cleanup passes.
 
-- `./scripts/legacy-ui/`
-
-Use those only for targeted debugging or historical reference.
-For normal UI validation, prefer `ui-smoke.sh` and `ui-capture.sh`.
+- `daytona-sandbox-manager.py` — Daytona remote-workspace surface; see `docs/daytona-vm.md` and `CONTRIBUTING.md`.
+- `runner-*.sh`, `install-runner-*.sh` — self-hosted runner monitoring; see `CONTRIBUTING.md` § "Runner scripts reference".
