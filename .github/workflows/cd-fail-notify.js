@@ -1,17 +1,36 @@
-// Shared logic for the fail-notify-{playwright,lighthouse} jobs in cd.yml.
+// Shared logic for the fail-notify-{playwright,lighthouse} and
+// close-on-green-{playwright,lighthouse} jobs in cd.yml.
 //
 // Called from github-script@v7 as:
-//   const { default: failNotify } = await import('./.github/workflows/cd-fail-notify.js');
+//   const { default: failNotify, closeOnGreen } = await import('./.github/workflows/cd-fail-notify.js');
 //   await failNotify({ github, context, core });
+//   await closeOnGreen({ github, context, core });
 //
 // Env inputs:
 //   VALIDATOR    — "playwright" or "lighthouse"
-//   PREVIEW_URL  — preview deployment URL
-//   REPRO_HINT   — shell command to reproduce locally
+//   PREVIEW_URL  — preview deployment URL (failNotify only)
+//   REPRO_HINT   — shell command to reproduce locally (failNotify only)
 //
 // Reads findings.md from the current working directory (downloaded artifact).
 
 import nodeFs from "node:fs";
+
+function markerFor(validator) {
+	return `<!-- cd-failure:${validator} -->`;
+}
+
+function runUrl(context) {
+	return `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+}
+
+async function findRollingIssue(github, context, validator) {
+	const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${markerFor(validator)}" is:issue`;
+	const found = await github.rest.search.issuesAndPullRequests({
+		q,
+		per_page: 1,
+	});
+	return found.data.items[0];
+}
 
 export default async function failNotify({
 	github,
@@ -21,25 +40,18 @@ export default async function failNotify({
 	fs = nodeFs,
 }) {
 	const validator = env.VALIDATOR;
-	const marker = `<!-- cd-failure:${validator} -->`;
+	const marker = markerFor(validator);
 	const findings = fs.existsSync("findings.md")
 		? fs.readFileSync("findings.md", "utf8")
 		: "_No findings file produced._";
 
 	const title = `CD: ${validator} failures on main`;
-	const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
-	const q = `repo:${context.repo.owner}/${context.repo.repo} in:body "${marker}" is:issue`;
-	const found = await github.rest.search.issuesAndPullRequests({
-		q,
-		per_page: 1,
-	});
-	const existing = found.data.items[0];
+	const existing = await findRollingIssue(github, context, validator);
 
 	const body = [
 		marker,
 		`**Commit:** ${context.sha}`,
-		`**Run:** ${runUrl}`,
+		`**Run:** ${runUrl(context)}`,
 		`**Preview URL:** ${env.PREVIEW_URL || "(not available)"}`,
 		"",
 		"## Findings",
@@ -91,4 +103,38 @@ export default async function failNotify({
 	});
 	core.notice(`Created rolling issue #${created.data.number}`);
 	return { issueNumber: created.data.number };
+}
+
+export async function closeOnGreen({ github, context, core, env = process.env }) {
+	const validator = env.VALIDATOR;
+	const existing = await findRollingIssue(github, context, validator);
+
+	if (!existing || existing.state !== "open") {
+		core.notice(`No open rolling ${validator} issue to close`);
+		return { closed: null };
+	}
+
+	const body = [
+		markerFor(validator),
+		`CD ${validator} validation is green for \`${context.sha}\` in ${runUrl(context)}.`,
+		"",
+		`Closing this auto-opened rolling issue. The CD auto-opener will reopen it or open a new one if ${validator} regresses again.`,
+	].join("\n");
+
+	await github.rest.issues.createComment({
+		owner: context.repo.owner,
+		repo: context.repo.repo,
+		issue_number: existing.number,
+		body,
+	});
+	await github.rest.issues.update({
+		owner: context.repo.owner,
+		repo: context.repo.repo,
+		issue_number: existing.number,
+		state: "closed",
+		state_reason: "completed",
+	});
+
+	core.notice(`Closed rolling issue #${existing.number}`);
+	return { closed: existing.number };
 }

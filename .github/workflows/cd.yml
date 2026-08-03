@@ -374,6 +374,46 @@ jobs:
             const { default: failNotify } = await import(pathToFileURL(abs).href);
             await failNotify({ github, context, core });
 
+  close-on-green-playwright:
+    needs: [playwright-validate]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout is required so the github-script step can import the shared
+      # fail-notify logic at .github/workflows/cd-fail-notify.js.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          VALIDATOR: playwright
+        with:
+          script: |
+            // github-script runs from its own dist dir; relative imports look
+            // there, not at the workspace. Resolve via GITHUB_WORKSPACE + file URL.
+            const path = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const abs = path.join(process.env.GITHUB_WORKSPACE, '.github/workflows/cd-fail-notify.js');
+            const { closeOnGreen } = await import(pathToFileURL(abs).href);
+            await closeOnGreen({ github, context, core });
+
+  close-on-green-lighthouse:
+    needs: [lighthouse]
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
+        env:
+          VALIDATOR: lighthouse
+        with:
+          script: |
+            // github-script runs from its own dist dir; relative imports look
+            // there, not at the workspace. Resolve via GITHUB_WORKSPACE + file URL.
+            const path = require('node:path');
+            const { pathToFileURL } = require('node:url');
+            const abs = path.join(process.env.GITHUB_WORKSPACE, '.github/workflows/cd-fail-notify.js');
+            const { closeOnGreen } = await import(pathToFileURL(abs).href);
+            await closeOnGreen({ github, context, core });
+
   validate-prod:
     needs: promote
     if: success()
