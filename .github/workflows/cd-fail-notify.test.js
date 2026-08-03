@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import failNotify from "./cd-fail-notify.js";
+import failNotify, { closeOnGreen } from "./cd-fail-notify.js";
 
 function makeContext() {
 	return {
@@ -95,4 +95,66 @@ test("failNotify opens the first CD failure issue for Factory triage", async () 
 	]);
 	assert.match(create.body, /issue triage inlet/);
 	assert.match(create.body, /Reproduce locally: `mise run web:e2e`/);
+});
+
+test("closeOnGreen closes the open rolling CD failure issue", async () => {
+	const github = makeGithub([{ number: 630, state: "open" }]);
+
+	const result = await closeOnGreen({
+		github,
+		context: makeContext(),
+		core,
+		env: { VALIDATOR: "playwright" },
+	});
+
+	assert.deepEqual(result, { closed: 630 });
+	assert.deepEqual(
+		github.calls.map(([name]) => name),
+		["search", "createComment", "update"],
+	);
+	assert.match(github.calls[0][1].q, /"<!-- cd-failure:playwright -->"/);
+	assert.equal(github.calls[0][1].per_page, 1);
+	assert.equal(github.calls[1][1].issue_number, 630);
+	assert.match(github.calls[1][1].body, /<!-- cd-failure:playwright -->/);
+	assert.match(github.calls[1][1].body, /CD playwright validation is green/);
+	assert.equal(github.calls[2][1].issue_number, 630);
+	assert.equal(github.calls[2][1].state, "closed");
+	assert.equal(github.calls[2][1].state_reason, "completed");
+});
+
+test("closeOnGreen is a no-op when there is no rolling issue", async () => {
+	const github = makeGithub([]);
+
+	const result = await closeOnGreen({
+		github,
+		context: makeContext(),
+		core,
+		env: { VALIDATOR: "playwright" },
+	});
+
+	assert.deepEqual(result, { closed: null });
+	assert.deepEqual(
+		github.calls.map(([name]) => name),
+		["search"],
+	);
+});
+
+test("closeOnGreen leaves an already-closed rolling issue alone", async () => {
+	// Flap protection: a fail → green → fail sequence can leave a closed
+	// issue matching the marker if a later run already reopened and
+	// re-closed it. Don't double-comment or re-close.
+	const github = makeGithub([{ number: 630, state: "closed" }]);
+
+	const result = await closeOnGreen({
+		github,
+		context: makeContext(),
+		core,
+		env: { VALIDATOR: "playwright" },
+	});
+
+	assert.deepEqual(result, { closed: null });
+	assert.deepEqual(
+		github.calls.map(([name]) => name),
+		["search"],
+	);
 });
