@@ -4,7 +4,7 @@ Desired state for the two Vercel projects' production env vars: `spaces-web`
 (dir `web/`) and `web-next` (dir `web-next/`), one manifest each. Two tiers:
 
 - **`values`** — non-secret operational flags and debug-friendly config
-  (`COMPUTE_PROVIDER`, `PR_REVIEWER_ENABLED`, IDs, URLs), checked by value.
+  (`COMPUTE_PROVIDER`, `ALLOWED_AGENT_LOGINS`, IDs, URLs), checked by value.
   Membership is explicit curation, never inferred from readability — a
   secret with a misconfigured sensitive flag must not get snapshotted into
   the repo.

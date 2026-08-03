@@ -1190,7 +1190,7 @@ class MergeabilitySeedTests(unittest.TestCase):
         surface = run_contributor._mergeability_surface(
             [
                 "Sources/WorkspaceManager/App/AppActivationPolicy.swift",
-                "web/src/lib/agent-runtime/pr-review.ts",
+                "web/src/lib/agent-runtime/vercel-sandbox.ts",
                 "infra/cloudflare-evidence-store/worker.ts",
                 "docs/development/evidence.md",
             ]

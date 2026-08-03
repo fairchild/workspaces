@@ -7,7 +7,6 @@ export interface Env {
   JWT_SIGNING_SECRET: string;
   GITHUB_API_BASE?: string;
   WEBHOOK_FORWARD_URL?: string;
-  WORKSPACES_WEBHOOK_CANARY_SECRET?: string;
 }
 
 interface StoredEvent {

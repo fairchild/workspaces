@@ -28,17 +28,6 @@ not a broad public security stance.
 - The Codespaces Claude worker is protected by the
   `codespaces-claude-break-glass` environment and defaults to `main` or
   owner-repository branches.
-- The managed PR reviewer passes a short-lived GitHub App installation token
-  only as the Managed Agents `github_repository.authorization_token` needed for
-  repository cloning. It does not write a token into the prompt or filesystem
-  for the agent to discover. The agent produces a structured review intent, and
-  the server-side broker validates and posts the GitHub review with the App
-  token. The broker re-checks current managed reviews before posting and
-  supersedes stale session output that did not account for a review posted while
-  the session was running.
-- Managed reviewer ingress canaries are HMAC verified and gated by
-  `WORKSPACES_WEBHOOK_CANARY_SECRET`; the dry-run response returns before DB
-  writes or managed-agent session creation.
 
 ## Release And Update Chain
 
@@ -75,8 +64,6 @@ uv run --script scripts/audit-security-posture.py --repo fairchild/workspaces --
 
 ## Explicit Follow-Ups
 
-- Keep PR-review broker execution outside the webhook request path; the
-  scheduled/protected broker route should own completed-session posting.
 - Consider a true WebSocket proxy for terminal access so the browser never sees
   the final ttyd URL after ticket redemption.
 - Keep dependency overrides current and remove them when upstream patched

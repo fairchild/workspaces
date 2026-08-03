@@ -1,4 +1,3 @@
-import { getPrReviewRunBySessionId } from "@/lib/agent-runtime/pr-review-runs";
 import { getSessionByInstanceId } from "@/lib/agent-sessions";
 import { authorizeRepoAccess } from "@/lib/api-auth";
 import { getSession } from "@/lib/auth-server";
@@ -28,10 +27,7 @@ export async function GET(request: Request): Promise<Response> {
 	}
 
 	const agentSession = await getSessionByInstanceId(authed.user.id, sessionId);
-	const reviewRun = agentSession
-		? null
-		: await getPrReviewRunBySessionId(sessionId);
-	const repo = agentSession?.repo ?? reviewRun?.repoFullName ?? null;
+	const repo = agentSession?.repo ?? null;
 	if (!repo) {
 		return new Response("session not found", { status: 404 });
 	}
@@ -70,16 +66,12 @@ export async function GET(request: Request): Promise<Response> {
 			};
 
 			// Live-tailing only makes sense while the session can still emit
-			// events. Review runs are one-shot: once the run record or the
-			// session itself is no longer active, the transcript is complete.
-			// Chat sessions stay tailable while idle — a follow-up user turn
-			// can produce more tool calls on the same session.
+			// events. Chat sessions stay tailable while idle — a follow-up user
+			// turn can produce more tool calls on the same session.
 			const shouldLiveTail = async (): Promise<boolean> => {
-				if (reviewRun && reviewRun.status !== "started") return false;
 				try {
 					const session = await client.beta.sessions.retrieve(sessionId);
 					if (session.status === "terminated") return false;
-					if (reviewRun && session.status === "idle") return false;
 				} catch {
 					return false;
 				}
@@ -107,17 +99,6 @@ export async function GET(request: Request): Promise<Response> {
 				const live = await client.beta.sessions.events.stream(sessionId);
 				for await (const event of live) {
 					if (closed) return;
-					// A review session reaching terminal idle is done for good —
-					// the broker never sends it another turn.
-					if (
-						reviewRun &&
-						event.type === "session.status_idle" &&
-						(event.stop_reason?.type === "end_turn" ||
-							event.stop_reason?.type === "retries_exhausted")
-					) {
-						sendEnd();
-						return;
-					}
 					const line = toTranscriptLine(event);
 					if (line) send(line);
 				}

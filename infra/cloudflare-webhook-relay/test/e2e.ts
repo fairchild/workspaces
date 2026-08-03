@@ -8,7 +8,6 @@
 import { signJWT } from "../src/github-verify";
 import { writeFileSync, readFileSync, existsSync, rmSync } from "fs";
 import { resolve } from "path";
-import { PR_REVIEW_WEBHOOK_CONTRACT_CASES } from "../../../web/src/lib/agent-runtime/__tests__/pr-review-trigger-fixtures";
 
 const WORKER_PORT = 8787;
 const MOCK_PORT = 8788;
@@ -16,7 +15,6 @@ const FORWARD_PORT = 8789;
 const WORKER_URL = `http://localhost:${WORKER_PORT}`;
 const FORWARD_URL = `http://127.0.0.1:${FORWARD_PORT}/api/webhooks/github`;
 const WEBHOOK_SECRET = "test-webhook-secret-e2e";
-const WEBHOOK_CANARY_SECRET = "test-webhook-canary-secret-e2e";
 const JWT_SECRET = "test-jwt-secret-e2e";
 
 const projectDir = resolve(import.meta.dir, "..");
@@ -156,10 +154,6 @@ function payloadForPR(
   });
 }
 
-function contractPayload(testCase: (typeof PR_REVIEW_WEBHOOK_CONTRACT_CASES)[number]): string {
-  return JSON.stringify(testCase.payload);
-}
-
 async function expectNoExtraWebSocketMessage(
   bws: BufferedWS,
   timeoutMs = 750
@@ -263,7 +257,6 @@ writeFileSync(
     `JWT_SIGNING_SECRET=${JWT_SECRET}`,
     `GITHUB_API_BASE=http://127.0.0.1:${MOCK_PORT}`,
     `WEBHOOK_FORWARD_URL=${FORWARD_URL}`,
-    `WORKSPACES_WEBHOOK_CANARY_SECRET=${WEBHOOK_CANARY_SECRET}`,
     "",
   ].join("\n")
 );
@@ -332,29 +325,6 @@ async function startForwardMock(): Promise<void> {
       const headers = Object.fromEntries(request.headers.entries()) as Record<string, string>;
       const body = await request.text();
       forwardedRequests.push({ body, headers });
-      if (headers["x-workspace-webhook-canary"]) {
-        const expectedSignature = await hmacSign(WEBHOOK_SECRET, body);
-        if (headers["x-workspace-webhook-canary"] !== WEBHOOK_CANARY_SECRET) {
-          return Response.json(
-            { ok: false, canary: true, error: "invalid_canary_secret" },
-            { status: 401 }
-          );
-        }
-        if (headers["x-hub-signature-256"] !== expectedSignature) {
-          return Response.json(
-            { ok: false, canary: true, error: "invalid_signature" },
-            { status: 401 }
-          );
-        }
-        return Response.json({
-          ok: true,
-          canary: true,
-          wouldTrigger: true,
-          triggerKind: "opened",
-          eventType: headers["x-github-event"],
-          action: "opened",
-        });
-      }
       return new Response("OK", { status: 200 });
     },
   });
@@ -504,10 +474,10 @@ try {
     }
   });
 
-  // Test 6: PR-review trigger events are forwarded to the web app route
-  await test("PR-review trigger webhooks are forwarded with the original signature", async () => {
+  // Test 6: Reviewable PR events are forwarded to the web app with the original signature
+  await test("Reviewable PR webhooks are forwarded with the original signature", async () => {
     forwardedRequests.length = 0;
-    const payload = contractPayload(PR_REVIEW_WEBHOOK_CONTRACT_CASES[0]);
+    const payload = payloadForPR(9090, "Forwarded PR", "opened");
     const expectedSignature = await hmacSign(WEBHOOK_SECRET, payload);
 
     const resp = await postWebhook(payload, "forward-review-delivery-1");
@@ -527,102 +497,6 @@ try {
     assert(
       forwarded.headers["x-github-delivery"] === "forward-review-delivery-1",
       `Expected delivery header, got ${forwarded.headers["x-github-delivery"]}`
-    );
-  });
-
-  // Test 7: Cloudflare and Vercel reviewer ingress share the same trigger contract
-  await test("PR-review forwarding follows the shared trigger contract matrix", async () => {
-    forwardedRequests.length = 0;
-    let expectedForwards = 0;
-
-    for (const testCase of PR_REVIEW_WEBHOOK_CONTRACT_CASES) {
-      const payload = contractPayload(testCase);
-      const resp = await postWebhook(
-        payload,
-        testCase.deliveryId,
-        testCase.eventType
-      );
-      assert(resp.status === 200, `${testCase.name}: webhook POST returned ${resp.status}`);
-
-      if (testCase.expectedForwarded) {
-        expectedForwards += 1;
-        await waitForForwardedRequestCount(expectedForwards);
-        const forwarded = forwardedRequests[expectedForwards - 1];
-        const expectedSignature = await hmacSign(WEBHOOK_SECRET, payload);
-        assert(
-          forwarded.body === payload,
-          `${testCase.name}: expected forwarded body to preserve the raw GitHub payload`
-        );
-        assert(
-          forwarded.headers["x-hub-signature-256"] === expectedSignature,
-          `${testCase.name}: expected forwarded signature to match original HMAC`
-        );
-        assert(
-          forwarded.headers["x-github-event"] === testCase.eventType,
-          `${testCase.name}: expected ${testCase.eventType} event header`
-        );
-      } else {
-        await Bun.sleep(250);
-        assert(
-          forwardedRequests.length === expectedForwards,
-          `${testCase.name}: expected no forwarded request`
-        );
-      }
-    }
-  });
-
-  // Test 8: Canary requires its separate secret and stays relay-local when unauthorized
-  await test("PR-review canary rejects missing or invalid canary secrets", async () => {
-    forwardedRequests.length = 0;
-    const missing = await fetch(`${WORKER_URL}/canary/pr-review-ingress`, {
-      method: "POST",
-    });
-    assert(missing.status === 401, `Expected 401 for missing canary secret, got ${missing.status}`);
-
-    const invalid = await fetch(`${WORKER_URL}/canary/pr-review-ingress`, {
-      method: "POST",
-      headers: { "X-Workspace-Webhook-Canary": "wrong-secret" },
-    });
-    assert(invalid.status === 401, `Expected 401 for invalid canary secret, got ${invalid.status}`);
-    assert(forwardedRequests.length === 0, "Unauthorized canary requests must not be forwarded");
-  });
-
-  // Test 9: Canary proves the signed Cloudflare -> Vercel dry-run path
-  await test("PR-review canary forwards a signed dry-run webhook to the web app", async () => {
-    forwardedRequests.length = 0;
-    const resp = await fetch(`${WORKER_URL}/canary/pr-review-ingress`, {
-      method: "POST",
-      headers: { "X-Workspace-Webhook-Canary": WEBHOOK_CANARY_SECRET },
-    });
-    const body = await resp.json() as {
-      ok: boolean;
-      canary: boolean;
-      upstreamStatus: number;
-      wouldTrigger: boolean;
-      triggerKind: string;
-    };
-
-    assert(resp.status === 200, `Expected 200, got ${resp.status}`);
-    assert(body.ok === true, "Expected canary response ok=true");
-    assert(body.canary === true, "Expected canary response marker");
-    assert(body.upstreamStatus === 200, `Expected upstream 200, got ${body.upstreamStatus}`);
-    assert(body.wouldTrigger === true, "Expected Vercel dry-run to report wouldTrigger=true");
-    assert(body.triggerKind === "opened", `Expected opened trigger, got ${body.triggerKind}`);
-
-    await waitForForwardedRequestCount(1);
-    const forwarded = forwardedRequests[0];
-    const expectedSignature = await hmacSign(WEBHOOK_SECRET, forwarded.body);
-    assert(
-      forwarded.headers["x-workspace-webhook-canary"] === WEBHOOK_CANARY_SECRET,
-      "Expected forwarded canary secret header"
-    );
-    assert(
-      forwarded.headers["x-hub-signature-256"] === expectedSignature,
-      "Expected forwarded canary request to be signed with the GitHub webhook HMAC"
-    );
-    assert(
-      forwarded.headers["x-github-event"] === "pull_request",
-      `Expected pull_request event header, got ${forwarded.headers["x-github-event"]}`
     );
   });
 

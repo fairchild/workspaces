@@ -68,36 +68,6 @@ describe("agent runtime config", () => {
 		).toThrow(/TTYD_TOKEN_SECRET or BETTER_AUTH_SECRET/);
 	});
 
-	it("requires GitHub App credentials when the PR reviewer is enabled", () => {
-		expect(() =>
-			validateProductionAgentRuntimeConfig({
-				NODE_ENV: "production",
-				ALLOWED_AGENT_LOGINS: "fairchild",
-				BETTER_AUTH_SECRET: "auth-secret",
-				TTYD_TOKEN_SECRET: "ttyd-secret",
-				VERCEL_OIDC_TOKEN: "oidc-token",
-				ANTHROPIC_API_KEY: "sk-test",
-				PR_REVIEWER_ENABLED: "1",
-			}),
-		).toThrow(
-			/PR_REVIEWER_APP_ID[\s\S]*PR_REVIEWER_PRIVATE_KEY[\s\S]*PR_REVIEWER_INSTALLATION_ID/,
-		);
-	});
-
-	it("treats configured GitHub App credentials as PR reviewer enablement", () => {
-		expect(() =>
-			validateProductionAgentRuntimeConfig({
-				NODE_ENV: "production",
-				ALLOWED_AGENT_LOGINS: "fairchild",
-				BETTER_AUTH_SECRET: "auth-secret",
-				TTYD_TOKEN_SECRET: "ttyd-secret",
-				VERCEL_OIDC_TOKEN: "oidc-token",
-				ANTHROPIC_API_KEY: "sk-test",
-				PR_REVIEWER_APP_ID: "123",
-			}),
-		).toThrow(/PR_REVIEWER_PRIVATE_KEY[\s\S]*PR_REVIEWER_INSTALLATION_ID/);
-	});
-
 	it("requires Better Auth secret in production auth config", () => {
 		expect(() =>
 			validateProductionAuthConfig({ NODE_ENV: "production" }),

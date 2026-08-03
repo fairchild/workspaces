@@ -72,56 +72,6 @@ export interface ManagedAgentsCacheTable {
 	metadata: string | null;
 }
 
-export interface ManagedPrReviewRunsTable {
-	fingerprint: string;
-	repo_full_name: string;
-	pr_number: number;
-	head_sha: string;
-	trigger_kind: string;
-	trigger_source_id: string;
-	reviewer_config_hash: string;
-	session_id: string | null;
-	session_started_at: string | null;
-	status: string;
-	created_at: string;
-	updated_at: string;
-	error: string | null;
-	failure_kind: string | null;
-	failure_message: string | null;
-	failure_retryable: number | null;
-	failed_at: string | null;
-	projection_status: string | null;
-	projection_updated_at: string | null;
-	projection_error: string | null;
-	github_review_id: string | null;
-	review_intent_event: string | null;
-	review_intent_body: string | null;
-	review_intent_labels: string | null;
-	review_intent_recorded_at: string | null;
-	active_claim_key: string | null;
-	coalesced_head_sha: string | null;
-	coalesced_trigger_kind: string | null;
-	coalesced_trigger_source_id: string | null;
-	coalesced_at: string | null;
-}
-
-export interface ManagedPrReviewProjectionsTable {
-	projection_id: string;
-	run_fingerprint: string;
-	projection_type: string;
-	projection_key: string;
-	desired_payload_hash: string;
-	desired_payload: string;
-	state: string;
-	attempts: number;
-	last_attempted_at: string | null;
-	observed_external_id: string | null;
-	error_kind: string | null;
-	error_text: string | null;
-	created_at: string;
-	updated_at: string;
-}
-
 export interface Database {
 	webhook_events: EventsTable;
 	chat_messages: ChatMessagesTable;
@@ -129,8 +79,6 @@ export interface Database {
 	agent_sessions: AgentSessionsTable;
 	base_snapshots: BaseSnapshotsTable;
 	managed_agents_cache: ManagedAgentsCacheTable;
-	managed_pr_review_runs: ManagedPrReviewRunsTable;
-	managed_pr_review_projections: ManagedPrReviewProjectionsTable;
 }
 
 let _turso: Client | undefined;
