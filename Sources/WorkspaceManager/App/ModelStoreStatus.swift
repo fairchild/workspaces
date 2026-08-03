@@ -178,7 +178,7 @@ enum ModelStoreBootstrapper {
             bootstrapErrors.append(message)
         }
 
-        log.info("[ModelStore] Falling back to in-memory store")
+        log.error("[ModelStore] Falling back to in-memory store")
         let inMemoryConfig = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
         let container = makeContainer(
             schema: schema,

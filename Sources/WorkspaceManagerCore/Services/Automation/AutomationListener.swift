@@ -40,8 +40,17 @@ public actor AutomationListener {
             AutomationServerDescriptor.current(launchedAt: $0, experiments: [])
         },
         logger: @escaping @Sendable (String) -> Void = { message in
-            Logger(subsystem: "com.cloudcompute.workspaces", category: "AutomationListener")
-                .info("[AutomationListener] \(message, privacy: .public)")
+            let logger = Logger(subsystem: "com.cloudcompute.workspaces", category: "AutomationListener")
+            // This sink carries mixed-severity text from call sites throughout the actor, not just this
+            // default's own messages — approximate severity from wording rather than misclassifying
+            // failures/drops as routine.
+            if message.localizedCaseInsensitiveContains("fail") || message.localizedCaseInsensitiveContains("error")
+                || message.localizedCaseInsensitiveContains("drop")
+            {
+                logger.error("[AutomationListener] \(message, privacy: .public)")
+            } else {
+                logger.info("[AutomationListener] \(message, privacy: .public)")
+            }
         }
     ) {
         self.controller = controller

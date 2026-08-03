@@ -188,18 +188,14 @@ enum PerformanceSignposts {
         lock.unlock()
 
         if let supersededFields {
-            emitPerfLog(
-                "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
-                supersededDurationMs,
-                sessionID.uuidString
+            log.info(
+                "[Perf] metric=workspace_click_to_focus duration_ms=\(String(format: "%.2f", supersededDurationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
             )
             emitWorkspaceClickMetricEvent(phase: "completed", fields: supersededFields)
         }
 
-        emitPerfLog(
-            "[Perf] metric=workspace_click_to_focus status=started session=%@ path=%@",
-            sessionID.uuidString,
-            workspacePath
+        log.info(
+            "[Perf] metric=workspace_click_to_focus status=started session=\(sessionID.uuidString, privacy: .public) path=\(workspacePath, privacy: .public)"
         )
         emitWorkspaceClickMetricEvent(phase: "started", fields: startedFields)
     }
@@ -222,11 +218,8 @@ enum PerformanceSignposts {
             "outcome": outcome,
             "duration_ms": String(format: "%.2f", durationMs),
         ]
-        emitPerfLog(
-            "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=%@",
-            durationMs,
-            sessionID.uuidString,
-            outcome
+        log.info(
+            "[Perf] metric=workspace_click_to_focus duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=\(outcome, privacy: .public)"
         )
         emitWorkspaceClickMetricEvent(phase: "completed", fields: fields)
     }
@@ -328,11 +321,8 @@ enum PerformanceSignposts {
                 "outcome": "superseded",
                 "duration_ms": String(format: "%.2f", durationMs),
             ]
-            emitPerfLog(
-                "[Perf] metric=new_workspace_sheet_ready duration_ms=%.2f attempt=%@ trigger=%@ outcome=superseded",
-                durationMs,
-                supersededInterval.attemptID.uuidString,
-                supersededInterval.trigger
+            log.info(
+                "[Perf] metric=new_workspace_sheet_ready duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(supersededInterval.attemptID.uuidString, privacy: .public) trigger=\(supersededInterval.trigger, privacy: .public) outcome=superseded"
             )
             emitNewWorkspaceSheetMetricEvent(phase: "completed", fields: fields)
         }
@@ -343,10 +333,8 @@ enum PerformanceSignposts {
             "attempt": attemptID.uuidString,
             "trigger": trigger,
         ]
-        emitPerfLog(
-            "[Perf] metric=new_workspace_sheet_ready status=started attempt=%@ trigger=%@",
-            attemptID.uuidString,
-            trigger
+        log.info(
+            "[Perf] metric=new_workspace_sheet_ready status=started attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public)"
         )
         emitNewWorkspaceSheetMetricEvent(phase: "started", fields: fields)
 
@@ -377,12 +365,8 @@ enum PerformanceSignposts {
             "outcome": outcome,
             "duration_ms": String(format: "%.2f", durationMs),
         ]
-        emitPerfLog(
-            "[Perf] metric=new_workspace_sheet_ready duration_ms=%.2f attempt=%@ trigger=%@ outcome=%@",
-            durationMs,
-            interval.attemptID.uuidString,
-            interval.trigger,
-            outcome
+        log.info(
+            "[Perf] metric=new_workspace_sheet_ready duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(interval.attemptID.uuidString, privacy: .public) trigger=\(interval.trigger, privacy: .public) outcome=\(outcome, privacy: .public)"
         )
         emitNewWorkspaceSheetMetricEvent(phase: "completed", fields: fields)
     }
@@ -411,12 +395,8 @@ enum PerformanceSignposts {
             "editor": editorID,
             "target": targetKind,
         ]
-        emitPerfLog(
-            "[Perf] metric=open_in_editor_launch status=started attempt=%@ trigger=%@ editor=%@ target=%@",
-            attemptID.uuidString,
-            trigger,
-            editorID,
-            targetKind
+        log.info(
+            "[Perf] metric=open_in_editor_launch status=started attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public) editor=\(editorID, privacy: .public) target=\(targetKind, privacy: .public)"
         )
         emitOpenInEditorMetricEvent(phase: "started", fields: fields)
     }
@@ -453,25 +433,12 @@ enum PerformanceSignposts {
 
         if let failureReason {
             fields["failure_reason"] = failureReason
-            emitPerfLog(
-                "[Perf] metric=open_in_editor_launch duration_ms=%.2f attempt=%@ trigger=%@ editor=%@ target=%@ outcome=%@ failure_reason=%@",
-                durationMs,
-                attemptID.uuidString,
-                trigger,
-                editorID,
-                targetKind,
-                outcome,
-                failureReason
+            log.info(
+                "[Perf] metric=open_in_editor_launch duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public) editor=\(editorID, privacy: .public) target=\(targetKind, privacy: .public) outcome=\(outcome, privacy: .public) failure_reason=\(failureReason, privacy: .public)"
             )
         } else {
-            emitPerfLog(
-                "[Perf] metric=open_in_editor_launch duration_ms=%.2f attempt=%@ trigger=%@ editor=%@ target=%@ outcome=%@",
-                durationMs,
-                attemptID.uuidString,
-                trigger,
-                editorID,
-                targetKind,
-                outcome
+            log.info(
+                "[Perf] metric=open_in_editor_launch duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public) editor=\(editorID, privacy: .public) target=\(targetKind, privacy: .public) outcome=\(outcome, privacy: .public)"
             )
         }
 
@@ -504,12 +471,6 @@ enum PerformanceSignposts {
             lock.unlock()
         }
     #endif
-
-    private static func emitPerfLog(_ format: StaticString, _ args: CVarArg...) {
-        withVaList(args) { pointer in
-            NSLogv(String(describing: format), pointer)
-        }
-    }
 
     private static func emitNewWorkspaceSheetMetricEvent(phase: String, fields: [String: String]) {
         #if DEBUG
