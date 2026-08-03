@@ -565,8 +565,9 @@ def sync_settings(conn: sqlite3.Connection, fetcher: Any) -> None:
         meta_set(conn, "cap_review", variables["FACTORY_REVIEW_DAILY_CAP"])
 
 
-def sync_all(conn: sqlite3.Connection, fetcher: Any, *, days: int) -> dict[str, Any]:
-    floor = (now_utc() - timedelta(days=days)).isoformat().replace("+00:00", "Z")
+def sync_all(conn: sqlite3.Connection, fetcher: Any, *, days: int, now: datetime | None = None) -> dict[str, Any]:
+    now = now or now_utc()
+    floor = (now - timedelta(days=days)).isoformat().replace("+00:00", "Z")
     stats: dict[str, Any] = {"errors": []}
     steps: list[tuple[str, Callable[[], int | None]]] = [
         ("runs", lambda: sync_runs(conn, fetcher, floor)),
@@ -582,7 +583,7 @@ def sync_all(conn: sqlite3.Connection, fetcher: Any, *, days: int) -> dict[str, 
             stats["errors"].append(f"{name}: {error}")
             print(f"[factory-dashboard] {name} sync failed: {error}", file=sys.stderr)
     ok = not stats["errors"]
-    meta_set(conn, "last_sync_at", now_utc().isoformat())
+    meta_set(conn, "last_sync_at", now.isoformat())
     meta_set(conn, "last_sync_ok", "1" if ok else "0")
     if stats["errors"]:
         meta_set(conn, "last_sync_error", "; ".join(stats["errors"]))
@@ -1349,9 +1350,10 @@ def main(argv: list[str] | None = None) -> int:
 
     conn = connect(db_path)
     try:
+        now = now_utc()
         if do_sync:
             fetcher = GitHubFetcher(args.repo)
-            stats = sync_all(conn, fetcher, days=args.days)
+            stats = sync_all(conn, fetcher, days=args.days, now=now)
             summary = ", ".join(
                 f"{name}={stats[name]}" for name in ("runs", "issues", "prs", "cost_rows") if name in stats
             )
@@ -1359,7 +1361,7 @@ def main(argv: list[str] | None = None) -> int:
             if stats["errors"]:
                 print(f"[factory-dashboard] {len(stats['errors'])} source(s) degraded to cache")
         if do_render:
-            metrics = build_metrics(conn, days=args.days, now=now_utc())
+            metrics = build_metrics(conn, days=args.days, now=now)
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(render_html(metrics), encoding="utf-8")
             print(f"[factory-dashboard] wrote {out_path}")
