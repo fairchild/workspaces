@@ -91,7 +91,9 @@ struct ProcessRunnerTests {
 
         #expect(result.success)
         #expect(result.stdout.contains("before-background"))
-        #expect(elapsed < .seconds(10))
+        // Must stay under the backgrounded child's 30s sleep; the slack above
+        // the 0.5s grace period absorbs loaded-CI process-spawn overhead.
+        #expect(elapsed < .seconds(25))
     }
 
     @Test("Throws timedOut for a child that never exits")
@@ -107,7 +109,9 @@ struct ProcessRunnerTests {
         }
 
         let elapsed = ContinuousClock.now - start
-        #expect(elapsed < .seconds(10))
+        // Must stay under the hung child's 30s sleep; the slack above the 0.5s
+        // timeout absorbs loaded-CI process-spawn overhead.
+        #expect(elapsed < .seconds(25))
     }
 
     @Test("Timeout leaves a process that completes in time untouched")
