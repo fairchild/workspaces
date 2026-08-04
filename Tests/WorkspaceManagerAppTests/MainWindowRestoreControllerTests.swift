@@ -170,11 +170,40 @@ struct MainWindowRestoreControllerTests {
         #expect(controller.handledRunID(for: plan([surface()], previousRunID: nil)) == nil)
     }
 
-    @Test("The banner hides once the user acts, and stays hidden")
+    @Test("The banner shows the plan it was offered, and hides once the user acts")
     func dismissHidesTheBanner() {
         var state = MainWindowRestoreState()
+        let offered = plan([surface()])
+        state.offer(offered)
+        #expect(state.bannerPlan == offered)
+
+        state.dismissBanner()
+
+        #expect(state.bannerPlan == nil)
+    }
+
+    /// Dismissal is for the rest of the launch. A later plan computation must not resurrect the
+    /// banner, which it would if `offer` reset the dismissal alongside the plan.
+    @Test("A plan offered after dismissal stays hidden")
+    func offerAfterDismissalStaysHidden() {
+        var state = MainWindowRestoreState()
         state.offer(plan([surface()]))
-        #expect(state.bannerPlan != nil)
+        state.dismissBanner()
+
+        state.offer(plan([surface()], previousRunID: "run-2"))
+
+        #expect(state.bannerPlan == nil)
+    }
+
+    /// Acting on a plan with no run identity persists nothing, but must still hide the banner —
+    /// the two halves are independent, and pairing them would leave such a plan on screen.
+    @Test("Dismissal does not depend on the plan having a run identity")
+    func dismissalIsIndependentOfRunIdentity() {
+        var state = MainWindowRestoreState()
+        let anonymous = plan([surface()], previousRunID: nil)
+        state.offer(anonymous)
+
+        #expect(controller.handledRunID(for: anonymous) == nil)
 
         state.dismissBanner()
 
@@ -214,6 +243,22 @@ struct MainWindowRestoreControllerTests {
         let resume = controller.initialCommand(for: .resumeClaude(agentSessionID: "abc123"))
         #expect(resume == RestoreLaunchCommand.claudeResume(sessionID: "abc123"))
         #expect(resume?.contains("abc123") == true)
+    }
+
+    /// Order and multiplicity both matter: the kill list is consumed in sequence, and two resume
+    /// surfaces on the same directory are two kills. A `Set`-based rewrite would collapse them.
+    @Test("The kill list keeps surface order and does not deduplicate")
+    func killListPreservesOrderAndDuplicates() {
+        let first = URL(fileURLWithPath: "/Users/dev/code/alpha")
+        let second = URL(fileURLWithPath: "/Users/dev/code/beta")
+        let target = plan([
+            surface(action: .resumeClaude(agentSessionID: "a"), directory: first),
+            surface(action: .freshShell, directory: URL(fileURLWithPath: "/Users/dev/code/skip")),
+            surface(action: .resumeClaude(agentSessionID: "b"), directory: first),
+            surface(action: .resumeClaude(agentSessionID: "c"), directory: second),
+        ])
+
+        #expect(controller.tmuxSessionDirectoriesToKill(in: target) == [first, first, second])
     }
 
     @Test("Only resume surfaces have their tmux session killed first")

@@ -3102,6 +3102,8 @@ struct ContentView: View {
     /// Record that the user acted on this plan's prior run (restored or
     /// dismissed), then hide the banner for the rest of this launch. Later
     /// launches that select the same prior run won't re-offer it.
+    /// The dismissal is deliberately outside the `if`: a plan with no run identity persists
+    /// nothing but must still hide the banner. Pairing them would leave such a plan on screen.
     private func markRestorePlanHandled(_ plan: RestorePlan) {
         if let previousRunID = restoreController.handledRunID(for: plan) {
             restoreHandledRunID = previousRunID
