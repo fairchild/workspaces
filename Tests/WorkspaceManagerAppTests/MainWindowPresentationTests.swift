@@ -124,7 +124,7 @@ struct MainWindowPresentationTests {
         #expect(cancelCount == 1)
     }
 
-    @Test("Assigning a new item does not cancel pending work")
+    @Test("Assigning a new item does not cancel pending work, and does not take effect")
     func itemSheetIgnoresNonNilWrites() {
         let box = Box("request")
         var cancelCount = 0
@@ -133,6 +133,8 @@ struct MainWindowPresentationTests {
         binding.wrappedValue = "another"
 
         #expect(cancelCount == 0)
+        // The source is the authority; the binding never writes through to it.
+        #expect(binding.wrappedValue == "request")
     }
 
     /// The progress sheet closes when its owner finishes, never because the user waved it away.
@@ -146,6 +148,48 @@ struct MainWindowPresentationTests {
         binding.wrappedValue = nil
 
         #expect(box.value == "in progress")
+        #expect(binding.wrappedValue == "in progress")
+    }
+
+    // MARK: - Freshness of the autoclosure sources
+
+    /// These three factories read their source through an `@autoclosure`, so every getter call
+    /// must re-evaluate it. Constructing from an already-set value proves nothing — an
+    /// implementation that snapshotted once would look identical. Each of these starts empty and
+    /// asserts the binding sees a value that arrived *after* construction.
+    @Test("A coordinator-backed alert sees an error raised after it was built")
+    func coordinatorAlertReadsTheCurrentValue() {
+        let box = Box<String>()
+        let isPresented = MainWindowPresentation.isPresented(box.value, onDismiss: {})
+
+        #expect(isPresented.wrappedValue == false)
+
+        box.value = "failed"
+
+        #expect(isPresented.wrappedValue)
+    }
+
+    @Test("An item sheet sees a request raised after it was built")
+    func itemSheetReadsTheCurrentValue() {
+        let box = Box<String>()
+        let binding = MainWindowPresentation.item(box.value, onDismiss: {})
+
+        #expect(binding.wrappedValue == nil)
+
+        box.value = "request"
+
+        #expect(binding.wrappedValue == "request")
+    }
+
+    @Test("An undismissable sheet sees progress that started after it was built")
+    func undismissableSheetReadsTheCurrentValue() {
+        let box = Box<String>()
+        let binding = MainWindowPresentation.undismissableItem(box.value)
+
+        #expect(binding.wrappedValue == nil)
+
+        box.value = "in progress"
+
         #expect(binding.wrappedValue == "in progress")
     }
 
