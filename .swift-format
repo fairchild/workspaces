@@ -12,5 +12,9 @@
   "indentConditionalCompilationBlocks": true,
   "indentSwitchCaseLabels": false,
   "spacesAroundRangeFormationOperators": false,
-  "multiElementCollectionTrailingCommas": true
+  "multiElementCollectionTrailingCommas": true,
+  "rules": {
+    "NeverForceUnwrap": true,
+    "NeverUseForceTry": true
+  }
 }

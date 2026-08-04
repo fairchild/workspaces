@@ -1,3 +1,5 @@
+// swift-format-ignore-file: NeverForceUnwrap
+// Test fixtures/helpers force-unwrap known-good literals or generator output; a failure here is a loud test crash, not a user-facing risk.
 //
 //  ClaudeIntegrationLifecycleTests.swift
 //  WorkspaceManagerAppTests
@@ -32,6 +34,17 @@ struct ClaudeIntegrationLifecycleTests {
         func userSettingsModificationDate() async -> Date? { nil }
     }
 
+    /// A per-call socket path so the hook listener never binds the real, machine-wide
+    /// `~/Library/Application Support/<bundleID>/hooks.sock` — that path is `flock`-guarded
+    /// against any real running app instance on the same machine, which the install-once
+    /// assertions below have nothing to do with. Built under `/tmp` directly (not
+    /// `FileManager.default.temporaryDirectory`, whose per-user `/var/folders/.../T/` prefix
+    /// plus a full UUID overflows Darwin's 104-byte `sockaddr_un.sun_path`, so the listener
+    /// would silently fail to bind and every isolation guarantee here would be a no-op).
+    private static func ephemeralSocketURL() -> URL {
+        URL(fileURLWithPath: "/tmp/wm-\(UUID().uuidString.prefix(8)).sock")
+    }
+
     /// Helper: configures the singleton with a fresh ephemeral defaults suite and a
     /// stub installer, then waits for the lifecycle's startup Task to finish so the
     /// (a)synchronous install() invocation has been observed.
@@ -43,7 +56,8 @@ struct ClaudeIntegrationLifecycleTests {
         let stub = StubInstaller()
         ClaudeIntegrationLifecycle.shared._configureForTesting(
             defaults: defaults,
-            installerFactory: { _ in stub }
+            installerFactory: { _ in stub },
+            socketURLOverride: Self.ephemeralSocketURL()
         )
 
         let registry = AgentSessionRegistry()
@@ -93,7 +107,8 @@ struct ClaudeIntegrationLifecycleTests {
         let stub = StubInstaller()
         ClaudeIntegrationLifecycle.shared._configureForTesting(
             defaults: defaults,
-            installerFactory: { _ in stub }
+            installerFactory: { _ in stub },
+            socketURLOverride: Self.ephemeralSocketURL()
         )
 
         var didPublishInstaller = false

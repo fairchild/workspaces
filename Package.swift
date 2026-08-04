@@ -48,7 +48,10 @@ let package = Package(
             dependencies: [
                 .product(name: "GRDB", package: "GRDB.swift")
             ],
-            swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")]
+            swiftSettings: [
+                .enableUpcomingFeature("BareSlashRegexLiterals"),
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
         ),
 
         // ====================================================================
@@ -88,7 +91,10 @@ let package = Package(
                 // install when needed.
                 .copy("Resources/HookForwarders")
             ],
-            swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")],
+            swiftSettings: [
+                .enableUpcomingFeature("BareSlashRegexLiterals"),
+                .enableExperimentalFeature("StrictConcurrency")
+            ],
             linkerSettings: [
                 .linkedLibrary("c++"),
                 .linkedFramework("Carbon"),
@@ -114,7 +120,10 @@ let package = Package(
         .executableTarget(
             name: "WorkspaceManagerCLI",
             dependencies: ["WorkspaceManagerCore"],
-            swiftSettings: [.enableUpcomingFeature("BareSlashRegexLiterals")]
+            swiftSettings: [
+                .enableUpcomingFeature("BareSlashRegexLiterals"),
+                .enableExperimentalFeature("StrictConcurrency")
+            ]
         ),
 
         // ====================================================================

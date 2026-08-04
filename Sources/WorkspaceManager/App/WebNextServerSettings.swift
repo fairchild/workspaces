@@ -28,7 +28,12 @@ enum WebNextServerSettings {
     ) -> WebNextServerConfiguration {
         let configured = defaults.string(forKey: rootStorageKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let root = (configured?.isEmpty == false ? configured! : defaultRoot)
+        let root: String
+        if let configured, !configured.isEmpty {
+            root = configured
+        } else {
+            root = defaultRoot
+        }
         let expanded = (root as NSString).expandingTildeInPath
         return WebNextServerConfiguration(
             webNextRoot: URL(fileURLWithPath: expanded),

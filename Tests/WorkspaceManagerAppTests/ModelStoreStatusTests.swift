@@ -1,3 +1,5 @@
+// swift-format-ignore-file: NeverUseForceTry
+// Test fixtures force-try known-good setup; a failure here is a loud test crash, not a user-facing risk.
 import Foundation
 import SwiftData
 import Testing

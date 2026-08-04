@@ -194,6 +194,8 @@ public struct CommandMarkerParser: Sendable {
         //   "D"                  — command end, no exit code
         //   "D;0"                — command end, exit code 0
         //   "D;137;err=killed"   — command end, exit 137 plus tail
+        // swift-format-ignore: NeverForceUnwrap
+        // Safe: string is non-empty per the guard above.
         let marker = string.first!
         let tail = string.dropFirst()
         switch marker {

@@ -96,6 +96,9 @@ actor UIFixtureLumeRuntimeService: LumeRuntimeServiceProtocol {
         self.errorLogURL = root.appendingPathComponent("lume_daemon.error.log", isDirectory: false)
         self.stepDelayNanoseconds = Self.stepDelay(environment: environment)
 
+        // swift-format-ignore: NeverUseForceTry
+        // Safe: fixture-only, hardcoded literal inputs — parse failure here means the
+        // fixture itself is broken and should crash loudly in dev/screenshot builds.
         let hostProfile = try! LumeHostProfile.parse(
             architecture: "arm64",
             swVersOutput: "26.2",
@@ -103,6 +106,8 @@ actor UIFixtureLumeRuntimeService: LumeRuntimeServiceProtocol {
             developerDirectoryOutput: "/Applications/Xcode.app/Contents/Developer"
         )
         self.hostProfile = hostProfile
+        // swift-format-ignore: NeverUseForceTry
+        // Safe: same fixture-only rationale as above.
         self.imageResolution = try! LumeImageCatalog.default.resolveDefaultMacOSImage(for: hostProfile)
 
         try? fileManager.createDirectory(at: root, withIntermediateDirectories: true)

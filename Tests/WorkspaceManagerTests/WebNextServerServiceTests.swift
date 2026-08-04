@@ -14,12 +14,7 @@ import Testing
 
 @testable import WorkspaceManagerCore
 
-@Suite(
-    "WebNextServerService",
-    .disabled(
-        if: ProcessInfo.processInfo.environment["CI"] != nil,
-        "Spawn-heavy suite with wall-clock readiness budgets; loaded CI runners add 13-15s process-spawn overhead and blow every budget (see 2026-08-03 ci-fallback run). Runner-robust rework tracked in #1163."
-    ))
+@Suite("WebNextServerService")
 struct WebNextServerServiceTests {
     // MARK: - Fixture
 
@@ -44,7 +39,9 @@ struct WebNextServerServiceTests {
 
         func configuration(
             script: String,
-            readinessTimeout: TimeInterval = 20,
+            // 30s leaves headroom above the 13-15s process-spawn overhead measured on
+            // loaded CI runners (2026-08-03 ci-fallback run) atop actual healthz startup.
+            readinessTimeout: TimeInterval = 30,
             readinessPollInterval: TimeInterval = 0.1,
             terminationGracePeriod: TimeInterval = 1,
             watchdogInterval: TimeInterval = 5,
@@ -208,7 +205,7 @@ struct WebNextServerServiceTests {
         #expect(reason.contains("Timed out"))
 
         let serverPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("server.pid")))
-        let died = await waitUntil { !self.processIsAlive(serverPID) }
+        let died = await waitUntil(timeout: 20) { !self.processIsAlive(serverPID) }
         #expect(died, "spawned process should be terminated after readiness timeout")
     }
 
@@ -223,7 +220,7 @@ struct WebNextServerServiceTests {
             \(fixture.healthzServerScript)
             """
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: script, readinessTimeout: 20))
+            configuration: fixture.configuration(script: script, readinessTimeout: 30))
 
         // Trigger start() from a task we cancel almost immediately — mirroring the
         // user closing the embedded pane during a cold build. If the readiness poll
@@ -234,7 +231,9 @@ struct WebNextServerServiceTests {
         try? await Task.sleep(nanoseconds: 50_000_000)  // 50ms: inside the readiness loop
         starter.cancel()
 
-        let ready = await waitUntil(timeout: 10) {
+        // Timeout comfortably exceeds the configured readinessTimeout above so this
+        // wait outlives the service's own budget rather than racing a shorter one.
+        let ready = await waitUntil(timeout: 35) {
             if case .ready = await service.state { return true }
             return false
         }
@@ -259,7 +258,9 @@ struct WebNextServerServiceTests {
             return
         }
         #expect(reason.contains("exited before becoming ready"))
-        #expect(Date().timeIntervalSince(startedAt) < 10, "early exit should fail fast, not wait out the timeout")
+        // 25s under the 30s readinessTimeout ceiling still proves this failed fast rather
+        // than waiting out the timeout, with the same loaded-CI margin as ProcessRunnerTests.
+        #expect(Date().timeIntervalSince(startedAt) < 25, "early exit should fail fast, not wait out the timeout")
     }
 
     @Test("pre-ready leader exit still kills surviving group members")
@@ -283,7 +284,7 @@ struct WebNextServerServiceTests {
         #expect(reason.contains("exited before becoming ready"))
 
         let childPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("child.pid")))
-        let childDied = await waitUntil { !self.processIsAlive(childPID) }
+        let childDied = await waitUntil(timeout: 20) { !self.processIsAlive(childPID) }
         #expect(childDied, "a child left behind by an exited leader must not survive the failure transition")
     }
 
@@ -310,7 +311,7 @@ struct WebNextServerServiceTests {
 
         await service.stop()
 
-        let childDied = await waitUntil { !self.processIsAlive(childPID) }
+        let childDied = await waitUntil(timeout: 20) { !self.processIsAlive(childPID) }
         #expect(childDied, "grandchild should die with the process group")
         #expect(await service.state == .idle)
 
@@ -341,14 +342,14 @@ struct WebNextServerServiceTests {
             return
         }
         let armedURL = fixture.dataDir.appendingPathComponent("term-ignorer-armed")
-        let armed = await waitUntil(timeout: 5) { FileManager.default.fileExists(atPath: armedURL.path) }
+        let armed = await waitUntil(timeout: 20) { FileManager.default.fileExists(atPath: armedURL.path) }
         #expect(armed, "the SIGTERM-ignoring child must be armed before stop() is exercised")
         let childPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("child.pid")))
         #expect(processIsAlive(childPID))
 
         await service.stop()
 
-        let childDied = await waitUntil(timeout: 5) { !self.processIsAlive(childPID) }
+        let childDied = await waitUntil(timeout: 20) { !self.processIsAlive(childPID) }
         #expect(childDied, "a SIGTERM-ignoring group member must be SIGKILLed even after the leader exits")
         #expect(await service.state == .idle)
     }
@@ -375,7 +376,7 @@ struct WebNextServerServiceTests {
         let serverPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("server.pid")))
         kill(serverPID, SIGKILL)
 
-        let failed = await waitUntil(timeout: 5) {
+        let failed = await waitUntil(timeout: 15) {
             if case .failed = await service.state { return true }
             return false
         }
@@ -483,7 +484,7 @@ struct WebNextServerServiceTests {
         }
 
         let logURL = try #require(await service.logFileURL)
-        let redacted = await waitUntil(timeout: 5) {
+        let redacted = await waitUntil(timeout: 15) {
             let contents = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
             return contents.contains("token=<redacted>") && !contents.contains(secret)
         }
@@ -504,7 +505,13 @@ struct WebNextServerServiceTests {
 
     // MARK: - Termination budget
 
-    @Test("stopForTermination finishes under the OS terminate budget and still SIGKILLs")
+    @Test(
+        "stopForTermination finishes under the OS terminate budget and still SIGKILLs",
+        .disabled(
+            if: ProcessInfo.processInfo.environment["CI"] != nil,
+            "Asserts a hard <4s wall-clock compression budget against the OS terminate grace period; loosening the bound to absorb loaded-CI scheduling noise would hide a real regression in the compression logic itself. Runs locally."
+        )
+    )
     func stopForTerminationBudget() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
@@ -526,7 +533,7 @@ struct WebNextServerServiceTests {
             return
         }
         let armedURL = fixture.dataDir.appendingPathComponent("term-ignorer-armed")
-        let armed = await waitUntil(timeout: 5) { FileManager.default.fileExists(atPath: armedURL.path) }
+        let armed = await waitUntil(timeout: 20) { FileManager.default.fileExists(atPath: armedURL.path) }
         #expect(armed, "the SIGTERM-ignoring child must be armed before termination")
         let childPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("child.pid")))
         #expect(processIsAlive(childPID))
@@ -536,7 +543,7 @@ struct WebNextServerServiceTests {
         let elapsed = Date().timeIntervalSince(started)
         #expect(elapsed < 4, "terminate path must finish under the OS budget, took \(elapsed)s")
 
-        let childDied = await waitUntil(timeout: 5) { !self.processIsAlive(childPID) }
+        let childDied = await waitUntil(timeout: 20) { !self.processIsAlive(childPID) }
         #expect(childDied, "a SIGTERM-ignoring member must still be SIGKILLed")
         #expect(await service.state == .idle)
     }

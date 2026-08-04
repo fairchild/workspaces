@@ -90,6 +90,7 @@ public struct WebNextServerConfiguration: Sendable {
         watchdogInterval: TimeInterval = 5,
         watchdogFailureThreshold: Int = 3
     ) {
+        precondition((1...65535).contains(port), "port must be a valid TCP port, got \(port)")
         let resolvedDataDir = dataDir ?? Self.defaultDataDirectory()
         self.webNextRoot = webNextRoot
         self.port = port
@@ -155,6 +156,9 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     }
 
     public var baseURL: URL {
+        // swift-format-ignore: NeverForceUnwrap
+        // Safe: fixed scheme/host plus WebNextServerConfiguration's init-validated port
+        // (1...65535) always forms a valid URL — an out-of-range port can't reach here.
         URL(string: "http://127.0.0.1:\(configuration.port)")!
     }
 
