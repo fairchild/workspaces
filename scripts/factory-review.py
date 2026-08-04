@@ -39,7 +39,15 @@ DEFAULT_DAILY_REVIEW_CAP = 12
 # review, see #1179) would otherwise run unbounded. This is a hard ceiling on
 # raw run attempts, independent of outcome.
 RUNAWAY_CAP_MULTIPLIER = 3
-REVIEW_JOB_NAMES = {"april", "plat"}
+# The step that actually posts a review, keyed by job name. Checking this
+# step's own conclusion (not the job's, and not the overall run's) is what
+# tells "a review was posted" apart from "the job trivially succeeded because
+# the review step was skipped" (already-reviewed dedup, head changed after
+# admission) or "an unrelated sibling job (e.g. telemetry) failed".
+REVIEW_STEP_NAME_BY_JOB = {
+    "april": "Run April counterpart review",
+    "plat": "Run Plat counterpart review",
+}
 CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
@@ -225,25 +233,54 @@ def count_daily_run_attempts(
 
 
 def review_was_posted(jobs: list[dict[str, Any]]) -> bool:
-    return any(
-        str(job.get("name") or "") in REVIEW_JOB_NAMES
-        and str(job.get("conclusion") or "").casefold() == "success"
-        for job in jobs
-        if isinstance(job, dict)
-    )
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        expected_step = REVIEW_STEP_NAME_BY_JOB.get(str(job.get("name") or ""))
+        if expected_step is None:
+            continue
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            if (
+                str(step.get("name") or "") == expected_step
+                and str(step.get("conclusion") or "").casefold() == "success"
+            ):
+                return True
+    return False
 
 
-def count_daily_successful_reviews(
+def count_daily_review_budget(
     runs: list[dict[str, Any]],
     review_posted_by_run: dict[str, bool],
+    current_run_id: str,
 ) -> int:
-    """Count distinct runs today whose reviewer job actually posted a review."""
-    run_ids = {
-        str(run["id"])
+    """Count runs today that hold a claim on the review budget.
+
+    A posted review holds its claim permanently. A run still in progress
+    holds a provisional claim -- this is what stops a burst of concurrent
+    triggers (one per PR) from all being admitted before any of them
+    resolve, since none would yet show as a posted review. A run that
+    finishes without posting a review (skipped admission, or a crash)
+    releases its claim and drops out of the count -- this is what stops a
+    crash loop from permanently consuming budget it never spent.
+    """
+    runs_by_id = {
+        str(run["id"]): run
         for run in runs
         if isinstance(run, dict) and run.get("id") is not None
     }
-    return sum(1 for run_id in run_ids if review_posted_by_run.get(run_id, False))
+    run_ids = set(runs_by_id) | ({current_run_id} if current_run_id else set())
+
+    def holds_claim(run_id: str) -> bool:
+        if review_posted_by_run.get(run_id, False):
+            return True
+        if run_id == current_run_id:
+            return True
+        status = str((runs_by_id.get(run_id) or {}).get("status") or "")
+        return status != "completed"
+
+    return sum(1 for run_id in run_ids if holds_claim(run_id))
 
 
 def authorize_execution(
@@ -267,19 +304,20 @@ def authorize_execution(
             f"({raw_attempts} run attempts) -- possible crash loop"
         )
 
+    # Deliberately not filtered by the run's overall conclusion: an unrelated
+    # sibling job (e.g. telemetry) failing must not erase a review that the
+    # april/plat job actually posted.
     review_posted_by_run = {
         str(run["id"]): review_was_posted(client.workflow_run_jobs(run["id"]))
         for run in runs
-        if isinstance(run, dict)
-        and run.get("id") is not None
-        and str(run.get("conclusion") or "").casefold() == "success"
+        if isinstance(run, dict) and run.get("id") is not None
     }
-    successful_reviews = count_daily_successful_reviews(runs, review_posted_by_run)
-    print(f"Factory review execution budget: {successful_reviews}/{daily_cap}")
-    if successful_reviews >= daily_cap:
+    review_budget = count_daily_review_budget(runs, review_posted_by_run, current_run_id)
+    print(f"Factory review execution budget: {review_budget}/{daily_cap}")
+    if review_budget > daily_cap:
         raise FactoryReviewError(
             f"daily review cap of {daily_cap} is exceeded "
-            f"({successful_reviews} successful reviews posted today)"
+            f"({review_budget} posted or in-flight reviews today)"
         )
 
 

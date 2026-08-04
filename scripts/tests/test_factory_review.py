@@ -148,26 +148,35 @@ class FactoryReviewTests(unittest.TestCase):
                 runs,
             )
 
-    def test_review_was_posted_requires_a_successful_reviewer_job(self) -> None:
+    def test_review_was_posted_requires_the_specific_review_step_to_succeed(self) -> None:
+        def job(name: str, step_name: str, step_conclusion: str, job_conclusion: str = "success"):
+            return {
+                "name": name,
+                "conclusion": job_conclusion,
+                "steps": [{"name": step_name, "conclusion": step_conclusion}],
+            }
+
         self.assertTrue(
             factory_review.review_was_posted(
-                [
-                    {"name": "admit", "conclusion": "success"},
-                    {"name": "april", "conclusion": "success"},
-                ]
+                [job("april", "Run April counterpart review", "success")]
             )
         )
         self.assertFalse(
             factory_review.review_was_posted(
-                [{"name": "admit", "conclusion": "success"}]
+                [job("april", "Run April counterpart review", "skipped")]
             ),
-            "admission alone is not a posted review",
+            "a job that trivially succeeded because the review step was skipped "
+            "(dedup, or head changed after admission) did not post a review",
         )
         self.assertFalse(
             factory_review.review_was_posted(
-                [{"name": "plat", "conclusion": "failure"}]
+                [job("plat", "Run Plat counterpart review", "failure", job_conclusion="failure")]
             ),
-            "a crashed reviewer job did not post a review",
+            "a crashed reviewer step did not post a review",
+        )
+        self.assertFalse(
+            factory_review.review_was_posted([{"name": "admit", "conclusion": "success", "steps": []}]),
+            "admission alone is not a posted review",
         )
 
     def test_daily_cap_counts_only_successful_reviews_not_failed_attempts(self) -> None:
@@ -178,9 +187,16 @@ class FactoryReviewTests(unittest.TestCase):
             {"id": 3, "run_attempt": 1, "status": "completed", "conclusion": "success"},
         ]
 
-        def jobs_for(run_id: int) -> list[dict[str, str]]:
+        def jobs_for(run_id: int) -> list[dict[str, object]]:
             posted = {1: True, 2: False, 3: True}
-            return [{"name": "april", "conclusion": "success" if posted[run_id] else "failure"}]
+            conclusion = "success" if posted[run_id] else "failure"
+            return [
+                {
+                    "name": "april",
+                    "conclusion": conclusion,
+                    "steps": [{"name": "Run April counterpart review", "conclusion": conclusion}],
+                }
+            ]
 
         client = mock.Mock()
         client.workflow_runs_on.return_value = runs
@@ -188,12 +204,66 @@ class FactoryReviewTests(unittest.TestCase):
 
         # Two reviews were posted (runs 1 and 3); run 2 failed after five
         # attempts and posted nothing, so it does not count toward the cap.
-        factory_review.authorize_execution(client, daily_cap=3, runaway_cap=30, current_run_id="4", current_run_attempt=1)
+        # The current attempt ("4") reserves the third and final slot.
+        factory_review.authorize_execution(
+            client, daily_cap=3, runaway_cap=30, current_run_id="4", current_run_attempt=1
+        )
 
-        with self.assertRaisesRegex(factory_review.FactoryReviewError, "2 successful reviews"):
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "daily review cap of 2"):
             factory_review.authorize_execution(
-                client, daily_cap=2, runaway_cap=30, current_run_id="4", current_run_attempt=1
+                client, daily_cap=2, runaway_cap=30, current_run_id="5", current_run_attempt=1
             )
+
+    def test_sibling_job_failure_does_not_erase_a_posted_review(self) -> None:
+        """A telemetry-job failure must not zero out a review the reviewer job posted.
+
+        The run's overall conclusion is 'failure' (telemetry failed), but the
+        april job's own review step succeeded -- that must still count.
+        """
+        runs = [{"id": 1, "run_attempt": 1, "status": "completed", "conclusion": "failure"}]
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        client.workflow_run_jobs.return_value = [
+            {
+                "name": "april",
+                "conclusion": "success",
+                "steps": [{"name": "Run April counterpart review", "conclusion": "success"}],
+            },
+            {"name": "telemetry", "conclusion": "failure", "steps": []},
+        ]
+
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "daily review cap of 1"):
+            factory_review.authorize_execution(
+                client, daily_cap=1, runaway_cap=30, current_run_id="2", current_run_attempt=1
+            )
+
+    def test_in_flight_runs_hold_a_provisional_claim_against_the_cap(self) -> None:
+        """Concurrent triggers across different PRs must not all bypass the cap.
+
+        None of them show as a posted review yet, so without a provisional
+        hold on still-running executions, a burst could admit far more than
+        `daily_cap` concurrent reviews before any of them resolve.
+        """
+        runs = [{"id": 10, "status": "in_progress", "conclusion": None}]
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        client.workflow_run_jobs.return_value = []
+
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "daily review cap of 1"):
+            factory_review.authorize_execution(
+                client, daily_cap=1, runaway_cap=30, current_run_id="20", current_run_attempt=1
+            )
+
+    def test_a_failed_run_releases_its_claim_once_concluded(self) -> None:
+        """A run that finishes without posting a review frees its reservation."""
+        runs = [{"id": 10, "status": "completed", "conclusion": "failure"}]
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        client.workflow_run_jobs.return_value = []
+
+        factory_review.authorize_execution(
+            client, daily_cap=1, runaway_cap=30, current_run_id="20", current_run_attempt=1
+        )
 
     def test_runaway_guard_trips_on_raw_attempts_even_with_no_successful_reviews(
         self,
