@@ -167,6 +167,7 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 - Test observable behavior, not implementation details
 - Protect data contracts: Codable roundtrips, git porcelain format values
 - Use `defer { cleanup() }` for temp directories
+- For behavior-preserving refactors, verify tests bind by mutating the extracted logic and confirming failures; a surviving mutation means the test gets rewritten, not the check dropped.
 
 ## Two Web Apps
 
