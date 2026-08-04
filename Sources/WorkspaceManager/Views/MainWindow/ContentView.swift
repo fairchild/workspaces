@@ -884,14 +884,12 @@ struct ContentView: View {
             .mainWindowErrorAlert($errorPresenter)
             .alert(
                 workspaceOrphanController.confirmationTitle(for: workspaceOrphanState.pendingCleanup),
-                isPresented: Binding(
-                    get: { workspaceOrphanState.pendingCleanup != nil },
-                    set: { if !$0 { workspaceOrphanState.pendingCleanup = nil } }
-                )
+                isPresented: MainWindowPresentation.isPresented($workspaceOrphanState.pendingCleanup)
             ) {
                 Button("Clean", role: .destructive) {
-                    guard let item = workspaceOrphanState.pendingCleanup else { return }
-                    workspaceOrphanState.pendingCleanup = nil
+                    guard
+                        let item = MainWindowPresentation.consume($workspaceOrphanState.pendingCleanup)
+                    else { return }
                     Task { @MainActor in
                         await cleanWorkspaceOrphan(item)
                     }
@@ -906,9 +904,9 @@ struct ContentView: View {
             }
             .alert(
                 "Could Not Complete Provider Setup",
-                isPresented: Binding(
-                    get: { workspaceProviderSetupCoordinator.errorMessage != nil },
-                    set: { if !$0 { workspaceProviderSetupCoordinator.clearError() } }
+                isPresented: MainWindowPresentation.isPresented(
+                    workspaceProviderSetupCoordinator.errorMessage,
+                    onDismiss: { workspaceProviderSetupCoordinator.clearError() }
                 )
             ) {
                 Button("OK", role: .cancel) { workspaceProviderSetupCoordinator.clearError() }
@@ -917,14 +915,13 @@ struct ContentView: View {
             }
             .alert(
                 "Close Terminal?",
-                isPresented: Binding(
-                    get: { viewState.terminalCloseConfirmation != nil },
-                    set: { if !$0 { viewState.terminalCloseConfirmation = nil } }
-                )
+                isPresented: MainWindowPresentation.isPresented($viewState.terminalCloseConfirmation)
             ) {
                 Button("Close", role: .destructive) {
-                    guard let confirmation = viewState.terminalCloseConfirmation else { return }
-                    viewState.terminalCloseConfirmation = nil
+                    guard
+                        let confirmation = MainWindowPresentation.consume(
+                            $viewState.terminalCloseConfirmation)
+                    else { return }
                     forceCloseTerminalTab(sessionID: confirmation.sessionID)
                 }
                 Button("Cancel", role: .cancel) {
@@ -939,13 +936,9 @@ struct ContentView: View {
                 )
             }
             .sheet(
-                item: Binding(
-                    get: { workspaceProviderSetupCoordinator.confirmationRequest },
-                    set: { request in
-                        if request == nil {
-                            workspaceProviderSetupCoordinator.cancelPendingAction()
-                        }
-                    }
+                item: MainWindowPresentation.item(
+                    workspaceProviderSetupCoordinator.confirmationRequest,
+                    onDismiss: { workspaceProviderSetupCoordinator.cancelPendingAction() }
                 )
             ) { request in
                 WorkspaceProviderSetupConfirmationSheet(
@@ -959,9 +952,8 @@ struct ContentView: View {
                 )
             }
             .sheet(
-                item: Binding(
-                    get: { workspaceProviderSetupCoordinator.progressPresentation },
-                    set: { _ in }
+                item: MainWindowPresentation.undismissableItem(
+                    workspaceProviderSetupCoordinator.progressPresentation
                 )
             ) { presentation in
                 WorkspaceProviderSetupProgressSheet(presentation: presentation)
@@ -1129,11 +1121,9 @@ struct ContentView: View {
     }
 
     private var pendingCodePreviewNavigationBinding: Binding<Bool> {
-        Binding(
-            get: { codePreviewNavigationState.pending != nil },
-            set: { isPresented in
-                if !isPresented { codePreviewNavigationState.clearPending() }
-            }
+        MainWindowPresentation.isPresented(
+            codePreviewNavigationState.pending,
+            onDismiss: { codePreviewNavigationState.clearPending() }
         )
     }
 
