@@ -103,8 +103,7 @@ struct ContentView: View {
     @State private var didScheduleInitialWorkspaceStatusSync = false
     @State private var didPrewarmPerfTerminalSurfaces = false
     @State private var workspaceOrphanState = WorkspaceOrphanReconciliationState()
-    @State private var pendingRestorePlan: RestorePlan?
-    @State private var restoreBannerDismissed = false
+    @State private var restoreState = MainWindowRestoreState()
     @AppStorage(TerminalRestoreBannerStorage.handledRunIDKey)
     private var restoreHandledRunID = ""
     @State private var isShowingFeedbackSheet = false
@@ -141,6 +140,7 @@ struct ContentView: View {
     private let maintenanceController = MainWindowMaintenanceController()
     private let sessionSwitcherController = SessionSwitcherPresentationController()
     private let codePreviewController = CodePreviewNavigationController()
+    private let restoreController = MainWindowRestoreController()
 
     private var launchRepositoryService: LaunchRepositoryService {
         LaunchRepositoryService(modelContext: modelContext)
@@ -728,7 +728,7 @@ struct ContentView: View {
                     }
                 )
             }
-            if let plan = pendingRestorePlan, !plan.surfaces.isEmpty, !restoreBannerDismissed {
+            if let plan = restoreState.bannerPlan {
                 RestoreSessionsBanner(
                     sessionCount: plan.surfaces.count,
                     onRestore: {
@@ -3011,19 +3011,23 @@ struct ContentView: View {
             localStateStore: localStateStore,
             normalizePath: RestorePathNormalization.normalize
         ).makePlan(index: index)
-        if plan.surfaces.isEmpty {
+        switch restoreController.disposition(
+            for: plan,
+            handledRunID: restoreHandledRunID,
+            seedKey: .defaultHome,
+            seedDirectory: resolvedDefaultHostDirectory
+        ) {
+        case .noRestorableSurfaces:
             restoreLog.info("[Restore] no restorable surfaces from previous run")
-        } else if plan.wasHandled(handledRunID: restoreHandledRunID.isEmpty ? nil : restoreHandledRunID) {
+        case .alreadyHandled(let previousRunID):
             restoreLog.info(
-                "[Restore] suppressed banner: previous run \(plan.previousRunID ?? "?", privacy: .public) already handled"
+                "[Restore] suppressed banner: previous run \(previousRunID ?? "?", privacy: .public) already handled"
             )
-        } else if !plan.offersMoreThanLaunchSeed(
-            seedKey: .defaultHome, seedDirectory: resolvedDefaultHostDirectory)
-        {
+        case .onlyDuplicatesLaunchSeed:
             restoreLog.info("[Restore] suppressed banner: plan only duplicates the launch seed")
-        } else {
+        case .offer:
             restoreLog.info("[Restore] planned \(plan.surfaces.count, privacy: .public) restorable surface(s)")
-            pendingRestorePlan = plan
+            restoreState.offer(plan)
             autorunRestoreIfRequested(plan)
         }
     }
@@ -3033,7 +3037,8 @@ struct ContentView: View {
     /// if the user clicked Restore, so smoke scripts can exercise the real
     /// resume path without desktop input. No effect outside that environment.
     private func autorunRestoreIfRequested(_ plan: RestorePlan) {
-        guard ProcessInfo.processInfo.environment["WORKSPACES_RESTORE_AUTORUN"] == "1" else { return }
+        guard restoreController.isAutorunRequested(environment: ProcessInfo.processInfo.environment)
+        else { return }
         restoreLog.info("[Restore] autorun: executing planned restore after settle delay")
         Task { @MainActor in
             // Approximate a real banner click: let launch layout settle first.
@@ -3046,11 +3051,13 @@ struct ContentView: View {
     /// Record that the user acted on this plan's prior run (restored or
     /// dismissed), then hide the banner for the rest of this launch. Later
     /// launches that select the same prior run won't re-offer it.
+    /// The dismissal is deliberately outside the `if`: a plan with no run identity persists
+    /// nothing but must still hide the banner. Pairing them would leave such a plan on screen.
     private func markRestorePlanHandled(_ plan: RestorePlan) {
-        if let previousRunID = plan.previousRunID {
+        if let previousRunID = restoreController.handledRunID(for: plan) {
             restoreHandledRunID = previousRunID
         }
-        restoreBannerDismissed = true
+        restoreState.dismissBanner()
     }
 
     /// Launch each surface in a restore plan. Reattach/fresh surfaces are a plain
@@ -3065,7 +3072,7 @@ struct ContentView: View {
         // pre-restore seed (the default-home fallback) left on those keys, so a
         // resume/reattach surface is created fresh and the coordinator's key-reuse
         // path can't drop its initial command.
-        for key in Set(plan.surfaces.map(\.key)) {
+        for key in restoreController.ownedSessionKeys(in: plan) {
             _ = tileTreeStore.retireSessions(inScope: key)
         }
 
@@ -3075,26 +3082,16 @@ struct ContentView: View {
         // the resume surface starts a fresh session instead of `-A`-attaching to
         // the retired seed's leftover shell.
         let tmuxProbe = TmuxSessionProbe()
-        for surface in plan.surfaces {
-            if case .resumeClaude = surface.action {
-                await tmuxProbe.killSession(
-                    GhosttyTerminalConfig.tmuxSessionName(for: surface.directory))
-            }
+        for directory in restoreController.tmuxSessionDirectoriesToKill(in: plan) {
+            await tmuxProbe.killSession(GhosttyTerminalConfig.tmuxSessionName(for: directory))
         }
 
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
         for surface in plan.surfaces {
-            let initialCommand: String?
-            switch surface.action {
-            case .reattachTmux, .freshShell:
-                initialCommand = nil
-            case .resumeClaude(let agentSessionID):
-                initialCommand = RestoreLaunchCommand.claudeResume(sessionID: agentSessionID)
-            }
             let session = activateHostSession(
                 key: surface.key,
                 directory: surface.directory,
-                initialCommand: initialCommand
+                initialCommand: restoreController.initialCommand(for: surface.action)
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
