@@ -9,6 +9,9 @@ import AppKit
 import Foundation
 import WebKit
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "WebNavigationPolicy")
 
 @MainActor
 final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
@@ -86,7 +89,7 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
         withError error: Error
     ) {
         PerformanceSignposts.endWebFirstLoadIfNeeded(outcome: "failed")
-        NSLog("[WebView] Navigation failed: %@", error.localizedDescription)
+        log.error("[WebView] Navigation failed: \(error.localizedDescription, privacy: .public)")
     }
 
     func webView(
@@ -95,7 +98,7 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
         withError error: Error
     ) {
         PerformanceSignposts.endWebFirstLoadIfNeeded(outcome: "failed_provisional")
-        NSLog("[WebView] Provisional navigation failed: %@", error.localizedDescription)
+        log.error("[WebView] Provisional navigation failed: \(error.localizedDescription, privacy: .public)")
     }
 
     func shouldAllow(url: URL) -> Bool {
@@ -151,10 +154,8 @@ final class WebNavigationPolicy: NSObject, WKNavigationDelegate {
         }
 
         if candidateHost != activeAllowedHost {
-            NSLog(
-                "[WebView] Adopting related host %@ for allowed host %@",
-                candidateHost,
-                activeAllowedHost
+            log.info(
+                "[WebView] Adopting related host \(candidateHost, privacy: .public) for allowed host \(self.activeAllowedHost, privacy: .public)"
             )
         }
         activeAllowedHost = candidateHost

@@ -11,6 +11,9 @@
 
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "DesktopUISmokeAutomation")
 
 /// Who drives the "switch selection back to the workspace" step of the smoke. `ui` (default) drives
 /// the real selection binding directly, as a sidebar click does. `api` parks after creating the
@@ -165,7 +168,9 @@ actor DesktopUISmokeEventWriter {
             try handle.write(contentsOf: encoded)
             try handle.write(contentsOf: Data("\n".utf8))
         } catch {
-            NSLog("[DesktopUISmokeAutomation] Failed to write event: %@", error.localizedDescription)
+            log.error(
+                "[DesktopUISmokeAutomation] Failed to write event: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 }

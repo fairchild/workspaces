@@ -19,6 +19,9 @@
 import Darwin
 import Foundation
 import Network
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "AgentHookListener")
 
 public actor AgentHookListener {
     public enum ListenerError: Error, Sendable {
@@ -52,7 +55,19 @@ public actor AgentHookListener {
         registry: any AgentSessionRegistryProtocol,
         commandStatusRegistry: LastCommandStatusRegistry? = nil,
         socketURLOverride: URL? = nil,
-        logger: @escaping @Sendable (String) -> Void = { NSLog("[AgentHookListener] %@", $0) }
+        logger: @escaping @Sendable (String) -> Void = { message in
+            let logger = Logger(subsystem: "com.cloudcompute.workspaces", category: "AgentHookListener")
+            // This sink carries mixed-severity text from call sites throughout the actor, not just this
+            // default's own messages — approximate severity from wording rather than misclassifying
+            // failures/drops as routine.
+            if message.localizedCaseInsensitiveContains("fail") || message.localizedCaseInsensitiveContains("error")
+                || message.localizedCaseInsensitiveContains("drop")
+            {
+                logger.error("[AgentHookListener] \(message, privacy: .public)")
+            } else {
+                logger.info("[AgentHookListener] \(message, privacy: .public)")
+            }
+        }
     ) {
         self.registry = registry
         self.commandStatusRegistry = commandStatusRegistry
@@ -155,7 +170,7 @@ public actor AgentHookListener {
     private nonisolated func readRequest(connection: NWConnection, accumulated: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
             if let error {
-                NSLog("[AgentHookListener] read error: %@", "\(error)")
+                log.error("[AgentHookListener] read error: \(String(describing: error), privacy: .public)")
                 connection.cancel()
                 return
             }
@@ -177,7 +192,7 @@ public actor AgentHookListener {
             }
 
             if buffer.count > 1_048_576 {
-                NSLog("[AgentHookListener] oversized request, dropping")
+                log.error("[AgentHookListener] oversized request, dropping")
                 connection.cancel()
                 return
             }

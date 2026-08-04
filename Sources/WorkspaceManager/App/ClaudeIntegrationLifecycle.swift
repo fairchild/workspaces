@@ -11,6 +11,9 @@ import AppKit
 import Combine
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "ClaudeIntegrationLifecycle")
 
 /// Shared keys for persisted opt-in state. The Settings UI toggle and the lifecycle's
 /// silent reinstall path both read/write the same UserDefaults key so they stay in
@@ -36,14 +39,14 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         _ in
         let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript()
         if eventForwarderPath == nil {
-            NSLog(
+            log.error(
                 "[ClaudeIntegration] event-forwarder.sh extraction failed; command hook forwarder will be skipped this session"
             )
         }
 
         let statusLinePath = ClaudeIntegrationLifecycle.extractStatusLineForwarderScript()
         if statusLinePath == nil {
-            NSLog(
+            log.error(
                 "[ClaudeIntegration] statusline.sh extraction failed; skipping status-line forwarder"
             )
         }
@@ -103,27 +106,27 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
 
             do {
                 try await listener.start()
-                NSLog("[ClaudeIntegration] hook listener started at %@", resolvedSocketPath)
+                log.info("[ClaudeIntegration] hook listener started at \(resolvedSocketPath, privacy: .public)")
             } catch {
-                NSLog("[ClaudeIntegration] hook listener failed to start: %@", "\(error)")
+                log.error(
+                    "[ClaudeIntegration] hook listener failed to start: \(String(describing: error), privacy: .public)"
+                )
             }
 
             if optedIn {
                 do {
                     if await installer.isInstalled() {
-                        NSLog("[ClaudeIntegration] settings already installed; no write needed")
+                        log.info("[ClaudeIntegration] settings already installed; no write needed")
                     } else {
                         try await installer.install()
                         let backup = await installer.mostRecentBackupPath() ?? "(no prior file)"
-                        NSLog(
-                            "[ClaudeIntegration] settings repair succeeded; backup=%@",
-                            backup
+                        log.info(
+                            "[ClaudeIntegration] settings repair succeeded; backup=\(backup, privacy: .public)"
                         )
                     }
                 } catch {
-                    NSLog(
-                        "[ClaudeIntegration] settings repair failed: %@; integration settings may be stale",
-                        "\(error)"
+                    log.error(
+                        "[ClaudeIntegration] settings repair failed: \(String(describing: error), privacy: .public); integration settings may be stale"
                     )
                 }
             }

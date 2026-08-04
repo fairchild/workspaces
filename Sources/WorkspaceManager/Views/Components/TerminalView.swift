@@ -6,6 +6,9 @@
 import AppKit
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalView")
 
 enum TerminalPaneChromePolicy: Equatable, Sendable {
     case minimal
@@ -37,7 +40,7 @@ struct TerminalContainerView: View {
             GhosttyTerminalRepresentable(
                 workingDirectory: workingDirectory,
                 onProcessExit: {
-                    NSLog("[GhosttyTerminal] Process exited for %@", processExitContext)
+                    log.info("[GhosttyTerminal] Process exited for \(processExitContext, privacy: .public)")
                 }
             )
         }
@@ -107,7 +110,9 @@ struct PersistentHostTerminalContainerView: View {
                 contextMenuProvider: contextMenuProvider,
                 onCloseConfirmationRequired: onCloseConfirmationRequired,
                 onProcessExit: {
-                    NSLog("[GhosttyTerminal] Process exited for host session %@", session.id.uuidString)
+                    log.info(
+                        "[GhosttyTerminal] Process exited for host session \(session.id.uuidString, privacy: .public)"
+                    )
                     onProcessExit?()
                 }
             )

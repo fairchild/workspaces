@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "InvestigationDiagnostics")
 
 enum InvestigationDiagnostics {
     private enum InputMode: String {
@@ -135,7 +138,7 @@ enum InvestigationDiagnostics {
             components.append("\(sanitize(key))=\(sanitize(value))")
         }
 
-        NSLog("%@", components.joined(separator: " "))
+        log.info("\(components.joined(separator: " "), privacy: .public)")
     }
 
     private static func sanitize(_ value: String) -> String {

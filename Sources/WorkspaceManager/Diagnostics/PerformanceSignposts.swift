@@ -9,6 +9,8 @@ import Foundation
 import OSLog
 import WorkspaceManagerCore
 
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "PerformanceSignposts")
+
 enum PerformanceSignposts {
     #if DEBUG
         typealias NewWorkspaceSheetMetricObserver = (_ phase: String, _ fields: [String: String]) -> Void
@@ -80,10 +82,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("LaunchToFirstPrompt", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=launch_to_first_prompt duration_ms=%.2f trigger=%@",
-            durationMs,
-            trigger
+        log.info(
+            "[Perf] metric=launch_to_first_prompt duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) trigger=\(trigger, privacy: .public)"
         )
         recordDiagnostic(metric: "launch_to_first_prompt", durationMs: durationMs, labels: ["trigger": trigger])
     }
@@ -96,7 +96,7 @@ enum PerformanceSignposts {
 
         let state = signposter.beginInterval("RepoHydration")
         repoHydrationInterval = ActiveInterval(state: state, startedAt: clock.now)
-        NSLog("[Perf] metric=repo_hydration status=started root=%@", rootPath)
+        log.info("[Perf] metric=repo_hydration status=started root=\(rootPath, privacy: .public)")
     }
 
     static func endRepoHydrationIfNeeded(discoveredCount: Int, importedCount: Int) {
@@ -111,11 +111,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("RepoHydration", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=repo_hydration duration_ms=%.2f discovered=%ld imported=%ld",
-            durationMs,
-            discoveredCount,
-            importedCount
+        log.info(
+            "[Perf] metric=repo_hydration duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) discovered=\(discoveredCount, privacy: .public) imported=\(importedCount, privacy: .public)"
         )
         recordDiagnostic(
             metric: "repo_hydration",
@@ -131,19 +128,15 @@ enum PerformanceSignposts {
         if let existing = repoClickIntervals.removeValue(forKey: sessionID) {
             signposter.endInterval("RepoClickToFocusedInput", existing.state)
             let durationMs = milliseconds(since: existing.startedAt)
-            NSLog(
-                "[Perf] metric=repo_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
-                durationMs,
-                sessionID.uuidString
+            log.info(
+                "[Perf] metric=repo_click_to_focus duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
             )
         }
 
         let state = signposter.beginInterval("RepoClickToFocusedInput")
         repoClickIntervals[sessionID] = ActiveInterval(state: state, startedAt: clock.now)
-        NSLog(
-            "[Perf] metric=repo_click_to_focus status=started session=%@ path=%@",
-            sessionID.uuidString,
-            repoPath
+        log.info(
+            "[Perf] metric=repo_click_to_focus status=started session=\(sessionID.uuidString, privacy: .public) path=\(repoPath, privacy: .public)"
         )
     }
 
@@ -158,11 +151,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("RepoClickToFocusedInput", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=repo_click_to_focus duration_ms=%.2f session=%@ outcome=%@",
-            durationMs,
-            sessionID.uuidString,
-            outcome
+        log.info(
+            "[Perf] metric=repo_click_to_focus duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=\(outcome, privacy: .public)"
         )
     }
 
@@ -198,18 +188,14 @@ enum PerformanceSignposts {
         lock.unlock()
 
         if let supersededFields {
-            emitPerfLog(
-                "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=superseded",
-                supersededDurationMs,
-                sessionID.uuidString
+            log.info(
+                "[Perf] metric=workspace_click_to_focus duration_ms=\(String(format: "%.2f", supersededDurationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
             )
             emitWorkspaceClickMetricEvent(phase: "completed", fields: supersededFields)
         }
 
-        emitPerfLog(
-            "[Perf] metric=workspace_click_to_focus status=started session=%@ path=%@",
-            sessionID.uuidString,
-            workspacePath
+        log.info(
+            "[Perf] metric=workspace_click_to_focus status=started session=\(sessionID.uuidString, privacy: .public) path=\(workspacePath, privacy: .public)"
         )
         emitWorkspaceClickMetricEvent(phase: "started", fields: startedFields)
     }
@@ -232,11 +218,8 @@ enum PerformanceSignposts {
             "outcome": outcome,
             "duration_ms": String(format: "%.2f", durationMs),
         ]
-        emitPerfLog(
-            "[Perf] metric=workspace_click_to_focus duration_ms=%.2f session=%@ outcome=%@",
-            durationMs,
-            sessionID.uuidString,
-            outcome
+        log.info(
+            "[Perf] metric=workspace_click_to_focus duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=\(outcome, privacy: .public)"
         )
         emitWorkspaceClickMetricEvent(phase: "completed", fields: fields)
     }
@@ -266,10 +249,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("WebViewInitialization", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=webview_initialization duration_ms=%.2f outcome=%@",
-            durationMs,
-            outcome
+        log.info(
+            "[Perf] metric=webview_initialization duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) outcome=\(outcome, privacy: .public)"
         )
     }
 
@@ -280,10 +261,8 @@ enum PerformanceSignposts {
         if let existing = webFirstLoadInterval {
             signposter.endInterval("WebFirstLoad", existing.state)
             let durationMs = milliseconds(since: existing.startedAt)
-            NSLog(
-                "[Perf] metric=web_first_load duration_ms=%.2f source=%@ outcome=superseded",
-                durationMs,
-                webFirstLoadSourceID?.uuidString ?? "unknown"
+            log.info(
+                "[Perf] metric=web_first_load duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) source=\(webFirstLoadSourceID?.uuidString ?? "unknown", privacy: .public) outcome=superseded"
             )
         }
 
@@ -307,11 +286,8 @@ enum PerformanceSignposts {
 
         signposter.endInterval("WebFirstLoad", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
-        NSLog(
-            "[Perf] metric=web_first_load duration_ms=%.2f source=%@ outcome=%@",
-            durationMs,
-            sourceID?.uuidString ?? "unknown",
-            outcome
+        log.info(
+            "[Perf] metric=web_first_load duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) source=\(sourceID?.uuidString ?? "unknown", privacy: .public) outcome=\(outcome, privacy: .public)"
         )
     }
 
@@ -345,11 +321,8 @@ enum PerformanceSignposts {
                 "outcome": "superseded",
                 "duration_ms": String(format: "%.2f", durationMs),
             ]
-            emitPerfLog(
-                "[Perf] metric=new_workspace_sheet_ready duration_ms=%.2f attempt=%@ trigger=%@ outcome=superseded",
-                durationMs,
-                supersededInterval.attemptID.uuidString,
-                supersededInterval.trigger
+            log.info(
+                "[Perf] metric=new_workspace_sheet_ready duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(supersededInterval.attemptID.uuidString, privacy: .public) trigger=\(supersededInterval.trigger, privacy: .public) outcome=superseded"
             )
             emitNewWorkspaceSheetMetricEvent(phase: "completed", fields: fields)
         }
@@ -360,10 +333,8 @@ enum PerformanceSignposts {
             "attempt": attemptID.uuidString,
             "trigger": trigger,
         ]
-        emitPerfLog(
-            "[Perf] metric=new_workspace_sheet_ready status=started attempt=%@ trigger=%@",
-            attemptID.uuidString,
-            trigger
+        log.info(
+            "[Perf] metric=new_workspace_sheet_ready status=started attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public)"
         )
         emitNewWorkspaceSheetMetricEvent(phase: "started", fields: fields)
 
@@ -394,12 +365,8 @@ enum PerformanceSignposts {
             "outcome": outcome,
             "duration_ms": String(format: "%.2f", durationMs),
         ]
-        emitPerfLog(
-            "[Perf] metric=new_workspace_sheet_ready duration_ms=%.2f attempt=%@ trigger=%@ outcome=%@",
-            durationMs,
-            interval.attemptID.uuidString,
-            interval.trigger,
-            outcome
+        log.info(
+            "[Perf] metric=new_workspace_sheet_ready duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(interval.attemptID.uuidString, privacy: .public) trigger=\(interval.trigger, privacy: .public) outcome=\(outcome, privacy: .public)"
         )
         emitNewWorkspaceSheetMetricEvent(phase: "completed", fields: fields)
     }
@@ -428,12 +395,8 @@ enum PerformanceSignposts {
             "editor": editorID,
             "target": targetKind,
         ]
-        emitPerfLog(
-            "[Perf] metric=open_in_editor_launch status=started attempt=%@ trigger=%@ editor=%@ target=%@",
-            attemptID.uuidString,
-            trigger,
-            editorID,
-            targetKind
+        log.info(
+            "[Perf] metric=open_in_editor_launch status=started attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public) editor=\(editorID, privacy: .public) target=\(targetKind, privacy: .public)"
         )
         emitOpenInEditorMetricEvent(phase: "started", fields: fields)
     }
@@ -470,25 +433,12 @@ enum PerformanceSignposts {
 
         if let failureReason {
             fields["failure_reason"] = failureReason
-            emitPerfLog(
-                "[Perf] metric=open_in_editor_launch duration_ms=%.2f attempt=%@ trigger=%@ editor=%@ target=%@ outcome=%@ failure_reason=%@",
-                durationMs,
-                attemptID.uuidString,
-                trigger,
-                editorID,
-                targetKind,
-                outcome,
-                failureReason
+            log.info(
+                "[Perf] metric=open_in_editor_launch duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public) editor=\(editorID, privacy: .public) target=\(targetKind, privacy: .public) outcome=\(outcome, privacy: .public) failure_reason=\(failureReason, privacy: .public)"
             )
         } else {
-            emitPerfLog(
-                "[Perf] metric=open_in_editor_launch duration_ms=%.2f attempt=%@ trigger=%@ editor=%@ target=%@ outcome=%@",
-                durationMs,
-                attemptID.uuidString,
-                trigger,
-                editorID,
-                targetKind,
-                outcome
+            log.info(
+                "[Perf] metric=open_in_editor_launch duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) attempt=\(attemptID.uuidString, privacy: .public) trigger=\(trigger, privacy: .public) editor=\(editorID, privacy: .public) target=\(targetKind, privacy: .public) outcome=\(outcome, privacy: .public)"
             )
         }
 
@@ -521,12 +471,6 @@ enum PerformanceSignposts {
             lock.unlock()
         }
     #endif
-
-    private static func emitPerfLog(_ format: StaticString, _ args: CVarArg...) {
-        withVaList(args) { pointer in
-            NSLogv(String(describing: format), pointer)
-        }
-    }
 
     private static func emitNewWorkspaceSheetMetricEvent(phase: String, fields: [String: String]) {
         #if DEBUG

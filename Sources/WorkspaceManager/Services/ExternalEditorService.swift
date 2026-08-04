@@ -1,5 +1,8 @@
 import AppKit
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "ExternalEditorService")
 
 enum ExternalEditorID: String, CaseIterable, Identifiable, Sendable {
     case zed
@@ -210,10 +213,8 @@ final class ExternalEditorService: ExternalEditorServiceProtocol {
                 return overrideURL
             }
 
-            NSLog(
-                "[ExternalEditor] Ignoring %@ override; directory missing at %@",
-                envKey,
-                overrideURL.path
+            log.error(
+                "[ExternalEditor] Ignoring \(envKey, privacy: .public) override; directory missing at \(overrideURL.path, privacy: .public)"
             )
         }
 

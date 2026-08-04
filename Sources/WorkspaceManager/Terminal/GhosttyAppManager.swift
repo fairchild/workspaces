@@ -6,6 +6,9 @@
 import AppKit
 import Foundation
 import GhosttyKit
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "GhosttyAppManager")
 
 @MainActor
 final class GhosttyAppManager: NSObject {
@@ -64,19 +67,19 @@ final class GhosttyAppManager: NSObject {
         guard !initialized else { return }
 
         if let resourcesDirectory = GhosttyResourcesLocator.configureProcessEnvironment() {
-            NSLog("[GhosttyAppManager] using Ghostty resources dir: %@", resourcesDirectory.path)
+            log.info("[GhosttyAppManager] using Ghostty resources dir: \(resourcesDirectory.path, privacy: .public)")
         } else {
-            NSLog("[GhosttyAppManager] Ghostty resources dir unavailable")
+            log.error("[GhosttyAppManager] Ghostty resources dir unavailable")
         }
 
         let initResult = ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv)
         guard initResult == GHOSTTY_SUCCESS else {
-            NSLog("[GhosttyAppManager] ghostty_init failed: %d", initResult)
+            log.error("[GhosttyAppManager] ghostty_init failed: \(initResult, privacy: .public)")
             return
         }
 
         guard let config = makeConfig(for: GhosttyThemePersistence.load()) else {
-            NSLog("[GhosttyAppManager] failed to build initial Ghostty config")
+            log.error("[GhosttyAppManager] failed to build initial Ghostty config")
             return
         }
         self.config = config
@@ -84,7 +87,7 @@ final class GhosttyAppManager: NSObject {
         var runtimeConfig = GhosttyRuntimeConfigFactory.make(userdata: Unmanaged.passUnretained(self).toOpaque())
 
         guard let app = ghostty_app_new(&runtimeConfig, config) else {
-            NSLog("[GhosttyAppManager] ghostty_app_new failed")
+            log.error("[GhosttyAppManager] ghostty_app_new failed")
             return
         }
 
@@ -163,7 +166,7 @@ final class GhosttyAppManager: NSObject {
     /// defaults such as scrollbar and scroll-speed tuning are always loaded.
     private func makeConfig(for pair: GhosttyThemePersistence.Pair) -> ghostty_config_t? {
         guard let config = ghostty_config_new() else {
-            NSLog("[GhosttyAppManager] ghostty_config_new failed")
+            log.error("[GhosttyAppManager] ghostty_config_new failed")
             return nil
         }
 

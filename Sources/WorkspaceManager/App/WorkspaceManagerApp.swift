@@ -10,6 +10,9 @@ import Foundation
 import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceManagerApp")
 
 extension Notification.Name {
     static let showFeedbackSheet = Notification.Name("WorkspacesShowFeedbackSheet")
@@ -384,9 +387,9 @@ private struct MainWindowRootView: View {
         )
         .onOpenURL { url in
             if deepLinkState.enqueue(url: url) {
-                NSLog("[DeepLink] Received request: %@", url.absoluteString)
+                log.info("[DeepLink] Received request: \(url.absoluteString, privacy: .public)")
             } else {
-                NSLog("[DeepLink] Ignored unsupported URL: %@", url.absoluteString)
+                log.info("[DeepLink] Ignored unsupported URL: \(url.absoluteString, privacy: .public)")
             }
         }
         .modifier(AgentSessionRegistryAttacher(tileTreeStore: tileTreeStore))
@@ -466,7 +469,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSLog("[AppDelegate] applicationDidFinishLaunching")
+        log.info("[AppDelegate] applicationDidFinishLaunching")
         PerformanceSignposts.beginLaunchToFirstPromptIfNeeded()
 
         GhosttyAppManager.shared.initializeIfNeeded()
@@ -474,15 +477,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if isCI {
             // CI: fully invisible — no dock icon, no app-switcher, no focus steal.
             NSApp.setActivationPolicy(.accessory)
-            NSLog("[AppDelegate] CI detected: .accessory policy (background)")
+            log.info("[AppDelegate] CI detected: .accessory policy (background)")
         } else {
             // Shared-desktop mode keeps .regular policy + dock presence but
             // suppresses every NSApp.activate call (launch and runtime), via
             // AppActivationPolicy. See WORKSPACES_NO_ACTIVATE_ON_LAUNCH.
             NSApp.setActivationPolicy(.regular)
             AppActivationPolicy.shared.activateIfAllowed()
-            NSLog(
-                "[AppDelegate] activation policy=.regular allowsActivation=\(AppActivationPolicy.shared.allowsActivation)"
+            log.info(
+                "[AppDelegate] activation policy=.regular allowsActivation=\(AppActivationPolicy.shared.allowsActivation, privacy: .public)"
             )
         }
         // Applying after activation-policy setup avoids Dock showing the generic executable icon.
@@ -636,7 +639,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidBecomeActive(_ notification: Notification) {
-        NSLog("[AppDelegate] applicationDidBecomeActive")
+        log.info("[AppDelegate] applicationDidBecomeActive")
         installHelpMenuItems()
         applyApplicationIconIfAvailable()
         GhosttyAppManager.shared.setFocus(true)
@@ -644,7 +647,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidResignActive(_ notification: Notification) {
-        NSLog("[AppDelegate] applicationDidResignActive")
+        log.info("[AppDelegate] applicationDidResignActive")
         GhosttyAppManager.shared.setFocus(false)
     }
 }

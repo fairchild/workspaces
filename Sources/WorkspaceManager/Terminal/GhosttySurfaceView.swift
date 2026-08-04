@@ -7,6 +7,9 @@ import AppKit
 import Foundation
 import GhosttyKit
 import QuartzCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "GhosttySurfaceView")
 
 enum GhosttySurfaceRetirementCloseError: LocalizedError {
     case processStillRunning(title: String)
@@ -334,7 +337,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
 
         GhosttyAppManager.shared.initializeIfNeeded()
         guard let app = GhosttyAppManager.shared.app else {
-            NSLog("[GhosttySurfaceView] Ghostty app is not initialized")
+            log.error("[GhosttySurfaceView] Ghostty app is not initialized")
             readinessDiagnostics.markSurfaceCreateFailed(reason: "ghostty_app_not_initialized")
             return
         }
@@ -344,7 +347,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         }
 
         guard let createdSurface else {
-            NSLog("[GhosttySurfaceView] ghostty_surface_new failed")
+            log.error("[GhosttySurfaceView] ghostty_surface_new failed")
             readinessDiagnostics.markSurfaceCreateFailed(reason: "ghostty_surface_new_failed")
             return
         }

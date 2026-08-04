@@ -189,12 +189,24 @@ main() {
     [[ -n "$log_file" ]] || fail "no launch-dev log found"
 
     activate_and_focus_terminal
+
+    # App logging is os.Logger, which never reaches the launch-dev stdout log;
+    # capture the unified log stream (--level info required) for evidence.
+    local stream_log
+    stream_log="$(mktemp -t shortcut-smoke-stream)"
+    /usr/bin/log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' \
+        --level info --style compact > "$stream_log" 2>/dev/null &
+    local stream_pid=$!
+    sleep 1
+
     send_shortcuts
     sleep 0.8
-    verify_log_evidence "$log_file"
+    kill "$stream_pid" 2>/dev/null || true
+    wait "$stream_pid" 2>/dev/null || true
+    verify_log_evidence "$stream_log"
 
     log "Shortcut pass-through smoke passed"
-    log "Evidence log: $log_file"
+    log "Evidence log: $stream_log (unified log stream; launcher log: $log_file)"
 }
 
 main "$@"

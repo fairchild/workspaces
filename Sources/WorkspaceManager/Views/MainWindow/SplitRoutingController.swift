@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "SplitRoutingController")
 
 @MainActor
 struct SplitRoutingController {
@@ -11,7 +14,7 @@ struct SplitRoutingController {
         focusTerminal: @escaping (UUID) -> Void
     ) {
         guard let request = GhosttyAppManager.splitActionRequest(from: notification) else {
-            NSLog("[SplitRouting] Ignored split action notification with invalid payload")
+            log.error("[SplitRouting] Ignored split action notification with invalid payload")
             return
         }
 

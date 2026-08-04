@@ -6,6 +6,9 @@
 //
 
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "OpenInEditorShortcutFlow")
 
 enum OpenInEditorTarget: Equatable {
     case project(rootURL: URL)
@@ -43,9 +46,8 @@ enum OpenInEditorShortcutFlow {
         trigger: OpenInEditorLaunchTrigger = .unknown
     ) throws {
         guard let target else {
-            NSLog(
-                "[EditorLaunch] metric=open_in_editor_launch status=skipped reason=no_target trigger=%@",
-                trigger.rawValue
+            log.error(
+                "[EditorLaunch] metric=open_in_editor_launch status=skipped reason=no_target trigger=\(trigger.rawValue, privacy: .public)"
             )
             return
         }

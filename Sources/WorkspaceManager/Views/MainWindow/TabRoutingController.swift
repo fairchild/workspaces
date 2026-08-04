@@ -1,5 +1,8 @@
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "TabRoutingController")
 
 @MainActor
 struct TabRoutingController {
@@ -12,7 +15,7 @@ struct TabRoutingController {
         requestCloseTabs: @escaping ([UUID]) -> Void
     ) {
         guard let request = GhosttyAppManager.tabActionRequest(from: notification) else {
-            NSLog("[TabRouting] Ignored tab action notification with invalid payload")
+            log.error("[TabRouting] Ignored tab action notification with invalid payload")
             return
         }
 

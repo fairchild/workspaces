@@ -10,6 +10,9 @@ import AppKit
 import Combine
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "AutomationIntegrationLifecycle")
 
 @MainActor
 final class AutomationIntegrationLifecycle: ObservableObject {
@@ -105,7 +108,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         } catch {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             handleRegistry.removeAll()
-            NSLog("[AutomationIntegration] listener unavailable: %@", "\(error)")
+            log.error("[AutomationIntegration] listener unavailable: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -222,7 +225,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         self.socketPath = startedSocketPath
         didStart = true
         self.startTask = nil
-        NSLog("[AutomationIntegration] listener started at %@", listener.socketPath)
+        log.info("[AutomationIntegration] listener started at \(listener.socketPath, privacy: .public)")
 
         // Mint the per-launch operator credential exactly once, on first start. Opted-in launches
         // register an operator handle and write the credential next to the socket; every other
@@ -237,7 +240,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             credentialURL: credentialURL
         )
         if credential != nil {
-            NSLog("[AutomationIntegration] operator credential minted at %@", credentialURL.path)
+            log.info("[AutomationIntegration] operator credential minted at \(credentialURL.path, privacy: .public)")
         }
 
         teardownObserver = NotificationCenter.default.addObserver(

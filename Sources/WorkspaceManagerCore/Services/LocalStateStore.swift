@@ -9,6 +9,9 @@
 
 import Foundation
 @preconcurrency import GRDB
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "LocalStateStore")
 
 public enum LocalStateStoreMode: Codable, Equatable, Sendable {
     case persistent(path: String)
@@ -100,14 +103,11 @@ public enum LocalStateStoreBootstrapper {
             Task.detached(priority: .utility) {
                 do {
                     let outcome = try await store.runRetention()
-                    NSLog(
-                        "[LocalStateStore] retention: sessions=%d agent_events=%d diagnostics=%d integrity=%@",
-                        outcome.deletedEndedSessions,
-                        outcome.deletedAgentEvents,
-                        outcome.deletedDiagnosticEvents,
-                        outcome.integrityOK ? "ok" : outcome.integrityDetail)
+                    log.info(
+                        "[LocalStateStore] retention: sessions=\(outcome.deletedEndedSessions, privacy: .public) agent_events=\(outcome.deletedAgentEvents, privacy: .public) diagnostics=\(outcome.deletedDiagnosticEvents, privacy: .public) integrity=\((outcome.integrityOK ? "ok" : outcome.integrityDetail), privacy: .public)"
+                    )
                 } catch {
-                    NSLog("[LocalStateStore] retention failed: %@", String(describing: error))
+                    log.error("[LocalStateStore] retention failed: \(String(describing: error), privacy: .public)")
                 }
             }
             return LocalStateStoreBootstrapResult(
@@ -117,7 +117,7 @@ public enum LocalStateStoreBootstrapper {
             )
         } catch {
             let message = "Failed to open local state store: \(String(describing: error))"
-            NSLog("[LocalStateStore] %@", message)
+            log.error("[LocalStateStore] \(message, privacy: .public)")
             return LocalStateStoreBootstrapResult(
                 store: nil,
                 mode: .unavailable,

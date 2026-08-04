@@ -10,6 +10,9 @@ import AppKit
 import Foundation
 import SwiftData
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "UIFixtureSeeder")
 
 @MainActor
 enum UIFixtureSeeder {
@@ -118,14 +121,14 @@ enum UIFixtureSeeder {
         do {
             try context.save()
         } catch {
-            NSLog("[UIFixture] Failed to seed fixture data: %@", String(describing: error))
+            log.error("[UIFixture] Failed to seed fixture data: \(String(describing: error), privacy: .public)")
         }
     }
 
     /// Reads `WORKSPACES_UI_FIXTURE_AGENT_STATES`, resolves workspace names against
     /// `context`, ensures a `HostTerminalSession` exists for each, then applies
     /// synthetic agent events so the registry lands at the requested
-    /// `AgentRunState`. Invalid entries log via `NSLog` and are skipped.
+    /// `AgentRunState`. Invalid entries log via `Logger` and are skipped.
     ///
     /// Best-effort: never throws, never crashes. Returns the number of workspace
     /// states applied successfully (useful for tests).
@@ -156,7 +159,8 @@ enum UIFixtureSeeder {
                     $0.name.caseInsensitiveCompare(entry.workspaceName) == .orderedSame
                 })
             else {
-                NSLog("[UIFixture] No fixture workspace named '%@' — skipping", entry.workspaceName)
+                log.error(
+                    "[UIFixture] No fixture workspace named '\(entry.workspaceName, privacy: .public)' — skipping")
                 continue
             }
 
@@ -213,7 +217,8 @@ enum UIFixtureSeeder {
                     $0.name.caseInsensitiveCompare(entry.workspaceName) == .orderedSame
                 })
             else {
-                NSLog("[UIFixture] No fixture workspace named '%@' — skipping", entry.workspaceName)
+                log.error(
+                    "[UIFixture] No fixture workspace named '\(entry.workspaceName, privacy: .public)' — skipping")
                 continue
             }
 
@@ -253,17 +258,21 @@ enum UIFixtureSeeder {
         raw.split(separator: ",", omittingEmptySubsequences: true).compactMap { fragment in
             let pair = fragment.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
             guard pair.count == 2 else {
-                NSLog("[UIFixture] Malformed agent-state entry '%@' — expected name:state", String(fragment))
+                log.error(
+                    "[UIFixture] Malformed agent-state entry '\(String(fragment), privacy: .public)' — expected name:state"
+                )
                 return nil
             }
             let name = pair[0].trimmingCharacters(in: .whitespaces)
             let stateToken = pair[1].trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else {
-                NSLog("[UIFixture] Empty workspace name in '%@' — skipping", String(fragment))
+                log.error("[UIFixture] Empty workspace name in '\(String(fragment), privacy: .public)' — skipping")
                 return nil
             }
             guard let run = runState(for: stateToken) else {
-                NSLog("[UIFixture] Unknown agent state '%@' for '%@' — skipping", stateToken, name)
+                log.error(
+                    "[UIFixture] Unknown agent state '\(stateToken, privacy: .public)' for '\(name, privacy: .public)' — skipping"
+                )
                 return nil
             }
             return ParsedEntry(workspaceName: name, run: run)
@@ -314,17 +323,21 @@ enum UIFixtureSeeder {
         raw.split(separator: ",", omittingEmptySubsequences: true).compactMap { fragment in
             let pair = fragment.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
             guard pair.count == 2 else {
-                NSLog("[UIFixture] Malformed command-status entry '%@' — expected name:status", String(fragment))
+                log.error(
+                    "[UIFixture] Malformed command-status entry '\(String(fragment), privacy: .public)' — expected name:status"
+                )
                 return nil
             }
             let name = pair[0].trimmingCharacters(in: .whitespaces)
             let stateToken = pair[1].trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else {
-                NSLog("[UIFixture] Empty workspace name in '%@' — skipping", String(fragment))
+                log.error("[UIFixture] Empty workspace name in '\(String(fragment), privacy: .public)' — skipping")
                 return nil
             }
             guard let status = commandStatus(for: stateToken) else {
-                NSLog("[UIFixture] Unknown command status '%@' for '%@' — skipping", stateToken, name)
+                log.error(
+                    "[UIFixture] Unknown command status '\(stateToken, privacy: .public)' for '\(name, privacy: .public)' — skipping"
+                )
                 return nil
             }
             return ParsedCommandStatusEntry(workspaceName: name, status: status)
@@ -381,7 +394,7 @@ enum UIFixtureSeeder {
         do {
             return try context.fetch(FetchDescriptor<Workspace>())
         } catch {
-            NSLog("[UIFixture] Could not fetch workspaces: %@", String(describing: error))
+            log.error("[UIFixture] Could not fetch workspaces: \(String(describing: error), privacy: .public)")
             return []
         }
     }

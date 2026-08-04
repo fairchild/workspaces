@@ -1,5 +1,11 @@
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(
+    subsystem: "com.cloudcompute.workspaces",
+    category: "MainWindowLaunchActionHandler"
+)
 
 @MainActor
 struct MainWindowLaunchActionHandler {
@@ -30,17 +36,13 @@ struct MainWindowLaunchActionHandler {
             return false
 
         case .clearDeepLinkNoMatch(let request):
-            NSLog("[DeepLink] No workspace match for cwd: %@", request.cwd)
+            log.error("[DeepLink] No workspace match for cwd: \(request.cwd, privacy: .public)")
             actions.clearDeepLink()
             return true
 
         case .selectDeepLinkedWorkspace(let request, let workspace):
-            NSLog(
-                "[DeepLink] Matched workspace '%@' for cwd '%@' (session_id=%@ source=%@)",
-                workspace.name,
-                request.cwd,
-                request.sessionID ?? "",
-                request.source ?? ""
+            log.info(
+                "[DeepLink] Matched workspace '\(workspace.name, privacy: .public)' for cwd '\(request.cwd, privacy: .public)' (session_id=\(request.sessionID ?? "", privacy: .public) source=\(request.source ?? "", privacy: .public))"
             )
             actions.discardPendingRemoteConnection("deep_link_selected")
             actions.selectWorkspace(
@@ -53,12 +55,8 @@ struct MainWindowLaunchActionHandler {
             return false
 
         case .selectDeepLinkedRepo(let request, let repo):
-            NSLog(
-                "[DeepLink] Matched repo '%@' for cwd '%@' (session_id=%@ source=%@)",
-                repo.name,
-                request.cwd,
-                request.sessionID ?? "",
-                request.source ?? ""
+            log.info(
+                "[DeepLink] Matched repo '\(repo.name, privacy: .public)' for cwd '\(request.cwd, privacy: .public)' (session_id=\(request.sessionID ?? "", privacy: .public) source=\(request.source ?? "", privacy: .public))"
             )
             actions.discardPendingRemoteConnection("deep_link_selected")
             actions.selectRepoTerminal(
@@ -72,16 +70,15 @@ struct MainWindowLaunchActionHandler {
 
         case .importDeepLinkedRepo(let request, let repoRoot):
             guard let repo = actions.importRepo(repoRoot) else {
-                NSLog("[DeepLink] Failed to import repo for cwd '%@' repo_root='%@'", request.cwd, repoRoot)
+                log.error(
+                    "[DeepLink] Failed to import repo for cwd '\(request.cwd, privacy: .public)' repo_root='\(repoRoot, privacy: .public)'"
+                )
                 actions.clearDeepLink()
                 return true
             }
 
-            NSLog(
-                "[DeepLink] Imported repo '%@' for cwd '%@' (repo_root=%@)",
-                repo.name,
-                request.cwd,
-                repoRoot
+            log.info(
+                "[DeepLink] Imported repo '\(repo.name, privacy: .public)' for cwd '\(request.cwd, privacy: .public)' (repo_root=\(repoRoot, privacy: .public))"
             )
             actions.discardPendingRemoteConnection("deep_link_repo_imported")
             actions.selectRepoTerminal(
@@ -108,10 +105,8 @@ struct MainWindowLaunchActionHandler {
 
         case .recordMissingPreviewBootstrap(let configuration):
             state.didApplyFixturePreviewBootstrap = true
-            NSLog(
-                "[UIFixture] Preview bootstrap skipped (repo=%@ path=%@)",
-                configuration.repoName,
-                configuration.relativePath
+            log.error(
+                "[UIFixture] Preview bootstrap skipped (repo=\(configuration.repoName, privacy: .public) path=\(configuration.relativePath, privacy: .public))"
             )
             return true
 
@@ -122,26 +117,22 @@ struct MainWindowLaunchActionHandler {
             state.selectedCodePreview = selection
             state.isTerminalPanelVisible = true
             state.isRightPaneVisible = true
-            NSLog(
-                "[UIFixture] Preview bootstrap applied (repo=%@ file=%@)",
-                repo.name,
-                selection.relativePath
+            log.info(
+                "[UIFixture] Preview bootstrap applied (repo=\(repo.name, privacy: .public) file=\(selection.relativePath, privacy: .public))"
             )
             return false
 
         case .recordMissingWebBootstrap(let targetName):
             state.didApplyFixtureWebBootstrap = true
-            NSLog("[UIFixture] Web bootstrap skipped (target=%@)", targetName)
+            log.error("[UIFixture] Web bootstrap skipped (target=\(targetName, privacy: .public))")
             return true
 
         case .applyWebBootstrap(let targetName, let selectedSource):
             state.didApplyFixtureWebBootstrap = true
             state.didResolveInitialSurface = true
             actions.selectWebSource(selectedSource)
-            NSLog(
-                "[UIFixture] Web bootstrap applied (target=%@ selected=%@)",
-                targetName,
-                selectedSource.name
+            log.info(
+                "[UIFixture] Web bootstrap applied (target=\(targetName, privacy: .public) selected=\(selectedSource.name, privacy: .public))"
             )
             return false
 

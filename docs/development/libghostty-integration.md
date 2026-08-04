@@ -351,11 +351,13 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - `./scripts/shortcut-pass-through-smoke.sh` is intentionally not shared-desktop-safe and requires `Ghostty Splits` mode
    - Optional scripted smoke: `mise run verify-shortcuts`
 8. Verify split runtime path in logs:
-   - `tail -n 80 .dev-data/logs/launch-dev-*.log`
-   - Expect `"[GhosttyAppManager] action=new_split direction="`
+   - App logging is `os.Logger` (subsystem `com.cloudcompute.workspaces`), not `NSLog` — it does **not** appear in `.dev-data/logs/launch-dev-*.log`, which only captures the process's redirected stdout/stderr. Start streaming *before* triggering the shortcut in step 7:
+     `/usr/bin/log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact`
+   - Expect `"[GhosttyAppManager] action=new_split direction="` in the stream
    - Optional resize/equalize traces:
      - `"[GhosttyAppManager] action=resize_split direction="`
      - `"[GhosttyAppManager] action=equalize_splits"`
+   - `log` here means `/usr/bin/log`, not the zsh `log` builtin — call it by absolute path or it will fail with a shell error
 9. If you need input-driving automation without foreground activation on a shared desktop, escalate to Tart/Lume or a separate macOS user/session instead of forcing local focus.
 
 If shortcut behavior regresses, first confirm step 4 before changing code.

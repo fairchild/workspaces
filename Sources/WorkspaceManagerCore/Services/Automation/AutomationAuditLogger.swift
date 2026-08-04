@@ -1,4 +1,7 @@
 import Foundation
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "AutomationAuditLogger")
 
 public actor AutomationAuditLogger {
     public struct Event: Codable, Sendable, Equatable {
@@ -105,7 +108,7 @@ public actor AutomationAuditLogger {
             try handle.write(contentsOf: data)
             try handle.write(contentsOf: Data("\n".utf8))
         } catch {
-            NSLog("[AutomationAudit] append failed: %@", "\(error)")
+            log.error("[AutomationAudit] append failed: \(String(describing: error), privacy: .public)")
         }
     }
 
