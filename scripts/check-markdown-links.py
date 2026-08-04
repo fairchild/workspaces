@@ -48,10 +48,18 @@ def strip_non_prose(text: str) -> str:
 def is_checkable_target(target: str) -> bool:
     if target.startswith(("http://", "https://", "mailto:", "tel:", "#")):
         return False
-    # Placeholder-y example targets ("url", "link", "<run url>") carry no
-    # path shape (no '.' and no '/') and aren't meant to resolve.
     path_part = target.split("#", 1)[0].strip().strip("<>")
-    return "." in path_part or "/" in path_part
+    if not path_part:
+        return False
+    if "." in path_part or "/" in path_part:
+        return True
+    # A bare, all-lowercase word with no path shape ("url", "link", "run
+    # url") is prose-example filler, not a target. A real extensionless
+    # filename (LICENSE, Makefile) always has an uppercase char, so it
+    # still gets checked.
+    if " " in path_part or path_part.islower():
+        return False
+    return True
 
 
 def is_excluded(path: Path) -> bool:
