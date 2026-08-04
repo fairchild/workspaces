@@ -3021,6 +3021,7 @@ struct ContentView: View {
     @MainActor
     private func computeRestorePlanIfEnabled() async {
         guard restoreSessionsOnLaunchEnabled, let localStateStore else { return }
+        await UIFixtureContinuitySeeder.waitUntilSeeded()
         let index = RestoreTargetIndexBuilder(
             homeDirectoryPath: resolvedDefaultHostDirectory.path,
             normalizePath: RestorePathNormalization.normalize

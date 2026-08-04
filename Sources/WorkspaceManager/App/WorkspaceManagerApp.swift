@@ -42,6 +42,7 @@ struct WorkspaceManagerApp: App {
         if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
             UIFixtureSeeder.seedDataIfNeeded(in: bootstrap.container.mainContext)
         }
+        UIFixtureContinuitySeeder.seedIfNeeded()
 
         let localStateBootstrap = LocalStateStoreBootstrapper.bootstrap(
             launchEnvironment: ProcessInfo.processInfo.environment

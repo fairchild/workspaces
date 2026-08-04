@@ -11,13 +11,15 @@
 # Grammar for the fixture env values lives in docs/development/ui-fixture-mode.md.
 
 # fixture_resolve_scenario <name>
-# Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, and FIXTURE_SCENARIO_ID
-# for the named scenario. "inline:<agent-states>" passes a raw agent-states spec
-# straight through. Returns non-zero (and sets nothing) for an unknown name.
+# Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, FIXTURE_SEED_RESTORE_BANNER,
+# and FIXTURE_SCENARIO_ID for the named scenario. "inline:<agent-states>" passes a raw
+# agent-states spec straight through. Returns non-zero (and sets nothing) for an
+# unknown name.
 fixture_resolve_scenario() {
     local name="$1"
     FIXTURE_AGENT_STATES=""
     FIXTURE_COMMAND_STATUSES=""
+    FIXTURE_SEED_RESTORE_BANNER=""
     FIXTURE_SCENARIO_ID=""
 
     if [[ "$name" == inline:* ]]; then
@@ -36,6 +38,14 @@ fixture_resolve_scenario() {
         attention-only)
             FIXTURE_AGENT_STATES="bugfix-422:awaitingInput"
             ;;
+        restore-banner)
+            # Seeds a synthetic previous-run continuity row (issue #1192) so the
+            # cold-start restore banner renders even though --clean-data wipes
+            # LocalStateStore before every evidence-lane capture. Also requires the
+            # restoreSessionsOnLaunch experiment, which app-capture.sh force-enables
+            # alongside the seed.
+            FIXTURE_SEED_RESTORE_BANNER=1
+            ;;
         clean)
             ;;
         *)
@@ -49,5 +59,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner clean
 }
