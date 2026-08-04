@@ -2714,6 +2714,9 @@ struct ContentView: View {
     /// surrounding selection has already changed. The dirty-edit veto deliberately does not fire
     /// here — a full repo/workspace-switch prompt is deferred (#704 Phase 4 follow-up); this path
     /// only tears the preview down alongside its context.
+    /// Commits `.close` directly and must keep doing so: routing this through
+    /// `codePreviewController.closeAction` would make repo/workspace removal prompt for unsaved
+    /// edits instead of tearing the preview down, and every controller test would stay green.
     private func clearCodePreview() {
         commitCodePreviewNavigation(.close)
     }

@@ -187,6 +187,26 @@ struct CodePreviewNavigationControllerTests {
         #expect(state.canCommitDeferred(capturedGeneration: captured, hasUnsavedEdits: false))
     }
 
+    /// The same rule with a real suspension between capture and check, mirroring the production
+    /// shape: capture the generation, await, then read. This pins the ordering; it does not reach
+    /// the `@State` wrapper itself, so it would not catch production snapshotting the struct into
+    /// a local before the Task instead of reading through the wrapper after it. That property was
+    /// verified out-of-band by a hosted-SwiftUI probe during review — see the PR's Review loop.
+    @Test("A navigation raised across a suspension still supersedes the captured target")
+    func deferredCommitIsVetoedAcrossASuspension() async {
+        var state = CodePreviewNavigationState()
+        state.raise(.open(selection("b.swift")))
+        let captured = state.generation
+
+        await Task.yield()
+        state.raise(.open(selection("c.swift")))
+        await Task.yield()
+
+        #expect(
+            state.canCommitDeferred(capturedGeneration: captured, hasUnsavedEdits: false) == false
+        )
+    }
+
     /// End-to-end ordering over the real sequence: open A dirty → prompt → Save → user opens C
     /// mid-save → the save resolves. C must win.
     @Test("Across a full save-then-supersede sequence the newer navigation wins")
