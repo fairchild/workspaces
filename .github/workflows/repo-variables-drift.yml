@@ -14,6 +14,7 @@ on:
       - "config/github/repo-variables.json"
       - "scripts/check-repo-variables.py"
       - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
   workflow_dispatch:
 
 permissions:

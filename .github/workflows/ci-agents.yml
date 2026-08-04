@@ -6,6 +6,7 @@ on:
     paths:
       - ".agents/**"
       - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
       - "scripts/tests/**"
       - "scripts/agent-triage-request.py"
       - "config/github/repo-variables.json"
@@ -25,6 +26,7 @@ on:
     paths:
       - ".agents/**"
       - ".github/workflows/*.yml"
+      - ".github/workflows/*.yaml"
       - "scripts/tests/**"
       - "scripts/agent-triage-request.py"
       - "config/github/repo-variables.json"
