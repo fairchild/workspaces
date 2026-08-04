@@ -39,7 +39,7 @@ Interpretation: no measurable idle-memory regression from linking WebKit when th
 Date/time artifact:
 
 - benchmark JSON: `output/tart-webview-benchmark/live/20260228-204558/benchmark.json`
-- script: `scripts/tart-webview-memory-benchmark.sh`
+- script: `scripts/tart-webview-memory-benchmark.sh` (removed as dead in #1168; this benchmark was a one-off)
 - VM: `sequoia-base`
 - binary: `release`
 - runs: `5`

@@ -25,4 +25,4 @@ Open `index.html` in a browser — the JS detects the missing webkit handler and
 
 ## Bridge
 
-The app pushes live workspace data to `window.RepoLanding.onData(data)` and listens for actions via `window.webkit.messageHandlers.repoLanding.postMessage({ action, ... })`. See [docs/development/repo-landing-overrides.md](../../docs/development/repo-landing-overrides.md) for the full contract.
+The app pushes live workspace data to `window.RepoLanding.onData(data)` and listens for actions via `window.webkit.messageHandlers.repoLanding.postMessage({ action, ... })`. See `RepoLandingView.swift` for the full contract.

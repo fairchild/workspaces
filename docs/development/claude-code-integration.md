@@ -6,7 +6,7 @@ native UI: sidebar status, live status fields, macOS notifications, tab titles
 from terminal state, and transcript viewing.
 
 This document describes the shipped architecture. Deferred programmatic/headless
-Claude work is tracked separately in `backlog/headless-claude-programmatic-runner.md`.
+Claude work is tracked separately in `backlog/done/headless-claude-programmatic-runner.md`.
 
 ## Agent Update Intake
 
@@ -298,7 +298,7 @@ Supported consumption shapes:
 Known transcript record types get richer rendering. Unknown records decode to an
 opaque JSON case and render collapsed. Transcript data is not used to reconstruct
 registry state on app launch. If crash recovery becomes necessary, prefer a
-host-owned durable `AgentEvent` log; see `backlog/agent-event-log-recovery.md`.
+host-owned durable `AgentEvent` log; see `backlog/done/agent-event-log-recovery.md`.
 
 ## Settings Installer
 
@@ -418,9 +418,9 @@ Perf suites remain opt-in with `WORKSPACES_PERF_RUN=1`.
 ## Deferred Ideas
 
 - Programmatic/headless Claude execution:
-  `backlog/headless-claude-programmatic-runner.md`
+  `backlog/done/headless-claude-programmatic-runner.md`
 - Host-owned durable event-log recovery:
-  `backlog/agent-event-log-recovery.md`
+  `backlog/done/agent-event-log-recovery.md`
 
 ## Historical PR Sequence
 

@@ -1,0 +1,38 @@
+# Catches the "git mv a plan into backlog/done/ and nothing re-points
+# referrers" breakage class before merge — see issue #1155. Deliberately its
+# own workflow (not a job in ci.yml): ci.yml's path filter keeps the
+# expensive macOS build scoped to product/build/release inputs, and this
+# check is a fast, docs-scoped, ubuntu-latest job that shouldn't ride along
+# with every doc change on that filter.
+name: Docs Link Check
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "**/*.md"
+      - "scripts/check-markdown-links.py"
+      - ".github/workflows/docs-link-check.yml"
+  pull_request:
+    paths:
+      - "**/*.md"
+      - "scripts/check-markdown-links.py"
+      - ".github/workflows/docs-link-check.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-link-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Check Markdown links
+        run: uv run scripts/check-markdown-links.py

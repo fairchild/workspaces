@@ -160,7 +160,7 @@ Use these scripts for day-to-day UI verification:
 - In shared-desktop mode, pair the launch with `./scripts/capture-window.sh` and pause your own input during capture.
 - On startup failure, writes a diagnostics bundle under `.dev-data/logs/launch-diagnostics-<timestamp>/`.
 - Use `./scripts/launch-dev.sh --watch` to keep tailing the launch log until interrupted.
-- See `backlog/isolation-strategies.md` for long-form architecture context.
+- See `backlog/done/isolation-strategies.md` for long-form architecture context.
 
 2. `./scripts/dev-smoke.sh`
 - Fast debug-app startup smoke for local development.

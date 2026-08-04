@@ -76,4 +76,4 @@ Full exploration: `EXPLORATION-llm-driven-dashboard.md`.
 
 ## Next step
 
-`backlog/spaces-agent-discovery-dashboard-plan.md` — Phase 1: build repo scanning + dashboard into the Next.js app.
+`backlog/done/spaces-agent-discovery-dashboard-plan.md` — Phase 1: build repo scanning + dashboard into the Next.js app.

@@ -178,8 +178,8 @@ time someone touches the area.
 - `web/src/app/dashboard/components/use-terminal-sessions.ts` — created in #302, fixed in #303 (INP) and #305 (reset effect).
 - `web/src/app/dashboard/components/terminal-panel.tsx` — refactored in #302, simplified in #305.
 - `web/src/lib/agent-sessions.ts` — migration for `terminal → shell` rename (#302).
-- `backlog/terminal-polish-followup.md` — rewritten in #306.
-- `backlog/terminal-architecture-followups.md` — renamed + rewritten in #306.
+- `backlog/done/terminal-polish-followup.md` — rewritten in #306.
+- `backlog/done/terminal-architecture-followups.md` — renamed + rewritten in #306.
 - `backlog/terminal-tmux-and-followups-plan.md` — deleted in #306.
 - `docs/development/agent-chat-sandbox.md` — auth section added (this retrospective's PR).
 
