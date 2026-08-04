@@ -3227,5 +3227,3 @@ private final class ContextMenuActionItem: NSObject {
         return item
     }
 }
-
-// MARK: - Main Terminal (Host-pinned)

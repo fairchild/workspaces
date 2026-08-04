@@ -5,6 +5,7 @@
 //  Owns the stores ContentView requires so the SwiftUI preview can construct one.
 //
 
+import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
 
@@ -13,7 +14,7 @@ import WorkspaceManagerCore
         .modelContainer(for: [Repo.self, Workspace.self, WebSource.self], inMemory: true)
 }
 
-struct ContentViewPreviewHost: View {
+private struct ContentViewPreviewHost: View {
     @State private var deepLinkState = WorkspaceDeepLinkState()
     @State private var lastSurfaceRawValue = ""
     @StateObject private var appCommandState = AppCommandState()
