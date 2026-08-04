@@ -1,23 +1,18 @@
 # Catches the "git mv a plan into backlog/done/ and nothing re-points
 # referrers" breakage class before merge — see issue #1155. Deliberately its
 # own workflow (not a job in ci.yml): ci.yml's path filter keeps the
-# expensive macOS build scoped to product/build/release inputs, and this
-# check is a fast, docs-scoped, ubuntu-latest job that shouldn't ride along
-# with every doc change on that filter.
+# expensive macOS build scoped to product/build/release inputs, and this is
+# a fast, docs-scoped, ubuntu-latest job that shouldn't ride along with that
+# filter. Unfiltered trigger (no `paths:`): the file that goes stale is
+# often not the .md that references it — a git mv of the *target* (a
+# script, an image, a renamed non-.md file) leaves no .md diff to filter on,
+# so this has to run on every push/PR to actually catch that case.
 name: Docs Link Check
 
 on:
   push:
     branches: [main]
-    paths:
-      - "**/*.md"
-      - "scripts/check-markdown-links.py"
-      - ".github/workflows/docs-link-check.yml"
   pull_request:
-    paths:
-      - "**/*.md"
-      - "scripts/check-markdown-links.py"
-      - ".github/workflows/docs-link-check.yml"
   workflow_dispatch:
 
 permissions:
