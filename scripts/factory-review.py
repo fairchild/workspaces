@@ -35,6 +35,11 @@ REVIEWER_BOTS = {
 }
 PLATFORM_PREFIXES = (".github/", "infra/")
 DEFAULT_DAILY_REVIEW_CAP = 12
+# The daily cap counts posted reviews; a crash loop (retries that never post a
+# review, see #1179) would otherwise run unbounded. This is a hard ceiling on
+# raw run attempts, independent of outcome.
+RUNAWAY_CAP_MULTIPLIER = 3
+REVIEW_JOB_NAMES = {"april", "plat"}
 CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
@@ -98,6 +103,10 @@ class GitHubClient:
             if len(batch) < 100:
                 return runs
             page += 1
+
+    def workflow_run_jobs(self, run_id: int) -> list[dict[str, Any]]:
+        payload = dict(self.request(f"/repos/{self.repository}/actions/runs/{run_id}/jobs"))
+        return [dict(job) for job in payload.get("jobs") or []]
 
     def _paginated(self, path: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -181,11 +190,27 @@ def parse_daily_cap(value: str | None) -> int:
     return cap
 
 
-def count_daily_runs(
+def parse_runaway_cap(value: str | None, daily_cap: int) -> int:
+    raw = (value or "").strip()
+    if not raw:
+        return daily_cap * RUNAWAY_CAP_MULTIPLIER
+    try:
+        cap = int(raw)
+    except ValueError as error:
+        raise FactoryReviewError(
+            f"FACTORY_REVIEW_RUNAWAY_CAP must be a positive integer, got {raw!r}"
+        ) from error
+    if cap <= 0:
+        raise FactoryReviewError("FACTORY_REVIEW_RUNAWAY_CAP must be a positive integer")
+    return cap
+
+
+def count_daily_run_attempts(
     runs: list[dict[str, Any]],
     current_run_id: str,
     current_run_attempt: int = 1,
 ) -> int:
+    """Count raw execution attempts today, including retries and failures."""
     attempts_by_run = {
         str(run["id"]): max(1, int(run.get("run_attempt") or 1))
         for run in runs
@@ -199,23 +224,62 @@ def count_daily_runs(
     return sum(attempts_by_run.values())
 
 
+def review_was_posted(jobs: list[dict[str, Any]]) -> bool:
+    return any(
+        str(job.get("name") or "") in REVIEW_JOB_NAMES
+        and str(job.get("conclusion") or "").casefold() == "success"
+        for job in jobs
+        if isinstance(job, dict)
+    )
+
+
+def count_daily_successful_reviews(
+    runs: list[dict[str, Any]],
+    review_posted_by_run: dict[str, bool],
+) -> int:
+    """Count distinct runs today whose reviewer job actually posted a review."""
+    run_ids = {
+        str(run["id"])
+        for run in runs
+        if isinstance(run, dict) and run.get("id") is not None
+    }
+    return sum(1 for run_id in run_ids if review_posted_by_run.get(run_id, False))
+
+
 def authorize_execution(
     client: GitHubClient,
     daily_cap: int,
+    runaway_cap: int,
     current_run_id: str,
     current_run_attempt: int,
 ) -> None:
     day = datetime.now(UTC).date().isoformat()
-    daily_run_count = count_daily_runs(
-        client.workflow_runs_on("factory-review-execute.yml", day),
-        current_run_id,
-        current_run_attempt,
-    )
-    print(f"Factory review execution budget: {daily_run_count}/{daily_cap}")
-    if daily_run_count > daily_cap:
+    runs = client.workflow_runs_on("factory-review-execute.yml", day)
+
+    # A crash loop (#1179) never posts a review, so the budget check below
+    # never sees it -- this hard ceiling on raw attempts is what actually
+    # stops it from retrying forever.
+    raw_attempts = count_daily_run_attempts(runs, current_run_id, current_run_attempt)
+    print(f"Factory review raw attempt count: {raw_attempts}/{runaway_cap}")
+    if raw_attempts > runaway_cap:
+        raise FactoryReviewError(
+            f"daily runaway guard of {runaway_cap} run attempts is exceeded "
+            f"({raw_attempts} run attempts) -- possible crash loop"
+        )
+
+    review_posted_by_run = {
+        str(run["id"]): review_was_posted(client.workflow_run_jobs(run["id"]))
+        for run in runs
+        if isinstance(run, dict)
+        and run.get("id") is not None
+        and str(run.get("conclusion") or "").casefold() == "success"
+    }
+    successful_reviews = count_daily_successful_reviews(runs, review_posted_by_run)
+    print(f"Factory review execution budget: {successful_reviews}/{daily_cap}")
+    if successful_reviews >= daily_cap:
         raise FactoryReviewError(
             f"daily review cap of {daily_cap} is exceeded "
-            f"({daily_run_count} run attempts)"
+            f"({successful_reviews} successful reviews posted today)"
         )
 
 
@@ -282,9 +346,14 @@ def main() -> int:
         os.environ.get("GITHUB_API_URL", "https://api.github.com"),
     )
     if args.authorize:
+        daily_cap = parse_daily_cap(os.environ.get("FACTORY_REVIEW_DAILY_CAP"))
+        runaway_cap = parse_runaway_cap(
+            os.environ.get("FACTORY_REVIEW_RUNAWAY_CAP"), daily_cap
+        )
         authorize_execution(
             client,
-            parse_daily_cap(os.environ.get("FACTORY_REVIEW_DAILY_CAP")),
+            daily_cap,
+            runaway_cap,
             require_env("GITHUB_RUN_ID"),
             int(require_env("GITHUB_RUN_ATTEMPT")),
         )

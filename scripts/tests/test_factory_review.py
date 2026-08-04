@@ -126,18 +126,14 @@ class FactoryReviewTests(unittest.TestCase):
         self.assertEqual(requested.action, "review")
         self.assertEqual(requested.reviewer, "april")
 
-    def test_daily_review_budget_counts_reruns_and_fails_closed(self) -> None:
+    def test_raw_attempt_count_includes_reruns_and_current_attempt(self) -> None:
         runs = [
             {"id": 100, "run_attempt": 2},
             {"id": 101, "run_attempt": 1},
         ]
-        self.assertEqual(factory_review.count_daily_runs(runs, "101"), 3)
-        self.assertEqual(factory_review.count_daily_runs(runs, "102", 3), 6)
+        self.assertEqual(factory_review.count_daily_run_attempts(runs, "101"), 3)
+        self.assertEqual(factory_review.count_daily_run_attempts(runs, "102", 3), 6)
 
-        client = mock.Mock()
-        client.workflow_runs_on.return_value = runs
-        with self.assertRaisesRegex(factory_review.FactoryReviewError, "4 run attempts"):
-            factory_review.authorize_execution(client, 3, "102", 1)
         with self.assertRaisesRegex(factory_review.FactoryReviewError, "positive integer"):
             factory_review.parse_daily_cap("0")
 
@@ -151,6 +147,74 @@ class FactoryReviewTests(unittest.TestCase):
                 api_client.workflow_runs_on("factory-review-execute.yml", "2026-07-14"),
                 runs,
             )
+
+    def test_review_was_posted_requires_a_successful_reviewer_job(self) -> None:
+        self.assertTrue(
+            factory_review.review_was_posted(
+                [
+                    {"name": "admit", "conclusion": "success"},
+                    {"name": "april", "conclusion": "success"},
+                ]
+            )
+        )
+        self.assertFalse(
+            factory_review.review_was_posted(
+                [{"name": "admit", "conclusion": "success"}]
+            ),
+            "admission alone is not a posted review",
+        )
+        self.assertFalse(
+            factory_review.review_was_posted(
+                [{"name": "plat", "conclusion": "failure"}]
+            ),
+            "a crashed reviewer job did not post a review",
+        )
+
+    def test_daily_cap_counts_only_successful_reviews_not_failed_attempts(self) -> None:
+        """Retries and crash-loop failures must not inflate the review budget."""
+        runs = [
+            {"id": 1, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+            {"id": 2, "run_attempt": 5, "status": "completed", "conclusion": "failure"},
+            {"id": 3, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+        ]
+
+        def jobs_for(run_id: int) -> list[dict[str, str]]:
+            posted = {1: True, 2: False, 3: True}
+            return [{"name": "april", "conclusion": "success" if posted[run_id] else "failure"}]
+
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        client.workflow_run_jobs.side_effect = lambda run_id: jobs_for(run_id)
+
+        # Two reviews were posted (runs 1 and 3); run 2 failed after five
+        # attempts and posted nothing, so it does not count toward the cap.
+        factory_review.authorize_execution(client, daily_cap=3, runaway_cap=30, current_run_id="4", current_run_attempt=1)
+
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "2 successful reviews"):
+            factory_review.authorize_execution(
+                client, daily_cap=2, runaway_cap=30, current_run_id="4", current_run_attempt=1
+            )
+
+    def test_runaway_guard_trips_on_raw_attempts_even_with_no_successful_reviews(
+        self,
+    ) -> None:
+        """A pure crash loop must still be stopped even though nothing succeeded."""
+        runs = [{"id": 1, "run_attempt": 40, "status": "completed", "conclusion": "failure"}]
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        client.workflow_run_jobs.return_value = [{"name": "april", "conclusion": "failure"}]
+
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "runaway guard"):
+            factory_review.authorize_execution(
+                client, daily_cap=12, runaway_cap=36, current_run_id="1", current_run_attempt=41
+            )
+
+    def test_runaway_cap_defaults_to_a_multiple_of_the_daily_cap(self) -> None:
+        self.assertEqual(factory_review.parse_runaway_cap(None, 12), 36)
+        self.assertEqual(factory_review.parse_runaway_cap("", 12), 36)
+        self.assertEqual(factory_review.parse_runaway_cap("100", 12), 100)
+        with self.assertRaisesRegex(factory_review.FactoryReviewError, "positive integer"):
+            factory_review.parse_runaway_cap("0", 12)
 
     def test_human_or_draft_pull_request_does_not_enter_review_lane(self) -> None:
         files = [{"filename": "Sources/Feature.swift"}]
@@ -187,6 +251,7 @@ class FactoryReviewTests(unittest.TestCase):
         self.assertIn("--expected-head", executor)
         self.assertIn("FACTORY_EXPECTED_PR_HEAD_SHA", executor)
         self.assertIn("FACTORY_REVIEW_DAILY_CAP", executor)
+        self.assertIn("FACTORY_REVIEW_RUNAWAY_CAP", executor)
         self.assertIn("factory-review.py --authorize", executor)
 
 
