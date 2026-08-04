@@ -2502,7 +2502,8 @@ struct ContentView: View {
 
     @MainActor
     private func cleanWorkspaceOrphan(_ item: WorkspaceOrphanItem) async {
-        guard workspaceOrphanState.beginCleaning(item) else { return }
+        guard !workspaceOrphanState.isCleaning(item) else { return }
+        workspaceOrphanState.beginCleaning(item)
         defer {
             workspaceOrphanState.endCleaning(item)
         }

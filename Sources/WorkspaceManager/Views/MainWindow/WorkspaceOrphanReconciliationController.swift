@@ -44,10 +44,10 @@ struct WorkspaceOrphanReconciliationState: Equatable {
         dismissedItemIDs.formUnion(visibleItems.map(\.id))
     }
 
-    /// Marks an item as in-flight. Returns `false` when a cleanup is already running for
-    /// it, which is how a repeat confirmation is ignored rather than run twice.
-    mutating func beginCleaning(_ item: WorkspaceOrphanItem) -> Bool {
-        cleaningItemIDs.insert(item.id).inserted
+    /// Marks an item as in-flight. Callers guard on `isCleaning(_:)` first so a repeat
+    /// confirmation returns without writing state back at all.
+    mutating func beginCleaning(_ item: WorkspaceOrphanItem) {
+        cleaningItemIDs.insert(item.id)
     }
 
     mutating func endCleaning(_ item: WorkspaceOrphanItem) {

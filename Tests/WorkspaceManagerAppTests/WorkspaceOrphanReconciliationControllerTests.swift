@@ -44,10 +44,10 @@ struct WorkspaceOrphanReconciliationControllerTests {
         )
     }
 
-    private func makeContext() throws -> ModelContext {
+    private func makeContainer() throws -> ModelContainer {
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
         let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
-        return ModelContext(try ModelContainer(for: schema, configurations: [configuration]))
+        return try ModelContainer(for: schema, configurations: [configuration])
     }
 
     // MARK: - Visibility and dismissal
@@ -88,23 +88,50 @@ struct WorkspaceOrphanReconciliationControllerTests {
 
     // MARK: - Cleanup in flight
 
-    @Test("A second confirmation while a cleanup is running is ignored")
-    func repeatCleanupIsRejectedWhileInFlight() {
+    @Test("An in-flight cleanup reports itself so a second confirmation is skipped")
+    func inFlightCleanupIsObservable() {
         var state = WorkspaceOrphanReconciliationState()
         let item = makeItem(id: "a")
         state.applyScanResult([item])
 
-        let startedFirst = state.beginCleaning(item)
-        let startedAgain = state.beginCleaning(item)
-        #expect(startedFirst)
-        #expect(startedAgain == false)
+        #expect(state.isCleaning(item) == false)
+        state.beginCleaning(item)
         #expect(state.isCleaning(item))
 
         state.endCleaning(item)
         #expect(state.isCleaning(item) == false)
+    }
 
-        let startedAfterFinishing = state.beginCleaning(item)
-        #expect(startedAfterFinishing)
+    @Test("Two cleanups in flight track independently")
+    func concurrentCleanupsAreTrackedSeparately() {
+        var state = WorkspaceOrphanReconciliationState()
+        let first = makeItem(id: "a")
+        let second = makeItem(id: "b")
+        state.applyScanResult([first, second])
+
+        state.beginCleaning(first)
+        state.beginCleaning(second)
+        #expect(state.cleaningItemIDs == ["a", "b"])
+
+        state.endCleaning(first)
+        #expect(state.isCleaning(first) == false)
+        #expect(state.isCleaning(second))
+    }
+
+    @Test("A rescan landing mid-confirmation leaves the pending item and in-flight set alone")
+    func scanDoesNotDisturbPendingOrInFlightState() {
+        var state = WorkspaceOrphanReconciliationState()
+        let pending = makeItem(id: "a")
+        let cleaning = makeItem(id: "b")
+        state.applyScanResult([pending, cleaning])
+        state.pendingCleanup = pending
+        state.beginCleaning(cleaning)
+
+        state.applyScanResult([pending, cleaning, makeItem(id: "c")])
+
+        #expect(state.pendingCleanup == pending)
+        #expect(state.isCleaning(cleaning))
+        #expect(state.visibleItems.map(\.id) == ["a", "b", "c"])
     }
 
     @Test("A cleaned item leaves the banner and forgets its dismissal")
@@ -156,9 +183,10 @@ struct WorkspaceOrphanReconciliationControllerTests {
 
     // MARK: - Record deletion
 
-    @Test("Deleting a record removes the workspace it names")
-    func deleteWorkspaceRecordRemovesWorkspace() throws {
-        let context = try makeContext()
+    @Test("Deleting a record persists — a fresh context no longer sees the workspace")
+    func deleteWorkspaceRecordPersistsTheDeletion() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let workspace = Workspace(
             name: "feature-a",
@@ -168,6 +196,7 @@ struct WorkspaceOrphanReconciliationControllerTests {
         repo.workspaces = [workspace]
         context.insert(repo)
         context.insert(workspace)
+        try context.save()
 
         let item = makeItem(
             id: "record",
@@ -176,13 +205,16 @@ struct WorkspaceOrphanReconciliationControllerTests {
         )
         try controller.deleteWorkspaceRecord(for: item, in: [repo], modelContext: context)
 
-        let remaining = try context.fetch(FetchDescriptor<Workspace>())
-        #expect(remaining.isEmpty)
+        // A second context over the same container only sees saved state, so this fails if
+        // the delete were left unsaved in the first context.
+        let verificationContext = ModelContext(container)
+        #expect(try verificationContext.fetch(FetchDescriptor<Workspace>()).isEmpty)
+        #expect(try verificationContext.fetch(FetchDescriptor<Repo>()).count == 1)
     }
 
     @Test("Deleting a record for an unknown workspace is rejected, not silently skipped")
     func deleteWorkspaceRecordRejectsUnknownWorkspace() throws {
-        let context = try makeContext()
+        let context = ModelContext(try makeContainer())
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         context.insert(repo)
 
@@ -199,7 +231,7 @@ struct WorkspaceOrphanReconciliationControllerTests {
 
     @Test("A worktree orphan carries no workspace id, so record deletion is rejected")
     func deleteWorkspaceRecordRejectsItemWithoutWorkspaceID() throws {
-        let context = try makeContext()
+        let context = ModelContext(try makeContainer())
         let item = makeItem(id: "git", kind: .gitWorktreeWithoutRecord, workspaceID: nil)
 
         #expect(throws: WorkspaceOrphanReconciliationError.unsupportedCleanupItem) {
@@ -226,26 +258,38 @@ struct WorkspaceOrphanReconciliationControllerTests {
 
     // MARK: - Snapshots and copy
 
-    @Test("Repository snapshots carry the fields the reconciler matches on")
-    func repositorySnapshotsPreserveWorkspaceFields() {
+    /// Every field the reconciler matches on, so a mis-wired snapshot field fails here rather
+    /// than becoming a silently missed or falsely reported orphan.
+    @Test("Repository snapshots carry every field the reconciler matches on")
+    func repositorySnapshotsPreserveWorkspaceFields() throws {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let workspace = Workspace(
             name: "feature-a",
             path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
-            sourceRepo: repo
+            sourceRepo: repo,
+            gitBranch: "feature/a"
         )
+        workspace.remoteId = "remote-123"
+        workspace.backendMetadataRaw = "{\"vmName\":\"vm-a\"}"
         repo.workspaces = [workspace]
 
         let snapshots = controller.repositorySnapshots(repos: [repo])
+        let snapshot = try #require(snapshots.first)
+        let workspaceSnapshot = try #require(snapshot.workspaces.first)
 
         #expect(snapshots.count == 1)
-        #expect(snapshots[0].id == repo.id)
-        #expect(snapshots[0].name == "alpha")
-        #expect(snapshots[0].localPath == repo.localPath)
-        #expect(snapshots[0].workspaces.count == 1)
-        #expect(snapshots[0].workspaces[0].id == workspace.id)
-        #expect(snapshots[0].workspaces[0].path == workspace.path)
-        #expect(snapshots[0].workspaces[0].backendIdentifier == workspace.backendIdentifier)
+        #expect(snapshot.id == repo.id)
+        #expect(snapshot.name == repo.name)
+        #expect(snapshot.localPath == repo.localPath)
+        #expect(snapshot.workspaces.count == 1)
+        #expect(workspaceSnapshot.id == workspace.id)
+        #expect(workspaceSnapshot.name == workspace.name)
+        #expect(workspaceSnapshot.path == workspace.path)
+        #expect(workspaceSnapshot.gitBranch == workspace.gitBranch)
+        #expect(workspaceSnapshot.backendIdentifier == workspace.backendIdentifier)
+        #expect(workspaceSnapshot.remoteId == workspace.remoteId)
+        #expect(workspaceSnapshot.backendMetadataRaw == workspace.backendMetadataRaw)
+        #expect(workspaceSnapshot.usesHostWorkspaceFiles == workspace.usesHostWorkspaceFiles)
     }
 
     @Test("Confirmation copy names what the destructive action removes")
