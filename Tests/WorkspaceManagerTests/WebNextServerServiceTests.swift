@@ -47,13 +47,29 @@ struct WebNextServerServiceTests {
         await SpawnBudget.deadline(spawns: 4, floor: 20, ceiling: 240)
     }
 
-    /// Readiness budget for the tests that must let their stub come fully up and then
-    /// still be refused. Unlike the others this one is paid in full on every run — a
-    /// rejection has no early event to wait on — so it stays as tight as the spawn
-    /// measurement allows while covering the two launches (`/bin/sh`, then `python3`)
-    /// the stub needs before anything answers.
+    /// Readiness budget for the rejection tests. They wait for their stub's listener
+    /// to answer and then assert the service refused it, so this only has to outlast
+    /// the stub's launch — two processes (`/bin/sh`, then `python3`) plus a bind — and
+    /// being generous costs nothing, because the observation ends the wait.
     private static func rejectionBudget() async -> TimeInterval {
-        await SpawnBudget.deadline(spawns: 4, floor: 4, ceiling: 240, refreshing: true)
+        await SpawnBudget.deadline(spawns: 12, floor: 60, ceiling: 360)
+    }
+
+    /// Window a rejected server is watched for a late transition to `.ready` after its
+    /// endpoint started answering — at least eight readiness polls wide, so the service
+    /// has demonstrably seen the listener and declined it rather than not looked yet.
+    /// Waiting on scheduling rather than on a spawn, it takes a fraction of the spawn
+    /// baseline; it is also the only budget here paid in full on a passing run, since
+    /// nothing is expected to happen during it.
+    private static func settleBudget() async -> TimeInterval {
+        await SpawnBudget.deadline(spawns: 0.5, floor: 2, ceiling: 15)
+    }
+
+    /// Budget for the one test whose property *is* the readiness timeout, so it waits
+    /// the whole thing out by construction. Sized for the stub's single `/bin/sh`
+    /// launch and nothing more.
+    private static func timeoutBudget() async -> TimeInterval {
+        await SpawnBudget.deadline(spawns: 6, floor: 8, ceiling: 240, refreshing: true)
     }
 
     // MARK: - Fixture
@@ -242,19 +258,20 @@ struct WebNextServerServiceTests {
         return try outcome.get()
     }
 
-    /// True once `url` answers an HTTP response accepted by `accept`. The rejection
-    /// tests use this to prove the stub listener really was live while readiness was
-    /// being decided — without it, a starved runner that never got the stub up at all
-    /// would pass them for the wrong reason.
-    private func waitForHTTPResponse(
+    /// True once the rejection stubs' listener is answering a response `accept` agrees
+    /// is theirs. The rejection tests use this to prove the stub really was live while
+    /// readiness was being decided — without it, a runner too loaded to get the stub up
+    /// at all would pass them for the wrong reason. Spawn-scaled and re-measuring on a
+    /// miss, because everything before the first response is process launch: `/bin/sh`,
+    /// then `python3`, then the bind.
+    private func rejectedListenerIsLive(
         at url: URL,
-        timeout: TimeInterval,
         accept: @escaping @Sendable (Int, Data) -> Bool = { status, _ in status > 0 }
     ) async -> Bool {
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
 
-        return await waitUntil(timeout: timeout, pollInterval: 0.1) {
+        return await waitUntilSpawnScaled(spawns: 12, floor: 60, ceiling: 360) {
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.timeoutInterval = 2
@@ -301,35 +318,38 @@ struct WebNextServerServiceTests {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
         // python http.server answers every path (404 for /api/healthz) — an HTTP
-        // response, but not a healthy web-next. Must time out, not go ready.
+        // response, but not a healthy web-next. Must not satisfy readiness.
         // `exec` keeps the recorded PID, so the listener is identifiably ours.
         let script = """
             echo $$ > "$WEB_NEXT_DATA_DIR/server.pid"
             exec python3 -m http.server "$PORT" --bind 127.0.0.1
             """
-        let budget = await Self.rejectionBudget()
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: script, readinessTimeout: budget))
+            configuration: fixture.configuration(script: script, readinessTimeout: await Self.rejectionBudget()))
 
-        // Watch the port while readiness is being decided. Asserting only that the
-        // service failed would pass just as happily on a runner too loaded to launch
-        // the listener at all; the observation is what makes this a rejection test.
-        let listenerObserver = Task {
-            await waitForHTTPResponse(at: fixture.baseURL, timeout: budget)
-        }
+        // The property is the refusal, so the test ends when the refusal is observable
+        // — once the listener answers and the service has polled it without going
+        // ready. Waiting out the readiness timeout instead would prove the same thing
+        // far more slowly, and would pass just as happily on a runner too loaded to
+        // launch the listener at all.
+        let starter = Task { await service.start() }
+        let listenerWasLive = await rejectedListenerIsLive(at: fixture.baseURL)
 
-        await service.start()
-        let listenerWasLive = await listenerObserver.value
         let serverPID = readPID(at: fixture.dataDir.appendingPathComponent("server.pid"))
-        defer { reapIfAlive(serverPID) }
-
         #expect(listenerWasLive, "the foreign listener must have been answering while readiness was decided")
         #expect(serverPID != nil, "the answering listener must be the process this service launched")
-        guard case .failed(let reason) = await service.state else {
-            Issue.record("expected .failed, got \(await service.state)")
-            return
+
+        let wentReady = await waitUntil(timeout: await Self.settleBudget()) {
+            if case .ready = await service.state { return true }
+            return false
         }
-        #expect(reason.contains("Timed out"))
+        #expect(!wentReady, "a listener with no healthz must never satisfy readiness")
+
+        // `stop()` bumps the generation the launch checks each poll, so awaiting the
+        // starter here ends it rather than leaving it running past the test.
+        await service.stop()
+        await starter.value
+        reapIfAlive(serverPID)
     }
 
     @Test("readiness timeout transitions to failed and kills the spawned process")
@@ -340,12 +360,9 @@ struct WebNextServerServiceTests {
             echo $$ > "$WEB_NEXT_DATA_DIR/server.pid"
             exec sleep 300
             """
-        // Paid in full on every run, so it stays as tight as the spawn measurement
-        // allows — but it must still outlast the stub's own launch, or the kill
-        // assertion below would have no process to check.
         let service = WebNextServerService(
             configuration: fixture.configuration(
-                script: script, readinessTimeout: await Self.rejectionBudget()))
+                script: script, readinessTimeout: await Self.timeoutBudget()))
 
         await service.start()
 
@@ -631,33 +648,32 @@ struct WebNextServerServiceTests {
             export HEALTHZ_BODY='{"ok": true, "localMode": false}'
             \(fixture.healthzServerScript)
             """
-        let budget = await Self.rejectionBudget()
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: script, readinessTimeout: budget))
+            configuration: fixture.configuration(script: script, readinessTimeout: await Self.rejectionBudget()))
 
-        // As in the foreign-listener test: observe that a healthz endpoint really was
-        // answering during the readiness window, so `.failed` means "rejected for
-        // localMode:false" and not "nothing ever came up".
+        // As in the foreign-listener test: the refusal is the property, and it becomes
+        // observable as soon as a healthz endpoint is answering and the service has
+        // polled it without going ready. Requiring the body distinguishes "rejected for
+        // localMode:false" from "nothing ever came up".
         let healthzURL = fixture.baseURL.appendingPathComponent("api/healthz")
-        let healthzObserver = Task {
-            await waitForHTTPResponse(at: healthzURL, timeout: budget) { status, data in
-                status == 200 && String(decoding: data, as: UTF8.self).contains("\"localMode\": false")
-            }
+        let starter = Task { await service.start() }
+        let healthzAnswered = await rejectedListenerIsLive(at: healthzURL) { status, data in
+            status == 200 && String(decoding: data, as: UTF8.self).contains("\"localMode\": false")
         }
 
-        try await withService(service) {
-            await service.start()
-            let healthzAnswered = await healthzObserver.value
-            #expect(healthzAnswered, "the localMode:false healthz endpoint must have been live and answering")
-            #expect(
-                readPID(at: fixture.dataDir.appendingPathComponent("server.pid")) != nil,
-                "the answering endpoint must be the process this service launched")
-            guard case .failed = await service.state else {
-                Issue.record("localMode:false must not satisfy readiness, got \(await service.state)")
-                return
-            }
+        let serverPID = readPID(at: fixture.dataDir.appendingPathComponent("server.pid"))
+        #expect(healthzAnswered, "the localMode:false healthz endpoint must have been live and answering")
+        #expect(serverPID != nil, "the answering endpoint must be the process this service launched")
+
+        let wentReady = await waitUntil(timeout: await Self.settleBudget()) {
+            if case .ready = await service.state { return true }
+            return false
         }
-        reapIfAlive(readPID(at: fixture.dataDir.appendingPathComponent("server.pid")))
+        #expect(!wentReady, "localMode:false must not satisfy readiness")
+
+        await service.stop()
+        await starter.value
+        reapIfAlive(serverPID)
     }
 
     // MARK: - Log redaction
