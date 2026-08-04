@@ -1,0 +1,35 @@
+# Drift gate for config/github/repo-variables.json — verifies every
+# FACTORY_*_ENABLED kill switch a workflow gates on still exists as a live
+# repo variable (#1149: factory-evidence-verify.yml shipped gated on an
+# unset variable and sat 100% dead for two weeks). Read-only: the `vars`
+# context is populated by Actions for every job, so no elevated GITHUB_TOKEN
+# permission is needed the way `gh variable list` would require.
+name: Repo Variables Drift
+
+on:
+  schedule:
+    - cron: "41 13 * * *"
+  pull_request:
+    paths:
+      - "config/github/repo-variables.json"
+      - "scripts/check-repo-variables.py"
+      - ".github/workflows/*.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repo-variables-drift-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - name: Check live repo variables against config/github/repo-variables.json
+        env:
+          REPO_VARS_JSON: ${{ toJSON(vars) }}
+        run: python3 scripts/check-repo-variables.py

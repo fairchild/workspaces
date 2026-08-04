@@ -5,10 +5,10 @@ on:
     branches: [main]
     paths:
       - ".agents/**"
-      - ".github/workflows/ci-agents.yml"
+      - ".github/workflows/*.yml"
       - "scripts/tests/**"
       - "scripts/agent-triage-request.py"
-      - ".github/workflows/factory-*.yml"
+      - "config/github/repo-variables.json"
       - "scripts/factory-implement.py"
       - "scripts/factory-janitor.py"
       - "scripts/factory-review.py"
@@ -24,10 +24,10 @@ on:
     branches: [main]
     paths:
       - ".agents/**"
-      - ".github/workflows/ci-agents.yml"
+      - ".github/workflows/*.yml"
       - "scripts/tests/**"
       - "scripts/agent-triage-request.py"
-      - ".github/workflows/factory-*.yml"
+      - "config/github/repo-variables.json"
       - "scripts/factory-implement.py"
       - "scripts/factory-janitor.py"
       - "scripts/factory-review.py"

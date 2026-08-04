@@ -22,3 +22,36 @@ default Actions token (rulesets are visible to anyone with read access);
 
 To manage an additional ruleset, create `rulesets/<name>.json` containing
 `{"name": "<live-name>"}` and run `snapshot`.
+
+## Repo variables (`repo-variables.json`)
+
+`repo-variables.json` lists every `FACTORY_*_ENABLED` kill-switch variable a
+workflow under `.github/workflows/` gates on (name → which workflow it
+gates). A workflow can reference `vars.FACTORY_FOO_ENABLED` in an `if:` and
+ship green with the lane 100% dead if nobody ever runs `gh variable set
+FACTORY_FOO_ENABLED --body true` — that's what happened to
+`factory-evidence-verify.yml` (#1149).
+
+Two checks close that gap, both running unattended in CI:
+
+```bash
+uv run --script scripts/tests/test_factory_workflows.py   # every vars.FACTORY_*_ENABLED reference has a manifest entry
+mise run repo-variables-check                              # every manifest entry exists as a live repo variable
+```
+
+The first reads only local files (workflow YAML + the manifest) and runs in
+`ci-agents.yml`'s `contents: read` job on any workflow-file change. The
+second needs live variable values; `.github/workflows/repo-variables-drift.yml`
+supplies them via `${{ toJSON(vars) }}` — the `vars` context is populated by
+Actions for every job, so unlike the rulesets read above (which also works
+off the default token) *and* unlike `gh variable list`'s REST endpoint (which
+needs a PAT — Actions variables aren't among `GITHUB_TOKEN`'s permission
+scopes), no elevated token is needed here either. That workflow runs on a
+daily schedule plus PRs touching the manifest or any workflow file. Running
+`mise run repo-variables-check` locally (no `REPO_VARS_JSON` set) falls back
+to `gh variable list`, so it still needs a `gh` authenticated with
+variable-read access there.
+
+Adding a new `FACTORY_*_ENABLED` gate: add its name to `repo-variables.json`,
+then `gh variable set <name> --body true` before merging (or `--body false`
+to ship it dark on purpose).

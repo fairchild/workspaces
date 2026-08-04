@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import sys
 import unittest
@@ -19,6 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 IMPLEMENT_SCRIPT = REPO_ROOT / "scripts" / "factory-implement.py"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "factory-implement.yml"
 REVIEW_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "factory-review-execute.yml"
+WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+REPO_VARIABLES_MANIFEST = REPO_ROOT / "config" / "github" / "repo-variables.json"
+FACTORY_ENABLED_VAR_DOT_REF = re.compile(r"vars\.(FACTORY_[A-Z0-9_]*_ENABLED)\b")
+FACTORY_ENABLED_VAR_BRACKET_REF = re.compile(r"vars\[\s*['\"](FACTORY_[A-Z0-9_]*_ENABLED)['\"]\s*\]")
 
 
 def load_module(name: str, path: Path):
@@ -994,6 +999,46 @@ class FactoryTelemetryContractTests(unittest.TestCase):
         self.assertIn("actions: read", jobs["telemetry"])
         self.assertIn("needs: [admit, april, plat]", jobs["telemetry"])
         self.assertIn("scripts/factory-cost-append.py", jobs["telemetry"])
+
+
+def referenced_factory_enabled_vars() -> set[str]:
+    """Every vars.FACTORY_*_ENABLED name gated on by any workflow file.
+
+    Covers both accessor styles (`vars.NAME` and `vars['NAME']`/`vars["NAME"]`)
+    across both workflow extensions GitHub Actions recognizes."""
+    names: set[str] = set()
+    paths = sorted(WORKFLOWS_DIR.glob("*.yml")) + sorted(WORKFLOWS_DIR.glob("*.yaml"))
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        names.update(FACTORY_ENABLED_VAR_DOT_REF.findall(text))
+        names.update(FACTORY_ENABLED_VAR_BRACKET_REF.findall(text))
+    return names
+
+
+class RepoVariableContractTests(unittest.TestCase):
+    """A workflow gate on an unset repo variable ships green and never runs
+    (#1149: factory-evidence-verify.yml gated on FACTORY_EVIDENCE_VERIFY_ENABLED
+    for two PRs before anyone noticed the variable didn't exist). This is the
+    local-files half of the contract — no network, so it runs unattended in
+    ci-agents.yml on any workflow-file change. The other half (does the
+    manifest name actually exist as a live repo variable) is
+    `.github/workflows/repo-variables-drift.yml` + `scripts/check-repo-variables.py`,
+    which also runs unattended (via the `vars` context, not a `gh` call — see
+    config/github/README.md)."""
+
+    def test_every_referenced_factory_enabled_var_has_a_manifest_entry(self) -> None:
+        referenced = referenced_factory_enabled_vars()
+        self.assertTrue(referenced, "expected at least one vars.FACTORY_*_ENABLED reference under .github/workflows/")
+
+        manifest = json.loads(REPO_VARIABLES_MANIFEST.read_text(encoding="utf-8"))
+        missing = sorted(referenced - set(manifest.keys()))
+        self.assertEqual(
+            missing,
+            [],
+            f"vars.FACTORY_*_ENABLED referenced in a workflow with no entry in "
+            f"{REPO_VARIABLES_MANIFEST.relative_to(REPO_ROOT)} (gate can never fire "
+            f"since nobody is prompted to `gh variable set`): {missing}",
+        )
 
 
 if __name__ == "__main__":

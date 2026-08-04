@@ -160,6 +160,10 @@ run = "uv run --script scripts/factory-dashboard.py --sync --render"
 description = "Diff live GitHub repo settings (rulesets) against config/github/; exit 1 on drift."
 run = "uv run --script scripts/github-settings.py check"
 
+[tasks."repo-variables-check"]
+description = "Diff config/github/repo-variables.json against live GitHub repo variables; runs unattended in repo-variables-drift.yml via toJSON(vars), or locally against gh variable list."
+run = "uv run --script scripts/check-repo-variables.py"
+
 [tasks."repo-settings-apply"]
 description = "Push config/github/ ruleset files to GitHub (needs repo admin)."
 run = "uv run --script scripts/github-settings.py apply"

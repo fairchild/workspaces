@@ -1,6 +1,6 @@
 # Agent Factory: Current State
 
-What is actually wired and running today, verified against the workflow YAML and live `gh variable list` output on 2026-08-03. `docs/development/agent-factory-v2-plan.md` is the design record — why the pipeline looks like this. This doc is the operational reference — which of it is live, how to turn a lane on or off, and where the telemetry lives. Update it whenever a lane's trigger, guard, or status changes; it will drift otherwise.
+What is actually wired and running today, verified against the workflow YAML and live `gh variable list` output on 2026-08-04. `docs/development/agent-factory-v2-plan.md` is the design record — why the pipeline looks like this. This doc is the operational reference — which of it is live, how to turn a lane on or off, and where the telemetry lives. Update it whenever a lane's trigger, guard, or status changes; it will drift otherwise.
 
 ## Lane table
 
@@ -10,7 +10,7 @@ What is actually wired and running today, verified against the workflow YAML and
 | Review (signal) | `factory-review.yml` | PR opened / `ready_for_review` / synchronize; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_ENABLED` on the PR-event path only — **`workflow_dispatch` bypasses both switches** (the `if:` uses boolean OR, not AND) | **Live** — untrusted, writes a context artifact only |
 | Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same switches, same bypass — if the upstream Review run's triggering event was `workflow_dispatch`, this job runs regardless of either switch; otherwise gated, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code |
 | Monitor | `factory-monitor.yml` | daily cron (13:30 UTC); or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_MONITOR_ENABLED` on the cron path only — **`workflow_dispatch` bypasses both switches** (same OR-not-AND pattern) | **Live** — telemetry, Digest, reconciliation janitor |
-| Evidence Verify | `factory-evidence-verify.yml` | `check_suite` completed; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_EVIDENCE_VERIFY_ENABLED`, both branches (dispatch does not bypass here) | **Wired but effectively off** — `FACTORY_EVIDENCE_VERIFY_ENABLED` is unset in `gh variable list`, and an unset repo variable reads as empty in Actions expressions, so the guard never passes. Nothing currently sets this switch. |
+| Evidence Verify | `factory-evidence-verify.yml` | `check_suite` completed; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_EVIDENCE_VERIFY_ENABLED`, both branches (dispatch does not bypass here) | **Live** — `FACTORY_EVIDENCE_VERIFY_ENABLED` was set `true` 2026-08-04 (#1149); the lane shipped green with #1136/#1137 but sat 100% skipped for two weeks because nobody had run `gh variable set` yet. `config/github/repo-variables.json` now guards against a repeat: any workflow referencing an unset `vars.FACTORY_*_ENABLED` fails `scripts/tests/test_factory_workflows.py` in CI. |
 | Owner Comment Responder | `factory-comment-responder.yml` | `issue_comment` created by the owner; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_RESPONDER_ENABLED`, both branches (dispatch does not bypass here) | **Live** |
 | Mention Triage → Executor | `agent-mention.yml` → `agent-executor.yml` | `@april-clearwater` / `@plat` / `@peter` / `@claude` mentions on issues/PRs/reviews | `AGENT_AUTOMATIONS_ENABLED`; execution additionally requires the `safe-to-run-agent` label, server-verified | **Live** — this is a distinct lane from the "Triage" pipeline Stage below; naming collision, not the same code path |
 | Milestone Legibility | `milestone-legibility.yml` | daily cron (13:37 UTC); PR touching the check script; `workflow_dispatch` | none (no Factory switch — always runs) | **Live** |
@@ -28,7 +28,7 @@ What is actually wired and running today, verified against the workflow YAML and
 
 ## Switch inventory
 
-Live values as of 2026-08-03 (`gh variable list --repo fairchild/workspaces`):
+Live values as of 2026-08-04 (`gh variable list --repo fairchild/workspaces`):
 
 | Variable | Value | Gates |
 |---|---|---|
@@ -39,7 +39,7 @@ Live values as of 2026-08-03 (`gh variable list --repo fairchild/workspaces`):
 | `FACTORY_REVIEW_DAILY_CAP` | `12` | Review (execute) lane — max executor attempts per UTC day, including reruns |
 | `FACTORY_MONITOR_ENABLED` | `true` | Monitor lane |
 | `FACTORY_RESPONDER_ENABLED` | `true` | Owner Comment Responder lane |
-| `FACTORY_EVIDENCE_VERIFY_ENABLED` | *(unset)* | Evidence Verify lane — unset means off; set it to `true` to activate |
+| `FACTORY_EVIDENCE_VERIFY_ENABLED` | `true` | Evidence Verify lane |
 
 `APPLE_ID`, `APPLE_TEAM_ID`, and `PREFERRED_RUNNER` also show up in `gh variable list` but are release/runner configuration, not Factory switches.
 
