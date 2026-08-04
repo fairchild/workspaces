@@ -81,26 +81,32 @@ struct MainWindowMaintenanceController {
         return Dictionary(grouping: syncable, by: \.backendIdentifier)
     }
 
-    /// What a provider's snapshots imply for the workspaces it was asked about. A workspace
-    /// the provider no longer reports is treated as archived; one whose status already matches
-    /// is omitted, so the caller only writes and saves when something actually moved.
-    func statusChanges(
-        for workspaces: [Workspace],
-        snapshots: [WorkspaceProviderStatusSnapshot]
-    ) -> [StatusChange] {
-        let statusesByRemoteID = Dictionary(
-            uniqueKeysWithValues: snapshots.map { ($0.remoteId, $0.status) }
+    /// The status a provider reports, keyed by remote id. Traps on duplicate remote ids,
+    /// which is the long-standing contract with providers.
+    func statusesByRemoteID(
+        from snapshots: [WorkspaceProviderStatusSnapshot]
+    ) -> [String: WorkspaceStatus] {
+        Dictionary(uniqueKeysWithValues: snapshots.map { ($0.remoteId, $0.status) })
+    }
+
+    /// What a provider's answer implies for one workspace, or `nil` when its status already
+    /// matches. A workspace the provider no longer reports is treated as archived.
+    ///
+    /// Deciding one workspace at a time — rather than batching a group's decisions ahead of
+    /// its writes — is what keeps a status read after any earlier write in the same pass, so
+    /// a workspace reached twice in one group settles instead of transitioning twice.
+    func statusChange(
+        for workspace: Workspace,
+        statusesByRemoteID: [String: WorkspaceStatus]
+    ) -> StatusChange? {
+        guard let remoteID = workspace.remoteId else { return nil }
+        let newStatus = statusesByRemoteID[remoteID] ?? .archived
+        guard workspace.status != newStatus else { return nil }
+        return StatusChange(
+            workspace: workspace,
+            previousStatus: workspace.status,
+            newStatus: newStatus
         )
-        return workspaces.compactMap { workspace in
-            guard let remoteID = workspace.remoteId else { return nil }
-            let newStatus = statusesByRemoteID[remoteID] ?? .archived
-            guard workspace.status != newStatus else { return nil }
-            return StatusChange(
-                workspace: workspace,
-                previousStatus: workspace.status,
-                newStatus: newStatus
-            )
-        }
     }
 
     /// Asks each provider for the current status of its remote workspaces and writes back
@@ -134,8 +140,16 @@ struct MainWindowMaintenanceController {
                 let snapshots = try await provider.syncStatuses(
                     for: providerWorkspaces.map(WorkspaceProviderTarget.init)
                 )
+                let reportedStatuses = statusesByRemoteID(from: snapshots)
 
-                for change in statusChanges(for: providerWorkspaces, snapshots: snapshots) {
+                for workspace in providerWorkspaces {
+                    guard
+                        let change = statusChange(
+                            for: workspace,
+                            statusesByRemoteID: reportedStatuses
+                        )
+                    else { continue }
+
                     workspaceProviderLog.info(
                         "[WorkspaceProvider] Syncing workspace '\(change.workspace.name, privacy: .public)' (\(providerID, privacy: .public)): \(change.previousStatus.rawValue, privacy: .public) -> \(change.newStatus.rawValue, privacy: .public)"
                     )

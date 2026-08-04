@@ -67,7 +67,9 @@ struct MainWindowMaintenanceControllerTests {
         let groups = controller.statusSyncGroups(repos: [repo])
 
         #expect(Set(groups.keys) == ["daytona", "lume"])
-        #expect(Set(groups["daytona", default: []].map(\.name)) == ["d1", "d2"])
+        // Ordered: a group keeps the order its workspaces appear in, which is the order
+        // the sync pass asks the provider about them.
+        #expect(groups["daytona", default: []].map(\.name) == ["d1", "d2"])
         #expect(groups["lume", default: []].map(\.name) == ["l1"])
     }
 
@@ -81,6 +83,14 @@ struct MainWindowMaintenanceControllerTests {
 
     // MARK: - Status decision
 
+    private func changes(
+        for workspaces: [Workspace],
+        snapshots: [WorkspaceProviderStatusSnapshot]
+    ) -> [MainWindowMaintenanceController.StatusChange] {
+        let reported = controller.statusesByRemoteID(from: snapshots)
+        return workspaces.compactMap { controller.statusChange(for: $0, statusesByRemoteID: reported) }
+    }
+
     @Test("Only workspaces whose status actually moved are reported, with the prior status")
     func statusChangesReportOnlyRealTransitions() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
@@ -91,7 +101,7 @@ struct MainWindowMaintenanceControllerTests {
             repo: repo, name: "steady", backendIdentifier: "daytona", remoteId: "d-2",
             status: .active)
 
-        let changes = controller.statusChanges(
+        let result = changes(
             for: [moving, steady],
             snapshots: [
                 WorkspaceProviderStatusSnapshot(remoteId: "d-1", status: .stopped),
@@ -99,10 +109,10 @@ struct MainWindowMaintenanceControllerTests {
             ]
         )
 
-        #expect(changes.count == 1)
-        #expect(changes.first?.workspace.name == "moving")
-        #expect(changes.first?.previousStatus == .active)
-        #expect(changes.first?.newStatus == .stopped)
+        #expect(result.count == 1)
+        #expect(result.first?.workspace.name == "moving")
+        #expect(result.first?.previousStatus == .active)
+        #expect(result.first?.newStatus == .stopped)
     }
 
     @Test("A workspace the provider no longer reports is treated as archived")
@@ -112,9 +122,7 @@ struct MainWindowMaintenanceControllerTests {
             repo: repo, name: "vanished", backendIdentifier: "daytona", remoteId: "gone",
             status: .active)
 
-        let changes = controller.statusChanges(for: [vanished], snapshots: [])
-
-        #expect(changes.map(\.newStatus) == [.archived])
+        #expect(changes(for: [vanished], snapshots: []).map(\.newStatus) == [.archived])
     }
 
     @Test("A workspace already archived and still unreported produces no change")
@@ -124,7 +132,53 @@ struct MainWindowMaintenanceControllerTests {
             repo: repo, name: "archived", backendIdentifier: "daytona", remoteId: "gone",
             status: .archived)
 
-        #expect(controller.statusChanges(for: [archived], snapshots: []).isEmpty)
+        #expect(changes(for: [archived], snapshots: []).isEmpty)
+    }
+
+    @Test("A workspace whose status was already applied this pass settles instead of moving again")
+    func statusChangeSettlesAfterAnEarlierWriteInTheSamePass() throws {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = makeWorkspace(
+            repo: repo, name: "remote", backendIdentifier: "daytona", remoteId: "d-1",
+            status: .active)
+        let reported = controller.statusesByRemoteID(
+            from: [WorkspaceProviderStatusSnapshot(remoteId: "d-1", status: .stopped)]
+        )
+
+        let first = try #require(controller.statusChange(for: workspace, statusesByRemoteID: reported))
+        workspace.status = first.newStatus
+        let second = controller.statusChange(for: workspace, statusesByRemoteID: reported)
+
+        #expect(first.newStatus == .stopped)
+        #expect(second == nil)
+    }
+
+    /// A workspace reached twice in one pass must transition once. Batching a group's
+    /// decisions ahead of its writes would report and log it twice.
+    @Test("A workspace reached twice in one pass transitions once")
+    func syncPassAppliesRepeatedIdentityOnce() async throws {
+        let context = ModelContext(try makeContainer())
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        context.insert(repo)
+        let workspace = makeWorkspace(
+            repo: repo, name: "remote", backendIdentifier: "daytona", remoteId: "d-1",
+            status: .active, context: context)
+
+        let provider = StatusSyncStubProvider(
+            id: "daytona",
+            snapshots: [WorkspaceProviderStatusSnapshot(remoteId: "d-1", status: .stopped)]
+        )
+
+        // The same repo twice surfaces the same Workspace identity twice in one group.
+        let outcome = await controller.syncWorkspaceStatuses(
+            repos: [repo, repo],
+            registry: makeRegistry([provider]),
+            modelContext: context,
+            trigger: "test"
+        )
+
+        #expect(outcome.changedCount == 1)
+        #expect(workspace.status == .stopped)
     }
 
     // MARK: - Sync pass
@@ -277,6 +331,45 @@ struct MainWindowMaintenanceControllerTests {
         #expect(inputs.workspaces.map(\.workspaceID) == [workspace.id])
         #expect(inputs.workspaces.map(\.repoID) == [repo.id])
         #expect(inputs.workspaces.map(\.lastAccessedAt) == [workspace.lastAccessedAt])
+    }
+
+    /// The projection is only useful if session state actually reaches it, so this asserts a
+    /// live agent status lands on the matching workspace and bubbles to its repo — and that a
+    /// session on an unrelated key does not.
+    @Test("A live agent status reaches the workspace whose session key matches")
+    func aggregatorInputsCarryLiveAgentStatus() throws {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = makeWorkspace(
+            repo: repo, name: "feature-a", backendIdentifier: "local", remoteId: nil)
+
+        let matching = HostTerminalSession(
+            key: .hostPath(workspace.workspaceURL.path),
+            directory: workspace.workspaceURL
+        )
+        let unrelated = HostTerminalSession(
+            key: .hostPath("/tmp/somewhere-else"),
+            directory: URL(fileURLWithPath: "/tmp/somewhere-else")
+        )
+        let status = AgentSessionStatus(
+            hostSessionID: matching.id,
+            cwd: workspace.workspaceURL.path,
+            run: .thinking,
+            lastEventAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        let inputs = controller.aggregatorInputs(
+            repos: [repo],
+            sessions: [matching, unrelated],
+            agentStatusBySessionID: [matching.id: status],
+            registry: makeRegistry([]),
+            normalizePath: { $0.path }
+        )
+
+        #expect(inputs.workspaces.compactMap(\.status) == [status])
+        #expect(inputs.workspaces.count == 1)
+        // The repo's own key has no session, so its status stays nil; roll-up to the repo row
+        // is the aggregator's job, not the projection's.
+        #expect(inputs.repos.allSatisfy { $0.status == nil })
     }
 
     @Test("With no registered agent status every input reports nil rather than a stale status")
