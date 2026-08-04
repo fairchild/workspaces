@@ -10,7 +10,7 @@ When the user asks to implement a change, default to carrying it through to a PR
 
 ## Startup Instruction Budget
 
-`AGENTS.md` is startup context for every repo session. Keep it under about **4,500 tokens** (roughly **3,300 words**) unless the added guidance is more important than the recurring context cost. Prefer tightening, deduplicating, or moving detailed policy into linked docs over expanding this file.
+`AGENTS.md` is startup context for every repo session. Keep it under about **4,500 tokens** unless the added guidance is more important than the recurring context cost. Token count is the real constraint — word count diverges from it on table-dense content and is not a reliable proxy, so measure tokens directly rather than words. Prefer tightening, deduplicating, or moving detailed policy into linked docs over expanding this file.
 
 Continuous improvement of `AGENTS.md` is important to the health and longevity of the codebase: it is how this repo teaches future agents to meet product, quality, evidence, and operational objectives. Improve it when the guidance becomes clearer, shorter, or more actionable. When encoding a lesson, place it at the cheapest surface that fires at the right moment — machinery (CI gates, scripts) over skills, skills over linked docs, this file last — and when a lesson graduates upward (e.g. prose becomes a script), delete the prose it replaces.
 
@@ -41,31 +41,27 @@ The native app's local SQLite sidecar schema lives in `docs/schema.sql`, with th
 
 ## Dev Verification Practice (required)
 
-When changing terminal/keyboard/sidebar behavior, run the canonical self-verification loop in `docs/development/libghostty-integration.md` § "Agent self-verification runbook". The short form:
+When changing terminal/keyboard/sidebar behavior, run the canonical self-verification loop in `docs/development/libghostty-integration.md` § "Agent self-verification runbook" — this is the short form:
 
 1. `./scripts/build-ghosttykit.sh` (once / after pin changes), then `swift build`.
-2. Launch only the debug binary: `./scripts/launch-dev.sh --no-build` — add `--no-activate` on a shared desktop (preferred when the user is actively using the machine), `--watch` to keep logs attached; `./scripts/dev-smoke.sh --no-build` is the fastest startup sanity check.
-3. Confirm you're testing the debug app, not `/Applications`: `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`. Debug builds show a `DEV` Dock badge and a persistent toolbar `DEV` badge; the window subtitle is no longer rendered. Kill `/Applications/WorkSpaces.app` if both are running.
-4. Verify shortcuts: `Cmd+B` toggles the sidebar; `Cmd+D` creates a visible right split. App logging is `os.Logger` (subsystem `com.cloudcompute.workspaces`), which does **not** land in `.dev-data/logs/` — that file only captures the process's stdout/stderr. Before triggering the action, start `/usr/bin/log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact`, then trigger the split; if it fails, expect `"[GhosttyAppManager] action=new_split direction="` in the stream.
-5. Capture evidence without forcing activation: `./scripts/capture-window.sh`. With `--no-activate`, pause your own input, capture, resume — it's a capture-only handshake, not an input-driving lane. Run activation-driving scripts (e.g. `./scripts/shortcut-pass-through-smoke.sh`, Ghostty Splits mode only) only when foreground input is acceptable; for input-driving automation that must not disturb the desktop, use Tart/Lume or a separate macOS user/session.
-6. Verify the daily-driver flows end to end with `./scripts/desktop-ui-smoke.sh --no-build` (`mise run dev-ui-smoke`): the `desktop-ui-smoke` automation mode creates a local workspace via the UI and switches selection workspace→repo→workspace, then asserts the JSONL milestone sequence (`workspace_created`, `sidebar_updated`, `terminal_session_attached`, `surface_focused`) under `output/desktop-ui-smoke/<timestamp>/`. Headless-safe (`--no-activate`); terminal-attach + follows-selection are hard gates, `surface_focused` is best-effort (focus is non-deterministic with the app backgrounded). Scheduled non-PR-blocking lane first; promote to a gate once stable.
+2. Launch only the debug binary: `./scripts/launch-dev.sh --no-build` (`--no-activate` on a shared desktop with the user present, `--watch` to keep logs attached); `./scripts/dev-smoke.sh --no-build` is the fastest sanity check.
+3. Confirm you're testing the debug app, not `/Applications`: `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`. Debug builds show a `DEV` Dock badge and a persistent toolbar `DEV` badge (no window subtitle). Kill `/Applications/WorkSpaces.app` if both are running.
+4. Verify shortcuts (`Cmd+B` sidebar, `Cmd+D` split) via logs — app logging is `os.Logger` (subsystem `com.cloudcompute.workspaces`), which does **not** land in `.dev-data/logs/` (stdout/stderr only). Start `/usr/bin/log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact` before triggering the action; expect `"[GhosttyAppManager] action=new_split direction="`.
+5. Capture evidence without forcing activation: `./scripts/capture-window.sh`. With `--no-activate`, pause your own input, capture, resume — capture-only, not input-driving. Reserve activation-driving scripts (e.g. `./scripts/shortcut-pass-through-smoke.sh`, Ghostty Splits mode) for when foreground input is acceptable; otherwise use Tart/Lume or a separate macOS user/session.
+6. Run `./scripts/desktop-ui-smoke.sh --no-build` (`mise run dev-ui-smoke`) end to end: creates a workspace via the UI, switches selection workspace→repo→workspace, and asserts the JSONL milestone sequence under `output/desktop-ui-smoke/<timestamp>/`. Headless-safe; terminal-attach + follows-selection are hard gates, `surface_focused` is best-effort — scheduled non-PR-blocking for now.
 7. `mise` shortcuts: `dev-launch`, `dev-watch`, `dev-smoke`, `dev-ui-smoke`, `dev-lume-ensure`, `dev-lume-preflight`, `dev-lume-standalone-validate`, `dev-lume-macos-smoke`.
 
-Launcher contract: `launch-dev.sh` reports success only once the debug process is alive and a visible window exists; on failure, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle first.
+Launcher contract: `launch-dev.sh` reports success only once the debug process is alive and a visible window exists; on failure, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle.
 
-**Lume.** Before any Lume work run `mise run dev-lume-ensure` (idempotent, self-healing); the daemon must run from the **installed** binary and its LaunchAgent has `KeepAlive: true`. Validation lanes, the storage contract (validated bases vs workspace VMs), unattended overrides under `config/lume/unattended/`, the upstream local-testing rules, and the app smoke's automation mode (`WORKSPACES_AUTOMATION_MODE=host-lume-macos-smoke`, JSONL milestones, artifacts under `output/lume-host-smoke/`) are all canonical in:
+**Lume.** Run `mise run dev-lume-ensure` before any Lume work (idempotent, self-healing; daemon must run from the installed binary, LaunchAgent `KeepAlive: true`). Storage contract, validation lanes, unattended overrides, and the app smoke's automation mode are canonical in `docs/development/lume-integration.md`, `docs/development/lume-validation.md`, `docs/development/lume-recreate-runbook.md`, `docs/development/lume-runner-setup.md`.
 
-- `docs/development/lume-integration.md` (§ "Daemon Reliability", storage layout, upstream testing note)
-- `docs/development/lume-validation.md` (standalone validate → preflight → full macOS smoke)
-- `docs/development/lume-recreate-runbook.md`, `docs/development/lume-runner-setup.md`
-
-Shortcut/split routing references: `docs/development/shortcut-routing.md`; longer-term shared-desktop isolation: `backlog/done/shared-desktop-focus-contention-followup.md`.
+Shortcut/split routing: `docs/development/shortcut-routing.md`. Shared-desktop isolation: `backlog/done/shared-desktop-focus-contention-followup.md`.
 
 ## Evidence-Driven Development
 
 Evidence is a merge gate. Do not create a PR without it. In order:
 
-1. **Run tests** — `swift test` or `cd web && pnpm test`
+1. **Run tests** — `swift test`, `cd web-next && pnpm test`, or `cd web && pnpm test`
 2. **Capture evidence** — for macOS-app UI, first-choice is the app evidence lane: `./scripts/evidence.sh --pr <number> --fixture <scenario>` (launches a fixture state, snapshots the main window via operator scope, uploads — no activation, no focus steal). Otherwise `./scripts/evidence.sh --pr <number> --name <slug>` (test output; web screenshots without auth: `mise run web:dev`). Fallbacks (ImageRenderer, qlmanage logs, VM lane) in `docs/development/evidence.md`.
 3. **Paste the uploaded evidence URLs into the PR body**
 4. **Only then create the PR** — no `[pending-ci]` unless evidence is genuinely impossible locally
@@ -107,7 +103,7 @@ mise run lint                  # swift-format lint --strict (CI fails without it
 ./scripts/evidence.sh --pr <N> --name <slug>   # required before PRs
 ```
 
-### Web dashboard (`web/`)
+### Web dashboard (`web/`, maintenance mode — see § Two Web Apps)
 
 Always use the `mise run web:*` tasks, never raw pnpm chains — catalog, caveats, and anti-patterns in `web/docs/local-dev.md`. Tasks live in `web/.mise.toml` (not chain-loaded from root): run after `cd web/` or with `mise -C web run ...`. Most used:
 
@@ -122,78 +118,15 @@ mise run web:deps -- <pkg>                  # add dep + fix package.json formatt
 
 Known caveat: `fast/unauth-*` specs need `NODE_ENV=production` — they fail under `pnpm dev` by design (see `web/docs/local-dev.md`).
 
+`web-next/` (active app) has no mise integration — plain `pnpm`, per `web-next/CONTRIBUTING.md`.
+
 ## Python Script Preference
 
 New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S uv run --script` plus a PEP 723 metadata block (`# /// script` … `# ///`, `requires-python = ">=3.11"`, `dependencies = [...]`). Prefer `uv run --script <path>` in docs/examples. Use package/module layout only when explicitly requested or tooling requires it.
 
-## Doc Navigation
+## Doc and Code Navigation
 
-| Task | Primary Doc | Skip |
-|------|-------------|------|
-| Understand the app | README.md | backlog/ |
-| Architectural decisions | ARCHITECTURE.md | backlog/ |
-| Implement a component | docs/original_spec.md (find relevant section) | Read whole file |
-| libghostty internals + dev verification runbook | docs/development/libghostty-integration.md | - |
-| Notifications / webhooks | docs/development/notifications.md | - |
-| Debug an issue | docs/development/troubleshooting.md | - |
-| Add Settings-gated experimental UI | docs/development/experimental-features.md | - |
-| Terminal keyboard focus | docs/development/solution-terminal-keyboard.md | - |
-| Evidence guide | docs/development/evidence.md | - |
-| UI fixture mode + release screenshots | docs/development/ui-fixture-mode.md | - |
-| Local SQLite state schema | docs/schema.sql | - |
-| Local state store plan | docs/development/local-state-store-plan.md | - |
-| Lume integration / daemon reliability | docs/development/lume-integration.md | - |
-| Lume validation lanes | docs/development/lume-validation.md | - |
-| Lume runner setup | docs/development/lume-runner-setup.md | - |
-| Xcode Cloud harness + debugging (real logs, VM quirks) | docs/development/xcode-cloud.md | - |
-| Web local dev (mise tasks, auth bypass) | web/docs/local-dev.md | - |
-| Web architecture | web/docs/architecture.md | - |
-| Agent Factory current state (lanes, switches, ops-data, dashboard) | docs/development/factory-current-state.md | - |
-| Agent Factory design record (why the pipeline looks like this) + glossary | docs/development/agent-factory-v2-plan.md, docs/agents/CONTEXT.md | docs/development/agent-team.md (superseded architecture) |
-| Agent Factory system overview + trust model (browser doc) | docs/development/agent-factory-v2-overview.html | - |
-| Roadmap/planning | backlog/ROADMAP.md | - |
-| Deferred work items | backlog/*.md | - |
-| Prototypes | prototypes/README.md | - |
-
-## Code Navigation
-
-| What | Where |
-|------|-------|
-| Data models | Sources/WorkspaceManagerCore/Models/Models.swift |
-| Git operations | Sources/WorkspaceManagerCore/Services/GitService.swift |
-| Workspace lifecycle | Sources/WorkspaceManagerCore/Services/WorkspaceService.swift |
-| Local state history | Sources/WorkspaceManagerCore/Services/LocalStateStore.swift |
-| Service protocols | Sources/WorkspaceManagerCore/Services/Protocols.swift |
-| Backend abstraction | Sources/WorkspaceManagerCore/Services/LocalBackend.swift |
-| Lume runtime setup | Sources/WorkspaceManagerCore/Services/LumeRuntimeService.swift |
-| Lume workspace orchestration | Sources/WorkspaceManagerCore/Services/LumeWorkspaceProvider.swift |
-| Lume daemon transport | Sources/WorkspaceManagerCore/Services/LumeHTTPClient.swift |
-| Lume CLI runner | Sources/WorkspaceManagerCore/Services/LumeCLIRunner.swift |
-| Lume image catalog | Sources/WorkspaceManagerCore/Services/LumeImageCatalog.swift |
-| Lume VM status normalization | Sources/WorkspaceManagerCore/Services/LumeVMStatus.swift |
-| Lume error heuristics | Sources/WorkspaceManagerCore/Services/LumeErrorHeuristics.swift |
-| Main layout | Sources/WorkspaceManager/Views/MainWindow/ContentView.swift |
-| Terminal wrapper | Sources/WorkspaceManager/Views/Components/TerminalView.swift |
-| Sidebar (repos/workspaces) | Sources/WorkspaceManager/Views/MainWindow/SidebarView.swift |
-| Right pane (files/changes) | Sources/WorkspaceManager/Views/MainWindow/RightPaneView.swift |
-| Notification constants | Sources/WorkspaceManagerCore/Services/NotificationConstants.swift |
-| Notification coordinator | Sources/WorkspaceManager/Views/MainWindow/NotificationCoordinator.swift |
-| WebSocket event stream | Sources/WorkspaceManagerCore/Services/EventStreamService.swift |
-| GitHub Device Flow auth | Sources/WorkspaceManagerCore/Services/GitHubDeviceAuth.swift |
-| JWT session exchange | Sources/WorkspaceManagerCore/Services/NotificationSessionService.swift |
-| Keychain storage | Sources/WorkspaceManagerCore/Services/KeychainHelper.swift |
-| Webhook event model | Sources/WorkspaceManagerCore/Models/WebhookEvent.swift |
-| Cloudflare Worker (webhooks) | infra/cloudflare-webhook-relay/ |
-| Cloudflare Worker (evidence) | infra/cloudflare-evidence-store/ |
-| Cloudflare Worker (terminal proxy) | infra/terminalshare-proxy/ |
-| Evidence upload script | scripts/upload-evidence.py |
-| Tests | Tests/WorkspaceManagerTests/ |
-| Web dashboard | web/src/app/dashboard/ |
-| Web agent runtime | web/src/lib/agent-runtime/ |
-| Web compute providers | web/src/lib/agent-runtime/vercel-sandbox.ts, provider-registry.ts |
-| Web terminal panel | web/src/app/dashboard/components/terminal-panel.tsx |
-| Web terminal API | web/src/app/api/terminal/ |
-| Web API auth helpers | web/src/lib/api-auth.ts |
+Task → doc and symbol → file pointer tables live in `docs/agents/code-map.md`, moved out of this file for the token budget. Check there before grepping cold.
 
 ## File Purpose Blocks
 
@@ -235,20 +168,16 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 - Protect data contracts: Codable roundtrips, git porcelain format values
 - Use `defer { cleanup() }` for temp directories
 
-## Tech Stack
+## Two Web Apps
 
-### macOS App
-- **UI**: SwiftUI + AppKit hybrid · **Terminal**: GhosttyKit (`libghostty`) binary target · **Persistence**: SwiftData · **Target**: macOS 14.0+ · **Distribution**: Direct (non-sandboxed; App Store sandbox blocks shell execution)
+Two Next.js apps in this repo are not interchangeable:
 
-### Web Dashboard (`web/`)
-- **Framework**: Next.js 15 (App Router) on Vercel · **Auth**: Better Auth + GitHub OAuth · **DB**: LibSQL + Kysely · **Terminal**: ghostty-web (WASM) · **Agent runtime**: multi-provider (Vercel Sandbox + Anthropic Managed Agents live; Daytona/GitHub Actions unavailable stubs; mock for tests) · **Styling**: CSS Modules + custom properties (no Tailwind) · **Tests**: Vitest (unit `node` + component `jsdom` projects), Playwright (E2E with video)
-
-### Infrastructure
-- Cloudflare Workers: webhook relay + Durable Object (`infra/cloudflare-webhook-relay/`), evidence store + R2 (`infra/cloudflare-evidence-store/`), terminal proxy + Durable Object (`infra/terminalshare-proxy/`)
+- **`web-next/`** is the active app — sessions-first UI, deployed at `folio.cloudcompute.com`, also embedded locally in the macOS app over loopback HTTP (`web-next/docs/decisions/embedded-native-contract.md`). New web work happens here — stack + local dev: `web-next/CONTRIBUTING.md`.
+- **`web/`** has been in maintenance mode since #754 (2026-07-08): no new development, old chat/terminal demoted, still serves GitHub webhook ingestion. Its managed PR reviewer was retired separately on 2026-08-02 (`docs/decisions/managed-reviewer-retirement.md`) — not a #754 consequence. Stack + local dev: `web/README.md`.
 
 ## Multi-Agent Coordination
 
-Agents coordinate via GitHub Discussions. See `.agents/skills/gh-discuss/SKILL.md` for conventions and the CLI script. Quick start: `uv run .agents/skills/gh-discuss/scripts/gh-discuss.py dashboard`
+Agents coordinate through the GitHub-native state machine — issue labels (`docs/agents/triage-labels.md`) and PR review, not chat or Discussions. `docs/decisions/factory-label-control-plane.md` records why: an audit found keyword triggers and reaction-scraping on Discussions failed silently, while label events are durable and reconcilable.
 
 ### QA of the web/ app
 

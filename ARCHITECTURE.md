@@ -10,6 +10,15 @@
 
 ---
 
+## Related Web Surfaces
+
+This document covers the macOS app. Two separate Next.js apps in this repo relate to it differently — see `AGENTS.md` § "Two Web Apps" for the full charter:
+
+- **`web-next/`** is the active sessions-first web app, deployed at `folio.cloudcompute.com`. The macOS app also embeds it locally over loopback HTTP — spawn, readiness, and token handoff are `WebNextServerService`; the in-app surface is `EmbeddedWebNextDetailView` — per the contract in `web-next/docs/decisions/embedded-native-contract.md`.
+- **`web/`** is the original dashboard, in maintenance mode since #754 (no cutover); it still serves GitHub webhook ingestion.
+
+---
+
 ## Architecture Overview
 
 ```
