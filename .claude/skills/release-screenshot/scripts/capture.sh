@@ -83,6 +83,18 @@ agent_states="$FIXTURE_AGENT_STATES"
 command_statuses="$FIXTURE_COMMAND_STATUSES"
 scenario_id="$FIXTURE_SCENARIO_ID"
 
+# This script never runs --clean-data between launches, so it never hits the continuity-wipe
+# gap WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER exists to seed around (see
+# docs/development/ui-fixture-mode.md § "Staging the restore banner") — and it doesn't set
+# WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH either. Silently proceeding here would produce a
+# "successful" clean-baseline capture with no banner, indistinguishable from success. Fail
+# loudly instead of drifting from what the scenario name promises.
+if [[ -n "$FIXTURE_SEED_RESTORE_BANNER" ]]; then
+    echo "ERROR: scenario '$scenario' seeds the restore banner, which this script does not support." >&2
+    echo "       Use the app evidence lane instead: ./scripts/evidence.sh --pr <N> --fixture $scenario" >&2
+    exit 2
+fi
+
 DEFAULT_OUTPUT_DIR="$REPO_ROOT/output/release-screenshots"
 mkdir -p "$DEFAULT_OUTPUT_DIR"
 timestamp="$(date +%Y%m%d-%H%M%S)"

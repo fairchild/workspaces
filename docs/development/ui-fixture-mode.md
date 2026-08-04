@@ -42,6 +42,7 @@ For repeatable captures, prefer the wrapper:
 | `WORKSPACES_UI_FIXTURE_AGENT_STATES` | optional | Comma-separated `<workspace-name>:<state>` pairs that drive specific workspaces into specific `AgentRunState`s. |
 | `WORKSPACES_UI_FIXTURE_COMMAND_STATUSES` | optional | Comma-separated `<workspace-name>:<status>` pairs that drive specific terminal sessions into synthetic `LastCommandStatus` values. |
 | `WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER` | optional | `1` opens the Cmd-P Session Switcher after fixture launch for deterministic overlay captures. |
+| `WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER` | optional | `1` seeds a synthetic previous-run continuity row (see "Staging the restore banner" below) so the cold-start restore banner has something to offer. Also requires `WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=1` — the banner itself is gated behind that experiment independently of fixture mode. |
 
 ### `WORKSPACES_UI_FIXTURE_AGENT_STATES` grammar
 
@@ -90,6 +91,30 @@ Plus one web source: `Swift Docs` (`https://docs.swift.org/`).
 Workspace paths point under `~/code/workspaces/<repo>/<workspace>/` for tab labels and `cd` targets, but **the paths don't need to exist on disk** — SwiftData accepts any string, and terminal PTYs fall back to `$HOME` when the path is missing.
 
 `feature-auth.lastAccessedAt` is bumped 60 s into the future so `MainWindowBootstrapController.fallbackSurface` picks it as the auto-selected workspace at launch.
+
+## Staging the restore banner
+
+The cold-start restore banner (`MainWindowRestoreController` / `TerminalRestorePlanner`, #1160 slice 4) reads durable continuity rows from `LocalStateStore`'s SQLite sidecar — a *different* store than the in-memory SwiftData `UIFixtureSeeder` seeds above. The app evidence lane (`./scripts/evidence.sh --fixture`) always launches with `--clean-data`, which wipes that SQLite sidecar before every capture for determinism — but that leaves nothing for the banner to offer, since it only ever shows continuity carried over from a run that already ended (issue #1192).
+
+`WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER=1` closes that gap by writing one synthetic "previous run" row directly through a second `LocalStateStore` instance, stamped with a `runStartedAt` several minutes before the real launch's own. `UIFixtureContinuitySeeder.swift` does this at `WorkspaceManagerApp.init()`, targeting the `feature-auth` workspace `UIFixtureSeeder` already seeds into SwiftData, so `TerminalRestoreTargetResolver` resolves it against live data exactly as it would a real prior session. `ContentView.computeRestorePlanIfEnabled()` awaits the seed write (`UIFixtureContinuitySeeder.waitUntilSeeded()`) before reading continuity data, so there's no race between the seed and the plan it feeds.
+
+The seeded row deliberately avoids all three suppression predicates in `MainWindowRestoreController.disposition(for:handledRunID:seedKey:seedDirectory:)`:
+
+- **`noRestorableSurfaces`** — the row is active (`ended_at IS NULL`), so the plan is non-empty.
+- **`alreadyHandled`** — each seed mints a fresh `runID`, which can't collide with a `terminalRestoreHandledRunID` recorded by an earlier capture.
+- **`onlyDuplicatesLaunchSeed`** — the row resolves to `.hostPath(<feature-auth path>)`, distinct from the `.defaultHome` key the pre-restore launch seed uses, so it's never just a duplicate of that seed regardless of which restore action (`freshShell`, absent a live tmux session or resumable transcript) the planner picks.
+
+**Production-database safety.** `UIFixtureContinuitySeeder.isSafeToSeed(databaseURL:)` refuses to write into the real, unconfigured production `LocalStateStore` path — the one `LocalStateStoreBootstrapper.defaultDatabaseURL` resolves to absent any `WORKSPACES_DATA_DIR`/`WORKSPACES_LOCAL_STATE_DIR` override — regardless of which override produced a match. `seedIfNeeded()` is only reachable when the primary store bootstrap already confirmed an explicit override was live (`localStateBootstrap.store != nil` in `WorkspaceManagerApp.init()`), so this check is specifically about an override that happens to *equal* the production path (set by accident, or inherited from a shell profile) rather than fixture mode's own "no override" case, which the primary bootstrap already disables independently.
+
+**Known residual risk: banner-decision timing.** The evidence lane's readiness gate is "operator credential present" plus "non-blank window content" — neither directly observes whether `computeRestorePlanIfEnabled()` has finished deciding the banner, only that the base window painted *something*. `app_capture_window` adds a fixed settle delay before its final snapshot when a restore-banner scenario is requested, but this is a heuristic margin, not a hard guarantee: under enough I/O contention (e.g. the launch-time retention pass overlapping the seed write), a capture could in principle land after the base chrome paints but before the banner does. No introspection signal currently distinguishes "restore plan decided" from "window painted" for the evidence lane to poll instead. A seed write that fails outright (e.g. a busy-timeout under that same contention) is caught and logged at `UIFixtureContinuitySeeder.swift`'s call site rather than surfaced to the capture script, so that failure mode also degrades to a banner-less capture rather than a loud error — check `.dev-data/logs` for `[UIFixtureContinuitySeeder]` if a `restore-banner` capture comes back without the banner.
+
+This also requires `WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=1` — `restoreSessionsOnLaunch` is an experimental flag independent of fixture mode, and `computeRestorePlanIfEnabled()` no-ops without it. The `restore-banner` fixture scenario (`scripts/lib/fixture-scenarios.sh`) sets both env vars together so callers don't need to remember the pairing:
+
+```bash
+./scripts/evidence.sh --pr <N> --fixture restore-banner
+```
+
+This wires through `app-capture.sh` only — the interactive `release-screenshot/scripts/capture.sh` path doesn't pass `--clean-data` between runs, so it doesn't hit the gap this seeds around.
 
 ## Architecture
 
@@ -149,6 +174,7 @@ Why we route through `HostTerminalSession` instead of injecting statuses straigh
 |------|-------|------|
 | `WorkspaceManagerApp.init()` | `Sources/WorkspaceManager/App/WorkspaceManagerApp.swift` | Calls `UIFixtureSeeder.seedDataIfNeeded(in:)` — populates SwiftData with the repos/workspaces above. |
 | `MainWindowRootView.body` ▸ `AgentSessionRegistryAttacher.onAppear` | same file | Calls `UIFixtureSeeder.seedAgentStatesIfNeeded(…)` and `seedCommandStatusesIfNeeded(…)` — reads fixture env vars, drives sessions, and applies synthetic status. Runs after the registry/host store wiring; idempotent via module-static latches. |
+| `WorkspaceManagerApp.init()` | `Sources/WorkspaceManager/App/UIFixtureContinuitySeeder.swift` | Calls `UIFixtureContinuitySeeder.seedIfNeeded()` — writes the synthetic previous-run continuity row (see "Staging the restore banner" above). `ContentView.computeRestorePlanIfEnabled()` awaits its completion before reading. |
 
 The split is structural: the SwiftData seeder runs at app-init time because that's where the model container is created; the agent-state seeder runs at view-attach time because that's where the `TileTreeStore` first becomes reachable. The latch makes the agent-state seeder safe against repeat `onAppear` events.
 
@@ -188,3 +214,5 @@ Edit `scripts/lib/fixture-scenarios.sh`'s `case` block — the single source of 
 - `.claude/skills/release-screenshot/SKILL.md` — the agent-facing skill that wraps fixture mode for repeatable captures.
 - `Sources/WorkspaceManager/App/UIFixtureSeeder.swift` — the seeder implementation.
 - `Tests/WorkspaceManagerAppTests/UIFixtureSeederTests.swift` — unit coverage for env-var parsing, state mapping, idempotency, and the "first entry becomes active session" invariant.
+- `Sources/WorkspaceManager/App/UIFixtureContinuitySeeder.swift` — the restore-banner continuity seeder (issue #1192).
+- `Tests/WorkspaceManagerAppTests/UIFixtureContinuitySeederTests.swift` — unit coverage for the seed plan and an end-to-end proof that the seeded row reaches `.offer` in `MainWindowRestoreController.disposition`.

@@ -47,6 +47,16 @@ struct WorkspaceManagerApp: App {
             launchEnvironment: ProcessInfo.processInfo.environment
         )
         LocalStateStoreController.shared.apply(localStateBootstrap)
+        // Seeded only after the primary store above has already opened and migrated on this
+        // same database file — starting it first would race that migration on a fresh data
+        // dir (two GRDB pools altering schema concurrently). Also only fires when the primary
+        // store is actually active: fixture mode without an explicit data directory disables
+        // the primary store (see LocalStateStoreBootstrapper.bootstrap), and seeding anyway
+        // would silently write a synthetic row into a real user's production database instead
+        // of the isolated fixture one.
+        if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1", localStateBootstrap.store != nil {
+            UIFixtureContinuitySeeder.seedIfNeeded()
+        }
         Task {
             await StartupDiagnosticsStore.shared.attach(localStateStore: localStateBootstrap.store)
         }
