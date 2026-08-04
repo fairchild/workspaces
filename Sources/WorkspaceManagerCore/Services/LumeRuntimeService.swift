@@ -387,6 +387,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
     private let defaultDisplay = "1024x768"
     private let defaultNetwork = "nat"
 
+    // swift-format-ignore: NeverForceUnwrap
+    // Safe: constant URL strings, always parse successfully.
     public init(
         baseURL: URL = URL(string: "http://localhost:7777/lume/")!,
         installerURL: URL = URL(

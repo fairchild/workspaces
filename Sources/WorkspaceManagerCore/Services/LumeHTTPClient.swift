@@ -38,7 +38,8 @@ struct LumeHTTPClient: Sendable {
         }
 
         if let emptyResponseType = Response.self as? any LumeHTTPEmptyResponse.Type {
-            // Safe: emptyResponseType is proven to be Response by the type check above
+            // swift-format-ignore: NeverForceUnwrap
+            // Safe: emptyResponseType is proven to be Response by the type check above.
             return emptyResponseType.init() as! Response
         }
 

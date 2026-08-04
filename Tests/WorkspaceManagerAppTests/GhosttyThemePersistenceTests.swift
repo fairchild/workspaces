@@ -1,3 +1,5 @@
+// swift-format-ignore-file: NeverForceUnwrap
+// Test fixtures/helpers force-unwrap known-good literals or generator output; a failure here is a loud test crash, not a user-facing risk.
 //
 //  GhosttyThemePersistenceTests.swift
 //  WorkspaceManagerAppTests

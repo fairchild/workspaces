@@ -155,6 +155,8 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
     }
 
     public var baseURL: URL {
+        // swift-format-ignore: NeverForceUnwrap
+        // Safe: fixed scheme/host plus a numeric port always forms a valid URL.
         URL(string: "http://127.0.0.1:\(configuration.port)")!
     }
 

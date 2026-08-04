@@ -69,6 +69,8 @@ struct TerminalContinuityManifest: Codable, Equatable {
     }
 
     static let storageKey = "terminalContinuity.manifest.v1"
+    // swift-format-ignore: NeverForceUnwrap
+    // Safe: constant UUID literal, always parses successfully.
     static let homeTargetID = UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
 
     let version: Int

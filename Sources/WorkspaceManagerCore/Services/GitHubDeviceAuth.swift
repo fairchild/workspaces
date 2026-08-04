@@ -66,6 +66,8 @@ public actor GitHubDeviceAuth: GitHubDeviceAuthProtocol {
     public func requestDeviceCode(scope: String = "") async throws -> DeviceCodeResponse {
         isCancelled = false
 
+        // swift-format-ignore: NeverForceUnwrap
+        // Safe: constant URL string, always parses successfully.
         var request = URLRequest(url: URL(string: "https://github.com/login/device/code")!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -102,6 +104,8 @@ public actor GitHubDeviceAuth: GitHubDeviceAuthProtocol {
                 throw DeviceAuthError.cancelled
             }
 
+            // swift-format-ignore: NeverForceUnwrap
+            // Safe: constant URL string, always parses successfully.
             var request = URLRequest(url: URL(string: "https://github.com/login/oauth/access_token")!)
             request.httpMethod = "POST"
             request.setValue("application/json", forHTTPHeaderField: "Accept")

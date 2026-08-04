@@ -1,3 +1,5 @@
+// swift-format-ignore-file: NeverForceUnwrap, NeverUseForceTry
+// Test fixture/mock helper; force-unwrap/force-try failures are loud test crashes, not user-facing risk.
 import Foundation
 
 final class MockURLProtocol: URLProtocol, @unchecked Sendable {

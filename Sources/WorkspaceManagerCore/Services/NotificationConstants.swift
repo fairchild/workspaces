@@ -8,7 +8,8 @@ public enum NotificationConstants {
         {
             return url
         }
-        // Safe: constant URL string, always parses successfully
+        // swift-format-ignore: NeverForceUnwrap
+        // Safe: constant URL string, always parses successfully.
         return URL(string: "https://webhooks.cloudcompute.com")!
     }()
     public static let feedbackBaseURL: URL = {
@@ -18,6 +19,8 @@ public enum NotificationConstants {
         {
             return url
         }
+        // swift-format-ignore: NeverForceUnwrap
+        // Safe: constant URL string, always parses successfully.
         return URL(string: "https://feedback.cloudcompute.com")!
     }()
     public static let gitHubAppClientID = "Iv23liJBRgQoWIWjtRoO"
