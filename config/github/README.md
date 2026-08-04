@@ -23,6 +23,20 @@ default Actions token (rulesets are visible to anyone with read access);
 To manage an additional ruleset, create `rulesets/<name>.json` containing
 `{"name": "<live-name>"}` and run `snapshot`.
 
+## App manifests (`apps/`)
+
+`apps/<slug>.manifest.json` holds the [GitHub App manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)
+used to create that App via the manifest flow (`POST /settings/apps/new` with
+the file's contents as the `manifest` form field) — creating and installing
+the App itself is still a manual, owner-only click; the file just keeps the
+desired permissions/description as reviewable, versioned config instead of
+tribal knowledge. `docs/development/github-app-identities.md` is the
+canonical table of which Apps exist, their bot login, and required
+permissions; a manifest here should match that doc's row for the same App.
+Not every existing App has a manifest file checked in yet — `apps/` started
+with `workspaces-factory` (issue #1180); backfilling the others is optional
+cleanup, not required.
+
 ## Repo variables (`repo-variables.json`)
 
 `repo-variables.json` lists every `FACTORY_*_ENABLED` kill-switch variable a

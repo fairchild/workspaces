@@ -52,6 +52,7 @@ TRUSTED_AUTOMATION_LOGINS = {
     "plat-ironwood[bot]",
     "workspace-agents",
     "workspace-agents[bot]",
+    "workspaces-factory[bot]",
 }
 
 
