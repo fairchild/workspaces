@@ -189,6 +189,65 @@ struct SessionSwitcherPresentationControllerTests {
         #expect(activities[second.id] == .inactive)
     }
 
+    /// `mergedWithBubbled` prefers `self` on ties, so the baseline must be the receiver. Swapping
+    /// the operands is invisible at different severities and only shows up here: `.thinking` and
+    /// `.runningTool` rank equally, and the repo's own session is what should win.
+    @Test("On equal severity the repo's own activity wins over the bubbled one")
+    func equalSeverityPrefersTheBaseline() {
+        let repo = makeRepo(name: "alpha", workspaceNames: ["a1"])
+        let session = HostTerminalSession(key: .repoPath(repo.localURL.path), directory: repo.localURL)
+
+        let activities = controller.repoActivities(
+            context(
+                repos: [repo],
+                sessions: [session],
+                agentStatusBySessionID: [session.id: status(hostSessionID: session.id, run: .thinking)],
+                paneCountBySessionKey: [session.key: 1],
+                bubbledRepoStatuses: [
+                    repo.id: status(
+                        hostSessionID: UUID(),
+                        run: .runningTool(name: "bash", detail: nil)
+                    )
+                ]
+            )
+        )
+
+        #expect(SessionActivity.thinking.severity == SessionActivity.runningTool.severity)
+        #expect(activities[repo.id] == .thinking)
+    }
+
+    /// Binds that the repo projection actually routes through `context.normalizePath`: with a
+    /// normalizer that rewrites the path, a session on the *raw* path no longer matches.
+    @Test("Repo activity resolves its session key through the context normalizer")
+    func repoActivityUsesTheContextNormalizer() {
+        let repo = makeRepo(name: "alpha")
+        let session = HostTerminalSession(key: .repoPath(repo.localURL.path), directory: repo.localURL)
+        var rewritten = SessionSwitcherProjectionContext(
+            repos: [repo],
+            webSources: [],
+            sessions: [session],
+            activeSessionID: nil,
+            agentStatusBySessionID: [session.id: status(hostSessionID: session.id, run: .thinking)],
+            paneCountBySessionKey: [session.key: 1],
+            activeSessionKey: nil,
+            bubbledRepoStatuses: [:],
+            registry: WorkspaceProviderRegistry(providers: []),
+            normalizePath: { _ in "/somewhere/else" }
+        )
+
+        let rerouted = controller.repoActivities(rewritten)
+        rewritten = context(
+            repos: [repo],
+            sessions: [session],
+            agentStatusBySessionID: [session.id: status(hostSessionID: session.id, run: .thinking)],
+            paneCountBySessionKey: [session.key: 1]
+        )
+        let direct = controller.repoActivities(rewritten)
+
+        #expect(direct[repo.id] == .thinking)
+        #expect(rerouted[repo.id] == .inactive)
+    }
+
     @Test("Every repo appears in the projection, quiet or not")
     func everyRepoIsProjected() {
         let repos = [makeRepo(name: "alpha"), makeRepo(name: "beta"), makeRepo(name: "gamma")]
@@ -200,20 +259,75 @@ struct SessionSwitcherPresentationControllerTests {
 
     // MARK: - Snapshot assembly
 
-    @Test("The snapshot carries a row for every repo and workspace")
-    func snapshotCoversReposAndWorkspaces() {
-        let repo = makeRepo(name: "alpha", workspaceNames: ["a1", "a2"])
+    /// A shape-only assertion here would pass even if `snapshot` handed `make` empty
+    /// dictionaries, so this asserts a value that can only arrive through the projections.
+    /// Note `make` consults them for *live* rows only — a row backed by a session.
+    @Test("A live workspace row carries the activity the projection computed")
+    func snapshotLiveWorkspaceRowReflectsProjectedActivity() throws {
+        let repo = makeRepo(name: "alpha", workspaceNames: ["a1"])
+        let workspace = try #require(repo.workspaces.first)
+        let session = HostTerminalSession(
+            key: .hostPath(workspace.workspaceURL.path),
+            directory: workspace.workspaceURL
+        )
 
-        let snapshot = controller.snapshot(context(repos: [repo]))
+        let snapshot = controller.snapshot(
+            context(
+                repos: [repo],
+                sessions: [session],
+                agentStatusBySessionID: [session.id: status(hostSessionID: session.id, run: .thinking)],
+                paneCountBySessionKey: [session.key: 1]
+            )
+        )
 
-        // One row per repo and workspace, plus the standing theme command.
-        #expect(snapshot.rows.count >= 3)
+        let row = try #require(snapshot.rows.first { $0.target == .hostSession(session.id) })
+        #expect(row.kind == .workspace)
+        #expect(row.activity == .thinking)
     }
 
-    @Test("An empty model still produces a usable snapshot")
+    /// The bubbled merge reaching the switcher: a repo whose own session is idle but whose
+    /// workspaces are waiting shows the bubbled state on its live row.
+    @Test("A live repo row carries the merged bubbled activity")
+    func snapshotLiveRepoRowReflectsBubbledActivity() throws {
+        let repo = makeRepo(name: "alpha", workspaceNames: ["a1"])
+        let session = HostTerminalSession(key: .repoPath(repo.localURL.path), directory: repo.localURL)
+        let bubbled = status(hostSessionID: UUID(), run: .awaitingInput(reason: .permissionPrompt))
+
+        let snapshot = controller.snapshot(
+            context(
+                repos: [repo],
+                sessions: [session],
+                paneCountBySessionKey: [session.key: 1],
+                bubbledRepoStatuses: [repo.id: bubbled]
+            )
+        )
+
+        let row = try #require(snapshot.rows.first { $0.target == .hostSession(session.id) })
+        #expect(row.kind == .repo)
+        #expect(row.activity == .awaitingInput)
+    }
+
+    /// Documents the boundary the projections stop at: a repo with no live session renders a
+    /// dormant row, and `make` hardcodes those to `.inactive` regardless of what bubbled up.
+    @Test("A repo with no session renders dormant, ignoring bubbled status")
+    func snapshotDormantRepoRowIgnoresBubbledActivity() throws {
+        let repo = makeRepo(name: "alpha", workspaceNames: ["a1"])
+        let bubbled = status(hostSessionID: UUID(), run: .thinking)
+
+        let snapshot = controller.snapshot(
+            context(repos: [repo], bubbledRepoStatuses: [repo.id: bubbled])
+        )
+
+        let row = try #require(snapshot.rows.first { $0.target == .repo(repo.id) })
+        #expect(row.activity == .inactive)
+    }
+
+    @Test("An empty model produces only the standing command row")
     func snapshotWithNoModelIsStillUsable() {
         let snapshot = controller.snapshot(context(repos: []))
 
-        #expect(snapshot.rows.isEmpty == false)
+        #expect(snapshot.rows.contains { $0.kind == .command })
+        #expect(snapshot.rows.contains { $0.kind == .workspace } == false)
+        #expect(snapshot.rows.contains { $0.kind == .repo } == false)
     }
 }
