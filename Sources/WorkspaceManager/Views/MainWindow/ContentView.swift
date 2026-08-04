@@ -16,12 +16,12 @@ private let creationLog = Logger(
     category: "WorkspaceCreation"
 )
 private let workspaceProviderLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceProvider")
-private let uiFixtureLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "UIFixture")
+private let uiFixtureLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "UIFixtureSeeder")
 private let archivedWorkspacePurgeLog = Logger(
     subsystem: "com.cloudcompute.workspaces",
     category: "ArchivedWorkspacePurge"
 )
-private let perfLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "Perf")
+private let perfLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "PerformanceSignposts")
 private let terminalContinuityLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalContinuity")
 private let hostSessionLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "HostSession")
 private let restoreLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "Restore")

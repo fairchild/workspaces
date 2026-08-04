@@ -3,7 +3,7 @@ import Foundation
 import WorkspaceManagerCore
 import os.log
 
-private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalFocusCoordinator")
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "SplitRoutingController")
 
 /// Single entry point for all terminal focus restoration flows.
 ///
