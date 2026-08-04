@@ -82,7 +82,12 @@ def mint_jwt(app_id: str, private_key_pem: bytes, *, now: int | None = None) -> 
             private_key_pem,
             algorithm="RS256",
         )
-    except (ValueError, jwt.InvalidKeyError) as err:
+    # PyJWT/cryptography don't raise a single exception type for bad key
+    # material: ValueError/InvalidKeyError for unparseable bytes, TypeError
+    # for an encrypted PEM given without a password, AttributeError for a
+    # public (not private) key PEM — verified empirically against the
+    # versions this script pins, not guessed.
+    except (ValueError, TypeError, AttributeError, jwt.InvalidKeyError) as err:
         raise WorkerTokenError(
             WorkerTokenState.NOT_CONFIGURED,
             f"FACTORY_WORKER_APP_KEY is not a valid RSA private key: {err}",
@@ -143,18 +148,38 @@ def find_installation_id(app_jwt: str, repo: str) -> int:
     return data["id"]
 
 
-def mint_installation_token(app_jwt: str, installation_id: int) -> dict:
+def mint_installation_token(app_jwt: str, installation_id: int, repo: str) -> dict:
+    # Scope the minted token to just this repo, even though the installation
+    # itself is expected to be repo-scoped at install time (belt and
+    # suspenders: an installation later widened to more repositories must
+    # not silently widen every token this script mints).
+    repo_name = repo.rsplit("/", 1)[-1]
     try:
-        return _api_call("POST", f"/app/installations/{installation_id}/access_tokens", app_jwt, body={})
+        return _api_call(
+            "POST",
+            f"/app/installations/{installation_id}/access_tokens",
+            app_jwt,
+            body={"repositories": [repo_name]},
+        )
     except HTTPError as err:
         body = err.read().decode("utf-8", "replace")[:300]
-        raise WorkerTokenError(
-            WorkerTokenState.APP_NOT_INSTALLED,
-            f"could not mint an installation token ({err.code}): {body}",
-        ) from err
+        if err.code in (401, 403):
+            raise WorkerTokenError(
+                WorkerTokenState.NOT_CONFIGURED,
+                f"GitHub rejected the installation-token request ({err.code}): {body}",
+            ) from err
+        if err.code == 404:
+            raise WorkerTokenError(
+                WorkerTokenState.APP_NOT_INSTALLED,
+                f"installation {installation_id} was not found when minting a token ({err.code}): {body}",
+            ) from err
+        raise
 
 
-def resolve(repo: str) -> WorkerTokenResult:
+def resolve(repo: str, *, mint: bool = True) -> WorkerTokenResult:
+    """Resolve readiness. `mint=False` (used by --check) stops after proving
+    the App is installed on `repo` — it never calls the access_tokens
+    endpoint, so a readiness check never creates a real 1-hour credential."""
     app_id = os.environ.get("FACTORY_WORKER_APP_ID", "").strip()
     key_path = os.environ.get("FACTORY_WORKER_APP_KEY", "").strip()
     missing = [name for name, value in (("FACTORY_WORKER_APP_ID", app_id), ("FACTORY_WORKER_APP_KEY", key_path)) if not value]
@@ -166,9 +191,19 @@ def resolve(repo: str) -> WorkerTokenResult:
         return WorkerTokenResult(WorkerTokenState.NOT_CONFIGURED, f"FACTORY_WORKER_APP_KEY={key_path} does not exist")
 
     try:
-        app_jwt = mint_jwt(app_id, key_file.read_bytes())
+        try:
+            key_bytes = key_file.read_bytes()
+        except OSError as err:
+            raise WorkerTokenError(WorkerTokenState.NOT_CONFIGURED, f"could not read FACTORY_WORKER_APP_KEY={key_path}: {err}") from err
+        app_jwt = mint_jwt(app_id, key_bytes)
         installation_id = find_installation_id(app_jwt, repo)
-        token_data = mint_installation_token(app_jwt, installation_id)
+        if not mint:
+            return WorkerTokenResult(
+                WorkerTokenState.WORKING,
+                f"workspaces-factory is installed on {repo} (installation {installation_id}); not minting a token for --check",
+                installation_id=installation_id,
+            )
+        token_data = mint_installation_token(app_jwt, installation_id, repo)
     except WorkerTokenError as err:
         return WorkerTokenResult(err.state, str(err))
 
@@ -193,7 +228,7 @@ def main() -> int:
         sys.exit(f"error: {err}")
 
     try:
-        result = resolve(repo)
+        result = resolve(repo, mint=not args.check)
     except URLError as err:
         sys.exit(f"error: could not reach GitHub API: {err}")
 

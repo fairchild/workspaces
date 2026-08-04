@@ -120,6 +120,22 @@ class MintJwtTests(unittest.TestCase):
             worker_token.mint_jwt("123456", b"not a real private key")
         self.assertEqual(ctx.exception.state, worker_token.WorkerTokenState.NOT_CONFIGURED)
 
+    def test_encrypted_key_raises_not_configured(self):
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        encrypted_pem = key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.PKCS8,
+            encryption_algorithm=serialization.BestAvailableEncryption(b"secret"),
+        )
+        with self.assertRaises(worker_token.WorkerTokenError) as ctx:
+            worker_token.mint_jwt("123456", encrypted_pem)
+        self.assertEqual(ctx.exception.state, worker_token.WorkerTokenState.NOT_CONFIGURED)
+
+    def test_public_key_instead_of_private_raises_not_configured(self):
+        with self.assertRaises(worker_token.WorkerTokenError) as ctx:
+            worker_token.mint_jwt("123456", self.public_pem)
+        self.assertEqual(ctx.exception.state, worker_token.WorkerTokenState.NOT_CONFIGURED)
+
 
 class RepoResolutionTests(unittest.TestCase):
     def test_explicit_repo_flag_wins(self):
@@ -172,16 +188,40 @@ class InstallationLookupTests(unittest.TestCase):
 
 
 class MintInstallationTokenTests(unittest.TestCase):
-    def test_error_maps_to_app_not_installed(self):
+    def test_404_maps_to_app_not_installed(self):
         with mock.patch.object(worker_token, "urlopen", side_effect=http_error(404, b'{"message": "not found"}')):
             with self.assertRaises(worker_token.WorkerTokenError) as ctx:
-                worker_token.mint_installation_token("jwt-token", 987654)
+                worker_token.mint_installation_token("jwt-token", 987654, "fairchild/workspaces")
         self.assertEqual(ctx.exception.state, worker_token.WorkerTokenState.APP_NOT_INSTALLED)
+
+    def test_401_maps_to_not_configured(self):
+        with mock.patch.object(worker_token, "urlopen", side_effect=http_error(401, b'{"message": "bad credentials"}')):
+            with self.assertRaises(worker_token.WorkerTokenError) as ctx:
+                worker_token.mint_installation_token("jwt-token", 987654, "fairchild/workspaces")
+        self.assertEqual(ctx.exception.state, worker_token.WorkerTokenState.NOT_CONFIGURED)
+
+    def test_unexpected_status_propagates_as_http_error(self):
+        with mock.patch.object(worker_token, "urlopen", side_effect=http_error(500)):
+            with self.assertRaises(HTTPError):
+                worker_token.mint_installation_token("jwt-token", 987654, "fairchild/workspaces")
 
     def test_success_returns_token_payload(self):
         payload = {"token": "ghs_fake", "expires_at": "2026-08-04T21:00:00Z"}
         with mock.patch.object(worker_token, "urlopen", return_value=FakeHTTPResponse(payload)):
-            self.assertEqual(worker_token.mint_installation_token("jwt-token", 987654), payload)
+            self.assertEqual(worker_token.mint_installation_token("jwt-token", 987654, "fairchild/workspaces"), payload)
+
+    def test_request_is_scoped_to_the_resolved_repository(self):
+        captured: dict = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode())
+            return FakeHTTPResponse({"token": "ghs_fake", "expires_at": "2026-08-04T21:00:00Z"})
+
+        with mock.patch.object(worker_token, "urlopen", side_effect=fake_urlopen):
+            worker_token.mint_installation_token("jwt-token", 987654, "fairchild/workspaces")
+        self.assertEqual(captured["url"], "https://api.github.com/app/installations/987654/access_tokens")
+        self.assertEqual(captured["body"], {"repositories": ["workspaces"]})
 
 
 class ResolveTests(unittest.TestCase):
@@ -225,6 +265,24 @@ class ResolveTests(unittest.TestCase):
             self.assertEqual(result.state, worker_token.WorkerTokenState.WORKING)
             self.assertEqual(result.token, "ghs_fake")
             self.assertEqual(result.expires_at, "2026-08-04T21:00:00Z")
+            self.assertEqual(result.installation_id, 987654)
+        finally:
+            os.unlink(key_path)
+
+    def test_check_mode_confirms_installation_without_minting_a_token(self):
+        private_pem, _ = generate_test_keypair()
+        with tempfile.NamedTemporaryFile(suffix=".pem", delete=False) as key_file:
+            key_file.write(private_pem)
+            key_path = key_file.name
+        try:
+            env = {"FACTORY_WORKER_APP_ID": "123456", "FACTORY_WORKER_APP_KEY": key_path}
+            with mock.patch.dict(os.environ, env, clear=True):
+                with mock.patch.object(worker_token, "find_installation_id", return_value=987654):
+                    with mock.patch.object(worker_token, "mint_installation_token") as mint_mock:
+                        result = worker_token.resolve("fairchild/workspaces", mint=False)
+            mint_mock.assert_not_called()
+            self.assertEqual(result.state, worker_token.WorkerTokenState.WORKING)
+            self.assertIsNone(result.token)
             self.assertEqual(result.installation_id, 987654)
         finally:
             os.unlink(key_path)

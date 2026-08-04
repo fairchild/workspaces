@@ -109,6 +109,8 @@ Today, standing `ready` issues only get dispatched once — the Implement lane f
 
 Verify with `uv run --script scripts/factory-worker-token.py --check` — `working` means both clicks landed correctly.
 
+**Known scope gap, decide before step 1:** the manifest's permissions (`contents`, `pull_requests`, `issues`, `metadata`) don't include `workflows: write`. Without it, GitHub rejects any push from this identity that touches `.github/workflows/*.yml` — a real limitation, not hypothetical: this PR's own diff edits `.github/workflows/ci-agents.yml` and could not have been pushed under `workspaces-factory[bot]` as manifested today. Kept minimal on purpose (the accepted issue #1180 recommendation specified least-privilege permissions without naming `workflows`), but it means opted-in workers whose legitimate change touches CI config still need owner identity for that one PR. Add `workflows: write` to the manifest before creating the App if that tradeoff isn't the one you want.
+
 ### Pre-flight audit (owner-authorship conditionals)
 
 Before flipping anything on, PR #1180's implementation ran a repo-wide audit for logic keyed on the PR author being the owner (`author == fairchild`-shaped checks, `authorAssociation`, assignee assumptions) across `.github/workflows/`, `scripts/`, `web/`, `web-next/`, and `docs/`. Full hit-list (~39 reviewed) is in the PR body and the audit comment on issue #1180. Summary:
