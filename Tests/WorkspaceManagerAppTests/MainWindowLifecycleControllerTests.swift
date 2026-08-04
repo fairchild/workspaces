@@ -29,8 +29,13 @@ struct MainWindowLifecycleControllerTests {
             { [weak self] in self?.record(name) }
         }
 
+        /// Suspends before recording, so an ordering that only holds when nothing yields
+        /// cannot pass: the sequence must actually await each step before running the next.
         func asyncStep(_ name: String) -> () async -> Void {
-            { [weak self] in self?.record(name) }
+            { [weak self] in
+                await Task.yield()
+                self?.record(name)
+            }
         }
 
         func index(of name: String) -> Int? {
@@ -89,14 +94,30 @@ struct MainWindowLifecycleControllerTests {
 
     // MARK: - Launch
 
-    @Test("Every launch step runs exactly once")
-    func launchRunsEveryStepOnce() async {
+    /// The whole contract is the order, so this asserts the complete sequence rather than a
+    /// set — a permutation of the middle steps would otherwise pass every other test here.
+    @Test("Launch runs every step once, in order")
+    func launchRunsEveryStepInOrder() async {
         let recorder = Recorder()
 
         await controller.runLaunchSequence(launchActions(recorder))
 
-        #expect(recorder.steps.count == 12)
-        #expect(Set(recorder.steps).count == 12)
+        #expect(
+            recorder.steps == [
+                "configureAutomationIntegration",
+                "ensureInitialHostSession",
+                "computeRestorePlanIfEnabled",
+                "prewarmPerfTerminalSurfaces",
+                "resolveSurfaceLifecycle",
+                "applyDiagnosticsFixture",
+                "applySessionSwitcherFixture",
+                "pruneRightPaneState",
+                "syncOpenInEditorShortcutRouting",
+                "refreshWorkspaceStatusAggregator",
+                "noteHostLumeSmokeLaunchReady",
+                "noteDesktopUISmokeLaunchReady",
+            ]
+        )
     }
 
     /// Automation integration installs the verb layer, so it has to be up before anything can
@@ -145,14 +166,25 @@ struct MainWindowLifecycleControllerTests {
 
     // MARK: - Model change
 
-    @Test("Every model-change step runs exactly once")
-    func modelChangeRunsEveryStepOnce() {
+    @Test("Model change runs every step once, in order")
+    func modelChangeRunsEveryStepInOrder() {
         let recorder = Recorder()
 
         controller.runModelChangeSequence(modelChangeActions(recorder))
 
-        #expect(recorder.steps.count == 9)
-        #expect(Set(recorder.steps).count == 9)
+        #expect(
+            recorder.steps == [
+                "rebuildSelectionCaches",
+                "releaseRemovedWebSources",
+                "reconcileSelection",
+                "resolveSurfaceLifecycle",
+                "applyDiagnosticsFixture",
+                "applySessionSwitcherFixture",
+                "pruneRepoSessions",
+                "refreshWorkspaceStatusAggregator",
+                "refreshSessionSwitcher",
+            ]
+        )
     }
 
     /// The rule this slice exists to lock in. Every later step resolves ids against the selection
