@@ -139,6 +139,7 @@ struct ContentView: View {
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
     private let workspaceOrphanController = WorkspaceOrphanReconciliationController()
     private let maintenanceController = MainWindowMaintenanceController()
+    private let sessionSwitcherController = SessionSwitcherPresentationController()
     private let codePreviewController = CodePreviewNavigationController()
 
     private var launchRepositoryService: LaunchRepositoryService {
@@ -315,75 +316,23 @@ struct ContentView: View {
         )
     }
 
-    private var commandPaletteWorkspaceActivities: [UUID: SidebarSessionActivity] {
-        let presentation = SidebarWorkspacePresentationController()
-        let normalize: (URL) -> String = { url in normalizePath(url.path) }
-        return Dictionary(
-            uniqueKeysWithValues: repos.flatMap(\.workspaces).map { workspace in
-                let key = presentation.sessionKey(
-                    for: workspace,
-                    registry: workspaceProviderRegistry,
-                    normalizePath: normalize
-                )
-                let activity = presentation.sessionActivity(
-                    for: key,
-                    paneCountBySessionKey: paneCountBySessionKeyForSidebar,
-                    activeSessionKey: activeSessionKeyForSidebar,
-                    sessions: tileTreeStore.sessions,
-                    agentStatusBySessionID: agentSessionRegistry.statuses
-                )
-                return (workspace.id, activity)
-            }
-        )
-    }
-
-    private var commandPaletteRepoActivities: [UUID: SidebarSessionActivity] {
-        let presentation = SidebarWorkspacePresentationController()
-        return Dictionary(
-            uniqueKeysWithValues: repos.map { repo in
-                let key = HostTerminalSessionKey.repoPath(normalizePath(repo.localURL.path))
-                let baseline = presentation.sessionActivity(
-                    for: key,
-                    paneCountBySessionKey: paneCountBySessionKeyForSidebar,
-                    activeSessionKey: activeSessionKeyForSidebar,
-                    sessions: tileTreeStore.sessions,
-                    agentStatusBySessionID: agentSessionRegistry.statuses
-                )
-                let bubbled =
-                    workspaceStatusAggregator.repoStatuses[repo.id]
-                    .map { SidebarSessionActivity.from($0) } ?? .inactive
-                return (repo.id, baseline.mergedWithBubbled(bubbled))
-            }
-        )
-    }
-
-    private var sessionSwitcherWorkspaceSessionKeys: [UUID: HostTerminalSessionKey] {
-        let presentation = SidebarWorkspacePresentationController()
-        let normalize: (URL) -> String = { url in normalizePath(url.path) }
-        return Dictionary(
-            uniqueKeysWithValues: repos.flatMap(\.workspaces).map { workspace in
-                let key = presentation.sessionKey(
-                    for: workspace,
-                    registry: workspaceProviderRegistry,
-                    normalizePath: normalize
-                )
-                return (workspace.id, key)
-            }
-        )
-    }
-
-    private func makeSessionSwitcherSnapshot() -> SessionSwitcherSnapshot {
-        SessionSwitcherSnapshot.make(
+    private var sessionSwitcherProjectionContext: SessionSwitcherProjectionContext {
+        SessionSwitcherProjectionContext(
             repos: repos,
             webSources: webSources,
             sessions: tileTreeStore.sessions,
             activeSessionID: tileTreeStore.activeSessionID,
-            agentStatuses: agentSessionRegistry.statuses,
+            agentStatusBySessionID: agentSessionRegistry.statuses,
             paneCountBySessionKey: paneCountBySessionKeyForSidebar,
-            workspaceSessionKeys: sessionSwitcherWorkspaceSessionKeys,
-            workspaceActivities: commandPaletteWorkspaceActivities,
-            repoActivities: commandPaletteRepoActivities
+            activeSessionKey: activeSessionKeyForSidebar,
+            bubbledRepoStatuses: workspaceStatusAggregator.repoStatuses,
+            registry: workspaceProviderRegistry,
+            normalizePath: { url in normalizePath(url.path) }
         )
+    }
+
+    private func makeSessionSwitcherSnapshot() -> SessionSwitcherSnapshot {
+        sessionSwitcherController.snapshot(sessionSwitcherProjectionContext)
     }
 
     static func sidebarActiveSessionKey(
