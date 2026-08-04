@@ -140,6 +140,7 @@ struct ContentView: View {
     private let workspaceOrphanController = WorkspaceOrphanReconciliationController()
     private let maintenanceController = MainWindowMaintenanceController()
     private let sessionSwitcherController = SessionSwitcherPresentationController()
+    private let lifecycleController = MainWindowLifecycleController()
     private let codePreviewController = CodePreviewNavigationController()
 
     private var launchRepositoryService: LaunchRepositoryService {
@@ -749,6 +750,59 @@ struct ContentView: View {
         )
     }
 
+    private var launchActions: MainWindowLifecycleController.LaunchActions {
+        MainWindowLifecycleController.LaunchActions(
+            configureAutomationIntegration: configureAutomationIntegration,
+            ensureInitialHostSession: ensureInitialHostSession,
+            computeRestorePlanIfEnabled: computeRestorePlanIfEnabled,
+            prewarmPerfTerminalSurfacesIfNeeded: prewarmPerfTerminalSurfacesIfNeeded,
+            resolveSurfaceLifecycle: resolveSurfaceLifecycle,
+            applyDiagnosticsFixtureIfNeeded: applyDiagnosticsFixtureIfNeeded,
+            applySessionSwitcherFixtureIfNeeded: applySessionSwitcherFixtureIfNeeded,
+            pruneRightPaneState: pruneRightPaneState,
+            syncOpenInEditorShortcutRouting: syncOpenInEditorShortcutRouting,
+            refreshWorkspaceStatusAggregator: refreshWorkspaceStatusAggregator,
+            noteHostLumeSmokeLaunchReady: hostLumeSmokeAutomation.noteLaunchReady,
+            noteDesktopUISmokeLaunchReady: desktopUISmokeAutomation.noteLaunchReady
+        )
+    }
+
+    private func modelChangeActions(
+        old: ModelSnapshot,
+        new: ModelSnapshot
+    ) -> MainWindowLifecycleController.ModelChangeActions {
+        MainWindowLifecycleController.ModelChangeActions(
+            rebuildSelectionCaches: {
+                mainSelectionCoordinator.rebuildCachesIfNeeded(
+                    repos: repos, webSources: webSources, normalizePath: normalizePath
+                )
+            },
+            releaseRemovedWebSources: { releaseRemovedWebSources(old: old, new: new) },
+            reconcileSelectionAfterModelChange: reconcileSelectionAfterModelChange,
+            resolveSurfaceLifecycle: resolveSurfaceLifecycle,
+            applyDiagnosticsFixtureIfNeeded: applyDiagnosticsFixtureIfNeeded,
+            applySessionSwitcherFixtureIfNeeded: applySessionSwitcherFixtureIfNeeded,
+            pruneRepoSessions: {
+                tileTreeStore.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
+            },
+            refreshWorkspaceStatusAggregator: refreshWorkspaceStatusAggregator,
+            refreshSessionSwitcherSnapshotIfPresented: refreshSessionSwitcherSnapshotIfPresented
+        )
+    }
+
+    private var teardownActions: MainWindowLifecycleController.TeardownActions {
+        MainWindowLifecycleController.TeardownActions(
+            clearOpenInEditorShortcutOverride: {
+                ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
+            },
+            cancelStatusAggregation: statusAggregationCoalescer.cancel,
+            // The window that installed the gesture-verb layer is gone; drop it so an operator
+            // mutation verb fails closed (unsupported) instead of driving a stale selection
+            // gesture while the app lingers as an accessory. Reappearing reinstalls it via onAppear.
+            detachAutomationGestureVerbs: AutomationIntegrationLifecycle.shared.detachGestureVerbs
+        )
+    }
+
     private var splitViewWithLifecycleHandlers: some View {
         splitViewWithToolbar
             .onAppear {
@@ -756,18 +810,7 @@ struct ContentView: View {
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
                 Task { @MainActor in
-                    await configureAutomationIntegration()
-                    ensureInitialHostSession()
-                    await computeRestorePlanIfEnabled()
-                    prewarmPerfTerminalSurfacesIfNeeded()
-                    resolveSurfaceLifecycle()
-                    applyDiagnosticsFixtureIfNeeded()
-                    applySessionSwitcherFixtureIfNeeded()
-                    pruneRightPaneState()
-                    syncOpenInEditorShortcutRouting()
-                    refreshWorkspaceStatusAggregator()
-                    await hostLumeSmokeAutomation.noteLaunchReady()
-                    await desktopUISmokeAutomation.noteLaunchReady()
+                    await lifecycleController.runLaunchSequence(launchActions)
                 }
                 notificationCoordinator.loadStoredAuth()
                 Task { @MainActor in
@@ -793,28 +836,13 @@ struct ContentView: View {
                 await performDeferredStartupWorkspaceStatusSync()
             }
             .onDisappear {
-                ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
-                statusAggregationCoalescer.cancel()
-                // The window that installed the gesture-verb layer is gone; drop it so an operator
-                // mutation verb fails closed (unsupported) instead of driving a stale selection
-                // gesture while the app lingers as an accessory. Reappearing reinstalls it via onAppear.
-                AutomationIntegrationLifecycle.shared.detachGestureVerbs()
+                lifecycleController.runTeardown(teardownActions)
             }
             .onChange(of: deepLinkState.pendingRequest) { _, _ in
                 resolveSurfaceLifecycle()
             }
             .onChange(of: modelSnapshot) { old, new in
-                mainSelectionCoordinator.rebuildCachesIfNeeded(
-                    repos: repos, webSources: webSources, normalizePath: normalizePath
-                )
-                releaseRemovedWebSources(old: old, new: new)
-                reconcileSelectionAfterModelChange()
-                resolveSurfaceLifecycle()
-                applyDiagnosticsFixtureIfNeeded()
-                applySessionSwitcherFixtureIfNeeded()
-                tileTreeStore.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
-                refreshWorkspaceStatusAggregator()
-                refreshSessionSwitcherSnapshotIfPresented()
+                lifecycleController.runModelChangeSequence(modelChangeActions(old: old, new: new))
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()
