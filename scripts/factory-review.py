@@ -35,6 +35,19 @@ REVIEWER_BOTS = {
 }
 PLATFORM_PREFIXES = (".github/", "infra/")
 DEFAULT_DAILY_REVIEW_CAP = 12
+# The daily cap counts posted reviews; a crash loop (retries that never post a
+# review, see #1179) would otherwise run unbounded. This is a hard ceiling on
+# raw run attempts, independent of outcome.
+RUNAWAY_CAP_MULTIPLIER = 3
+# The step that actually posts a review, keyed by job name. Checking this
+# step's own conclusion (not the job's, and not the overall run's) is what
+# tells "a review was posted" apart from "the job trivially succeeded because
+# the review step was skipped" (already-reviewed dedup, head changed after
+# admission) or "an unrelated sibling job (e.g. telemetry) failed".
+REVIEW_STEP_NAME_BY_JOB = {
+    "april": "Run April counterpart review",
+    "plat": "Run Plat counterpart review",
+}
 CLOSING_REFERENCE_RE = re.compile(
     r"(?im)\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(?P<number>\d+)\b"
 )
@@ -98,6 +111,10 @@ class GitHubClient:
             if len(batch) < 100:
                 return runs
             page += 1
+
+    def workflow_run_jobs(self, run_id: int) -> list[dict[str, Any]]:
+        payload = dict(self.request(f"/repos/{self.repository}/actions/runs/{run_id}/jobs"))
+        return [dict(job) for job in payload.get("jobs") or []]
 
     def _paginated(self, path: str) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
@@ -181,11 +198,27 @@ def parse_daily_cap(value: str | None) -> int:
     return cap
 
 
-def count_daily_runs(
+def parse_runaway_cap(value: str | None, daily_cap: int) -> int:
+    raw = (value or "").strip()
+    if not raw:
+        return daily_cap * RUNAWAY_CAP_MULTIPLIER
+    try:
+        cap = int(raw)
+    except ValueError as error:
+        raise FactoryReviewError(
+            f"FACTORY_REVIEW_RUNAWAY_CAP must be a positive integer, got {raw!r}"
+        ) from error
+    if cap <= 0:
+        raise FactoryReviewError("FACTORY_REVIEW_RUNAWAY_CAP must be a positive integer")
+    return cap
+
+
+def count_daily_run_attempts(
     runs: list[dict[str, Any]],
     current_run_id: str,
     current_run_attempt: int = 1,
 ) -> int:
+    """Count raw execution attempts today, including retries and failures."""
     attempts_by_run = {
         str(run["id"]): max(1, int(run.get("run_attempt") or 1))
         for run in runs
@@ -199,23 +232,92 @@ def count_daily_runs(
     return sum(attempts_by_run.values())
 
 
+def review_was_posted(jobs: list[dict[str, Any]]) -> bool:
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        expected_step = REVIEW_STEP_NAME_BY_JOB.get(str(job.get("name") or ""))
+        if expected_step is None:
+            continue
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict):
+                continue
+            if (
+                str(step.get("name") or "") == expected_step
+                and str(step.get("conclusion") or "").casefold() == "success"
+            ):
+                return True
+    return False
+
+
+def count_daily_review_budget(
+    runs: list[dict[str, Any]],
+    review_posted_by_run: dict[str, bool],
+    current_run_id: str,
+) -> int:
+    """Count runs today that hold a claim on the review budget.
+
+    A posted review holds its claim permanently. A run still in progress
+    holds a provisional claim -- this is what stops a burst of concurrent
+    triggers (one per PR) from all being admitted before any of them
+    resolve, since none would yet show as a posted review. A run that
+    finishes without posting a review (skipped admission, or a crash)
+    releases its claim and drops out of the count -- this is what stops a
+    crash loop from permanently consuming budget it never spent.
+    """
+    runs_by_id = {
+        str(run["id"]): run
+        for run in runs
+        if isinstance(run, dict) and run.get("id") is not None
+    }
+    run_ids = set(runs_by_id) | ({current_run_id} if current_run_id else set())
+
+    def holds_claim(run_id: str) -> bool:
+        if review_posted_by_run.get(run_id, False):
+            return True
+        if run_id == current_run_id:
+            return True
+        status = str((runs_by_id.get(run_id) or {}).get("status") or "")
+        return status != "completed"
+
+    return sum(1 for run_id in run_ids if holds_claim(run_id))
+
+
 def authorize_execution(
     client: GitHubClient,
     daily_cap: int,
+    runaway_cap: int,
     current_run_id: str,
     current_run_attempt: int,
 ) -> None:
     day = datetime.now(UTC).date().isoformat()
-    daily_run_count = count_daily_runs(
-        client.workflow_runs_on("factory-review-execute.yml", day),
-        current_run_id,
-        current_run_attempt,
-    )
-    print(f"Factory review execution budget: {daily_run_count}/{daily_cap}")
-    if daily_run_count > daily_cap:
+    runs = client.workflow_runs_on("factory-review-execute.yml", day)
+
+    # A crash loop (#1179) never posts a review, so the budget check below
+    # never sees it -- this hard ceiling on raw attempts is what actually
+    # stops it from retrying forever.
+    raw_attempts = count_daily_run_attempts(runs, current_run_id, current_run_attempt)
+    print(f"Factory review raw attempt count: {raw_attempts}/{runaway_cap}")
+    if raw_attempts > runaway_cap:
+        raise FactoryReviewError(
+            f"daily runaway guard of {runaway_cap} run attempts is exceeded "
+            f"({raw_attempts} run attempts) -- possible crash loop"
+        )
+
+    # Deliberately not filtered by the run's overall conclusion: an unrelated
+    # sibling job (e.g. telemetry) failing must not erase a review that the
+    # april/plat job actually posted.
+    review_posted_by_run = {
+        str(run["id"]): review_was_posted(client.workflow_run_jobs(run["id"]))
+        for run in runs
+        if isinstance(run, dict) and run.get("id") is not None
+    }
+    review_budget = count_daily_review_budget(runs, review_posted_by_run, current_run_id)
+    print(f"Factory review execution budget: {review_budget}/{daily_cap}")
+    if review_budget > daily_cap:
         raise FactoryReviewError(
             f"daily review cap of {daily_cap} is exceeded "
-            f"({daily_run_count} run attempts)"
+            f"({review_budget} posted or in-flight reviews today)"
         )
 
 
@@ -282,9 +384,14 @@ def main() -> int:
         os.environ.get("GITHUB_API_URL", "https://api.github.com"),
     )
     if args.authorize:
+        daily_cap = parse_daily_cap(os.environ.get("FACTORY_REVIEW_DAILY_CAP"))
+        runaway_cap = parse_runaway_cap(
+            os.environ.get("FACTORY_REVIEW_RUNAWAY_CAP"), daily_cap
+        )
         authorize_execution(
             client,
-            parse_daily_cap(os.environ.get("FACTORY_REVIEW_DAILY_CAP")),
+            daily_cap,
+            runaway_cap,
             require_env("GITHUB_RUN_ID"),
             int(require_env("GITHUB_RUN_ATTEMPT")),
         )

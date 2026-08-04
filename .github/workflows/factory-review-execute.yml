@@ -65,10 +65,11 @@ jobs:
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "force_review=$FORCE_REVIEW" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
-      - name: Enforce review daily cap
+      - name: Enforce review daily cap and runaway guard
         working-directory: source
         env:
           FACTORY_REVIEW_DAILY_CAP: ${{ vars.FACTORY_REVIEW_DAILY_CAP || '12' }}
+          FACTORY_REVIEW_RUNAWAY_CAP: ${{ vars.FACTORY_REVIEW_RUNAWAY_CAP || '' }}
           GH_TOKEN: ${{ github.token }}
         run: uv run --script scripts/factory-review.py --authorize
       - name: Admit counterpart review
