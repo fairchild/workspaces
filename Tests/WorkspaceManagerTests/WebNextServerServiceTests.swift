@@ -7,9 +7,10 @@
 //  and sign-in URL construction — all against stub shell commands so no test
 //  needs pnpm or a web-next checkout.
 //
-//  Deadlines here are sized from `SpawnBudget`'s measured process-spawn cost rather
-//  than fixed wall clocks, because spawn latency is the term that varies by two
-//  orders of magnitude between a laptop and a loaded hosted runner.
+//  Deadlines here are multiples of `LaunchBudget`'s measured launch-to-first-response
+//  cost rather than fixed wall clocks, because that cost is the term that varies by two
+//  orders of magnitude between a laptop and a loaded hosted runner — ~0.3s here against
+//  ~35s on the runner that produced this suite's third gating.
 //
 
 import Darwin
@@ -18,8 +19,8 @@ import Testing
 
 @testable import WorkspaceManagerCore
 
-/// `.serialized` because these tests are spawn-bound rather than CPU-bound: run
-/// concurrently, the suite becomes its own largest source of load, and `SpawnBudget`'s
+/// `.serialized` because these tests are launch-bound rather than CPU-bound: run
+/// concurrently, the suite becomes its own largest source of load, and `LaunchBudget`'s
 /// serially-measured baseline then under-predicts what each test actually pays. One
 /// stub process group at a time keeps the measurement honest and the budgets derived
 /// from it meaningful.
@@ -27,49 +28,47 @@ import Testing
 struct WebNextServerServiceTests {
     // MARK: - Budgets
     //
-    // Every deadline is a multiple of the measured spawn cost. They are read at use
-    // time rather than cached in a `static let` so a baseline that grew mid-run widens
-    // the budgets that follow it.
+    // Each is a multiple of one measured launch: `/bin/sh`, `python3`, the imports, the
+    // bind, and the first successful HTTP response. Read at use time rather than cached
+    // in a `static let`, so a baseline that grew mid-run widens the budgets after it.
 
-    /// Readiness budget for tests where reaching `.ready` is a precondition rather
-    /// than the property under test. The service starts its clock after `posix_spawn`
-    /// returns, so this covers the stub's `python3` exec, module imports, bind, and
-    /// first successful health probe — plus whatever the script launches beforehand.
+    /// Reaching `.ready` is one whole launch — the same round trip the baseline
+    /// measures — so 3x is the margin, not the estimate. Used where readiness is a
+    /// precondition rather than the property under test.
     private static func readyBudget() async -> TimeInterval {
-        await SpawnBudget.deadline(spawns: 8, floor: 45, ceiling: 360)
+        await LaunchBudget.deadline(launches: 3, floor: 45, ceiling: 360)
     }
 
     /// Budget for a side effect of an already-running process — a signal landing, a
-    /// process group draining, a marker file appearing. Some of these do wait on a
-    /// spawn (the SIGTERM-ignoring child arming itself), and the scheduler that starves
-    /// spawns delays the rest, so it scales too.
+    /// process group draining, a marker file appearing. Cheaper than a launch, though
+    /// the SIGTERM-ignoring child does have to start, and the scheduler that starves
+    /// launches delays the rest.
     private static func eventBudget() async -> TimeInterval {
-        await SpawnBudget.deadline(spawns: 4, floor: 20, ceiling: 240)
+        await LaunchBudget.deadline(launches: 1.5, floor: 20, ceiling: 240)
     }
 
-    /// Readiness budget for the rejection tests. They wait for their stub's listener
-    /// to answer and then assert the service refused it, so this only has to outlast
-    /// the stub's launch — two processes (`/bin/sh`, then `python3`) plus a bind — and
-    /// being generous costs nothing, because the observation ends the wait.
+    /// Budget for the rejection tests, which wait for their stub's listener to answer
+    /// and then assert the service refused it. One launch plus margin, and being
+    /// generous costs nothing because the observation ends the wait, not the clock.
     private static func rejectionBudget() async -> TimeInterval {
-        await SpawnBudget.deadline(spawns: 12, floor: 60, ceiling: 360)
+        await LaunchBudget.deadline(launches: 3, floor: 60, ceiling: 360)
     }
 
     /// Window a rejected server is watched for a late transition to `.ready` after its
     /// endpoint started answering — at least eight readiness polls wide, so the service
     /// has demonstrably seen the listener and declined it rather than not looked yet.
-    /// Waiting on scheduling rather than on a spawn, it takes a fraction of the spawn
-    /// baseline; it is also the only budget here paid in full on a passing run, since
+    /// It waits on scheduling rather than on a launch, so it is a fraction of the
+    /// baseline; it is also the only budget paid in full on a passing run, since
     /// nothing is expected to happen during it.
     private static func settleBudget() async -> TimeInterval {
-        await SpawnBudget.deadline(spawns: 0.5, floor: 2, ceiling: 15)
+        await LaunchBudget.deadline(launches: 0.2, floor: 2, ceiling: 15)
     }
 
     /// Budget for the one test whose property *is* the readiness timeout, so it waits
-    /// the whole thing out by construction. Sized for the stub's single `/bin/sh`
-    /// launch and nothing more.
+    /// the whole thing out by construction. Its stub only needs `/bin/sh` — no
+    /// interpreter, no listener — so it is a fraction of a full launch.
     private static func timeoutBudget() async -> TimeInterval {
-        await SpawnBudget.deadline(spawns: 6, floor: 8, ceiling: 240, refreshing: true)
+        await LaunchBudget.deadline(launches: 0.5, floor: 8, ceiling: 240, refreshing: true)
     }
 
     // MARK: - Fixture
@@ -84,7 +83,7 @@ struct WebNextServerServiceTests {
                 .appendingPathComponent("webnext-server-tests-\(UUID().uuidString)", isDirectory: true)
             dataDir = root.appendingPathComponent("data", isDirectory: true)
             try FileManager.default.createDirectory(at: dataDir, withIntermediateDirectories: true)
-            port = try Self.findFreePort()
+            port = try LaunchBudget.findFreePort()
             try Self.healthzServerSource.write(
                 to: root.appendingPathComponent("healthz-server.py"), atomically: true, encoding: .utf8)
         }
@@ -175,33 +174,6 @@ struct WebNextServerServiceTests {
             HTTPServer(("127.0.0.1", int(os.environ["PORT"])), Handler).serve_forever()
             """
 
-        private static func findFreePort() throws -> Int {
-            let sock = socket(AF_INET, SOCK_STREAM, 0)
-            guard sock >= 0 else { throw POSIXError(.EIO) }
-            defer { close(sock) }
-
-            var address = sockaddr_in()
-            address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            address.sin_family = sa_family_t(AF_INET)
-            address.sin_port = 0
-            address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
-
-            let bound = withUnsafeMutablePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                }
-            }
-            guard bound == 0 else { throw POSIXError(.EADDRINUSE) }
-
-            var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-            let named = withUnsafeMutablePointer(to: &address) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    getsockname(sock, $0, &length)
-                }
-            }
-            guard named == 0 else { throw POSIXError(.EIO) }
-            return Int(UInt16(bigEndian: address.sin_port))
-        }
     }
 
     // MARK: - Helpers
@@ -231,7 +203,7 @@ struct WebNextServerServiceTests {
     /// reading immediately is what separates "the stub never got far enough" from
     /// "the supervisor failed to act on it".
     private func awaitPID(at url: URL) async -> pid_t? {
-        let appeared = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+        let appeared = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
             FileManager.default.fileExists(atPath: url.path)
         }
         guard appeared else { return nil }
@@ -261,7 +233,7 @@ struct WebNextServerServiceTests {
     /// True once the rejection stubs' listener is answering a response `accept` agrees
     /// is theirs. The rejection tests use this to prove the stub really was live while
     /// readiness was being decided — without it, a runner too loaded to get the stub up
-    /// at all would pass them for the wrong reason. Spawn-scaled and re-measuring on a
+    /// at all would pass them for the wrong reason. Launch-scaled and re-measuring on a
     /// miss, because everything before the first response is process launch: `/bin/sh`,
     /// then `python3`, then the bind.
     private func rejectedListenerIsLive(
@@ -271,7 +243,7 @@ struct WebNextServerServiceTests {
         let session = URLSession(configuration: .ephemeral)
         defer { session.invalidateAndCancel() }
 
-        return await waitUntilSpawnScaled(spawns: 12, floor: 60, ceiling: 360) {
+        return await waitUntilLaunchScaled(launches: 3, floor: 60, ceiling: 360) {
             var request = URLRequest(url: url)
             request.cachePolicy = .reloadIgnoringLocalCacheData
             request.timeoutInterval = 2
@@ -376,7 +348,7 @@ struct WebNextServerServiceTests {
             readPID(at: fixture.dataDir.appendingPathComponent("server.pid")),
             "the stub must have recorded its PID before the readiness budget expired")
         defer { reapIfAlive(serverPID) }
-        let died = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+        let died = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
             !self.processIsAlive(serverPID)
         }
         #expect(died, "spawned process should be terminated after readiness timeout")
@@ -408,7 +380,7 @@ struct WebNextServerServiceTests {
             // Outlive the service's own readiness budget rather than racing a shorter
             // deadline against it — the extra `sleep 0.4` plus its shell put this
             // launch one step behind the plain healthz stub.
-            let ready = await waitUntilSpawnScaled(spawns: 12, floor: 65, ceiling: 480) {
+            let ready = await waitUntilLaunchScaled(launches: 4, floor: 65, ceiling: 480) {
                 if case .ready = await service.state { return true }
                 return false
             }
@@ -424,9 +396,9 @@ struct WebNextServerServiceTests {
         defer { fixture.cleanup() }
         // The property is that a dead process is noticed immediately instead of waiting
         // out the readiness budget — a relationship between two durations, so both
-        // scale with spawn cost and their ordering survives any load.
-        let readinessTimeout = await SpawnBudget.deadline(spawns: 12, floor: 60, ceiling: 600)
-        var fastFailBound = await SpawnBudget.deadline(spawns: 3, floor: 15, ceiling: 180)
+        // scale with launch cost and their ordering survives any load.
+        let readinessTimeout = await LaunchBudget.deadline(launches: 4, floor: 60, ceiling: 600)
+        var fastFailBound = await LaunchBudget.deadline(launches: 1, floor: 15, ceiling: 180)
         #expect(
             fastFailBound * 2 < readinessTimeout,
             "the fast-fail bound must stay well under the budget it proves we did not wait out")
@@ -457,7 +429,7 @@ struct WebNextServerServiceTests {
         if elapsed >= fastFailBound {
             fastFailBound = min(
                 readinessTimeout * 0.75,
-                await SpawnBudget.deadline(spawns: 3, floor: 15, ceiling: 180, refreshing: true))
+                await LaunchBudget.deadline(launches: 1, floor: 15, ceiling: 180, refreshing: true))
         }
         #expect(elapsed < fastFailBound, "early exit should fail fast, took \(elapsed)s")
     }
@@ -484,7 +456,7 @@ struct WebNextServerServiceTests {
 
         let childPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("child.pid")))
         defer { reapIfAlive(childPID) }
-        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+        let childDied = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
             !self.processIsAlive(childPID)
         }
         #expect(childDied, "a child left behind by an exited leader must not survive the failure transition")
@@ -517,7 +489,7 @@ struct WebNextServerServiceTests {
         guard let childPID else { return }
         defer { reapIfAlive(childPID) }
 
-        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+        let childDied = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
             !self.processIsAlive(childPID)
         }
         #expect(childDied, "grandchild should die with the process group")
@@ -548,7 +520,7 @@ struct WebNextServerServiceTests {
         guard let childPID else { return }
         defer { reapIfAlive(childPID) }
 
-        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+        let childDied = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
             !self.processIsAlive(childPID)
         }
         #expect(childDied, "a SIGTERM-ignoring group member must be SIGKILLed even after the leader exits")
@@ -577,7 +549,7 @@ struct WebNextServerServiceTests {
             let serverPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("server.pid")))
             kill(serverPID, SIGKILL)
 
-            let failed = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            let failed = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
                 if case .failed = await service.state { return true }
                 return false
             }
@@ -707,7 +679,7 @@ struct WebNextServerServiceTests {
             }
 
             let logURL = try #require(await service.logFileURL)
-            let redacted = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            let redacted = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
                 let contents = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
                 return contents.contains("token=<redacted>") && !contents.contains(secret)
             }
@@ -736,7 +708,7 @@ struct WebNextServerServiceTests {
             """
             Asserts a hard <4s wall-clock compression against the OS terminate grace period. \
             That ceiling is imposed by the OS and does not scale with runner load, so unlike the \
-            rest of this suite the bound cannot be derived from a measured spawn baseline — and \
+            rest of this suite the bound cannot be derived from a measured launch baseline — and \
             loosening it to absorb scheduling noise would hide a real regression in the \
             compression logic itself. Runs locally.
             """
@@ -771,7 +743,7 @@ struct WebNextServerServiceTests {
         guard let childPID else { return }
         defer { reapIfAlive(childPID) }
 
-        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+        let childDied = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
             !self.processIsAlive(childPID)
         }
         #expect(childDied, "a SIGTERM-ignoring member must still be SIGKILLed")
@@ -801,7 +773,7 @@ struct WebNextServerServiceTests {
     /// rather than throwing so a caller mid-teardown always reaches its own cleanup.
     private func armedTermIgnoringChildPID(in fixture: Fixture) async -> pid_t? {
         let armedURL = fixture.dataDir.appendingPathComponent("term-ignorer-armed")
-        let armed = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+        let armed = await waitUntilLaunchScaled(launches: 1.5, floor: 20, ceiling: 240) {
             FileManager.default.fileExists(atPath: armedURL.path)
         }
         guard armed else {
