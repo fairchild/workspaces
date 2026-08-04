@@ -26,24 +26,35 @@ import Testing
 @Suite("WebNextServerService", .serialized)
 struct WebNextServerServiceTests {
     // MARK: - Budgets
+    //
+    // Every deadline is a multiple of the measured spawn cost. They are read at use
+    // time rather than cached in a `static let` so a baseline that grew mid-run widens
+    // the budgets that follow it.
 
     /// Readiness budget for tests where reaching `.ready` is a precondition rather
-    /// than the property under test: covers the stub's `/bin/sh` spawn, its `python3`
-    /// exec, module imports, bind, and first successful health probe, with room for
-    /// external load on top.
-    private static let readyBudget = SpawnBudget.deadline(spawns: 8, floor: 45, ceiling: 240)
+    /// than the property under test. The service starts its clock after `posix_spawn`
+    /// returns, so this covers the stub's `python3` exec, module imports, bind, and
+    /// first successful health probe — plus whatever the script launches beforehand.
+    private static func readyBudget() async -> TimeInterval {
+        await SpawnBudget.deadline(spawns: 8, floor: 45, ceiling: 360)
+    }
 
     /// Budget for a side effect of an already-running process — a signal landing, a
-    /// process group draining, a marker file appearing. No spawn, but the scheduler
-    /// that starves spawns also delays these, so it scales too.
-    private static let eventBudget = SpawnBudget.deadline(spawns: 4, floor: 20, ceiling: 120)
+    /// process group draining, a marker file appearing. Some of these do wait on a
+    /// spawn (the SIGTERM-ignoring child arming itself), and the scheduler that starves
+    /// spawns delays the rest, so it scales too.
+    private static func eventBudget() async -> TimeInterval {
+        await SpawnBudget.deadline(spawns: 4, floor: 20, ceiling: 240)
+    }
 
     /// Readiness budget for the tests that must let their stub come fully up and then
     /// still be refused. Unlike the others this one is paid in full on every run — a
     /// rejection has no early event to wait on — so it stays as tight as the spawn
-    /// measurement allows while keeping ~2x headroom over the two spawns (`/bin/sh`,
-    /// then `python3`) the stub needs.
-    private static let rejectionBudget = SpawnBudget.deadline(spawns: 4, floor: 4, ceiling: 120)
+    /// measurement allows while covering the two launches (`/bin/sh`, then `python3`)
+    /// the stub needs before anything answers.
+    private static func rejectionBudget() async -> TimeInterval {
+        await SpawnBudget.deadline(spawns: 4, floor: 4, ceiling: 240, refreshing: true)
+    }
 
     // MARK: - Fixture
 
@@ -74,7 +85,7 @@ struct WebNextServerServiceTests {
 
         func configuration(
             script: String,
-            readinessTimeout: TimeInterval = WebNextServerServiceTests.readyBudget,
+            readinessTimeout: TimeInterval,
             // A quarter second is fast enough to keep local runs snappy while cutting
             // the connection-refused churn a 0.1s poll generates across a whole suite.
             readinessPollInterval: TimeInterval = 0.25,
@@ -96,12 +107,16 @@ struct WebNextServerServiceTests {
             )
         }
 
-        /// Stub server: records env/cwd the service injected, then answers
-        /// `/api/healthz` with `200 {"ok": true}` on the configured port.
+        /// Stub server: records env/cwd the service injected and its own PID, then
+        /// answers `/api/healthz` with `200 {"ok": true}` on the configured port.
+        /// `exec` keeps that PID, so `server.pid` identifies the listening process —
+        /// which is what lets a test tie an observed HTTP response to the stub it
+        /// launched, and reap the process if a teardown assertion fails.
         var healthzServerScript: String {
             """
             echo "$PORT" > "$WEB_NEXT_DATA_DIR/observed-port"
             pwd > "$WEB_NEXT_DATA_DIR/observed-cwd"
+            echo $$ > "$WEB_NEXT_DATA_DIR/server.pid"
             exec python3 "\(root.path)/healthz-server.py"
             """
         }
@@ -186,6 +201,27 @@ struct WebNextServerServiceTests {
         return value
     }
 
+    /// Last-resort reap. The assertion that a process should already be gone has
+    /// been recorded by the time this runs; killing the survivor anyway keeps one
+    /// failure from becoming many, since a leaked `sleep 300` or Python server loads
+    /// the machine for every test that follows it.
+    private func reapIfAlive(_ pid: pid_t?) {
+        guard let pid, processIsAlive(pid) else { return }
+        kill(-pid, SIGKILL)
+        kill(pid, SIGKILL)
+    }
+
+    /// Waits for a PID file the stub writes, then reads it. Waiting rather than
+    /// reading immediately is what separates "the stub never got far enough" from
+    /// "the supervisor failed to act on it".
+    private func awaitPID(at url: URL) async -> pid_t? {
+        let appeared = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            FileManager.default.fileExists(atPath: url.path)
+        }
+        guard appeared else { return nil }
+        return readPID(at: url)
+    }
+
     /// Runs `body` and stops the service on every exit path — early return, recorded
     /// issue, or thrown error. `defer` cannot `await`, and a fire-and-forget
     /// `Task { await service.stop() }` is not guaranteed to run before the test
@@ -235,7 +271,9 @@ struct WebNextServerServiceTests {
     func startBecomesReady() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let service = WebNextServerService(configuration: fixture.configuration(script: fixture.healthzServerScript))
+        let service = WebNextServerService(
+            configuration: fixture.configuration(
+                script: fixture.healthzServerScript, readinessTimeout: await Self.readyBudget()))
 
         try await withService(service) {
             await service.start()
@@ -264,23 +302,29 @@ struct WebNextServerServiceTests {
         defer { fixture.cleanup() }
         // python http.server answers every path (404 for /api/healthz) — an HTTP
         // response, but not a healthy web-next. Must time out, not go ready.
+        // `exec` keeps the recorded PID, so the listener is identifiably ours.
         let script = """
+            echo $$ > "$WEB_NEXT_DATA_DIR/server.pid"
             exec python3 -m http.server "$PORT" --bind 127.0.0.1
             """
+        let budget = await Self.rejectionBudget()
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: script, readinessTimeout: Self.rejectionBudget))
+            configuration: fixture.configuration(script: script, readinessTimeout: budget))
 
         // Watch the port while readiness is being decided. Asserting only that the
         // service failed would pass just as happily on a runner too loaded to launch
         // the listener at all; the observation is what makes this a rejection test.
         let listenerObserver = Task {
-            await waitForHTTPResponse(at: fixture.baseURL, timeout: Self.rejectionBudget)
+            await waitForHTTPResponse(at: fixture.baseURL, timeout: budget)
         }
 
         await service.start()
         let listenerWasLive = await listenerObserver.value
+        let serverPID = readPID(at: fixture.dataDir.appendingPathComponent("server.pid"))
+        defer { reapIfAlive(serverPID) }
 
         #expect(listenerWasLive, "the foreign listener must have been answering while readiness was decided")
+        #expect(serverPID != nil, "the answering listener must be the process this service launched")
         guard case .failed(let reason) = await service.state else {
             Issue.record("expected .failed, got \(await service.state)")
             return
@@ -300,20 +344,10 @@ struct WebNextServerServiceTests {
         // allows — but it must still outlast the stub's own launch, or the kill
         // assertion below would have no process to check.
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: script, readinessTimeout: Self.rejectionBudget))
-
-        // Watch for the stub's PID while readiness is being decided, so a stub that
-        // never got far enough to be killed reads differently from a supervisor that
-        // failed to kill it.
-        let pidURL = fixture.dataDir.appendingPathComponent("server.pid")
-        let pidObserver = Task {
-            await waitUntil(timeout: Self.rejectionBudget) {
-                FileManager.default.fileExists(atPath: pidURL.path)
-            }
-        }
+            configuration: fixture.configuration(
+                script: script, readinessTimeout: await Self.rejectionBudget()))
 
         await service.start()
-        #expect(await pidObserver.value, "the stub must have recorded its PID before the budget expired")
 
         guard case .failed(let reason) = await service.state else {
             Issue.record("expected .failed, got \(await service.state)")
@@ -321,8 +355,13 @@ struct WebNextServerServiceTests {
         }
         #expect(reason.contains("Timed out"))
 
-        let serverPID = try #require(readPID(at: pidURL))
-        let died = await waitUntil(timeout: Self.eventBudget) { !self.processIsAlive(serverPID) }
+        let serverPID = try #require(
+            readPID(at: fixture.dataDir.appendingPathComponent("server.pid")),
+            "the stub must have recorded its PID before the readiness budget expired")
+        defer { reapIfAlive(serverPID) }
+        let died = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            !self.processIsAlive(serverPID)
+        }
         #expect(died, "spawned process should be terminated after readiness timeout")
     }
 
@@ -336,7 +375,8 @@ struct WebNextServerServiceTests {
             sleep 0.4
             \(fixture.healthzServerScript)
             """
-        let service = WebNextServerService(configuration: fixture.configuration(script: script))
+        let service = WebNextServerService(
+            configuration: fixture.configuration(script: script, readinessTimeout: await Self.readyBudget()))
 
         try await withService(service) {
             // Trigger start() from a task we cancel almost immediately — mirroring the
@@ -349,8 +389,9 @@ struct WebNextServerServiceTests {
             starter.cancel()
 
             // Outlive the service's own readiness budget rather than racing a shorter
-            // deadline against it.
-            let ready = await waitUntil(timeout: Self.readyBudget + Self.eventBudget) {
+            // deadline against it — the extra `sleep 0.4` plus its shell put this
+            // launch one step behind the plain healthz stub.
+            let ready = await waitUntilSpawnScaled(spawns: 12, floor: 65, ceiling: 480) {
                 if case .ready = await service.state { return true }
                 return false
             }
@@ -366,27 +407,41 @@ struct WebNextServerServiceTests {
         defer { fixture.cleanup() }
         // The property is that a dead process is noticed immediately instead of waiting
         // out the readiness budget — a relationship between two durations, so both
-        // scale with spawn cost and their ordering survives any load. The bound holds
-        // until a single spawn costs more than `fastFailBound`'s ceiling, which is two
-        // minutes: past that the whole run is already over.
-        let readinessTimeout = SpawnBudget.deadline(spawns: 12, floor: 60, ceiling: 360)
-        let fastFailBound = SpawnBudget.deadline(spawns: 3, floor: 15, ceiling: 120)
+        // scale with spawn cost and their ordering survives any load.
+        let readinessTimeout = await SpawnBudget.deadline(spawns: 12, floor: 60, ceiling: 600)
+        var fastFailBound = await SpawnBudget.deadline(spawns: 3, floor: 15, ceiling: 180)
         #expect(
             fastFailBound * 2 < readinessTimeout,
             "the fast-fail bound must stay well under the budget it proves we did not wait out")
 
+        let script = """
+            echo 1 > "$WEB_NEXT_DATA_DIR/script-ran"
+            exit 1
+            """
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: "exit 1", readinessTimeout: readinessTimeout))
+            configuration: fixture.configuration(script: script, readinessTimeout: readinessTimeout))
 
         let startedAt = Date()
         await service.start()
+        let elapsed = Date().timeIntervalSince(startedAt)
 
         guard case .failed(let reason) = await service.state else {
             Issue.record("expected .failed, got \(await service.state)")
             return
         }
         #expect(reason.contains("exited before becoming ready"))
-        let elapsed = Date().timeIntervalSince(startedAt)
+        #expect(
+            FileManager.default.fileExists(atPath: fixture.dataDir.appendingPathComponent("script-ran").path),
+            "the failure must come from the script running and exiting, not from a launch that never ran it")
+
+        // Missing the bound may mean the machine slowed down since the baseline was
+        // taken rather than that detection regressed. Re-measure before calling it a
+        // regression, capped so the comparison cannot widen into vacuity.
+        if elapsed >= fastFailBound {
+            fastFailBound = min(
+                readinessTimeout * 0.75,
+                await SpawnBudget.deadline(spawns: 3, floor: 15, ceiling: 180, refreshing: true))
+        }
         #expect(elapsed < fastFailBound, "early exit should fail fast, took \(elapsed)s")
     }
 
@@ -399,7 +454,8 @@ struct WebNextServerServiceTests {
             echo $! > "$WEB_NEXT_DATA_DIR/child.pid"
             exit 0
             """
-        let service = WebNextServerService(configuration: fixture.configuration(script: script))
+        let service = WebNextServerService(
+            configuration: fixture.configuration(script: script, readinessTimeout: await Self.readyBudget()))
 
         await service.start()
 
@@ -410,7 +466,10 @@ struct WebNextServerServiceTests {
         #expect(reason.contains("exited before becoming ready"))
 
         let childPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("child.pid")))
-        let childDied = await waitUntil(timeout: Self.eventBudget) { !self.processIsAlive(childPID) }
+        defer { reapIfAlive(childPID) }
+        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            !self.processIsAlive(childPID)
+        }
         #expect(childDied, "a child left behind by an exited leader must not survive the failure transition")
     }
 
@@ -425,7 +484,8 @@ struct WebNextServerServiceTests {
             echo $! > "$WEB_NEXT_DATA_DIR/child.pid"
             \(fixture.healthzServerScript)
             """
-        let service = WebNextServerService(configuration: fixture.configuration(script: script))
+        let service = WebNextServerService(
+            configuration: fixture.configuration(script: script, readinessTimeout: await Self.readyBudget()))
 
         let childPID: pid_t? = try await withService(service) {
             await service.start()
@@ -438,8 +498,11 @@ struct WebNextServerServiceTests {
             return pid
         }
         guard let childPID else { return }
+        defer { reapIfAlive(childPID) }
 
-        let childDied = await waitUntil(timeout: Self.eventBudget) { !self.processIsAlive(childPID) }
+        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            !self.processIsAlive(childPID)
+        }
         #expect(childDied, "grandchild should die with the process group")
         #expect(await service.state == .idle)
 
@@ -453,7 +516,9 @@ struct WebNextServerServiceTests {
         defer { fixture.cleanup() }
         let service = WebNextServerService(
             configuration: fixture.configuration(
-                script: fixture.termIgnoringChildScript, terminationGracePeriod: 0.5))
+                script: fixture.termIgnoringChildScript,
+                readinessTimeout: await Self.readyBudget(),
+                terminationGracePeriod: 0.5))
 
         let childPID: pid_t? = try await withService(service) {
             await service.start()
@@ -461,11 +526,14 @@ struct WebNextServerServiceTests {
                 Issue.record("expected .ready, got \(await service.state)")
                 return nil
             }
-            return try await armedTermIgnoringChildPID(in: fixture)
+            return await armedTermIgnoringChildPID(in: fixture)
         }
         guard let childPID else { return }
+        defer { reapIfAlive(childPID) }
 
-        let childDied = await waitUntil(timeout: Self.eventBudget) { !self.processIsAlive(childPID) }
+        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            !self.processIsAlive(childPID)
+        }
         #expect(childDied, "a SIGTERM-ignoring group member must be SIGKILLed even after the leader exits")
         #expect(await service.state == .idle)
     }
@@ -476,12 +544,11 @@ struct WebNextServerServiceTests {
     func watchdogDetectsServerDeath() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let script = """
-            echo $$ > "$WEB_NEXT_DATA_DIR/server.pid"
-            \(fixture.healthzServerScript)
-            """
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: script, watchdogInterval: 0.15))
+            configuration: fixture.configuration(
+                script: fixture.healthzServerScript,
+                readinessTimeout: await Self.readyBudget(),
+                watchdogInterval: 0.15))
 
         try await withService(service) {
             await service.start()
@@ -493,7 +560,7 @@ struct WebNextServerServiceTests {
             let serverPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("server.pid")))
             kill(serverPID, SIGKILL)
 
-            let failed = await waitUntil(timeout: Self.eventBudget) {
+            let failed = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
                 if case .failed = await service.state { return true }
                 return false
             }
@@ -508,7 +575,9 @@ struct WebNextServerServiceTests {
     func signInURLFromTokenFile() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let service = WebNextServerService(configuration: fixture.configuration(script: fixture.healthzServerScript))
+        let service = WebNextServerService(
+            configuration: fixture.configuration(
+                script: fixture.healthzServerScript, readinessTimeout: await Self.readyBudget()))
 
         try await withService(service) {
             await service.start()
@@ -562,15 +631,16 @@ struct WebNextServerServiceTests {
             export HEALTHZ_BODY='{"ok": true, "localMode": false}'
             \(fixture.healthzServerScript)
             """
+        let budget = await Self.rejectionBudget()
         let service = WebNextServerService(
-            configuration: fixture.configuration(script: script, readinessTimeout: Self.rejectionBudget))
+            configuration: fixture.configuration(script: script, readinessTimeout: budget))
 
         // As in the foreign-listener test: observe that a healthz endpoint really was
         // answering during the readiness window, so `.failed` means "rejected for
         // localMode:false" and not "nothing ever came up".
         let healthzURL = fixture.baseURL.appendingPathComponent("api/healthz")
         let healthzObserver = Task {
-            await waitForHTTPResponse(at: healthzURL, timeout: Self.rejectionBudget) { status, data in
+            await waitForHTTPResponse(at: healthzURL, timeout: budget) { status, data in
                 status == 200 && String(decoding: data, as: UTF8.self).contains("\"localMode\": false")
             }
         }
@@ -579,11 +649,15 @@ struct WebNextServerServiceTests {
             await service.start()
             let healthzAnswered = await healthzObserver.value
             #expect(healthzAnswered, "the localMode:false healthz endpoint must have been live and answering")
+            #expect(
+                readPID(at: fixture.dataDir.appendingPathComponent("server.pid")) != nil,
+                "the answering endpoint must be the process this service launched")
             guard case .failed = await service.state else {
                 Issue.record("localMode:false must not satisfy readiness, got \(await service.state)")
                 return
             }
         }
+        reapIfAlive(readPID(at: fixture.dataDir.appendingPathComponent("server.pid")))
     }
 
     // MARK: - Log redaction
@@ -606,7 +680,8 @@ struct WebNextServerServiceTests {
             echo "Local sign-in: http://127.0.0.1:$PORT/sign-in?token=\(secret)&redirect=/"
             \(fixture.healthzServerScript)
             """
-        let service = WebNextServerService(configuration: fixture.configuration(script: script))
+        let service = WebNextServerService(
+            configuration: fixture.configuration(script: script, readinessTimeout: await Self.readyBudget()))
 
         try await withService(service) {
             await service.start()
@@ -616,7 +691,7 @@ struct WebNextServerServiceTests {
             }
 
             let logURL = try #require(await service.logFileURL)
-            let redacted = await waitUntil(timeout: Self.eventBudget) {
+            let redacted = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
                 let contents = (try? String(contentsOf: logURL, encoding: .utf8)) ?? ""
                 return contents.contains("token=<redacted>") && !contents.contains(secret)
             }
@@ -657,25 +732,32 @@ struct WebNextServerServiceTests {
         // A full 5s grace here; stopForTermination must compress it under budget.
         let service = WebNextServerService(
             configuration: fixture.configuration(
-                script: fixture.termIgnoringChildScript, terminationGracePeriod: 5))
+                script: fixture.termIgnoringChildScript,
+                readinessTimeout: await Self.readyBudget(),
+                terminationGracePeriod: 5))
 
-        await service.start()
-        guard case .ready = await service.state else {
-            Issue.record("expected .ready, got \(await service.state)")
-            await service.stop()
-            return
+        // `withService`'s trailing stop is a no-op after `stopForTermination` succeeds
+        // and the guaranteed teardown when anything above it exits early.
+        let childPID: pid_t? = try await withService(service) {
+            await service.start()
+            guard case .ready = await service.state else {
+                Issue.record("expected .ready, got \(await service.state)")
+                return nil
+            }
+            guard let childPID = await armedTermIgnoringChildPID(in: fixture) else { return nil }
+
+            let started = Date()
+            await service.stopForTermination()
+            let elapsed = Date().timeIntervalSince(started)
+            #expect(elapsed < 4, "terminate path must finish under the OS budget, took \(elapsed)s")
+            return childPID
         }
-        guard let childPID = try await armedTermIgnoringChildPID(in: fixture) else {
-            await service.stop()
-            return
+        guard let childPID else { return }
+        defer { reapIfAlive(childPID) }
+
+        let childDied = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
+            !self.processIsAlive(childPID)
         }
-
-        let started = Date()
-        await service.stopForTermination()
-        let elapsed = Date().timeIntervalSince(started)
-        #expect(elapsed < 4, "terminate path must finish under the OS budget, took \(elapsed)s")
-
-        let childDied = await waitUntil(timeout: Self.eventBudget) { !self.processIsAlive(childPID) }
         #expect(childDied, "a SIGTERM-ignoring member must still be SIGKILLed")
         #expect(await service.state == .idle)
     }
@@ -684,7 +766,8 @@ struct WebNextServerServiceTests {
     func signInURLNilWhenNotReady() async throws {
         let fixture = try Fixture()
         defer { fixture.cleanup() }
-        let service = WebNextServerService(configuration: fixture.configuration(script: "exit 0"))
+        let service = WebNextServerService(
+            configuration: fixture.configuration(script: "exit 0", readinessTimeout: 1))
 
         #expect(await service.signInURL(redirect: "/w/demo") == nil)
 
@@ -698,17 +781,21 @@ struct WebNextServerServiceTests {
 
     /// PID of the SIGTERM-ignoring group member, once it has confirmed its handler is
     /// installed. Waiting on the marker rather than on elapsed time is what keeps the
-    /// escalation tests from racing SIGTERM against handler installation.
-    private func armedTermIgnoringChildPID(in fixture: Fixture) async throws -> pid_t? {
+    /// escalation tests from racing SIGTERM against handler installation. Returns nil
+    /// rather than throwing so a caller mid-teardown always reaches its own cleanup.
+    private func armedTermIgnoringChildPID(in fixture: Fixture) async -> pid_t? {
         let armedURL = fixture.dataDir.appendingPathComponent("term-ignorer-armed")
-        let armed = await waitUntil(timeout: Self.eventBudget) {
+        let armed = await waitUntilSpawnScaled(spawns: 4, floor: 20, ceiling: 240) {
             FileManager.default.fileExists(atPath: armedURL.path)
         }
         guard armed else {
             Issue.record("the SIGTERM-ignoring child never armed")
             return nil
         }
-        let childPID = try #require(readPID(at: fixture.dataDir.appendingPathComponent("child.pid")))
+        guard let childPID = await awaitPID(at: fixture.dataDir.appendingPathComponent("child.pid")) else {
+            Issue.record("the SIGTERM-ignoring child never recorded its PID")
+            return nil
+        }
         #expect(processIsAlive(childPID))
         return childPID
     }

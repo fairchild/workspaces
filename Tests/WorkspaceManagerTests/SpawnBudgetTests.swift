@@ -57,8 +57,20 @@ struct SpawnBudgetTests {
     }
 
     @Test("the measured baseline is a positive duration usable as a scaling factor")
-    func measuredBaselineIsUsable() {
-        #expect(SpawnBudget.spawnSeconds > 0)
-        #expect(SpawnBudget.deadline(spawns: 4, floor: 20, ceiling: 120) >= 20)
+    func measuredBaselineIsUsable() async {
+        #expect(await SpawnBudget.spawnSeconds() > 0)
+        #expect(await SpawnBudget.deadline(spawns: 4, floor: 20, ceiling: 120) >= 20)
+    }
+
+    @Test("re-measuring never lowers the baseline, so budgets only widen mid-run")
+    func refreshNeverLowersTheBaseline() async {
+        // Load is not stationary: a baseline taken at suite start can be an
+        // under-estimate by the time a later test uses it. Re-measuring has to be safe
+        // to call at any moment, which means it can raise the baseline but never
+        // shrink a budget another test already sized from it.
+        let first = await SpawnBudget.spawnSeconds()
+        let refreshed = await SpawnBudget.refreshedSpawnSeconds()
+        #expect(refreshed >= first)
+        #expect(await SpawnBudget.spawnSeconds() == refreshed, "the raised baseline must stick")
     }
 }
