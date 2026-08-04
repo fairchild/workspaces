@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "InvestigationDiagnostics")
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "PerformanceSignposts")
 
 enum InvestigationDiagnostics {
     private enum InputMode: String {

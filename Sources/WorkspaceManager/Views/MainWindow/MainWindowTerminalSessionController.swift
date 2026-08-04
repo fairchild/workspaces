@@ -2,7 +2,7 @@ import Foundation
 import WorkspaceManagerCore
 import os.log
 
-private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "MainWindowTerminalSessionController")
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "HostSession")
 
 @MainActor
 struct MainWindowTerminalSessionController {

@@ -2,7 +2,7 @@ import Foundation
 import WorkspaceManagerCore
 import os.log
 
-private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceEnvironmentOptionsController")
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "PerformanceSignposts")
 
 struct WorkspaceProviderSheetState: Sendable, Equatable {
     let providerID: String

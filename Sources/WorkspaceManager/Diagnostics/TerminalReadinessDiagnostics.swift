@@ -2,7 +2,7 @@ import Foundation
 import WorkspaceManagerCore
 import os.log
 
-private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalReadinessDiagnostics")
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "PerformanceSignposts")
 
 final class TerminalReadinessDiagnostics {
     enum Signal: String {
