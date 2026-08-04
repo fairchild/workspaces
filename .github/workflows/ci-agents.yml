@@ -88,12 +88,3 @@ jobs:
 
       - name: Run CD failure notifier tests
         run: node --test .github/workflows/cd-fail-notify.test.js
-
-      - name: TEMP - probe toJSON(vars) for repo-variables-drift design (removed before PR)
-        env:
-          REPO_VARS_JSON: ${{ toJSON(vars) }}
-        run: |
-          echo "raw REPO_VARS_JSON:"
-          echo "$REPO_VARS_JSON"
-          echo "check-repo-variables.py against it:"
-          python3 scripts/check-repo-variables.py
