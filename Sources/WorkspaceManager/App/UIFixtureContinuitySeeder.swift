@@ -32,7 +32,12 @@ enum UIFixtureContinuitySeeder {
     /// the resolved target exists in the same launch's seeded SwiftData.
     static let seededWorkspaceRelativePath = "bertram-chat/feature-auth"
 
-    private static var pendingSeed: Task<Void, Never>?
+    /// `seedIfNeeded()` (called once, synchronously, from `WorkspaceManagerApp.init()`) is the
+    /// only writer; `waitUntilSeeded()` (called from SwiftUI view lifecycle, necessarily after
+    /// `init()` has returned) is the only reader. `nonisolated(unsafe)` documents that
+    /// happens-before ordering rather than papering over an actual race — the compiler can't
+    /// see across the app-init → view-lifecycle boundary that guarantees it.
+    private nonisolated(unsafe) static var pendingSeed: Task<Void, Never>?
 
     static func isRequested(in environment: [String: String]) -> Bool {
         environment["WORKSPACES_UI_FIXTURE"] == "1" && environment[seedRestoreBannerEnvKey] == "1"
