@@ -56,7 +56,7 @@ Model capability was at most secondary: agents did what the pipeline permitted. 
 
 | Stage | Persona | Trigger | Does | Builds on |
 |---|---|---|---|---|
-| Triage | Peter | issue opened; feedback poll cron | understand/reproduce; route small+clear → `ready`, large/ambiguous → `spec`, unclear → `needs-info`, someday → `idea`; sanitize + dedup feedback | new |
+| Triage | Peter | issue opened; feedback poll cron | understand/reproduce; route small+clear → `ready`, large/ambiguous → `spec`, unclear → comment + leave in `needs-triage` (no dedicated label since the `needs-info` label was removed 2026-08-02), someday → `idea`; sanitize + dedup feedback | new |
 | Spec | Peter | `spec` applied | write `specs/<slug>/PRODUCT.md` + `TECH.md`; open spec-only PR | new; Warp's spec-skill shape |
 | Implement | April or Plat | `ready` applied | claim → branch → implement → evidence → PR (`Closes #N`) | evidence lane (`_evidence.yml`, `evidence.sh`) reused as-is |
 | Review | the counterpart | agent PR opened | review against mergeability standard; apply `mergeable` | the one organically working v1 behavior |

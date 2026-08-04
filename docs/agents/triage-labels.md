@@ -36,14 +36,14 @@ Not yet CI-enforced; it's the cheapest surface today. If drift shows up, a readi
 | Label | Meaning |
 | --- | --- |
 | `needs-triage` | Maintainer needs to evaluate the issue. |
-| `needs-info` | Waiting on the reporter for specific missing information. Prefer this over the generic GitHub `question` label. |
 | `task` | Planned work item. Combine with `agent` for agent pipeline work. |
 | `ready` | Ready for the owning lane to act. `agent` + `ready` means an agent may claim it. `human` + `ready` means a human may pick it up. |
 | `claimed` | Actively owned and in progress. For agent work, claim comments and assignees identify which agent owns it. |
 | `review` | A PR exists and is awaiting review. |
 | `mergeable` | Additive review signal: an agent reviewed and approved the linked PR; owner merge is now appropriate. |
 | `blocked` | Progress is blocked by a dependency that should be resolved before work continues. |
-| `wontfix` | Closed or closing as not planned. |
+
+`needs-info` and `wontfix` were deleted in the 2026-08-02 label hygiene sweep (#1159) as never-applied. Waiting on the reporter for missing information is no longer label-tracked — leave a comment and keep the issue in `needs-triage`. Closing as not planned uses GitHub's native "not planned" issue-close reason instead of a label.
 
 Exactly one of `ready`, `claimed`, and `review` should be present on an active `agent` + `task` issue. `mergeable` may stack with `review`.
 
@@ -86,10 +86,10 @@ These two labels keep the open backlog actionable without deleting history. They
 | Label in mattpocock/skills | Label in this repo | Meaning |
 | --- | --- | --- |
 | `needs-triage` | `needs-triage` | Maintainer needs to evaluate the issue. |
-| `needs-info` | `needs-info` | Waiting on the reporter for more information. |
+| `needs-info` | *(no label — comment on the issue)* | Waiting on the reporter for more information; not label-tracked since the 2026-08-02 sweep removed the unused `needs-info` label. |
 | `ready-for-agent` | `agent` + `ready` | Fully specified, approved, unblocked, and available for an AFK agent to claim. |
 | `ready-for-human` | `human` + `ready` | Ready for a human to implement, review, or operate. |
-| `wontfix` | `wontfix` | Will not be actioned. |
+| `wontfix` | *(no label — close as "not planned")* | Will not be actioned; use GitHub's native "not planned" issue-close reason since the 2026-08-02 sweep removed the unused `wontfix` label. |
 
 ## Dimension Labels
 

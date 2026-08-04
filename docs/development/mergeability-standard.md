@@ -16,7 +16,7 @@ Work is mergeable when it is correct, coherent with the product, reviewable, ver
 - Visual changes ship visual evidence: before/after screenshots (or after-only when the before state is gone or irrelevant) for any user-visible UI change, captured via the fixture lane, the capture-only handshake, or a VM lane. Narrative-only claims do not clear the gate; if capture is genuinely blocked, mark `blocked:evidence` with the reason.
 - State what changed, how it was verified, and what residual risk or follow-up remains.
 - If evidence is blocked, say so explicitly before merge and explain what approval or environment is needed.
-- Use machine-readable blocker labels when a PR is not merge-ready: `blocked:ci`, `blocked:secrets`, `blocked:evidence`, or `blocked:review`.
+- Use machine-readable blocker labels when a PR is not merge-ready: `blocked:ci`, `blocked:secrets`, or `blocked:evidence`. (`blocked:review` was deleted in the 2026-08-02 label hygiene sweep as unused; a PR needing revision after review simply stays on `review` until fixed — no separate blocker label covers that state.)
 
 ## Required PR Body Section
 
