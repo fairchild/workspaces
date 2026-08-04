@@ -15,6 +15,7 @@ import WorkspaceManagerCore
 @MainActor
 @Suite("ArchivedWorkspacePurge")
 struct ArchivedWorkspacePurgeTests {
+    private let controller = MainWindowMaintenanceController()
     private let now = Date(timeIntervalSince1970: 1_700_000_000)
     private let day = 86_400.0
 
@@ -81,7 +82,7 @@ struct ArchivedWorkspacePurgeTests {
             archivedAt: now.addingTimeInterval(-40 * day)
         )
 
-        let result = ContentView.expiredArchivedWorkspaces(
+        let result = controller.expiredArchivedWorkspaces(
             [expired, boundary],
             now: now,
             delayDays: 30
@@ -89,7 +90,7 @@ struct ArchivedWorkspacePurgeTests {
 
         // Re-run over the full set to confirm filtering excludes the others.
         let all = repo.workspaces
-        let resultAll = ContentView.expiredArchivedWorkspaces(all, now: now, delayDays: 30)
+        let resultAll = controller.expiredArchivedWorkspaces(all, now: now, delayDays: 30)
         #expect(Set(resultAll.map(\.name)) == ["expired", "boundary"])
         #expect(Set(result.map(\.name)) == ["expired", "boundary"])
     }
@@ -105,7 +106,7 @@ struct ArchivedWorkspacePurgeTests {
             archivedAt: now.addingTimeInterval(-400 * day)
         )
 
-        #expect(ContentView.expiredArchivedWorkspaces([expired], now: now, delayDays: 0).isEmpty)
-        #expect(ContentView.expiredArchivedWorkspaces([expired], now: now, delayDays: -5).isEmpty)
+        #expect(controller.expiredArchivedWorkspaces([expired], now: now, delayDays: 0).isEmpty)
+        #expect(controller.expiredArchivedWorkspaces([expired], now: now, delayDays: -5).isEmpty)
     }
 }

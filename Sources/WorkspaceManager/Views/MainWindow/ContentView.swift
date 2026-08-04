@@ -147,6 +147,7 @@ struct ContentView: View {
     private let tabRoutingController = TabRoutingController()
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
     private let workspaceOrphanController = WorkspaceOrphanReconciliationController()
+    private let maintenanceController = MainWindowMaintenanceController()
 
     private var launchRepositoryService: LaunchRepositoryService {
         LaunchRepositoryService(modelContext: modelContext)
@@ -2356,27 +2357,10 @@ struct ContentView: View {
         await purgeExpiredArchivedWorkspaces(trigger: "launch_deferred")
     }
 
-    /// Local archived workspaces whose `.archived/` directory has aged past the
-    /// configured retention. Pure so the selection rule is unit-testable; workspaces
-    /// without an `archivedAt` (archived before this was tracked) are never auto-purged.
-    static func expiredArchivedWorkspaces(
-        _ workspaces: [Workspace],
-        now: Date,
-        delayDays: Int
-    ) -> [Workspace] {
-        guard delayDays > 0 else { return [] }
-        let cutoff = now.addingTimeInterval(-Double(delayDays) * 86_400)
-        return workspaces.filter { workspace in
-            workspace.backend == .local
-                && workspace.status == .archived
-                && (workspace.archivedAt.map { $0 <= cutoff } ?? false)
-        }
-    }
-
     @MainActor
     private func purgeExpiredArchivedWorkspaces(trigger: String) async {
         let delayDays = ArchivedWorkspaceSettings.purgeDays()
-        let candidates = Self.expiredArchivedWorkspaces(
+        let candidates = maintenanceController.expiredArchivedWorkspaces(
             repos.flatMap(\.workspaces),
             now: Date(),
             delayDays: delayDays
@@ -2416,64 +2400,11 @@ struct ContentView: View {
 
     @MainActor
     private func syncWorkspaceStatuses(trigger: String) async {
-        let syncStartedAt = Date()
-        let nonLocalWorkspaces = repos.flatMap(\.workspaces).filter {
-            $0.backend != .local && $0.remoteId != nil
-        }
-        guard !nonLocalWorkspaces.isEmpty else { return }
-
-        var changed = false
-        var changedCount = 0
-        var hadFailure = false
-        let groupedWorkspaces = Dictionary(grouping: nonLocalWorkspaces, by: \.backendIdentifier)
-
-        for (providerID, providerWorkspaces) in groupedWorkspaces {
-            guard let provider = workspaceProviderRegistry.provider(for: providerID) else { continue }
-
-            let providerSyncStartedAt = Date()
-            var providerChangedCount = 0
-            var outcome = "success"
-
-            do {
-                let snapshots = try await provider.syncStatuses(
-                    for: providerWorkspaces.map(WorkspaceProviderTarget.init)
-                )
-                let statusesByRemoteID = Dictionary(
-                    uniqueKeysWithValues: snapshots.map { ($0.remoteId, $0.status) }
-                )
-
-                for workspace in providerWorkspaces {
-                    guard let remoteID = workspace.remoteId else { continue }
-                    let newStatus = statusesByRemoteID[remoteID] ?? .archived
-                    if workspace.status != newStatus {
-                        workspaceProviderLog.info(
-                            "[WorkspaceProvider] Syncing workspace '\(workspace.name, privacy: .public)' (\(providerID, privacy: .public)): \(workspace.status.rawValue, privacy: .public) -> \(newStatus.rawValue, privacy: .public)"
-                        )
-                        workspace.status = newStatus
-                        changed = true
-                        changedCount += 1
-                        providerChangedCount += 1
-                    }
-                }
-            } catch {
-                outcome = "failure"
-                hadFailure = true
-                workspaceProviderLog.error(
-                    "[WorkspaceProvider] Failed to sync \(providerID, privacy: .public) workspace statuses: \(error.localizedDescription, privacy: .public)"
-                )
-            }
-
-            perfLog.info(
-                "[Perf] metric=workspace_status_sync_provider duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(providerSyncStartedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) provider=\(providerID, privacy: .public) workspace_count=\(providerWorkspaces.count, privacy: .public) changed_count=\(providerChangedCount, privacy: .public) outcome=\(outcome, privacy: .public)"
-            )
-        }
-
-        if changed {
-            try? modelContext.save()
-        }
-
-        perfLog.info(
-            "[Perf] metric=workspace_status_sync duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(syncStartedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) providers=\(groupedWorkspaces.count, privacy: .public) workspace_count=\(nonLocalWorkspaces.count, privacy: .public) changed_count=\(changedCount, privacy: .public) outcome=\(hadFailure ? "partial_failure" : "success", privacy: .public)"
+        await maintenanceController.syncWorkspaceStatuses(
+            repos: repos,
+            registry: workspaceProviderRegistry,
+            modelContext: modelContext,
+            trigger: trigger
         )
     }
 
@@ -3248,48 +3179,14 @@ struct ContentView: View {
     }
 
     private func refreshWorkspaceStatusAggregator() {
-        let presentation = SidebarWorkspacePresentationController()
-        let statuses = agentSessionRegistry.statuses
-        let sessions = tileTreeStore.sessions
-        let normalize: (URL) -> String = { url in normalizePath(url.path) }
-
-        let workspaceInputs: [WorkspaceStatusAggregator.WorkspaceInput] =
-            repos
-            .flatMap(\.workspaces)
-            .map { workspace in
-                let key = presentation.sessionKey(
-                    for: workspace,
-                    registry: workspaceProviderRegistry,
-                    normalizePath: normalize
-                )
-                let status = presentation.freshestAgentStatus(
-                    for: key,
-                    sessions: sessions,
-                    agentStatusBySessionID: statuses
-                )
-                return WorkspaceStatusAggregator.WorkspaceInput(
-                    workspaceID: workspace.id,
-                    repoID: workspace.sourceRepo?.id,
-                    lastAccessedAt: workspace.lastAccessedAt,
-                    status: status
-                )
-            }
-
-        let repoInputs: [WorkspaceStatusAggregator.RepoInput] = repos.map { repo in
-            let key = HostTerminalSessionKey.repoPath(normalize(repo.localURL))
-            let status = presentation.freshestAgentStatus(
-                for: key,
-                sessions: sessions,
-                agentStatusBySessionID: statuses
-            )
-            return WorkspaceStatusAggregator.RepoInput(
-                repoID: repo.id,
-                lastAccessedAt: repo.lastAccessedAt,
-                status: status
-            )
-        }
-
-        workspaceStatusAggregator.update(workspaces: workspaceInputs, repos: repoInputs)
+        let inputs = maintenanceController.aggregatorInputs(
+            repos: repos,
+            sessions: tileTreeStore.sessions,
+            agentStatusBySessionID: agentSessionRegistry.statuses,
+            registry: workspaceProviderRegistry,
+            normalizePath: { url in normalizePath(url.path) }
+        )
+        workspaceStatusAggregator.update(workspaces: inputs.workspaces, repos: inputs.repos)
     }
 
     @MainActor
