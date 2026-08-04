@@ -34,6 +34,16 @@ struct ClaudeIntegrationLifecycleTests {
         func userSettingsModificationDate() async -> Date? { nil }
     }
 
+    /// A per-call temp-dir socket path so the hook listener never binds the real,
+    /// machine-wide `~/Library/Application Support/<bundleID>/hooks.sock` — that path
+    /// is `flock`-guarded against any real running app instance on the same machine,
+    /// which the install-once assertions below have nothing to do with.
+    private static func ephemeralSocketURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-lifecycle-test-\(UUID().uuidString)", isDirectory: false)
+            .appendingPathExtension("sock")
+    }
+
     /// Helper: configures the singleton with a fresh ephemeral defaults suite and a
     /// stub installer, then waits for the lifecycle's startup Task to finish so the
     /// (a)synchronous install() invocation has been observed.
@@ -45,7 +55,8 @@ struct ClaudeIntegrationLifecycleTests {
         let stub = StubInstaller()
         ClaudeIntegrationLifecycle.shared._configureForTesting(
             defaults: defaults,
-            installerFactory: { _ in stub }
+            installerFactory: { _ in stub },
+            socketURLOverride: Self.ephemeralSocketURL()
         )
 
         let registry = AgentSessionRegistry()
@@ -95,7 +106,8 @@ struct ClaudeIntegrationLifecycleTests {
         let stub = StubInstaller()
         ClaudeIntegrationLifecycle.shared._configureForTesting(
             defaults: defaults,
-            installerFactory: { _ in stub }
+            installerFactory: { _ in stub },
+            socketURLOverride: Self.ephemeralSocketURL()
         )
 
         var didPublishInstaller = false

@@ -35,6 +35,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private var teardownObserver: Any?
     private var didStart = false
     private var defaults: UserDefaults = .standard
+    private var socketURLOverride: URL?
     private var installerFactory: @Sendable (String) async -> any ClaudeSettingsInstalling = {
         _ in
         let eventForwarderPath = ClaudeIntegrationLifecycle.extractEventForwarderScript()
@@ -67,13 +68,19 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
 
     /// Test seam: swap the UserDefaults instance and the installer construction so
     /// the silent-reinstall behaviour can be exercised without touching the user's
-    /// real `~/.claude/settings.json`. Tests must reset state via `_resetForTesting`.
+    /// real `~/.claude/settings.json`. `socketURLOverride` keeps the hook listener off
+    /// the real, machine-wide `~/Library/Application Support/<bundleID>/hooks.sock` —
+    /// without it, tests contend over the same `flock`-guarded socket as any real
+    /// running app instance on the same machine. Call again to reconfigure; each call
+    /// resets `didStart` so a fresh `start()` re-runs the lifecycle.
     func _configureForTesting(
         defaults: UserDefaults,
-        installerFactory: @escaping @Sendable (String) async -> any ClaudeSettingsInstalling
+        installerFactory: @escaping @Sendable (String) async -> any ClaudeSettingsInstalling,
+        socketURLOverride: URL? = nil
     ) {
         self.defaults = defaults
         self.installerFactory = installerFactory
+        self.socketURLOverride = socketURLOverride
         self.didStart = false
         self.listener = nil
         self.notificationPoster = nil
@@ -89,7 +96,8 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         let listener = AgentHookListener(
             bundleIdentifier: bundleID,
             registry: registry,
-            commandStatusRegistry: commandStatusRegistry
+            commandStatusRegistry: commandStatusRegistry,
+            socketURLOverride: socketURLOverride
         )
         self.listener = listener
         self.socketPath = listener.socketPath
