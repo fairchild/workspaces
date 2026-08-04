@@ -8,8 +8,8 @@ This file is the short reference for the current Workspaces performance investig
 
 Use it together with:
 
-- [investigation-2026-04-07-global-slowness-and-input-latency.md](/Users/fairchild/.worktrees/workspaces/codex/workspaces-perf-optimization/docs/performance/investigation-2026-04-07-global-slowness-and-input-latency.md)
-- [investigation-2026-04-07-global-slowness-and-input-latency-log.md](/Users/fairchild/.worktrees/workspaces/codex/workspaces-perf-optimization/docs/performance/investigation-2026-04-07-global-slowness-and-input-latency-log.md)
+- [investigation-2026-04-07-global-slowness-and-input-latency.md](investigation-2026-04-07-global-slowness-and-input-latency.md)
+- [investigation-2026-04-07-global-slowness-and-input-latency-log.md](investigation-2026-04-07-global-slowness-and-input-latency-log.md)
 
 ## Current Best Read
 

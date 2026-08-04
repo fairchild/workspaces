@@ -1,6 +1,6 @@
 # Ops Report Fixtures
 
-These fixture packs drive [`scripts/ops-report.py`](/Users/fairchild/.codex/worktrees/3272/workspaces/scripts/ops-report.py) in replay mode:
+These fixture packs drive [`scripts/ops-report.py`](../../scripts/ops-report.py) in replay mode:
 
 ```bash
 uv run --script scripts/ops-report.py \
@@ -26,7 +26,7 @@ File shapes should mirror the live GitHub/perf inputs that `ops-report.py` alrea
 - `issues.json`: `gh issue list --json ...` style entries
 - `prs.json`: `gh pr list --json ...` style entries
 - `runs.json`: `gh run list --json ...` style entries
-- perf files: same shape as [`docs/performance/latest-summary.json`](/Users/fairchild/.codex/worktrees/3272/workspaces/docs/performance/latest-summary.json) and [`docs/performance/metrics-history.csv`](/Users/fairchild/.codex/worktrees/3272/workspaces/docs/performance/metrics-history.csv)
+- perf files: same shape as [`docs/performance/latest-summary.json`](../../docs/performance/latest-summary.json) and [`docs/performance/metrics-history.csv`](../../docs/performance/metrics-history.csv)
 
 Scenarios:
 

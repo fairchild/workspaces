@@ -126,4 +126,4 @@ Only one remote connection can be in-flight at a time. Clicking a second cloud w
 
 ## Future Work
 
-See `backlog/daytona-native-swift-api-plan.md` — replace the Python CLI bridge with direct URLSession calls to the Daytona REST API, eliminating the `uv`/Python dependency and enabling streaming progress updates.
+See `backlog/done/daytona-native-swift-api-plan.md` — replace the Python CLI bridge with direct URLSession calls to the Daytona REST API, eliminating the `uv`/Python dependency and enabling streaming progress updates.

@@ -89,7 +89,7 @@ The agent runtime executes Claude Code through the `ComputeProviderRegistry` at 
 | `github-actions` | Runner stub | No | Transcript stub |
 | `mock` | In-process test provider | Yes | PTY stub |
 
-> Historical note: `cloudflare-sandbox` was scaffolded alongside the Vercel provider as a multi-provider proof-of-concept. The Worker and provider class were deleted in PR #321 because the scaffold had never been wired to a real Cloudflare account and was sitting in the runtime as ~500 lines of dead code. Design notes preserved in `backlog/cloudflare-sandbox-live-plan.md`.
+> Historical note: `cloudflare-sandbox` was scaffolded alongside the Vercel provider as a multi-provider proof-of-concept. The Worker and provider class were deleted in PR #321 because the scaffold had never been wired to a real Cloudflare account and was sitting in the runtime as ~500 lines of dead code. Design notes preserved in `backlog/done/cloudflare-sandbox-live-plan.md`.
 
 ### Session Lifecycle
 

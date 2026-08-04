@@ -540,7 +540,7 @@ security find-identity -v -p codesigning
 | `scripts/prepare-prerelease.sh` | Prepare tester-prerelease version/build metadata and changelog notes for a PR |
 | `scripts/notarize.sh` | Create DMG and notarize |
 | `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` and provisioning profile |
-| `scripts/signing-config.sh` | Your signing credentials (not in git) |
+| `scripts/signing-config.sh.template` | Copy to `scripts/signing-config.sh` and fill in your signing credentials (gitignored, not in git) |
 
 ---
 

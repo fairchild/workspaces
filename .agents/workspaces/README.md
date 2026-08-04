@@ -1,5 +1,10 @@
 # .agents/workspaces — Repo Landing Override
 
+> **Not currently wired up.** Commit `a7569b39` ("refine main window navigation and
+> simplify sidebar chrome") replaced this WKWebView-based override with a native SwiftUI
+> `RepoLandingView`; there is no WebKit bridge or `.agents/workspaces/index.html`
+> override-loading path in the app anymore. This directory describes the prior design.
+
 This directory replaces the native SwiftUI landing page with a custom HTML dashboard when you click this repo in the sidebar.
 
 ## How it works
@@ -25,4 +30,4 @@ Open `index.html` in a browser — the JS detects the missing webkit handler and
 
 ## Bridge
 
-The app pushes live workspace data to `window.RepoLanding.onData(data)` and listens for actions via `window.webkit.messageHandlers.repoLanding.postMessage({ action, ... })`. See [docs/development/repo-landing-overrides.md](../../docs/development/repo-landing-overrides.md) for the full contract.
+The app pushed live workspace data to `window.RepoLanding.onData(data)` and listened for actions via `window.webkit.messageHandlers.repoLanding.postMessage({ action, ... })`, per the design this directory describes. Current `RepoLandingView.swift` is native SwiftUI and has no such bridge.
