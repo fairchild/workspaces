@@ -204,6 +204,24 @@ app_capture_window() {
         content_waited=$((content_waited + 1))
     done
 
+    if [[ -n "$FIXTURE_SEED_RESTORE_BANNER" ]]; then
+        # Non-blank content proves the base window painted, not that the restore banner
+        # specifically has — computeRestorePlanIfEnabled() (which decides that) runs later
+        # in the same launch sequence and can still be in flight when the base chrome first
+        # composites. There's no readiness signal for "restore plan decided" to poll, so this
+        # is a heuristic settle, not a guarantee: give it a fixed margin, then re-snapshot.
+        echo "→ restore-banner scenario: settling before final snapshot (banner decision can lag first paint)…" >&2
+        sleep 2
+        if ! "$cli_binary" window snapshot --out "$out_png" >&2; then
+            echo "error: window snapshot failed (see the CLI message above)." >&2
+            return 1
+        fi
+        if [[ ! -f "$out_png" ]]; then
+            echo "error: snapshot reported success but no PNG was written to $out_png." >&2
+            return 1
+        fi
+    fi
+
     echo "→ captured $out_png (rendered content verified)" >&2
     return 0
 }

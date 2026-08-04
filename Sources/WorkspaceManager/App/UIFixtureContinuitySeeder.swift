@@ -32,15 +32,33 @@ enum UIFixtureContinuitySeeder {
     /// the resolved target exists in the same launch's seeded SwiftData.
     static let seededWorkspaceRelativePath = "bertram-chat/feature-auth"
 
-    /// `seedIfNeeded()` (called once, synchronously, from `WorkspaceManagerApp.init()`) is the
-    /// only writer; `waitUntilSeeded()` (called from SwiftUI view lifecycle, necessarily after
-    /// `init()` has returned) is the only reader. `nonisolated(unsafe)` documents that
-    /// happens-before ordering rather than papering over an actual race — the compiler can't
-    /// see across the app-init → view-lifecycle boundary that guarantees it.
-    private nonisolated(unsafe) static var pendingSeed: Task<Void, Never>?
+    /// `seedIfNeeded()` (called once from `WorkspaceManagerApp.init()`, which already calls
+    /// other `@MainActor` fixture seeders synchronously) is the only writer; `waitUntilSeeded()`
+    /// (called from `ContentView`, itself `@MainActor`) is the only reader. Isolating the task
+    /// slot itself — rather than documenting a happens-before argument as `nonisolated(unsafe)`
+    /// — makes a future second call site (a test, a preview, a future scene) a compile error
+    /// instead of a silent lost-update race on `pendingSeed`.
+    @MainActor
+    private static var pendingSeed: Task<Void, Never>?
 
     static func isRequested(in environment: [String: String]) -> Bool {
         environment["WORKSPACES_UI_FIXTURE"] == "1" && environment[seedRestoreBannerEnvKey] == "1"
+    }
+
+    /// Refuses to seed into the real, unconfigured production database — the location
+    /// `LocalStateStoreBootstrapper.defaultDatabaseURL` resolves to absent any `WORKSPACES_DATA_DIR`
+    /// / `WORKSPACES_LOCAL_STATE_DIR` override. `seedIfNeeded` already requires an explicit
+    /// override to have produced a live primary store (see its call site), but "explicit" isn't
+    /// "isolated": an override that happens to equal the production path — set by accident, or
+    /// inherited from a shell profile — would otherwise write a synthetic active session into a
+    /// real user's data. Comparing against the always-unconfigured resolution catches exactly
+    /// that path regardless of which override produced it.
+    static func isSafeToSeed(databaseURL: URL) -> Bool {
+        guard let productionDatabaseURL = try? LocalStateStoreBootstrapper.defaultDatabaseURL(launchEnvironment: [:])
+        else {
+            return false
+        }
+        return databaseURL.standardizedFileURL.path != productionDatabaseURL.standardizedFileURL.path
     }
 
     /// The directory a seeded session restores, given the home directory it resolves under.
@@ -78,9 +96,11 @@ enum UIFixtureContinuitySeeder {
     }
 
     /// Fire hook: called from `WorkspaceManagerApp.init()`. No-op unless both
-    /// `WORKSPACES_UI_FIXTURE` and `seedRestoreBannerEnvKey` are `1`. The write races
-    /// the rest of app startup; `waitUntilSeeded()` is the synchronization point restore
-    /// planning awaits before reading, so the race never surfaces as a flaky capture.
+    /// `WORKSPACES_UI_FIXTURE` and `seedRestoreBannerEnvKey` are `1`, and the resolved
+    /// database is confirmed isolated (`isSafeToSeed`) — never the real production one. The
+    /// write races the rest of app startup; `waitUntilSeeded()` is the synchronization point
+    /// restore planning awaits before reading, so the race never surfaces as a flaky capture.
+    @MainActor
     static func seedIfNeeded(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         now: Date = Date()
@@ -89,6 +109,12 @@ enum UIFixtureContinuitySeeder {
         guard let databaseURL = try? LocalStateStoreBootstrapper.defaultDatabaseURL(launchEnvironment: environment)
         else {
             log.error("[UIFixtureContinuitySeeder] no resolvable data directory — skipping restore-banner seed")
+            return
+        }
+        guard isSafeToSeed(databaseURL: databaseURL) else {
+            log.error(
+                "[UIFixtureContinuitySeeder] resolved database is the production path — refusing to seed restore-banner continuity"
+            )
             return
         }
         pendingSeed = Task.detached(priority: .utility) {
@@ -106,6 +132,7 @@ enum UIFixtureContinuitySeeder {
     /// Awaited by `ContentView.computeRestorePlanIfEnabled()` before it reads continuity
     /// data, so restore planning never races the seed write above. A no-op — returns
     /// immediately — when no seed was requested for this launch.
+    @MainActor
     static func waitUntilSeeded() async {
         await pendingSeed?.value
     }
