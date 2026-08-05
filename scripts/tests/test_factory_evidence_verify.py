@@ -75,6 +75,11 @@ def body_with_entries(entries: list[dict[str, object]]) -> str:
     )
 
 
+def with_owner_edit(body: str, note: str) -> str:
+    """Simulate an owner editing the PR description (not the evidence block)."""
+    return body.replace("## Summary\n- change", f"## Summary\n- change\n- {note}")
+
+
 def pr_payload(
     body: str,
     *,
@@ -283,6 +288,153 @@ class ProcessPrTests(unittest.TestCase):
             verify.process_pr(321, {})
 
         gh.assert_not_called()
+
+
+class BodyChangeRaceGuardTests(unittest.TestCase):
+    """Coverage for #1183: a body edit at a stable head SHA must never be
+    clobbered by a write derived from the stale pre-edit body."""
+
+    maxDiff = None
+
+    def test_stable_sha_body_change_does_not_write_stale_derived_body(self) -> None:
+        body = body_with_entries([ci_entry()])
+        edited_body = with_owner_edit(body, "owner edited the description mid-flight")
+        updates = {
+            1: verify.entry_update_for_check_run(
+                "Web CI",
+                HEAD,
+                {"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+            )
+        }
+        stale_new_body = verify.update_evidence_entries(body, updates)
+
+        written: dict[str, str] = {}
+
+        def fake_write(pr_number, new_body, env):
+            written["body"] = new_body
+            return True
+
+        with (
+            mock.patch.object(
+                verify,
+                "_gh_json",
+                # attempt 1: same SHA, drifted body; attempt 2: stable now
+                side_effect=[
+                    pr_payload(edited_body, head_sha=HEAD),
+                    pr_payload(edited_body, head_sha=HEAD),
+                ],
+            ) as gh_json,
+            mock.patch.object(verify, "_write_pr_body", side_effect=fake_write) as write,
+        ):
+            result = verify._apply_ci_updates(321, HEAD, body, updates, {})
+
+        # Both mocked re-fetches must actually have been consumed — otherwise
+        # this test would pass even if the retry loop short-circuited after
+        # detecting the first drift instead of re-checking the reapplied body.
+        self.assertEqual(gh_json.call_count, 2)
+        write.assert_called_once()
+        self.assertEqual(result, written["body"])
+        self.assertNotEqual(written["body"], stale_new_body)
+        self.assertIn("owner edited the description mid-flight", written["body"])
+        self.assertIn(f"- [complete] {CI_ITEM}", written["body"])
+
+    def test_race_then_reapply_succeeds_and_completes_verification(self) -> None:
+        body = body_with_entries([ci_entry()])
+        edited_body = with_owner_edit(body, "clarify rollout plan")
+        pr_initial = pr_payload(body, labels=["blocked:evidence"])
+        pr_drifted = pr_payload(edited_body, labels=["blocked:evidence"])
+
+        written: dict[str, str] = {}
+        gh_calls: list[list[str]] = []
+
+        def fake_write(pr_number, new_body, env):
+            written["body"] = new_body
+            return True
+
+        with (
+            mock.patch.object(
+                verify, "_gh_json", side_effect=[pr_initial, pr_drifted, pr_drifted]
+            ) as gh_json,
+            mock.patch.object(
+                verify,
+                "latest_completed_check_run",
+                return_value={"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+            ),
+            mock.patch.object(verify, "_write_pr_body", side_effect=fake_write),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True),
+        ):
+            verify.process_pr(321, {})
+
+        self.assertEqual(gh_json.call_count, 3)
+        self.assertIn("clarify rollout plan", written["body"])
+        self.assertIn(f"- [complete] {CI_ITEM}", written["body"])
+        self.assertIn(
+            ["pr", "edit", "321", "--remove-label", "blocked:evidence"],
+            gh_calls,
+        )
+
+    def test_gives_up_without_writing_when_body_keeps_changing(self) -> None:
+        body = body_with_entries([ci_entry()])
+        drifting_bodies = [
+            with_owner_edit(body, f"edit #{i}") for i in range(1, verify.MAX_WRITE_ATTEMPTS + 1)
+        ]
+        gh_responses = [pr_payload(body, labels=["blocked:evidence"])] + [
+            pr_payload(b, labels=["blocked:evidence"]) for b in drifting_bodies
+        ]
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=gh_responses) as gh_json,
+            mock.patch.object(
+                verify,
+                "latest_completed_check_run",
+                return_value={"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+            ),
+            mock.patch.object(verify, "_write_pr_body") as write,
+            mock.patch.object(verify, "_gh") as gh,
+            mock.patch.object(verify, "log") as log_mock,
+        ):
+            verify.process_pr(321, {})
+
+        # Bounded: exactly one initial fetch plus MAX_WRITE_ATTEMPTS retries —
+        # a fourth call would raise StopIteration and fail this test, proving
+        # the loop can't spin past the documented bound.
+        self.assertEqual(gh_json.call_count, 1 + verify.MAX_WRITE_ATTEMPTS)
+        write.assert_not_called()
+        gh.assert_not_called()
+        self.assertTrue(
+            any("giving up" in call.args[0] for call in log_mock.call_args_list)
+        )
+
+    def test_retargeted_entry_is_dropped_instead_of_misapplied(self) -> None:
+        """If an owner retargets the evidence line itself (not just prose) to
+        a different check between read and write, the stale-index update
+        must be dropped, never slapped onto the now-different entry."""
+        body = body_with_entries([ci_entry()])
+        retargeted_entry = ci_entry(status="pending-ci")
+        retargeted_entry["item"] = "CI: `macOS CI` green on the PR head"
+        retargeted_body = body_with_entries([retargeted_entry])
+        updates = {
+            1: verify.entry_update_for_check_run(
+                "Web CI",
+                HEAD,
+                {"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+            )
+        }
+
+        with (
+            mock.patch.object(
+                verify, "_gh_json", side_effect=[pr_payload(retargeted_body, head_sha=HEAD)]
+            ) as gh_json,
+            mock.patch.object(verify, "_write_pr_body") as write,
+        ):
+            result = verify._apply_ci_updates(321, HEAD, body, updates, {})
+
+        self.assertEqual(gh_json.call_count, 1)
+        write.assert_not_called()
+        self.assertEqual(result, retargeted_body)
+        self.assertNotIn("Web CI", result)
+        self.assertIn("[pending-ci] CI: `macOS CI` green on the PR head", result)
 
 
 class WorkflowContractTests(unittest.TestCase):
