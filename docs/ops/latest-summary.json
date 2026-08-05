@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-04T14:15:45.512610Z",
+  "generated_at": "2026-08-05T14:15:23.997848Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -19,40 +19,44 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-07-05T14:15:45.512610Z",
+    "window_start": "2026-07-06T14:15:23.997848Z",
     "completed_runs": 499,
-    "failure_runs": 29,
-    "failure_rate": 5.811623246492986,
-    "rerun_runs": 2,
-    "rerun_rate": 0.4008016032064128,
+    "failure_runs": 15,
+    "failure_rate": 3.006012024048096,
+    "rerun_runs": 1,
+    "rerun_rate": 0.2004008016032064,
     "top_failing_workflows": [
       {
-        "workflow_name": "CI Fallback",
-        "failures": 11
-      },
-      {
-        "workflow_name": "CI",
-        "failures": 10
-      },
-      {
         "workflow_name": "Factory Review Executor",
-        "failures": 7
+        "failures": 8
       },
       {
         "workflow_name": "PR Readiness",
+        "failures": 3
+      },
+      {
+        "workflow_name": "Factory Implement",
+        "failures": 2
+      },
+      {
+        "workflow_name": "CI Fallback",
+        "failures": 1
+      },
+      {
+        "workflow_name": "CI",
         "failures": 1
       }
     ],
     "agents": {
       "Approved Mention Execution": {
-        "completed_runs": 41,
+        "completed_runs": 44,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 1,
-        "rerun_rate": 2.4390243902439024
+        "rerun_rate": 2.272727272727273
       },
       "Mention Triage": {
-        "completed_runs": 64,
+        "completed_runs": 72,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
@@ -63,7 +67,7 @@
   "perf": {
     "available": true,
     "latest_timestamp": "2026-03-22T10:29:08-0700",
-    "freshness_days": 134.86571195150464,
+    "freshness_days": 135.86546293805557,
     "metrics": {
       "launch_to_first_prompt": {
         "latest_median_ms": 1468.205,
@@ -85,13 +89,13 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 85.74566565520833,
+      "days_since_activity": 86.74541664175926,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
     },
     {
       "discussion_number": 110,
       "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-      "days_since_activity": 17.011151766319447,
+      "days_since_activity": 18.01090275287037,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
     }
   ],
@@ -118,13 +122,13 @@
         {
           "discussion_number": 43,
           "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-          "days_since_activity": 85.74566565520833,
+          "days_since_activity": 86.74541664175926,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
         },
         {
           "discussion_number": 110,
           "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-          "days_since_activity": 17.011151766319447,
+          "days_since_activity": 18.01090275287037,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
         }
       ],
