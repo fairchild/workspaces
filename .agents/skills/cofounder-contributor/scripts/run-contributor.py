@@ -220,6 +220,7 @@ from execution import (  # noqa: E402, F401
     _mergeability_surface,
     _pr_body_and_head,
     _pr_evidence_entries,
+    _preserve_unparseable_output,
     _update_mergeable_label,
     _write_github_outputs,
     app_bot_git_identity,
@@ -1436,6 +1437,103 @@ def phase_task_for_selection(
     )
 
 
+REVIEW_RETRYABLE_SELECTION_KINDS = {"review_pr", "review_followup_pr"}
+REVIEW_RETRY_ATTEMPTS = 2
+# run_claude(mode="cli") defaults to a 1200s per-call ceiling; two attempts
+# at that ceiling (2460s including validation) leaves the "april"/"plat" job
+# (timeout-minutes: 45 in factory-review-execute.yml) only ~4 minutes for
+# checkout, setup-uv, preflight revalidation, and artifact upload. 900s caps
+# the worst case at 1860s, restoring comfortable headroom; reviews are
+# read-only (no scratch workspace, no edits) so they don't need the full
+# 1200s non-retryable actions get.
+REVIEW_RETRY_ATTEMPT_TIMEOUT_SECONDS = 900
+
+
+def run_action_phase(
+    system_prompt: str,
+    task: str,
+    claude_env: dict[str, str],
+    env: dict[str, str],
+    *,
+    mode: str,
+    tools: str,
+    cwd: Path,
+    write_scope: Path | None,
+    max_attempts: int,
+    timeout: int | None = None,
+) -> tuple[str, int, str | None, str]:
+    """Run the model and validate its output, retrying transient failures once.
+
+    #1179: reviews had a meaningful first-attempt failure rate (a runtime
+    crash before any output, or a completed analysis that died at output
+    validation) with a rerun-success rate of roughly 100% -- a single retry
+    absorbs most of that without coordinator intervention. A retry re-runs
+    the model from scratch, which is only safe when the run has no side
+    effects to duplicate; `main()` caps `max_attempts` at 1 for anything but
+    a review, since review tools are read-only (Read/Grep/Glob) and reviews
+    use no scratch workspace. `main()` also passes a tighter `timeout` for
+    retryable runs (each `run_claude(mode="cli")` call otherwise defaults to
+    a 1200s ceiling; two full-length attempts back to back can approach the
+    review job's own wall-clock budget).
+
+    Retries stay inside this function and never touch `route_action` (called
+    at most once, by the caller, after this returns), so a retried-then-
+    posted review is still exactly one `gh pr review` call. The #1202 daily
+    review cap (scripts/factory-review.py) counts by whether the review
+    job's own step concluded successfully, not by how many attempts happened
+    inside it, so retrying here can't inflate that cap. It DOES mean a
+    single counted "raw attempt" under FACTORY_REVIEW_RUNAWAY_CAP can now
+    cost up to 2 model invocations instead of 1 -- see the comment on
+    RUNAWAY_CAP_MULTIPLIER in scripts/factory-review.py.
+
+    Each attempt gets a distinct `phase` value ("action" for the first,
+    "action-retry-N" after) so its cost-telemetry row gets a distinct id;
+    without that, a retry's real cost row silently loses a same-id race
+    against attempt 1's (often near-zero, since it failed) row during
+    ingestion (scripts/factory-cost-append.py dedupes by id).
+    """
+    raw_output = ""
+    exit_code = 1
+    validated_json: str | None = None
+    error_text = ""
+    for attempt in range(1, max_attempts + 1):
+        remaining = max_attempts - attempt
+        phase = "action" if attempt == 1 else f"action-retry-{attempt}"
+        try:
+            raw_output = run_claude(
+                system_prompt,
+                task,
+                claude_env,
+                mode=mode,
+                tools=tools,
+                cwd=cwd,
+                write_scope=write_scope,
+                timeout=timeout,
+                phase=phase,
+            )
+        except SystemExit as exc:
+            log(f"action attempt {attempt}/{max_attempts} crashed (exit {exc.code})")
+            if remaining <= 0:
+                raise
+            log(f"retrying ({remaining} attempt(s) left) after a transient runtime failure")
+            continue
+
+        exit_code, validated_json, error_text = validate_output(raw_output, env)
+        if exit_code == 2 and error_text.startswith("duplicate:"):
+            return raw_output, exit_code, validated_json, error_text
+        if exit_code == 0 and validated_json is not None:
+            if attempt > 1:
+                log(f"action attempt {attempt}/{max_attempts} recovered after a transient output failure")
+            return raw_output, exit_code, validated_json, error_text
+
+        log(f"action attempt {attempt}/{max_attempts} failed output validation: {error_text or 'unknown error'}")
+        if remaining <= 0:
+            break
+        log(f"retrying ({remaining} attempt(s) left) after a transient output failure")
+
+    return raw_output, exit_code, validated_json, error_text
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prompt-file", required=True, type=Path)
@@ -1523,19 +1621,22 @@ def main() -> int:
             # The scratch is the repo's own HEAD export — trusted content by
             # construction. Review checkouts of PR heads are never seeded.
             ensure_claude_project_trust(claude_cwd, claude_env)
-        raw_output = run_claude(
+        is_retryable_review = choice.selection_kind in REVIEW_RETRYABLE_SELECTION_KINDS
+        max_attempts = REVIEW_RETRY_ATTEMPTS if is_retryable_review else 1
+        raw_output, exit_code, validated_json, error_text = run_action_phase(
             compose_system_prompt(prompt_file.read_text(encoding="utf-8")),
             phase_task_for_selection(choice, task_envelope, payloads, message=args.message),
             claude_env,
+            env,
             mode=args.mode,
             tools=contributor_tools_for_selection(choice.selection_kind),
             cwd=claude_cwd,
             write_scope=(
                 scratch_workspace.scratch_dir if scratch_workspace is not None else None
             ),
-            phase="action",
+            max_attempts=max_attempts,
+            timeout=REVIEW_RETRY_ATTEMPT_TIMEOUT_SECONDS if is_retryable_review else None,
         )
-        exit_code, validated_json, error_text = validate_output(raw_output, env)
 
         if exit_code == 2 and error_text.startswith("duplicate:"):
             log("Skipping duplicate proposal")

@@ -91,7 +91,12 @@ jobs:
     needs: admit
     if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'april'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30: run-contributor.py retries a review once on a transient
+    # failure (#1179). Each retryable attempt is capped at 15 minutes
+    # (REVIEW_RETRY_ATTEMPT_TIMEOUT_SECONDS, tighter than the CLI's own
+    # 20-minute default specifically so two attempts fit safely) -- 30
+    # minutes only ever budgeted for one attempt at the untightened ceiling.
+    timeout-minutes: 45
     concurrency:
       group: factory-review-april-${{ needs.admit.outputs.pr_number }}-${{ needs.admit.outputs.head_sha }}
       cancel-in-progress: false
@@ -175,7 +180,12 @@ jobs:
     needs: admit
     if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'plat'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30: run-contributor.py retries a review once on a transient
+    # failure (#1179). Each retryable attempt is capped at 15 minutes
+    # (REVIEW_RETRY_ATTEMPT_TIMEOUT_SECONDS, tighter than the CLI's own
+    # 20-minute default specifically so two attempts fit safely) -- 30
+    # minutes only ever budgeted for one attempt at the untightened ceiling.
+    timeout-minutes: 45
     concurrency:
       group: factory-review-plat-${{ needs.admit.outputs.pr_number }}-${{ needs.admit.outputs.head_sha }}
       cancel-in-progress: false

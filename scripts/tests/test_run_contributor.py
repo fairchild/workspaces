@@ -16,6 +16,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -1412,6 +1413,356 @@ class CostTelemetryTests(unittest.TestCase):
             )
         self.assertEqual(len(captured), 1)
         self.assertIn("partial stream", captured[0])
+
+
+class UnparseableOutputArtifactTests(unittest.TestCase):
+    """#1179: preserve a review that died at output validation as an artifact
+    instead of only a GitHub Actions log line that can expire before anyone
+    inspects it."""
+
+    def test_validate_output_failure_writes_raw_text_to_telemetry_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "PATH": "/usr/bin:/bin"}
+            with mock.patch.object(
+                run_contributor.subprocess,
+                "run",
+                return_value=mock.Mock(
+                    returncode=1, stdout="", stderr="error: failed to parse output: bad input"
+                ),
+            ):
+                exit_code, validated_json, error_text = run_contributor.validate_output(
+                    "not json or frontmatter", env
+                )
+
+            self.assertEqual(exit_code, 1)
+            self.assertIsNone(validated_json)
+            self.assertIn("failed to parse output", error_text)
+
+            written = list((Path(tmp) / "parse-failures").glob("*.txt"))
+            self.assertEqual(len(written), 1)
+            self.assertEqual(written[0].read_text(encoding="utf-8"), "not json or frontmatter")
+
+    def test_validate_output_success_writes_no_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "PATH": "/usr/bin:/bin"}
+            with mock.patch.object(
+                run_contributor.subprocess,
+                "run",
+                return_value=mock.Mock(returncode=0, stdout='{"action": "review_pr"}', stderr=""),
+            ):
+                run_contributor.validate_output("---\naction: review_pr\n---\n", env)
+
+            self.assertFalse((Path(tmp) / "parse-failures").exists())
+
+    def test_duplicate_proposal_skip_writes_no_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "PATH": "/usr/bin:/bin"}
+            with mock.patch.object(
+                run_contributor.subprocess,
+                "run",
+                return_value=mock.Mock(
+                    returncode=2, stdout="", stderr="duplicate: proposed 'x' matches existing 'x'"
+                ),
+            ):
+                run_contributor.validate_output("---\naction: propose\n---\n", env)
+
+            self.assertFalse((Path(tmp) / "parse-failures").exists())
+
+    def test_validation_timeout_also_writes_the_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "PATH": "/usr/bin:/bin"}
+            with mock.patch.object(
+                run_contributor.subprocess,
+                "run",
+                side_effect=run_contributor.subprocess.TimeoutExpired(cmd="validate", timeout=30),
+            ):
+                exit_code, validated_json, error_text = run_contributor.validate_output(
+                    "some output", env
+                )
+
+            self.assertEqual(exit_code, 1)
+            self.assertIsNone(validated_json)
+            self.assertEqual(error_text, "validation timed out")
+            written = list((Path(tmp) / "parse-failures").glob("*.txt"))
+            self.assertEqual(len(written), 1)
+            self.assertEqual(written[0].read_text(encoding="utf-8"), "some output")
+
+    def test_two_failures_in_one_run_get_distinct_sequential_filenames(self) -> None:
+        # A retried review can fail output validation twice (attempt 1, then
+        # attempt 2 after recovering from a runtime crash but still failing
+        # to parse) -- both must be preserved, not overwrite each other.
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "PATH": "/usr/bin:/bin"}
+            with mock.patch.object(
+                run_contributor.subprocess,
+                "run",
+                return_value=mock.Mock(returncode=1, stdout="", stderr="failed to parse output: bad"),
+            ):
+                run_contributor.validate_output("first attempt output", env)
+                run_contributor.validate_output("second attempt output", env)
+
+            written = sorted((Path(tmp) / "parse-failures").glob("*.txt"))
+            self.assertEqual([f.name for f in written], ["0001-unparsed-output.txt", "0002-unparsed-output.txt"])
+            self.assertEqual(written[0].read_text(encoding="utf-8"), "first attempt output")
+            self.assertEqual(written[1].read_text(encoding="utf-8"), "second attempt output")
+
+    def test_artifact_write_failure_is_swallowed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            blocker = Path(tmp) / "blocker"
+            blocker.write_text("not a directory", encoding="utf-8")
+            env = {"FACTORY_TELEMETRY_DIR": str(blocker / "telemetry")}
+            # Must not raise even though the telemetry dir cannot be created.
+            run_contributor._preserve_unparseable_output("raw output", env)
+
+    def test_redacts_secrets_before_writing(self) -> None:
+        secret = "SECRETVALUE12345"
+        with tempfile.TemporaryDirectory() as tmp:
+            env = {"FACTORY_TELEMETRY_DIR": tmp, "GH_TOKEN": secret}
+            run_contributor._preserve_unparseable_output(f"leaked token: {secret}", env)
+
+            written = (Path(tmp) / "parse-failures" / "0001-unparsed-output.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn(secret, written)
+            self.assertIn("[REDACTED]", written)
+
+
+class ReviewActionRetryTests(unittest.TestCase):
+    """#1179: reviews had a meaningful first-attempt failure rate with a
+    near-100% rerun success rate; a bounded in-process retry should absorb
+    that without a second GitHub Actions run (which is what #1202's daily
+    cap and runaway guard actually count)."""
+
+    def test_review_recovers_on_second_attempt_after_a_runtime_crash(self) -> None:
+        with mock.patch.object(
+            run_contributor, "run_claude", side_effect=[SystemExit(249), "---\naction: review_pr\n---\n"]
+        ) as run_claude:
+            with mock.patch.object(
+                run_contributor, "validate_output", return_value=(0, '{"action": "review_pr"}', "")
+            ) as validate_output:
+                raw_output, exit_code, validated_json, error_text = run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=2,
+                )
+
+        self.assertEqual(run_claude.call_count, 2)
+        self.assertEqual(validate_output.call_count, 1)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(validated_json, '{"action": "review_pr"}')
+        self.assertEqual(raw_output, "---\naction: review_pr\n---\n")
+
+    def test_review_recovers_on_second_attempt_after_a_parse_failure(self) -> None:
+        with mock.patch.object(
+            run_contributor, "run_claude", side_effect=["garbled first pass", "---\naction: review_pr\n---\n"]
+        ) as run_claude:
+            with mock.patch.object(
+                run_contributor,
+                "validate_output",
+                side_effect=[(1, None, "failed to parse output"), (0, '{"action": "review_pr"}', "")],
+            ) as validate_output:
+                raw_output, exit_code, validated_json, error_text = run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=2,
+                )
+
+        self.assertEqual(run_claude.call_count, 2)
+        self.assertEqual(validate_output.call_count, 2)
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(validated_json, '{"action": "review_pr"}')
+
+    def test_review_exhausts_retries_and_returns_the_last_failure(self) -> None:
+        with mock.patch.object(run_contributor, "run_claude", side_effect=["a", "b"]):
+            with mock.patch.object(
+                run_contributor,
+                "validate_output",
+                side_effect=[(1, None, "first failure"), (1, None, "second failure")],
+            ) as validate_output:
+                raw_output, exit_code, validated_json, error_text = run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=2,
+                )
+
+        self.assertEqual(validate_output.call_count, 2)
+        self.assertEqual(exit_code, 1)
+        self.assertIsNone(validated_json)
+        self.assertEqual(error_text, "second failure")
+        self.assertEqual(raw_output, "b")
+
+    def test_runtime_crash_on_the_final_attempt_propagates(self) -> None:
+        with mock.patch.object(run_contributor, "run_claude", side_effect=SystemExit(249)):
+            with self.assertRaises(SystemExit):
+                run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=2,
+                )
+
+    def test_single_attempt_budget_never_retries(self) -> None:
+        # Non-review selection kinds (advance_pr, execute_issue) are called
+        # with max_attempts=1 by main() -- a single failure must not retry,
+        # since those runs mutate a scratch workspace that a blind rerun
+        # would layer edits onto rather than start clean.
+        with mock.patch.object(run_contributor, "run_claude", return_value="raw") as run_claude:
+            with mock.patch.object(
+                run_contributor, "validate_output", return_value=(1, None, "boom")
+            ) as validate_output:
+                raw_output, exit_code, validated_json, error_text = run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=1,
+                )
+
+        self.assertEqual(run_claude.call_count, 1)
+        self.assertEqual(validate_output.call_count, 1)
+        self.assertEqual(exit_code, 1)
+
+    def test_duplicate_proposal_short_circuits_without_retry(self) -> None:
+        with mock.patch.object(run_contributor, "run_claude", return_value="raw") as run_claude:
+            with mock.patch.object(
+                run_contributor, "validate_output", return_value=(2, None, "duplicate: matches 'x'")
+            ):
+                raw_output, exit_code, validated_json, error_text = run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=2,
+                )
+
+        self.assertEqual(run_claude.call_count, 1)
+        self.assertEqual(exit_code, 2)
+        self.assertTrue(error_text.startswith("duplicate:"))
+
+    def test_only_review_selection_kinds_get_the_retry_budget(self) -> None:
+        for kind in ("review_pr", "review_followup_pr"):
+            self.assertIn(kind, run_contributor.REVIEW_RETRYABLE_SELECTION_KINDS)
+        for kind in ("advance_pr", "execute_claimed_issue", "execute_ready_issue", "comment_discussion", "propose"):
+            self.assertNotIn(kind, run_contributor.REVIEW_RETRYABLE_SELECTION_KINDS)
+
+    def test_retried_attempts_get_distinct_telemetry_phases(self) -> None:
+        # #1179 codex review: both attempts previously used phase="action",
+        # so their cost-telemetry rows got the identical id
+        # (f"{run_id}-{run_attempt}-{phase}") and factory-cost-append.py's
+        # id-dedup silently dropped the retry's real cost row. Confirms each
+        # attempt now gets a distinct phase.
+        with mock.patch.object(
+            run_contributor, "run_claude", side_effect=[SystemExit(249), "---\naction: review_pr\n---\n"]
+        ) as run_claude:
+            with mock.patch.object(
+                run_contributor, "validate_output", return_value=(0, '{"action": "review_pr"}', "")
+            ):
+                run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=2,
+                )
+
+        phases = [call.kwargs["phase"] for call in run_claude.call_args_list]
+        self.assertEqual(phases, ["action", "action-retry-2"])
+        self.assertEqual(len(set(phases)), len(phases))
+
+        # Prove the distinctness where it actually matters: the cost row
+        # telemetry.py builds from each phase, not just that the phase
+        # strings differ syntactically.
+        env = {"GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1"}
+        row_ids = {run_contributor.build_cost_row("", phase, env)["id"] for phase in phases}
+        self.assertEqual(len(row_ids), 2, f"expected 2 distinct cost-row ids, got {row_ids}")
+
+    def test_review_attempts_use_the_tighter_retry_timeout(self) -> None:
+        # Both attempts, not just the first -- a retry only helps if the
+        # SECOND call also gets a timeout that leaves the job headroom.
+        with mock.patch.object(
+            run_contributor,
+            "run_claude",
+            side_effect=[SystemExit(249), "---\naction: review_pr\n---\n"],
+        ) as run_claude:
+            with mock.patch.object(
+                run_contributor, "validate_output", return_value=(0, "{}", "")
+            ):
+                run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Read", cwd=Path("."),
+                    write_scope=None, max_attempts=2,
+                    timeout=run_contributor.REVIEW_RETRY_ATTEMPT_TIMEOUT_SECONDS,
+                )
+
+        self.assertEqual(run_claude.call_count, 2)
+        for call in run_claude.call_args_list:
+            self.assertEqual(
+                call.kwargs["timeout"], run_contributor.REVIEW_RETRY_ATTEMPT_TIMEOUT_SECONDS
+            )
+
+    def test_non_retryable_runs_keep_the_default_uncapped_timeout(self) -> None:
+        with mock.patch.object(run_contributor, "run_claude", return_value="raw") as run_claude:
+            with mock.patch.object(run_contributor, "validate_output", return_value=(0, "{}", "")):
+                run_contributor.run_action_phase(
+                    "system", "task", {}, {}, mode="cli", tools="Edit", cwd=Path("."),
+                    write_scope=None, max_attempts=1,
+                )
+
+        self.assertIsNone(run_claude.call_args.kwargs["timeout"])
+
+
+class RouteActionCallDisciplineTests(unittest.TestCase):
+    """#1179 codex review: the retry-helper-level tests above prove
+    run_action_phase() never calls route_action() itself, but don't prove
+    main() only calls it once end to end. This exercises main()'s directed
+    (--message) path, which is the actual path factory-review-execute.yml
+    invokes, and patches run_action_phase()/route_action() at the seam
+    main() actually calls -- it does NOT itself simulate an internal retry
+    (run_action_phase is mocked to return a value, not exercised); that's
+    covered separately by ReviewActionRetryTests above. What this proves is
+    narrower and complementary: no matter what run_action_phase returns or
+    how many attempts it took to get there, main() calls it and
+    route_action() each exactly once."""
+
+    def _patched_env(self, tmp_path: str) -> dict[str, str]:
+        return {
+            "CLAUDE_CODE_OAUTH_TOKEN": "token",
+            "GH_TOKEN": "token",
+            "HOME": tmp_path,
+            "PATH": "/usr/bin:/bin",
+        }
+
+    def test_main_calls_route_action_exactly_once_after_a_retried_success(self) -> None:
+        pr = {
+            "number": 42,
+            "author": {"login": "workspace-agents"},
+            "body": "",
+            "authorAssociation": "OWNER",
+            "reviews": {"nodes": []},
+            "comments": {"nodes": []},
+        }
+        with tempfile.TemporaryDirectory() as tmp, tempfile.NamedTemporaryFile(
+            "w", suffix=".md", delete=False
+        ) as prompt_file:
+            prompt_file.write("# April Clearwater\nsystem prompt\n")
+            prompt_file.flush()
+            with mock.patch.object(sys, "argv", [
+                "run-contributor.py", "--prompt-file", prompt_file.name, "--mode", "cli",
+                "--message", "@fairchild mentioned you in PR #42\n---\ndirected body\n---\n",
+            ]):
+                with mock.patch.dict(os.environ, self._patched_env(tmp), clear=True):
+                    with mock.patch.object(run_contributor, "detect_bot_login", return_value=""):
+                        with mock.patch.object(
+                            run_contributor, "repo_owner_name", return_value=("fairchild", "workspaces")
+                        ):
+                            with mock.patch.object(run_contributor, "recent_commit_summary", return_value={}):
+                                with mock.patch.object(run_contributor, "gather_backlog_state", return_value=""):
+                                    with mock.patch.object(
+                                        run_contributor, "fetch_detailed_pull_request", return_value=pr
+                                    ):
+                                        with mock.patch.object(
+                                            run_contributor, "fetch_pr_diff", return_value=""
+                                        ):
+                                            with mock.patch.object(
+                                                run_contributor,
+                                                "run_action_phase",
+                                                return_value=(
+                                                    "raw", 0, '{"action": "review_pr", "pr_number": 42}', ""
+                                                ),
+                                            ) as run_action_phase:
+                                                with mock.patch.object(
+                                                    run_contributor, "route_action", return_value=0
+                                                ) as route_action:
+                                                    exit_code = run_contributor.main()
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(run_action_phase.call_count, 1)
+        self.assertEqual(route_action.call_count, 1)
 
 
 if __name__ == "__main__":
