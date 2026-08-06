@@ -1,7 +1,7 @@
 {
   "name": "workspaces-factory",
   "url": "https://github.com/fairchild/workspaces",
-  "description": "PR-authoring identity for Orca-dispatched implementation workers, so the human owner can formally approve worker PRs (GitHub blocks self-approval on PRs authored by the owner's own account). Contributor only — does not review. Per-agent attribution stays on the author:<agent> labels; this identity is shared across workers.",
+  "description": "PR-authoring identity for CLI-based implementation workers (any coding-agent harness), so the human owner can formally approve worker PRs (GitHub blocks self-approval on PRs authored by the owner's own account). Contributor only — does not review. Per-agent attribution stays on the author:<agent> labels; this identity is shared across workers.",
   "public": false,
   "default_permissions": {
     "contents": "write",

@@ -6,9 +6,10 @@
 # ]
 # ///
 """Mint a GitHub App installation token for the `workspaces-factory` worker
-identity (issue #1180), so an Orca-dispatched worker can push commits and
-open PRs as `workspaces-factory[bot]` instead of the owner's personal
-account — the property that lets the owner formally approve the PR.
+identity (issue #1180), so a CLI-dispatched implementation worker (any
+coding-agent harness) can push commits and open PRs as
+`workspaces-factory[bot]` instead of the owner's personal account — the
+property that lets the owner formally approve the PR.
 
 Reads FACTORY_WORKER_APP_ID and FACTORY_WORKER_APP_KEY (a filesystem path to
 the App's PEM private key) from the environment. Prints the minted token

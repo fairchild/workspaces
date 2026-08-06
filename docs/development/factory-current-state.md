@@ -89,7 +89,7 @@ Today, standing `ready` issues only get dispatched once — the Implement lane f
 
 ## `workspaces-factory` rollout (worker PR authorship, issue #1180)
 
-**Problem.** All agent-authored PRs post from the shared owner account (`fairchild`), and GitHub blocks the owner from submitting an *approving review* on their own PR — the only formal-approval path is gone, forcing workarounds like an "I approve" comment + auto-merge (#1173) when the App reviewers' runtime crashed (#1179). This is a **separate mechanism** from the Factory Implement/Review lanes above, which already push as `april-clearwater[bot]`/`workspace-agents[bot]` via `actions/create-github-app-token` inside GitHub Actions — the owner-account problem is specific to Orca-dispatched CLI workers (local/cloud Claude Code / Codex sessions in Orca worktrees), which push and `gh pr create` using the operator's own ambient `gh` auth.
+**Problem.** All agent-authored PRs post from the shared owner account (`fairchild`), and GitHub blocks the owner from submitting an *approving review* on their own PR — the only formal-approval path is gone, forcing workarounds like an "I approve" comment + auto-merge (#1173) when the App reviewers' runtime crashed (#1179). This is a **separate mechanism** from the Factory Implement/Review lanes above, which already push as `april-clearwater[bot]`/`workspace-agents[bot]` via `actions/create-github-app-token` inside GitHub Actions — the owner-account problem is specific to CLI-dispatched implementation workers (local or cloud coding-agent sessions on any harness — Claude Code, codex, Cursor, Orca-managed terminals, etc.), which push and `gh pr create` using the operator's own ambient `gh` auth.
 
 **Fix.** A single shared GitHub App identity, `workspaces-factory[bot]`, that an opted-in worker authors PRs as instead. Per-agent attribution stays on `author:<agent>` labels (§ "Author Labels" above) — this only changes the git/PR *authorship* identity, not who gets credited.
 
@@ -105,7 +105,7 @@ Today, standing `ready` issues only get dispatched once — the Implement lane f
 ### Michael's two clicks
 
 1. **Create the App** from the manifest: `https://github.com/settings/apps/new`, paste/upload `config/github/apps/workspaces-factory.manifest.json`'s contents as the `manifest` field (or use the `gh-apps` skill's `create` flow pointed at that file). Save the generated App ID and download the private key PEM.
-2. **Install the App** on `fairchild/workspaces` (only that repo). Then make credentials reachable from worker environments as `FACTORY_WORKER_APP_ID` (the App ID) and `FACTORY_WORKER_APP_KEY` (a path to the PEM) — *how* those reach an Orca worktree's environment is a follow-up decision, not resolved by this PR (parallel to how `EVIDENCE_UPLOAD_TOKEN` is sourced today, see root `AGENTS.md` § Evidence-Driven Development).
+2. **Install the App** on `fairchild/workspaces` (only that repo). Then make credentials reachable from worker environments as `FACTORY_WORKER_APP_ID` (the App ID) and `FACTORY_WORKER_APP_KEY` (a path to the PEM) — *how* those reach a CLI worker's environment is a follow-up decision, not resolved by this PR (parallel to how `EVIDENCE_UPLOAD_TOKEN` is sourced today, see root `AGENTS.md` § Evidence-Driven Development).
 
 Verify with `uv run --script scripts/factory-worker-token.py --check` — `working` means both clicks landed correctly.
 
@@ -125,7 +125,7 @@ Before flipping anything on, PR #1180's implementation ran a repo-wide audit for
 
 ### Proof step before flipping any default
 
-Per the accepted issue #1180 recommendation: land **one worker PR authored end-to-end via `workspaces-factory[bot]`** (`FACTORY_WORKER_IDENTITY=app` on a real Orca dispatch) before `app` becomes the default for any worker. That PR should verify, and record in its own body:
+Per the accepted issue #1180 recommendation: land **one worker PR authored end-to-end via `workspaces-factory[bot]`** (`FACTORY_WORKER_IDENTITY=app` on a real dispatch of a CLI-based coding-agent worker) before `app` becomes the default for any worker. That PR should verify, and record in its own body:
 
 1. PR author renders as `workspaces-factory[bot]`, not `fairchild`.
 2. `fairchild` can submit a formal `APPROVED` review on it (not just a comment) — the actual property this issue is about.
