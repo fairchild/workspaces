@@ -1,12 +1,15 @@
 # GitHub App Identities
 
-This repo uses three separate GitHub App identities for agent work. They are intentionally not interchangeable.
+This repo uses separate GitHub App identities for agent work. They are intentionally not interchangeable.
 
 | App | Bot login | Commit role | Required permissions |
 |-----|-----------|-------------|----------------------|
 | `april-clearwater` | `april-clearwater[bot]` | Contributor that may open PRs and push commits as April | `contents:write`, `pull_requests:write`, `metadata:read` |
 | `workspace-agents` | `workspace-agents[bot]` | Contributor that may open PRs and push commits for shared agent execution | `contents:write`, `pull_requests:write`, `metadata:read` |
 | `workspaces-claude-pr-reviewer` | `workspaces-claude-pr-reviewer[bot]` | Review-only app; must not push commits | `contents:read`, `pull_requests:write`, `statuses:write`, `metadata:read` |
+| `workspaces-factory` | `workspaces-factory[bot]` | Contributor identity for Orca-dispatched implementation workers (issue #1180) — opt-in via `FACTORY_WORKER_IDENTITY=app`, shared across workers rather than per-agent since `author:<agent>` labels already carry attribution | `contents:write`, `pull_requests:write`, `issues:write`, `metadata:read` |
+
+`april-clearwater` and `workspace-agents` are the GitHub-Actions-driven Factory lanes (`factory-implement.yml`, `agent-executor.yml`); `workspaces-factory` is a distinct mechanism for CLI workers dispatched outside GitHub Actions (Orca worktrees) that otherwise push and open PRs under the operator's own `gh` auth. Created and installed on `fairchild/workspaces` 2026-08-05 (App ID `4501816`; credentials at `~/.config/gh-apps/workspaces-factory/app.pem`, exported as `FACTORY_WORKER_APP_ID`/`FACTORY_WORKER_APP_KEY`). The worker tooling that mints and uses its token (manifest, `scripts/factory-worker-token.py`, `scripts/factory-worker-identity.sh`) lands via #1203 (open as of this writing, not yet merged); this PR is the end-to-end rollout proof for issue #1180 — a `workspaces-factory[bot]`-authored PR, CI triggering on the App-token push, and a formal `fairchild` approval GitHub counts.
 
 ## Mechanism
 
