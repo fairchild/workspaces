@@ -349,6 +349,26 @@ class RunContributorEvidenceTests(unittest.TestCase):
         self.assertEqual(run_checked.call_args.kwargs["cwd"], Path("/tmp/model-workspace"))
         self.assertFalse(trust_file_written)
 
+    def test_task_travels_via_stdin_not_argv(self) -> None:
+        # Diff-carrying tasks on large PRs exceeded ARG_MAX as an argv element
+        # (OSError "Argument list too long: npx" on #1203's review runs); the
+        # prompt must ride stdin, which --print reads when no positional
+        # prompt is given.
+        with mock.patch.object(
+            run_contributor,
+            "run_checked",
+            return_value=mock.Mock(stdout="ok"),
+        ) as run_checked:
+            run_contributor.run_claude(
+                "system",
+                "big task payload",
+                {"PATH": "/usr/bin"},
+                mode="cli",
+            )
+        command = run_checked.call_args.args[0]
+        self.assertNotIn("big task payload", command)
+        self.assertEqual(run_checked.call_args.kwargs["input"], "big task payload")
+
     def test_cli_mode_pre_approves_every_exposed_tool(self) -> None:
         with mock.patch.object(
             run_contributor,
