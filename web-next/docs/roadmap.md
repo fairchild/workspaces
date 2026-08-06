@@ -69,7 +69,7 @@ app, can:
 
 > **Posture (2026-07-07 grooming).** web-next is the **web lane** of a two-lane
 > product — it runs in parallel with the desktop app, one active milestone per
-> lane (see `backlog/ROADMAP.md` § Milestone Alignment). It is a **single-user
+> lane (see `docs/agents/issue-tracker.md` § Milestone Operating Contract). It is a **single-user
 > (owner) tool** until a second allowlist login is wanted: sharing (#829) and
 > assistive-tech/mobile a11y (#804/#809) are deferred, while contrast/keyboard/
 > visible-failure work (#805/#806/#808) stays because it serves the owner.

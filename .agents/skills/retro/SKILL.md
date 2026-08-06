@@ -39,12 +39,12 @@ proven 2026-07-02 (milestone #7 cycle → PRs #735/#736/#739).
   can trim them by lookup instead of judgment.
 - **File human-lane items immediately** (`ops`/`human` labels) — they are
   the owner's queue, not the report's appendix.
-- Add the narrative to `backlog/ROADMAP.md` § Learnings (the archive layer),
+- Add the narrative as a dated file in `docs/retros/` (the archive layer),
   dated, newest-first — after the encodings ship, referencing them.
 
 ## Definition of done
 
 - [ ] Encoding PR(s) merged (or explicitly deferred with a reason)
 - [ ] Issues filed for non-encodable actions, each in its lane
-- [ ] ROADMAP Learnings entry references the shipped encodings
+- [ ] docs/retros/ entry references the shipped encodings
 - [ ] Anything the arc made stale (docs, tracker rows) is fixed or filed
