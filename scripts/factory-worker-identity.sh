@@ -78,6 +78,15 @@ if ! git -C "$REPO_ROOT" config --local extensions.worktreeConfig true; then
   return 1 2>/dev/null || exit 1
 fi
 
+# Re-sourcing this script in the same worktree (a fresh token after the
+# previous one expired, say) must not fail on the second run: the plain
+# `config key ""` below overwrites exactly one existing value, and errors if
+# more than one is already present. `--unset-all` first collapses back to
+# zero so every re-source lands on the same two-value end state (empty reset
+# marker, then the real helper) — the "key doesn't exist yet" case on a
+# first run is expected and not a failure, hence the suppressed stderr.
+git -C "$REPO_ROOT" config --worktree --unset-all credential.https://github.com.helper 2>/dev/null
+
 if ! git -C "$REPO_ROOT" config --worktree user.name "$BOT_LOGIN" \
   || ! git -C "$REPO_ROOT" config --worktree user.email "$BOT_EMAIL" \
   || ! git -C "$REPO_ROOT" config --worktree credential.https://github.com.helper "" \

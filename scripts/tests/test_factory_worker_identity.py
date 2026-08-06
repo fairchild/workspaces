@@ -162,22 +162,27 @@ class WorktreeIsolationTests(unittest.TestCase):
         )
         return result.stdout.strip() if result.returncode == 0 else None
 
-    def test_app_mode_in_one_worktree_does_not_leak_into_another(self):
+    def _source_app_mode(self, worktree: Path) -> dict[str, str]:
         clean_env = {
             key: value
             for key, value in os.environ.items()
             if key not in {"FACTORY_WORKER_IDENTITY", "FACTORY_WORKER_APP_ID", "FACTORY_WORKER_APP_KEY", "FACTORY_WORKER_BOT_EMAIL", "GH_TOKEN"}
         }
         result = subprocess.run(
-            ["bash", "-c", f'source "{self.wt_a}/scripts/factory-worker-identity.sh"; echo "STATUS=$?"; echo "GH_TOKEN_SET=${{GH_TOKEN:+yes}}"'],
-            cwd=self.wt_a,
+            ["bash", "-c", f'source "{worktree}/scripts/factory-worker-identity.sh"; echo "STATUS=$?"; echo "GH_TOKEN_SET=${{GH_TOKEN:+yes}}"'],
+            cwd=worktree,
             env={**clean_env, "FACTORY_WORKER_IDENTITY": "app", "FACTORY_WORKER_APP_ID": "0", "FACTORY_WORKER_APP_KEY": "/dev/null"},
             capture_output=True,
             text=True,
             timeout=30,
         )
         markers = parse_markers(result.stdout)
-        self.assertEqual(markers["STATUS"], "0", result.stderr)
+        markers["_stderr"] = result.stderr
+        return markers
+
+    def test_app_mode_in_one_worktree_does_not_leak_into_another(self):
+        markers = self._source_app_mode(self.wt_a)
+        self.assertEqual(markers["STATUS"], "0", markers["_stderr"])
         self.assertEqual(markers["GH_TOKEN_SET"], "yes")
 
         # Worktree A: identity and credential helper resolve to the bot,
@@ -200,6 +205,27 @@ class WorktreeIsolationTests(unittest.TestCase):
             timeout=30,
         ).stdout.strip()
         self.assertEqual(merged_name, "scratch-repo-owner")
+
+    def test_resourcing_in_the_same_worktree_is_idempotent(self):
+        # Regression test: the credential-helper "reset to empty, then add"
+        # pair used a bare `config key value` for the reset step, which
+        # only overwrites a single existing value. A second source() in the
+        # same worktree (a fresh token after the previous one expired, say)
+        # left two prior values in place and errored with "cannot overwrite
+        # multiple values with a single value" until --unset-all was added
+        # first.
+        first = self._source_app_mode(self.wt_a)
+        self.assertEqual(first["STATUS"], "0", first["_stderr"])
+
+        second = self._source_app_mode(self.wt_a)
+        self.assertEqual(second["STATUS"], "0", second["_stderr"])
+        self.assertEqual(second["GH_TOKEN_SET"], "yes")
+
+        self.assertEqual(self._git_config(self.wt_a, "user.name"), "workspaces-factory[bot]")
+        self.assertEqual(
+            self._git_config(self.wt_a, "credential.https://github.com.helper"),
+            '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f',
+        )
 
 
 if __name__ == "__main__":
