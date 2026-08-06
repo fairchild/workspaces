@@ -35,7 +35,10 @@ canonical table of which Apps exist, their bot login, and required
 permissions; a manifest here should match that doc's row for the same App.
 Not every existing App has a manifest file checked in yet — `apps/` started
 with `workspaces-factory` (issue #1180); backfilling the others is optional
-cleanup, not required.
+cleanup, not required. When an App's logo is re-uploaded in the GitHub UI,
+update the committed copy at `apps/<slug>-logo.png` (e.g.
+`apps/workspaces-factory-logo.png`) in the same change, so the config-as-code
+copy never drifts from what's actually live.
 
 ## Repo variables (`repo-variables.json`)
 

@@ -16,9 +16,19 @@
 #
 # Source this so the exported GH_TOKEN survives in the calling shell:
 #   source scripts/factory-worker-identity.sh
-# Running it instead of sourcing it still leaves the local git config (commit
-# identity, credential helper) wired, but GH_TOKEN only lives in the
-# subshell and won't reach your interactive shell or `gh`.
+# Running it instead of sourcing it still leaves the worktree-scoped git
+# config (commit identity, credential helper) wired, but GH_TOKEN only lives
+# in the subshell and won't reach your interactive shell or `gh`.
+#
+# Identity/credential writes are scoped with `git config --worktree`, not
+# `--local`. Under this repo's standard topology (multiple linked worktrees
+# off one shared clone), `--local` targets the SHARED `$GIT_COMMON_DIR/config`
+# — a bug caught via collateral damage: an app-mode run in one worktree
+# overwrote git identity and blanked the credential helper chain for every
+# other worktree of the repo, breaking their pushes until reverted by hand.
+# `--worktree` requires `extensions.worktreeConfig=true` (enabled below,
+# idempotent, itself repo-wide by design) or it silently falls back to the
+# same shared file — verified empirically, not assumed.
 
 # `return` (not a function wrapping it — a function's `return` only exits the
 # function, not this sourced file) so a no-op stays a no-op whether this file
@@ -49,33 +59,45 @@ fi
 
 export GH_TOKEN="$TOKEN"
 
-# Local-repo scope only — never touches global git config. The credential
-# helper reads GH_TOKEN live from the environment at fill time, so the token
-# itself never lands on disk (contrast scripts/factory-cost-append.py's
-# embedded-URL pattern, which is fine for a throwaway CI checkout but not for
-# a worktree that persists for the life of the session).
+# Worktree scope only — never touches global git config, and (once the
+# extension below is enabled) never touches the shared per-clone config
+# other worktrees read either. The credential helper reads GH_TOKEN live
+# from the environment at fill time, so the token itself never lands on disk
+# (contrast scripts/factory-cost-append.py's embedded-URL pattern, which is
+# fine for a throwaway CI checkout but not for a worktree that persists for
+# the life of the session).
 #
 # Each command's exit status is checked individually rather than trusting
 # pipefail/errexit (deliberately unset above): a partial failure here (e.g.
 # a locked or read-only .git/config) must not report success while leaving
 # GH_TOKEN exported against a stale owner commit/push identity.
-if ! git -C "$REPO_ROOT" config user.name "$BOT_LOGIN" \
-  || ! git -C "$REPO_ROOT" config user.email "$BOT_EMAIL" \
-  || ! git -C "$REPO_ROOT" config credential.https://github.com.helper "" \
-  || ! git -C "$REPO_ROOT" config --add credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'; then
-  echo "factory-worker-identity: FACTORY_WORKER_IDENTITY=app is set and a token was minted, but wiring local git config in $REPO_ROOT failed (read-only or locked .git/config?)." >&2
+if ! git -C "$REPO_ROOT" config --local extensions.worktreeConfig true; then
+  echo "factory-worker-identity: FACTORY_WORKER_IDENTITY=app is set and a token was minted, but enabling extensions.worktreeConfig in $REPO_ROOT failed (read-only or locked .git/config?)." >&2
   echo "factory-worker-identity: GH_TOKEN is NOT exported to avoid pairing bot gh auth with a stale owner commit/push identity — fix the git config issue and re-source." >&2
   unset GH_TOKEN
   return 1 2>/dev/null || exit 1
 fi
 
-echo "factory-worker-identity: configured as $BOT_LOGIN (GH_TOKEN set, local git identity + credential helper wired)" >&2
+if ! git -C "$REPO_ROOT" config --worktree user.name "$BOT_LOGIN" \
+  || ! git -C "$REPO_ROOT" config --worktree user.email "$BOT_EMAIL" \
+  || ! git -C "$REPO_ROOT" config --worktree credential.https://github.com.helper "" \
+  || ! git -C "$REPO_ROOT" config --worktree --add credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'; then
+  echo "factory-worker-identity: FACTORY_WORKER_IDENTITY=app is set and a token was minted, but wiring worktree-scoped git config in $REPO_ROOT failed (read-only or locked .git/config?)." >&2
+  echo "factory-worker-identity: GH_TOKEN is NOT exported to avoid pairing bot gh auth with a stale owner commit/push identity — fix the git config issue and re-source." >&2
+  unset GH_TOKEN
+  return 1 2>/dev/null || exit 1
+fi
 
-# The credential helper override is written to .git/config and outlives this
-# shell. A later `git push` in this same worktree from a shell that never
-# sourced this script (GH_TOKEN unset) sees an empty password and fails
-# closed rather than silently falling back to the owner's keychain
-# credentials — that's the intended failure mode, but it means re-sourcing
-# this script (or restoring `credential.https://github.com.helper` to
-# `osxkeychain`) is required to go back to pushing as the owner in the same
-# worktree. Fresh worker worktrees per dispatch sidestep this entirely.
+echo "factory-worker-identity: configured as $BOT_LOGIN (GH_TOKEN set, worktree-scoped git identity + credential helper wired)" >&2
+
+# The credential helper override is written to this worktree's
+# .git/worktrees/<name>/config.worktree and outlives this shell, but does
+# not affect any other worktree of the repo. A later `git push` in this same
+# worktree from a shell that never sourced this script (GH_TOKEN unset) sees
+# an empty password and fails closed rather than silently falling back to
+# the owner's keychain credentials — that's the intended failure mode, but
+# it means re-sourcing this script (or restoring
+# `credential.https://github.com.helper` to `osxkeychain` with
+# `git config --worktree`) is required to go back to pushing as the owner in
+# the same worktree. Fresh worker worktrees per dispatch sidestep this
+# entirely.
