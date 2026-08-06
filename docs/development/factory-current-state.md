@@ -87,9 +87,56 @@ mise run factory-dashboard
 
 Today, standing `ready` issues only get dispatched once — the Implement lane fires off the `ready` label event, and if that run doesn't land a PR (transient failure, cap exhaustion, whatever), the issue just sits until a human re-toggles the label. PR #1172 ("level-triggered sweep for the standing ready queue") closes that gap: a new `scripts/factory-sweep.py`, invoked daily from `factory-monitor.yml`, re-dispatches `factory-implement.yml` for the oldest standing `ready`+`agent`+`task` issues with no open linked PR, within the remaining `FACTORY_IMPLEMENT_DAILY_CAP` headroom for the day. It re-fires standing admission without ever granting new admission itself — `claim()`'s owner-actor and content-staleness checks in `factory-implement.py` are unchanged and still gate every dispatch, sweep-triggered or not. Not merged as of this writing; once it lands, add a row to the switch inventory above for whatever guard variable it introduces.
 
+## `workspaces-factory` rollout (worker PR authorship, issue #1180)
+
+**Problem.** All agent-authored PRs post from the shared owner account (`fairchild`), and GitHub blocks the owner from submitting an *approving review* on their own PR — the only formal-approval path is gone, forcing workarounds like an "I approve" comment + auto-merge (#1173) when the App reviewers' runtime crashed (#1179). This is a **separate mechanism** from the Factory Implement/Review lanes above, which already push as `april-clearwater[bot]`/`workspace-agents[bot]` via `actions/create-github-app-token` inside GitHub Actions — the owner-account problem is specific to CLI-dispatched implementation workers (local or cloud coding-agent sessions on any harness — Claude Code, codex, Cursor, Orca-managed terminals, etc.), which push and `gh pr create` using the operator's own ambient `gh` auth.
+
+**Fix.** A single shared GitHub App identity, `workspaces-factory[bot]`, that an opted-in worker authors PRs as instead. Per-agent attribution stays on `author:<agent>` labels (§ "Author Labels" above) — this only changes the git/PR *authorship* identity, not who gets credited.
+
+**What's shipped in this PR (machinery only — nothing flips by default):**
+
+- `config/github/apps/workspaces-factory.manifest.json` — App manifest: `contents:write`, `pull_requests:write`, `issues:write`, `metadata:read`; no webhooks.
+- `scripts/factory-worker-token.py` — mints a ~1-hour installation token from `FACTORY_WORKER_APP_ID` + `FACTORY_WORKER_APP_KEY` (PEM path). `--check` reports one of three states without minting anything: `not-configured` (env unset/unreadable), `configured-but-app-not-installed` (valid-looking credentials, no installation on this repo), `working`.
+- `scripts/factory-worker-identity.sh` — `source` this in a worker session; when `FACTORY_WORKER_IDENTITY=app` it mints a token, exports `GH_TOKEN`, and points worktree-scoped (`git config --worktree`, isolated from every other linked worktree of this repo, never global) git commit identity + credential helper at `workspaces-factory[bot]`. **Unset (the default) or any other value: verified no-op** — no env mutation, no git config change. (Earlier revision used `--local`, which under this repo's standard multi-worktree topology targets the shared `$GIT_COMMON_DIR/config` — caught via collateral damage from a live worker run; fixed to `--worktree` + `extensions.worktreeConfig`, covered by a two-worktree isolation test.)
+- `scripts/tests/test_factory_worker_token.py` — unit tests for JWT construction (RS256, `iss`/`iat`/`exp` claims, GitHub's 10-minute cap) against a throwaway RSA key generated at test time, plus the HTTP-status-to-state classifier, with no real App and no network calls.
+
+**What this PR cannot test.** No App exists yet, so end-to-end minting (`working` state), a live `gh pr create` as the bot, and whether GitHub actually counts `fairchild`'s review as a formal approval on a bot-authored PR are all unverified. Evidence for this PR is the `not-configured` `--check` output, the unit test run, and the pre-flight audit below — not a live mint.
+
+### Michael's two clicks
+
+1. **Create the App** from the manifest: `https://github.com/settings/apps/new`, paste/upload `config/github/apps/workspaces-factory.manifest.json`'s contents as the `manifest` field (or use the `gh-apps` skill's `create` flow pointed at that file). Save the generated App ID and download the private key PEM.
+2. **Install the App** on `fairchild/workspaces` (only that repo). Then make credentials reachable from worker environments as `FACTORY_WORKER_APP_ID` (the App ID) and `FACTORY_WORKER_APP_KEY` (a path to the PEM) — *how* those reach a CLI worker's environment is a follow-up decision, not resolved by this PR (parallel to how `EVIDENCE_UPLOAD_TOKEN` is sourced today, see root `AGENTS.md` § Evidence-Driven Development).
+
+Verify with `uv run --script scripts/factory-worker-token.py --check` — `working` means both clicks landed correctly.
+
+**Known scope gap, decide before step 1:** the manifest's permissions (`contents`, `pull_requests`, `issues`, `metadata`) don't include `workflows: write`. Without it, GitHub rejects any push from this identity that touches `.github/workflows/*.yml` — a real limitation, not hypothetical: this PR's own diff edits `.github/workflows/ci-agents.yml` and could not have been pushed under `workspaces-factory[bot]` as manifested today. Kept minimal on purpose (the accepted issue #1180 recommendation specified least-privilege permissions without naming `workflows`), but it means opted-in workers whose legitimate change touches CI config still need owner identity for that one PR. Add `workflows: write` to the manifest before creating the App if that tradeoff isn't the one you want.
+
+### Pre-flight audit (owner-authorship conditionals)
+
+Before flipping anything on, PR #1180's implementation ran a repo-wide audit for logic keyed on the PR author being the owner (`author == fairchild`-shaped checks, `authorAssociation`, assignee assumptions) across `.github/workflows/`, `scripts/`, `web/`, `web-next/`, and `docs/`. Full hit-list (~39 reviewed) is in the PR body and the audit comment on issue #1180. Summary:
+
+- **Fixed in this PR:** `scripts/factory-janitor.py`'s `TRUSTED_AUTOMATION_LOGINS` (used by `trusted_comment_author()`, since a bot's `authorAssociation` is never `OWNER`/`MEMBER`/`COLLABORATOR`) now includes `workspaces-factory[bot]` — otherwise an opted-in worker's own claim/state comments (posted with `GH_TOKEN` set for the whole session, not just PR creation) would stop being recognized as trusted. `docs/development/github-app-identities.md` and `docs/agents/triage-labels.md` updated to describe mixed authorship instead of a single shared account.
+- **Flagged for Michael's judgment, not changed here:**
+  - `config/github/rulesets/main-merge.json` currently sets `required_approving_review_count: 0` and `require_code_owner_review: false` — **no approving review is required to merge to `main` today**, so this fix's actual benefit (a formal approval GitHub will count) isn't enforced by branch protection yet. Whether to turn that on is a separate, more consequential decision than shipping the App plumbing.
+  - `scripts/factory-evidence-verify.py`'s `FACTORY_LABEL_ACTORS` (derived from the CI-contributor `APP_BOT_GIT_IDENTITIES` table) doesn't include `workspaces-factory[bot]` either — low practical impact today since workers don't typically self-apply `blocked:evidence`, but worth a follow-up if that changes.
+  - `scripts/ops-report.py`'s `select_approval_timestamp` matches comments authored by the repo owner for *discussion*-approval-lag metrics — likely unrelated to PR self-approval, but flagged since it's an owner-authorship comparison in the same theme.
+  - `.github/workflows/factory-review-execute.yml` templates `"@${REPOSITORY_OWNER} mentioned you in PR #..."` into the reviewer prompt regardless of actual PR author — cosmetic, will read oddly on a `workspaces-factory[bot]`-authored PR, not a gate.
+- **Confirmed unaffected (not exhaustive — see full list):** the Factory Implement/Review/Monitor/Responder lanes' `github.actor == github.repository_owner` checks gate who *triggered* automation, not PR authorship, and are a different lane entirely; `scripts/factory-review.py`'s self-review guard already compares against the reviewer-bot logins generically; `.github/CODEOWNERS` (`@fairchild`) does not need to change — it's the mechanism this fix unblocks, not something it invalidates; `web`/`web-next` owner-login references are dashboard sign-in allowlists, unrelated to CLI-worker git/PR authorship.
+
+### Proof step before flipping any default
+
+Per the accepted issue #1180 recommendation: land **one worker PR authored end-to-end via `workspaces-factory[bot]`** (`FACTORY_WORKER_IDENTITY=app` on a real dispatch of a CLI-based coding-agent worker) before `app` becomes the default for any worker. That PR should verify, and record in its own body:
+
+1. PR author renders as `workspaces-factory[bot]`, not `fairchild`.
+2. `fairchild` can submit a formal `APPROVED` review on it (not just a comment) — the actual property this issue is about.
+3. CI triggered on the App-token push. GitHub App tokens do trigger workflows (unlike the default `GITHUB_TOKEN`), but that's unverified in this repo's specific workflow config until a real push proves it.
+
+Only after that lands does defaulting `FACTORY_WORKER_IDENTITY=app` for worker dispatch become its own follow-up decision — not automatic, and not part of this PR.
+
 ## References
 
 - `docs/development/agent-factory-v2-plan.md` — design record: why this pipeline, the decisions behind it, the milestone roadmap
 - `docs/agents/CONTEXT.md` — Factory vocabulary (Stage, Gate, Persona, etc.)
 - `docs/agents/triage-labels.md` — the `ready`/`claimed`/`review`/`mergeable` label state machine and `author:*` attribution labels
 - `docs/development/evidence.md` — the evidence lane the Implement lane reuses as-is
+- `docs/development/github-app-identities.md` — App identity table, mechanism, and verification checklist

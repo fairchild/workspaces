@@ -20,7 +20,7 @@ The default for planned work is agent-driven. Peter-created execution issues sho
 
 ## Author Labels
 
-Every agent, human, and automation in this repo pushes under the **same GitHub account** (`fairchild`), so a PR's author and assignee tell you nothing about which agent produced it — and almost every PR is agent-authored. `author:<slug>` labels restore that attribution and make it filterable (`gh pr list --label author:<slug>`).
+Most agent work in this repo still pushes under the owner's own GitHub account (`fairchild`), so a PR's author and assignee mostly tell you nothing about which agent produced it — and almost every PR is agent-authored. `author:<slug>` labels restore that attribution and make it filterable (`gh pr list --label author:<slug>`). This is now only *mostly* true: the GitHub-Actions Factory lanes push as `april-clearwater[bot]`/`workspace-agents[bot]`, and CLI-dispatched implementation workers (any harness) can opt into pushing as `workspaces-factory[bot]` (`FACTORY_WORKER_IDENTITY=app`, issue #1180, `docs/development/github-app-identities.md`) so the owner can formally approve the PR — but even then, `author:<slug>` is still the only thing that tells you *which agent*, since `workspaces-factory[bot]` is shared across every opted-in worker.
 
 Rules:
 
