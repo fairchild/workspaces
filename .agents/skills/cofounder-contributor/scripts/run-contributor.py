@@ -845,9 +845,13 @@ def run_claude(
             cmd.extend(["--tools", tools, "--allowedTools", scoped_tool_rules(tools, write_scope)])
         cmd.extend(["--max-budget-usd", budget])
         effective_timeout = timeout or 1200
-    cmd.append(task)
+    # The task embeds PR diffs and bodies, which on large PRs exceeds the OS
+    # ARG_MAX for a single argv element (observed: OSError "Argument list too
+    # long: 'npx'" on #1203's review runs). --print mode reads the prompt from
+    # stdin when no positional prompt is given, so deliver it there instead.
     raw_output = run_checked(
         cmd,
+        input=task,
         timeout=effective_timeout,
         cwd=cwd or REPO_ROOT,
         env=env,
