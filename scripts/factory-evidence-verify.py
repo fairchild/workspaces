@@ -40,6 +40,7 @@ FACTORY_PR_MARKER = "<!-- contributor:issue="
 BLOCKED_EVIDENCE_LABEL = "blocked:evidence"
 GH_TIMEOUT = 60
 VALID_STATUSES = {"complete", "blocked", "pending-ci"}
+MAX_WRITE_ATTEMPTS = 3
 
 # Identities whose label application counts as machine-applied. Derived from
 # the contributor identity table so reviewer-only apps never qualify.
@@ -225,6 +226,89 @@ def _write_pr_body(pr_number: int, body: str, env: dict[str, str]) -> bool:
             pass
 
 
+def _updates_targeting_unchanged_entries(
+    body: str,
+    updates: dict[int, dict[str, object]],
+) -> dict[int, dict[str, object]]:
+    """Drop updates whose target index no longer names the check they were
+    computed for — e.g. an owner retargeted that evidence line during a
+    retry. `updates` is keyed by index and blind to entry content, so this
+    is what keeps a stale CI result from landing on an unrelated entry."""
+    entries = evidence_entries(body)
+    if entries is None:
+        return {}
+    current_check_names: dict[int, str | None] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            index = int(entry["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        current_check_names[index] = _ci_check_name(str(entry.get("item", "")).strip())
+    return {
+        index: update
+        for index, update in updates.items()
+        if current_check_names.get(index) == update.get("check_name")
+    }
+
+
+def _apply_ci_updates(
+    pr_number: int,
+    head_sha: str,
+    body: str,
+    updates: dict[int, dict[str, object]],
+    env: dict[str, str],
+) -> str | None:
+    """Write `updates` onto the PR body, guarded against concurrent edits.
+
+    Re-reads the PR immediately before writing. A moved head SHA means the
+    PR advanced past what `updates` was computed against, so the write is
+    skipped outright (next check_suite event self-heals). A body that no
+    longer matches what was read at the top of `process_pr` — same SHA, but
+    an owner edited the description in the UI in between — means writing
+    `updates` now would clobber that edit; instead, re-apply `updates` to
+    the freshly-read body and re-check, up to MAX_WRITE_ATTEMPTS times.
+    Before each reapply, updates are narrowed to entries still naming the
+    check they were computed for (see `_updates_targeting_unchanged_entries`),
+    so a mid-flight edit to the evidence block itself can drop a stale
+    result rather than misapply it. This does not close the write itself
+    against a same-instant edit — `gh pr edit` has no conditional-write
+    primitive — it narrows that window to the gap between the final
+    match check and the write call. Returns the body now live on the PR
+    (written, or already up to date), or None if the caller should stop
+    without further evidence-state changes.
+    """
+    for attempt in range(1, MAX_WRITE_ATTEMPTS + 1):
+        safe_updates = _updates_targeting_unchanged_entries(body, updates)
+        if not safe_updates:
+            return body
+        new_body = update_evidence_entries(body, safe_updates)
+        if new_body == body:
+            return body
+        current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
+        current_head = current.get("head") if isinstance(current, dict) else None
+        current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
+        if current_sha != head_sha:
+            log(f"PR #{pr_number} advanced during verification; skipping write")
+            return None
+        current_body = str(current.get("body") or "") if isinstance(current, dict) else ""
+        if current_body != body:
+            log(
+                f"PR #{pr_number} body changed during verification "
+                f"(attempt {attempt}/{MAX_WRITE_ATTEMPTS}); re-applying evidence updates"
+            )
+            body = current_body
+            continue
+        if not _write_pr_body(pr_number, new_body, env):
+            log(f"PR #{pr_number} body update failed")
+            return None
+        log(f"PR #{pr_number}: updated {len(safe_updates)} ci evidence entries")
+        return new_body
+    log(f"PR #{pr_number} body kept changing during verification; giving up without writing")
+    return None
+
+
 def process_pr(pr_number: int, env: dict[str, str]) -> None:
     pr = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
     if not isinstance(pr, dict) or pr.get("state") != "open":
@@ -246,19 +330,10 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
         for index, check_name in needed:
             run = latest_completed_check_run(check_name, head_sha, env)
             updates[index] = entry_update_for_check_run(check_name, head_sha, run)
-        new_body = update_evidence_entries(body, updates)
-        if new_body != body:
-            current = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
-            current_head = current.get("head") if isinstance(current, dict) else None
-            current_sha = str(current_head.get("sha", "")) if isinstance(current_head, dict) else ""
-            if current_sha != head_sha:
-                log(f"PR #{pr_number} advanced during verification; skipping write")
-                return
-            if not _write_pr_body(pr_number, new_body, env):
-                log(f"PR #{pr_number} body update failed")
-                return
-            log(f"PR #{pr_number}: updated {len(updates)} ci evidence entries")
-            body = new_body
+        updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
+        if updated_body is None:
+            return
+        body = updated_body
 
     label_names = {
         str(label.get("name", ""))
