@@ -37,7 +37,15 @@ PLATFORM_PREFIXES = (".github/", "infra/")
 DEFAULT_DAILY_REVIEW_CAP = 12
 # The daily cap counts posted reviews; a crash loop (retries that never post a
 # review, see #1179) would otherwise run unbounded. This is a hard ceiling on
-# raw run attempts, independent of outcome.
+# raw run attempts (GITHUB_RUN_ATTEMPT, i.e. `gh run rerun`), independent of
+# outcome -- NOT a hard ceiling on model invocations. Since #1179, one raw
+# attempt's review step (run-contributor.py's run_action_phase) can itself
+# retry once internally on a transient failure, so a single counted attempt
+# can now cost up to 2 Claude invocations rather than 1. That in-process
+# retry is invisible here by design (it happens inside one workflow step, so
+# it can't be observed via run_attempt or double-count the review budget
+# below) -- but it does mean this multiplier's cost ceiling should be read as
+# "up to 2x raw attempts" worth of model spend, not raw attempts alone.
 RUNAWAY_CAP_MULTIPLIER = 3
 # The step that actually posts a review, keyed by job name. Checking this
 # step's own conclusion (not the job's, and not the overall run's) is what

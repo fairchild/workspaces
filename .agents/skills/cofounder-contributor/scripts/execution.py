@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 from _helpers import (
     AGENT_CLAIM_LABEL,
@@ -67,6 +68,7 @@ from github_state import (
     find_pr_review_state,
     repo_owner_name,
 )
+from telemetry import redact_secrets
 
 _label_cache: set[str] | None = None
 AUTHOR_LABEL_COLOR = "BFD4F2"
@@ -1083,6 +1085,31 @@ def route_execution_action(
     return 0
 
 
+def _preserve_unparseable_output(raw_output: str, env: dict[str, str]) -> None:
+    """Persist the exact text that failed output validation as a run artifact.
+
+    #1179: a review whose analysis fully completed died at this stage and
+    was never posted, then its GitHub Actions log expired before anyone
+    could inspect it. When FACTORY_TELEMETRY_DIR is set, the run already
+    uploads that directory as a workflow artifact (see
+    factory-review-execute.yml's "Upload {April,Plat} review telemetry"
+    step), so writing here needs no new plumbing -- it only adds one more
+    file to what's already collected. Best-effort: a write failure here must
+    never fail the contributor run, same as telemetry.record_run_telemetry.
+    """
+    telemetry_dir = (env.get("FACTORY_TELEMETRY_DIR") or "").strip()
+    if not telemetry_dir:
+        return
+    try:
+        failures_dir = Path(telemetry_dir) / "parse-failures"
+        failures_dir.mkdir(parents=True, exist_ok=True)
+        seq = sum(1 for _ in failures_dir.glob("*.txt")) + 1
+        redacted = redact_secrets(raw_output, env)
+        (failures_dir / f"{seq:04d}-unparsed-output.txt").write_text(redacted, encoding="utf-8")
+    except Exception as exc:  # artifact preservation is best-effort
+        log(f"artifact preservation: skipped ({exc})")
+
+
 def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | None, str]:
     log("Validating agent output")
     try:
@@ -1097,12 +1124,15 @@ def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | No
         )
     except subprocess.TimeoutExpired:
         print("error: validation timed out", file=sys.stderr)
+        _preserve_unparseable_output(raw_output, env)
         return 1, None, "validation timed out"
     if result.returncode == 0:
         return 0, result.stdout, result.stderr
     error_text = result.stderr.strip()
     if error_text:
         print(error_text, file=sys.stderr)
+    if not (result.returncode == 2 and error_text.startswith("duplicate:")):
+        _preserve_unparseable_output(raw_output, env)
     return result.returncode, None, error_text
 
 

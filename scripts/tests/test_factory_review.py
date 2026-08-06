@@ -179,6 +179,34 @@ class FactoryReviewTests(unittest.TestCase):
             "admission alone is not a posted review",
         )
 
+    def test_review_step_counts_once_regardless_of_retries_inside_it(self) -> None:
+        """#1179: run-contributor.py retries a review once in-process on a
+        transient failure before `route_action` ever posts anything, so at
+        most one `gh pr review` call happens per step. Confirms the budget
+        accounting this depends on: it is derived entirely from the step's
+        own final conclusion and `run_attempt` (a *workflow*-level GitHub
+        Actions rerun), neither of which reflects retries that happened
+        inside a single step's process -- so an in-process retry cannot be
+        observed here at all, let alone counted twice.
+        """
+        run = {"id": 1, "run_attempt": 1, "status": "completed", "conclusion": "success"}
+        # Same shape regardless of whether the review step needed a retry
+        # internally to reach this success -- factory-review.py has no
+        # visibility into that and does not need any to count correctly.
+        jobs = [
+            {
+                "name": "april",
+                "conclusion": "success",
+                "steps": [{"name": "Run April counterpart review", "conclusion": "success"}],
+            }
+        ]
+
+        self.assertTrue(factory_review.review_was_posted(jobs))
+        budget = factory_review.count_daily_review_budget(
+            [run], {"1": True}, current_run_id="1"
+        )
+        self.assertEqual(budget, 1, "a retried-then-posted review claims exactly one budget slot")
+
     def test_daily_cap_counts_only_successful_reviews_not_failed_attempts(self) -> None:
         """Retries and crash-loop failures must not inflate the review budget."""
         runs = [
