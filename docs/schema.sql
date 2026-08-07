@@ -49,7 +49,9 @@ ON CONFLICT(key) DO UPDATE SET
 --   site has that identity.
 -- - target_path captures current path-derived session keys.
 -- - backend_identifier/backend_instance_id identify provider-backed sessions.
--- - tmux_session_name is nullable because tmux is mode-dependent.
+-- - tmux_session_name is nullable because tmux is mode-dependent. When set, it is
+--   the session's *chosen* launch name (split panes carry a pane suffix beyond the
+--   directory derivation); restore probes and reattaches by this exact value.
 CREATE TABLE IF NOT EXISTS terminal_sessions (
     host_session_id TEXT PRIMARY KEY NOT NULL,
     session_key TEXT NOT NULL,

@@ -30,12 +30,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "factory-worker-identity.sh"
 
+# Deliberately carries no PEP 723 metadata block: `uv run --script` accepts
+# metadata-less scripts, and embedding a second metadata header at column 0 in
+# this file makes spec-compliant uv reject the whole test file as having
+# multiple metadata blocks.
 STUB_TOKEN_SCRIPT = """\
 #!/usr/bin/env -S uv run --script
-# /// script
-# requires-python = ">=3.11"
-# dependencies = []
-# ///
 print("stub-token-for-worktree-isolation-test")
 """
 

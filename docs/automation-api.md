@@ -168,7 +168,9 @@ workspaces tile close
 ```
 
 The request is scoped to the caller. There is no V1 command for closing an
-arbitrary tile by ID.
+arbitrary tile by ID. The response reports `outcome: "requested"` with
+`changed: false`: close is fire-and-forget and the app may still prompt, so
+the API reports the request without claiming the tile closed.
 
 ## Write Into The Current Tile (Experimental)
 

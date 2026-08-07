@@ -97,6 +97,42 @@ struct LocalStateStoreTests {
         #expect(rawDetailCount == 0)
     }
 
+    /// The continuity row records the session's *chosen* tmux name, not a directory
+    /// re-derivation: a split pane's disambiguated name must round-trip so restore
+    /// probes and reattaches the pane's own session (#1232).
+    @Test("Continuity rows carry the session's chosen tmux name")
+    func continuityRowsCarryChosenTmuxName() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let databaseURL = fixture.url.appendingPathComponent("state.sqlite")
+        let store = try LocalStateStore(databaseURL: databaseURL)
+        let directory = URL(fileURLWithPath: "/tmp/workspaces/repo")
+        let primary = HostTerminalSession(key: .repoPath(directory.path), directory: directory)
+        let splitID = UUID()
+        let split = HostTerminalSession(
+            id: splitID,
+            key: .repoPath(directory.path),
+            directory: directory,
+            tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: splitID)
+        )
+
+        for session in [primary, split] {
+            try await store.recordTerminalSession(
+                session,
+                terminalMode: "tmux_per_session",
+                isActive: true,
+                hooksSocketPath: nil
+            )
+        }
+
+        let rows = try await store.fetchContinuitySessions()
+        let primaryRow = try #require(rows.first { $0.hostSessionID == primary.id })
+        let splitRow = try #require(rows.first { $0.hostSessionID == split.id })
+        #expect(primaryRow.tmuxSessionName == TmuxSessionNaming.defaultName(for: directory))
+        #expect(splitRow.tmuxSessionName == split.tmuxSessionNameOverride)
+        #expect(primaryRow.tmuxSessionName != splitRow.tmuxSessionName)
+    }
+
     @Test("Agent events create a placeholder terminal session when needed")
     func agentEventsCreatePlaceholderTerminalSession() async throws {
         let fixture = try TemporaryDirectory()

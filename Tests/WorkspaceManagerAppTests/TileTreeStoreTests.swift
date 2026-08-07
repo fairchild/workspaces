@@ -62,6 +62,117 @@ struct TileTreeStoreTests {
         #expect(store.activeSessionID == third.id)
     }
 
+    /// The #1232 acceptance: two panes in one workspace under tmux mode launch on
+    /// distinct session names — the primary keeps the directory derivation, the
+    /// split gets a pane-suffixed override that the continuity row records.
+    @Test("Split panes in one directory get distinct tmux session names")
+    func splitPanesGetDistinctTmuxSessionNames() throws {
+        let store = TileTreeStore()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(
+            key: .repoPath(directory.path),
+            directory: directory
+        ).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+
+        #expect(primary.tmuxSessionNameOverride == nil)
+        #expect(split.tmuxSessionNameOverride != nil)
+        #expect(split.effectiveTmuxSessionName != primary.effectiveTmuxSessionName)
+        #expect(split.effectiveTmuxSessionName.hasPrefix(primary.effectiveTmuxSessionName))
+    }
+
+    /// The #1232 reclaim path, end to end through a stubbed `tmux` executable that
+    /// records its argv: explicitly closing a split pane kills the pane-scoped
+    /// session on the workspaces socket by its exact recorded name.
+    @Test("Closing a split pane kills its pane-scoped tmux session")
+    func closingSplitPaneKillsItsTmuxSession() async throws {
+        let stubDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tmux-stub-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: stubDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stubDirectory) }
+        let invocationFile = stubDirectory.appendingPathComponent("invocation")
+        let stubExecutable = stubDirectory.appendingPathComponent("tmux")
+        try "#!/bin/sh\necho \"$@\" > \"\(invocationFile.path)\"\nexit 0\n"
+            .write(to: stubExecutable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: stubExecutable.path)
+
+        let probe = TmuxSessionProbe(environment: ["PATH": "\(stubDirectory.path):/usr/bin:/bin"])
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.killTmuxSession = { await probe.killSession($0) }
+
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        let expectedSessionName = try #require(split.tmuxSessionNameOverride)
+
+        #expect(store.handleProcessExit(for: split.id))
+
+        // The kill is async and crosses a child-process launch, whose round trip
+        // varies by orders of magnitude on loaded runners — wait on the stub's
+        // recorded invocation, not a tuned clock.
+        let deadline = Date().addingTimeInterval(30)
+        while !FileManager.default.fileExists(atPath: invocationFile.path), Date() < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        let invocation = try String(contentsOf: invocationFile, encoding: .utf8)
+        #expect(invocation.contains("-L workspaces"))
+        #expect(invocation.contains("kill-session"))
+        #expect(invocation.contains("-t =\(expectedSessionName)"))
+    }
+
+    /// Which teardown may reclaim a tmux session: only a pane-scoped override (one
+    /// that differs from the directory derivation). Primaries and restored primaries
+    /// carry names a future launch in that directory `-A`-reattaches, so they must
+    /// survive; non-tmux mode never kills anything.
+    @Test("Only pane-scoped overrides are reclaimed on teardown")
+    func onlyPaneScopedOverridesAreReclaimed() {
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let derived = TmuxSessionNaming.defaultName(for: directory)
+        let primary = HostTerminalSession(key: .repoPath(directory.path), directory: directory)
+        let restoredPrimary = HostTerminalSession(
+            key: .repoPath(directory.path), directory: directory, tmuxSessionNameOverride: derived)
+        let paneID = UUID()
+        let pane = HostTerminalSession(
+            id: paneID, key: .repoPath(directory.path), directory: directory,
+            tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: paneID))
+
+        #expect(store.paneScopedTmuxSessionNameToKill(for: primary) == nil)
+        #expect(store.paneScopedTmuxSessionNameToKill(for: restoredPrimary) == nil)
+        #expect(store.paneScopedTmuxSessionNameToKill(for: pane) == pane.tmuxSessionNameOverride)
+
+        store.resolveTerminalMultiplexingMode = { .ghosttyManagedSplits }
+        #expect(store.paneScopedTmuxSessionNameToKill(for: pane) == nil)
+    }
+
+    /// The #1232 restore side: one created session per continuity row. The activation
+    /// path's key-reuse would collapse a primary and its recorded split panes into one
+    /// session and drop the panes' recorded tmux targets — `createRestoredSession`
+    /// never reuses.
+    @Test("Restored surfaces sharing a key each get their own session")
+    func restoredSurfacesSharingKeyGetOwnSessions() {
+        let store = TileTreeStore()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let derived = TmuxSessionNaming.defaultName(for: directory)
+        let paneName = "\(derived)-pdeadbeef"
+
+        let primary = store.createRestoredSession(
+            key: .repoPath(directory.path), directory: directory, tmuxSessionNameOverride: derived)
+        let pane = store.createRestoredSession(
+            key: .repoPath(directory.path), directory: directory,
+            initialCommand: nil, tmuxSessionNameOverride: paneName)
+
+        #expect(store.sessions.count == 2)
+        #expect(primary.id != pane.id)
+        #expect(primary.effectiveTmuxSessionName == derived)
+        #expect(pane.effectiveTmuxSessionName == paneName)
+        // Contrast: the activation path reuses by key instead of creating a third.
+        #expect(store.activateSession(key: .repoPath(directory.path), directory: directory).created == false)
+    }
+
     @Test("Tab title overrides are scoped to primary sessions")
     func tabTitleOverridesAreScopedToPrimarySessions() throws {
         let store = TileTreeStore()

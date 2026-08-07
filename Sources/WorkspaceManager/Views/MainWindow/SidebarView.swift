@@ -1424,8 +1424,13 @@ struct SidebarView: View {
         await desktopUISmokeAutomation.noteRepoReady(repo)
         guard desktopUISmokeAutomation.shouldStartScenario() else { return }
         if desktopUISmokeAutomation.usesAPICreateDriver {
+            let attachBaselineBeforeRepoPark = desktopUISmokeAutomation.terminalAttachCount
             let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
             onRepoTerminalSelected(repo)
+            _ = await desktopUISmokeAutomation.waitForTerminalAttach(
+                after: attachBaselineBeforeRepoPark,
+                timeout: .seconds(15)
+            )
             _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
                 after: focusBaselineBeforeRepoPark,
                 timeout: .seconds(15)
@@ -1442,6 +1447,7 @@ struct SidebarView: View {
 
         await desktopUISmokeAutomation.noteWorkspaceCreationStarted(repo: repo)
 
+        let attachBaselineBeforeCreate = desktopUISmokeAutomation.terminalAttachCount
         let focusBaselineBeforeCreate = desktopUISmokeAutomation.surfaceFocusCount
         await createWorkspace(
             from: repo,
@@ -1460,7 +1466,12 @@ struct SidebarView: View {
         await desktopUISmokeAutomation.noteWorkspaceCreated(workspace)
         await emitDesktopUISmokeSidebarUpdate(for: workspace)
 
-        // Flow 1: the freshly created workspace's terminal becomes ready.
+        // Flow 1: the freshly created workspace's terminal attaches (hard gate),
+        // then focus (best-effort; skipped when activation is suppressed).
+        _ = await desktopUISmokeAutomation.waitForTerminalAttach(
+            after: attachBaselineBeforeCreate,
+            timeout: .seconds(15)
+        )
         _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
             after: focusBaselineBeforeCreate,
             timeout: .seconds(15)
@@ -1472,8 +1483,13 @@ struct SidebarView: View {
         // `terminal_session_attached` milestone — and switch the active PTY off the repo terminal,
         // which is the wrong-PTY guard proven end to end.
         if desktopUISmokeAutomation.usesAPISelectDriver {
+            let attachBaselineBeforeRepoPark = desktopUISmokeAutomation.terminalAttachCount
             let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
             onRepoTerminalSelected(repo)
+            _ = await desktopUISmokeAutomation.waitForTerminalAttach(
+                after: attachBaselineBeforeRepoPark,
+                timeout: .seconds(15)
+            )
             _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
                 after: focusBaselineBeforeRepoPark,
                 timeout: .seconds(15)
@@ -1485,15 +1501,25 @@ struct SidebarView: View {
         // Flow 2: switch selection to the repo terminal, then back to the
         // workspace. Distinct attached session IDs prove the surface follows
         // selection rather than stranding a stale session.
+        let attachBaselineBeforeRepo = desktopUISmokeAutomation.terminalAttachCount
         let focusBaselineBeforeRepo = desktopUISmokeAutomation.surfaceFocusCount
         onRepoTerminalSelected(repo)
+        _ = await desktopUISmokeAutomation.waitForTerminalAttach(
+            after: attachBaselineBeforeRepo,
+            timeout: .seconds(15)
+        )
         _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
             after: focusBaselineBeforeRepo,
             timeout: .seconds(15)
         )
 
+        let attachBaselineBeforeReselect = desktopUISmokeAutomation.terminalAttachCount
         let focusBaselineBeforeReselect = desktopUISmokeAutomation.surfaceFocusCount
         selectWorkspace(workspace)
+        _ = await desktopUISmokeAutomation.waitForTerminalAttach(
+            after: attachBaselineBeforeReselect,
+            timeout: .seconds(15)
+        )
         _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
             after: focusBaselineBeforeReselect,
             timeout: .seconds(15)
@@ -1516,8 +1542,13 @@ struct SidebarView: View {
                 )
             }
 
+            let attachBaselineAfterWeb = desktopUISmokeAutomation.terminalAttachCount
             let focusBaselineAfterWeb = desktopUISmokeAutomation.surfaceFocusCount
             selectWorkspace(workspace)
+            _ = await desktopUISmokeAutomation.waitForTerminalAttach(
+                after: attachBaselineAfterWeb,
+                timeout: .seconds(15)
+            )
             _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
                 after: focusBaselineAfterWeb,
                 timeout: .seconds(15)

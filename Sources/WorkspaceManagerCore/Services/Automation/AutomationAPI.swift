@@ -862,8 +862,16 @@ public struct AutomationWorkspaceArchiveResult: Codable, Sendable, Equatable {
     }
 }
 
+/// Typed outcome for fire-and-forget tile mutations. `requested` reports that the verb entered the
+/// app's normal request path without claiming the effect landed — `tile.close` hands off to the
+/// close-confirmation flow, where Ghostty may still prompt instead of closing.
+public enum AutomationMutationOutcomeKind: String, Codable, Sendable, Equatable {
+    case requested
+}
+
 public struct AutomationMutationResult: Codable, Sendable, Equatable {
     public let changed: Bool
+    public let outcome: AutomationMutationOutcomeKind?
     public let focusedSurfaceID: String?
     public let createdSurfaceID: String?
     public let closedSurfaceID: String?
@@ -872,6 +880,7 @@ public struct AutomationMutationResult: Codable, Sendable, Equatable {
 
     public init(
         changed: Bool,
+        outcome: AutomationMutationOutcomeKind? = nil,
         focusedSurfaceID: String? = nil,
         createdSurfaceID: String? = nil,
         closedSurfaceID: String? = nil,
@@ -879,6 +888,7 @@ public struct AutomationMutationResult: Codable, Sendable, Equatable {
         system: AutomationSystemDescriptor = AutomationSystemDescriptor()
     ) {
         self.changed = changed
+        self.outcome = outcome
         self.focusedSurfaceID = focusedSurfaceID
         self.createdSurfaceID = createdSurfaceID
         self.closedSurfaceID = closedSurfaceID
