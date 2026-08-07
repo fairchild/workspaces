@@ -998,6 +998,7 @@ public enum AutomationErrorCode: String, Codable, Sendable, Equatable {
     case routeNotFound = "route_not_found"
     case methodNotAllowed = "method_not_allowed"
     case unsupported
+    case busy
     case internalError = "internal_error"
 }
 

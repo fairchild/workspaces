@@ -426,6 +426,8 @@ enum AutomationHTTPRouter {
             return 404
         case .unsupported:
             return 409
+        case .busy:
+            return 503
         case .internalError:
             return 500
         }

@@ -42,7 +42,16 @@ processes only receive automation environment when their surface is created.
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
 not terminal input or output. Each event carries an `operatorHandle` boolean so
-operator calls are distinguishable from tile calls (`[A1]`).
+operator calls are distinguishable from tile calls (`[A1]`). The file rotates
+at 5 MB (two rotated files kept, `.1`/`.2`). A completed mutation whose
+response could not be written back to a disconnected caller appends a follow-up
+entry with `responseUndelivered: true`; reconcile with a read verb.
+
+Both socket ends carry deadlines: the listener closes connections that do not
+deliver a full request within 10 s, bounds response writes the same way, and
+answers connections over its small concurrency cap with a `busy` error. The
+client sets 30 s send/receive socket timeouts, so a hung app surfaces as a
+typed timeout in the CLI instead of a wedged shell.
 
 ### Operator scope (`[A1]`)
 
@@ -599,6 +608,7 @@ is whatever the sidebar gesture left selected.
 | `route_not_found` | The route is not part of the API. |
 | `method_not_allowed` | The path exists but the HTTP method is wrong. |
 | `unsupported` | The requested V1 operation is not supported in the current context. |
+| `busy` | The listener is at its concurrent-connection cap; retry shortly. |
 | `internal_error` | Unexpected server-side failure. |
 
 ## CLI
