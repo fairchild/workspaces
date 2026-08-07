@@ -35,6 +35,7 @@ RUN_DIR="$OUTPUT_ROOT/$TIMESTAMP"
 RUN_LINK="$OUTPUT_ROOT/latest"
 RUN_STATUS="failed"
 FAILURE_MESSAGE=""
+FINALIZED=false
 APP_PID=""
 LAUNCH_LOG_PATH=""
 SMOKE_REPO_PATH=""
@@ -144,7 +145,11 @@ for raw_line in path.read_text().splitlines():
     raw_line = raw_line.strip()
     if not raw_line:
         continue
-    event = json.loads(raw_line)
+    try:
+        event = json.loads(raw_line)
+    except json.JSONDecodeError:
+        # A torn final line (app killed mid-write) must not abort cleanup.
+        continue
     if event.get("type") == "workspace_created" and event.get("workspacePath"):
         result = event["workspacePath"]
 print(result)
@@ -185,9 +190,17 @@ write_summary() {
 EOF
 }
 
+# Single finalize path for every outcome (pass, fail, signal). Clears all
+# traps first so a late signal takes its default action instead of re-entering;
+# the FINALIZED guard covers the one-command window before the traps drop.
 finalize_and_exit() {
+    trap - EXIT TERM INT HUP
     local exit_code="$1"
     local message="$2"
+    if [[ "$FINALIZED" == true ]]; then
+        exit "$exit_code"
+    fi
+    FINALIZED=true
     local elapsed_seconds
     elapsed_seconds=$(( $(date +%s) - STARTED_AT ))
 
@@ -209,6 +222,17 @@ on_exit() {
     if [[ "$exit_code" -ne 0 && "$RUN_STATUS" != "passed" ]]; then
         finalize_and_exit "$exit_code" "${FAILURE_MESSAGE:-Smoke run failed.}"
     fi
+}
+
+# Terminating signals do not fire this script's EXIT trap (a plain `kill`, and
+# what CI timeouts send), so funnel them into the same finalize path: the
+# worktree is cleaned, summary.md records the interruption, and the exit code
+# is the conventional 128+signum.
+on_signal() {
+    local signal_name="$1"
+    local signal_number="$2"
+    RUN_STATUS="interrupted"
+    finalize_and_exit "$((128 + signal_number))" "Smoke run interrupted by SIG${signal_name}."
 }
 
 create_disposable_repo() {
@@ -475,6 +499,9 @@ main() {
     setup_run_dir
     STARTED_AT="$(date +%s)"
     trap on_exit EXIT
+    trap 'on_signal TERM 15' TERM
+    trap 'on_signal INT 2' INT
+    trap 'on_signal HUP 1' HUP
 
     create_disposable_repo
     launch_automated_app
