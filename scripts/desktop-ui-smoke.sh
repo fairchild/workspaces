@@ -58,7 +58,7 @@ Usage: ./scripts/desktop-ui-smoke.sh [options]
 
 Options:
   --no-build               Reuse the current debug binary
-  --keep-artifacts         Keep the disposable smoke repo after a passing run
+  --keep-artifacts         Keep the smoke repo and created worktree, any outcome
   --timeout-seconds <n>    Total timeout for the smoke (default: 300)
   --inactivity-seconds <n> Fail if no new event progress occurs (default: 90)
   --help, -h               Show this help
@@ -119,14 +119,17 @@ cleanup_repo() {
         chmod -R u+w "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
         rm -rf "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
     fi
-    cleanup_created_worktrees
 }
 
 # The app creates the workspace as a git worktree under the configured
-# workspaces root (default ~/workspaces/<repo-name>/<workspace-name>). Remove it
-# using the path the app reported in the milestone stream so a passing run leaves
-# no residue on disk.
+# workspaces root (default ~/workspaces/<repo-name>/<workspace-name>) — the
+# owner's real workspace list, not a temp dir. Remove it using the path the app
+# reported in the milestone stream. Runs on every outcome (passed, failed,
+# interrupted) so no run leaves residue there; --keep-artifacts opts out.
 cleanup_created_worktrees() {
+    if [[ "$KEEP_ARTIFACTS" == true ]]; then
+        return 0
+    fi
     [[ -f "$EVENTS_PATH" ]] || return 0
     local workspace_path
     workspace_path="$(
@@ -193,6 +196,7 @@ finalize_and_exit() {
     if [[ "$RUN_STATUS" == "passed" ]]; then
         cleanup_repo
     fi
+    cleanup_created_worktrees
     write_summary "$elapsed_seconds" "$message"
     log "$message"
     log "Run directory: $RUN_DIR"
