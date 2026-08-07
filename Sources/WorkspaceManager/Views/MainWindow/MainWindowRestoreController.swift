@@ -87,14 +87,26 @@ struct MainWindowRestoreController {
         Set(plan.surfaces.map(\.key))
     }
 
-    /// Directories whose deterministic tmux session must be killed before restore. The planner
-    /// only chose resume because the prior tmux session is gone, so a live session on that name
-    /// can only be this launch's seed artifact — killing it stops the resume surface
-    /// `-A`-attaching to a leftover shell instead of starting fresh.
-    func tmuxSessionDirectoriesToKill(in plan: RestorePlan) -> [URL] {
-        plan.surfaces.compactMap { surface in
+    /// Tmux session names to kill before restore. The planner only chose resume because the
+    /// prior tmux session is gone, so a live session on the resume surface's directory-derived
+    /// name can only be this launch's seed artifact — killing it stops the resume surface
+    /// `-A`-attaching to a leftover shell instead of starting fresh. A name another surface is
+    /// reattaching to is never killed: a resume and a reattach surface can share a directory,
+    /// and the derived name would then be the reattach target (#1233).
+    func tmuxSessionNamesToKill(
+        in plan: RestorePlan,
+        sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
+    ) -> [String] {
+        let reattachTargets = Set(
+            plan.surfaces.compactMap { surface -> String? in
+                guard case .reattachTmux(let name) = surface.action else { return nil }
+                return name
+            }
+        )
+        return plan.surfaces.compactMap { surface in
             guard case .resumeClaude = surface.action else { return nil }
-            return surface.directory
+            let name = sessionName(surface.directory)
+            return reattachTargets.contains(name) ? nil : name
         }
     }
 
@@ -109,5 +121,14 @@ struct MainWindowRestoreController {
         case .resumeClaude(let agentSessionID):
             return RestoreLaunchCommand.claudeResume(sessionID: agentSessionID)
         }
+    }
+
+    /// The tmux session name a restored surface must launch on, or `nil` to derive from the
+    /// launch directory. A reattach surface targets the probed name from its continuity row —
+    /// re-deriving from the directory would start a fresh session in the fallback directory
+    /// and strand the surviving one whenever the recorded directory is gone (#1233).
+    func tmuxSessionNameOverride(for action: RestoreSurfaceAction) -> String? {
+        guard case .reattachTmux(let sessionName) = action else { return nil }
+        return sessionName
     }
 }

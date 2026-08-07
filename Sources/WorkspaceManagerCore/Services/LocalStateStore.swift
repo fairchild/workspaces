@@ -286,7 +286,9 @@ public actor LocalStateStore {
         let target = Self.targetFields(for: session.key)
         let customCommandPresent = session.customCommand == nil ? 0 : 1
         let activeValue = isActive ? 1 : 0
-        let tmuxSessionName = Self.tmuxSessionName(for: session.directoryURL, terminalMode: terminalMode)
+        // The session's chosen name (split-pane or restore override included), not a
+        // directory re-derivation — restore probes and reattaches by this recorded value.
+        let tmuxSessionName = terminalMode == "tmux_per_session" ? session.effectiveTmuxSessionName : nil
         let runID = self.runID
         let runStartedAt = self.runStartedAt
 
@@ -1309,47 +1311,6 @@ public actor LocalStateStore {
         case .errored:
             return "errored"
         }
-    }
-
-    private static func tmuxSessionName(for directory: URL, terminalMode: String) -> String? {
-        guard terminalMode == "tmux_per_session" else { return nil }
-        let normalizedPath = directory
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-            .path
-        let baseComponent = directory.lastPathComponent.isEmpty ? "session" : directory.lastPathComponent
-        let sanitizedBase = sanitizeSessionComponent(baseComponent)
-        let hash = fnv1a64(normalizedPath)
-        let hashPrefix = String(format: "%016llx", hash).prefix(8)
-        return "wm-\(sanitizedBase)-\(hashPrefix)"
-    }
-
-    private static func sanitizeSessionComponent(_ value: String) -> String {
-        let transformed = value.lowercased().map { character -> Character in
-            if character.isASCII, character.isLetter || character.isNumber {
-                return character
-            }
-            return "-"
-        }
-
-        let collapsed = String(transformed)
-            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-
-        if collapsed.isEmpty {
-            return "session"
-        }
-
-        return String(collapsed.prefix(20))
-    }
-
-    private static func fnv1a64(_ value: String) -> UInt64 {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in value.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 0x0100_0000_01b3
-        }
-        return hash
     }
 
     private static func isoString(_ date: Date) -> String {

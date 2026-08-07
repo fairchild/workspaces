@@ -62,6 +62,25 @@ struct TileTreeStoreTests {
         #expect(store.activeSessionID == third.id)
     }
 
+    /// The #1232 acceptance: two panes in one workspace under tmux mode launch on
+    /// distinct session names — the primary keeps the directory derivation, the
+    /// split gets a pane-suffixed override that the continuity row records.
+    @Test("Split panes in one directory get distinct tmux session names")
+    func splitPanesGetDistinctTmuxSessionNames() throws {
+        let store = TileTreeStore()
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(
+            key: .repoPath(directory.path),
+            directory: directory
+        ).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+
+        #expect(primary.tmuxSessionNameOverride == nil)
+        #expect(split.tmuxSessionNameOverride != nil)
+        #expect(split.effectiveTmuxSessionName != primary.effectiveTmuxSessionName)
+        #expect(split.effectiveTmuxSessionName.hasPrefix(primary.effectiveTmuxSessionName))
+    }
+
     @Test("Tab title overrides are scoped to primary sessions")
     func tabTitleOverridesAreScopedToPrimarySessions() throws {
         let store = TileTreeStore()

@@ -2956,13 +2956,15 @@ struct ContentView: View {
     @discardableResult
     @MainActor
     private func activateHostSession(
-        key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil, initialCommand: String? = nil
+        key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil, initialCommand: String? = nil,
+        tmuxSessionNameOverride: String? = nil
     ) -> HostTerminalSession {
         let result = tileTreeStore.activateSession(
             key: key,
             directory: directory,
             customCommand: customCommand,
-            initialCommand: initialCommand
+            initialCommand: initialCommand,
+            tmuxSessionNameOverride: tmuxSessionNameOverride
         )
         if result.created {
             hostSessionLog.info(
@@ -3099,18 +3101,25 @@ struct ContentView: View {
         // prior tmux session is gone, so a live session on the resume surface's
         // deterministic name can only be this launch's seed artifact. Kill it so
         // the resume surface starts a fresh session instead of `-A`-attaching to
-        // the retired seed's leftover shell.
+        // the retired seed's leftover shell. Names another surface reattaches to
+        // are excluded by the controller (#1233).
         let tmuxProbe = TmuxSessionProbe()
-        for directory in restoreController.tmuxSessionDirectoriesToKill(in: plan) {
-            await tmuxProbe.killSession(GhosttyTerminalConfig.tmuxSessionName(for: directory))
+        for sessionName in restoreController.tmuxSessionNamesToKill(in: plan) {
+            await tmuxProbe.killSession(sessionName)
         }
 
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
         for surface in plan.surfaces {
+            if surface.launchDirectoryFellBack {
+                restoreLog.notice(
+                    "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) recorded directory is gone; launching in fallback \(surface.directory.path, privacy: .public)"
+                )
+            }
             let session = activateHostSession(
                 key: surface.key,
                 directory: surface.directory,
-                initialCommand: restoreController.initialCommand(for: surface.action)
+                initialCommand: restoreController.initialCommand(for: surface.action),
+                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface.action)
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }

@@ -140,6 +140,40 @@ struct TerminalRestorePlannerTests {
         let surface = try #require(plan.surfaces.first)
         #expect(surface.action == .freshShell)
         #expect(surface.directory == URL(fileURLWithPath: "/resolved-root"))
+        #expect(surface.launchDirectoryFellBack)
+    }
+
+    /// The #1233 case: the workspace directory is gone but its tmux session survived.
+    /// The plan must still reattach by the recorded name — from the fallback root —
+    /// and report the directory switch rather than silently relocating.
+    @Test("A reattach with a dead directory keeps the probed name and reports the fallback")
+    func reattachWithDeadDirectoryKeepsNameAndReportsFallback() throws {
+        let planner = makePlanner(
+            resolve: { _ in
+                ResolvedRestoreTarget(
+                    key: .repoPath("/repo"),
+                    rootDirectory: URL(fileURLWithPath: "/resolved-root")
+                )
+            },
+            tmuxAlive: { $0 == "wm-repo-abcd1234" },
+            directoryExists: { $0 == "/resolved-root" }
+        )
+        let row = makeRow(directoryPath: "/moved-away", tmuxSessionName: "wm-repo-abcd1234")
+        let plan = planner.plan(rows: [row], layout: nil)
+        let surface = try #require(plan.surfaces.first)
+        #expect(surface.action == .reattachTmux(sessionName: "wm-repo-abcd1234"))
+        #expect(surface.directory == URL(fileURLWithPath: "/resolved-root"))
+        #expect(surface.launchDirectoryFellBack)
+    }
+
+    @Test("A surviving recorded directory is not reported as a fallback")
+    func existingDirectoryIsNotAFallback() throws {
+        let planner = makePlanner(tmuxAlive: { _ in true })
+        let row = makeRow(tmuxSessionName: "wm-repo-abcd1234")
+        let plan = planner.plan(rows: [row], layout: nil)
+        let surface = try #require(plan.surfaces.first)
+        #expect(surface.directory == URL(fileURLWithPath: "/repo"))
+        #expect(!surface.launchDirectoryFellBack)
     }
 
     @Test("A non-Claude agent never picks the resume rung")

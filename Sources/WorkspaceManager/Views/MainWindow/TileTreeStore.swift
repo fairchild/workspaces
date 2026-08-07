@@ -230,13 +230,15 @@ final class TileTreeStore: ObservableObject {
         key: HostTerminalSessionKey,
         directory: URL,
         customCommand: String? = nil,
-        initialCommand: String? = nil
+        initialCommand: String? = nil,
+        tmuxSessionNameOverride: String? = nil
     ) -> HostTerminalSessionActivationResult {
         let result = coordinator.activate(
             key: key,
             directory: directory,
             customCommand: customCommand,
-            initialCommand: initialCommand
+            initialCommand: initialCommand,
+            tmuxSessionNameOverride: tmuxSessionNameOverride
         )
         publishSnapshot()
         return result
@@ -609,9 +611,18 @@ final class TileTreeStore: ObservableObject {
         // leaf and no split happened — abort before mutating any binding (keeps a seeded tab pristine).
         guard newTile != parentTile else { return nil }
 
+        // A non-primary pane needs its own tmux session name: the primary's is a pure
+        // function of the shared directory, so two `new-session -A` launches on that
+        // name would attach to one session — two mirrored views, one shell (#1232).
+        let splitSessionID = UUID()
         let splitSession = HostTerminalSession(
+            id: splitSessionID,
             key: primarySession.key,
-            directory: primarySession.directoryURL
+            directory: primarySession.directoryURL,
+            tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(
+                for: primarySession.directoryURL,
+                paneSessionID: splitSessionID
+            )
         )
 
         if existingTree == nil {

@@ -31,6 +31,11 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
     public let key: HostTerminalSessionKey
     public let directory: URL
     public let action: RestoreSurfaceAction
+    /// True when the recorded launch directory no longer exists and `directory` is
+    /// the resolved target root instead. The wiring layer reports this instead of
+    /// switching silently — for a reattach it means the surface launches somewhere
+    /// other than where the surviving tmux session was recorded.
+    public let launchDirectoryFellBack: Bool
 
     public var id: UUID { hostSessionID }
 
@@ -38,12 +43,14 @@ public struct RestoreSurfacePlan: Sendable, Equatable, Identifiable {
         hostSessionID: UUID,
         key: HostTerminalSessionKey,
         directory: URL,
-        action: RestoreSurfaceAction
+        action: RestoreSurfaceAction,
+        launchDirectoryFellBack: Bool = false
     ) {
         self.hostSessionID = hostSessionID
         self.key = key
         self.directory = directory
         self.action = action
+        self.launchDirectoryFellBack = launchDirectoryFellBack
     }
 }
 
@@ -147,13 +154,14 @@ public struct TerminalRestorePlanner: Sendable {
         for row in rows {
             guard row.endedAt == nil, row.isActive else { continue }
             guard let resolved = resolveTarget(row) else { continue }
-            let (action, directory) = decideAction(row: row, resolved: resolved)
+            let decision = decideAction(row: row, resolved: resolved)
             surfaces.append(
                 RestoreSurfacePlan(
                     hostSessionID: row.hostSessionID,
                     key: resolved.key,
-                    directory: directory,
-                    action: action
+                    directory: decision.directory,
+                    action: decision.action,
+                    launchDirectoryFellBack: decision.fellBack
                 )
             )
         }
@@ -168,9 +176,10 @@ public struct TerminalRestorePlanner: Sendable {
     private func decideAction(
         row: TerminalSessionContinuityRow,
         resolved: ResolvedRestoreTarget
-    ) -> (RestoreSurfaceAction, URL) {
+    ) -> (action: RestoreSurfaceAction, directory: URL, fellBack: Bool) {
         if let tmuxSessionName = row.tmuxSessionName, isTmuxSessionAlive(tmuxSessionName) {
-            return (.reattachTmux(sessionName: tmuxSessionName), nearestValidDirectory(row: row, resolved: resolved))
+            let (directory, fellBack) = nearestValidDirectory(row: row, resolved: resolved)
+            return (.reattachTmux(sessionName: tmuxSessionName), directory, fellBack)
         }
 
         if row.agentKind == AgentKind.claudeCode.rawValue,
@@ -179,22 +188,23 @@ public struct TerminalRestorePlanner: Sendable {
             directoryExists(agentCwd),
             isTranscriptResumable(agentSessionID, agentCwd)
         {
-            return (.resumeClaude(agentSessionID: agentSessionID), URL(fileURLWithPath: agentCwd))
+            return (.resumeClaude(agentSessionID: agentSessionID), URL(fileURLWithPath: agentCwd), false)
         }
 
-        return (.freshShell, nearestValidDirectory(row: row, resolved: resolved))
+        let (directory, fellBack) = nearestValidDirectory(row: row, resolved: resolved)
+        return (.freshShell, directory, fellBack)
     }
 
     /// Prefer the recorded launch directory when it still exists; otherwise fall
-    /// back to the resolved (validated) target root.
+    /// back to the resolved (validated) target root, reporting the fallback.
     private func nearestValidDirectory(
         row: TerminalSessionContinuityRow,
         resolved: ResolvedRestoreTarget
-    ) -> URL {
+    ) -> (URL, fellBack: Bool) {
         if directoryExists(row.directoryPath) {
-            return URL(fileURLWithPath: row.directoryPath)
+            return (URL(fileURLWithPath: row.directoryPath), false)
         }
-        return resolved.rootDirectory
+        return (resolved.rootDirectory, true)
     }
 
     /// Default directory-existence probe: true only for an existing directory.
