@@ -231,7 +231,7 @@ import re
 import statistics
 import sys
 
-from perf_schema import canonical_summary, load_contract
+from perf_schema import canonical_summary, load_contract, measured_duration_samples
 
 out_dir = pathlib.Path(sys.argv[1])
 root_dir = pathlib.Path(sys.argv[2])
@@ -250,7 +250,6 @@ shell_profile_mode = sys.argv[14]
 terminal_diagnostics = sys.argv[15]
 disable_state_restoration = sys.argv[16]
 
-duration_pattern = re.compile(r"metric=([a-z_]+) duration_ms=([0-9]+(?:\.[0-9]+)?)")
 hydration_meta_pattern = re.compile(
     r"metric=repo_hydration duration_ms=[0-9]+(?:\.[0-9]+)? discovered=(\d+) imported=(\d+)"
 )
@@ -280,8 +279,8 @@ def parse_log_timestamp(line: str):
 for log_file in sorted(out_dir.glob("run-*.log")):
     text = log_file.read_text(errors="ignore")
     per_run = {}
-    for match in duration_pattern.finditer(text):
-        per_run[match.group(1)] = float(match.group(2))
+    for metric_name, duration in measured_duration_samples(text):
+        per_run[metric_name] = duration
     for metric in metric_order:
         if metric in per_run:
             metrics[metric].append(per_run[metric])

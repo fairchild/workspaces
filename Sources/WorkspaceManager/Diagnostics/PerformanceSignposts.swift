@@ -127,9 +127,9 @@ enum PerformanceSignposts {
 
         if let existing = repoClickIntervals.removeValue(forKey: sessionID) {
             signposter.endInterval("RepoClickToFocusedInput", existing.state)
-            let durationMs = milliseconds(since: existing.startedAt)
+            let elapsedMs = milliseconds(since: existing.startedAt)
             log.info(
-                "[Perf] metric=repo_click_to_focus duration_ms=\(String(format: "%.2f", durationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
+                "[Perf] metric=repo_click_to_focus status=abandoned elapsed_ms=\(String(format: "%.2f", elapsedMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
             )
         }
 
@@ -156,25 +156,41 @@ enum PerformanceSignposts {
         )
     }
 
+    /// Ends an interval whose latency was never observed (user navigated away,
+    /// selection superseded, surface invalidated). Emits `status=abandoned` with
+    /// `elapsed_ms` — not `duration_ms` — so duration parsers cannot mistake the
+    /// idle wall time for a measured latency sample.
     static func cancelRepoClickToFocusedInputIfNeeded(sessionID: UUID, reason: String) {
-        endRepoClickToFocusedInputIfNeeded(sessionID: sessionID, outcome: reason)
+        let interval: ActiveInterval?
+
+        lock.lock()
+        interval = repoClickIntervals.removeValue(forKey: sessionID)
+        lock.unlock()
+
+        guard let interval else { return }
+
+        signposter.endInterval("RepoClickToFocusedInput", interval.state)
+        let elapsedMs = milliseconds(since: interval.startedAt)
+        log.info(
+            "[Perf] metric=repo_click_to_focus status=abandoned elapsed_ms=\(String(format: "%.2f", elapsedMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=\(reason, privacy: .public)"
+        )
     }
 
     static func beginWorkspaceClickToFocusedInput(sessionID: UUID, workspacePath: String) {
         var supersededFields: [String: String]?
-        var supersededDurationMs: Double = 0
+        var supersededElapsedMs: Double = 0
         let startedFields: [String: String]
 
         lock.lock()
         if let existing = workspaceClickIntervals.removeValue(forKey: sessionID) {
             signposter.endInterval("WorkspaceClickToFocusedInput", existing.state)
-            supersededDurationMs = milliseconds(since: existing.startedAt)
+            supersededElapsedMs = milliseconds(since: existing.startedAt)
             supersededFields = [
                 "metric": "workspace_click_to_focus",
-                "status": "completed",
+                "status": "abandoned",
                 "session": sessionID.uuidString,
                 "outcome": "superseded",
-                "duration_ms": String(format: "%.2f", supersededDurationMs),
+                "elapsed_ms": String(format: "%.2f", supersededElapsedMs),
             ]
         }
         let state = signposter.beginInterval("WorkspaceClickToFocusedInput")
@@ -189,9 +205,9 @@ enum PerformanceSignposts {
 
         if let supersededFields {
             log.info(
-                "[Perf] metric=workspace_click_to_focus duration_ms=\(String(format: "%.2f", supersededDurationMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
+                "[Perf] metric=workspace_click_to_focus status=abandoned elapsed_ms=\(String(format: "%.2f", supersededElapsedMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=superseded"
             )
-            emitWorkspaceClickMetricEvent(phase: "completed", fields: supersededFields)
+            emitWorkspaceClickMetricEvent(phase: "abandoned", fields: supersededFields)
         }
 
         log.info(
@@ -224,8 +240,32 @@ enum PerformanceSignposts {
         emitWorkspaceClickMetricEvent(phase: "completed", fields: fields)
     }
 
+    /// Ends an interval whose latency was never observed (user navigated away,
+    /// selection superseded, surface invalidated). Emits `status=abandoned` with
+    /// `elapsed_ms` — not `duration_ms` — so duration parsers cannot mistake the
+    /// idle wall time for a measured latency sample.
     static func cancelWorkspaceClickToFocusedInputIfNeeded(sessionID: UUID, reason: String) {
-        endWorkspaceClickToFocusedInputIfNeeded(sessionID: sessionID, outcome: reason)
+        let interval: ActiveInterval?
+
+        lock.lock()
+        interval = workspaceClickIntervals.removeValue(forKey: sessionID)
+        lock.unlock()
+
+        guard let interval else { return }
+
+        signposter.endInterval("WorkspaceClickToFocusedInput", interval.state)
+        let elapsedMs = milliseconds(since: interval.startedAt)
+        let fields = [
+            "metric": "workspace_click_to_focus",
+            "status": "abandoned",
+            "session": sessionID.uuidString,
+            "outcome": reason,
+            "elapsed_ms": String(format: "%.2f", elapsedMs),
+        ]
+        log.info(
+            "[Perf] metric=workspace_click_to_focus status=abandoned elapsed_ms=\(String(format: "%.2f", elapsedMs), privacy: .public) session=\(sessionID.uuidString, privacy: .public) outcome=\(reason, privacy: .public)"
+        )
+        emitWorkspaceClickMetricEvent(phase: "abandoned", fields: fields)
     }
 
     static func beginWebViewInitializationIfNeeded() {
