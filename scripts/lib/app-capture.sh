@@ -17,6 +17,9 @@
 # support directory keyed by bundle id — never under WORKSPACES_DATA_DIR, which
 # only redirects the app's own state store. This mirrors
 # AutomationOperatorCredentialStore.defaultURL / AutomationListener.defaultSocketURL.
+# shellcheck source=synthetic-root.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/synthetic-root.sh"
+
 APP_CAPTURE_BUNDLE_ID="com.cloudcompute.workspaces"
 APP_CAPTURE_PID=""
 APP_CAPTURE_LAUNCHED=""
@@ -129,9 +132,17 @@ app_capture_window() {
     # can only observe the file our launch mints.
     rm -f "$cred_path" 2>/dev/null || true
 
+    # Isolation boundary: point the app's workspaces root inside the evidence-lane
+    # data dir so the launch-time orphan scan reads a deterministic (empty) root
+    # instead of the owner's real ~/workspaces. --clean-data wipes it each run;
+    # the app recreates it on launch.
+    synthetic_root_ensure "$data_dir/workspaces-root" || return 1
+    synthetic_root_require || return 1
+
     local -a launch_args=(
         --no-build --no-activate --fixture --clean-data
         --data-dir "$data_dir"
+        --env "WORKSPACES_SYNTHETIC_ROOT=$WORKSPACES_SYNTHETIC_ROOT"
         --env WORKSPACES_AUTOMATION_API=1
         --env WORKSPACES_AUTOMATION_OPERATOR=1
     )

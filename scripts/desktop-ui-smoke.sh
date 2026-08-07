@@ -20,6 +20,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/synthetic-root.sh
+source "$SCRIPT_DIR/lib/synthetic-root.sh"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 CAPTURE_SCRIPT="$REPO_ROOT/scripts/capture-window.sh"
 OUTPUT_ROOT="$REPO_ROOT/output/desktop-ui-smoke"
@@ -101,6 +103,9 @@ setup_run_dir() {
     mkdir -p "$RUN_DIR"
     ln -sfn "$RUN_DIR" "$RUN_LINK"
     EVENTS_PATH="$RUN_DIR/events.jsonl"
+    # Isolation boundary: the app's workspaces root lives inside the run dir, so
+    # created worktrees can never leak into the owner's real ~/workspaces.
+    synthetic_root_ensure "$RUN_DIR/workspaces-root" || fail "Could not establish WORKSPACES_SYNTHETIC_ROOT."
 }
 
 cleanup_app() {
@@ -122,10 +127,10 @@ cleanup_repo() {
     cleanup_created_worktrees
 }
 
-# The app creates the workspace as a git worktree under the configured
-# workspaces root (default ~/workspaces/<repo-name>/<workspace-name>). Remove it
-# using the path the app reported in the milestone stream so a passing run leaves
-# no residue on disk.
+# The app creates the workspace as a git worktree under the synthetic workspaces
+# root inside the run dir (WORKSPACES_SYNTHETIC_ROOT/<repo-name>/<workspace-name>).
+# Remove it using the path the app reported in the milestone stream so a passing
+# run leaves no residue on disk.
 cleanup_created_worktrees() {
     [[ -f "$EVENTS_PATH" ]] || return 0
     local workspace_path
@@ -208,7 +213,8 @@ on_exit() {
 }
 
 create_disposable_repo() {
-    SMOKE_REPO_PATH="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-ui-smoke-XXXXXX")"
+    # Inside the run dir so a red run leaves zero residue outside it.
+    SMOKE_REPO_PATH="$(mktemp -d "$RUN_DIR/smoke-repo-XXXXXX")"
     (
         cd "$SMOKE_REPO_PATH"
         git init >/dev/null
@@ -221,6 +227,7 @@ create_disposable_repo() {
 }
 
 launch_automated_app() {
+    synthetic_root_require || fail "Refusing to launch without WORKSPACES_SYNTHETIC_ROOT."
     local app_data_dir="$RUN_DIR/app-data"
     local launch_output
     local -a args=(
@@ -229,6 +236,7 @@ launch_automated_app() {
         "--clean-data"
         "--window-timeout" "20"
         "--env" "WORKSPACES_DISABLE_AUTO_IMPORT=1"
+        "--env" "WORKSPACES_SYNTHETIC_ROOT=$WORKSPACES_SYNTHETIC_ROOT"
         "--env" "WORKSPACES_AUTOMATION_MODE=desktop-ui-smoke"
         "--env" "WORKSPACES_AUTOMATION_REPO_PATH=$SMOKE_REPO_PATH"
         "--env" "WORKSPACES_AUTOMATION_WORKSPACE_NAME=$WORKSPACE_NAME"
