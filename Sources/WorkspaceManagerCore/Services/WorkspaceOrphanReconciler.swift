@@ -248,6 +248,9 @@ public struct WorkspaceOrphanReconciler: Sendable {
         // storage outside it is never read. This keeps synthetic runs (smokes,
         // fixture captures) from statting the owner's real filesystem roots.
         if let syntheticRoot = SyntheticRunRoot.url(environment: environment) {
+            workspaceOrphanLog.info(
+                "Synthetic run root active: orphan scan root overridden to \(syntheticRoot.path, privacy: .public)"
+            )
             let boundary = normalizePath(syntheticRoot.path)
             self.workspacesRoot = syntheticRoot
             self.syntheticRootBoundary = boundary

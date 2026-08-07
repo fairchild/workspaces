@@ -20,8 +20,12 @@ synthetic_root_ensure() {
         echo "error: WORKSPACES_SYNTHETIC_ROOT must be an absolute path (got: $WORKSPACES_SYNTHETIC_ROOT)." >&2
         return 1
     fi
-    mkdir -p "$WORKSPACES_SYNTHETIC_ROOT"
+    if ! mkdir -p "$WORKSPACES_SYNTHETIC_ROOT"; then
+        echo "error: failed to create WORKSPACES_SYNTHETIC_ROOT directory: $WORKSPACES_SYNTHETIC_ROOT" >&2
+        return 1
+    fi
     export WORKSPACES_SYNTHETIC_ROOT
+    return 0
 }
 
 # synthetic_root_require — launch gate: refuse to start a synthetic run without

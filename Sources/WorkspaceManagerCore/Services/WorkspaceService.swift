@@ -127,6 +127,11 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         self.materializer = materializer
         self.cleanupFailureReporter = cleanupFailureReporter
         self.syntheticWorkspacesRoot = SyntheticRunRoot.url(environment: environment)
+        if let syntheticWorkspacesRoot {
+            log.info(
+                "Synthetic run root active: workspaces root overridden to \(syntheticWorkspacesRoot.path, privacy: .public)"
+            )
+        }
         // Under a synthetic root, the default root is never used — creating it
         // would be a write outside the isolation boundary.
         Self.ensureWorkspacesRootExists(at: syntheticWorkspacesRoot ?? Self.defaultWorkspacesRoot)
