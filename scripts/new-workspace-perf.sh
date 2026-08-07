@@ -91,15 +91,20 @@ for i in $(seq 1 "$RUNS"); do
     pkill -f "$DEBUG_BINARY" 2>/dev/null || true
     sleep 1
 
+    # OS_ACTIVITY_DT_MODE makes os.Logger output mirror to stderr. The app's
+    # [Perf] lines are os.Logger-only, so without it a redirected debug launch
+    # captures nothing and new_workspace_sheet_ready never appears (#1238).
     (
         cd "$ROOT_DIR"
         if [[ "$LAUNCH_MODE" == "no-activate" ]]; then
+            OS_ACTIVITY_DT_MODE=YES \
             WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
             WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 \
             WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
             WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE=1 \
             "$DEBUG_BINARY" >"$LOG_FILE" 2>&1
         else
+            OS_ACTIVITY_DT_MODE=YES \
             WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
             WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
             WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE=1 \

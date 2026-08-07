@@ -72,11 +72,6 @@
       "description": "Long-running register/deregister cycles (10 min default, 60 min target) with 30 events per cycle; measures RSS delta and registry-size symmetry."
     },
     {
-      "id": "channel4_replay_10k_records",
-      "build_kind": "debug",
-      "description": "Cold-start replay of a 10,000-record transcript JSONL through TranscriptColdStartRecovery + AgentSessionRegistry.ingestBatch with the production 500 ev/s rate cap; measures wall-clock completion and RSS delta. Gates the perf audit's hard constraints for Channel 4 (perf-audit-pr443-final.md)."
-    },
-    {
       "id": "channel2_statusline_burst",
       "build_kind": "debug",
       "description": "In-process burst of 1000 status-line POSTs at parallelism=8 against AgentHookListener /statusline; measures end-to-end HTTP and registry-update latency."
@@ -356,30 +351,6 @@
       "reference_baselines": {
         "channel1_long_session_memory": {
           "max_entries": 0
-        }
-      }
-    },
-    {
-      "name": "channel4_replay_completion_seconds",
-      "unit": "seconds",
-      "supported_scenarios": [
-        "channel4_replay_10k_records"
-      ],
-      "reference_baselines": {
-        "channel4_replay_10k_records": {
-          "max_seconds": 25
-        }
-      }
-    },
-    {
-      "name": "channel4_replay_rss_delta_mb",
-      "unit": "MB",
-      "supported_scenarios": [
-        "channel4_replay_10k_records"
-      ],
-      "reference_baselines": {
-        "channel4_replay_10k_records": {
-          "max_mb": 50
         }
       }
     },

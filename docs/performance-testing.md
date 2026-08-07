@@ -171,6 +171,37 @@ When `--record` is used, repo docs are updated:
 - `docs/performance/dashboard.md`
 - `docs/performance/metrics-reference.md`
 
+Recording cadence: the daily `perf-validation` cron runs
+`./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui
+lane is available, so the history CSV and dashboard advance automatically. When
+the lane is down the workflow fails visibly instead of skipping green. To
+append an ad-hoc canonical summary (a re-baseline output dir, an installed-lane
+run) without re-measuring:
+
+```bash
+uv run --script scripts/perf-history-record.py --summary <output-dir>/summary.json
+```
+
+## Channel scenario workflow
+
+The channel scenarios (hook-ingest and status-line bursts, sidebar churn,
+long-session memory) run in-process Swift Testing workloads and are dispatched
+through the same contract entrypoint:
+
+```bash
+./scripts/perf-runner.sh --scenario channel1_hook_ingest_burst --assert-budget
+./scripts/perf-runner.sh --scenario channel2_statusline_burst --assert-budget
+./scripts/perf-runner.sh --scenario channel1_sidebar_churn --assert-budget
+./scripts/perf-runner.sh --scenario channel1_long_session_memory --assert-budget   # ~10 minutes
+```
+
+Each arm wraps the corresponding `scripts/perf/*/run.sh` driver via
+`scripts/perf_channel_baseline.py`, canonicalizes the driver output into
+`summary.json`/`summary.txt`, and asserts contract budgets. Metrics whose
+contract reference is an absolute cap (long-session RSS delta, registry size
+after close) gate directly against the cap. A contract-expected metric that the
+driver fails to produce is a `missing` budget violation, not a pass.
+
 ## Automated CI perf workflow
 
 The dedicated GitHub Actions workflow is `.github/workflows/perf-validation.yml`.
