@@ -985,6 +985,31 @@ struct AutomationAPITests {
         #expect(text?.contains(#""changed":false"#) == true)
     }
 
+    @Test("tile.focus and tile.split results omit the outcome key entirely on the wire")
+    func mutationResultOmitsOutcomeKeyForFocusAndSplit() throws {
+        func encodedKeys(of result: AutomationMutationResult) throws -> Set<String> {
+            let data = try AutomationJSON.encoder.encode(result)
+            let object = try #require(
+                try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            return Set(object.keys)
+        }
+
+        // Pin the wire-compat claim at the key level: the optional outcome field added for
+        // tile.close must stay absent (not null, not defaulted) from focus and split payloads.
+        let focusKeys = try encodedKeys(
+            of: AutomationMutationResult(changed: true, focusedSurfaceID: "surface-2"))
+        #expect(!focusKeys.contains("outcome"))
+        #expect(focusKeys.contains("changed"))
+        #expect(focusKeys.contains("focusedSurfaceID"))
+
+        let splitKeys = try encodedKeys(
+            of: AutomationMutationResult(
+                changed: true, focusedSurfaceID: "surface-2", createdSurfaceID: "surface-2"))
+        #expect(!splitKeys.contains("outcome"))
+        #expect(splitKeys.contains("changed"))
+        #expect(splitKeys.contains("createdSurfaceID"))
+    }
+
     @Test("GET /v1/windows succeeds for an operator handle and denies a tile handle")
     @MainActor
     func routerWindows() async throws {
