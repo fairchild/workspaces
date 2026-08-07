@@ -228,8 +228,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
         key: HostTerminalSessionKey,
         directory: URL,
         customCommand: String? = nil,
-        initialCommand: String? = nil,
-        tmuxSessionNameOverride: String? = nil
+        initialCommand: String? = nil
     ) -> HostTerminalSessionActivationResult {
         let normalizedDirectory = HostTerminalSession.normalize(directory)
         let normalizedPath = normalizedDirectory.path
@@ -258,8 +257,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
             key: normalizedKey,
             directory: normalizedDirectory,
             customCommand: customCommand,
-            initialCommand: initialCommand,
-            tmuxSessionNameOverride: tmuxSessionNameOverride
+            initialCommand: initialCommand
         )
         sessions.append(session)
         setActiveSessionID(session.id)
@@ -312,6 +310,28 @@ public struct HostTerminalSessionCoordinator: Sendable {
     @discardableResult
     public mutating func activate(sessionID: UUID) -> HostTerminalSession? {
         guard let session = session(withID: sessionID) else { return nil }
+        setActiveSessionID(session.id)
+        return session
+    }
+
+    /// Always-create activation for restore wiring. Each restore surface maps 1:1 to a
+    /// recorded continuity row and the owned scope is retired before restore runs, so
+    /// `activate`'s key-reuse would collapse sibling pane rows into one session and drop
+    /// the later rows' initial commands and recorded tmux targets (#1232).
+    @discardableResult
+    public mutating func createSession(
+        key: HostTerminalSessionKey,
+        directory: URL,
+        initialCommand: String? = nil,
+        tmuxSessionNameOverride: String? = nil
+    ) -> HostTerminalSession {
+        let session = HostTerminalSession(
+            key: key,
+            directory: directory,
+            initialCommand: initialCommand,
+            tmuxSessionNameOverride: tmuxSessionNameOverride
+        )
+        sessions.append(session)
         setActiveSessionID(session.id)
         return session
     }

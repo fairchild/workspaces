@@ -2956,15 +2956,13 @@ struct ContentView: View {
     @discardableResult
     @MainActor
     private func activateHostSession(
-        key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil, initialCommand: String? = nil,
-        tmuxSessionNameOverride: String? = nil
+        key: HostTerminalSessionKey, directory: URL, customCommand: String? = nil, initialCommand: String? = nil
     ) -> HostTerminalSession {
         let result = tileTreeStore.activateSession(
             key: key,
             directory: directory,
             customCommand: customCommand,
-            initialCommand: initialCommand,
-            tmuxSessionNameOverride: tmuxSessionNameOverride
+            initialCommand: initialCommand
         )
         if result.created {
             hostSessionLog.info(
@@ -3081,11 +3079,12 @@ struct ContentView: View {
         restoreState.dismissBanner()
     }
 
-    /// Launch each surface in a restore plan. Reattach/fresh surfaces are a plain
-    /// directory-backed launch (the deterministic tmux name reattaches a surviving
-    /// session automatically); resume surfaces get `claude --resume` typed into
-    /// their login shell as initial input (correct PATH + hook env — see
-    /// `GhosttyTerminalConfig.initialInput`).
+    /// Launch each surface in a restore plan, one created session per continuity
+    /// row. Reattach surfaces launch on their row's recorded tmux name (a split
+    /// pane's differs from the directory derivation); resume surfaces get
+    /// `claude --resume` typed into their login shell as initial input (correct
+    /// PATH + hook env — see `GhosttyTerminalConfig.initialInput`) unless their
+    /// `-A` target is already a live session another surface owns.
     /// Then honor the plan's advisory focus by re-activating the selected surface.
     @MainActor
     private func executeRestore(_ plan: RestorePlan) async {
@@ -3108,6 +3107,16 @@ struct ContentView: View {
             await tmuxProbe.killSession(sessionName)
         }
 
+        // Probe before launch: any resume launch name still alive after the kill
+        // pass belongs to a session another surface reattaches to, so its `-A`
+        // launch would join that shared session — suppress the resume command
+        // instead of typing it into a shell another surface owns (#1233).
+        var liveResumeLaunchNames: Set<String> = []
+        for sessionName in restoreController.resumeLaunchSessionNames(in: plan)
+        where await tmuxProbe.isSessionAlive(sessionName) {
+            liveResumeLaunchNames.insert(sessionName)
+        }
+
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
         for surface in plan.surfaces {
             if surface.launchDirectoryFellBack {
@@ -3115,17 +3124,30 @@ struct ContentView: View {
                     "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) recorded directory is gone; launching in fallback \(surface.directory.path, privacy: .public)"
                 )
             }
-            let session = activateHostSession(
+            let initialCommand = restoreController.initialCommand(
+                for: surface, liveSessionNames: liveResumeLaunchNames)
+            if initialCommand == nil, case .resumeClaude = surface.action {
+                restoreLog.notice(
+                    "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) resume target is a live session; attaching without the resume command"
+                )
+            }
+            // One session per continuity row (never key-reuse): sibling rows sharing
+            // a key — a primary and its recorded split panes — each launch on their
+            // own recorded tmux target (#1232).
+            let session = tileTreeStore.createRestoredSession(
                 key: surface.key,
                 directory: surface.directory,
-                initialCommand: restoreController.initialCommand(for: surface.action),
+                initialCommand: initialCommand,
                 tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface.action)
+            )
+            hostSessionLog.info(
+                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
 
         if let selected = plan.selectedHostSessionID, let target = activatedByHostSessionID[selected] {
-            _ = activateHostSession(key: target.key, directory: target.directoryURL)
+            _ = tileTreeStore.activateExistingSession(sessionID: target.id)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
     }

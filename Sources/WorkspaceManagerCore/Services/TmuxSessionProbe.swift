@@ -134,16 +134,21 @@ public struct TmuxSessionProbe: Sendable {
         }
     }
 
+    /// A PATH value with the common Homebrew/system bin paths prepended (an absent
+    /// or empty PATH still yields the tool paths). One resolution shared by the
+    /// probe environment and the launch-time tmux gate, so a session the probe
+    /// reports alive is one launch can also see tmux for.
+    public static func pathPrependingToolPaths(_ existing: String?) -> String {
+        let toolPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        guard let existing, !existing.isEmpty else { return toolPaths }
+        return "\(toolPaths):\(existing)"
+    }
+
     /// Process environment with the common Homebrew/system bin paths prepended so
     /// `/usr/bin/env tmux` resolves regardless of the launch PATH.
     public static let defaultEnvironment: [String: String] = {
         var environment = ProcessInfo.processInfo.environment
-        let toolPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        if let existing = environment["PATH"], !existing.isEmpty {
-            environment["PATH"] = "\(toolPaths):\(existing)"
-        } else {
-            environment["PATH"] = toolPaths
-        }
+        environment["PATH"] = pathPrependingToolPaths(environment["PATH"])
         return environment
     }()
 }

@@ -110,6 +110,22 @@ struct MainWindowRestoreController {
         }
     }
 
+    /// The directory-derived tmux names resume surfaces will `new-session -A`-launch on.
+    /// The wiring probes these after the pre-restore kill pass: a name still alive there
+    /// was excluded from the kill list because another surface reattaches to it (shared
+    /// directory, #1233), so the resume launch would join that live session.
+    func resumeLaunchSessionNames(
+        in plan: RestorePlan,
+        sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
+    ) -> Set<String> {
+        Set(
+            plan.surfaces.compactMap { surface -> String? in
+                guard case .resumeClaude = surface.action else { return nil }
+                return sessionName(surface.directory)
+            }
+        )
+    }
+
     /// What a restored surface launches with. Reattach and fresh surfaces are a plain
     /// directory-backed launch — the deterministic tmux name reattaches a surviving session on
     /// its own — while a resume surface gets `claude --resume` as initial input so it runs
@@ -121,6 +137,20 @@ struct MainWindowRestoreController {
         case .resumeClaude(let agentSessionID):
             return RestoreLaunchCommand.claudeResume(sessionID: agentSessionID)
         }
+    }
+
+    /// `initialCommand(for:)` guarded by the probe-before-launch check: a resume whose
+    /// `-A` target is in `liveSessionNames` attaches to an existing session — one another
+    /// surface owns — so injecting the command would type `claude --resume` into that
+    /// shared shell. The surface degrades to a plain attach instead (#1233).
+    func initialCommand(
+        for surface: RestoreSurfacePlan,
+        liveSessionNames: Set<String>,
+        sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
+    ) -> String? {
+        guard let command = initialCommand(for: surface.action) else { return nil }
+        guard !liveSessionNames.contains(sessionName(surface.directory)) else { return nil }
+        return command
     }
 
     /// The tmux session name a restored surface must launch on, or `nil` to derive from the

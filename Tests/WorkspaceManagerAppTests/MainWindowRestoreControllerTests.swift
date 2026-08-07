@@ -316,6 +316,36 @@ struct MainWindowRestoreControllerTests {
         #expect(controller.tmuxSessionNameOverride(for: .reattachTmux(sessionName: "wm-alpha")) == "wm-alpha")
     }
 
+    /// The #1233 shared-directory hazard, launch side: a resume surface's `-A` launch name
+    /// can be the very session another surface reattaches to (it is excluded from the kill
+    /// list). When the pre-launch probe reports that name still live, the resume command is
+    /// suppressed — attaching is fine, typing `claude --resume` into the shared shell is not.
+    @Test("A resume whose launch name is still live suppresses its initial command")
+    func liveResumeTargetSuppressesInitialCommand() {
+        let resume = surface(
+            action: .resumeClaude(agentSessionID: "a"),
+            directory: URL(fileURLWithPath: "/Users/dev/code/alpha"))
+        let derive = { (url: URL) in "wm-\(url.lastPathComponent)" }
+
+        #expect(controller.initialCommand(for: resume, liveSessionNames: ["wm-alpha"], sessionName: derive) == nil)
+        #expect(
+            controller.initialCommand(for: resume, liveSessionNames: [], sessionName: derive)
+                == RestoreLaunchCommand.claudeResume(sessionID: "a"))
+    }
+
+    @Test("Only resume surfaces contribute probe-before-launch names")
+    func probeNamesAreResumeOnly() {
+        let target = plan([
+            surface(action: .reattachTmux(sessionName: "wm-alpha")),
+            surface(action: .freshShell, directory: URL(fileURLWithPath: "/Users/dev/code/beta")),
+            surface(
+                action: .resumeClaude(agentSessionID: "a"),
+                directory: URL(fileURLWithPath: "/Users/dev/code/gamma")),
+        ])
+
+        #expect(controller.resumeLaunchSessionNames(in: target) { "wm-\($0.lastPathComponent)" } == ["wm-gamma"])
+    }
+
     @Test("Every key the plan restores is claimed, deduplicated")
     func ownedKeysCoverThePlanWithoutDuplicates() {
         let shared = HostTerminalSessionKey.hostPath("/Users/dev/code/alpha")

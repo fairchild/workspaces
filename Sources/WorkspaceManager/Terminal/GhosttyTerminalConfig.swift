@@ -92,15 +92,9 @@ struct GhosttyTerminalConfig {
             environment[AutomationAPI.handleEnvironmentKey] = automationEnvironment.handle
         }
 
-        // Same tool-path handling as TmuxSessionProbe.defaultEnvironment (absent or
-        // empty PATH still gets the tool paths), so a session the probe reports
-        // alive is one this launch gate can also see tmux for.
-        let toolPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
-        if let path = environment["PATH"], !path.isEmpty {
-            environment["PATH"] = "\(toolPaths):\(path)"
-        } else {
-            environment["PATH"] = toolPaths
-        }
+        // Shared with TmuxSessionProbe.defaultEnvironment, so a session the probe
+        // reports alive is one this launch gate can also see tmux for.
+        environment["PATH"] = TmuxSessionProbe.pathPrependingToolPaths(environment["PATH"])
 
         let shell = environment["SHELL"] ?? "/bin/zsh"
         let shellName = URL(fileURLWithPath: shell).lastPathComponent.lowercased()
