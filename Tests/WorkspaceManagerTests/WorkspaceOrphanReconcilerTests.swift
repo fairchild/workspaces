@@ -409,9 +409,11 @@ struct WorkspaceOrphanReconcilerTests {
         let item = try #require(result.items.first)
         #expect(result.items.count == 1)
         #expect(item.kind == .lumeVMWithoutWorkspace)
-        // Must stay under the stub's 30s sleep; the slack above the 0.5s
-        // timeout absorbs loaded-CI process-spawn overhead.
-        #expect(elapsed < .seconds(25))
+        // The bound scales from this machine's measured launch cost so loaded-CI
+        // spawn overhead widens it, while the 25s ceiling keeps it under the
+        // stub's 30s sleep — past that the assertion proves nothing.
+        let bound = await LaunchBudget.deadline(launches: 1, floor: 5, ceiling: 25)
+        #expect(elapsed < .seconds(bound))
     }
 
     @Test("Cleanup of a hanging git worktree removal throws the typed timeout")
@@ -451,9 +453,11 @@ struct WorkspaceOrphanReconcilerTests {
         }
         let elapsed = ContinuousClock.now - start
 
-        // Must stay under the stub's 30s sleep; the slack above the 0.5s
-        // timeout absorbs loaded-CI process-spawn overhead.
-        #expect(elapsed < .seconds(25))
+        // The bound scales from this machine's measured launch cost so loaded-CI
+        // spawn overhead widens it, while the 25s ceiling keeps it under the
+        // stub's 30s sleep — past that the assertion proves nothing.
+        let bound = await LaunchBudget.deadline(launches: 1, floor: 5, ceiling: 25)
+        #expect(elapsed < .seconds(bound))
     }
 
     private func makeHangingGitStub(in directory: URL) throws -> URL {
