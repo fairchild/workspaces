@@ -260,28 +260,33 @@ struct AutomationSocketRobustnessTests {
         }
     }
 
-    @Test("Undelivered responses append a marker entry after the completed mutation")
+    @Test("Undelivered responses append a marker entry carrying the response's outcome")
     func undeliveredResponseAppendsMarkerEntry() async throws {
         let auditURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("wm-robust-undelivered-\(UUID().uuidString.prefix(8)).jsonl")
         defer { try? FileManager.default.removeItem(at: auditURL) }
         let logger = AutomationAuditLogger(auditURL: auditURL)
-        let okBody = try AutomationJSON.encoder.encode(
-            AutomationResponseEnvelope(result: AutomationEmptyResult())
+        let deniedBody = try AutomationJSON.encoder.encode(
+            AutomationResponseEnvelope<AutomationEmptyResult>(
+                error: AutomationErrorResponse(code: .capabilityDenied, message: "denied")
+            )
         )
 
         await logger.record(
             method: "POST",
             path: "/v1/tile/close",
             headers: [AutomationAPI.handleHeader: "op"],
-            responseBody: okBody,
+            responseBody: deniedBody,
             operatorHandle: true
         )
+        let outcome = AutomationAuditLogger.responseOutcome(from: deniedBody)
         await logger.recordResponseUndelivered(
             method: "POST",
             path: "/v1/tile/close",
             handlePresent: true,
-            operatorHandle: true
+            operatorHandle: true,
+            allowed: outcome.allowed,
+            errorCode: outcome.errorCode
         )
 
         let contents = try String(contentsOf: auditURL, encoding: .utf8)
@@ -298,5 +303,7 @@ struct AutomationSocketRobustnessTests {
         #expect(marker.method == "POST")
         #expect(marker.path == "/v1/tile/close")
         #expect(marker.operatorHandle)
+        #expect(marker.allowed == false)
+        #expect(marker.errorCode == .capabilityDenied)
     }
 }

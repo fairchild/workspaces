@@ -285,12 +285,14 @@ public actor AutomationListener {
             responseBody: result.body,
             operatorHandle: operatorHandle
         )
-        // The mutation above already completed; if the peer disconnected (or the write stalls past
-        // the deadline), mark the response undelivered so the caller knows to reconcile via a read.
+        // The request above already ran; if the peer disconnected (or the write stalls past the
+        // deadline), append a best-effort marker for the response whose delivery failed, carrying
+        // that response's outcome so an undelivered denial still audits as denied.
         let auditLogger = auditLogger
         let method = request.method
         let path = request.path
         let handlePresent = request.headers[AutomationAPI.handleHeader]?.isEmpty == false
+        let outcome = AutomationAuditLogger.responseOutcome(from: result.body)
         let watchdog = Self.deadlineWatchdog(connection: connection, after: writeDeadline, label: "write")
         connection.send(
             content: response,
@@ -304,7 +306,9 @@ public actor AutomationListener {
                             method: method,
                             path: path,
                             handlePresent: handlePresent,
-                            operatorHandle: operatorHandle
+                            operatorHandle: operatorHandle,
+                            allowed: outcome.allowed,
+                            errorCode: outcome.errorCode
                         )
                     }
                 }

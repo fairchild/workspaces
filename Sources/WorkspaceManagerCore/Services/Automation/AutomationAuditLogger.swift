@@ -18,8 +18,9 @@ public actor AutomationAuditLogger {
         public let surfaceID: String?
         public let requestedLines: Int?
         public let returnedLines: Int?
-        /// True on follow-up entries appended when a completed mutation's response could not be
-        /// written back (peer disconnected mid-request); the caller reconciles via a read verb.
+        /// True on best-effort follow-up entries appended when a response's delivery failed
+        /// (peer disconnected or the write stalled); the marker carries that response's outcome
+        /// (`allowed`/`errorCode`) so undelivered denials still read as denials.
         public let responseUndelivered: Bool?
 
         public init(
@@ -82,7 +83,7 @@ public actor AutomationAuditLogger {
         responseBody: Data,
         operatorHandle: Bool = false
     ) {
-        let summary = (try? AutomationJSON.decoder.decode(AuditEnvelopeSummary.self, from: responseBody))
+        let outcome = Self.responseOutcome(from: responseBody)
         let surfaceRead = surfaceReadAuditMetadata(
             path: path,
             requestBody: requestBody,
@@ -94,8 +95,8 @@ public actor AutomationAuditLogger {
             path: path,
             handlePresent: headers[AutomationAPI.handleHeader]?.isEmpty == false,
             operatorHandle: operatorHandle,
-            allowed: summary?.ok == true,
-            errorCode: summary?.error?.code,
+            allowed: outcome.allowed,
+            errorCode: outcome.errorCode,
             metadata: Self.routeMetadata(method: method, path: path, body: requestBody),
             surfaceID: surfaceRead?.surfaceID,
             requestedLines: surfaceRead?.requestedLines,
@@ -104,13 +105,25 @@ public actor AutomationAuditLogger {
         append(event)
     }
 
-    /// Appends a marker entry after a completed request whose response never reached the peer,
-    /// so an agent that timed out or disconnected can tell its mutation landed.
+    /// Derives the audit outcome (`allowed`/`errorCode`) from a response envelope body, the same
+    /// classification `record` applies, so callers can carry an undelivered response's outcome.
+    public nonisolated static func responseOutcome(
+        from responseBody: Data
+    ) -> (allowed: Bool, errorCode: AutomationErrorCode?) {
+        let summary = try? AutomationJSON.decoder.decode(AuditEnvelopeSummary.self, from: responseBody)
+        return (summary?.ok == true, summary?.error?.code)
+    }
+
+    /// Best-effort marker appended after any request whose response failed to deliver (peer
+    /// disconnected or the write stalled). Carries that response's outcome verbatim so an agent
+    /// that timed out can tell whether its request was allowed or denied before reconciling.
     public func recordResponseUndelivered(
         method: String,
         path: String,
         handlePresent: Bool,
-        operatorHandle: Bool
+        operatorHandle: Bool,
+        allowed: Bool,
+        errorCode: AutomationErrorCode?
     ) {
         let event = Event(
             timestamp: timestampFormatter.string(from: Date()),
@@ -118,8 +131,8 @@ public actor AutomationAuditLogger {
             path: path,
             handlePresent: handlePresent,
             operatorHandle: operatorHandle,
-            allowed: true,
-            errorCode: nil,
+            allowed: allowed,
+            errorCode: errorCode,
             responseUndelivered: true
         )
         append(event)
