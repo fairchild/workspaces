@@ -51,6 +51,8 @@ public actor SSHBackend: RemoteBackendProtocol {
         self.runCommand =
             runCommand
             ?? { executable, arguments in
+                // Un-timed by design: SSH command duration is bounded by the caller's
+                // outer deadline, not here (scripts/check-subprocess-timeouts.py allowlist).
                 try await ProcessRunner.run(
                     executable: executable,
                     arguments: arguments,

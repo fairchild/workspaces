@@ -377,6 +377,92 @@ struct WorkspaceOrphanReconcilerTests {
         #expect(result.items.isEmpty)
     }
 
+    @Test("Scan completes past a hanging git and still reaches later phases")
+    func scanCompletesWhenGitHangs() async throws {
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let workspacesRoot = testRoot.appendingPathComponent("workspaces", isDirectory: true)
+        let vmStorageURL = testRoot.appendingPathComponent("workspace-vms", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: vmStorageURL.appendingPathComponent("orphan-vm", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let hangingGit = try makeHangingGitStub(in: testRoot)
+
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: workspacesRoot,
+            lumeWorkspaceStorageURL: vmStorageURL,
+            worktreeLister: GitPorcelainWorktreeLister(executable: hangingGit.path, timeout: 0.5),
+            fileSystem: DefaultWorkspaceOrphanFileSystem()
+        )
+
+        let start = ContinuousClock.now
+        let result = await reconciler.scan(
+            repositories: [
+                repoSnapshot(name: "sample-repo", localPath: testRoot.path, workspaces: [])
+            ]
+        )
+        let elapsed = ContinuousClock.now - start
+
+        // The hung repo scan expires with a typed warning and the scan still
+        // reaches the Lume VM phase instead of wedging at git.
+        let item = try #require(result.items.first)
+        #expect(result.items.count == 1)
+        #expect(item.kind == .lumeVMWithoutWorkspace)
+        // Must stay under the stub's 30s sleep; the slack above the 0.5s
+        // timeout absorbs loaded-CI process-spawn overhead.
+        #expect(elapsed < .seconds(25))
+    }
+
+    @Test("Cleanup of a hanging git worktree removal throws the typed timeout")
+    func cleanupSurfacesTypedTimeoutWhenGitHangs() async throws {
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let workspacesRoot = testRoot.appendingPathComponent("workspaces", isDirectory: true)
+        let hangingGit = try makeHangingGitStub(in: testRoot)
+
+        let repo = repoSnapshot(name: "sample-repo", localPath: testRoot.path, workspaces: [])
+        let stuckWorktreePath =
+            workspacesRoot
+            .appendingPathComponent("sample-repo", isDirectory: true)
+            .appendingPathComponent("stuck-worktree", isDirectory: true)
+            .path
+        let entry = GitWorktreeEntry(path: stuckWorktreePath, branch: nil, isPrunable: false)
+        let item = WorkspaceOrphanItem.gitWorktreeWithoutRecord(repo: repo, entry: entry)
+        let path = try #require(item.path)
+
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: workspacesRoot,
+            lumeWorkspaceStorageURL: nil,
+            worktreeLister: StaticWorktreeLister(entries: []),
+            fileSystem: DefaultWorkspaceOrphanFileSystem(),
+            gitExecutable: hangingGit.path,
+            gitCommandTimeout: 0.5
+        )
+
+        let start = ContinuousClock.now
+        await #expect(
+            throws: WorkspaceOrphanReconciliationError.gitCommandTimedOut(
+                args: ["worktree", "remove", "--force", path],
+                timeout: 0.5
+            )
+        ) {
+            try await reconciler.cleanupGitWorktree(item)
+        }
+        let elapsed = ContinuousClock.now - start
+
+        // Must stay under the stub's 30s sleep; the slack above the 0.5s
+        // timeout absorbs loaded-CI process-spawn overhead.
+        #expect(elapsed < .seconds(25))
+    }
+
+    private func makeHangingGitStub(in directory: URL) throws -> URL {
+        let url = directory.appendingPathComponent("hanging-git", isDirectory: false)
+        try Data("#!/bin/sh\nexec sleep 30\n".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        return url
+    }
+
     private func makeTempDir() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceOrphanReconcilerTests-\(UUID().uuidString)", isDirectory: true)

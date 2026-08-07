@@ -19,6 +19,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-subprocess-timeouts.py"
       - "scripts/generate-sparkle-appcast.sh"
       - "scripts/install-local.sh"
       - "scripts/notarize.sh"
@@ -48,6 +49,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-subprocess-timeouts.py"
       - "scripts/generate-sparkle-appcast.sh"
       - "scripts/install-local.sh"
       - "scripts/notarize.sh"
@@ -97,6 +99,9 @@ jobs:
 
       - name: Lint
         run: swift-format lint --strict --recursive Sources/ Tests/
+
+      - name: Subprocess timeout tripwire
+        run: python3 scripts/check-subprocess-timeouts.py
 
       - name: Build (debug)
         run: swift build

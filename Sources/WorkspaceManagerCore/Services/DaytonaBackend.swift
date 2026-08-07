@@ -126,6 +126,8 @@ public actor DaytonaBackend: ProvisionCapable, StartStopCapable, Archivable, Lis
             throw DaytonaError.uvNotFound
         }
 
+        // Un-timed by design: sandbox operations run under the caller's outer
+        // deadline, not here (scripts/check-subprocess-timeouts.py allowlist).
         let result = try await ProcessRunner.run(
             executable: uvPath,
             arguments: ["run", "--script", scriptPath] + args,

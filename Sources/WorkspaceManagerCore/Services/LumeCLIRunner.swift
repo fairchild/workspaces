@@ -28,6 +28,9 @@ struct LumeCLIRunner: Sendable {
     }
 
     func run(arguments: [String]) async throws -> ProcessResult {
+        // Un-timed by design: lume operations (image pulls, VM lifecycle) are
+        // long-running and bounded by the caller's outer deadline
+        // (scripts/check-subprocess-timeouts.py allowlist).
         try await ProcessRunner.run(
             executable: executablePath,
             arguments: arguments,
