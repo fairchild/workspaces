@@ -107,9 +107,12 @@ struct WorkspaceClickToFocusSignpostTests {
         let supersededEvents = captured.filter { $0.fields["outcome"] == "superseded" }
         #expect(supersededEvents.count == 1)
         #expect(supersededEvents.first?.fields["session"] == sessionID.uuidString)
+        #expect(supersededEvents.first?.fields["status"] == "abandoned")
+        #expect(supersededEvents.first?.fields["elapsed_ms"] != nil)
+        #expect(supersededEvents.first?.fields["duration_ms"] == nil)
     }
 
-    @Test("cancel closes interval with reason")
+    @Test("cancel closes interval as abandoned, not completed")
     func cancelClosesWithReason() async {
         var captured: [(phase: String, fields: [String: String])] = []
         PerformanceSignposts.setWorkspaceClickMetricObserver { phase, fields in
@@ -130,6 +133,11 @@ struct WorkspaceClickToFocusSignpostTests {
         let cancelledEvents = captured.filter { $0.fields["outcome"] == "workspace_selected" }
         #expect(cancelledEvents.count == 1)
         #expect(cancelledEvents.first?.fields["session"] == sessionID.uuidString)
+        #expect(cancelledEvents.first?.phase == "abandoned")
+        #expect(cancelledEvents.first?.fields["status"] == "abandoned")
+        #expect(cancelledEvents.first?.fields["elapsed_ms"] != nil)
+        #expect(cancelledEvents.first?.fields["duration_ms"] == nil)
+        #expect(captured.allSatisfy { $0.fields["status"] != "completed" })
     }
 
     @Test("cancel with wrong session is a no-op")
@@ -150,8 +158,8 @@ struct WorkspaceClickToFocusSignpostTests {
             reason: "wrong_session"
         )
 
-        let completedEvents = captured.filter { $0.fields["status"] == "completed" }
-        #expect(completedEvents.isEmpty)
+        let closedEvents = captured.filter { $0.fields["status"] != "started" }
+        #expect(closedEvents.isEmpty)
 
         PerformanceSignposts.cancelWorkspaceClickToFocusedInputIfNeeded(
             sessionID: activeSession,

@@ -24,7 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from perf_schema import evaluate_budgets, load_contract
+from perf_schema import evaluate_budgets, load_contract, measured_duration_samples
 
 SUMMARIZE_PERF_LOG = (
     REPO_ROOT
@@ -96,6 +96,30 @@ class PerfContractTests(unittest.TestCase):
         self.assertEqual(budget["gate_budget"], 7)
         self.assertEqual(budget["diagnostic_threshold"], 18)
         self.assertNotIn("gate_budget_ms", budget)
+
+    def test_measured_duration_samples_reject_abandoned_click_intervals(self) -> None:
+        text = "\n".join(
+            [
+                "2026-08-06 10:00:00.000 [Perf] metric=launch_to_first_prompt duration_ms=240.00 trigger=terminal_focus",
+                "2026-08-06 10:00:00.100 [Perf] metric=workspace_click_to_focus duration_ms=271.27 session=a outcome=prompt_ready",
+                "2026-08-06 10:00:00.200 [Perf] metric=repo_click_to_focus duration_ms=463.59 session=b outcome=focused",
+                "2026-08-06 10:00:15.300 [Perf] metric=workspace_click_to_focus duration_ms=15006.41 session=c outcome=web_source_selected",
+                "2026-08-06 10:00:15.400 [Perf] metric=repo_click_to_focus duration_ms=9001.00 session=d outcome=superseded",
+                "2026-08-06 10:00:15.500 [Perf] metric=workspace_click_to_focus duration_ms=8000.00 session=e",
+                "2026-08-06 10:00:15.600 [Perf] metric=workspace_click_to_focus status=abandoned elapsed_ms=36566.90 session=f outcome=repo_overview_selected",
+            ]
+        )
+
+        samples = measured_duration_samples(text)
+
+        self.assertEqual(
+            samples,
+            [
+                ("launch_to_first_prompt", 240.0),
+                ("workspace_click_to_focus", 271.27),
+                ("repo_click_to_focus", 463.59),
+            ],
+        )
 
     def test_main_window_hotspot_scenarios_are_registered(self) -> None:
         contract = load_contract()
