@@ -158,11 +158,15 @@ because no live window is attached, the intent surfaces that error; if the verb
 returns `confirmation_required`, the intent maps it to the native App Intents
 confirmation prompt before reporting the outcome.
 
-App Intents intentionally work independently of the Automation API and Operator
-Scope experiments. They are user-initiated by Shortcuts/Siri/Spotlight and run
-in process, so their handle is registered only in memory and never leaves the
-app or exposes a socket. The experiments continue to gate the external socket
-surface and the process-readable operator credential used by CLI/dev/CI callers.
+App Intents are user-initiated by Shortcuts/Siri/Spotlight and run in process,
+so their handle is registered only in memory and never leaves the app or
+exposes a socket. Minting is still gated on the Operator Scope experiment — the
+same opt-in the socket-side credential requires, re-checked on every intent
+call — so with the experiment off the intents fail closed with a clear
+disabled error (`capability_denied`). The Automation API experiment continues
+to gate only the external socket surface and the process-readable operator
+credential used by CLI/dev/CI callers; App Intents do not require the
+listener.
 
 ## Envelope
 
@@ -220,7 +224,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
 | `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` from a primary tile. Each successful split creates a new terminal surface in the caller's tab. Secondary split-tile callers return `unsupported` in V1. |
-| `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. |
+| `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. The result reports `outcome: "requested"` with `changed: false` — close is fire-and-forget and Ghostty may still prompt, so the API never claims the close landed. |
 | `POST /v1/input/write` | Experimental. Pastes `text` into the caller's own PTY; `submit: true` then presses Return as a synthetic key event (never an appended `\r`, which bracketed paste would insert literally). Body is `{"text": "...", "submit": false}`, at most 32 KiB UTF-8 of text. Requires the `input.write` capability, granted only while the Automation Input Write experiment is on. |
 
 Mutation bodies must be projections over the supported operation, not raw tile

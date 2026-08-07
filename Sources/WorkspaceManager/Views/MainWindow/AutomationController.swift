@@ -464,8 +464,12 @@ final class AutomationController: AutomationControlling {
     func automationCloseTile(for handle: String) throws -> AutomationMutationResult {
         let resolved = try resolve(handle, requiring: .tileClose)
         requestCloseTerminal(resolved.entry.hostSessionID)
+        // Close is fire-and-forget into the app's close-confirmation path — Ghostty may still
+        // prompt — so the result reports the request as `requested` without claiming the tile
+        // closed. `closedSurfaceID` names the surface the request targeted.
         return AutomationMutationResult(
-            changed: true,
+            changed: false,
+            outcome: .requested,
             closedSurfaceID: resolved.entry.hostSessionID.uuidString
         )
     }

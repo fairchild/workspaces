@@ -77,13 +77,18 @@ public final class AutomationHandleRegistry {
     /// reviewed workspace mutation verbs). Unlike `upsert`,
     /// this is not keyed by a live terminal session — the entry stands alone under a synthetic host
     /// session id so `remove(hostSessionID:)`/`removeAll` still evict it when the launch ends. Each
-    /// call mints a fresh handle; a launch mints exactly one.
+    /// call mints a fresh handle; re-registering under the same host session id evicts the prior
+    /// entry first, so a replaced handle stops resolving instead of leaking as un-revocable.
     @discardableResult
     public func registerOperator(
         appScopeID: String,
         capabilities: [AutomationCapability] = AutomationAPI.operatorCapabilities,
         hostSessionID: UUID = UUID()
     ) -> Entry {
+        if let priorHandle = handleByHostSessionID[hostSessionID] {
+            entriesByHandle.removeValue(forKey: priorHandle)
+            createdHostSessionIDsByOperatorHandle.removeValue(forKey: priorHandle)
+        }
         let handle = makeUniqueHandle()
         handleByHostSessionID[hostSessionID] = handle
         let entry = Entry(

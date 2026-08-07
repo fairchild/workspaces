@@ -479,13 +479,16 @@ struct AutomationControllerTests {
         }
     }
 
-    @Test("Close routes through existing close request path")
+    @Test("Close reports a typed close request without claiming the tile closed")
     func closeRoutesThroughExistingClosePath() throws {
         let fixture = makeFixture()
 
         let result = try fixture.controller.automationCloseTile(for: fixture.primaryHandle)
 
-        #expect(result.changed)
+        // Close is fire-and-forget and Ghostty may still prompt, so the result never claims the
+        // change landed — only that the request entered the normal close-confirmation path.
+        #expect(result.outcome == .requested)
+        #expect(!result.changed)
         #expect(result.closedSurfaceID == fixture.primary.id.uuidString)
         #expect(fixture.closedSessionIDs == [fixture.primary.id])
     }

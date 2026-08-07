@@ -40,9 +40,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         ExperimentalFeatures.isEnabled(.automationAPI)
     }
 
-    /// Whether this launch opted into operator scope. Operator scope rides on the automation listener,
-    /// so it requires the Automation API experiment as well; the caller only reaches minting when the
-    /// listener is enabled.
+    /// Whether this launch opted into operator scope. Both mint paths check it: the socket-side
+    /// credential provision (reached only when the listener is enabled) and the App Intents mint,
+    /// which has no listener dependency and therefore gates on it explicitly per call.
     private var isOperatorEnabled: Bool {
         ExperimentalFeatures.isEnabled(.automationOperator)
     }
@@ -355,6 +355,23 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     }
 
     func appIntentControllerAndHandle() throws -> (controller: AutomationController, handle: String) {
+        try appIntentControllerAndHandle(isOperatorEnabled: isOperatorEnabled)
+    }
+
+    /// The operator gate runs before the cached-handle fast path, so turning the experiment off
+    /// mid-launch cuts Shortcuts off immediately — the same per-request re-check `input.write`
+    /// applies. `isOperatorEnabled` is injected so tests exercise the gate without mutating global
+    /// experiment state.
+    func appIntentControllerAndHandle(
+        isOperatorEnabled: Bool
+    ) throws -> (controller: AutomationController, handle: String) {
+        guard isOperatorEnabled else {
+            throw AutomationServiceError(
+                .capabilityDenied,
+                "The Automation Operator Scope experiment is disabled. "
+                    + "Enable it in WorkSpaces Settings to use Shortcuts actions."
+            )
+        }
         guard let controller else {
             throw AutomationServiceError(
                 .unsupported,

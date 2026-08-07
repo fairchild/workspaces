@@ -244,6 +244,31 @@ struct WorkspacesAppIntentsTests {
         #expect(requirement == confirmation)
     }
 
+    @Test("disabled operator experiment surfaces as a clear intent error")
+    func disabledOperatorGateMapsToIntentError() throws {
+        // Mirrors the error appIntentControllerAndHandle throws when the operator experiment is
+        // off: the client must surface it as the intent's error message, not swallow it.
+        let client = WorkspacesAppIntentAutomationClient {
+            throw AutomationServiceError(
+                .capabilityDenied,
+                "The Automation Operator Scope experiment is disabled. "
+                    + "Enable it in WorkSpaces Settings to use Shortcuts actions."
+            )
+        }
+
+        do {
+            _ = try client.inventory()
+            Issue.record("Expected the disabled gate to surface as an intent error.")
+        } catch let error as WorkspacesAppIntentError {
+            guard case .automation(let response) = error else {
+                Issue.record("Expected automation error, got \(error).")
+                return
+            }
+            #expect(response.code == .capabilityDenied)
+            #expect(error.errorDescription?.contains("Automation Operator Scope") == true)
+        }
+    }
+
     @Test("unsupported automation errors become clear intent errors")
     func unsupportedMapsToIntentError() async throws {
         let controller = FakeWorkspacesAppIntentController()

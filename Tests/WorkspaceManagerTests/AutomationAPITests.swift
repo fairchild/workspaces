@@ -379,7 +379,7 @@ private final class FakeAutomationController: AutomationControlling {
     func automationCloseTile(for handle: String) throws -> AutomationMutationResult {
         _ = try automationContext(for: handle)
         closeHandles.append(handle)
-        return AutomationMutationResult(changed: true, closedSurfaceID: "surface-1")
+        return AutomationMutationResult(changed: false, outcome: .requested, closedSurfaceID: "surface-1")
     }
 
     func automationWriteInput(
@@ -942,6 +942,47 @@ struct AutomationAPITests {
         // so a credential left behind by a crashed launch fails closed against a fresh registry.
         registry.removeAll()
         #expect(registry.resolve("op-1") == nil)
+    }
+
+    @Test("Re-registering an operator under the same host session evicts the prior handle")
+    @MainActor
+    func registryOperatorReRegisterEvictsPriorHandle() {
+        var counter = 0
+        let registry = AutomationHandleRegistry(makeHandle: {
+            counter += 1
+            return "op-\(counter)"
+        })
+        let hostSessionID = UUID(uuidString: "99999999-9999-9999-9999-999999999999")!
+        let createdSurfaceID = UUID(uuidString: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")!
+
+        let first = registry.registerOperator(appScopeID: "workspaces.local", hostSessionID: hostSessionID)
+        registry.recordWorkspaceCreation(operatorHandle: first.handle, hostSessionID: createdSurfaceID)
+        let second = registry.registerOperator(appScopeID: "workspaces.local", hostSessionID: hostSessionID)
+
+        // Registry invariant: every resolvable handle stays reachable through a host-session
+        // mapping, so a re-mint under the same host session id must evict the prior entry —
+        // otherwise the replaced handle leaks as permanently resolvable and un-revocable.
+        #expect(first.handle != second.handle)
+        #expect(registry.resolve(first.handle) == nil)
+        #expect(registry.resolve(second.handle)?.isOperator == true)
+        #expect(registry.handle(for: hostSessionID) == second.handle)
+        // Creation attributions die with the evicted handle instead of dangling.
+        #expect(!registry.operatorHandle(first.handle, createdHostSessionID: createdSurfaceID))
+
+        registry.remove(hostSessionID: hostSessionID)
+        #expect(registry.resolve(second.handle) == nil)
+    }
+
+    @Test("tile.close result encodes the typed requested outcome without claiming a change")
+    func mutationResultEncodesRequestedOutcome() throws {
+        let result = AutomationMutationResult(
+            changed: false,
+            outcome: .requested,
+            closedSurfaceID: "surface-1"
+        )
+        let text = String(data: try AutomationJSON.encoder.encode(result), encoding: .utf8)
+        #expect(text?.contains(#""outcome":"requested""#) == true)
+        #expect(text?.contains(#""changed":false"#) == true)
     }
 
     @Test("GET /v1/windows succeeds for an operator handle and denies a tile handle")
