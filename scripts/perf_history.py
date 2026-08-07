@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -126,12 +127,25 @@ def _bar(value: float | None, max_value: float, width: int = 24) -> str:
     return "#" * filled + "-" * (width - filled)
 
 
+def _row_timestamp_key(row: dict[str, Any]) -> datetime:
+    try:
+        return datetime.strptime(str(row.get("timestamp", "")), "%Y-%m-%dT%H:%M:%S%z")
+    except ValueError:
+        return datetime.min.replace(tzinfo=timezone.utc)
+
+
 def render_dashboard(
     rows: list[dict[str, Any]],
     summary: dict[str, Any],
     timestamp: str,
     perf_dir: Path,
 ) -> str:
+    # The CSV is an append log; ad-hoc ingestion (perf-history-record.py, with
+    # mtime-derived timestamps) can legitimately append an older run after a
+    # newer one. The dashboard therefore orders rows by their timestamp instead
+    # of trusting tail position as "latest" (stable sort keeps append order for
+    # unparseable timestamps, which sort first).
+    rows = sorted(rows, key=_row_timestamp_key)
     metadata = summary.get("metadata", {})
     budget_results = summary.get("budget_results", {})
     latest = rows[-1] if rows else None
@@ -285,9 +299,11 @@ def render_dashboard(
     lines.append("## Recording Cadence")
     lines.append("")
     lines.append(
-        "- The daily `perf-validation` cron records the launch lanes here via "
-        "`./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui lane is up; "
-        "a run that cannot measure fails visibly instead of skipping green."
+        "- The daily `perf-validation` cron measures the launch lanes via "
+        "`./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui lane is up "
+        "and uploads the refreshed history/dashboard as run artifacts; committing them back to the "
+        "repo is a manual/orchestrated step. A run that cannot measure fails visibly instead of "
+        "skipping green."
     )
     lines.append(
         "- Ad-hoc canonical summaries (e.g. re-baseline output dirs) are appended with "

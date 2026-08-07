@@ -180,22 +180,44 @@ jobs:
 
       # The launch lanes alone leave the key-flow scenarios unmeasured; the cron
       # runs the full runnable contract so hot-spot and channel regressions
-      # surface daily, not only in ad-hoc re-baselines (#1238).
+      # surface daily, not only in ad-hoc re-baselines (#1238). Each loop runs
+      # every scenario even after a failure so one budget miss cannot hide the
+      # rest, then fails the step listing every failing scenario.
       - name: Run main-window hot-spot scenarios (assert budget)
+        id: hotspot_scenarios
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p perf-artifacts
+          failures=""
           for scenario in main_window_agent_activity_burst main_window_session_switcher_snapshot main_window_workspace_create_ui_stall main_window_idle_cpu_diagnostics_closed main_window_resident_memory_20_workspaces; do
-            ./scripts/perf-runner.sh --scenario "$scenario" --assert-budget --output-dir "perf-artifacts/$scenario"
+            if ! ./scripts/perf-runner.sh --scenario "$scenario" --assert-budget --output-dir "perf-artifacts/$scenario"; then
+              failures="$failures $scenario"
+            fi
           done
+          if [ -n "$failures" ]; then
+            echo "Hot-spot scenarios failed budget assertion:$failures" >&2
+            echo "Hot-spot scenarios failed budget assertion:$failures" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Run channel scenarios (assert budget)
+        # Budget misses in the hot-spot step must not hide the channel verdicts;
+        # earlier build/setup failures still skip this step.
+        if: ${{ success() || steps.hotspot_scenarios.outcome == 'failure' }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p perf-artifacts
+          failures=""
           for scenario in channel1_hook_ingest_burst channel2_statusline_burst channel1_sidebar_churn channel1_long_session_memory; do
-            ./scripts/perf-runner.sh --scenario "$scenario" --assert-budget --output-dir "perf-artifacts/$scenario"
+            if ! ./scripts/perf-runner.sh --scenario "$scenario" --assert-budget --output-dir "perf-artifacts/$scenario"; then
+              failures="$failures $scenario"
+            fi
           done
+          if [ -n "$failures" ]; then
+            echo "Channel scenarios failed budget assertion:$failures" >&2
+            echo "Channel scenarios failed budget assertion:$failures" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
 
       - name: Collect perf artifacts
         if: always()

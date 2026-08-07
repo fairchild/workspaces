@@ -55,7 +55,7 @@ current n/a ms (n/a of target)
 
 ## Recording Cadence
 
-- The daily `perf-validation` cron records the launch lanes here via `./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui lane is up; a run that cannot measure fails visibly instead of skipping green.
+- The daily `perf-validation` cron measures the launch lanes via `./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui lane is up and uploads the refreshed history/dashboard as run artifacts; committing them back to the repo is a manual/orchestrated step. A run that cannot measure fails visibly instead of skipping green.
 - Ad-hoc canonical summaries (e.g. re-baseline output dirs) are appended with `uv run --script scripts/perf-history-record.py --summary <summary.json>`.
 
 ## Metric Definitions

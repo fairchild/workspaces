@@ -8,7 +8,9 @@
 Gives ad-hoc canonical summaries (re-baseline output dirs, installed-lane runs)
 the same metrics-history.csv + dashboard.md recording path that
 perf-baseline.sh --record uses, so trend history survives between cron
-recordings (#1238).
+recordings (#1238). Rows may append out of chronological order (timestamps
+default to file mtime); the dashboard sorts rows by timestamp, so an older
+ingested summary cannot masquerade as the latest run.
 """
 
 from __future__ import annotations

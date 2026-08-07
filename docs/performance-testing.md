@@ -173,10 +173,13 @@ When `--record` is used, repo docs are updated:
 
 Recording cadence: the daily `perf-validation` cron runs
 `./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui
-lane is available, so the history CSV and dashboard advance automatically. When
-the lane is down the workflow fails visibly instead of skipping green. To
-append an ad-hoc canonical summary (a re-baseline output dir, an installed-lane
-run) without re-measuring:
+lane is available. The cron gates on budgets and uploads the refreshed
+history/dashboard as run artifacts only — its token is read-only
+(`contents: read`), so committing `docs/performance/` updates back to the repo
+stays a manual/orchestrated step (download the artifact or re-record locally,
+then commit). When the lane is down the workflow fails visibly instead of
+skipping green. To append an ad-hoc canonical summary (a re-baseline output
+dir, an installed-lane run) without re-measuring:
 
 ```bash
 uv run --script scripts/perf-history-record.py --summary <output-dir>/summary.json
@@ -201,6 +204,14 @@ Each arm wraps the corresponding `scripts/perf/*/run.sh` driver via
 contract reference is an absolute cap (long-session RSS delta, registry size
 after close) gate directly against the cap. A contract-expected metric that the
 driver fails to produce is a `missing` budget violation, not a pass.
+
+Channel RSS references were refreshed on 2026-08-07 from the
+`perf-rebaseline-20260807` run: sidebar churn measured a 1.67 MB steady-state
+RSS delta over 60 s (reference 2 MB, 3 MB gate via the x1.25 formula), and the
+600 s long-session soak measured a 20.39 MB warm-up-dominated delta with the
+registry drained to zero (ten-minute cap 32 MB, >=1.5x headroom over the
+observation; sixty-minute cap 40 MB extrapolated from the post-warm-up plateau
+— refresh it from a real 60-minute soak before leaning on it).
 
 ## Automated CI perf workflow
 

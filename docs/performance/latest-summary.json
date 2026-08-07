@@ -1,7 +1,7 @@
 {
   "artifacts": {
     "line_count": 24,
-    "log_file": "/Users/fairchild/code/workspaces/output/perf-rebaseline-20260807/installed_login_shell/installed_login_shell.log",
+    "log_file": "output/perf-rebaseline-20260807/installed_login_shell/installed_login_shell.log",
     "perf_event_count": 10
   },
   "budget_results": {
@@ -149,7 +149,7 @@
     }
   },
   "line_count": 24,
-  "log_file": "/Users/fairchild/code/workspaces/output/perf-rebaseline-20260807/installed_login_shell/installed_login_shell.log",
+  "log_file": "output/perf-rebaseline-20260807/installed_login_shell/installed_login_shell.log",
   "metadata": {
     "build_kind": "installed",
     "scenario": "installed_login_shell",

@@ -142,6 +142,23 @@ class PerfHistoryTests(unittest.TestCase):
             text = render_dashboard([], installed_summary(), "2026-08-07T10:00:00-0700", Path(tmpdir))
             self.assertIn("Not enough recorded history", text)
 
+    def test_dashboard_latest_is_chronological_not_ingestion_order(self) -> None:
+        newer = debug_summary()
+        older = debug_summary()
+        older["metrics"]["launch_to_first_prompt"]["median"] = 500.0
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            record_summary(summary=newer, root_dir=root, timestamp="2026-08-07T10:00:00-0700")
+            paths = record_summary(summary=older, root_dir=root, timestamp="2026-08-01T10:00:00-0700")
+            dashboard = paths["dashboard_md"].read_text()
+
+            latest_snapshot = dashboard.split("## Investigated Delta")[0]
+            self.assertIn("600.00", latest_snapshot)
+            self.assertNotIn("500.00", latest_snapshot)
+
+            trend = dashboard.split("## Trend")[1]
+            self.assertLess(trend.index("2026-08-01"), trend.index("2026-08-07"))
+
 
 class PerfChannelBaselineTests(unittest.TestCase):
     def test_contract_has_no_unrunnable_scenarios(self) -> None:
