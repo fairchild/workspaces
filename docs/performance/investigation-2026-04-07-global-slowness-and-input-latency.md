@@ -57,6 +57,7 @@ Key numbers:
 - `input_investigation.event_age_ms`: min `1117.16 ms`, median `1198.85 ms`, max `2480.36 ms`
 - `input_investigation.handler_duration_ms`: min `0.10 ms`, median `0.16 ms`, max `1.07 ms`
 - `workspace_click_to_focus`: `36566.90 ms`, outcome `repo_overview_selected`
+  - Correction: under the current admission rules this sample is an abandoned interval (`repo_overview_selected` is not a success outcome) and is excluded from latency summaries; the number is kept as evidence of the stall, and no improvement claim rests on it.
 
 Interpretation:
 

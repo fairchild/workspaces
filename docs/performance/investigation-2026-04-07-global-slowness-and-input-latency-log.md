@@ -100,6 +100,7 @@ Result:
 - `input event_age_ms`: median `1198.85 ms`, max `2480.36 ms`
 - `handler_duration_ms`: median `0.16 ms`, max `1.07 ms`
 - `workspace_click_to_focus`: `36566.90 ms`, outcome `repo_overview_selected`
+  - Correction: under the current admission rules this sample is an abandoned interval (`repo_overview_selected` is not a success outcome) and is excluded from latency summaries; the number is kept as evidence of the stall, and no improvement claim rests on it.
 - focus failure markers observed:
   - `focus_request_inactive_skip`
   - `focus_request_missing_window_retry`
@@ -171,6 +172,7 @@ Result:
 - `input event_age_ms` max improved from `2480.36 ms` to `219.34 ms`
 - `handler_duration_ms`: median `0.20 ms`, max `7.43 ms`
 - `workspace_click_to_focus`: improved from `36566.90 ms` with `repo_overview_selected` to `5870.88 ms` with `focused`
+  - Correction: the `36566.90 ms` "before" sample is an abandoned interval under the current admission rules (`repo_overview_selected` is not a success outcome) and is excluded from latency summaries; the improvement claim rests on the `event_age_ms` medians and the successful `5870.88 ms` `focused` sample, not on that number.
 - first-pass grep of the new app sample no longer surfaced:
   - `SidebarRows.swift`
   - `Menu.init`
