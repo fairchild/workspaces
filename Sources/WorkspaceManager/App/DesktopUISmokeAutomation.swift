@@ -112,6 +112,7 @@ private struct DesktopUISmokeEvent: Codable, Sendable {
         case webSurfaceAttached = "web_surface_attached"
         case surfaceFocused = "surface_focused"
         case surfaceFocusTimedOut = "surface_focus_timed_out"
+        case surfaceFocusNotApplicable = "surface_focus_not_applicable"
         case scenarioComplete = "scenario_complete"
         case failure
     }
@@ -187,6 +188,13 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     private var pendingAPISelectWorkspacePath: String?
     private var apiSelectCompletionTask: Task<Void, Never>?
     private var emittedScenarioComplete = false
+    private var emittedSurfaceFocusNotApplicable = false
+
+    /// Whether a terminal surface can ever become first responder in this launch.
+    /// False when activation is suppressed (`WORKSPACES_NO_ACTIVATE_ON_LAUNCH` / `CI`):
+    /// the app never becomes key, so `surface_focused` cannot fire and waiting for
+    /// it is a dead wait.
+    private let surfaceFocusPossible: Bool
 
     /// Monotonic counter bumped each time a terminal surface reports focus.
     /// The scenario captures it before a selection action and waits for it to
@@ -197,10 +205,17 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     /// contract as `surfaceFocusCount`.
     @Published private(set) var webSurfaceAttachCount = 0
 
+    /// Monotonic counter for terminal session attaches, same baseline-then-wait
+    /// contract as `surfaceFocusCount`. The scenario waits on it after driving a
+    /// selection change: the attach milestone is the hard gate the host script
+    /// asserts, and (unlike focus) it fires in every launch mode.
+    @Published private(set) var terminalAttachCount = 0
+
     init(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let configuration = DesktopUISmokeAutomationConfiguration.from(environment: environment)
         self.configuration = configuration
         self.writer = configuration.map { DesktopUISmokeEventWriter(eventsURL: $0.eventsURL) }
+        self.surfaceFocusPossible = AppActivationPolicy(environment: environment).allowsActivation
     }
 
     var isEnabled: Bool {
@@ -332,6 +347,7 @@ final class DesktopUISmokeAutomationController: ObservableObject {
         scopePath: String
     ) async {
         guard isEnabled else { return }
+        terminalAttachCount += 1
         await emit(
             makeEvent(
                 type: .terminalSessionAttached,
@@ -388,12 +404,38 @@ final class DesktopUISmokeAutomationController: ObservableObject {
     /// Suspend until a surface focus fires after `baseline`, or `timeout`
     /// elapses. Returns true on focus, false on timeout (emitting a non-fatal
     /// timeout milestone so the scheduled lane stays honest in headless runs
-    /// where focus can lag behind attach).
+    /// where focus can lag behind attach). When activation is suppressed the
+    /// wait is skipped entirely — focus cannot arrive — and a single
+    /// `surface_focus_not_applicable` milestone marks the absence as a mode
+    /// property rather than a timeout.
     func waitForSurfaceFocus(after baseline: Int, timeout: Duration) async -> Bool {
+        guard surfaceFocusPossible else {
+            if !emittedSurfaceFocusNotApplicable {
+                emittedSurfaceFocusNotApplicable = true
+                await emit(makeEvent(type: .surfaceFocusNotApplicable))
+            }
+            return false
+        }
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while surfaceFocusCount <= baseline {
             if ContinuousClock.now >= deadline {
                 await emit(makeEvent(type: .surfaceFocusTimedOut))
+                return false
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        return true
+    }
+
+    /// Suspend until a terminal session attaches after `baseline`, or `timeout`
+    /// elapses. No milestone on timeout — a missing attach surfaces in the host
+    /// script's sequence assertions. The scenario waits on this before emitting
+    /// its next milestone so `scenario_complete` stays the final event even
+    /// though attach milestones are emitted from detached tasks.
+    func waitForTerminalAttach(after baseline: Int, timeout: Duration) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        while terminalAttachCount <= baseline {
+            if ContinuousClock.now >= deadline {
                 return false
             }
             try? await Task.sleep(for: .milliseconds(50))

@@ -403,11 +403,20 @@ if types[-1] != "scenario_complete":
 
 focus_events = [e for e in events if e.get("type") == "surface_focused"]
 focus_timeouts = [e for e in events if e.get("type") == "surface_focus_timed_out"]
+# The app emits surface_focus_not_applicable when it launched non-activating:
+# focus cannot fire in that mode, so report it as unavailable, not as zero.
+focus_not_applicable = any(
+    e.get("type") == "surface_focus_not_applicable" for e in events
+)
+focus_summary = (
+    "surface focus n/a (no-activate launch)"
+    if focus_not_applicable
+    else f"{len(focus_events)} surface focuses, {len(focus_timeouts)} focus timeouts"
+)
 print(
     f"OK: {len(attaches)} terminal attaches, "
     f"{len(web_attaches)} web surface attaches, "
-    f"{len(focus_events)} surface focuses, "
-    f"{len(focus_timeouts)} focus timeouts"
+    f"{focus_summary}"
 )
 PY
 }
