@@ -294,6 +294,72 @@ struct GhosttyTerminalConfigTests {
         #expect(config.shellProfileModeLabel == "clean")
     }
 
+    @Test("A chosen tmux session name wins over the directory derivation")
+    func chosenTmuxSessionNameWinsOverDerivation() throws {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+            ],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true,
+            tmuxSessionName: "wm-repo-a-12345678-pdeadbeef"
+        )
+
+        let command = try #require(config.command)
+        #expect(command.contains("new-session -A -s"))
+        #expect(command.contains("'wm-repo-a-12345678-pdeadbeef'"))
+    }
+
+    @Test("A split session's launch context threads its disambiguated tmux name")
+    func splitSessionLaunchContextThreadsItsName() throws {
+        let directory = URL(fileURLWithPath: "/tmp/repo-a")
+        let splitID = UUID()
+        let splitName = TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: splitID)
+        let config = GhosttyTerminalConfig(
+            launchContext: .hostSession(
+                HostTerminalSession(
+                    id: splitID,
+                    key: .repoPath(directory.path),
+                    directory: directory,
+                    tmuxSessionNameOverride: splitName
+                ),
+                hooksSocketPath: nil
+            ),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+
+        let command = try #require(config.command)
+        #expect(command.contains("'\(splitName)'"))
+        #expect(!command.contains("'\(GhosttyTerminalConfig.tmuxSessionName(for: directory))'"))
+    }
+
+    /// Launch and probe must agree on tool paths: TmuxSessionProbe injects them even
+    /// when PATH is absent, so the launch gate has to as well — otherwise a session
+    /// the probe reports alive launches as a plain shell instead of reattaching.
+    @Test("A missing or empty PATH still gets the probe's tool paths")
+    func missingPathGetsToolPaths() {
+        let toolPaths = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        let withoutPath = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: ["SHELL": "/bin/zsh"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+        let emptyPath = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: ["SHELL": "/bin/zsh", "PATH": ""],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+
+        #expect(withoutPath.environmentVariables["PATH"] == toolPaths)
+        #expect(emptyPath.environmentVariables["PATH"] == toolPaths)
+    }
+
     @Test("tmux session identity is stable for a given path")
     func tmuxSessionIdentityIsStable() {
         let first = GhosttyTerminalConfig(

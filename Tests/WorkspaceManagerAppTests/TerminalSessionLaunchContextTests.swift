@@ -53,6 +53,23 @@ struct TerminalSessionLaunchContextTests {
         #expect(context.agentCommunication == .hookEnvironment)
     }
 
+    @Test("A host session's chosen tmux name threads into the launch context")
+    func hostSessionThreadsChosenTmuxName() {
+        let directory = URL(fileURLWithPath: "/Users/test/repo")
+        let plain = HostTerminalSession(key: .repoPath(directory.path), directory: directory)
+        let overridden = HostTerminalSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            tmuxSessionNameOverride: "wm-repo-12345678-pdeadbeef"
+        )
+
+        let plainContext = TerminalSessionLaunchContext.hostSession(plain, hooksSocketPath: nil)
+        let overriddenContext = TerminalSessionLaunchContext.hostSession(overridden, hooksSocketPath: nil)
+
+        #expect(plainContext.tmuxSessionName == plain.effectiveTmuxSessionName)
+        #expect(overriddenContext.tmuxSessionName == "wm-repo-12345678-pdeadbeef")
+    }
+
     @Test("A customCommand session ignores any initial command and maps to custom mode")
     func customCommandSessionMapsToCustomMode() {
         let session = HostTerminalSession(
