@@ -2240,8 +2240,13 @@ struct ContentView: View {
                     let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == effect.workspaceID })
                 {
                     Task { @MainActor in
+                        let attachBaselineBeforeRepoPark = desktopUISmokeAutomation.terminalAttachCount
                         let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
                         handleRepoTerminalSelection(repo)
+                        _ = await desktopUISmokeAutomation.waitForTerminalAttach(
+                            after: attachBaselineBeforeRepoPark,
+                            timeout: .seconds(15)
+                        )
                         _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
                             after: focusBaselineBeforeRepoPark,
                             timeout: .seconds(15)
