@@ -179,6 +179,37 @@ struct TmuxSessionProbeTests {
         #expect(probe.supportsSessionEnvironmentFlag() == false)
     }
 
+    /// The production runner is called from a lazy static initializer on the main
+    /// thread — a `swift_once`. Anything that runs the main run loop while that once
+    /// is held re-enters AppKit, and a nested SwiftUI layout pass composing another
+    /// terminal surface re-enters the same once; libdispatch traps that recursive
+    /// lock and the app aborts before a surface exists. So the runner has to block
+    /// the calling thread without servicing it.
+    @MainActor
+    @Test("The synchronous runner blocks without running the caller's run loop")
+    func synchronousRunnerLeavesTheCallersRunLoopAlone() {
+        let pending = RunLoopBlockFlag()
+        RunLoop.main.perform { pending.markRan() }
+
+        // The child closes stdout and then lingers, so the read finishes while the
+        // process is still alive. That window is the whole test: a runner that waits
+        // by running the run loop services the queued block inside it, and one that
+        // parks the thread does not.
+        let output = TmuxSessionProbe.defaultSynchronousOutputRunner(
+            "/bin/sh",
+            ["-c", "echo probe; exec 1>&-; sleep 0.4"],
+            nil
+        )
+
+        #expect(output?.contains("probe") == true)
+        #expect(pending.didRun == false)
+
+        // The block really was queued: it runs only once this test runs the loop,
+        // which is what makes the assertion above non-vacuous.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        #expect(pending.didRun)
+    }
+
     private func adjacent(_ arguments: [String], _ first: String, _ second: String) -> Bool {
         guard let index = arguments.firstIndex(of: first), index + 1 < arguments.count else { return false }
         return arguments[index + 1] == second
@@ -190,6 +221,25 @@ private actor ArgumentRecorder {
 
     func record(executable: String, arguments: [String]) {
         calls.append((executable, arguments))
+    }
+}
+
+/// Records whether a run-loop-scheduled block has run yet. Written from the run
+/// loop and read from the thread that scheduled it, so it carries its own lock.
+private final class RunLoopBlockFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ran = false
+
+    var didRun: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return ran
+    }
+
+    func markRan() {
+        lock.lock()
+        ran = true
+        lock.unlock()
     }
 }
 

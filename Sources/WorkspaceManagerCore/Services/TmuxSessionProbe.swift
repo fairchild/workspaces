@@ -28,7 +28,9 @@ public struct TmuxSessionProbe: Sendable {
     /// Same contract as `OutputCommandRunner`, without the suspension point.
     /// A terminal surface composes its launch command synchronously, so the
     /// capability question that command's shape depends on has to be answerable
-    /// without awaiting.
+    /// without awaiting. An implementation blocks the calling thread and leaves
+    /// its run loop alone — see `defaultSynchronousOutputRunner` for why that
+    /// second half is load-bearing.
     public typealias SynchronousOutputRunner =
         @Sendable (_ executable: String, _ arguments: [String], _ environment: [String: String]?) -> String?
 
@@ -199,6 +201,14 @@ public struct TmuxSessionProbe: Sendable {
     /// Production synchronous runner: a bounded `Process` run yielding stdout on a
     /// zero exit. The watchdog kills the child at the deadline, which closes the
     /// pipe, so neither the read nor the wait is open-ended.
+    ///
+    /// It blocks the calling thread outright and never runs that thread's run loop.
+    /// Callers reach this from inside a lazy static initializer on the main thread —
+    /// a `swift_once` — and running the main run loop there re-enters AppKit: a
+    /// nested SwiftUI layout pass composes another terminal surface, re-enters the
+    /// same `swift_once`, and libdispatch traps the recursive lock. Hence the
+    /// termination semaphore rather than `Process.waitUntilExit()`, which runs the
+    /// caller's run loop by design.
     public static let defaultSynchronousOutputRunner: SynchronousOutputRunner = { executable, arguments, environment in
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
@@ -207,6 +217,11 @@ public struct TmuxSessionProbe: Sendable {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        // Signalled from Process's own queue, so waiting on it parks this thread
+        // instead of servicing it. Captures only the semaphore: the process is the
+        // handler's parameter, so the handler cannot retain the process it belongs to.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         do {
             try process.run()
         } catch {
@@ -218,10 +233,12 @@ public struct TmuxSessionProbe: Sendable {
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: watchdog)
         let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let exitedBeforeDeadline = exited.wait(timeout: .now() + 5) == .success
         watchdog.cancel()
 
-        guard process.terminationStatus == 0 else { return nil }
+        // `terminationStatus` is only defined once the child has exited, which the
+        // semaphore is what establishes.
+        guard exitedBeforeDeadline, process.terminationStatus == 0 else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
 
