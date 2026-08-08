@@ -39,6 +39,35 @@ under-capable handles fail closed. Context responses do not echo the handle.
 Restart WorkSpaces after changing the Automation API experiment. Terminal
 processes only receive automation environment when their surface is created.
 
+In `tmux_per_session` mode the handle also travels in the tmux *session's* own
+environment: `new-session -e` seeds it at creation, and a chained
+`set-environment` in the same command sequence re-points a session that outlived
+an earlier launch (tmux ignores `-e` when `-A` attaches). One tmux server backs
+every session on the `-L workspaces` socket and a pane inherits the server's
+environment, so without per-session wiring a tile would read the handle of
+whichever tile happened to start the server, and its in-tile verbs would mutate
+that tile instead (#1257).
+
+This scopes which handle a pane *receives*. It does not scope which handles are
+*readable*: the `-L workspaces` socket is one same-user trust domain, and any
+pane on it can enumerate the other sessions and read their environment
+(`tmux list-sessions`, `tmux show-environment -t <session>`), so a process in one
+tile can still obtain another tile's handle and act as that tile. The property
+gained is correct targeting for well-behaved callers, not secrecy between tiles.
+What separates tiles from anything else is unchanged: the socket's own
+permissions and the user account that owns it, exactly as for `automation.sock`
+above.
+
+Two consequences survive the fix. A shell already running in a reattached pane
+keeps the environment it was spawned with — tmux cannot rewrite a live process —
+so after a relaunch that pane's handle is stale until a new shell starts in the
+session. And tmux older than 3.2 has no `new-session -e`, so there the launch can
+only set the environment after the session is created and a newly created
+session's *first* pane inherits the tmux server's environment; later panes,
+reattaches, and every pane on tmux 3.2+ are unaffected. The app resolves the
+installed tmux version once per launch and logs a notice when it takes that
+fallback.
+
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
 not terminal input or output. Each event carries an `operatorHandle` boolean so
