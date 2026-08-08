@@ -1,12 +1,20 @@
-# Advisory proof-of-concept for issue #1229 / #1240: can GitHub-hosted macos-15
-# (which boots an auto-login Aqua session) run the behavioral desktop-ui-smoke
-# lane? One green run answers the platform question; stays advisory and
-# self-triggering-only until the flake profile is known.
-name: UI Smoke (advisory PoC)
+# Advisory behavioral gate for issue #1229: desktop-ui-smoke on GitHub-hosted
+# macos-15, which boots an auto-login Aqua session (proven green on PR #1264's
+# own run, 2026-08-08). Advisory while the flake profile accumulates; the
+# required-status proposal happens in #1229 once stability is demonstrated.
+name: UI Smoke (advisory)
 
 on:
   pull_request:
     paths:
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
+      - "Package.resolved"
+      - "scripts/desktop-ui-smoke.sh"
+      - "scripts/launch-dev.sh"
+      - "scripts/lib/**"
+      - "scripts/build-ghosttykit.sh"
       - ".github/workflows/ui-smoke-advisory.yml"
   workflow_dispatch:
 
