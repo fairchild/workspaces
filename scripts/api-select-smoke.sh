@@ -244,8 +244,16 @@ main() {
     log "Driving API select: workspaces workspace select $workspace_id"
     "$CLI_BIN" workspace select "$workspace_id" --json | tee "$RUN_DIR/select-result.json"
 
-    log "Waiting for terminal_session_attached from the API-driven select…"
-    wait_for_event terminal_session_attached
+    # Server-side typed wait (POST /v1/wait) replaces the old 1s JSONL re-parse poll here:
+    # the app itself confirms the selection landed and a terminal surface is attached. A
+    # timed_out/not_applicable outcome exits non-zero (2/3) and fails the run under set -e.
+    # The awaiting_api_select poll above stays JSONL-based by design — that milestone is
+    # scenario-driver state the wait vocabulary intentionally does not model.
+    log "Waiting server-side for the selection to land (workspaces wait)…"
+    "$CLI_BIN" wait --for workspace_selected --workspace-id "$workspace_id" --timeout-ms 20000 --json \
+        | tee "$RUN_DIR/wait-workspace-selected.json"
+    "$CLI_BIN" wait --for surface_attached --timeout-ms 20000 --json \
+        | tee "$RUN_DIR/wait-surface-attached.json"
 
     # Assert a workspace-scoped terminal attach occurred AFTER the handoff — i.e. the API verb, not
     # the app's own scenario, drove it.

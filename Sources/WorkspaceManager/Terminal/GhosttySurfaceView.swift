@@ -50,6 +50,13 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
     private var lastScaleAndSize: GhosttySurfaceScaleCalculator.ScaleAndSize?
     private var trackingAreaInstalled = false
     var workingDirectoryPath: String { workingDirectory.path }
+    /// Whether the shell has reported a prompt-readiness signal (title or pwd — the same
+    /// signals `TerminalReadinessDiagnostics` counts as `first_prompt_ready`). Once observed
+    /// it stays true for the surface's lifetime; the Automation API's `prompt_ready` wait
+    /// condition reads it as "the shell finished initializing and rendered a prompt".
+    var hasObservedPromptReadySignal: Bool {
+        !terminalTitle.isEmpty || currentWorkingDirectory != nil
+    }
     var contextMenuProvider: (() -> NSMenu?)?
     var onScrollbarStateChange: ((GhosttyScrollbarState) -> Void)?
     var onTerminalTitleChanged: ((String) -> Void)?

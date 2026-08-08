@@ -14,6 +14,16 @@ final class AutomationController: AutomationControlling {
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
     private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
     private var surfaceTextReader: @MainActor (TileTreeStore, UUID) -> String?
+    /// Per-surface prompt-readiness read for the `prompt_ready` wait condition. `nil` from the
+    /// reader means the surface has no realized terminal view yet — reported as pending, never
+    /// as "not ready", so absence of the signal is not mistaken for a negative signal.
+    private let promptReadinessReader: @MainActor (TileTreeStore, UUID) -> Bool?
+    /// The app-level focus read behind `GET /v1/focus`. Injectable so tests assert the route's
+    /// projection without AppKit window state; production defaults to the live enumerator.
+    private let focusStateProvider: @MainActor (TileTreeStore?) -> AutomationFocusState
+    /// Time seam for `POST /v1/wait`, injectable so wait outcomes are tested with virtual time.
+    private let waitTimeSource: AutomationWaitTimeSource
+    private let waitPollIntervalMS: Int
     /// The gesture-verb layer — the single place workspace mutation verbs enter
     /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
     /// condition: a mutation verb cannot run without a live window, and never falls back.
@@ -37,7 +47,15 @@ final class AutomationController: AutomationControlling {
         gestureVerbs: AutomationGestureVerbs? = nil,
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
-        }
+        },
+        promptReadinessReader: @escaping @MainActor (TileTreeStore, UUID) -> Bool? = { store, surfaceID in
+            store.surfaceStore.terminal(for: surfaceID)?.hasObservedPromptReadySignal
+        },
+        focusStateProvider: @escaping @MainActor (TileTreeStore?) -> AutomationFocusState = { store in
+            AutomationFocusEnumerator.state(tileTreeStore: store)
+        },
+        waitTimeSource: AutomationWaitTimeSource = .continuous(),
+        waitPollIntervalMS: Int = AutomationAPI.waitPollIntervalMS
     ) {
         self.handleRegistry = handleRegistry
         self.tileTreeStore = tileTreeStore
@@ -51,6 +69,10 @@ final class AutomationController: AutomationControlling {
         self.surfaceTextReader = surfaceTextReader
         self.gestureVerbs = gestureVerbs
         self.isInputWriteEnabled = isInputWriteEnabled
+        self.promptReadinessReader = promptReadinessReader
+        self.focusStateProvider = focusStateProvider
+        self.waitTimeSource = waitTimeSource
+        self.waitPollIntervalMS = waitPollIntervalMS
     }
 
     func update(
@@ -341,15 +363,13 @@ final class AutomationController: AutomationControlling {
         for handle: String,
         request: AutomationSurfaceReadRequest
     ) throws -> AutomationSurfaceReadResult {
+        // Operator handles read any live terminal surface, not only ones they created this
+        // launch: surface.read is read-only, opt-in per launch, and audited per call, and the
+        // wait primitive's text/prompt conditions need the same reach. The creation-attribution
+        // registry remains for audit lineage; it is no longer an access gate here.
         let entry = try resolveOperator(handle, requiring: .surfaceRead)
         guard let surfaceID = UUID(uuidString: request.surfaceID) else {
             throw AutomationServiceError(.invalidRequest, "surfaceID must be a UUID.")
-        }
-        guard handleRegistry.operatorHandle(entry.handle, createdHostSessionID: surfaceID) else {
-            throw AutomationServiceError(
-                .capabilityDenied,
-                "This operator handle did not create the requested terminal surface this launch."
-            )
         }
         guard let tileTreeStore else {
             throw AutomationServiceError(
@@ -381,6 +401,163 @@ final class AutomationController: AutomationControlling {
 
     func automationHandleIsOperator(_ handle: String) -> Bool {
         handleRegistry.resolve(handle)?.isOperator ?? false
+    }
+
+    func automationWait(
+        for handle: String,
+        plan: AutomationWaitPlan
+    ) async throws -> AutomationWaitResult {
+        // Operator scope. Read conditions gate on the capability whose data they observe:
+        // topology/selection conditions on workspace.read, terminal-content conditions
+        // (text match, prompt readiness) on surface.read.
+        let capability: AutomationCapability
+        switch plan.condition {
+        case .surfaceAttached, .workspaceSelected:
+            capability = .workspaceRead
+        case .surfaceTextMatches, .promptReady:
+            capability = .surfaceRead
+        }
+        let entry = try resolveOperator(handle, requiring: capability)
+        let capabilities = entry.capabilities
+        let verdict = await AutomationWaitEngine.run(
+            plan: plan,
+            pollIntervalMS: waitPollIntervalMS,
+            timeSource: waitTimeSource,
+            probe: { [weak self] in
+                // A controller torn down mid-wait has no state to observe; pending lets the
+                // bounded timeout produce a truthful timed_out instead of fabricating a result.
+                self?.evaluateWaitProbe(plan.condition)
+                    ?? .pending(AutomationWaitObservation(windowAttached: false))
+            }
+        )
+        return AutomationWaitResult(
+            condition: plan.condition.kind,
+            outcome: verdict.outcome,
+            waitedMS: verdict.waitedMS,
+            requestedTimeoutMS: plan.requestedTimeoutMS,
+            effectiveTimeoutMS: plan.effectiveTimeoutMS,
+            observed: verdict.observed,
+            system: AutomationSystemDescriptor(capabilities: capabilities)
+        )
+    }
+
+    func automationFocus(for handle: String) throws -> AutomationFocusResult {
+        // Operator scope, read-only: focus is key-window/first-responder state, the same
+        // domain window.read lists, so it shares that capability rather than minting one.
+        let entry = try resolveOperator(handle, requiring: .windowRead)
+        return AutomationFocusResult(
+            state: focusStateProvider(tileTreeStore),
+            system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+        )
+    }
+
+    /// One evaluation tick for a wait condition, against live state only — no caching between
+    /// ticks, so a condition that becomes true mid-wait is observed on the next poll.
+    private func evaluateWaitProbe(_ condition: AutomationWaitCondition) -> AutomationWaitProbe {
+        switch condition {
+        case .surfaceAttached(let surfaceID):
+            guard let tileTreeStore else {
+                return .pending(AutomationWaitObservation(windowAttached: false, surfaceAttached: false))
+            }
+            if let surfaceID {
+                let attached = tileTreeStore.primarySessionID(containing: surfaceID) != nil
+                let observed = AutomationWaitObservation(
+                    windowAttached: true,
+                    surfaceAttached: attached,
+                    attachedSurfaceID: attached ? surfaceID.uuidString : nil
+                )
+                return attached ? .satisfied(observed) : .pending(observed)
+            }
+            let activeSessionID = tileTreeStore.activeSessionID
+            let attached =
+                activeSessionID.map { tileTreeStore.primarySessionID(containing: $0) != nil } ?? false
+            let observed = AutomationWaitObservation(
+                windowAttached: true,
+                surfaceAttached: attached,
+                attachedSurfaceID: attached ? activeSessionID?.uuidString : nil
+            )
+            return attached ? .satisfied(observed) : .pending(observed)
+
+        case .workspaceSelected(let workspaceID):
+            let inventory = workspaceInventory()
+            let selected = inventory.workspaces.first(where: \.isSelected)
+            guard let workspaceID else {
+                let observed = AutomationWaitObservation(
+                    workspaceSelected: selected != nil,
+                    selectedWorkspaceID: selected?.workspaceID
+                )
+                return selected != nil ? .satisfied(observed) : .pending(observed)
+            }
+            let target = inventory.workspaces.first { $0.workspaceID == workspaceID }
+            if let target, target.isArchived {
+                // Selecting an archived workspace navigates to its repo overview instead of
+                // selecting it, so this wait is unsatisfiable while the archive state holds.
+                return .notApplicable(
+                    AutomationWaitObservation(
+                        workspaceSelected: false,
+                        selectedWorkspaceID: selected?.workspaceID,
+                        targetWorkspaceArchived: true
+                    )
+                )
+            }
+            let satisfied = selected?.workspaceID == workspaceID
+            let observed = AutomationWaitObservation(
+                workspaceSelected: satisfied,
+                selectedWorkspaceID: selected?.workspaceID,
+                targetWorkspaceArchived: target == nil ? nil : false
+            )
+            return satisfied ? .satisfied(observed) : .pending(observed)
+
+        case .surfaceTextMatches(let surfaceID, let pattern):
+            guard let tileTreeStore else {
+                return .pending(AutomationWaitObservation(windowAttached: false, surfaceLive: false))
+            }
+            guard tileTreeStore.primarySessionID(containing: surfaceID) != nil else {
+                return .pending(AutomationWaitObservation(windowAttached: true, surfaceLive: false))
+            }
+            guard let fullText = surfaceTextReader(tileTreeStore, surfaceID) else {
+                return .pending(AutomationWaitObservation(windowAttached: true, surfaceLive: true))
+            }
+            // Match against the same bounded suffix surface.read returns, so a wait can never
+            // observe more terminal content than the read route exposes.
+            let bounded = Self.boundedSurfaceReadText(
+                fullText,
+                maxLines: AutomationAPI.surfaceReadMaxLines,
+                maxUTF8Bytes: AutomationAPI.surfaceReadMaxUTF8Bytes
+            )
+            let matched = Self.waitPatternMatches(pattern, in: bounded)
+            let observed = AutomationWaitObservation(
+                windowAttached: true,
+                surfaceLive: true,
+                textMatched: matched
+            )
+            return matched ? .satisfied(observed) : .pending(observed)
+
+        case .promptReady(let surfaceID):
+            guard let tileTreeStore else {
+                return .pending(AutomationWaitObservation(windowAttached: false, surfaceLive: false))
+            }
+            guard tileTreeStore.primarySessionID(containing: surfaceID) != nil else {
+                return .pending(AutomationWaitObservation(windowAttached: true, surfaceLive: false))
+            }
+            guard let ready = promptReadinessReader(tileTreeStore, surfaceID) else {
+                // Live tile, no realized terminal view yet: the readiness signal is
+                // unavailable, which is pending — not a claim the prompt is not ready.
+                return .pending(AutomationWaitObservation(windowAttached: true, surfaceLive: true))
+            }
+            let observed = AutomationWaitObservation(
+                windowAttached: true,
+                surfaceLive: true,
+                promptReady: ready
+            )
+            return ready ? .satisfied(observed) : .pending(observed)
+        }
+    }
+
+    private static func waitPatternMatches(_ pattern: String, in text: String) -> Bool {
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        return regex.firstMatch(in: text, range: range) != nil
     }
 
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {

@@ -53,6 +53,24 @@ public enum AutomationAPI {
     /// the cap, the returned line is the UTF-8-safe suffix of that line.
     public static let surfaceReadMaxLines = 500
     public static let surfaceReadMaxUTF8Bytes = 256 * 1_024
+
+    /// Bounds for `POST /v1/wait` (operator scope). A wait is never open-ended: a request
+    /// without `timeoutMS` waits `waitDefaultTimeoutMS`, and any request is clamped to
+    /// `waitMaxTimeoutMS` (reported as `effectiveTimeoutMS` alongside the caller's
+    /// `requestedTimeoutMS`, the same clamp reporting `surface.read` uses for lines). The
+    /// ceiling sits below `AutomationSocketClient`'s default 30 s receive deadline because a
+    /// wait executes between the listener's read deadline (cancelled once the request
+    /// parses) and its write deadline (armed only after the route returns) — the ceiling is
+    /// what bounds that gap, and it must leave the response time to reach a defaulted
+    /// client. Longer waits are the caller's re-arm loop: repeat the request on `timed_out`
+    /// until its own budget expires, each round bounded and each freeing a listener
+    /// connection slot between rounds.
+    public static let waitDefaultTimeoutMS = 5_000
+    public static let waitMaxTimeoutMS = 20_000
+    /// How often the wait engine re-evaluates a pending condition.
+    public static let waitPollIntervalMS = 100
+    /// Cap on `surface_text_matches` regex patterns, bounding pathological-pattern cost.
+    public static let waitPatternMaxUTF8Bytes = 1_024
 }
 
 public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equatable {
@@ -1156,4 +1174,32 @@ public protocol AutomationControlling: AnyObject, Sendable {
     /// events, so operator calls are distinguishable in `automation-audit.jsonl` without the audit
     /// logger seeing the opaque handle's scope. A missing/stale handle is not an operator handle.
     func automationHandleIsOperator(_ handle: String) -> Bool
+
+    /// Typed server-side wait (`POST /v1/wait`, operator scope): evaluates the plan's
+    /// condition against live app state until satisfied, the bounded timeout elapses, or the
+    /// state proves the condition unsatisfiable (`not_applicable`). Defaulted below so
+    /// existing conformers (fakes included) keep compiling; the production controller
+    /// overrides it.
+    func automationWait(
+        for handle: String,
+        plan: AutomationWaitPlan
+    ) async throws -> AutomationWaitResult
+
+    /// Truthful focus report (`GET /v1/focus`, `window.read`, operator scope), including the
+    /// explicit `focusPossible: false` state under a no-activate launch. Defaulted below so
+    /// existing conformers keep compiling; the production controller overrides it.
+    func automationFocus(for handle: String) throws -> AutomationFocusResult
+}
+
+extension AutomationControlling {
+    public func automationWait(
+        for handle: String,
+        plan: AutomationWaitPlan
+    ) async throws -> AutomationWaitResult {
+        throw AutomationServiceError(.unsupported, "This controller does not implement wait.")
+    }
+
+    public func automationFocus(for handle: String) throws -> AutomationFocusResult {
+        throw AutomationServiceError(.unsupported, "This controller does not implement focus.")
+    }
 }

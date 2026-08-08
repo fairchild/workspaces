@@ -789,6 +789,306 @@ struct AutomationControllerTests {
         }
     }
 
+    // MARK: - Wait and focus
+
+    /// Virtual clock for controller-level wait tests: sleeps advance a counter instantly, so
+    /// timeout arithmetic is exercised without wall-clock waits.
+    private final class VirtualWaitClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var currentMS: Int64 = 0
+
+        var timeSource: AutomationWaitTimeSource {
+            AutomationWaitTimeSource(
+                nowMS: { [weak self] in
+                    guard let self else { return 0 }
+                    self.lock.lock()
+                    defer { self.lock.unlock() }
+                    return self.currentMS
+                },
+                sleepMS: { [weak self] milliseconds in
+                    guard let self else { return }
+                    self.lock.lock()
+                    defer { self.lock.unlock() }
+                    self.currentMS += milliseconds
+                }
+            )
+        }
+    }
+
+    @Test("wait surface_attached satisfies against a live attached surface")
+    func waitSurfaceAttachedSatisfied() async throws {
+        let store = TileTreeStore()
+        let session = store.activateSession(
+            key: .repoPath("/tmp/repo"),
+            directory: URL(fileURLWithPath: "/tmp/repo")
+        ).session
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in }
+        )
+        let plan = AutomationWaitPlan(
+            condition: .surfaceAttached(surfaceID: nil),
+            requestedTimeoutMS: 1_000,
+            effectiveTimeoutMS: 1_000
+        )
+
+        let result = try await controller.automationWait(for: operatorEntry.handle, plan: plan)
+
+        #expect(result.outcome == .satisfied)
+        #expect(result.condition == .surfaceAttached)
+        #expect(result.observed.surfaceAttached == true)
+        #expect(result.observed.attachedSurfaceID == session.id.uuidString)
+        #expect(result.observed.windowAttached == true)
+    }
+
+    @Test("wait workspace_selected polls live inventory until the selection lands")
+    func waitWorkspaceSelectedPolls() async throws {
+        let store = TileTreeStore()
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let workspaceID = UUID()
+        let clock = VirtualWaitClock()
+        var inventoryReads = 0
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            workspaceInventory: {
+                inventoryReads += 1
+                return AutomationWorkspaceInventory(
+                    repos: [],
+                    workspaces: [
+                        AutomationWorkspaceDescriptor(
+                            workspaceID: workspaceID,
+                            repoID: nil,
+                            name: "feature",
+                            path: "/tmp/feature",
+                            branch: nil,
+                            status: "active",
+                            isArchived: false,
+                            backend: "local",
+                            // The selection lands on the third poll — the wait must observe
+                            // live state each tick, never a cached first read.
+                            isSelected: inventoryReads >= 3
+                        )
+                    ]
+                )
+            },
+            waitTimeSource: clock.timeSource,
+            waitPollIntervalMS: 100
+        )
+        let plan = AutomationWaitPlan(
+            condition: .workspaceSelected(workspaceID: workspaceID),
+            requestedTimeoutMS: 5_000,
+            effectiveTimeoutMS: 5_000
+        )
+
+        let result = try await controller.automationWait(for: operatorEntry.handle, plan: plan)
+
+        #expect(result.outcome == .satisfied)
+        #expect(result.waitedMS == 200)
+        #expect(result.observed.workspaceSelected == true)
+        #expect(result.observed.selectedWorkspaceID == workspaceID)
+        #expect(inventoryReads == 3)
+    }
+
+    @Test("wait workspace_selected on an archived workspace is not_applicable immediately")
+    func waitWorkspaceSelectedArchivedNotApplicable() async throws {
+        let store = TileTreeStore()
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let workspaceID = UUID()
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            workspaceInventory: {
+                AutomationWorkspaceInventory(
+                    repos: [],
+                    workspaces: [
+                        AutomationWorkspaceDescriptor(
+                            workspaceID: workspaceID,
+                            repoID: nil,
+                            name: "archived",
+                            path: "/tmp/archived",
+                            branch: nil,
+                            status: "archived",
+                            isArchived: true,
+                            backend: "local",
+                            isSelected: false
+                        )
+                    ]
+                )
+            }
+        )
+        let plan = AutomationWaitPlan(
+            condition: .workspaceSelected(workspaceID: workspaceID),
+            requestedTimeoutMS: 5_000,
+            effectiveTimeoutMS: 5_000
+        )
+
+        let result = try await controller.automationWait(for: operatorEntry.handle, plan: plan)
+
+        #expect(result.outcome == .notApplicable)
+        #expect(result.observed.targetWorkspaceArchived == true)
+        #expect(result.observed.workspaceSelected == false)
+    }
+
+    @Test("wait surface_text_matches observes live terminal text through the bounded reader")
+    func waitSurfaceTextMatches() async throws {
+        let store = TileTreeStore()
+        let session = store.activateSession(
+            key: .repoPath("/tmp/repo"),
+            directory: URL(fileURLWithPath: "/tmp/repo")
+        ).session
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let clock = VirtualWaitClock()
+        var textReads = 0
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            surfaceTextReader: { _, _ in
+                textReads += 1
+                return textReads >= 2 ? "compiling...\nBUILD PASSED" : "compiling..."
+            },
+            waitTimeSource: clock.timeSource,
+            waitPollIntervalMS: 100
+        )
+        let plan = AutomationWaitPlan(
+            condition: .surfaceTextMatches(surfaceID: session.id, pattern: "BUILD (PASSED|FAILED)"),
+            requestedTimeoutMS: 5_000,
+            effectiveTimeoutMS: 5_000
+        )
+
+        let result = try await controller.automationWait(for: operatorEntry.handle, plan: plan)
+
+        #expect(result.outcome == .satisfied)
+        #expect(result.waitedMS == 100)
+        #expect(result.observed.textMatched == true)
+        #expect(result.observed.surfaceLive == true)
+        #expect(textReads == 2)
+    }
+
+    @Test("wait prompt_ready times out typed when the readiness signal never arrives")
+    func waitPromptReadyTimesOut() async throws {
+        let store = TileTreeStore()
+        let session = store.activateSession(
+            key: .repoPath("/tmp/repo"),
+            directory: URL(fileURLWithPath: "/tmp/repo")
+        ).session
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let clock = VirtualWaitClock()
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            promptReadinessReader: { _, _ in false },
+            waitTimeSource: clock.timeSource,
+            waitPollIntervalMS: 100
+        )
+        let plan = AutomationWaitPlan(
+            condition: .promptReady(surfaceID: session.id),
+            requestedTimeoutMS: 60_000,
+            effectiveTimeoutMS: 250
+        )
+
+        let result = try await controller.automationWait(for: operatorEntry.handle, plan: plan)
+
+        #expect(result.outcome == .timedOut)
+        #expect(result.waitedMS == 250)
+        #expect(result.requestedTimeoutMS == 60_000)
+        #expect(result.effectiveTimeoutMS == 250)
+        #expect(result.observed.promptReady == false)
+    }
+
+    @Test("wait requires an operator handle; tile handles fail capability_denied")
+    func waitDeniesTileHandles() async throws {
+        let fixture = makeFixture()
+        let plan = AutomationWaitPlan(
+            condition: .surfaceAttached(surfaceID: nil),
+            requestedTimeoutMS: 1_000,
+            effectiveTimeoutMS: 1_000
+        )
+        do {
+            _ = try await fixture.controller.automationWait(for: fixture.primaryHandle, plan: plan)
+            Issue.record("Expected a tile handle to be denied the wait route")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+    }
+
+    @Test("focus projects the provider state for an operator handle and denies tiles")
+    func focusProjection() async throws {
+        let store = TileTreeStore()
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            focusStateProvider: { _ in
+                AutomationFocusState(
+                    appIsActive: false,
+                    keyWindowID: nil,
+                    firstResponderSurfaceID: nil,
+                    focusPossible: false
+                )
+            }
+        )
+
+        let result = try controller.automationFocus(for: operatorEntry.handle)
+        #expect(result.appIsActive == false)
+        #expect(result.keyWindowID == nil)
+        #expect(result.firstResponderSurfaceID == nil)
+        #expect(result.focusPossible == false)
+        #expect(result.system.capabilities.contains(.windowRead))
+
+        let fixture = makeFixture()
+        do {
+            _ = try fixture.controller.automationFocus(for: fixture.primaryHandle)
+            Issue.record("Expected a tile handle to be denied focus.read")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .capabilityDenied)
+        }
+    }
+
+    @Test("Focus enumerator reports no key window truthfully and passes the activation policy through")
+    func focusEnumeratorTruthfulWithoutKeyWindow() {
+        // A live-but-never-key window: the enumerator must not promote it to key. No close()
+        // here — NSWindow releases itself on close by default, which double-frees under ARC;
+        // scope exit reclaims it like the other window-backed tests.
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: true
+        )
+
+        let state = AutomationFocusEnumerator.state(
+            windows: [window],
+            appIsActive: false,
+            activationAllowed: false,
+            tileTreeStore: nil
+        )
+
+        #expect(state.appIsActive == false)
+        #expect(state.keyWindowID == nil)
+        #expect(state.firstResponderSurfaceID == nil)
+        #expect(state.focusPossible == false)
+    }
+
     @MainActor
     private final class Fixture {
         let store: TileTreeStore

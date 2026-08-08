@@ -247,6 +247,11 @@ public actor AutomationAuditLogger {
         if path == "/v1/workspace/archive", let teardown = object["teardownTerminals"] as? Bool {
             metadata["workspaceArchive.teardownTerminals"] = teardown ? "true" : "false"
         }
+        // The wait condition is enum vocabulary, never content; the predicate (which can carry a
+        // caller-authored pattern) is deliberately not recorded.
+        if path == "/v1/wait", let condition = object["for"] as? String {
+            metadata["wait.for"] = condition
+        }
         return metadata.isEmpty ? nil : metadata
     }
 

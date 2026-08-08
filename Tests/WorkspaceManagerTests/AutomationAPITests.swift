@@ -408,6 +408,71 @@ private final class FakeAutomationController: AutomationControlling {
         inputWrites.append(InputWrite(handle: handle, text: text, submit: submit))
         return AutomationInputWriteResult(accepted: true, byteCount: text.utf8.count, surfaceID: "surface-1")
     }
+
+    var waitPlans: [AutomationWaitPlan] = []
+    var focusCalls: [String] = []
+
+    /// Named ids the fake maps to each projected wait outcome, so router tests can drive the
+    /// wire mapping without a live app.
+    static let waitTimedOutWorkspaceID = "77777777-7777-7777-7777-777777777777"
+    static let waitNotApplicableWorkspaceID = "ffffffff-ffff-ffff-ffff-ffffffffffff"
+
+    func automationWait(
+        for handle: String,
+        plan: AutomationWaitPlan
+    ) async throws -> AutomationWaitResult {
+        // Mirrors the operator-scope projection: only an operator handle carries the wait's
+        // read capabilities; a tile handle ("live") is capability_denied, others are stale.
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(
+                .capabilityDenied, "The automation handle does not include workspace.read.")
+        }
+        waitPlans.append(plan)
+        let outcome: AutomationWaitOutcomeKind
+        let observed: AutomationWaitObservation
+        switch plan.condition {
+        case .workspaceSelected(let workspaceID)
+        where workspaceID == UUID(uuidString: Self.waitTimedOutWorkspaceID):
+            outcome = .timedOut
+            observed = AutomationWaitObservation(workspaceSelected: false)
+        case .workspaceSelected(let workspaceID)
+        where workspaceID == UUID(uuidString: Self.waitNotApplicableWorkspaceID):
+            outcome = .notApplicable
+            observed = AutomationWaitObservation(workspaceSelected: false, targetWorkspaceArchived: true)
+        default:
+            outcome = .satisfied
+            observed = AutomationWaitObservation(surfaceAttached: true, attachedSurfaceID: "surface-1")
+        }
+        return AutomationWaitResult(
+            condition: plan.condition.kind,
+            outcome: outcome,
+            waitedMS: outcome == .timedOut ? plan.effectiveTimeoutMS : 0,
+            requestedTimeoutMS: plan.requestedTimeoutMS,
+            effectiveTimeoutMS: plan.effectiveTimeoutMS,
+            observed: observed
+        )
+    }
+
+    func automationFocus(for handle: String) throws -> AutomationFocusResult {
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(.capabilityDenied, "The automation handle does not include window.read.")
+        }
+        focusCalls.append(handle)
+        return AutomationFocusResult(
+            state: AutomationFocusState(
+                appIsActive: false,
+                keyWindowID: "42",
+                firstResponderSurfaceID: nil,
+                focusPossible: false
+            )
+        )
+    }
 }
 
 @Suite("Automation API")
@@ -2205,6 +2270,541 @@ struct AutomationAPITests {
             throw error
         }
         await first.stop()
+    }
+
+    // MARK: - Wait plan resolution
+
+    @Test("Wait plan resolves defaults, clamps the ceiling, and echoes both timeouts")
+    func waitPlanTimeouts() throws {
+        let defaulted = try AutomationWaitPlan.resolve(
+            AutomationWaitRequest(condition: "surface_attached")
+        )
+        #expect(defaulted.requestedTimeoutMS == AutomationAPI.waitDefaultTimeoutMS)
+        #expect(defaulted.effectiveTimeoutMS == AutomationAPI.waitDefaultTimeoutMS)
+        #expect(defaulted.condition == .surfaceAttached(surfaceID: nil))
+
+        let clamped = try AutomationWaitPlan.resolve(
+            AutomationWaitRequest(condition: "surface_attached", timeoutMS: 600_000)
+        )
+        #expect(clamped.requestedTimeoutMS == 600_000)
+        #expect(clamped.effectiveTimeoutMS == AutomationAPI.waitMaxTimeoutMS)
+
+        #expect(throws: AutomationServiceError.self) {
+            try AutomationWaitPlan.resolve(AutomationWaitRequest(condition: "surface_attached", timeoutMS: 0))
+        }
+    }
+
+    @Test("Wait plan rejects unknown conditions with the vocabulary in the message")
+    func waitPlanVocabulary() {
+        do {
+            _ = try AutomationWaitPlan.resolve(AutomationWaitRequest(condition: "surface_focused"))
+            Issue.record("Expected invalid_request for an unknown wait condition")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .invalidRequest)
+            for kind in AutomationWaitConditionKind.allCases {
+                #expect(error.response.message.contains(kind.rawValue))
+            }
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test("Wait plan validates predicates per condition instead of silently ignoring fields")
+    func waitPlanPredicateValidation() throws {
+        let surfaceID = "11111111-1111-1111-1111-111111111111"
+        let workspaceID = "22222222-2222-2222-2222-222222222222"
+
+        // surface_attached: optional surfaceID; workspace/pattern fields are rejected.
+        let attached = try AutomationWaitPlan.resolve(
+            AutomationWaitRequest(
+                condition: "surface_attached",
+                predicate: AutomationWaitPredicate(surfaceID: surfaceID)
+            )
+        )
+        #expect(attached.condition == .surfaceAttached(surfaceID: UUID(uuidString: surfaceID)))
+        expectInvalidWaitRequest(
+            AutomationWaitRequest(
+                condition: "surface_attached",
+                predicate: AutomationWaitPredicate(pattern: "x")
+            )
+        )
+        expectInvalidWaitRequest(
+            AutomationWaitRequest(
+                condition: "surface_attached",
+                predicate: AutomationWaitPredicate(surfaceID: "not-a-uuid")
+            )
+        )
+
+        // workspace_selected: optional workspaceID; surface/pattern fields are rejected.
+        let selected = try AutomationWaitPlan.resolve(
+            AutomationWaitRequest(
+                condition: "workspace_selected",
+                predicate: AutomationWaitPredicate(workspaceID: workspaceID)
+            )
+        )
+        #expect(selected.condition == .workspaceSelected(workspaceID: UUID(uuidString: workspaceID)))
+        expectInvalidWaitRequest(
+            AutomationWaitRequest(
+                condition: "workspace_selected",
+                predicate: AutomationWaitPredicate(surfaceID: surfaceID)
+            )
+        )
+
+        // surface_text_matches: surfaceID + compiling pattern required, bounded length.
+        let textMatch = try AutomationWaitPlan.resolve(
+            AutomationWaitRequest(
+                condition: "surface_text_matches",
+                predicate: AutomationWaitPredicate(surfaceID: surfaceID, pattern: "PASS|FAIL")
+            )
+        )
+        #expect(
+            textMatch.condition
+                == .surfaceTextMatches(surfaceID: UUID(uuidString: surfaceID)!, pattern: "PASS|FAIL")
+        )
+        expectInvalidWaitRequest(
+            AutomationWaitRequest(
+                condition: "surface_text_matches",
+                predicate: AutomationWaitPredicate(pattern: "PASS")
+            )
+        )
+        expectInvalidWaitRequest(
+            AutomationWaitRequest(
+                condition: "surface_text_matches",
+                predicate: AutomationWaitPredicate(surfaceID: surfaceID, pattern: "([unclosed")
+            )
+        )
+        expectInvalidWaitRequest(
+            AutomationWaitRequest(
+                condition: "surface_text_matches",
+                predicate: AutomationWaitPredicate(
+                    surfaceID: surfaceID,
+                    pattern: String(repeating: "a", count: AutomationAPI.waitPatternMaxUTF8Bytes + 1)
+                )
+            )
+        )
+
+        // prompt_ready: surfaceID required.
+        let prompt = try AutomationWaitPlan.resolve(
+            AutomationWaitRequest(
+                condition: "prompt_ready",
+                predicate: AutomationWaitPredicate(surfaceID: surfaceID)
+            )
+        )
+        #expect(prompt.condition == .promptReady(surfaceID: UUID(uuidString: surfaceID)!))
+        expectInvalidWaitRequest(AutomationWaitRequest(condition: "prompt_ready"))
+    }
+
+    private func expectInvalidWaitRequest(_ request: AutomationWaitRequest) {
+        do {
+            _ = try AutomationWaitPlan.resolve(request)
+            Issue.record("Expected invalid_request for \(request)")
+        } catch let error as AutomationServiceError {
+            #expect(error.response.code == .invalidRequest)
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    // MARK: - Wait engine (virtual time — no sleeps)
+
+    /// Virtual clock for the wait engine: `sleepMS` advances the counter instantly, so the
+    /// engine's timeout arithmetic is exercised deterministically without wall-clock waits.
+    private final class VirtualWaitClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var currentMS: Int64 = 0
+        private(set) var sleeps: [Int64] = []
+
+        var timeSource: AutomationWaitTimeSource {
+            AutomationWaitTimeSource(
+                nowMS: { [weak self] in
+                    guard let self else { return 0 }
+                    self.lock.lock()
+                    defer { self.lock.unlock() }
+                    return self.currentMS
+                },
+                sleepMS: { [weak self] milliseconds in
+                    guard let self else { return }
+                    self.lock.lock()
+                    defer { self.lock.unlock() }
+                    self.currentMS += milliseconds
+                    self.sleeps.append(milliseconds)
+                }
+            )
+        }
+    }
+
+    /// Serves a scripted sequence of probes, then repeats the final element.
+    @MainActor
+    private final class ScriptedProbe {
+        private var script: [AutomationWaitProbe]
+        private(set) var tickCount = 0
+
+        init(_ script: [AutomationWaitProbe]) {
+            self.script = script
+        }
+
+        func next() -> AutomationWaitProbe {
+            tickCount += 1
+            return script.count > 1 ? script.removeFirst() : script[0]
+        }
+    }
+
+    @Test("Wait engine returns satisfied with the elapsed virtual time")
+    @MainActor
+    func waitEngineSatisfied() async throws {
+        let clock = VirtualWaitClock()
+        let observed = AutomationWaitObservation(surfaceAttached: true, attachedSurfaceID: "s-1")
+        let probe = ScriptedProbe([
+            .pending(AutomationWaitObservation(surfaceAttached: false)),
+            .pending(AutomationWaitObservation(surfaceAttached: false)),
+            .satisfied(observed),
+        ])
+        let plan = AutomationWaitPlan(
+            condition: .surfaceAttached(surfaceID: nil),
+            requestedTimeoutMS: 1_000,
+            effectiveTimeoutMS: 1_000
+        )
+
+        let verdict = await AutomationWaitEngine.run(
+            plan: plan,
+            pollIntervalMS: 100,
+            timeSource: clock.timeSource,
+            probe: { probe.next() }
+        )
+
+        #expect(verdict.outcome == .satisfied)
+        #expect(verdict.waitedMS == 200)
+        #expect(verdict.observed == observed)
+        #expect(probe.tickCount == 3)
+        #expect(clock.sleeps == [100, 100])
+    }
+
+    @Test("Wait engine times out exactly at the effective ceiling, truncating the final sleep")
+    @MainActor
+    func waitEngineTimesOutAtCeiling() async throws {
+        let clock = VirtualWaitClock()
+        let lastObserved = AutomationWaitObservation(surfaceAttached: false)
+        let probe = ScriptedProbe([.pending(lastObserved)])
+        let plan = AutomationWaitPlan(
+            condition: .surfaceAttached(surfaceID: nil),
+            requestedTimeoutMS: 60_000,
+            effectiveTimeoutMS: 250
+        )
+
+        let verdict = await AutomationWaitEngine.run(
+            plan: plan,
+            pollIntervalMS: 100,
+            timeSource: clock.timeSource,
+            probe: { probe.next() }
+        )
+
+        #expect(verdict.outcome == .timedOut)
+        // The final sleep is truncated to the remaining budget: 100 + 100 + 50, never 300.
+        #expect(verdict.waitedMS == 250)
+        #expect(clock.sleeps == [100, 100, 50])
+        #expect(verdict.observed == lastObserved)
+    }
+
+    @Test("Wait engine surfaces not_applicable immediately without polling")
+    @MainActor
+    func waitEngineNotApplicable() async throws {
+        let clock = VirtualWaitClock()
+        let observed = AutomationWaitObservation(workspaceSelected: false, targetWorkspaceArchived: true)
+        let probe = ScriptedProbe([.notApplicable(observed)])
+        let plan = AutomationWaitPlan(
+            condition: .workspaceSelected(workspaceID: UUID()),
+            requestedTimeoutMS: 5_000,
+            effectiveTimeoutMS: 5_000
+        )
+
+        let verdict = await AutomationWaitEngine.run(
+            plan: plan,
+            pollIntervalMS: 100,
+            timeSource: clock.timeSource,
+            probe: { probe.next() }
+        )
+
+        #expect(verdict.outcome == .notApplicable)
+        #expect(verdict.waitedMS == 0)
+        #expect(verdict.observed == observed)
+        #expect(probe.tickCount == 1)
+        #expect(clock.sleeps.isEmpty)
+    }
+
+    // MARK: - Wait and focus routes
+
+    @Test("POST /v1/wait resolves the plan at the wire and projects every typed outcome")
+    @MainActor
+    func routerWait() async throws {
+        let controller = FakeAutomationController()
+
+        let satisfied = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/wait",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data(#"{"for":"surface_attached","timeoutMS":600000}"#.utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let satisfiedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWaitResult>.self,
+            from: satisfied.body
+        )
+        #expect(satisfied.status == 200)
+        #expect(satisfiedEnvelope.result?.outcome == .satisfied)
+        #expect(satisfiedEnvelope.result?.condition == .surfaceAttached)
+        // The router clamps at the wire; the controller sees the effective ceiling.
+        #expect(satisfiedEnvelope.result?.requestedTimeoutMS == 600_000)
+        #expect(satisfiedEnvelope.result?.effectiveTimeoutMS == AutomationAPI.waitMaxTimeoutMS)
+        #expect(controller.waitPlans.last?.effectiveTimeoutMS == AutomationAPI.waitMaxTimeoutMS)
+
+        let timedOut = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/wait",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data(
+                    #"{"for":"workspace_selected","predicate":{"workspaceID":"\#(FakeAutomationController.waitTimedOutWorkspaceID)"}}"#
+                        .utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let timedOutEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWaitResult>.self,
+            from: timedOut.body
+        )
+        #expect(timedOut.status == 200)
+        #expect(timedOutEnvelope.result?.outcome == .timedOut)
+        #expect(timedOutEnvelope.result?.waitedMS == AutomationAPI.waitDefaultTimeoutMS)
+
+        let notApplicable = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/wait",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data(
+                    #"{"for":"workspace_selected","predicate":{"workspaceID":"\#(FakeAutomationController.waitNotApplicableWorkspaceID)"}}"#
+                        .utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let notApplicableEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWaitResult>.self,
+            from: notApplicable.body
+        )
+        #expect(notApplicable.status == 200)
+        #expect(notApplicableEnvelope.result?.outcome == .notApplicable)
+        #expect(notApplicableEnvelope.result?.observed.targetWorkspaceArchived == true)
+    }
+
+    @Test("POST /v1/wait fails typed for bad shapes, wrong methods, and under-capable handles")
+    @MainActor
+    func routerWaitFailures() async throws {
+        let controller = FakeAutomationController()
+
+        let unknownCondition = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/wait",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data(#"{"for":"surface_focused"}"#.utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let unknownEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: unknownCondition.body
+        )
+        #expect(unknownCondition.status == 400)
+        #expect(unknownEnvelope.error?.code == .invalidRequest)
+        #expect(controller.waitPlans.isEmpty)
+
+        let strayPredicate = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/wait",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data(#"{"for":"surface_attached","predicate":{"pattern":"PASS"}}"#.utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        #expect(strayPredicate.status == 400)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/wait",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: wrongMethod.body
+        )
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+
+        let tileHandle = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/wait",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data(#"{"for":"surface_attached"}"#.utf8)
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let tileEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: tileHandle.body
+        )
+        #expect(tileHandle.status == 403)
+        #expect(tileEnvelope.error?.code == .capabilityDenied)
+        #expect(controller.waitPlans.isEmpty)
+    }
+
+    @Test("GET /v1/focus reports the truthful state for an operator handle and fails closed otherwise")
+    @MainActor
+    func routerFocus() async throws {
+        let controller = FakeAutomationController()
+
+        let focus = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/focus",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let focusEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationFocusResult>.self,
+            from: focus.body
+        )
+        #expect(focus.status == 200)
+        #expect(focusEnvelope.result?.focusPossible == false)
+        #expect(focusEnvelope.result?.keyWindowID == "42")
+        #expect(controller.focusCalls == ["operator"])
+
+        let tileHandle = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "GET",
+                path: "/v1/focus",
+                headers: [AutomationAPI.handleHeader: "live"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        let tileEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self,
+            from: tileHandle.body
+        )
+        #expect(tileHandle.status == 403)
+        #expect(tileEnvelope.error?.code == .capabilityDenied)
+
+        let wrongMethod = await AutomationHTTPRouter.route(
+            HTTPRequest(
+                method: "POST",
+                path: "/v1/focus",
+                headers: [AutomationAPI.handleHeader: "operator"],
+                body: Data()
+            ),
+            controller: controller,
+            enabled: true
+        )
+        #expect(wrongMethod.status == 405)
+    }
+
+    @Test("Wait and focus results encode stable wire shapes")
+    func waitAndFocusWireShapes() throws {
+        let waitResult = AutomationWaitResult(
+            condition: .workspaceSelected,
+            outcome: .timedOut,
+            waitedMS: 250,
+            requestedTimeoutMS: 60_000,
+            effectiveTimeoutMS: 250,
+            observed: AutomationWaitObservation(workspaceSelected: false),
+            system: AutomationSystemDescriptor(capabilities: [.workspaceRead])
+        )
+        let waitText = String(data: try AutomationJSON.encoder.encode(waitResult), encoding: .utf8)
+        #expect(
+            waitText
+                == #"{"effectiveTimeoutMS":250,"for":"workspace_selected","observed":{"workspaceSelected":false},"outcome":"timed_out","requestedTimeoutMS":60000,"system":{"capabilities":["workspace.read"]},"waitedMS":250}"#
+        )
+
+        let focusResult = AutomationFocusResult(
+            state: AutomationFocusState(
+                appIsActive: false,
+                keyWindowID: nil,
+                firstResponderSurfaceID: nil,
+                focusPossible: false
+            ),
+            system: AutomationSystemDescriptor(capabilities: [.windowRead])
+        )
+        let focusText = String(data: try AutomationJSON.encoder.encode(focusResult), encoding: .utf8)
+        #expect(
+            focusText
+                == #"{"appIsActive":false,"focusPossible":false,"system":{"capabilities":["window.read"]}}"#
+        )
+    }
+
+    @Test("Audit log records the wait condition but never the predicate pattern")
+    func auditLogWaitMetadata() async throws {
+        let auditURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-wait-audit-\(UUID().uuidString.prefix(8)).jsonl")
+        defer { try? FileManager.default.removeItem(at: auditURL) }
+        let logger = AutomationAuditLogger(auditURL: auditURL)
+        let requestBody = try AutomationJSON.encoder.encode(
+            AutomationWaitRequest(
+                condition: "surface_text_matches",
+                predicate: AutomationWaitPredicate(
+                    surfaceID: "11111111-1111-1111-1111-111111111111",
+                    pattern: "secret-pattern"
+                ),
+                timeoutMS: 1_000
+            )
+        )
+        let responseBody = try AutomationJSON.encoder.encode(
+            AutomationResponseEnvelope(
+                result: AutomationWaitResult(
+                    condition: .surfaceTextMatches,
+                    outcome: .satisfied,
+                    waitedMS: 100,
+                    requestedTimeoutMS: 1_000,
+                    effectiveTimeoutMS: 1_000,
+                    observed: AutomationWaitObservation(textMatched: true)
+                )
+            )
+        )
+
+        await logger.record(
+            method: "POST",
+            path: "/v1/wait",
+            headers: [AutomationAPI.handleHeader: "op"],
+            requestBody: requestBody,
+            responseBody: responseBody,
+            operatorHandle: true
+        )
+
+        let contents = try String(contentsOf: auditURL, encoding: .utf8)
+        #expect(!contents.contains("secret-pattern"))
+        let event = try AutomationJSON.decoder.decode(
+            AutomationAuditLogger.Event.self,
+            from: Data(try #require(contents.split(separator: "\n").first).utf8)
+        )
+        #expect(event.metadata?["wait.for"] == "surface_text_matches")
+        #expect(event.allowed)
     }
 }
 

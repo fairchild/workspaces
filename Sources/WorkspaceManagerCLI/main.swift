@@ -42,6 +42,8 @@ private final class CLIApp {
         "input",
         "window",
         "workspace",
+        "wait",
+        "focus",
     ]
 
     private let stateStore = CLIStateStore()
@@ -92,6 +94,10 @@ private final class CLIApp {
             return try runWindow(arguments: tail)
         case "workspace":
             return try runWorkspaceOperator(arguments: tail)
+        case "wait":
+            return try runWait(arguments: tail)
+        case "focus":
+            return try runFocus(arguments: tail)
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -1234,14 +1240,144 @@ private final class CLIApp {
         return 0
     }
 
+    /// `workspaces wait --for <condition> [--surface-id <id>] [--workspace-id <id>]
+    /// [--pattern <regex>] [--timeout-ms <n>] [--json]` — the operator-scope server-side wait
+    /// (`POST /v1/wait`). Replaces hand-rolled sleep/re-poll loops: the app evaluates the
+    /// condition on its own state and answers with a typed outcome. The exit code follows the
+    /// outcome so `set -e` scripts branch without parsing JSON: 0 satisfied, 2 timed_out,
+    /// 3 not_applicable.
+    private func runWait(arguments: [String]) throws -> Int32 {
+        let usage =
+            "workspaces wait --for <surface_attached|workspace_selected|surface_text_matches|prompt_ready> "
+            + "[--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]"
+        var json = false
+        var condition: String?
+        var surfaceID: String?
+        var workspaceID: String?
+        var pattern: String?
+        var timeoutMS: Int?
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--json":
+                json = true
+                index += 1
+            case "--for":
+                guard index + 1 < arguments.count else { throw CLIError("Usage: \(usage)") }
+                condition = arguments[index + 1]
+                index += 2
+            case "--surface-id":
+                guard index + 1 < arguments.count else { throw CLIError("Usage: \(usage)") }
+                surfaceID = arguments[index + 1]
+                index += 2
+            case "--workspace-id":
+                guard index + 1 < arguments.count else { throw CLIError("Usage: \(usage)") }
+                workspaceID = arguments[index + 1]
+                index += 2
+            case "--pattern":
+                guard index + 1 < arguments.count else { throw CLIError("Usage: \(usage)") }
+                pattern = arguments[index + 1]
+                index += 2
+            case "--timeout-ms":
+                guard index + 1 < arguments.count, let parsed = Int(arguments[index + 1]) else {
+                    throw CLIError("Usage: \(usage)")
+                }
+                timeoutMS = parsed
+                index += 2
+            default:
+                throw CLIError("Usage: \(usage)")
+            }
+        }
+        guard let condition, !condition.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let predicate: AutomationWaitPredicate? =
+            (surfaceID == nil && workspaceID == nil && pattern == nil)
+            ? nil
+            : AutomationWaitPredicate(surfaceID: surfaceID, workspaceID: workspaceID, pattern: pattern)
+        let request = AutomationWaitRequest(condition: condition, predicate: predicate, timeoutMS: timeoutMS)
+        let credential = try loadOperatorCredential()
+        let result = try operatorRequest(
+            AutomationWaitResult.self,
+            credential: credential,
+            method: "POST",
+            path: "/v1/wait",
+            body: try JSONEncoder().encode(request),
+            // The socket receive deadline must outlive the server-side wait ceiling.
+            timeout: TimeInterval(AutomationAPI.waitMaxTimeoutMS) / 1_000 + 10
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+        } else {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let observed =
+                (try? encoder.encode(result.observed)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+            print(
+                "\(result.outcome.rawValue) for=\(result.condition.rawValue) waited=\(result.waitedMS)ms "
+                    + "timeout=\(result.effectiveTimeoutMS)ms observed=\(observed)")
+        }
+        switch result.outcome {
+        case .satisfied:
+            return 0
+        case .timedOut:
+            return 2
+        case .notApplicable:
+            return 3
+        }
+    }
+
+    /// `workspaces focus [--json]` — the operator-scope focus report (`GET /v1/focus`).
+    /// `focusPossible=false` marks a no-activate launch: absent focus is "unavailable under
+    /// this launch policy", not a focus failure — never assert on the other fields without
+    /// branching on it first.
+    private func runFocus(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces focus [--json]"
+        var json = false
+        for argument in arguments {
+            switch argument {
+            case "--json":
+                json = true
+            default:
+                throw CLIError("Usage: \(usage)")
+            }
+        }
+
+        let credential = try loadOperatorCredential()
+        let result = try operatorRequest(
+            AutomationFocusResult.self,
+            credential: credential,
+            method: "GET",
+            path: "/v1/focus",
+            body: Data()
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+        print(
+            "appIsActive=\(result.appIsActive) keyWindowID=\(result.keyWindowID ?? "-") "
+                + "firstResponderSurfaceID=\(result.firstResponderSurfaceID ?? "-") "
+                + "focusPossible=\(result.focusPossible)")
+        return 0
+    }
+
     private func operatorRequest<Result>(
         _ type: Result.Type = Result.self,
         credential: AutomationOperatorCredential,
         method: String,
         path: String,
-        body: Data
+        body: Data,
+        timeout: TimeInterval? = nil
     ) throws -> Result where Result: Codable & Sendable & Equatable {
-        let client = AutomationSocketClient(socketPath: credential.socketPath)
+        let client =
+            timeout.map { AutomationSocketClient(socketPath: credential.socketPath, timeout: $0) }
+            ?? AutomationSocketClient(socketPath: credential.socketPath)
         let response = try client.request(
             method: method,
             path: path,
@@ -1853,6 +1989,8 @@ private func printHelp() {
           workspaces workspace select <workspace-id> [--json]
           workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
           workspaces workspace archive <workspace-id> [--teardown] [--json]
+          workspaces wait --for <condition> [--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]
+          workspaces focus [--json]
           workspaces help
 
         Launch behavior:
