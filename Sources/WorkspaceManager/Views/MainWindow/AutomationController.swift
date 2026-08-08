@@ -23,7 +23,10 @@ final class AutomationController: AutomationControlling {
     private let focusStateProvider: @MainActor (TileTreeStore?) -> AutomationFocusState
     /// Time seam for `POST /v1/wait`, injectable so wait outcomes are tested with virtual time.
     private let waitTimeSource: AutomationWaitTimeSource
+    /// Poll intervals for `POST /v1/wait`, split by what a tick costs: topology and selection
+    /// ticks are a couple of lookups, content ticks are a terminal read plus a regex run.
     private let waitPollIntervalMS: Int
+    private let waitContentPollIntervalMS: Int
     /// The gesture-verb layer — the single place workspace mutation verbs enter
     /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
     /// condition: a mutation verb cannot run without a live window, and never falls back.
@@ -55,7 +58,8 @@ final class AutomationController: AutomationControlling {
             AutomationFocusEnumerator.state(tileTreeStore: store)
         },
         waitTimeSource: AutomationWaitTimeSource = .continuous(),
-        waitPollIntervalMS: Int = AutomationAPI.waitPollIntervalMS
+        waitPollIntervalMS: Int = AutomationAPI.waitPollIntervalMS,
+        waitContentPollIntervalMS: Int = AutomationAPI.waitContentPollIntervalMS
     ) {
         self.handleRegistry = handleRegistry
         self.tileTreeStore = tileTreeStore
@@ -73,6 +77,7 @@ final class AutomationController: AutomationControlling {
         self.focusStateProvider = focusStateProvider
         self.waitTimeSource = waitTimeSource
         self.waitPollIntervalMS = waitPollIntervalMS
+        self.waitContentPollIntervalMS = waitContentPollIntervalMS
     }
 
     func update(
@@ -363,10 +368,9 @@ final class AutomationController: AutomationControlling {
         for handle: String,
         request: AutomationSurfaceReadRequest
     ) throws -> AutomationSurfaceReadResult {
-        // Operator handles read any live terminal surface, not only ones they created this
-        // launch: surface.read is read-only, opt-in per launch, and audited per call, and the
-        // wait primitive's text/prompt conditions need the same reach. The creation-attribution
-        // registry remains for audit lineage; it is no longer an access gate here.
+        // Any live terminal surface is readable by an operator handle: the read is read-only,
+        // operator scope is opt-in per launch, and every call is audited with the surface id.
+        // The creation-attribution registry serves audit lineage, not access control.
         let entry = try resolveOperator(handle, requiring: .surfaceRead)
         guard let surfaceID = UUID(uuidString: request.surfaceID) else {
             throw AutomationServiceError(.invalidRequest, "surfaceID must be a UUID.")
@@ -411,23 +415,31 @@ final class AutomationController: AutomationControlling {
         // topology/selection conditions on workspace.read, terminal-content conditions
         // (text match, prompt readiness) on surface.read.
         let capability: AutomationCapability
+        let pollIntervalMS: Int
         switch plan.condition {
         case .surfaceAttached, .workspaceSelected:
             capability = .workspaceRead
+            pollIntervalMS = waitPollIntervalMS
         case .surfaceTextMatches, .promptReady:
             capability = .surfaceRead
+            pollIntervalMS = waitContentPollIntervalMS
         }
         let entry = try resolveOperator(handle, requiring: capability)
         let capabilities = entry.capabilities
+        // The wait's own deadline, in the same time base the engine measures against. A tick
+        // that does real work (the text-match regex) gets whatever is left of it as its budget,
+        // so no single tick can outlive the wait the caller asked for.
+        let deadlineMS = waitTimeSource.nowMS() + Int64(plan.effectiveTimeoutMS)
         let verdict = await AutomationWaitEngine.run(
             plan: plan,
-            pollIntervalMS: waitPollIntervalMS,
+            pollIntervalMS: pollIntervalMS,
             timeSource: waitTimeSource,
             probe: { [weak self] in
                 // A controller torn down mid-wait has no state to observe; pending lets the
                 // bounded timeout produce a truthful timed_out instead of fabricating a result.
-                self?.evaluateWaitProbe(plan.condition)
-                    ?? .pending(AutomationWaitObservation(windowAttached: false))
+                guard let self else { return .pending(AutomationWaitObservation(windowAttached: false)) }
+                let remainingMS = Int(max(0, deadlineMS - self.waitTimeSource.nowMS()))
+                return await self.evaluateWaitProbe(plan.condition, remainingMS: remainingMS)
             }
         )
         return AutomationWaitResult(
@@ -453,7 +465,12 @@ final class AutomationController: AutomationControlling {
 
     /// One evaluation tick for a wait condition, against live state only — no caching between
     /// ticks, so a condition that becomes true mid-wait is observed on the next poll.
-    private func evaluateWaitProbe(_ condition: AutomationWaitCondition) -> AutomationWaitProbe {
+    /// `remainingMS` is what is left of the caller's wait budget: the only tick that spends it
+    /// is `surface_text_matches`, whose regex runs off this actor and aborts when it expires.
+    private func evaluateWaitProbe(
+        _ condition: AutomationWaitCondition,
+        remainingMS: Int
+    ) async -> AutomationWaitProbe {
         switch condition {
         case .surfaceAttached(let surfaceID):
             guard let tileTreeStore else {
@@ -518,20 +535,24 @@ final class AutomationController: AutomationControlling {
             guard let fullText = surfaceTextReader(tileTreeStore, surfaceID) else {
                 return .pending(AutomationWaitObservation(windowAttached: true, surfaceLive: true))
             }
-            // Match against the same bounded suffix surface.read returns, so a wait can never
-            // observe more terminal content than the read route exposes.
+            // A tail of the buffer, capped well under what surface.read returns: this tick
+            // repeats for the life of the wait and backtracking cost scales with input length,
+            // so the wait observes strictly less terminal content than the read route exposes.
             let bounded = Self.boundedSurfaceReadText(
                 fullText,
                 maxLines: AutomationAPI.surfaceReadMaxLines,
-                maxUTF8Bytes: AutomationAPI.surfaceReadMaxUTF8Bytes
+                maxUTF8Bytes: AutomationAPI.waitTextMatchMaxUTF8Bytes
             )
-            let matched = Self.waitPatternMatches(pattern, in: bounded)
+            // Off the MainActor and abortable at the wait's deadline: a pathological pattern
+            // costs this wait its budget and nothing else. `nil` means the match did not
+            // conclude in time — pending, not "did not match", so the outcome stays truthful.
+            let matched = await pattern.firstMatchExists(in: bounded, budgetMS: remainingMS)
             let observed = AutomationWaitObservation(
                 windowAttached: true,
                 surfaceLive: true,
                 textMatched: matched
             )
-            return matched ? .satisfied(observed) : .pending(observed)
+            return matched == true ? .satisfied(observed) : .pending(observed)
 
         case .promptReady(let surfaceID):
             guard let tileTreeStore else {
@@ -552,12 +573,6 @@ final class AutomationController: AutomationControlling {
             )
             return ready ? .satisfied(observed) : .pending(observed)
         }
-    }
-
-    private static func waitPatternMatches(_ pattern: String, in text: String) -> Bool {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
-        let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        return regex.firstMatch(in: text, range: range) != nil
     }
 
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {

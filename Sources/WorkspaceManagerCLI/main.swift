@@ -1242,10 +1242,10 @@ private final class CLIApp {
 
     /// `workspaces wait --for <condition> [--surface-id <id>] [--workspace-id <id>]
     /// [--pattern <regex>] [--timeout-ms <n>] [--json]` — the operator-scope server-side wait
-    /// (`POST /v1/wait`). Replaces hand-rolled sleep/re-poll loops: the app evaluates the
-    /// condition on its own state and answers with a typed outcome. The exit code follows the
-    /// outcome so `set -e` scripts branch without parsing JSON: 0 satisfied, 2 timed_out,
-    /// 3 not_applicable.
+    /// (`POST /v1/wait`). The app evaluates the condition against its own state and answers
+    /// with a typed outcome, so a script states what it is waiting for instead of sleeping and
+    /// re-checking. The exit code follows the outcome so `set -e` scripts branch without
+    /// parsing JSON: 0 satisfied, 2 timed_out, 3 not_applicable.
     private func runWait(arguments: [String]) throws -> Int32 {
         let usage =
             "workspaces wait --for <surface_attached|workspace_selected|surface_text_matches|prompt_ready> "

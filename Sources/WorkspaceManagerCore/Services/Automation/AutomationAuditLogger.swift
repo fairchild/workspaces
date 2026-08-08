@@ -252,6 +252,12 @@ public actor AutomationAuditLogger {
         if path == "/v1/wait", let condition = object["for"] as? String {
             metadata["wait.for"] = condition
         }
+        // Which surface a content read touched. An operator handle reads any live surface, so
+        // the surface id is the audit trail's only per-surface lineage — the opaque id alone,
+        // never the text that came back.
+        if path == "/v1/surface/read", let surfaceID = object["surfaceID"] as? String {
+            metadata["surfaceRead.surfaceID"] = surfaceID
+        }
         return metadata.isEmpty ? nil : metadata
     }
 

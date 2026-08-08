@@ -3,11 +3,11 @@
 //  WorkspaceManagerCore
 //
 //  Typed server-side wait for `POST /v1/wait` (operator scope): the condition vocabulary,
-//  the validated bounded-timeout plan, and the deterministic wait engine. The engine turns
-//  the sleep/re-poll loops smoke scripts hand-roll into one server-side evaluation with a
-//  typed outcome — never an open-ended block. The condition vocabulary is shared design
-//  surface for the future events endpoint (#1227): an event stream emits the same
-//  observations a wait polls for.
+//  the validated bounded-timeout plan, and the deterministic wait engine. A caller states a
+//  condition once and the app evaluates it against its own live state, answering with a typed
+//  outcome inside a bounded window — never an open-ended block. The condition vocabulary is
+//  shared design surface for the future events endpoint (#1227): an event stream emits the
+//  same observations a wait polls for.
 //
 
 import Foundation
@@ -158,13 +158,75 @@ public struct AutomationWaitResult: Codable, Sendable, Equatable {
     }
 }
 
+/// A `surface_text_matches` pattern, compiled once when the plan resolves and reused for
+/// every tick of that wait — the same compile that validates the pattern, so a poll loop
+/// never pays to rebuild it.
+///
+/// `@unchecked Sendable` because `NSRegularExpression` is immutable once constructed and
+/// documented thread-safe, which is what lets the same object be handed to the off-MainActor
+/// match task. Equality is by pattern text so a resolved condition stays comparable.
+public struct AutomationWaitPattern: @unchecked Sendable, Equatable {
+    public let source: String
+    private let regex: NSRegularExpression
+
+    public init(_ source: String) throws {
+        do {
+            self.regex = try NSRegularExpression(pattern: source)
+        } catch {
+            throw AutomationServiceError(.invalidRequest, "Predicate 'pattern' is not a valid regular expression.")
+        }
+        self.source = source
+    }
+
+    /// Whether the pattern matches `text`, evaluated off the MainActor within `budgetMS`.
+    ///
+    /// Two properties matter here. The match runs on a detached task, so a pathological
+    /// pattern burns a cooperative-pool thread rather than wedging the UI: the app keeps
+    /// drawing and answering other automation calls while it runs. And it is abortable —
+    /// `.reportProgress` calls the enumeration block periodically during a long match, which
+    /// is where the deadline and `Task.isCancelled` are checked and `stop` is set.
+    ///
+    /// Returns `nil` when the budget expired before the match concluded. That is deliberately
+    /// distinct from `false`: the caller reports the tick as pending and lets the wait's own
+    /// ceiling produce a truthful `timed_out`, rather than claiming the text did not match.
+    public func firstMatchExists(in text: String, budgetMS: Int) async -> Bool? {
+        let pattern = self
+        let budget = max(1, budgetMS)
+        return await Task.detached(priority: .userInitiated) { () -> Bool? in
+            let deadline = ContinuousClock.now.advanced(by: .milliseconds(budget))
+            var matched = false
+            var abandoned = false
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            pattern.regex.enumerateMatches(in: text, options: [.reportProgress], range: range) { result, flags, stop in
+                if flags.contains(.progress) {
+                    if Task.isCancelled || ContinuousClock.now >= deadline {
+                        abandoned = true
+                        stop.pointee = true
+                    }
+                    return
+                }
+                if result != nil {
+                    matched = true
+                    stop.pointee = true
+                }
+            }
+            if matched { return true }
+            return abandoned ? nil : false
+        }.value
+    }
+
+    public static func == (lhs: AutomationWaitPattern, rhs: AutomationWaitPattern) -> Bool {
+        lhs.source == rhs.source
+    }
+}
+
 /// A validated wait condition: predicate fields parsed, UUID-shaped, and scoped to the
 /// condition they apply to. Produced only by `AutomationWaitPlan.resolve`, so the evaluator
-/// never sees a malformed target.
+/// never sees a malformed target — or, for `surface_text_matches`, an uncompiled pattern.
 public enum AutomationWaitCondition: Sendable, Equatable {
     case surfaceAttached(surfaceID: UUID?)
     case workspaceSelected(workspaceID: UUID?)
-    case surfaceTextMatches(surfaceID: UUID, pattern: String)
+    case surfaceTextMatches(surfaceID: UUID, pattern: AutomationWaitPattern)
     case promptReady(surfaceID: UUID)
 
     public var kind: AutomationWaitConditionKind {
@@ -272,7 +334,12 @@ public struct AutomationWaitPlan: Sendable, Equatable {
         return uuid
     }
 
-    private static func validatedPattern(_ value: String?, for kind: AutomationWaitConditionKind) throws -> String {
+    /// Validates and compiles in one step: the compiled object travels with the condition, so
+    /// the evaluator reuses this compile instead of rebuilding the pattern on every tick.
+    private static func validatedPattern(
+        _ value: String?,
+        for kind: AutomationWaitConditionKind
+    ) throws -> AutomationWaitPattern {
         guard let value, !value.isEmpty else {
             throw AutomationServiceError(
                 .invalidRequest,
@@ -285,12 +352,7 @@ public struct AutomationWaitPlan: Sendable, Equatable {
                 "Predicate 'pattern' exceeds the \(AutomationAPI.waitPatternMaxUTF8Bytes)-byte limit."
             )
         }
-        do {
-            _ = try NSRegularExpression(pattern: value)
-        } catch {
-            throw AutomationServiceError(.invalidRequest, "Predicate 'pattern' is not a valid regular expression.")
-        }
-        return value
+        return try AutomationWaitPattern(value)
     }
 }
 
@@ -347,13 +409,15 @@ public struct AutomationWaitTimeSource: Sendable {
 }
 
 /// The bounded poll loop behind `POST /v1/wait`. Probes on the caller's isolation (the app
-/// controller evaluates on the MainActor), sleeps between pending ticks, and never runs past
-/// `plan.effectiveTimeoutMS` — the final sleep is truncated to the remaining budget, so a
-/// timeout reports `waitedMS == effectiveTimeoutMS` rather than overshooting by a poll
-/// interval. The ceiling exists because a wait executes between the listener's read deadline
-/// (cancelled once the request parses) and write deadline (armed only after the route
-/// returns): the wait itself is the bound, chosen below `AutomationSocketClient`'s default
-/// receive deadline so a defaulted caller never times out client-side mid-wait.
+/// controller evaluates on the MainActor — a probe is free to suspend, which is how the
+/// text-match condition hands its regex to a detached task), sleeps between pending ticks,
+/// and never runs past `plan.effectiveTimeoutMS` — the final sleep is truncated to the
+/// remaining budget, so a timeout reports `waitedMS == effectiveTimeoutMS` rather than
+/// overshooting by a poll interval. The ceiling exists because a wait executes between the
+/// listener's read deadline (cancelled once the request parses) and write deadline (armed
+/// only after the route returns): the wait itself is the bound, chosen below
+/// `AutomationSocketClient`'s default receive deadline so a defaulted caller never times out
+/// client-side mid-wait.
 public enum AutomationWaitEngine {
     public static func run(
         plan: AutomationWaitPlan,

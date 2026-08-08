@@ -511,12 +511,11 @@ The success envelope carries the text plus the effective bounds:
 ```
 
 - **Operator-scoped authority.** Any live terminal surface is readable by an
-  operator handle. The original created-this-launch restriction was relaxed
-  (#1225): the read is read-only, operator scope is opt-in per launch, every
-  call is audited, and the wait primitive's `surface_text_matches` /
-  `prompt_ready` conditions need the same reach. Tile handles never carry
-  `surface.read` and fail `capability_denied`; the creation-attribution
-  registry remains for audit lineage, not as an access gate.
+  operator handle. The grant rests on the read being read-only, operator scope
+  being opt-in per launch, and every call landing in the audit log with the
+  surface id it touched (`surfaceRead.surfaceID`) — never the text. Tile
+  handles never carry `surface.read` and fail `capability_denied`; the
+  creation-attribution registry serves audit lineage, not access control.
 - **Ghostty text API.** The app reads GhosttyKit's plain terminal text through
   `ghostty_surface_read_text` over the whole screen/scrollback selection. No OCR
   or screenshot path is used.
@@ -635,9 +634,9 @@ is whatever the sidebar gesture left selected.
 
 ## Wait
 
-`POST /v1/wait` (operator scope) is the typed replacement for hand-rolled
-sleep/re-poll loops: the app evaluates a condition against its own live state
-and answers with a typed outcome. Request:
+`POST /v1/wait` (operator scope) lets a caller state a condition once and have
+the app evaluate it against its own live state, answering with a typed outcome
+instead of leaving the caller to sleep and re-check. Request:
 
 ```json
 {
@@ -668,8 +667,8 @@ rejected `invalid_request`, never silently ignored):
 | --- | --- | --- | --- |
 | `surface_attached` | optional `surfaceID` | The named surface is live in the tile tree; without a predicate, the active session resolves to an attached terminal (the same rule the ui-state topology uses). | `workspace.read` |
 | `workspace_selected` | optional `workspaceID` | The named workspace is the current selection; without a predicate, any workspace is selected. Naming an archived workspace returns `not_applicable` immediately — selection of an archived workspace navigates to its repo overview and can never satisfy the wait. | `workspace.read` |
-| `surface_text_matches` | `surfaceID` + regex `pattern` (≤ 1 KiB, must compile) | The bounded terminal text (same 500-line / 256 KiB suffix `surface.read` returns) matches the pattern. | `surface.read` |
-| `prompt_ready` | `surfaceID` | The surface's shell has reported a readiness signal (title or pwd — the same signals `first_prompt_ready` diagnostics count). "Ready once" semantics: the signal stays observed for the surface's lifetime. | `surface.read` |
+| `surface_text_matches` | `surfaceID` + regex `pattern` (≤ 1 KiB, must compile) | The bounded terminal text matches the pattern. The tick reads the last 500 lines capped at 32 KiB — an eighth of what `surface.read` returns, because this read repeats every tick and match cost scales with input length. | `surface.read` |
+| `prompt_ready` | `surfaceID` | The surface's shell has reported a readiness signal (title or pwd — the same signals `first_prompt_ready` diagnostics count). Ready-once: the surface latches the first signal, so a TUI clearing the window title on exit cannot un-ready it. | `surface.read` |
 
 Outcomes are the typed enum `satisfied` / `timed_out` / `not_applicable` —
 never a bare boolean — and every outcome carries `observed`, the final
@@ -689,6 +688,18 @@ is still legitimately waiting. Longer waits are the caller's re-arm loop:
 repeat the request on `timed_out` until your own budget expires; each round is
 bounded and frees its listener connection slot between rounds. A pending wait
 holds one of the listener's 8 connection slots for at most the ceiling.
+
+**Cost of a tick.** Topology and selection conditions poll every 100 ms — a tick
+is a couple of lookups. Content conditions poll every 250 ms, because a tick is
+a terminal read plus a regex run. The regex is compiled once when the plan
+resolves (the same compile that validates it) and runs on a detached task, not
+the MainActor: the 1 KiB pattern cap bounds how much pattern the app parses, not
+what a match costs — backtracking cost is a function of the *input*, and a
+six-byte `(a+)+$` is already super-polynomial in it. What bounds the cost is the
+32 KiB input cap plus an abort at the wait's own deadline. A pathological pattern
+therefore spends its own wait's budget, reports `timed_out` with `textMatched`
+absent (the match was abandoned, not decided), and leaves the UI responsive
+throughout.
 
 **Composition with the events endpoint (#1227).** A wait is the
 single-condition, poll-based case of the planned events stream: the condition

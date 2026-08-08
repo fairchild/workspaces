@@ -961,10 +961,13 @@ struct AutomationControllerTests {
                 return textReads >= 2 ? "compiling...\nBUILD PASSED" : "compiling..."
             },
             waitTimeSource: clock.timeSource,
-            waitPollIntervalMS: 100
+            waitContentPollIntervalMS: 250
         )
         let plan = AutomationWaitPlan(
-            condition: .surfaceTextMatches(surfaceID: session.id, pattern: "BUILD (PASSED|FAILED)"),
+            condition: .surfaceTextMatches(
+                surfaceID: session.id,
+                pattern: try AutomationWaitPattern("BUILD (PASSED|FAILED)")
+            ),
             requestedTimeoutMS: 5_000,
             effectiveTimeoutMS: 5_000
         )
@@ -972,10 +975,73 @@ struct AutomationControllerTests {
         let result = try await controller.automationWait(for: operatorEntry.handle, plan: plan)
 
         #expect(result.outcome == .satisfied)
-        #expect(result.waitedMS == 100)
+        // Content conditions poll on the slower interval — one pending tick, one satisfying tick.
+        #expect(result.waitedMS == 250)
         #expect(result.observed.textMatched == true)
         #expect(result.observed.surfaceLive == true)
         #expect(textReads == 2)
+    }
+
+    @Test("wait surface_text_matches times out typed on a catastrophic pattern, MainActor still live")
+    func waitSurfaceTextMatchesCatastrophicPatternTimesOut() async throws {
+        let store = TileTreeStore()
+        let session = store.activateSession(
+            key: .repoPath("/tmp/repo"),
+            directory: URL(fileURLWithPath: "/tmp/repo")
+        ).session
+        let registry = AutomationHandleRegistry()
+        let operatorEntry = registry.registerOperator(appScopeID: "workspaces.local")
+        // Real time, not the virtual clock: the property under test is that a pathological
+        // pattern spends the wait's budget and stops, which only means anything on a real clock.
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            surfaceTextReader: { _, _ in String(repeating: "a", count: 64) + "b" }
+        )
+        let ceilingMS = 500
+        let plan = AutomationWaitPlan(
+            condition: .surfaceTextMatches(surfaceID: session.id, pattern: try AutomationWaitPattern("(a+)+$")),
+            requestedTimeoutMS: ceilingMS,
+            effectiveTimeoutMS: ceilingMS
+        )
+
+        // A MainActor heartbeat: if the regex ran on this actor, it could not tick while the
+        // wait is in flight. Baseline it first so the count is strictly ticks during the wait.
+        let heartbeat = MainActorHeartbeat()
+        let ticker = Task { @MainActor in
+            while !Task.isCancelled {
+                heartbeat.tick()
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+        }
+        defer { ticker.cancel() }
+        try await Task.sleep(for: .milliseconds(50))
+        let baselineTicks = heartbeat.count
+
+        let started = ContinuousClock.now
+        let result = try await controller.automationWait(for: operatorEntry.handle, plan: plan)
+        let elapsed = ContinuousClock.now - started
+        let ticksDuringWait = heartbeat.count - baselineTicks
+
+        #expect(result.outcome == .timedOut)
+        #expect(result.effectiveTimeoutMS == ceilingMS)
+        // `textMatched` is absent, not false: the tick abandoned its match rather than deciding it.
+        #expect(result.observed.textMatched == nil)
+        #expect(result.observed.surfaceLive == true)
+        // Loose bound — the claim is that the wait terminates at all, and left unbounded this
+        // match outlives the process.
+        #expect(elapsed < .seconds(30))
+        #expect(ticksDuringWait >= 2)
+    }
+
+    /// Counts MainActor turns taken while something else is awaited. A plain counter is enough:
+    /// every mutation and read happens on the MainActor.
+    @MainActor
+    private final class MainActorHeartbeat {
+        private(set) var count = 0
+        func tick() { count += 1 }
     }
 
     @Test("wait prompt_ready times out typed when the readiness signal never arrives")
@@ -995,7 +1061,7 @@ struct AutomationControllerTests {
             requestCloseTerminal: { _ in },
             promptReadinessReader: { _, _ in false },
             waitTimeSource: clock.timeSource,
-            waitPollIntervalMS: 100
+            waitContentPollIntervalMS: 100
         )
         let plan = AutomationWaitPlan(
             condition: .promptReady(surfaceID: session.id),

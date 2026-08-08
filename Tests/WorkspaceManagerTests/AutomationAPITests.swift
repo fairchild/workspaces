@@ -2359,7 +2359,10 @@ struct AutomationAPITests {
         )
         #expect(
             textMatch.condition
-                == .surfaceTextMatches(surfaceID: UUID(uuidString: surfaceID)!, pattern: "PASS|FAIL")
+                == .surfaceTextMatches(
+                    surfaceID: UUID(uuidString: surfaceID)!,
+                    pattern: try AutomationWaitPattern("PASS|FAIL")
+                )
         )
         expectInvalidWaitRequest(
             AutomationWaitRequest(
@@ -2403,6 +2406,36 @@ struct AutomationAPITests {
         } catch {
             Issue.record("Unexpected error: \(error)")
         }
+    }
+
+    // MARK: - Wait pattern matching
+
+    @Test("A resolved pattern answers a well-behaved match without spending its budget")
+    func waitPatternMatchesWellBehavedInput() async throws {
+        let pattern = try AutomationWaitPattern("BUILD (PASSED|FAILED)")
+
+        #expect(await pattern.firstMatchExists(in: "compiling…\nBUILD PASSED\n", budgetMS: 1_000) == true)
+        #expect(await pattern.firstMatchExists(in: "compiling…\n", budgetMS: 1_000) == false)
+    }
+
+    @Test("A catastrophic pattern abandons its match at the budget instead of running to completion")
+    func waitPatternAbandonsCatastrophicMatchAtBudget() async throws {
+        // `(a+)+$` over a run of 'a' terminated by 'b' is the textbook super-polynomial case:
+        // ~2^n backtracks at n = 64, which no wait budget can absorb. Six bytes of pattern, far
+        // inside `waitPatternMaxUTF8Bytes` — which is exactly why pattern length bounds nothing.
+        let pattern = try AutomationWaitPattern("(a+)+$")
+        let text = String(repeating: "a", count: 64) + "b"
+
+        let started = ContinuousClock.now
+        let outcome = await pattern.firstMatchExists(in: text, budgetMS: 250)
+        let elapsed = ContinuousClock.now - started
+
+        // nil, not false: the match is undetermined, and reporting "did not match" would be a
+        // claim the evaluation never earned.
+        #expect(outcome == nil)
+        // Loose on purpose — the property is boundedness, not latency. Left to run, this match
+        // outlives the process; anything in seconds proves the abort fired.
+        #expect(elapsed < .seconds(30))
     }
 
     // MARK: - Wait engine (virtual time — no sleeps)
@@ -2805,6 +2838,64 @@ struct AutomationAPITests {
         )
         #expect(event.metadata?["wait.for"] == "surface_text_matches")
         #expect(event.allowed)
+    }
+
+    @Test("Audit log names the surface every content read targeted, never the text it returned")
+    func auditLogSurfaceReadLineage() async throws {
+        let auditURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-surface-read-audit-\(UUID().uuidString.prefix(8)).jsonl")
+        defer { try? FileManager.default.removeItem(at: auditURL) }
+        let logger = AutomationAuditLogger(auditURL: auditURL)
+        let surfaceID = "33333333-3333-3333-3333-333333333333"
+
+        await logger.record(
+            method: "POST",
+            path: "/v1/surface/read",
+            headers: [AutomationAPI.handleHeader: "op"],
+            requestBody: try AutomationJSON.encoder.encode(
+                AutomationSurfaceReadRequest(surfaceID: surfaceID, lines: 10)
+            ),
+            responseBody: try AutomationJSON.encoder.encode(
+                AutomationResponseEnvelope(
+                    result: AutomationSurfaceReadResult(
+                        surfaceID: surfaceID,
+                        requestedLines: 10,
+                        lines: 10,
+                        returnedLines: 1,
+                        byteCount: 13,
+                        text: "sensitive-text"
+                    )
+                )
+            ),
+            operatorHandle: true
+        )
+        // A body the typed decoder rejects (`lines` absent). An operator handle reads any live
+        // surface, so which surface a caller named belongs on the record even when the call
+        // never reached the controller.
+        await logger.record(
+            method: "POST",
+            path: "/v1/surface/read",
+            headers: [AutomationAPI.handleHeader: "op"],
+            requestBody: Data(#"{"surfaceID":"33333333-3333-3333-3333-333333333333"}"#.utf8),
+            responseBody: Data(
+                #"{"ok":false,"error":{"code":"invalid_request","message":"lines is required"}}"#.utf8
+            ),
+            operatorHandle: true
+        )
+
+        let contents = try String(contentsOf: auditURL, encoding: .utf8)
+        #expect(!contents.contains("sensitive-text"))
+        let events = try contents.split(separator: "\n").map {
+            try AutomationJSON.decoder.decode(AutomationAuditLogger.Event.self, from: Data($0.utf8))
+        }
+        #expect(events.count == 2)
+        #expect(events.allSatisfy { $0.metadata?["surfaceRead.surfaceID"] == surfaceID })
+        #expect(events[0].surfaceID == surfaceID)
+        #expect(events[0].allowed)
+        // The typed lineage field goes empty on the undecodable body; the metadata read is what
+        // keeps the lineage complete across both.
+        #expect(events[1].surfaceID == nil)
+        #expect(!events[1].allowed)
     }
 }
 

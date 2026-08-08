@@ -67,10 +67,25 @@ public enum AutomationAPI {
     /// connection slot between rounds.
     public static let waitDefaultTimeoutMS = 5_000
     public static let waitMaxTimeoutMS = 20_000
-    /// How often the wait engine re-evaluates a pending condition.
+    /// How often the wait engine re-evaluates a pending condition. Content conditions
+    /// (`surface_text_matches`, `prompt_ready`) poll on the slower interval: each of their
+    /// ticks costs a full terminal read plus a regex run, where a topology/selection tick is
+    /// a couple of dictionary lookups.
     public static let waitPollIntervalMS = 100
-    /// Cap on `surface_text_matches` regex patterns, bounding pathological-pattern cost.
+    public static let waitContentPollIntervalMS = 250
+    /// Cap on the `surface_text_matches` pattern's own length. This bounds how much pattern
+    /// the app parses and stores — it does **not** bound match cost: backtracking cost is a
+    /// function of the *input*, and a six-byte `(a+)+$` is already super-polynomial in it.
+    /// Match cost is bounded by two other things: `waitTextMatchMaxUTF8Bytes` caps the input,
+    /// and the match itself runs off the MainActor under the wait's own deadline
+    /// (`AutomationWaitPattern.firstMatchExists`).
     public static let waitPatternMaxUTF8Bytes = 1_024
+    /// Cap on the terminal text a `surface_text_matches` tick is evaluated against — an
+    /// eighth of what `surface.read` returns. Backtracking cost grows with input length, and
+    /// this condition re-runs the pattern every tick, so it reads a much shorter tail than a
+    /// one-shot read: the completion marker a wait is watching for lands at the end of the
+    /// buffer, not in the scrollback.
+    public static let waitTextMatchMaxUTF8Bytes = 32 * 1_024
 }
 
 public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equatable {
