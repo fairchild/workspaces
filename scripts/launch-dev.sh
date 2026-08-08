@@ -44,6 +44,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/synthetic-root.sh
+source "$SCRIPT_DIR/lib/synthetic-root.sh"
 
 APP_NAME="WorkspaceManager"
 INSTALLED_APP_BUNDLE_NAME="WorkSpaces"
@@ -98,6 +100,9 @@ Isolation notes:
 - This simulates explicit state isolation and avoids leaking dev state into
   global user directories.
 - It does not emulate full OS sandboxing; it isolates app persistence scope.
+- --fixture additionally establishes/requires WORKSPACES_SYNTHETIC_ROOT (a
+  caller-provided value wins; otherwise a default under the data dir), so the
+  launch-time workspace-orphan scan never reads the real ~/workspaces root.
 USAGE
 }
 
@@ -339,7 +344,48 @@ configure_fixture_mode() {
     if [[ "$FIXTURE_MODE" == true ]]; then
         ENV_VARS+=("WORKSPACES_UI_FIXTURE=1")
         ENV_VARS+=("WORKSPACES_DISABLE_AUTO_IMPORT=1")
+        configure_synthetic_root
     fi
+}
+
+# Belt-and-braces isolation guard for --fixture: scripts/lib/app-capture.sh (the
+# evidence lane's first-choice path) already establishes WORKSPACES_SYNTHETIC_ROOT
+# before invoking this script, so the launch-time workspace-orphan scan only ever
+# sees synthetic state there. Any other fixture-launching path — a bare
+# `./scripts/launch-dev.sh --fixture` for manual capture, a future caller — used
+# to skip that boundary entirely and let the orphan scan fall through to the real
+# ~/workspaces (#1217). This makes the guard unconditional for every --fixture
+# launch instead of relying on each caller to remember it: an inherited/`--env`
+# WORKSPACES_SYNTHETIC_ROOT wins (matching synthetic_root_ensure's contract),
+# otherwise a default under this launch's data dir is created, and the launch
+# refuses to proceed without one. Never runs for a normal (non-fixture) launch.
+#
+# Every existing `--env WORKSPACES_SYNTHETIC_ROOT=...` entry is stripped out of
+# ENV_VARS first (keeping the last one, matching how `env` itself resolves
+# duplicate assignments) rather than just reading the first match and leaving
+# the rest in place — otherwise a duplicate or an explicit empty override
+# (`--env WORKSPACES_SYNTHETIC_ROOT=`) would validate one value here but ship a
+# stale or empty one to the launched app, silently defeating the guard.
+configure_synthetic_root() {
+    local entry resolved=""
+    local -a filtered=()
+    for entry in "${ENV_VARS[@]}"; do
+        if [[ "$entry" == WORKSPACES_SYNTHETIC_ROOT=* ]]; then
+            resolved="${entry#WORKSPACES_SYNTHETIC_ROOT=}"
+        else
+            filtered+=("$entry")
+        fi
+    done
+    ENV_VARS=()
+    [[ ${#filtered[@]} -gt 0 ]] && ENV_VARS=("${filtered[@]}")
+    [[ -n "$resolved" ]] && WORKSPACES_SYNTHETIC_ROOT="$resolved"
+
+    synthetic_root_ensure "$DATA_DIR/workspaces-root" \
+        || fail "Could not establish WORKSPACES_SYNTHETIC_ROOT for --fixture launch."
+    synthetic_root_require \
+        || fail "Refusing --fixture launch without WORKSPACES_SYNTHETIC_ROOT."
+
+    ENV_VARS+=("WORKSPACES_SYNTHETIC_ROOT=$WORKSPACES_SYNTHETIC_ROOT")
 }
 
 configure_launch_behavior() {
