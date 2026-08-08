@@ -24,34 +24,17 @@ struct WorkspaceManagerCLI {
 
 private final class CLIApp {
     private static let appBundleIdentifier = "com.cloudcompute.workspaces"
-    private static let reservedCommands: Set<String> = [
-        "help",
-        "--help",
-        "-h",
-        "repo",
-        "ws",
-        "open",
-        "run",
-        "resume",
-        "status",
-        "recent",
-        "doctor",
-        "automation",
-        "surface",
-        "tile",
-        "input",
-        "window",
-        "workspace",
-        "wait",
-        "focus",
-    ]
+    private static let reservedCommands = CLIVerbCatalog.reservedCommands
 
     private let stateStore = CLIStateStore()
     private let workspaceService: WorkspaceService = .shared
     private let gitService: GitService = .shared
 
+    /// Set once the invocation has said something about the plane split; see `emitPlaneHint`.
+    private var planeHintEmitted = false
+
     func run(arguments: [String]) async throws -> Int32 {
-        guard let command = arguments.first else {
+        guard arguments.first != nil else {
             return try await launchApp(request: nil)
         }
 
@@ -59,8 +42,16 @@ private final class CLIApp {
             return try await launchApp(request: launchRequest)
         }
 
+        // Top-level automation aliases ('workspaces workspace list') canonicalize into the
+        // grouped form ('workspaces automation workspace list') before dispatch, so both
+        // spellings share one code path. Canonicalization only ever prepends, so the
+        // non-empty guarantee from the guard above carries through it.
+        let canonical = CLIVerbCatalog.canonicalArguments(arguments)
+        precondition(!canonical.isEmpty, "canonicalArguments emptied a non-empty argument vector")
+        let command = canonical[0]
+
         var state = try stateStore.load()
-        let tail = Array(arguments.dropFirst())
+        let tail = Array(canonical.dropFirst())
 
         switch command {
         case "help", "--help", "-h":
@@ -84,20 +75,6 @@ private final class CLIApp {
             return try await runDoctor(state: state)
         case "automation":
             return try runAutomation(arguments: tail)
-        case "surface":
-            return try runSurface(arguments: tail)
-        case "tile":
-            return try runTile(arguments: tail)
-        case "input":
-            return try runInput(arguments: tail)
-        case "window":
-            return try runWindow(arguments: tail)
-        case "workspace":
-            return try runWorkspaceOperator(arguments: tail)
-        case "wait":
-            return try runWait(arguments: tail)
-        case "focus":
-            return try runFocus(arguments: tail)
         default:
             throw CLIError("Unknown command '\(command)'. Run 'workspaces help'.")
         }
@@ -191,16 +168,19 @@ private final class CLIApp {
             try stateStore.save(state)
             print("Added repository: \(repo.name)")
             print(repo.path)
+            if let inventory = appInventory(),
+                let notice = CLIPlaneComposer.repoAddNotice(app: inventory, addedRepoPath: repo.path)
+            {
+                writeStderr(notice)
+            }
             return 0
 
         case "list":
-            if state.repos.isEmpty {
-                print("No repositories tracked.")
-                return 0
-            }
-
-            for repo in state.repos.sorted(by: { $0.addedAt > $1.addedAt }) {
-                print("\(repo.name)\t\(repo.path)")
+            let localRows = state.repos
+                .sorted(by: { $0.addedAt > $1.addedAt })
+                .map { CLIPlaneComposer.LocalRow(displayName: $0.name, path: $0.path) }
+            for line in CLIPlaneComposer.repoListLines(app: appInventory(), local: localRows) {
+                print(line)
             }
             return 0
 
@@ -228,9 +208,7 @@ private final class CLIApp {
                 throw CLIError("Workspace name cannot be empty.")
             }
 
-            guard let repo = resolveRepo(token: repoToken, state: state) else {
-                throw CLIError("Repository not found: \(repoToken)")
-            }
+            let repo = try resolveLocalRepoOrExplain(token: repoToken, state: state)
 
             let info = try await workspaceService.createWorkspace(
                 repoName: repo.name,
@@ -261,13 +239,11 @@ private final class CLIApp {
             return 0
 
         case "list":
-            if state.workspaces.isEmpty {
-                print("No workspaces tracked.")
-                return 0
-            }
-
-            for workspace in state.workspaces.sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt }) {
-                print("\(workspaceDisplayName(workspace))\t\(workspace.path)")
+            let localRows = state.workspaces
+                .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
+                .map { CLIPlaneComposer.LocalRow(displayName: workspaceDisplayName($0), path: $0.path) }
+            for line in CLIPlaneComposer.workspaceListLines(app: appInventory(), local: localRows) {
+                print(line)
             }
             return 0
 
@@ -275,7 +251,7 @@ private final class CLIApp {
             guard arguments.count >= 2 else {
                 throw CLIError("Usage: workspaces ws path <workspace>")
             }
-            let workspace = try resolveWorkspace(token: arguments[1], state: state)
+            let workspace = try resolveWorkspace(token: arguments[1], state: &state)
             print(workspace.path)
             return 0
 
@@ -345,9 +321,7 @@ private final class CLIApp {
             let range = RaceGroupPlanner.countRange
             throw CLIError("--n must be between \(range.lowerBound) and \(range.upperBound).")
         }
-        guard let repo = resolveRepo(token: repoToken, state: state) else {
-            throw CLIError("Repository not found: \(repoToken)")
-        }
+        let repo = try resolveLocalRepoOrExplain(token: repoToken, state: state)
 
         let plan = RaceGroupPlanner.plan(
             prompt: prompt,
@@ -494,7 +468,7 @@ private final class CLIApp {
             throw CLIError("Usage: workspaces open <workspace> [--cmd \"command\"]")
         }
 
-        var workspace = try resolveWorkspace(token: workspaceToken, state: state)
+        var workspace = try resolveWorkspace(token: workspaceToken, state: &state)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
         let config = loadWorkspaceLocalConfig(at: workspaceURL)
         let command = commandOverride ?? workspace.defaultCommand ?? config.defaultCommand
@@ -516,7 +490,7 @@ private final class CLIApp {
         }
 
         let workspaceToken = arguments[0]
-        let workspace = try resolveWorkspace(token: workspaceToken, state: state)
+        let workspace = try resolveWorkspace(token: workspaceToken, state: &state)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
 
         let commandString: String
@@ -627,7 +601,7 @@ private final class CLIApp {
             throw CLIError("Usage: workspaces status <workspace> [--watch] [--interval <seconds>]")
         }
 
-        let workspace = try resolveWorkspace(token: workspaceToken, state: state)
+        let workspace = try resolveWorkspace(token: workspaceToken, state: &state)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
 
         repeat {
@@ -703,15 +677,20 @@ private final class CLIApp {
         return failures == 0 ? 0 : 1
     }
 
+    /// `workspaces automation <verb>` — the namespace grouping every verb that talks to
+    /// the app's automation socket. The seven gesture/read/wait verbs also keep their historical
+    /// top-level spellings as aliases (canonicalized in `run` before dispatch).
     private func runAutomation(arguments: [String]) throws -> Int32 {
+        let expected = "health, context, surface, tile, input, window, workspace, wait, focus"
         guard let subcommand = arguments.first else {
-            throw CLIError("Missing automation subcommand. Expected: health, context")
+            throw CLIError("Missing automation subcommand. Expected: \(expected)")
         }
+        let tail = Array(arguments.dropFirst())
 
         switch subcommand {
         case "health":
             let result = try performAutomationHealthRequest()
-            if arguments.dropFirst().contains("--json") {
+            if tail.contains("--json") {
                 print(try AutomationCLIResultPrinter.resultJSON(result))
             } else {
                 print(Self.healthLine(result))
@@ -720,7 +699,7 @@ private final class CLIApp {
 
         case "context":
             let json = try requireJSONFlag(
-                arguments: Array(arguments.dropFirst()), usage: "workspaces automation context --json")
+                arguments: tail, usage: "workspaces automation context --json")
             let result: AutomationContextResult = try performAutomationRequest(
                 method: "GET",
                 path: "/v1/context",
@@ -731,16 +710,32 @@ private final class CLIApp {
             }
             return 0
 
+        case "surface":
+            return try runSurface(arguments: tail)
+        case "tile":
+            return try runTile(arguments: tail)
+        case "input":
+            return try runInput(arguments: tail)
+        case "window":
+            return try runWindow(arguments: tail)
+        case "workspace":
+            return try runWorkspaceOperator(arguments: tail)
+        case "wait":
+            return try runWait(arguments: tail)
+        case "focus":
+            return try runFocus(arguments: tail)
+
         default:
-            throw CLIError("Unknown automation subcommand '\(subcommand)'. Expected: health, context")
+            throw CLIError("Unknown automation subcommand '\(subcommand)'. Expected: \(expected)")
         }
     }
 
     private func runSurface(arguments: [String]) throws -> Int32 {
         guard arguments.first == "list" else {
-            throw CLIError("Usage: workspaces surface list --json")
+            throw CLIError("Usage: workspaces automation surface list --json")
         }
-        let json = try requireJSONFlag(arguments: Array(arguments.dropFirst()), usage: "workspaces surface list --json")
+        let json = try requireJSONFlag(
+            arguments: Array(arguments.dropFirst()), usage: "workspaces automation surface list --json")
         let result: AutomationSurfacesResult = try performAutomationRequest(
             method: "GET",
             path: "/v1/surfaces",
@@ -763,7 +758,7 @@ private final class CLIApp {
             let direction = try singleDirectionFlag(
                 AutomationTileFocusDirection.self,
                 arguments: tail,
-                usage: "workspaces tile focus --left|--right|--up|--down|--next|--previous"
+                usage: "workspaces automation tile focus --left|--right|--up|--down|--next|--previous"
             )
             let body = try directionBody(direction.rawValue)
             _ = try performAutomationRequest(
@@ -779,7 +774,7 @@ private final class CLIApp {
             let direction = try singleDirectionFlag(
                 AutomationTileSplitDirection.self,
                 arguments: tail,
-                usage: "workspaces tile split --left|--right|--up|--down"
+                usage: "workspaces automation tile split --left|--right|--up|--down"
             )
             let body = try directionBody(direction.rawValue)
             _ = try performAutomationRequest(
@@ -793,7 +788,7 @@ private final class CLIApp {
 
         case "close":
             guard tail.isEmpty else {
-                throw CLIError("Usage: workspaces tile close")
+                throw CLIError("Usage: workspaces automation tile close")
             }
             _ = try performAutomationRequest(
                 AutomationMutationResult.self,
@@ -809,7 +804,7 @@ private final class CLIApp {
     }
 
     private func runInput(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces input write <text> [--submit]"
+        let usage = "workspaces automation input write <text> [--submit]"
         guard arguments.first == "write" else {
             throw CLIError("Usage: \(usage)")
         }
@@ -845,7 +840,7 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces window <list|snapshot>` — the operator-scope commands. Unlike the tile-scoped
+    /// `workspaces automation window <list|snapshot>` — the operator-scope commands. Unlike the tile-scoped
     /// commands, they read the per-launch operator credential file (minted next to the socket by an
     /// opted-in launch) rather than the `WORKSPACES_AUTOMATION_HANDLE` env, so they work from any
     /// same-user shell outside a WorkSpaces tile. Absent the credential they fail closed with guidance.
@@ -856,12 +851,14 @@ private final class CLIApp {
         case "snapshot":
             return try runWindowSnapshot(arguments: Array(arguments.dropFirst()))
         default:
-            throw CLIError("Usage: workspaces window list [--json] | window snapshot --out <path> [--window <id>]")
+            throw CLIError(
+                "Usage: workspaces automation window list [--json] | automation window snapshot --out <path> [--window <id>]"
+            )
         }
     }
 
     private func runWindowList(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces window list [--json]"
+        let usage = "workspaces automation window list [--json]"
         var json = false
         for argument in arguments {
             switch argument {
@@ -898,12 +895,12 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces window snapshot --out <path> [--window <id>]` — writes a composited PNG of an app
+    /// `workspaces automation window snapshot --out <path> [--window <id>]` — writes a composited PNG of an app
     /// window (operator scope). With no `--window`, it targets the main window (falling back to the
     /// first listed), so the common "snapshot the app" case needs no id lookup. Works with the app
     /// backgrounded — no activation, no focus steal.
     private func runWindowSnapshot(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces window snapshot --out <path> [--window <id>]"
+        let usage = "workspaces automation window snapshot --out <path> [--window <id>]"
         var outPath: String?
         var windowID: String?
 
@@ -969,12 +966,12 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces workspace list [--json]` — the operator-scope read of the app's repos and
+    /// `workspaces automation workspace list [--json]` — the operator-scope read of the app's repos and
     /// workspaces (`workspace.read`). Like `window list`, it reads the per-launch operator credential
     /// file (minted next to the socket by an opted-in launch) rather than the injected terminal
     /// environment, so it works from any same-user shell outside a WorkSpaces tile. Absent the
-    /// credential it fails closed with guidance. Distinct from `ws list`, which lists the CLI's own
-    /// local-state workspaces; this reflects what the running app currently has.
+    /// credential it fails closed with guidance. This is the app plane's source of truth; `ws list`
+    /// derives from it too when the app is running, adding the CLI-local-only rows the app cannot see.
     private func runWorkspaceOperator(arguments: [String]) throws -> Int32 {
         switch arguments.first {
         case "list":
@@ -987,13 +984,13 @@ private final class CLIApp {
             return try runWorkspaceArchive(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError(
-                "Usage: workspaces workspace list [--json] | workspace select <id> [--json] | workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | workspace archive <id> [--teardown] [--json]"
+                "Usage: workspaces automation workspace list [--json] | automation workspace select <id> [--json] | automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | automation workspace archive <id> [--teardown] [--json]"
             )
         }
     }
 
     private func runWorkspaceList(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces workspace list [--json]"
+        let usage = "workspaces automation workspace list [--json]"
         var json = false
         for argument in arguments.dropFirst() {
             switch argument {
@@ -1047,13 +1044,13 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]`
+    /// `workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]`
     /// drives the running app's real sidebar create helper via the operator socket. A completed
     /// response means the app created the workspace, selected it, and attached its terminal; setup
     /// sheets return `confirmation_required` with the confirmation payload instead of blocking.
     private func runWorkspaceCreate(arguments: [String]) throws -> Int32 {
         let usage =
-            "workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]"
+            "workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]"
         var json = false
         var repoID: String?
         var name: String?
@@ -1130,13 +1127,13 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces workspace select <id> [--json]` — an operator mutation verb. Drives the
+    /// `workspaces automation workspace select <id> [--json]` — an operator mutation verb. Drives the
     /// running app's real selection gesture (the same path a sidebar click takes) via the socket, so
     /// the app highlights the workspace, attaches its terminal, and requests focus. `<id>` is a stable
     /// workspace id from `workspace list`. Operator scope: reads the per-launch credential, so it works
     /// from any same-user shell outside a tile.
     private func runWorkspaceSelect(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces workspace select <id> [--json]"
+        let usage = "workspaces automation workspace select <id> [--json]"
         var json = false
         var workspaceID: String?
         for argument in arguments {
@@ -1181,13 +1178,13 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces workspace archive <id> [--teardown] [--json]` — an operator mutation verb.
-    /// Drives the running app's real sidebar archive gesture, so the row leaves the active list
-    /// exactly as it would from the sidebar menu. `<id>` is a stable workspace id from
-    /// `workspace list`. `--teardown` asks the app to kill the workspace's tmux sessions and
-    /// retire its terminal tiles before archiving, so a live terminal cannot fail the call.
+    /// `workspaces automation workspace archive <id> [--teardown] [--json]` — an operator mutation
+    /// verb. Drives the running app's real sidebar archive gesture, so the row leaves the active
+    /// list exactly as it would from the sidebar menu. `<id>` is a stable workspace id from
+    /// `automation workspace list`. `--teardown` asks the app to kill the workspace's tmux sessions
+    /// and retire its terminal tiles before archiving, so a live terminal cannot fail the call.
     private func runWorkspaceArchive(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces workspace archive <id> [--teardown] [--json]"
+        let usage = "workspaces automation workspace archive <id> [--teardown] [--json]"
         var json = false
         var teardown = false
         var workspaceID: String?
@@ -1240,7 +1237,7 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces wait --for <condition> [--surface-id <id>] [--workspace-id <id>]
+    /// `workspaces automation wait --for <condition> [--surface-id <id>] [--workspace-id <id>]
     /// [--pattern <regex>] [--timeout-ms <n>] [--json]` — the operator-scope server-side wait
     /// (`POST /v1/wait`). The app evaluates the condition against its own state and answers
     /// with a typed outcome, so a script states what it is waiting for instead of sleeping and
@@ -1248,7 +1245,8 @@ private final class CLIApp {
     /// parsing JSON: 0 satisfied, 2 timed_out, 3 not_applicable.
     private func runWait(arguments: [String]) throws -> Int32 {
         let usage =
-            "workspaces wait --for <surface_attached|workspace_selected|surface_text_matches|prompt_ready> "
+            "workspaces automation wait "
+            + "--for <surface_attached|workspace_selected|surface_text_matches|prompt_ready> "
             + "[--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]"
         var json = false
         var condition: String?
@@ -1331,12 +1329,12 @@ private final class CLIApp {
         }
     }
 
-    /// `workspaces focus [--json]` — the operator-scope focus report (`GET /v1/focus`).
-    /// `focusPossible=false` marks a no-activate launch: absent focus is "unavailable under
-    /// this launch policy", not a focus failure — never assert on the other fields without
-    /// branching on it first.
+    /// `workspaces automation focus [--json]` — the operator-scope focus report
+    /// (`GET /v1/focus`). `focusPossible=false` marks a no-activate launch: absent focus is
+    /// "unavailable under this launch policy", not a focus failure — never assert on the other
+    /// fields without branching on it first.
     private func runFocus(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces focus [--json]"
+        let usage = "workspaces automation focus [--json]"
         var json = false
         for argument in arguments {
             switch argument {
@@ -1367,6 +1365,12 @@ private final class CLIApp {
         return 0
     }
 
+    /// `timeout` overrides the socket client's own send/receive deadline for one call. Most
+    /// operator verbs leave it nil and inherit the client default, which is sized for a user who
+    /// typed the command and will wait. Two override it, for opposite reasons: the passive
+    /// inventory probe shortens it, because nobody typed that request and it has a usable
+    /// fallback; `wait` derives it from the server-side wait ceiling instead of inheriting, so
+    /// the deadline keeps outliving the wait even if either constant moves.
     private func operatorRequest<Result>(
         _ type: Result.Type = Result.self,
         credential: AutomationOperatorCredential,
@@ -1570,7 +1574,32 @@ private final class CLIApp {
         return state.repos.first(where: { $0.path == normalizedTokenPath })
     }
 
-    private func resolveWorkspace(token: String, state: CLIState) throws -> WorkspaceRecord {
+    /// Resolves a repo token against the CLI-local store; when it misses and the running
+    /// app tracks the repo instead, the error explains the plane split and both ways out.
+    private func resolveLocalRepoOrExplain(token: String, state: CLIState) throws -> RepoRecord {
+        if let repo = resolveRepo(token: token, state: state) {
+            return repo
+        }
+        if let inventory = appInventory(),
+            let guidance = CLIPlaneComposer.missingLocalRepoGuidance(
+                token: token,
+                normalizedTokenPath: normalizePath(token).path,
+                app: inventory
+            )
+        {
+            throw CLIError(guidance)
+        }
+        if appRunningWithoutOperatorCredential() {
+            emitPlaneHint(CLIPlaneComposer.operatorCredentialMissingHint, evenWhenQuiet: true)
+        }
+        throw CLIError("Repository not found: \(token)")
+    }
+
+    /// Resolves a workspace selector against the CLI-local store first, then against the
+    /// running app's inventory. An app-side match is adopted into local state (keyed by
+    /// path) so flows that persist access records (`open`, `run`) keep working; callers
+    /// that never save (`ws path`, `status`) leave the adoption in memory only.
+    private func resolveWorkspace(token: String, state: inout CLIState) throws -> WorkspaceRecord {
         if let uuid = UUID(uuidString: token),
             let byID = state.workspaces.first(where: { $0.id == uuid })
         {
@@ -1595,7 +1624,119 @@ private final class CLIApp {
             throw CLIError("Workspace name is ambiguous: \(token). Candidates: \(candidates)")
         }
 
+        if let inventory = appInventory() {
+            switch CLIPlaneComposer.matchWorkspace(token: token, in: inventory) {
+            case .match(let match):
+                let now = Date()
+                // A local record at the same path is superseded by the app-derived one, but
+                // the fields the app never knew about are the local plane's own: keep the
+                // user's default command and the original creation time.
+                let superseded = state.workspaces.first { $0.path == match.path }
+                let record = WorkspaceRecord(
+                    id: match.workspaceID,
+                    name: match.name,
+                    repoName: match.repoName ?? "",
+                    repoPath: match.repoPath ?? "",
+                    path: match.path,
+                    gitBranch: match.branch ?? "",
+                    createdAt: superseded?.createdAt ?? now,
+                    lastAccessedAt: now,
+                    defaultCommand: superseded?.defaultCommand
+                )
+                state.workspaces.removeAll { $0.path == record.path }
+                state.workspaces.append(record)
+                return record
+            case .ambiguous(let candidates):
+                throw CLIError(
+                    "Workspace name is ambiguous in the running app: \(token). "
+                        + "Candidates: \(candidates.joined(separator: ", "))"
+                )
+            case .none:
+                break
+            }
+        }
+
         throw CLIError("Workspace not found: \(token)")
+    }
+
+    /// The running app's repo/workspace inventory via the operator socket, or nil when the
+    /// appless plane is in effect (no operator credential, no listener, a timeout, or a reply the
+    /// CLI could not read). Every local verb that consults the app plane funnels through this one
+    /// seam, so the probe's bound and its failure taxonomy each have one place to live —
+    /// `CLIAppProbe`, which `workspaces help` renders the deadline from.
+    ///
+    /// `deadline` reaches the socket as SO_RCVTIMEO/SO_SNDTIMEO, so it bounds each blocking
+    /// syscall rather than the call as a whole: an app that trickles a chunk per interval could
+    /// still outlast it. It converts the failure mode that matters — an app that accepts the
+    /// connection and then stops answering — from an unbounded hang into a fall back to the
+    /// appless plane, which is what every other probe failure already does.
+    ///
+    /// Falling back stays the behavior in every case; what a miss no longer does is stay mute.
+    /// `noteProbeOutcome` renders the reason where a person will read it.
+    private func appInventory(
+        withDeadline deadline: TimeInterval = CLIAppProbe.deadline
+    ) -> AutomationWorkspaceInventory? {
+        guard let credential = try? loadOperatorCredential() else {
+            noteProbeOutcome(.noOperatorCredential(appRunning: appIsRunning()))
+            return nil
+        }
+        do {
+            let result = try operatorRequest(
+                AutomationWorkspacesResult.self,
+                credential: credential,
+                method: "GET",
+                path: "/v1/workspaces",
+                body: Data(),
+                timeout: deadline
+            )
+            return AutomationWorkspaceInventory(repos: result.repos, workspaces: result.workspaces)
+        } catch {
+            noteProbeOutcome(CLIAppProbe.outcome(forProbeError: error))
+            return nil
+        }
+    }
+
+    /// True when the app is running but no operator credential is readable — `appInventory`
+    /// returns nil, every cross-plane hint stays silent, and a repo the app tracks reads as
+    /// simply missing. That is the 2026-08-07 probe scenario, so the miss paths say so.
+    private func appRunningWithoutOperatorCredential() -> Bool {
+        guard (try? loadOperatorCredential()) == nil else {
+            return false
+        }
+        return appIsRunning()
+    }
+
+    private func appIsRunning() -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: Self.appBundleIdentifier).isEmpty
+    }
+
+    /// Says why the app plane was skipped, at most once per invocation.
+    private func noteProbeOutcome(_ outcome: CLIAppProbe.Outcome) {
+        guard let hint = outcome.hint else { return }
+        emitPlaneHint(hint, evenWhenQuiet: false)
+    }
+
+    /// One plane hint per invocation, whichever surface raises it first, so a verb that probes and
+    /// then explains a miss does not say the same thing twice.
+    ///
+    /// Audibility: probe hints reach an interactive stderr, or any stderr under
+    /// `WORKSPACES_CLI_VERBOSE=1`. A piped or captured stderr sees nothing new, which keeps the
+    /// output scripts parse byte-identical while the promise `workspaces help` makes about two
+    /// planes stays honest for the person at the terminal. Hints raised on a path the user
+    /// explicitly hit — a selector that missed both planes — pass `evenWhenQuiet: true` and print
+    /// regardless, because there the hint is part of the answer.
+    private func emitPlaneHint(_ hint: String, evenWhenQuiet: Bool) {
+        guard !planeHintEmitted, evenWhenQuiet || Self.planeHintsAudible else { return }
+        planeHintEmitted = true
+        writeStderr(hint)
+    }
+
+    private static var planeHintsAudible: Bool {
+        let verbose = ProcessInfo.processInfo.environment["WORKSPACES_CLI_VERBOSE"]?.lowercased()
+        if verbose == "1" || verbose == "true" {
+            return true
+        }
+        return isatty(STDERR_FILENO) == 1
     }
 
     private func runInteractiveSession(in directory: URL, command: String?) throws -> Int32 {
@@ -1806,9 +1947,11 @@ private struct CLIError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// The CLI's path spelling and the one `CLIPlaneComposer` compares against the app's
+/// descriptors are the same pipeline, so a trailing slash or a symlinked spelling of the
+/// same directory never reads as two different places across the planes.
 private func normalizePath(_ path: String) -> URL {
-    let expanded = NSString(string: path).expandingTildeInPath
-    return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath()
+    CLIPathNormalizer.normalizedURL(path)
 }
 
 private func validateGitRepository(at url: URL) throws {
@@ -1955,52 +2098,5 @@ private func writeStderr(_ message: String) {
 }
 
 private func printHelp() {
-    print(
-        """
-        WorkSpaces CLI
-
-        Usage:
-          workspaces
-          workspaces .
-          workspaces /path/to/repo
-          workspaces repo add <path>
-          workspaces repo list
-          workspaces ws new <repo> <name>
-          workspaces ws list
-          workspaces ws path <workspace>
-          workspaces ws race <repo> <prompt...> [--n 3] [--cmd "claude"] [--name <slug>] [--no-launch]
-          workspaces open <workspace> [--cmd "command"]
-          workspaces run <workspace> -- <command...>
-          workspaces run <workspace> --cmd "command"
-          workspaces resume
-          workspaces status <workspace> [--watch] [--interval <seconds>]
-          workspaces recent
-          workspaces doctor
-          workspaces automation health
-          workspaces automation context --json
-          workspaces surface list --json
-          workspaces tile focus --left|--right|--up|--down|--next|--previous
-          workspaces tile split --left|--right|--up|--down
-          workspaces tile close
-          workspaces input write <text> [--submit]
-          workspaces window list [--json]
-          workspaces window snapshot --out <path> [--window <id>]
-          workspaces workspace list [--json]
-          workspaces workspace select <workspace-id> [--json]
-          workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
-          workspaces workspace archive <workspace-id> [--teardown] [--json]
-          workspaces wait --for <condition> [--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]
-          workspaces focus [--json]
-          workspaces help
-
-        Launch behavior:
-          - no args: open the WorkSpaces app
-          - path arg: open the app and focus the matching workspace or repo
-
-        Workspace selectors:
-          - UUID
-          - <repo>/<workspace>
-          - workspace name (if unique)
-        """
-    )
+    print(CLIVerbCatalog.helpText)
 }

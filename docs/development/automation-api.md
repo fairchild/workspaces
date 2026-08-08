@@ -80,7 +80,17 @@ Both socket ends carry deadlines: the listener closes connections that do not
 deliver a full request within 10 s, bounds response writes the same way, and
 answers connections over its small concurrency cap with a `busy` error. The
 client sets 30 s send/receive socket timeouts, so a hung app surfaces as a
-typed timeout in the CLI instead of a wedged shell.
+typed timeout in the CLI instead of a wedged shell. Callers may set their own per
+request: the CLI's passive inventory probe — the one behind `ws list`, `repo
+list`, and selector resolution, which nobody typed — uses 0.5 s and falls back to
+the CLI-local plane when it fires, while `automation wait` goes the other way and
+derives its deadline from the server-side wait ceiling plus headroom so a
+legitimately-waiting server never trips it. Every probe timeout is per blocking syscall
+(`SO_RCVTIMEO`/`SO_SNDTIMEO`), not a budget for the whole call. The fallback is
+never silent to a person: missing credential, dead listener, timeout, and
+unreadable reply each print their own one-line note on an interactive stderr (or
+under `WORKSPACES_CLI_VERBOSE=1`), and nothing on a piped one, so script output
+is unchanged.
 
 ### Operator scope (`[A1]`)
 
@@ -421,8 +431,11 @@ mutation rides this route.
   (whether it is the workspace currently selected in the app). Each repo carries
   `isSelected` (whether it is the repo selected for its landing view).
 - **Live app state.** The listing reflects what the *running app* currently has,
-  read from the live SwiftData models and selection state — distinct from the
-  CLI's own local-state store (`workspaces ws list`).
+  read from the live SwiftData models and selection state. It is also the source
+  `workspaces ws list` derives from whenever the operator credential is readable:
+  that verb prints this inventory and then labels the rows that exist only in the
+  CLI's own local-state store. Without the credential it falls back to the
+  local-state store alone.
 
 ## Workspace create
 
@@ -815,72 +828,84 @@ state truthfully:
 The `workspaces` CLI wraps the socket API. Scoped commands read the same
 environment that WorkSpaces injects into terminal surfaces.
 
+Every verb that talks to the socket is spelled `workspaces automation <verb>`,
+which is what `workspaces help` prints and what the examples below use. The bare
+top-level spellings (`workspaces surface …`, `tile`, `input`, `window`,
+`workspace`, `wait`, `focus`) remain supported as compatibility aliases onto the
+same dispatch path and behave identically — existing scripts need no edit, and
+`scripts/api-select-smoke.sh` still drives `workspaces wait` that way.
+
 ```bash
 workspaces automation health
 workspaces automation health --json
 workspaces automation context --json
-workspaces surface list --json
-workspaces tile focus --left
-workspaces tile focus --right
-workspaces tile focus --up
-workspaces tile focus --down
-workspaces tile focus --next
-workspaces tile focus --previous
-workspaces tile split --left
-workspaces tile split --right
-workspaces tile split --up
-workspaces tile split --down
-workspaces tile close
-workspaces input write 'echo hi'
-workspaces input write 'echo hi' --submit
+workspaces automation surface list --json
+workspaces automation tile focus --left
+workspaces automation tile focus --right
+workspaces automation tile focus --up
+workspaces automation tile focus --down
+workspaces automation tile focus --next
+workspaces automation tile focus --previous
+workspaces automation tile split --left
+workspaces automation tile split --right
+workspaces automation tile split --up
+workspaces automation tile split --down
+workspaces automation tile close
+workspaces automation input write 'echo hi'
+workspaces automation input write 'echo hi' --submit
 ```
 
-`workspaces window list`, `workspaces window snapshot`, and `workspaces workspace
-list` are the operator-scope commands. Unlike the tile-scoped commands, they read
+`automation window list`, `automation window snapshot`, `automation workspace
+list`, `automation wait`, and `automation focus` are the operator-scope
+commands. Unlike the tile-scoped commands, they read
 the per-launch operator credential file (minted next to the socket by an opt-in
 launch) rather than the injected terminal environment, so they work from any
 same-user shell outside a WorkSpaces tile. Absent the credential they fail closed
 with guidance.
 
 ```bash
-workspaces window list
-workspaces window list --json
-workspaces window snapshot --out shot.png            # main window, or first if none is main
-workspaces window snapshot --out shot.png --window 42 # a specific window.read id
-workspaces workspace list                            # repos + workspaces, human-readable
-workspaces workspace list --json                     # same, as the raw result envelope
-workspaces workspace select <id>                     # drive the real selection gesture for <id>
-workspaces workspace select <id> --json              # same, as the raw result envelope
-workspaces workspace create <repo-id> feature-a      # create local workspace through the UI path
-workspaces workspace create <repo-id> feature-a --json
-workspaces workspace create <repo-id> feature-a --provider lume --guest-os macos
-workspaces workspace archive <id>                   # archive through the sidebar action path
-workspaces workspace archive <id> --teardown        # kill tmux + retire terminals first
-workspaces workspace archive <id> --json
-workspaces wait --for workspace_selected --workspace-id <id> --timeout-ms 10000 --json
-workspaces wait --for surface_text_matches --surface-id <id> --pattern 'PASS|FAIL'
-workspaces wait --for prompt_ready --surface-id <id>
-workspaces focus --json                              # truthful focus report incl. focusPossible
+workspaces automation window list
+workspaces automation window list --json
+workspaces automation window snapshot --out shot.png             # main window, or first if none is main
+workspaces automation window snapshot --out shot.png --window 42 # a specific window.read id
+workspaces automation workspace list                             # repos + workspaces, human-readable
+workspaces automation workspace list --json                      # same, as the raw result envelope
+workspaces automation workspace select <id>                      # drive the real selection gesture for <id>
+workspaces automation workspace select <id> --json               # same, as the raw result envelope
+workspaces automation workspace create <repo-id> feature-a       # create local workspace through the UI path
+workspaces automation workspace create <repo-id> feature-a --json
+workspaces automation workspace create <repo-id> feature-a --provider lume --guest-os macos
+workspaces automation workspace archive <id>                     # archive through the sidebar action path
+workspaces automation workspace archive <id> --teardown          # kill tmux + retire terminals first
+workspaces automation workspace archive <id> --json
+workspaces automation wait --for workspace_selected --workspace-id <id> --timeout-ms 10000 --json
+workspaces automation wait --for surface_text_matches --surface-id <id> --pattern 'PASS|FAIL'
+workspaces automation wait --for prompt_ready --surface-id <id>
+workspaces automation focus --json                               # truthful focus report incl. focusPossible
 ```
 
-`workspace list` reads the running app's repos and workspaces (`workspace.read`),
-marking the currently-selected repo and workspace with a leading `*`. It is
-distinct from `workspaces ws list`, which lists the CLI's own local-state
-workspaces rather than what the app currently has.
+`automation workspace list` reads the running app's repos and workspaces
+(`workspace.read`), marking the currently-selected repo and workspace with a
+leading `*`. It is the app plane's source of truth; `workspaces ws list` derives
+from it whenever the operator credential is readable, adding the rows that exist
+only in the CLI's own local-state store, and falls back to that store alone
+without the credential.
 
-`window snapshot` writes the PNG to `--out` and, with no `--window`, targets the
-main window (falling back to the first listed) so the common "snapshot the app"
-case needs no id lookup. It works with the app backgrounded — no activation, no
-focus steal.
+`automation window snapshot` writes the PNG to `--out` and, with no `--window`,
+targets the main window (falling back to the first listed) so the common
+"snapshot the app" case needs no id lookup. It works with the app backgrounded —
+no activation, no focus steal.
 
-`workspace select <id>` drives the running app's real selection gesture for the
-workspace with stable `<id>` (from `workspace list`): the app highlights it,
-attaches its terminal, and requests focus, exactly as a sidebar click would. It
-prints whether a terminal attached; `--json` emits the raw result envelope. Absent a
-live window it fails `unsupported` — it never falls back to a data-layer write.
+`automation workspace select <id>` drives the running app's real selection
+gesture for the workspace with stable `<id>` (from `automation workspace list`):
+the app highlights it, attaches its terminal, and requests focus, exactly as a
+sidebar click would. It prints whether a terminal attached; `--json` emits the raw
+result envelope. Absent a live window it fails `unsupported` — it never falls back
+to a data-layer write.
 
-`workspace create <repo-id> <name>` drives the sidebar's real create helper for
-the repo with stable `<repo-id>` (from `workspace list`). It defaults to the local
+`automation workspace create <repo-id> <name>` drives the sidebar's real create
+helper for the repo with stable `<repo-id>` (from `automation workspace list`).
+It defaults to the local
 provider; `--provider` and `--guest-os` mirror the New Workspace sheet's provider
 choice. On success, the app creates the workspace, selects it, and attaches its
 terminal. If provider setup needs user confirmation, the command prints the
@@ -888,10 +913,14 @@ confirmation message; `--json` includes the structured confirmation payload.
 Absent a live window it fails `unsupported` — it never falls back to a data-layer
 write.
 
-`wait` is the server-side typed wait: its exit code follows the outcome so
-`set -e` scripts branch without parsing JSON — 0 `satisfied`, 2 `timed_out`,
-3 `not_applicable`. `focus` prints the truthful focus report; never assert on
-its other fields without branching on `focusPossible` first.
+`automation wait` is the server-side typed wait: its exit code follows the
+outcome so `set -e` scripts branch without parsing JSON — 0 `satisfied`,
+2 `timed_out`, 3 `not_applicable`. `automation focus` prints the truthful focus
+report; never assert on its other fields without branching on `focusPossible`
+first. `automation wait` holds the socket open for the length of the
+server-side wait, so it derives its client deadline from the wait ceiling plus
+headroom rather than inheriting the default — the opposite direction from the
+inventory probe, which shortens it.
 
 ## Implementation Map
 
