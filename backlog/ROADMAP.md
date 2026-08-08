@@ -28,9 +28,10 @@ I stop noticing the app: pick context, get a terminal, work.
 
 The bet is on one user. I expect that taking that seriously leaves high-quality
 reusable parts along the way — libraries, packages, a good experience — and if
-I like it, some other cohort likely would; Folio, the conversation experience,
-is already one of them: an installable package with MFWiki as its first outside
-consumer.
+I like it, some other cohort likely would. Folio, the conversation experience,
+is the first test of that: the approved next step is extracting it as a package
+something outside this repo can install and build against. It is still private
+to the monorepo until that lands.
 
 ## The Surfaces
 
@@ -77,6 +78,7 @@ yet (#547).
 uses the normal lane and state labels whether or not it has a milestone yet.
 Current focus reads off the
 [open milestones](https://github.com/fairchild/workspaces/milestones), and the
-milestone operating contract lives in `docs/agents/issue-tracker.md`. Anything
-here that would need updating more than a few times a year belongs in GitHub
-or a decision doc instead.
+milestone operating contract lives in `docs/agents/issue-tracker.md`. Narrative
+history lives in `docs/retros/` from mid-2026 on, and in git before that.
+Anything here that would need updating more than a few times a year belongs in
+GitHub or a decision doc instead.
