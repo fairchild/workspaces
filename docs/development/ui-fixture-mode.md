@@ -50,17 +50,19 @@ For repeatable captures, prefer the wrapper:
 
 | Variable | Effect |
 |----------|--------|
-| `WORKSPACES_SYNTHETIC_ROOT` | Any non-blank value marks the run synthetic: preferences resolve to the shared scratch suite `com.cloudcompute.workspaces.isolated`, which the app wipes at bootstrap. Every isolated launch therefore starts with no stored selection, theme, or settings state. |
-| `WORKSPACES_PREFERENCES_SUITE` | Names an explicit suite instead. Nothing wipes it on the app's behalf, so this is the form to use for isolation without a synthetic root, for parallel isolated launches that must not share one suite, or when preferences should survive a relaunch inside one run. A name that resolves back to a persistent domain (the app id, `WorkspaceManager`, the global domain) is ignored. |
+| `WORKSPACES_SYNTHETIC_ROOT` | Any non-blank value marks the run synthetic: preferences resolve to a scratch suite named `com.cloudcompute.workspaces.isolated.<digest>`, where the digest is derived from the root itself, and the app wipes that suite at bootstrap. Every isolated launch therefore starts with no stored selection, theme, or settings state, and two launches under different roots neither share a plist nor wipe each other. |
+| `WORKSPACES_PREFERENCES_SUITE` | Names an explicit suite instead. Nothing wipes it on the app's behalf, so this is the form to use for isolation without a synthetic root, for two isolated launches that share one root but must not share one suite, or when preferences should survive a relaunch inside one run. A name that resolves back to a persistent domain (the app id, `WorkspaceManager`, the global domain) or to the scratch-suite base `com.cloudcompute.workspaces.isolated` is ignored. |
 
 Both are read once at bootstrap (`Sources/WorkspaceManagerCore/Services/LaunchPreferences.swift`) and the resolved store backs every `@AppStorage` and settings read in the app. Unset, the app reads and writes the persistent domain exactly as before. The resolved domain is logged at launch:
 
 ```bash
 log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact | grep LaunchPreferences
-# [LaunchPreferences] domain=scratch suite=com.cloudcompute.workspaces.isolated reset=true isolated=true
+# [LaunchPreferences] domain=scratch suite=com.cloudcompute.workspaces.isolated.cc2195059e870052 reset=true isolated=true
 ```
 
-Helper processes that share the environment (the `workspaces` CLI driving a live isolated app) resolve to the same suite without clearing it — only the app's own bootstrap resets.
+The digest is a stable FNV-1a of the root string, not a per-process hash, so helper processes that share the environment (the `workspaces` CLI driving a live isolated app) land on the same suite and read it without clearing it — only the app's own bootstrap resets.
+
+**Lanes that seed preferences before launch.** `scripts/continuity-evidence.sh` and `scripts/shortcut-pass-through-smoke.sh` write and read `com.cloudcompute.workspaces` directly (`defaults write com.cloudcompute.workspaces mainWindow.lastSurface …`, `defaults read com.cloudcompute.workspaces terminalMultiplexingMode`). That domain is the right target only while the lane launches the app unisolated. The moment a lane sets `WORKSPACES_SYNTHETIC_ROOT`, the app stops reading that domain and its seeds go nowhere — such a lane must seed the same scratch suite the app will resolve to, or set `WORKSPACES_PREFERENCES_SUITE` to a name it picks and seed that. Migrating those two lanes belongs with the synthetic-root integration (#1245), not here.
 
 ### `WORKSPACES_UI_FIXTURE_AGENT_STATES` grammar
 

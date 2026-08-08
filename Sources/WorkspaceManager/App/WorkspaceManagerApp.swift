@@ -29,15 +29,21 @@ struct WorkspaceManagerApp: App {
     @StateObject private var workspaceStatusAggregator = WorkspaceStatusAggregator()
     @StateObject private var workspaceJournal: WorkspaceJournal
     @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
-    private let appRuntimeDependencies = AppRuntimeDependencies.resolved()
+    private let appRuntimeDependencies: AppRuntimeDependencies
     private let localStateStore: LocalStateStore?
     let sharedModelContainer: ModelContainer
 
     init() {
-        // First statement of the launch: resolving the preferences domain — and
-        // wiping it, when the run is isolated — has to happen before anything
-        // reads a stored value through it.
+        // Resolving the preferences domain — and wiping it, when the run is
+        // isolated — has to happen before anything reads a stored value through it,
+        // which is why it is the first statement of this body and why nothing that
+        // reads preferences carries an inline stored-property default. Inline
+        // defaults are evaluated in the initializer prologue, ahead of this line:
+        // `AppRuntimeDependencies.resolved()` reads the web-next settings out of
+        // UserDefaults, so as a stored-property default it would have observed the
+        // pre-wipe suite. It is constructed below instead.
         LaunchPreferences.bootstrapForApplicationLaunch()
+        self.appRuntimeDependencies = AppRuntimeDependencies.resolved()
 
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
         let bootstrap = ModelStoreBootstrapper.bootstrap(

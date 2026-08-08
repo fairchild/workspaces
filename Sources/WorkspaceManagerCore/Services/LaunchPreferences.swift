@@ -20,7 +20,7 @@ public enum LaunchPreferencesResolution: Equatable, Sendable {
     /// The persistent app domain — normal dev and production launches.
     case standard
     /// A scratch suite. `resetOnLaunch` means the app wipes it at bootstrap, which
-    /// is what keeps a fixed suite name from becoming the leak it replaces.
+    /// is what keeps a reused suite name from becoming the leak it replaces.
     case scratch(suiteName: String, resetOnLaunch: Bool)
 
     public var isIsolated: Bool {
@@ -47,24 +47,35 @@ public enum LaunchPreferencesEnvironment {
     public static let syntheticRootKey = "WORKSPACES_SYNTHETIC_ROOT"
 
     /// Names an explicit scratch suite. Callers that need isolation without a
-    /// synthetic root, parallel isolated launches, or preferences that survive a
-    /// relaunch within one run set this and own the suite's lifetime — an
-    /// explicitly named suite is never reset on the app's behalf.
+    /// synthetic root, two isolated launches sharing one root, or preferences that
+    /// survive a relaunch within one run set this and own the suite's lifetime —
+    /// an explicitly named suite is never reset on the app's behalf.
     public static let suiteOverrideKey = "WORKSPACES_PREFERENCES_SUITE"
 
-    /// Fixed suite for synthetic launches: one plist wiped per launch, rather than
-    /// a per-root plist accumulating in `~/Library/Preferences`.
-    public static let defaultScratchSuiteName = "com.cloudcompute.workspaces.isolated"
+    /// Prefix every synthetic-launch scratch suite shares. Never the suite name
+    /// itself — see `scratchSuiteName(forSyntheticRoot:)`.
+    public static let scratchSuiteBaseName = "com.cloudcompute.workspaces.isolated"
 
     /// Names that resolve back to a persistent domain (the bundled app id, the
-    /// unbundled dev process domain, the global domain), so an override naming one
-    /// is treated as unset rather than silently defeating isolation.
+    /// unbundled dev process domain, the global domain) or to the scratch-suite
+    /// base, so an override naming one is treated as unset rather than silently
+    /// defeating isolation or aliasing the synthetic-launch namespace.
     static let reservedSuiteNames: Set<String> = [
         "com.cloudcompute.workspaces",
         "WorkspaceManager",
         "NSGlobalDomain",
         ".GlobalPreferences",
+        scratchSuiteBaseName,
     ]
+
+    /// The suite a synthetic root resolves to: the base name plus a stable digest
+    /// of the root. One plist per root means two isolated launches under different
+    /// roots neither share state nor wipe each other at bootstrap, while every
+    /// process launched into the *same* root — the app and the `workspaces` CLI
+    /// driving it — still agrees on one suite.
+    public static func scratchSuiteName(forSyntheticRoot syntheticRoot: String) -> String {
+        "\(scratchSuiteBaseName).\(stableDigest(of: syntheticRoot))"
+    }
 
     public static func resolution(
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -82,11 +93,25 @@ public enum LaunchPreferencesEnvironment {
             }
         }
 
-        if trimmed(environment[syntheticRootKey]) != nil {
-            return .scratch(suiteName: defaultScratchSuiteName, resetOnLaunch: true)
+        if let syntheticRoot = trimmed(environment[syntheticRootKey]) {
+            return .scratch(
+                suiteName: scratchSuiteName(forSyntheticRoot: syntheticRoot),
+                resetOnLaunch: true
+            )
         }
 
         return .standard
+    }
+
+    /// FNV-1a (64-bit). `Hasher` is seeded per process, so it cannot name a suite
+    /// two processes must both find; this is stable across processes and releases.
+    private static func stableDigest(of value: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return String(hash, radix: 16)
     }
 
     private static func trimmed(_ rawValue: String?) -> String? {
@@ -110,10 +135,17 @@ public enum LaunchPreferences {
     /// isolated app) observe the same suite without clearing it underneath.
     public static let defaults: UserDefaults = makeDefaults(for: resolution)
 
-    /// Called first thing in the app's launch: clears the scratch suite when the
-    /// resolution says this run owns it, then records the resolved domain so an
-    /// isolated launch is visible in the log stream.
+    /// Called first thing in the app's launch, against the process's own resolution.
     public static func bootstrapForApplicationLaunch() {
+        bootstrap(resolution: resolution)
+    }
+
+    /// Clears the scratch suite when the resolution says this run owns it, then
+    /// records the resolved domain so an isolated launch is visible in the log
+    /// stream. Takes its resolution as an argument so the wipe decision — which
+    /// suites get cleared and which are the caller's to keep — is exercised
+    /// directly instead of only through the process environment.
+    static func bootstrap(resolution: LaunchPreferencesResolution) {
         if case .scratch(let suiteName, true) = resolution {
             reset(suiteName: suiteName)
         }
@@ -122,7 +154,7 @@ public enum LaunchPreferences {
         case .standard:
             log.info("[LaunchPreferences] domain=standard")
         case .scratch(let suiteName, let resetOnLaunch):
-            let isolated = defaults !== UserDefaults.standard
+            let isolated = makeDefaults(for: resolution) !== UserDefaults.standard
             log.info(
                 """
                 [LaunchPreferences] domain=scratch suite=\(suiteName, privacy: .public) \
@@ -133,8 +165,10 @@ public enum LaunchPreferences {
     }
 
     /// Drops every value in a suite. Applied to the on-disk domain, so a store
-    /// already vended for that suite sees the cleared state too.
-    public static func reset(suiteName: String) {
+    /// already vended for that suite sees the cleared state too. Module-internal:
+    /// the only sanctioned way to clear preferences is a launch whose resolution
+    /// says the run owns the suite.
+    static func reset(suiteName: String) {
         UserDefaults.standard.removePersistentDomain(forName: suiteName)
     }
 
