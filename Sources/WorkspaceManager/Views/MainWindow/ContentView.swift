@@ -2002,10 +2002,10 @@ struct ContentView: View {
                 }
             },
             tmuxSessionName: { session in
-                guard tileTreeStore.resolveTerminalMultiplexingMode() == .tmuxPerSession else {
-                    return nil
-                }
-                return session.effectiveTmuxSessionName
+                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(
+                    of: session,
+                    mode: tileTreeStore.resolveTerminalMultiplexingMode()
+                )
             },
             killTmuxSession: tileTreeStore.killTmuxSession,
             closeForRetirement: { sessionID in

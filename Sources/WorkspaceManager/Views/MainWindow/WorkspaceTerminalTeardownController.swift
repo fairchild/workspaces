@@ -40,6 +40,18 @@ struct WorkspaceTerminalTeardownController {
     var killedProcessExitBudget: Duration = .seconds(5)
     var closeRetryInterval: Duration = .milliseconds(100)
 
+    /// The tmux session backing `session` under teardown, or `nil` when none does: outside
+    /// `.tmuxPerSession` nothing launches under tmux, and a remote (`customCommand`) surface runs
+    /// its command directly even in tmux mode (`TerminalSessionLaunchContext.hostSession` passes it
+    /// no tmux name), so its directory derivation would name a session it does not own.
+    static func tmuxSessionNameForTeardown(
+        of session: HostTerminalSession,
+        mode: TerminalMultiplexingMode
+    ) -> String? {
+        guard mode == .tmuxPerSession, !session.isRemote else { return nil }
+        return session.effectiveTmuxSessionName
+    }
+
     func teardown(scopeKey: HostTerminalSessionKey) async -> Outcome {
         let sessions = sessionsInScope(scopeKey)
 

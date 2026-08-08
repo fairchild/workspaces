@@ -258,4 +258,56 @@ struct WorkspaceTerminalTeardownControllerTests {
         }
         #expect(report.killedTmuxSessions == [a.effectiveTmuxSessionName])
     }
+
+    /// The kill-list derivation the live wiring uses. A remote (`customCommand`) surface launches
+    /// its command directly and never under tmux, so its directory derivation names a session it
+    /// does not own — killing it would take down whatever local surface holds that name.
+    @Test("kill-list derivation excludes remote sessions and every session outside tmux mode")
+    func killListDerivationExcludesRemoteSessions() async {
+        let local = session()
+        let remote = HostTerminalSession(
+            key: Self.scope,
+            directory: URL(fileURLWithPath: "/tmp/ws"),
+            customCommand: "ssh sandbox"
+        )
+        #expect(local.effectiveTmuxSessionName == remote.effectiveTmuxSessionName)
+
+        #expect(
+            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: local, mode: .tmuxPerSession)
+                == local.effectiveTmuxSessionName)
+        #expect(
+            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: remote, mode: .tmuxPerSession) == nil)
+        #expect(
+            WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: local, mode: .ghosttyManagedSplits)
+                == nil)
+
+        // Through the state machine on the real derivation: the remote session still closes and
+        // retires, it just contributes no name to the kill list.
+        var killCalls: [String] = []
+        var closed: [UUID] = []
+        let controller = WorkspaceTerminalTeardownController(
+            sessionsInScope: { _ in [remote] },
+            tmuxSessionName: {
+                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: $0, mode: .tmuxPerSession)
+            },
+            killTmuxSession: { name in
+                killCalls.append(name)
+                return true
+            },
+            closeForRetirement: { closed.append($0) },
+            retireSessions: { _ in [remote.id] }
+        )
+
+        let outcome = await controller.teardown(scopeKey: Self.scope)
+
+        #expect(killCalls.isEmpty)
+        #expect(closed == [remote.id])
+        #expect(
+            outcome
+                == .completed(
+                    AutomationWorkspaceArchiveTeardownReport(
+                        retiredSurfaceIDs: [remote.id.uuidString],
+                        killedTmuxSessions: []
+                    )))
+    }
 }

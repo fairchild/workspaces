@@ -1535,6 +1535,16 @@ struct AutomationAPITests {
         #expect(badTeardown.status == 400)
         #expect(badTeardownEnvelope.error?.code == .invalidRequest)
 
+        // JSONSerialization bridges JSON numbers to Bool, so `1` would silently read as true
+        // without the CoreFoundation-boolean check. The documented contract is boolean-only.
+        let numericTeardown = await post(
+            "operator", body: Data("{\"workspaceID\":\"\(validID)\",\"teardownTerminals\":1}".utf8))
+        let numericTeardownEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: numericTeardown.body)
+        #expect(numericTeardown.status == 400)
+        #expect(numericTeardownEnvelope.error?.code == .invalidRequest)
+        #expect(controller.archiveCalls.count == 2)
+
         let terminalActive = await post(
             "operator", body: body(FakeAutomationController.archiveTerminalActiveID))
         let terminalActiveEnvelope = try AutomationJSON.decoder.decode(

@@ -279,17 +279,19 @@ enum AutomationHTTPRouter {
     /// The archive body: the same global `workspaceID` contract as `workspace.select`, plus the
     /// optional `teardownTerminals` boolean. A present-but-non-boolean `teardownTerminals` is
     /// rejected rather than silently treated as false, so a caller cannot believe it requested
-    /// teardown when the server ignored the field.
+    /// teardown when the server ignored the field. `JSONSerialization` bridges JSON numbers to
+    /// `Bool` (`1` casts to `true`), so the check is on the CoreFoundation boolean type — that
+    /// matches the strictness `JSONDecoder` already applies to the `Codable` routes' booleans.
     private static func decodeWorkspaceArchive(from body: Data) throws -> AutomationWorkspaceArchiveRequest {
         let workspaceID = try decodeWorkspaceID(from: body)
         let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
         var teardownTerminals: Bool?
         if let raw = object["teardownTerminals"] {
-            guard let flag = raw as? Bool else {
+            guard let number = raw as? NSNumber, CFGetTypeID(number) == CFBooleanGetTypeID() else {
                 throw AutomationServiceError(
                     .invalidRequest, "Request 'teardownTerminals' must be a boolean when provided.")
             }
-            teardownTerminals = flag
+            teardownTerminals = number.boolValue
         }
         return AutomationWorkspaceArchiveRequest(workspaceID: workspaceID, teardownTerminals: teardownTerminals)
     }
