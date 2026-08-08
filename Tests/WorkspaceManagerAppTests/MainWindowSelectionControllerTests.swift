@@ -68,6 +68,49 @@ private final class StateBox {
     var lastSurfaceRawValue = ""
 }
 
+/// Answers a launch spec (or fails) only after running the test's hook on the main actor.
+/// That hook is the seam for "the selection moved on while the provider was working": it runs
+/// inside the controller's `await`, so the re-check that follows is ordered by the language
+/// rather than by a sleep.
+private actor GatedLaunchSpecProvider: WorkspaceProviderProtocol {
+    nonisolated let descriptor = WorkspaceProviderDescriptor(
+        id: "gated",
+        displayName: "Gated",
+        description: "Answers a terminal launch spec after running the test's hook."
+    )
+
+    private let spec: TerminalLaunchSpec?
+    private let whileWorking: @MainActor @Sendable () -> Void
+
+    init(spec: TerminalLaunchSpec?, whileWorking: @escaping @MainActor @Sendable () -> Void) {
+        self.spec = spec
+        self.whileWorking = whileWorking
+    }
+
+    func availability() async -> WorkspaceProviderAvailability { .available }
+
+    nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
+        .hostPath(workspace.workspaceURL.path)
+    }
+
+    func createWorkspace(
+        request: WorkspaceProviderCreationRequest,
+        workspaceService: any WorkspaceServiceProtocol,
+        progress: WorkspaceProviderProgressHandler?,
+        persist: WorkspaceProviderPersistenceHandler?
+    ) async throws -> WorkspaceProviderCreationResult {
+        throw WorkspaceProviderError.unavailable("Not used in this test.")
+    }
+
+    func terminalLaunchSpec(for workspace: WorkspaceProviderTarget) async throws -> TerminalLaunchSpec {
+        await MainActor.run { whileWorking() }
+        guard let spec else {
+            throw WorkspaceProviderError.unavailable("Provider failed after the hook ran.")
+        }
+        return spec
+    }
+}
+
 /// Every effect the controller drives through a closure, in call order.
 @MainActor
 private final class EffectLog {
@@ -175,7 +218,7 @@ struct MainWindowSelectionControllerTests {
                 markWebSourceAccessed: { _ in effects.record("mark_web_source") },
                 acknowledgeAttention: { _ in effects.record("acknowledge_attention") },
                 acknowledgeAgentSession: { _ in effects.record("acknowledge_agent_session") },
-                activateHostSession: { key, directory, _ in
+                activateHostSession: MainWindowHostSessionActivator { key, directory, _ in
                     effects.record(key: key, directory: directory)
                     return HostTerminalSession(key: key, directory: directory)
                 },
@@ -365,6 +408,108 @@ struct MainWindowSelectionControllerTests {
         #expect(harness.controller.attachWorkspaceSessionWithoutSelection(archived) == nil)
         #expect(harness.controller.attachWorkspaceSessionWithoutSelection(remote) == nil)
         #expect(harness.effects.navigationDestinations.isEmpty)
+    }
+
+    // MARK: - Provider connect
+
+    /// A stopped remote workspace plus the spec a provider would answer for it.
+    private func makeRemoteWorkspaceFixture() throws -> (workspace: Workspace, spec: TerminalLaunchSpec) {
+        let workspaceRoot = try makeRepoDirectory("remote-a")
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "remote-a",
+            path: workspaceRoot,
+            sourceRepo: repo,
+            status: .stopped,
+            backendIdentifier: "daytona"
+        )
+        let spec = TerminalLaunchSpec(
+            sessionKey: .hostPath(workspaceRoot.path),
+            workingDirectory: workspaceRoot
+        )
+        return (workspace, spec)
+    }
+
+    @Test("A provider connect whose selection is still current opens the session it was asked for")
+    func currentProviderConnectOpensSession() async throws {
+        let container = try makeContainer()
+        let fixture = try makeRemoteWorkspaceFixture()
+        let harness = makeHarness(context: ModelContext(container))
+        harness.box.state.columnVisibility = .detailOnly
+
+        await harness.controller.connectToProviderBackedWorkspace(
+            fixture.workspace,
+            provider: GatedLaunchSpecProvider(spec: fixture.spec, whileWorking: {})
+        )
+
+        #expect(harness.effects.entries == ["activate_session", "acknowledge_attention"])
+        #expect(harness.effects.activatedKeys == [fixture.spec.sessionKey])
+        #expect(harness.focus.events == ["request_focus"])
+        #expect(fixture.workspace.status == .active)
+        #expect(harness.box.state.connectingWorkspaceID == nil)
+        #expect(harness.box.state.columnVisibility == .all)
+    }
+
+    @Test("A provider connect that resolves after the selection moved on lands nothing")
+    func staleProviderConnectLandsNothing() async throws {
+        let container = try makeContainer()
+        let fixture = try makeRemoteWorkspaceFixture()
+        let harness = makeHarness(context: ModelContext(container))
+        harness.box.state.columnVisibility = .detailOnly
+        // What a later selection leaves behind: the in-flight token now names something else.
+        let movedOnWorkspaceID = UUID()
+        let box = harness.box
+
+        await harness.controller.connectToProviderBackedWorkspace(
+            fixture.workspace,
+            provider: GatedLaunchSpecProvider(
+                spec: fixture.spec,
+                whileWorking: { box.state.connectingWorkspaceID = movedOnWorkspaceID }
+            )
+        )
+
+        #expect(harness.effects.entries.isEmpty)
+        #expect(harness.focus.events.isEmpty)
+        #expect(fixture.workspace.status == .stopped)
+        #expect(harness.box.state.columnVisibility == .detailOnly)
+        // The abandoned connect leaves the newer selection's token alone.
+        #expect(harness.box.state.connectingWorkspaceID == movedOnWorkspaceID)
+    }
+
+    @Test("A provider failure that arrives after the selection moved on reports nothing")
+    func staleProviderFailureReportsNothing() async throws {
+        let container = try makeContainer()
+        let fixture = try makeRemoteWorkspaceFixture()
+        let harness = makeHarness(context: ModelContext(container))
+        let movedOnWorkspaceID = UUID()
+        let box = harness.box
+
+        await harness.controller.connectToProviderBackedWorkspace(
+            fixture.workspace,
+            provider: GatedLaunchSpecProvider(
+                spec: nil,
+                whileWorking: { box.state.connectingWorkspaceID = movedOnWorkspaceID }
+            )
+        )
+
+        #expect(harness.effects.errors.isEmpty)
+        #expect(harness.box.state.connectingWorkspaceID == movedOnWorkspaceID)
+    }
+
+    @Test("A provider failure for the current selection reports the error and clears the token")
+    func currentProviderFailureReportsError() async throws {
+        let container = try makeContainer()
+        let fixture = try makeRemoteWorkspaceFixture()
+        let harness = makeHarness(context: ModelContext(container))
+
+        await harness.controller.connectToProviderBackedWorkspace(
+            fixture.workspace,
+            provider: GatedLaunchSpecProvider(spec: nil, whileWorking: {})
+        )
+
+        #expect(harness.effects.errors.count == 1)
+        #expect(harness.box.state.connectingWorkspaceID == nil)
+        #expect(harness.effects.activatedKeys.isEmpty)
     }
 
     // MARK: - Web source selection

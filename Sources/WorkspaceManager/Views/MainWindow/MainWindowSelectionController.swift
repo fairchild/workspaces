@@ -39,7 +39,7 @@ struct MainWindowSelectionController {
         let markWebSourceAccessed: @MainActor (WebSource) -> Void
         let acknowledgeAttention: @MainActor (WorkspaceStatusAggregator.AttentionTarget) -> Void
         let acknowledgeAgentSession: @MainActor (UUID) -> Void
-        let activateHostSession: @MainActor (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
+        let activateHostSession: MainWindowHostSessionActivator
         let persistTerminalContinuity: @MainActor (TerminalContinuityManifest.TargetKind, UUID, URL, URL) -> Void
         let restoredLaunchDirectoryForRepo: @MainActor (Repo) -> URL?
         let restoredLaunchDirectoryForWorkspace: @MainActor (Workspace) -> URL?
@@ -88,9 +88,9 @@ struct MainWindowSelectionController {
         dependencies.focusCoordinator.cancelPendingFocusRequest(reason: "repo_terminal_selected")
         dependencies.abandonPendingRemoteConnection("repo_terminal_selected")
         let session = dependencies.activateHostSession(
-            .repoPath(repoDirectory.path),
-            launchDirectory,
-            nil
+            key: .repoPath(repoDirectory.path),
+            directory: launchDirectory,
+            customCommand: nil
         )
         dependencies.focusCoordinator.beginRepoClickMeasurement(
             sessionID: session.id,
@@ -161,9 +161,9 @@ struct MainWindowSelectionController {
             inside: workspaceDirectory
         )
         let session = dependencies.activateHostSession(
-            .hostPath(workspaceDirectory.path),
-            launchDirectory,
-            nil
+            key: .hostPath(workspaceDirectory.path),
+            directory: launchDirectory,
+            customCommand: nil
         )
         dependencies.focusCoordinator.beginWorkspaceClickMeasurement(
             sessionID: session.id,
@@ -259,9 +259,9 @@ struct MainWindowSelectionController {
             workspace.status = launchSpec.statusAfterLaunch
             try? dependencies.modelContext.save()
             let session = dependencies.activateHostSession(
-                launchSpec.sessionKey,
-                launchSpec.workingDirectory,
-                launchSpec.customCommand
+                key: launchSpec.sessionKey,
+                directory: launchSpec.workingDirectory,
+                customCommand: launchSpec.customCommand
             )
             dependencies.state.wrappedValue.columnVisibility = .all
             dependencies.acknowledgeAttention(.workspace(workspace.id))

@@ -178,7 +178,7 @@ struct ContentView: View {
                 markWebSourceAccessed: { markAccessed(webSource: $0) },
                 acknowledgeAttention: { acknowledgeVisitedAttentionTarget($0) },
                 acknowledgeAgentSession: { acknowledgeVisitedAgentSession($0) },
-                activateHostSession: { key, directory, customCommand in
+                activateHostSession: MainWindowHostSessionActivator { key, directory, customCommand in
                     activateHostSession(key: key, directory: directory, customCommand: customCommand)
                 },
                 persistTerminalContinuity: { targetKind, targetID, rootURL, launchURL in
