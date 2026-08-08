@@ -2153,6 +2153,11 @@ struct ContentView: View {
                         attentionItems: workspaceStatusAggregator.attentionItems,
                         repos: repos
                     ).count,
+                    // The other half of the pill's visibility rule: the minimalToolbar
+                    // experiment removes the toolbar group it lives in. Read at call time
+                    // from the same defaults + forced-on env the @ExperimentalFeatureFlag
+                    // wrapper reads, so toggling the experiment shows in the next read.
+                    minimalToolbar: ExperimentalFeatures.isEnabled(.minimalToolbar),
                     banners: visibleAutomationBanners,
                     tileTreeStore: tileTreeStore
                 )

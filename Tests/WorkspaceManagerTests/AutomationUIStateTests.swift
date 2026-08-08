@@ -16,22 +16,26 @@ import Testing
 
 // MARK: - Fixture-predicted snapshots
 
-/// The structural state a fixture-mode launch stages, predicted from `UIFixtureSeeder`'s
-/// deterministic seed data: feature-auth auto-selected, six repos, all workspaces active.
+/// The structural state a fixture-mode evidence-lane launch renders: `UIFixtureSeeder`'s
+/// six repos with all workspaces active, a terminal attached, and — verified live against
+/// the debug app on 2026-08-07 — no workspace selected. A `--clean-data` fixture launch has
+/// no prior selection to restore and does not auto-select one, so `selection.kind` is `none`
+/// and no sidebar row is selected. (The shipped goldens were regenerated from that live read
+/// through `scripts/ui-state-golden.sh update`; this is the offline mirror of it.)
 private func fixtureSnapshot(banners: [AutomationUIBanner]) -> AutomationUIStateSnapshot {
-    func row(_ name: String, selected: Bool = false) -> AutomationUIStateWorkspaceRow {
-        AutomationUIStateWorkspaceRow(
-            name: name, status: "active", isSelected: selected, attention: nil)
+    func row(_ name: String) -> AutomationUIStateWorkspaceRow {
+        AutomationUIStateWorkspaceRow(name: name, status: "active", isSelected: false, attention: nil)
     }
     return AutomationUIStateProjection.snapshot(
-        selection: AutomationUIStateSelection(kind: .workspace, name: "feature-auth"),
+        selection: AutomationUIStateSelection(kind: .none, name: nil),
         banners: banners,
         attentionCount: 0,
+        minimalToolbar: false,
         sidebar: [
             AutomationUIStateRepoSection(
                 name: "bertram-chat",
                 isSelected: false,
-                workspaces: [row("feature-auth", selected: true), row("bugfix-422"), row("refactor-state")]
+                workspaces: [row("feature-auth"), row("bugfix-422"), row("refactor-state")]
             ),
             AutomationUIStateRepoSection(
                 name: "bread-builder", isSelected: false, workspaces: [row("refactor-runtime")]),
@@ -76,8 +80,27 @@ struct AutomationUIStateProjectionTests {
     }
 
     @Test func attentionPillTextMirrorsPillVisibility() {
-        #expect(AutomationUIStateProjection.attentionPillText(count: 0) == nil)
-        #expect(AutomationUIStateProjection.attentionPillText(count: 2) == "2 need you")
+        #expect(AutomationUIStateProjection.attentionPillText(count: 0, minimalToolbar: false) == nil)
+        #expect(
+            AutomationUIStateProjection.attentionPillText(count: 2, minimalToolbar: false)
+                == "2 need you")
+    }
+
+    @Test func minimalToolbarHidesThePillAtAnyCount() {
+        // The pill lives in the trailing toolbar group the minimalToolbar experiment removes,
+        // so with the experiment on there is no rendered text for any count to produce.
+        #expect(AutomationUIStateProjection.attentionPillText(count: 2, minimalToolbar: true) == nil)
+        #expect(AutomationUIStateProjection.attentionPillText(count: 0, minimalToolbar: true) == nil)
+
+        let snapshot = AutomationUIStateProjection.snapshot(
+            selection: AutomationUIStateSelection(kind: .none, name: nil),
+            banners: [],
+            attentionCount: 4,
+            minimalToolbar: true,
+            sidebar: [],
+            terminal: AutomationUIStateTerminal(attached: false, tabCount: 0, splitCount: 0)
+        )
+        #expect(snapshot.attentionPillText == nil)
     }
 
     @Test func snapshotAppliesOrderingContract() {
@@ -85,6 +108,7 @@ struct AutomationUIStateProjectionTests {
             selection: AutomationUIStateSelection(kind: .none, name: nil),
             banners: [.restoreSessions, .modelStoreDegraded],
             attentionCount: 0,
+            minimalToolbar: false,
             sidebar: [
                 AutomationUIStateRepoSection(
                     name: "zeta",
@@ -209,6 +233,7 @@ private final class UIStateFakeController: AutomationControlling {
             selection: AutomationUIStateSelection(kind: .workspace, name: "feature-auth"),
             banners: [.workspaceOrphanCleanup],
             attentionCount: 1,
+            minimalToolbar: false,
             sidebar: [],
             terminal: AutomationUIStateTerminal(attached: true, tabCount: 1, splitCount: 0)
         ),

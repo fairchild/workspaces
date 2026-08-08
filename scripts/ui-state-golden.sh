@@ -10,6 +10,7 @@
 #   ./scripts/ui-state-golden.sh verify --scenario clean --from-file wire.json
 #   ./scripts/ui-state-golden.sh update --scenario clean      # EXPLICIT regeneration
 #   ./scripts/ui-state-golden.sh print                        # dump live state JSON
+#   ./scripts/ui-state-golden.sh settle --scenario clean      # print "<timeout> <poll>"
 #
 # `update` is the only way a golden changes — a verify mismatch never rewrites
 # anything. Comparison semantics are canonical in the unit-tested Swift
@@ -18,6 +19,21 @@
 # subtree against `.result.state`, after pruning the golden's `ignore` dot paths
 # from both sides (arrays traverse element-wise). The wire `volatile` subtree is
 # outside `state` and therefore never compared.
+#
+# Key order: the golden mirrors the wire. `update` writes `state` exactly as the
+# response delivered it and holds no opinion of its own, so an update against an
+# unchanged app rewrites the same bytes and shows no diff. The response is already
+# key-sorted (`AutomationJSON.encoder` sets `.sortedKeys`); re-sorting here would
+# be a second, independent ordering that silently diverges if that ever changes.
+# Only mismatch *messages* sort keys, where stable text matters and file shape
+# does not.
+#
+# Settle: a golden may declare `"settle": {"timeoutSeconds": N, "pollSeconds": M}`
+# for chrome that cannot exist at first paint (the orphan banner is decided by
+# deferred startup work that runs seconds after the window renders). `verify`
+# then re-fetches and re-compares on that interval until the state matches or the
+# bound elapses — a per-golden wait, not a global sleep, and a deterministic
+# failure when the state never arrives.
 # ==========================================================================
 
 set -euo pipefail
@@ -29,13 +45,16 @@ CREDENTIAL_PATH="$HOME/Library/Application Support/com.cloudcompute.workspaces/a
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") <verify|update|print> [options]
+Usage: $(basename "$0") <verify|update|print|settle> [options]
 
 Options:
   --scenario <name>   Golden scenario id (fixtures/ui-state/<name>.json);
-                      required for verify/update.
+                      required for verify/update/settle.
+  --golden <path>     Use this golden file instead of the scenario's path
+                      (tests and one-off comparisons).
   --from-file <path>  Use a saved /v1/ui-state response instead of fetching
-                      from the running app's automation socket.
+                      from the running app's automation socket. A saved
+                      response cannot change, so any declared settle is skipped.
   -h, --help          Show this help
 EOF
   exit 1
@@ -47,9 +66,11 @@ shift
 
 SCENARIO=""
 FROM_FILE=""
+GOLDEN_OVERRIDE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --scenario) SCENARIO="$2"; shift 2 ;;
+    --golden) GOLDEN_OVERRIDE="$2"; shift 2 ;;
     --from-file) FROM_FILE="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "error: unknown option: $1" >&2; usage ;;
@@ -57,14 +78,17 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$COMMAND" in
-  verify|update)
-    [[ -n "$SCENARIO" ]] || { echo "error: --scenario is required for $COMMAND." >&2; usage; }
+  verify|update|settle)
+    if [[ -z "$SCENARIO" && -z "$GOLDEN_OVERRIDE" ]]; then
+      echo "error: --scenario (or --golden) is required for $COMMAND." >&2
+      usage
+    fi
     ;;
   print) ;;
   *) echo "error: unknown command: $COMMAND" >&2; usage ;;
 esac
 
-GOLDEN_PATH="$REPO_ROOT/fixtures/ui-state/$SCENARIO.json"
+GOLDEN_PATH="${GOLDEN_OVERRIDE:-$REPO_ROOT/fixtures/ui-state/$SCENARIO.json}"
 
 # fetch_wire_response <out-file> — GET /v1/ui-state through the per-launch operator
 # credential. Requires a running app launched with WORKSPACES_AUTOMATION_API=1 and
@@ -90,48 +114,45 @@ fetch_wire_response() {
   fi
 }
 
-WIRE_FILE="$FROM_FILE"
-if [[ -z "$WIRE_FILE" ]]; then
-  WIRE_FILE="$(mktemp -t ui-state-wire)"
-  trap 'rm -f "$WIRE_FILE"' EXIT
-  fetch_wire_response "$WIRE_FILE"
-fi
+# acquire_wire <out-file> — the saved response when --from-file was given, a live
+# fetch otherwise.
+acquire_wire() {
+  if [[ -n "$FROM_FILE" ]]; then
+    cp "$FROM_FILE" "$1"
+    return 0
+  fi
+  fetch_wire_response "$1"
+}
 
-case "$COMMAND" in
-  print)
-    python3 - "$WIRE_FILE" <<'PY'
+# read_settle — prints "<timeoutSeconds> <pollSeconds>" for the golden's settle
+# declaration, "0 0" when it declares none. Validates the shape here, where it is
+# used, so a typo fails loudly instead of silently disabling the wait.
+read_settle() {
+  python3 - "$GOLDEN_PATH" <<'PY'
 import json, sys
-wire = json.load(open(sys.argv[1]))
-if not wire.get("ok"):
-    sys.exit(f"error: /v1/ui-state returned an error envelope: {json.dumps(wire.get('error'))}")
-print(json.dumps(wire["result"]["state"], indent=2, sort_keys=True))
-PY
-    ;;
 
-  update)
-    python3 - "$WIRE_FILE" "$GOLDEN_PATH" "$SCENARIO" <<'PY'
-import json, os, sys
-wire_path, golden_path, scenario = sys.argv[1:4]
-wire = json.load(open(wire_path))
-if not wire.get("ok"):
-    sys.exit(f"error: /v1/ui-state returned an error envelope: {json.dumps(wire.get('error'))}")
-ignore = []
-if os.path.exists(golden_path):
-    ignore = json.load(open(golden_path)).get("ignore", [])
-document = {"scenario": scenario, "ignore": ignore, "state": wire["result"]["state"]}
-with open(golden_path, "w") as handle:
-    json.dump(document, handle, indent=2, sort_keys=True)
-    handle.write("\n")
-print(f"updated {golden_path}")
+golden_path = sys.argv[1]
+settle = json.load(open(golden_path)).get("settle")
+if settle is None:
+    print("0 0")
+    raise SystemExit(0)
+if not isinstance(settle, dict):
+    raise SystemExit(f"error: golden 'settle' must be an object in {golden_path}")
+timeout = settle.get("timeoutSeconds")
+poll = settle.get("pollSeconds", 1)
+for name, value in (("timeoutSeconds", timeout), ("pollSeconds", poll)):
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise SystemExit(f"error: golden settle '{name}' must be an integer >= 1 in {golden_path}")
+print(timeout, poll)
 PY
-    echo "→ re-verify offline: swift test --filter UIStateGolden" >&2
-    ;;
+}
 
-  verify)
-    [[ -f "$GOLDEN_PATH" ]] || { echo "error: no golden at $GOLDEN_PATH" >&2; exit 1; }
-    python3 - "$WIRE_FILE" "$GOLDEN_PATH" <<'PY'
+# compare_wire <wire-file> <quiet|loud> — exit 0 on match, 1 on mismatch. Loud mode
+# prints the path-sorted mismatch list; quiet mode is the retry-loop's probe.
+compare_wire() {
+  python3 - "$1" "$GOLDEN_PATH" "$2" <<'PY'
 import json, sys
-wire_path, golden_path = sys.argv[1:3]
+wire_path, golden_path, report = sys.argv[1:4]
 wire = json.load(open(wire_path))
 if not wire.get("ok"):
     sys.exit(f"error: /v1/ui-state returned an error envelope: {json.dumps(wire.get('error'))}")
@@ -187,12 +208,102 @@ for ignore_path in golden.get("ignore", []):
 mismatches = []
 diff(expected_state, actual_state, "state", mismatches)
 if mismatches:
-    print(f"✗ ui-state mismatch vs {golden_path}:", file=sys.stderr)
-    for mismatch in sorted(mismatches):
-        print(f"  {mismatch}", file=sys.stderr)
-    print("  (goldens update only via: scripts/ui-state-golden.sh update --scenario <name>)", file=sys.stderr)
+    if report == "loud":
+        print(f"✗ ui-state mismatch vs {golden_path}:", file=sys.stderr)
+        for mismatch in sorted(mismatches):
+            print(f"  {mismatch}", file=sys.stderr)
+        print("  (goldens update only via: scripts/ui-state-golden.sh update --scenario <name>)", file=sys.stderr)
     sys.exit(1)
-print(f"✓ ui-state matches {golden_path}")
+if report == "loud":
+    print(f"✓ ui-state matches {golden_path}")
 PY
+}
+
+case "$COMMAND" in
+  settle)
+    [[ -f "$GOLDEN_PATH" ]] || { echo "error: no golden at $GOLDEN_PATH" >&2; exit 1; }
+    read_settle
+    ;;
+
+  print)
+    WIRE_FILE="$(mktemp "${TMPDIR:-/tmp}/ui-state-wire.XXXXXX")"
+    trap 'rm -f "$WIRE_FILE"' EXIT
+    acquire_wire "$WIRE_FILE"
+    python3 - "$WIRE_FILE" <<'PY'
+import json, sys
+wire = json.load(open(sys.argv[1]))
+if not wire.get("ok"):
+    sys.exit(f"error: /v1/ui-state returned an error envelope: {json.dumps(wire.get('error'))}")
+print(json.dumps(wire["result"]["state"], indent=2))
+PY
+    ;;
+
+  update)
+    WIRE_FILE="$(mktemp "${TMPDIR:-/tmp}/ui-state-wire.XXXXXX")"
+    trap 'rm -f "$WIRE_FILE"' EXIT
+    acquire_wire "$WIRE_FILE"
+    python3 - "$WIRE_FILE" "$GOLDEN_PATH" "${SCENARIO:-}" <<'PY'
+import json, os, sys
+wire_path, golden_path, scenario = sys.argv[1:4]
+wire = json.load(open(wire_path))
+if not wire.get("ok"):
+    sys.exit(f"error: /v1/ui-state returned an error envelope: {json.dumps(wire.get('error'))}")
+
+# Carried forward, never regenerated: the ignore list and the settle declaration are
+# authored decisions about the golden, not observations of the app.
+existing = json.load(open(golden_path)) if os.path.exists(golden_path) else {}
+document = {"scenario": scenario or existing.get("scenario", ""), "ignore": existing.get("ignore", [])}
+if "settle" in existing:
+    document["settle"] = existing["settle"]
+document["state"] = wire["result"]["state"]
+
+with open(golden_path, "w") as handle:
+    json.dump(document, handle, indent=2)
+    handle.write("\n")
+print(f"updated {golden_path}")
+PY
+    echo "→ re-verify offline: swift test --filter UIStateGolden" >&2
+    ;;
+
+  verify)
+    [[ -f "$GOLDEN_PATH" ]] || { echo "error: no golden at $GOLDEN_PATH" >&2; exit 1; }
+    WIRE_FILE="$(mktemp "${TMPDIR:-/tmp}/ui-state-wire.XXXXXX")"
+    trap 'rm -f "$WIRE_FILE"' EXIT
+
+    # Separate assignment, not `read <<<"$(…)"`: `read` would mask a malformed
+    # declaration's non-zero exit and silently verify with no wait at all.
+    SETTLE_SPEC="$(read_settle)"
+    read -r SETTLE_TIMEOUT SETTLE_POLL <<<"$SETTLE_SPEC"
+    if [[ -n "$FROM_FILE" && "$SETTLE_TIMEOUT" != "0" ]]; then
+      echo "note: --from-file is a fixed response; the golden's ${SETTLE_TIMEOUT}s settle does not apply." >&2
+      SETTLE_TIMEOUT=0
+    fi
+
+    if [[ "$SETTLE_TIMEOUT" == "0" ]]; then
+      acquire_wire "$WIRE_FILE"
+      compare_wire "$WIRE_FILE" loud
+      exit 0
+    fi
+
+    echo "→ settling: this golden allows up to ${SETTLE_TIMEOUT}s (polling every ${SETTLE_POLL}s) for the state to arrive." >&2
+    waited=0
+    while :; do
+      acquire_wire "$WIRE_FILE"
+      if compare_wire "$WIRE_FILE" quiet; then
+        compare_wire "$WIRE_FILE" loud
+        if (( waited > 0 )); then
+          echo "  (settled after ${waited}s)" >&2
+        fi
+        exit 0
+      fi
+      if (( waited + SETTLE_POLL > SETTLE_TIMEOUT )); then
+        compare_wire "$WIRE_FILE" loud || true
+        echo "error: ui-state never settled to $GOLDEN_PATH within ${SETTLE_TIMEOUT}s" >&2
+        echo "       (polled every ${SETTLE_POLL}s; the mismatch above is the final read)." >&2
+        exit 1
+      fi
+      sleep "$SETTLE_POLL"
+      waited=$((waited + SETTLE_POLL))
+    done
     ;;
 esac

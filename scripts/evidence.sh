@@ -198,6 +198,19 @@ if [[ -n "$FIXTURE" ]]; then
       echo "       If the change is intentional: ./scripts/ui-state-golden.sh update --scenario $FIXTURE" >&2
       exit 1
     fi
+
+    # A golden that declares a settle waited for chrome the first snapshot could not
+    # have contained (the orphan banner is decided ~2s after first paint). Re-snapshot
+    # so the PNG shows the state the golden just verified, not the pre-settle frame.
+    SETTLE_SPEC="$("$SCRIPT_DIR/ui-state-golden.sh" settle --scenario "$FIXTURE")"
+    read -r SETTLE_TIMEOUT _ <<<"$SETTLE_SPEC"
+    if [[ -n "$SETTLE_TIMEOUT" && "$SETTLE_TIMEOUT" != "0" ]]; then
+      echo "→ re-snapshotting after settle so the PNG matches the verified state…" >&2
+      if ! "$(app_capture_cli_binary)" window snapshot --out "$FILE" >&2; then
+        echo "error: post-settle window snapshot failed (see the CLI message above)." >&2
+        exit 1
+      fi
+    fi
   fi
 fi
 

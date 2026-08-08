@@ -68,6 +68,15 @@ proves *what* rendered. Goldens change only through the explicit
 auto-regenerated on mismatch); comparison semantics are canonical in the
 unit-tested `UIStateGolden` Swift comparator. See `fixtures/ui-state/README.md`.
 
+Some chrome cannot exist at first paint — the orphan banner is decided by the
+deferred startup pass that runs ~2s after the window renders — so a golden may
+declare a `settle` bound (`{"timeoutSeconds": N, "pollSeconds": M}`). The lane then
+re-fetches on that interval until the state matches or the bound elapses, failing
+with the bound and the final mismatch rather than racing it. When a settle applies
+the lane re-snapshots afterwards, so the PNG shows the state the golden verified
+rather than the pre-settle frame. Goldens without deferred chrome declare none and
+stay single-shot.
+
 **Tokenless capture (local degrade).** The upload-token gate runs *after*
 capture and the ui-state diff, so a worktree without `EVIDENCE_UPLOAD_TOKEN`
 still produces the local PNG and the golden verdict. Pass `--no-upload` for an

@@ -642,6 +642,11 @@ only through the explicit `scripts/ui-state-golden.sh update` flow — see
 value so the deferred event stream (#1227) can embed the same representation
 (e.g. a `ui_state_changed` event) rather than inventing a second schema.
 
+Fields report what is rendered, not what is merely true: `attentionPillText` is
+`null` both at a zero attention count and whenever the `minimalToolbar`
+experiment is on, because that experiment removes the toolbar group the pill
+lives in. Absent optional fields are absent from the JSON rather than `null`.
+
 ## Error Codes
 
 | Code | Meaning |

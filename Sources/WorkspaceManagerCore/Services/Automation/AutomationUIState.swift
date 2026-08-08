@@ -180,10 +180,13 @@ public enum AutomationUIStateProjection {
         }
     }
 
-    /// The toolbar pill's rendered text for a resolved attention count; `nil` when the
-    /// pill is hidden (count zero) — mirrors `NeedsYouToolbarPill`'s visibility rule.
-    public static func attentionPillText(count: Int) -> String? {
-        count > 0 ? "\(count) need you" : nil
+    /// The toolbar pill's rendered text; `nil` whenever the pill is not on screen. Both
+    /// halves of its visibility rule apply: the `minimalToolbar` experiment removes the
+    /// whole trailing toolbar group the pill lives in, and inside that group the pill
+    /// renders nothing at count zero.
+    public static func attentionPillText(count: Int, minimalToolbar: Bool) -> String? {
+        guard !minimalToolbar else { return nil }
+        return count > 0 ? "\(count) need you" : nil
     }
 
     /// Assembles a snapshot with the ordering contract applied: banner ids sorted,
@@ -192,13 +195,14 @@ public enum AutomationUIStateProjection {
         selection: AutomationUIStateSelection,
         banners: [AutomationUIBanner],
         attentionCount: Int,
+        minimalToolbar: Bool,
         sidebar: [AutomationUIStateRepoSection],
         terminal: AutomationUIStateTerminal
     ) -> AutomationUIStateSnapshot {
         AutomationUIStateSnapshot(
             selection: selection,
             banners: banners.map(\.rawValue).sorted(),
-            attentionPillText: attentionPillText(count: attentionCount),
+            attentionPillText: attentionPillText(count: attentionCount, minimalToolbar: minimalToolbar),
             sidebar:
                 sidebar
                 .map { section in

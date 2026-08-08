@@ -47,6 +47,10 @@ DEFERRED_KEYS = (
 )
 
 
+# Debug-only fixture seed (#1228), gated behind #if DEBUG: enforced-absent in release.
+ORPHAN_BANNER_SEED_KEY = "WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER"
+
+
 def clean_symbols(count: int = 2000) -> list[str]:
     return [f"0000000100000000 T _$s16WorkspaceManager{index}yF" for index in range(count)]
 
@@ -111,6 +115,19 @@ class ReleaseHarnessAbsenceTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, EXIT_LEAK, result.stdout + result.stderr)
         self.assertIn("WORKSPACES_AUTOMATION_EVENTS_PATH", result.stderr)
+
+    def test_leaked_orphan_banner_seed_fails(self) -> None:
+        """The orphan-banner fixture seed (#1228) is debug-only; in release it is a leak.
+
+        Its prefix is also the allowlisted WORKSPACES_UI_FIXTURE, so this pins that the
+        longer key is enforced on its own rather than absorbed by the shorter deferral.
+        """
+        strings = [*clean_strings(), ORPHAN_BANNER_SEED_KEY]
+        with HarnessFixture(symbols=clean_symbols(), strings=strings) as fixture:
+            result = fixture.run()
+
+        self.assertEqual(result.returncode, EXIT_LEAK, result.stdout + result.stderr)
+        self.assertIn(ORPHAN_BANNER_SEED_KEY, result.stderr)
 
     def test_stale_deferral_entry_fails(self) -> None:
         """When #1237 gates a fixture key, its allowlist entry must be deleted."""

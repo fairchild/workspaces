@@ -75,10 +75,12 @@ final class AutomationController: AutomationControlling {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
+        // Window-bound like `gestureVerbs`, and cleared the same way: an update that
+        // installs no reader means no window is offering one, so `nil` here clears a
+        // previous window's closure instead of leaving it callable. The remaining
+        // members below are app-scoped and keep their last value when omitted.
         self.gestureVerbs = gestureVerbs
-        if let uiState {
-            self.uiState = uiState
-        }
+        self.uiState = uiState
         if let webSurfaces {
             self.webSurfaces = webSurfaces
         }

@@ -20,6 +20,7 @@ enum AutomationUIStateEnumerator {
         selectedRepoID: UUID?,
         workspaceStatuses: [UUID: AgentSessionStatus],
         attentionCount: Int,
+        minimalToolbar: Bool,
         banners: [AutomationUIBanner],
         tileTreeStore: TileTreeStore
     ) -> AutomationUIStateCapture {
@@ -60,6 +61,7 @@ enum AutomationUIStateEnumerator {
             selection: selection,
             banners: banners,
             attentionCount: attentionCount,
+            minimalToolbar: minimalToolbar,
             sidebar: sidebar,
             terminal: topology.terminal
         )

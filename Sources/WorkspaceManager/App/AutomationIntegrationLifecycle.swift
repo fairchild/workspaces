@@ -279,7 +279,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         windowSnapshot: @escaping @MainActor (String) async -> WindowSnapshotOutcome,
         workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory,
         gestureVerbs: AutomationGestureVerbs?,
-        uiState: (@MainActor () -> AutomationUIStateCapture)? = nil
+        // No default, like `gestureVerbs`: both are window-bound and an omitted argument
+        // clears the previous window's closure, which should be a deliberate choice.
+        uiState: (@MainActor () -> AutomationUIStateCapture)?
     ) -> AutomationController {
         if let controller {
             controller.update(
