@@ -14,6 +14,10 @@ final class AutomationController: AutomationControlling {
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
     private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
     private var surfaceTextReader: @MainActor (TileTreeStore, UUID) -> String?
+    /// The structural UI-state read (`ui.read`). `nil` when no window has installed it,
+    /// which is the `unsupported` condition — like the gesture layer, the read never
+    /// fabricates chrome state without a live window behind it.
+    private var uiState: (@MainActor () -> AutomationUIStateCapture)?
     /// Per-surface prompt-readiness read for the `prompt_ready` wait condition. `nil` from the
     /// reader means the surface has no realized terminal view yet — reported as pending, never
     /// as "not ready", so absence of the signal is not mistaken for a negative signal.
@@ -51,6 +55,7 @@ final class AutomationController: AutomationControlling {
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         },
+        uiState: (@MainActor () -> AutomationUIStateCapture)? = nil,
         promptReadinessReader: @escaping @MainActor (TileTreeStore, UUID) -> Bool? = { store, surfaceID in
             store.surfaceStore.terminal(for: surfaceID)?.hasObservedPromptReadySignal
         },
@@ -73,6 +78,7 @@ final class AutomationController: AutomationControlling {
         self.surfaceTextReader = surfaceTextReader
         self.gestureVerbs = gestureVerbs
         self.isInputWriteEnabled = isInputWriteEnabled
+        self.uiState = uiState
         self.promptReadinessReader = promptReadinessReader
         self.focusStateProvider = focusStateProvider
         self.waitTimeSource = waitTimeSource
@@ -90,12 +96,18 @@ final class AutomationController: AutomationControlling {
         windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil,
         workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil,
         surfaceTextReader: (@MainActor (TileTreeStore, UUID) -> String?)? = nil,
-        gestureVerbs: AutomationGestureVerbs? = nil
+        gestureVerbs: AutomationGestureVerbs? = nil,
+        uiState: (@MainActor () -> AutomationUIStateCapture)? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
+        // Window-bound like `gestureVerbs`, and cleared the same way: an update that
+        // installs no reader means no window is offering one, so `nil` here clears a
+        // previous window's closure instead of leaving it callable. The remaining
+        // members below are app-scoped and keep their last value when omitted.
         self.gestureVerbs = gestureVerbs
+        self.uiState = uiState
         if let webSurfaces {
             self.webSurfaces = webSurfaces
         }
@@ -123,6 +135,10 @@ final class AutomationController: AutomationControlling {
     /// rather than driving a stale gesture. A window reappearing reinstalls it via `configure`.
     func detachGestureVerbs() {
         gestureVerbs = nil
+        // The ui-state read is window-bound the same way: with no window there is no
+        // rendered chrome to report, so a post-teardown read fails `unsupported` rather
+        // than describing a window that no longer exists.
+        uiState = nil
     }
 
     func automationContext(for handle: String) throws -> AutomationContextResult {
@@ -405,6 +421,24 @@ final class AutomationController: AutomationControlling {
 
     func automationHandleIsOperator(_ handle: String) -> Bool {
         handleRegistry.resolve(handle)?.isOperator ?? false
+    }
+
+    func automationUIState(for handle: String) throws -> AutomationUIStateResult {
+        // Operator scope, read-only: like the other operator reads, resolved without the
+        // tile-liveness check. A tile handle lacks ui.read and fails capability_denied.
+        let entry = try resolveOperator(handle, requiring: .uiRead)
+        guard let uiState else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; ui.read requires a live window."
+            )
+        }
+        let capture = uiState()
+        return AutomationUIStateResult(
+            state: capture.state,
+            volatile: capture.volatile,
+            system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+        )
     }
 
     func automationWait(
