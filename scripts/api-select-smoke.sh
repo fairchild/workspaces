@@ -47,12 +47,6 @@ KEEP_ARTIFACTS=false
 TOTAL_TIMEOUT_SECONDS="$DEFAULT_TIMEOUT_SECONDS"
 WORKSPACE_NAME="api-select-smoke-$TIMESTAMP"
 EVENTS_PATH=""
-APP_PID=""
-LAUNCH_LOG_PATH=""
-SMOKE_REPO_PATH=""
-RUN_STATUS="failed"
-FAILURE_MESSAGE=""
-FINALIZED=false
 
 log() { smoke_log "$@"; }
 fail() { smoke_fail "$@"; }
@@ -217,6 +211,7 @@ wait_for_event() {
 
 main() {
     parse_args "$@"
+    smoke_init
     trap on_exit EXIT
     setup_run_dir
     create_disposable_repo

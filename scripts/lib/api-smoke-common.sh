@@ -201,9 +201,15 @@ smoke_wait_for_event() {
 # exits). TERM/INT/HUP are ignored (not restored to default) for the duration
 # of cleanup so a second signal during teardown can't kill it mid-cleanup;
 # EXIT is cleared immediately so this function's own `exit` below doesn't
-# re-enter smoke_on_exit. Cleanup is unconditional (see file header) and a
-# failing optional `smoke_write_summary <exit-code> <message>` callback
-# cannot swallow the real exit code — the final exit always uses $exit_code.
+# re-enter smoke_on_exit. Cleanup is unconditional (see file header).
+#
+# Every step here is backstopped with `|| true`: finalize inherits the
+# caller's `set -e`, so any step that exits non-zero — a cleanup helper, the
+# JSONL reader behind it, the optional `smoke_write_summary <exit-code>
+# <message>` callback — would otherwise abort finalize partway and replace
+# the real exit code with its own. The three properties this function owns
+# (processes and worktrees cleaned, summary written, exit code preserved) all
+# depend on reaching the last line, so no step is allowed to be fatal.
 smoke_finalize_and_exit() {
     if [[ "$FINALIZED" == true ]]; then
         exit "$1"
@@ -214,9 +220,9 @@ smoke_finalize_and_exit() {
     local exit_code="$1"
     local message="${2:-}"
 
-    smoke_cleanup_app
-    smoke_cleanup_repo
-    smoke_cleanup_created_worktree
+    smoke_cleanup_app || true
+    smoke_cleanup_repo || true
+    smoke_cleanup_created_worktree || true
 
     if declare -F smoke_write_summary >/dev/null 2>&1; then
         smoke_write_summary "$exit_code" "$message" || true
@@ -224,6 +230,12 @@ smoke_finalize_and_exit() {
 
     [[ -n "$message" ]] && smoke_log "$message"
     smoke_log "Run directory: $RUN_DIR"
+    # Cleanup being unconditional means a red run's repo and worktree are gone
+    # by the time anyone reads the failure, so name the opt-out at the moment
+    # it is wanted.
+    if (( exit_code != 0 )) && [[ "${KEEP_ARTIFACTS:-false}" != true ]]; then
+        smoke_log "Re-run with --keep-artifacts to preserve the disposable repo and created worktree for inspection."
+    fi
     exit "$exit_code"
 }
 

@@ -9,7 +9,12 @@ with in-flight PR #1265, which is mid-flight on that exact code) rather than
 switching them over here.
 
 A torn final line (the app killed mid-write) is skipped, not fatal — cleanup
-and milestone waits must survive an interrupted run's partial JSONL.
+and milestone waits must survive an interrupted run's partial JSONL. The tear
+lands on a byte boundary, not a character one, so the read decodes with
+errors="replace": an interrupted multi-byte UTF-8 sequence becomes a
+replacement char that then fails JSON parsing and is skipped like any other
+torn line, instead of raising UnicodeDecodeError out of the reader and
+aborting the caller's cleanup under set -e.
 """
 
 import json
@@ -20,7 +25,7 @@ from pathlib import Path
 def _events(path: Path):
     if not path.exists():
         return
-    for raw_line in path.read_text().splitlines():
+    for raw_line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw_line.strip()
         if not line:
             continue
