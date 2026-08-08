@@ -57,6 +57,13 @@ public enum AutomationWorkspaceArchiveOutcome: Sendable, Equatable {
     case unsupported(String)
     /// The workspace id resolves to nothing the app tracks. Mapped to `invalid_request` at the wire.
     case notFound
+    /// The workspace still has a live terminal that did not exit before the lifecycle timeout — the
+    /// transient arm. Mapped to `terminal_active` with `retryable: true` at the wire.
+    case terminalActive(String)
+    /// A terminal close was blocked by the runtime's close-confirmation (a live process that would
+    /// raise the headlessly-unanswerable Ghostty dialog). Mapped to `close_blocked_by_confirmation`
+    /// with `retryable: false` at the wire — retrying cannot dismiss the dialog.
+    case closeBlockedByConfirmation(String)
 }
 
 @MainActor
@@ -104,8 +111,10 @@ public final class AutomationGestureVerbs {
     /// Drive the real sidebar create gesture for `command` and report what the UI did.
     private let performCreation:
         (@MainActor (RepoTarget, AutomationWorkspaceCreateCommand) async -> AutomationWorkspaceCreateOutcome)?
-    /// Drive the real sidebar archive gesture for `target` and report what the UI did.
-    private let performArchive: (@MainActor (WorkspaceTarget) async -> AutomationWorkspaceArchiveOutcome)?
+    /// Drive the real sidebar archive gesture for `target` (with the command's teardown option)
+    /// and report what the UI did.
+    private let performArchive:
+        (@MainActor (WorkspaceTarget, AutomationWorkspaceArchiveCommand) async -> AutomationWorkspaceArchiveOutcome)?
 
     public init(
         resolveWorkspace: @escaping @MainActor (UUID) -> WorkspaceTarget?,
@@ -114,7 +123,9 @@ public final class AutomationGestureVerbs {
         performCreation: (
             @MainActor (RepoTarget, AutomationWorkspaceCreateCommand) async -> AutomationWorkspaceCreateOutcome
         )? = nil,
-        performArchive: (@MainActor (WorkspaceTarget) async -> AutomationWorkspaceArchiveOutcome)? = nil
+        performArchive: (
+            @MainActor (WorkspaceTarget, AutomationWorkspaceArchiveCommand) async -> AutomationWorkspaceArchiveOutcome
+        )? = nil
     ) {
         self.resolveWorkspace = resolveWorkspace
         self.performSelection = performSelection
@@ -151,15 +162,18 @@ public final class AutomationGestureVerbs {
     }
 
     /// `workspace.archive`: enter the same sidebar archive action the row menu uses. Resolves the
-    /// workspace id, then drives only the supplied gesture closure. A missing archive closure means
-    /// the live window did not install an archive path, so the verb fails closed.
-    public func archiveWorkspace(_ workspaceID: UUID) async -> AutomationWorkspaceArchiveOutcome {
+    /// workspace id, then drives only the supplied gesture closure (which owns the command's
+    /// optional terminal teardown). A missing archive closure means the live window did not install
+    /// an archive path, so the verb fails closed.
+    public func archiveWorkspace(
+        _ command: AutomationWorkspaceArchiveCommand
+    ) async -> AutomationWorkspaceArchiveOutcome {
         guard let performArchive else {
             return .unsupported("No WorkSpaces sidebar is attached; workspace.archive requires a live window.")
         }
-        guard let target = resolveWorkspace(workspaceID) else {
+        guard let target = resolveWorkspace(command.workspaceID) else {
             return .notFound
         }
-        return await performArchive(target)
+        return await performArchive(target, command)
     }
 }

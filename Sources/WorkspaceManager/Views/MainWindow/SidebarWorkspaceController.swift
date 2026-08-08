@@ -277,7 +277,9 @@ struct SidebarWorkspaceController {
         try saveModelContext(action: "save workspace")
     }
 
-    private func terminalSessionKey(for workspace: Workspace) throws -> HostTerminalSessionKey {
+    /// The terminal scope key the lifecycle verbs retire. Internal so operator
+    /// archive-with-teardown can resolve the same scope the archive path will retire.
+    func terminalSessionKey(for workspace: Workspace) throws -> HostTerminalSessionKey {
         let target = WorkspaceProviderTarget(workspace)
         if workspace.backend == .local {
             return LocalWorkspaceProvider().sessionKey(for: target)

@@ -105,7 +105,7 @@ private final class FakeWorkspacesAppIntentController: AutomationControlling {
 
     func automationArchiveWorkspace(
         for handle: String,
-        workspaceID: String
+        request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult {
         throw AutomationServiceError(.unsupported, "Not used by App Intents.")
     }

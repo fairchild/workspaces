@@ -720,15 +720,64 @@ public struct AutomationWorkspaceCreateEffect: Sendable, Equatable {
     }
 }
 
+/// Body for `POST /v1/workspace/archive`. `teardownTerminals` defaults to false (absent), which
+/// preserves the original archive semantics: a live terminal fails the call with a typed error.
+/// `true` opts into forced teardown first — the workspace's tmux sessions are killed and its
+/// terminal tiles retired before the archive gesture runs, so operator loops can close what they
+/// opened without the blind-retry dance.
+public struct AutomationWorkspaceArchiveRequest: Codable, Sendable, Equatable {
+    public let workspaceID: String
+    public let teardownTerminals: Bool?
+
+    public init(workspaceID: String, teardownTerminals: Bool? = nil) {
+        self.workspaceID = workspaceID
+        self.teardownTerminals = teardownTerminals
+    }
+}
+
+/// The resolved archive command the gesture layer drives, mirroring the create verb's
+/// request-vs-command split: the wire request carries optionals, the command is fully resolved.
+public struct AutomationWorkspaceArchiveCommand: Sendable, Equatable {
+    public let workspaceID: UUID
+    public let teardownTerminals: Bool
+
+    public init(workspaceID: UUID, teardownTerminals: Bool = false) {
+        self.workspaceID = workspaceID
+        self.teardownTerminals = teardownTerminals
+    }
+}
+
+/// What a completed forced teardown actually did, reported on the archive result and summarized
+/// (as counts, never session names' content) in the audit log's teardown entry.
+/// `retiredSurfaceIDs` are the terminal surfaces removed from the tile tree;
+/// `killedTmuxSessions` are the tmux session names confirmed killed (a name whose kill reported
+/// failure — usually already gone — is not listed).
+public struct AutomationWorkspaceArchiveTeardownReport: Codable, Sendable, Equatable {
+    public let retiredSurfaceIDs: [String]
+    public let killedTmuxSessions: [String]
+
+    public init(retiredSurfaceIDs: [String], killedTmuxSessions: [String]) {
+        self.retiredSurfaceIDs = retiredSurfaceIDs
+        self.killedTmuxSessions = killedTmuxSessions
+    }
+}
+
 /// What driving the real workspace-archive gesture produced. `selectedWorkspaceID` is read after
 /// the gesture so callers can observe the same selection fallback a sidebar archive click produced.
+/// `teardown` is present only when the command requested terminal teardown and it ran.
 public struct AutomationWorkspaceArchiveEffect: Sendable, Equatable {
     public let workspaceID: UUID
     public let selectedWorkspaceID: UUID?
+    public let teardown: AutomationWorkspaceArchiveTeardownReport?
 
-    public init(workspaceID: UUID, selectedWorkspaceID: UUID?) {
+    public init(
+        workspaceID: UUID,
+        selectedWorkspaceID: UUID?,
+        teardown: AutomationWorkspaceArchiveTeardownReport? = nil
+    ) {
         self.workspaceID = workspaceID
         self.selectedWorkspaceID = selectedWorkspaceID
+        self.teardown = teardown
     }
 }
 
@@ -837,6 +886,8 @@ public struct AutomationWorkspaceArchiveResult: Codable, Sendable, Equatable {
     public let selectedWorkspaceID: UUID?
     public let confirmation: AutomationConfirmationRequirement?
     public let message: String?
+    /// Present only when the request asked for `teardownTerminals` and the teardown ran.
+    public let teardown: AutomationWorkspaceArchiveTeardownReport?
     public let system: AutomationSystemDescriptor
 
     public init(
@@ -847,6 +898,7 @@ public struct AutomationWorkspaceArchiveResult: Codable, Sendable, Equatable {
         selectedWorkspaceID: UUID? = nil,
         confirmation: AutomationConfirmationRequirement? = nil,
         message: String? = nil,
+        teardown: AutomationWorkspaceArchiveTeardownReport? = nil,
         system: AutomationSystemDescriptor = AutomationSystemDescriptor(
             capabilities: AutomationAPI.operatorCapabilities
         )
@@ -858,6 +910,7 @@ public struct AutomationWorkspaceArchiveResult: Codable, Sendable, Equatable {
         self.selectedWorkspaceID = selectedWorkspaceID
         self.confirmation = confirmation
         self.message = message
+        self.teardown = teardown
         self.system = system
     }
 }
@@ -1009,15 +1062,30 @@ public enum AutomationErrorCode: String, Codable, Sendable, Equatable {
     case methodNotAllowed = "method_not_allowed"
     case unsupported
     case internalError = "internal_error"
+    /// A workspace lifecycle verb refused because the workspace still has a live terminal that did
+    /// not exit before the lifecycle timeout. Transient — the terminal may finish exiting on its
+    /// own — so responses carry `retryable: true`; callers can also re-issue the archive with
+    /// `teardownTerminals: true` instead of retrying blind.
+    case terminalActive = "terminal_active"
+    /// A terminal close was blocked by the runtime's close-confirmation (a live process the app
+    /// would prompt the user about — headlessly unanswerable). Not self-resolving, so responses
+    /// carry `retryable: false`; blind retries would spin on a dialog no caller can dismiss.
+    case closeBlockedByConfirmation = "close_blocked_by_confirmation"
 }
 
 public struct AutomationErrorResponse: Codable, Sendable, Equatable, LocalizedError {
     public let code: AutomationErrorCode
     public let message: String
+    /// Wire-documented retry semantics. `true`: the failure is transient and the same request may
+    /// succeed on retry (`terminal_active`). `false`: the condition will not resolve without
+    /// intervention — retrying the identical request is wasted work (`close_blocked_by_confirmation`).
+    /// `nil` (omitted on the wire): the code carries no retry guidance, matching pre-existing codes.
+    public let retryable: Bool?
 
-    public init(code: AutomationErrorCode, message: String) {
+    public init(code: AutomationErrorCode, message: String, retryable: Bool? = nil) {
         self.code = code
         self.message = message
+        self.retryable = retryable
     }
 
     public var errorDescription: String? {
@@ -1028,8 +1096,8 @@ public struct AutomationErrorResponse: Codable, Sendable, Equatable, LocalizedEr
 public struct AutomationServiceError: Error, Sendable, Equatable {
     public let response: AutomationErrorResponse
 
-    public init(_ code: AutomationErrorCode, _ message: String) {
-        self.response = AutomationErrorResponse(code: code, message: message)
+    public init(_ code: AutomationErrorCode, _ message: String, retryable: Bool? = nil) {
+        self.response = AutomationErrorResponse(code: code, message: message, retryable: retryable)
     }
 
     public init(response: AutomationErrorResponse) {
@@ -1053,7 +1121,7 @@ public protocol AutomationControlling: AnyObject, Sendable {
     ) async throws -> AutomationWorkspaceCreateResult
     func automationArchiveWorkspace(
         for handle: String,
-        workspaceID: String
+        request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult
     func automationWindowSnapshot(
         for handle: String,
