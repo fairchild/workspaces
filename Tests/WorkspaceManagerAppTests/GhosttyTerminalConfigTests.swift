@@ -395,4 +395,224 @@ struct GhosttyTerminalConfigTests {
         #expect(first.command == second.command)
         #expect(first.command != different.command)
     }
+
+    // MARK: - Per-tile tmux session environment
+
+    /// The env pairs a tile-scoped launch carries, in the order the builder emits.
+    private static func tileEnvironment(handle: String) -> [(key: String, value: String)] {
+        [
+            (key: AutomationAPI.socketEnvironmentKey, value: "/tmp/workspaces-automation.sock"),
+            (key: AutomationAPI.handleEnvironmentKey, value: handle),
+        ]
+    }
+
+    /// A pane inherits the tmux *server's* environment, and one server backs every
+    /// session on the `-L workspaces` socket. Without per-session wiring, the
+    /// second workspace's tile runs with the first workspace's handle and its
+    /// in-tile CLI verbs mutate the wrong tile.
+    @Test("tmux launch seeds this tile's automation handle into its own session")
+    func tmuxLaunchSeedsAutomationHandleIntoSession() {
+        let script = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-b-00000000",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+            sessionEnvironment: Self.tileEnvironment(handle: "handle-b")
+        )
+
+        #expect(script.contains("exec tmux -L workspaces new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b'"))
+        #expect(script.contains("-e '\(AutomationAPI.handleEnvironmentKey)=handle-b'"))
+        #expect(script.contains("-e '\(AutomationAPI.socketEnvironmentKey)=/tmp/workspaces-automation.sock'"))
+    }
+
+    /// The whole script travels as one `-c` argument, so the config's escaping has
+    /// to survive it — the value the CLI resolves its caller from must still be
+    /// recoverable from the launch command.
+    @Test("The composed launch command carries the tile's handle and hook context")
+    func composedLaunchCommandCarriesTileEnvironment() throws {
+        let hostSessionID = UUID(uuidString: "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31")!
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true,
+            hostSessionID: hostSessionID,
+            hooksSocketPath: "/tmp/workspaces-hooks.sock",
+            automationEnvironment: AutomationTerminalEnvironment(
+                socketPath: "/tmp/workspaces-automation.sock",
+                handle: "handle-b"
+            ),
+            tmuxSessionName: "wm-repo-b-00000000"
+        )
+
+        let command = try #require(config.command)
+        #expect(command.contains("'\(AutomationAPI.handleEnvironmentKey)=handle-b'"))
+        #expect(command.contains("'\(AutomationAPI.socketEnvironmentKey)=/tmp/workspaces-automation.sock'"))
+        #expect(command.contains("'WORKSPACES_HOST_SESSION_ID=\(hostSessionID.uuidString)'"))
+        #expect(command.contains("'WORKSPACES_HOOKS_SOCKET=/tmp/workspaces-hooks.sock'"))
+    }
+
+    /// The defect in issue #1257, at the seam that causes it: two tiles launching
+    /// against the same tmux server must not carry each other's handle.
+    @Test("Two tiles' tmux launches carry only their own handle")
+    func tmuxLaunchesDoNotCrossTileHandles() {
+        let workspaceA = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-a",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            sessionEnvironment: Self.tileEnvironment(handle: "handle-a")
+        )
+        let workspaceB = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-b",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+            sessionEnvironment: Self.tileEnvironment(handle: "handle-b")
+        )
+
+        #expect(workspaceA.contains("handle-a"))
+        #expect(!workspaceA.contains("handle-b"))
+        #expect(workspaceB.contains("handle-b"))
+        #expect(!workspaceB.contains("handle-a"))
+    }
+
+    /// `new-session -A` attaching a session that survived an earlier launch ignores
+    /// `-e`, so the surviving session still names the recorded launch's handle. The
+    /// chained `set-environment` runs after create-or-attach on either path, with
+    /// no probe-then-attach window another launch could create the session in.
+    @Test("Reattach reseeds a surviving session with this launch's handle")
+    func reattachReseedsSurvivingSessionEnvironment() throws {
+        let script = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-b-00000000",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+            sessionEnvironment: Self.tileEnvironment(handle: "handle-current-launch")
+        )
+
+        let reseed =
+            "\\; set-environment -t '=wm-repo-b-00000000' "
+            + "'\(AutomationAPI.handleEnvironmentKey)' 'handle-current-launch'"
+        let attachRange = try #require(script.range(of: "new-session -A"))
+        let reseedRange = try #require(script.range(of: reseed))
+
+        #expect(attachRange.lowerBound < reseedRange.lowerBound)
+        #expect(!script.contains("has-session"))
+    }
+
+    @Test("A tmux launch with no tile-scoped environment stays a bare attach-or-create")
+    func tmuxLaunchWithoutTileEnvironmentStaysBare() throws {
+        let script = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-a",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            sessionEnvironment: []
+        )
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+
+        #expect(script == "exec tmux -L workspaces new-session -A -s 'wm-repo-a' -c '/tmp/repo-a'")
+        let command = try #require(config.command)
+        #expect(!command.contains("set-environment"))
+    }
+
+    /// The script is interpolated into a shell command that is itself wrapped as a
+    /// single `-c` argument, so quoting has to survive two layers. Parsing the
+    /// composed command with a real shell and a `tmux` stand-in is the only check
+    /// that binds what tmux actually receives — a substring assertion cannot tell
+    /// a correctly escaped apostrophe from one that ended the quoting context.
+    @Test("Adversarial values reach tmux as single argv elements")
+    func adversarialValuesSurviveBothQuotingLayers() throws {
+        let sessionName = "wm-o'brien's repo"
+        let workingDirectory = URL(fileURLWithPath: "/tmp/o'brien repo")
+        let handle = "han'dle \"x\" $y `z`"
+        let config = GhosttyTerminalConfig(
+            workingDirectory: workingDirectory,
+            environment: [
+                "SHELL": "/bin/sh",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_SHELL_PROFILE_MODE": "clean",
+            ],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true,
+            automationEnvironment: AutomationTerminalEnvironment(
+                socketPath: "/tmp/auto.sock",
+                handle: handle
+            ),
+            tmuxSessionName: sessionName
+        )
+
+        let argv = try Self.argvHandedToTmux(byRunning: try #require(config.command))
+
+        #expect(argv.contains(sessionName))
+        #expect(argv.contains(workingDirectory.path))
+        #expect(argv.contains("\(AutomationAPI.handleEnvironmentKey)=\(handle)"))
+        #expect(argv.contains(handle))
+        #expect(argv.contains("=\(sessionName)"))
+        // The separator tmux splits its command sequence on.
+        #expect(argv.contains(";"))
+    }
+
+    /// Runs `command` under `/bin/sh` with a `tmux` stand-in first on PATH that
+    /// prints each argument it receives on its own line, and returns those lines
+    /// for the first invocation. `exec` in the script means that invocation is the
+    /// whole of it.
+    private static func argvHandedToTmux(byRunning command: String) throws -> [String] {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tmux-argv-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let stub = directory.appendingPathComponent("tmux")
+        try "#!/bin/sh\nfor argument in \"$@\"; do printf '%s\\n' \"$argument\"; done\n"
+            .write(to: stub, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stub.path)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", command]
+        process.environment = ["PATH": directory.path]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+
+        return String(decoding: data, as: UTF8.self)
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(String.init)
+    }
+
+    @Test("Only tile-scoped keys are seeded into the session environment")
+    func onlyTileScopedKeysAreSeeded() {
+        let seeded = GhosttyTerminalConfig.tileScopedEnvironment(from: [
+            "SHELL": "/bin/zsh",
+            "PATH": "/usr/bin:/bin",
+            "TERM": "xterm-256color",
+            AutomationAPI.handleEnvironmentKey: "handle-b",
+            "WORKSPACES_HOST_SESSION_ID": "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31",
+        ])
+
+        #expect(seeded.map(\.key) == [AutomationAPI.handleEnvironmentKey, "WORKSPACES_HOST_SESSION_ID"])
+    }
+
+    /// Dictionary iteration order is unstable; the launch command must not be, or
+    /// restore comparisons and command-equality assertions become flaky.
+    @Test("Seeded environment ordering is deterministic")
+    func seededEnvironmentOrderingIsDeterministic() {
+        func config() -> GhosttyTerminalConfig {
+            GhosttyTerminalConfig(
+                workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+                environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+                terminalMultiplexingMode: .tmuxPerSession,
+                isTmuxAvailableOverride: true,
+                hostSessionID: UUID(uuidString: "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31")!,
+                hooksSocketPath: "/tmp/workspaces-hooks.sock",
+                automationEnvironment: AutomationTerminalEnvironment(
+                    socketPath: "/tmp/workspaces-automation.sock",
+                    handle: "handle-b"
+                ),
+                tmuxSessionName: "wm-repo-b-00000000"
+            )
+        }
+
+        #expect(config().command == config().command)
+    }
 }

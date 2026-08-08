@@ -39,6 +39,18 @@ under-capable handles fail closed. Context responses do not echo the handle.
 Restart WorkSpaces after changing the Automation API experiment. Terminal
 processes only receive automation environment when their surface is created.
 
+In `tmux_per_session` mode the handle also travels in the tmux *session's* own
+environment: `new-session -e` seeds it at creation, and a chained
+`set-environment` in the same command sequence re-points a session that outlived
+an earlier launch (tmux ignores `-e` when `-A` attaches). One tmux server backs
+every session on the `-L workspaces` socket and a pane inherits the server's
+environment, so without per-session wiring a tile would read the handle of
+whichever tile happened to start the server, and its in-tile verbs would mutate
+that tile instead (#1257). One consequence survives the fix: a shell already
+running in a reattached pane keeps the environment it was spawned with — tmux
+cannot rewrite a live process — so after a relaunch that pane's handle is stale
+until a new shell starts in the session.
+
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
 not terminal input or output. Each event carries an `operatorHandle` boolean so
