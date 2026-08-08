@@ -126,6 +126,59 @@ struct TmuxSessionProbeTests {
         #expect(await probe.killSession("wm-repo-abcd1234") == false)
     }
 
+    // MARK: - Version capability
+
+    @Test("A tmux version line yields its major.minor across the forms tmux prints")
+    func parsesVersionLineForms() {
+        func parsed(_ output: String?) -> [Int]? {
+            TmuxSessionProbe.parseVersion(fromVersionOutput: output).map { [$0.major, $0.minor] }
+        }
+
+        #expect(parsed("tmux 3.5a\n") == [3, 5])
+        #expect(parsed("tmux next-3.6\n") == [3, 6])
+        #expect(parsed("tmux 3.2-rc3\n") == [3, 2])
+        #expect(parsed("tmux 2.8\n") == [2, 8])
+        #expect(parsed("tmux master\n") == nil)
+        #expect(parsed(nil) == nil)
+    }
+
+    /// `new-session -e` arrived in tmux 3.2. Emitting it at an older tmux is not a
+    /// degraded launch — tmux rejects the flag and the pane never comes up — so the
+    /// gate has to fail closed on anything it cannot read as new enough.
+    @Test("Only tmux 3.2 and newer are credited with new-session -e")
+    func creditsOnlyThreeTwoAndNewerWithSessionEnvironmentFlag() {
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 3, minor: 2)))
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 3, minor: 6)))
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 4, minor: 0)))
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 3, minor: 1)) == false)
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 2, minor: 9)) == false)
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: nil) == false)
+    }
+
+    @Test("The capability probe asks tmux -V on the injected runner")
+    func capabilityProbeAsksTmuxVersion() throws {
+        let recorder = SynchronousArgumentRecorder()
+        let probe = TmuxSessionProbe(
+            runSynchronouslyForOutput: { executable, arguments, _ in
+                recorder.record(executable: executable, arguments: arguments)
+                return "tmux 3.5a\n"
+            },
+            environment: [:]
+        )
+
+        #expect(probe.supportsSessionEnvironmentFlag())
+        let call = try #require(recorder.calls.first)
+        #expect(call.executable == "/usr/bin/env")
+        #expect(call.arguments == ["tmux", "-V"])
+    }
+
+    @Test("An unavailable tmux -V reads as no new-session -e")
+    func unavailableVersionReadsAsUnsupported() {
+        let probe = TmuxSessionProbe(runSynchronouslyForOutput: { _, _, _ in nil }, environment: [:])
+        #expect(probe.version() == nil)
+        #expect(probe.supportsSessionEnvironmentFlag() == false)
+    }
+
     private func adjacent(_ arguments: [String], _ first: String, _ second: String) -> Bool {
         guard let index = arguments.firstIndex(of: first), index + 1 < arguments.count else { return false }
         return arguments[index + 1] == second
@@ -137,5 +190,24 @@ private actor ArgumentRecorder {
 
     func record(executable: String, arguments: [String]) {
         calls.append((executable, arguments))
+    }
+}
+
+/// The synchronous seam has no suspension point to hop through, so its recorder is
+/// a lock rather than an actor.
+private final class SynchronousArgumentRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(executable: String, arguments: [String])] = []
+
+    var calls: [(executable: String, arguments: [String])] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func record(executable: String, arguments: [String]) {
+        lock.lock()
+        recorded.append((executable, arguments))
+        lock.unlock()
     }
 }

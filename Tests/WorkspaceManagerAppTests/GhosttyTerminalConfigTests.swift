@@ -434,6 +434,7 @@ struct GhosttyTerminalConfigTests {
             environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
             terminalMultiplexingMode: .tmuxPerSession,
             isTmuxAvailableOverride: true,
+            tmuxSupportsSessionEnvironmentFlagOverride: true,
             hostSessionID: hostSessionID,
             hooksSocketPath: "/tmp/workspaces-hooks.sock",
             automationEnvironment: AutomationTerminalEnvironment(
@@ -512,6 +513,82 @@ struct GhosttyTerminalConfigTests {
         #expect(!script.contains("has-session"))
     }
 
+    /// `new-session -e` arrived in tmux 3.2. Handing it to an older tmux is not a
+    /// degraded launch — tmux rejects the flag and the pane never comes up — so the
+    /// pre-3.2 shape drops the `-e` pairs and keeps the chained `set-environment`,
+    /// which every tmux understands.
+    @Test("A tmux without new-session -e seeds the session after create instead")
+    func tmuxWithoutSessionEnvironmentFlagSeedsAfterCreate() throws {
+        let script = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-b-00000000",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+            sessionEnvironment: Self.tileEnvironment(handle: "handle-b"),
+            seedsEnvironmentOnCreate: false
+        )
+
+        #expect(script.hasPrefix("exec tmux -L workspaces new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b' \\;"))
+        #expect(!script.contains(" -e "))
+        for pair in Self.tileEnvironment(handle: "handle-b") {
+            let reseed = "\\; set-environment -t '=wm-repo-b-00000000' '\(pair.key)' '\(pair.value)'"
+            #expect(script.contains(reseed))
+        }
+    }
+
+    /// The two shapes differ only in the `-e` pairs: the same keys, the same values,
+    /// the same session, so a downgrade costs a created session's first pane its
+    /// environment and nothing else.
+    @Test("The pre-3.2 shape is the 3.2+ shape minus its new-session -e pairs")
+    func preThreeTwoShapeIsTheModernShapeWithoutSeeding() {
+        func script(seedsEnvironmentOnCreate: Bool) -> String {
+            GhosttyTerminalConfig.tmuxLaunchScript(
+                sessionName: "wm-repo-b-00000000",
+                workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+                sessionEnvironment: Self.tileEnvironment(handle: "handle-b"),
+                seedsEnvironmentOnCreate: seedsEnvironmentOnCreate
+            )
+        }
+
+        var stripped = script(seedsEnvironmentOnCreate: true)
+        for pair in Self.tileEnvironment(handle: "handle-b") {
+            stripped = stripped.replacingOccurrences(of: " -e '\(pair.key)=\(pair.value)'", with: "")
+        }
+        #expect(stripped == script(seedsEnvironmentOnCreate: false))
+    }
+
+    /// The version answer has to reach the composed launch command, not just the
+    /// script builder — the config is what a surface actually launches.
+    @Test("The composed launch command follows the resolved tmux capability")
+    func composedLaunchCommandFollowsResolvedTmuxCapability() throws {
+        func command(supportsSessionEnvironmentFlag: Bool) throws -> String {
+            let config = GhosttyTerminalConfig(
+                workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+                environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+                terminalMultiplexingMode: .tmuxPerSession,
+                isTmuxAvailableOverride: true,
+                tmuxSupportsSessionEnvironmentFlagOverride: supportsSessionEnvironmentFlag,
+                automationEnvironment: AutomationTerminalEnvironment(
+                    socketPath: "/tmp/workspaces-automation.sock",
+                    handle: "handle-b"
+                ),
+                tmuxSessionName: "wm-repo-b-00000000"
+            )
+            return try #require(config.command)
+        }
+
+        // The script is re-quoted into the shell's `-c` argument, so assert on the
+        // forms that survive that layer: `KEY=VALUE` is the `-e` pair, `'KEY'` and
+        // `'VALUE'` as separate words are the chained `set-environment`.
+        let seeded = try command(supportsSessionEnvironmentFlag: true)
+        #expect(seeded.contains("'\(AutomationAPI.handleEnvironmentKey)=handle-b'"))
+        #expect(seeded.contains("set-environment"))
+
+        let unseeded = try command(supportsSessionEnvironmentFlag: false)
+        #expect(!unseeded.contains("\(AutomationAPI.handleEnvironmentKey)=handle-b"))
+        #expect(unseeded.contains("set-environment"))
+        #expect(unseeded.contains("'\(AutomationAPI.handleEnvironmentKey)'"))
+        #expect(unseeded.contains("'handle-b'"))
+    }
+
     @Test("A tmux launch with no tile-scoped environment stays a bare attach-or-create")
     func tmuxLaunchWithoutTileEnvironmentStaysBare() throws {
         let script = GhosttyTerminalConfig.tmuxLaunchScript(
@@ -550,6 +627,7 @@ struct GhosttyTerminalConfigTests {
             ],
             terminalMultiplexingMode: .tmuxPerSession,
             isTmuxAvailableOverride: true,
+            tmuxSupportsSessionEnvironmentFlagOverride: true,
             automationEnvironment: AutomationTerminalEnvironment(
                 socketPath: "/tmp/auto.sock",
                 handle: handle
@@ -589,14 +667,55 @@ struct GhosttyTerminalConfigTests {
         process.environment = ["PATH": directory.path]
         let output = Pipe()
         process.standardOutput = output
-        process.standardError = Pipe()
+        process.standardError = FileHandle.nullDevice
         try process.run()
+        // Killing the child at the deadline closes the pipe, so the read below is
+        // bounded by the same budget as the wait.
+        let killSwitch = armKillSwitch(for: process, after: childProcessBudgetSeconds)
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        killSwitch.cancel()
 
         return String(decoding: data, as: UTF8.self)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init)
+    }
+
+    /// Deadline for the stub round trip above, sized from this machine's measured
+    /// cost of launching a child and getting an answer back rather than from a fixed
+    /// wall clock — the policy in `WorkspaceManagerTests/Helpers/LaunchBudget`,
+    /// applied at the one call site in this target that supervises a process (the
+    /// two test targets cannot share source). Floored so a fast machine still fails
+    /// fast, capped so a pathological baseline cannot hang the run.
+    private static var childProcessBudgetSeconds: TimeInterval {
+        min(60, max(5, launchRoundTripSeconds * 20))
+    }
+
+    /// One trivial launch-to-exit round trip, measured once. A machine the probe
+    /// cannot run on is not evidence of a fast one, so it reads as slow.
+    private static let launchRoundTripSeconds: TimeInterval = {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "exit 0"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let started = Date()
+        guard (try? process.run()) != nil else { return 20 }
+        let killSwitch = armKillSwitch(for: process, after: 90)
+        process.waitUntilExit()
+        killSwitch.cancel()
+        return max(Date().timeIntervalSince(started), 0.05)
+    }()
+
+    /// Terminates `process` once `seconds` elapse. Cancel it once the child is
+    /// reaped: a stub that never exits should fail its test on a budget, not hang
+    /// the suite.
+    private static func armKillSwitch(for process: Process, after seconds: TimeInterval) -> DispatchWorkItem {
+        let killSwitch = DispatchWorkItem {
+            if process.isRunning { process.terminate() }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + seconds, execute: killSwitch)
+        return killSwitch
     }
 
     @Test("Only tile-scoped keys are seeded into the session environment")
@@ -622,6 +741,7 @@ struct GhosttyTerminalConfigTests {
                 environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
                 terminalMultiplexingMode: .tmuxPerSession,
                 isTmuxAvailableOverride: true,
+                tmuxSupportsSessionEnvironmentFlagOverride: true,
                 hostSessionID: UUID(uuidString: "2D4D6044-1E11-49C9-9CB0-A1D7B9F44E31")!,
                 hooksSocketPath: "/tmp/workspaces-hooks.sock",
                 automationEnvironment: AutomationTerminalEnvironment(

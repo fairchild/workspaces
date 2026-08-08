@@ -2,10 +2,12 @@
 //  TmuxSessionProbe.swift
 //  WorkspaceManagerCore
 //
-//  Probes whether a deterministic Workspaces tmux session is still alive on the
-//  dedicated `-L workspaces` socket, so cold-start restore can reattach to a
-//  surviving session instead of relaunching it. Command execution is injected so
-//  the probe is unit-testable without a real tmux server.
+//  Asks the installed tmux what the app needs to know before it launches: whether
+//  a deterministic Workspaces session is still alive on the dedicated
+//  `-L workspaces` socket (so cold-start restore can reattach instead of
+//  relaunching), what its active pane is running, and which command flags this
+//  tmux understands. Command execution is injected so every answer is unit-testable
+//  without a real tmux server.
 //
 
 import Foundation
@@ -23,17 +25,28 @@ public struct TmuxSessionProbe: Sendable {
     public typealias OutputCommandRunner =
         @Sendable (_ executable: String, _ arguments: [String], _ environment: [String: String]?) async -> String?
 
+    /// Same contract as `OutputCommandRunner`, without the suspension point.
+    /// A terminal surface composes its launch command synchronously, so the
+    /// capability question that command's shape depends on has to be answerable
+    /// without awaiting.
+    public typealias SynchronousOutputRunner =
+        @Sendable (_ executable: String, _ arguments: [String], _ environment: [String: String]?) -> String?
+
     private let run: CommandRunner
     private let runForOutput: OutputCommandRunner
+    private let runSynchronouslyForOutput: SynchronousOutputRunner
     private let environment: [String: String]
 
     public init(
         run: @escaping CommandRunner = TmuxSessionProbe.defaultRunner,
         runForOutput: @escaping OutputCommandRunner = TmuxSessionProbe.defaultOutputRunner,
+        runSynchronouslyForOutput: @escaping SynchronousOutputRunner =
+            TmuxSessionProbe.defaultSynchronousOutputRunner,
         environment: [String: String] = TmuxSessionProbe.defaultEnvironment
     ) {
         self.run = run
         self.runForOutput = runForOutput
+        self.runSynchronouslyForOutput = runSynchronouslyForOutput
         self.environment = environment
     }
 
@@ -102,6 +115,55 @@ public struct TmuxSessionProbe: Sendable {
         return exitCode == 0
     }
 
+    /// First release whose `new-session` accepts `-e KEY=VALUE`. Older tmux rejects
+    /// the flag outright, so a launch that emits it there loses the whole pane.
+    public static let sessionEnvironmentFlagVersion = (major: 3, minor: 2)
+
+    /// The installed tmux's `major.minor`, or `nil` when tmux is absent, wedged, or
+    /// prints a version line naming no number (`tmux master`). `tmux -V` answers
+    /// from the binary and never contacts a server, so this is safe to run before
+    /// deciding what to launch.
+    public func version() -> (major: Int, minor: Int)? {
+        Self.parseVersion(
+            fromVersionOutput: runSynchronouslyForOutput(
+                "/usr/bin/env",
+                ["tmux", "-V"],
+                environment
+            ))
+    }
+
+    /// Whether the installed tmux understands `new-session -e`, which is how a
+    /// launch gives a session its own environment *before* the created session's
+    /// first pane spawns.
+    ///
+    /// An unreadable version reads as too old. The two failure modes are not
+    /// symmetric: emitting the flag at a tmux that rejects it costs the whole pane,
+    /// while assuming it is missing costs a freshly created session's first pane
+    /// its seeded environment until a new shell starts there.
+    public func supportsSessionEnvironmentFlag() -> Bool {
+        Self.supportsSessionEnvironmentFlag(version: version())
+    }
+
+    public static func supportsSessionEnvironmentFlag(version: (major: Int, minor: Int)?) -> Bool {
+        guard let version else { return false }
+        let minimum = sessionEnvironmentFlagVersion
+        return (version.major, version.minor) >= (minimum.major, minimum.minor)
+    }
+
+    /// Pulls `major.minor` out of a `tmux -V` line. tmux writes `tmux 3.5a`,
+    /// `tmux next-3.6`, `tmux 3.2-rc3`; the first number-and-dot run wins, and a
+    /// bare major (`tmux 3`) reads as `.0`.
+    public static func parseVersion(fromVersionOutput output: String?) -> (major: Int, minor: Int)? {
+        guard let output else { return nil }
+        for candidate in output.split(whereSeparator: { !$0.isNumber && $0 != "." }) {
+            let components = candidate.split(separator: ".", omittingEmptySubsequences: true)
+            guard let major = components.first.flatMap({ Int($0) }) else { continue }
+            let minor = components.count > 1 ? Int(components[1]) ?? 0 : 0
+            return (major: major, minor: minor)
+        }
+        return nil
+    }
+
     /// Production runner: `ProcessRunner.run` with a short timeout so a wedged
     /// tmux server cannot stall restore; any throw maps to `nil` (not alive).
     public static let defaultRunner: CommandRunner = { executable, arguments, environment in
@@ -132,6 +194,35 @@ public struct TmuxSessionProbe: Sendable {
         } catch {
             return nil
         }
+    }
+
+    /// Production synchronous runner: a bounded `Process` run yielding stdout on a
+    /// zero exit. The watchdog kills the child at the deadline, which closes the
+    /// pipe, so neither the read nor the wait is open-ended.
+    public static let defaultSynchronousOutputRunner: SynchronousOutputRunner = { executable, arguments, environment in
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        process.environment = environment
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+
+        let watchdog = DispatchWorkItem {
+            if process.isRunning { process.terminate() }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: watchdog)
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        watchdog.cancel()
+
+        guard process.terminationStatus == 0 else { return nil }
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// A PATH value with the common Homebrew/system bin paths prepended (an absent
