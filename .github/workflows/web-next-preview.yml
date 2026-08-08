@@ -1,8 +1,8 @@
 name: Web Next Preview
 
-# Opt-in Vercel preview for web-next. Vercel's native Git deployments are
-# disabled for this project (web-next/vercel.json git.deploymentEnabled=false),
-# so previews are created only here — and only when a PR that touches web-next/**
+# Opt-in Vercel preview for web-next. The Vercel project's Git provider is
+# disconnected; web-next/vercel.json also sets git.deploymentEnabled=false as
+# defense in depth. Previews are created only here — and only when a PR touches web-next/**
 # (or this workflow) carries the `preview` label. Label the PR to deploy; remove
 # it to stop redeploying on subsequent pushes. `unlabeled` is in the trigger list
 # so removing the label enters this PR's concurrency group and cancels an
