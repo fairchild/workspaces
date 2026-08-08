@@ -35,3 +35,25 @@ Create a GitHub issue. Use the repo's normal issue labels from `docs/agents/tria
 ## When a Skill Says "Fetch the Relevant Ticket"
 
 Run `gh issue view <number> --comments`.
+
+## Milestone Operating Contract
+
+Roadmap and milestones play different roles: `backlog/ROADMAP.md` holds
+strategic direction and promotion rules; a GitHub milestone is the live
+execution contract for one promoted theme; backlog plan files hold
+design/support detail for work not yet promoted.
+
+Lanes run independently — desktop (`D`), web-next (`W`), automation (`A`),
+plus ad-hoc lanes like factory (`F`) and repo health (`H`) — each with **one
+active milestone at a time**. Parallel lanes are the sanctioned exception to a
+single global focus: they are honest only while the lanes contend for neither
+the same files nor the same reviewer context; record that independence
+argument in the milestone description when opening a second active lane.
+
+Milestone titles are self-describing: a `[<lane><order>]` prefix (`[D1]`,
+`[W3]`, `[H1]`) makes execution order visible on sight, and each description
+leads with a `[LANE: … · ACTIVE|QUEUED]` posture header. A read-only drift
+gate (`scripts/milestone-legibility-check.py`,
+`.github/workflows/milestone-legibility.yml`) fails when any open milestone
+loses its prefix or posture tag. Automated planning matches milestones by the
+prefix-stripped name, so the convention does not disturb it.
