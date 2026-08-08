@@ -471,6 +471,25 @@ struct GhosttyTerminalConfigTests {
         #expect(!workspaceB.contains("handle-a"))
     }
 
+    /// The create path's first pane spawns as part of `new-session`, before the
+    /// chained commands run — so every seeded pair has to ride `new-session -e`
+    /// itself. A pair that drifted past the `\;` separator would leave a freshly
+    /// created tile's own first shell without its handle, which is the bug.
+    @Test("Seeded pairs ride new-session itself, ahead of the chained commands")
+    func seededPairsRideNewSessionBeforeChainedCommands() throws {
+        let script = GhosttyTerminalConfig.tmuxLaunchScript(
+            sessionName: "wm-repo-b-00000000",
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-b"),
+            sessionEnvironment: Self.tileEnvironment(handle: "handle-b")
+        )
+
+        let firstChained = try #require(script.range(of: " \\; "))
+        let newSessionArguments = script[..<firstChained.lowerBound]
+        for pair in Self.tileEnvironment(handle: "handle-b") {
+            #expect(newSessionArguments.contains("-e '\(pair.key)=\(pair.value)'"))
+        }
+    }
+
     /// `new-session -A` attaching a session that survived an earlier launch ignores
     /// `-e`, so the surviving session still names the recorded launch's handle. The
     /// chained `set-environment` runs after create-or-attach on either path, with

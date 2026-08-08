@@ -254,6 +254,9 @@ struct GhosttyTerminalConfig {
 
         var script =
             "exec \(tmux) new-session -A -s \(singleQuoted(sessionName)) -c \(singleQuoted(workingDirectory.path))"
+        // On the create path the first pane's shell spawns as part of `new-session`,
+        // before the chained commands run, so `-e` — not the `set-environment`
+        // below — is what that pane inherits. These pairs stay on `new-session`.
         for pair in sessionEnvironment {
             script += " -e \(singleQuoted("\(pair.key)=\(pair.value)"))"
         }
