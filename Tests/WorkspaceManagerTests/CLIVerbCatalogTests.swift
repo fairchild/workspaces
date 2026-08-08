@@ -16,6 +16,13 @@ struct CLIVerbCatalogTests {
             (["window", "snapshot", "--out", "x.png"], ["automation", "window", "snapshot", "--out", "x.png"]),
             (["workspace", "list", "--json"], ["automation", "workspace", "list", "--json"]),
             (["workspace", "create", "repo-id", "name"], ["automation", "workspace", "create", "repo-id", "name"]),
+            // #1265's verbs shipped at top level; scripts/api-select-smoke.sh drives
+            // `workspaces wait` that way, so grouping them may not break the spelling.
+            (
+                ["wait", "--for", "surface_attached"],
+                ["automation", "wait", "--for", "surface_attached"]
+            ),
+            (["focus", "--json"], ["automation", "focus", "--json"]),
         ]
     )
     func aliasCanonicalization(input: [String], expected: [String]) {
@@ -149,10 +156,12 @@ struct CLIVerbCatalogTests {
               workspaces automation workspace select <workspace-id> [--json]
               workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
               workspaces automation workspace archive <workspace-id> [--teardown] [--json]
+              workspaces automation wait --for <condition> [--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]
+              workspaces automation focus [--json]
 
             Compatibility:
-              'surface', 'tile', 'input', 'window', and 'workspace' still work as
-              top-level verbs and mean 'automation <verb>'.
+              'surface', 'tile', 'input', 'window', 'workspace', 'wait', and 'focus'
+              still work as top-level verbs and mean 'automation <verb>'.
 
             Two planes:
               'ws' and 'repo' manage the CLI-local plane and work without the app;

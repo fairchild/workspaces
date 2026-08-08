@@ -39,6 +39,35 @@ under-capable handles fail closed. Context responses do not echo the handle.
 Restart WorkSpaces after changing the Automation API experiment. Terminal
 processes only receive automation environment when their surface is created.
 
+In `tmux_per_session` mode the handle also travels in the tmux *session's* own
+environment: `new-session -e` seeds it at creation, and a chained
+`set-environment` in the same command sequence re-points a session that outlived
+an earlier launch (tmux ignores `-e` when `-A` attaches). One tmux server backs
+every session on the `-L workspaces` socket and a pane inherits the server's
+environment, so without per-session wiring a tile would read the handle of
+whichever tile happened to start the server, and its in-tile verbs would mutate
+that tile instead (#1257).
+
+This scopes which handle a pane *receives*. It does not scope which handles are
+*readable*: the `-L workspaces` socket is one same-user trust domain, and any
+pane on it can enumerate the other sessions and read their environment
+(`tmux list-sessions`, `tmux show-environment -t <session>`), so a process in one
+tile can still obtain another tile's handle and act as that tile. The property
+gained is correct targeting for well-behaved callers, not secrecy between tiles.
+What separates tiles from anything else is unchanged: the socket's own
+permissions and the user account that owns it, exactly as for `automation.sock`
+above.
+
+Two consequences survive the fix. A shell already running in a reattached pane
+keeps the environment it was spawned with — tmux cannot rewrite a live process —
+so after a relaunch that pane's handle is stale until a new shell starts in the
+session. And tmux older than 3.2 has no `new-session -e`, so there the launch can
+only set the environment after the session is created and a newly created
+session's *first* pane inherits the tmux server's environment; later panes,
+reattaches, and every pane on tmux 3.2+ are unaffected. The app resolves the
+installed tmux version once per launch and logs a notice when it takes that
+fallback.
+
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
 not terminal input or output. Each event carries an `operatorHandle` boolean so
@@ -51,10 +80,12 @@ Both socket ends carry deadlines: the listener closes connections that do not
 deliver a full request within 10 s, bounds response writes the same way, and
 answers connections over its small concurrency cap with a `busy` error. The
 client sets 30 s send/receive socket timeouts, so a hung app surfaces as a
-typed timeout in the CLI instead of a wedged shell. Callers may shorten that per
+typed timeout in the CLI instead of a wedged shell. Callers may set their own per
 request: the CLI's passive inventory probe — the one behind `ws list`, `repo
 list`, and selector resolution, which nobody typed — uses 0.5 s and falls back to
-the CLI-local plane when it fires. Every probe timeout is per blocking syscall
+the CLI-local plane when it fires, while `automation wait` goes the other way and
+derives its deadline from the server-side wait ceiling plus headroom so a
+legitimately-waiting server never trips it. Every probe timeout is per blocking syscall
 (`SO_RCVTIMEO`/`SO_SNDTIMEO`), not a budget for the whole call. The fallback is
 never silent to a person: missing credential, dead listener, timeout, and
 unreadable reply each print their own one-line note on an interactive stderr (or
@@ -241,7 +272,9 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/workspaces` | **Operator scope.** Returns the app's tracked repos and workspaces with stable SwiftData model ids, names, and enough state to target: per workspace, its `status`, `isArchived`, `backend`, and whether it `isSelected`; per repo, whether it `isSelected`. Read-only — mutation verbs use these stable targets. Requires `workspace.read`; a tile handle lacks it and fails `capability_denied`. See [Workspace list](#workspace-list). |
 | `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null,"select":true,"fromRef":"origin/main"}`; `providerID` defaults to `local`, `select` defaults to `true`, and `fromRef` is omitted by default. Returns `completed` with the created workspace and, when selected, the attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
-| `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from a terminal surface created by the same operator handle through `workspace.create` this launch. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is the `attachedSurfaceID` from that create result. Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles and non-created/unattributed surfaces fail `capability_denied`. See [Surface read](#surface-read). |
+| `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from any live terminal surface. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is a live host-session id (e.g. the `attachedSurfaceID` from a create/select result). Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles fail `capability_denied`. See [Surface read](#surface-read). |
+| `POST /v1/wait` | **Operator scope, typed wait.** Evaluates a condition (`surface_attached`, `workspace_selected`, `surface_text_matches`, `prompt_ready`) server-side until satisfied, a bounded timeout elapses, or current state proves it unsatisfiable. Body is `{"for":"…","predicate":{…},"timeoutMS":n}`; the outcome is the typed enum `satisfied` / `timed_out` / `not_applicable`, never a bare boolean. Topology/selection conditions require `workspace.read`; content conditions require `surface.read`. See [Wait](#wait). |
+| `GET /v1/focus` | **Operator scope.** Truthful report of the app's live focus state: `{appIsActive, keyWindowID, firstResponderSurfaceID, focusPossible}`. `focusPossible: false` marks a no-activate (or CI) launch where the app cannot take focus — absent focus is then "unavailable", not a focus failure. Requires `window.read`. See [Focus](#focus). |
 | `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. `{"teardownTerminals":true}` kills the workspace's tmux sessions and retires its terminal tiles first, so a live terminal cannot fail the call. Returns `completed` with the archived workspace id, post-gesture selection state, and (after teardown) a teardown report, or `confirmation_required` if the UI path ever reaches a modal. A live terminal without teardown fails typed: `terminal_active` (`retryable: true`) on the exit-timeout, `close_blocked_by_confirmation` (`retryable: false`) when the close-confirmation blocks. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
@@ -271,12 +304,12 @@ handle.
 | `context.read` | `GET /v1/context` |
 | `surfaces.read` | `GET /v1/surfaces` |
 | `browser.read` | `GET /v1/web-surfaces` (read-only listing) and `GET /v1/web-surfaces/{id}/snapshot` (bounded PNG of a live surface); granted to default handles under the Automation API experiment |
-| `window.read` | `GET /v1/windows` (list the app's windows); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
+| `window.read` | `GET /v1/windows` (list the app's windows) and `GET /v1/focus` (truthful focus report); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `window.snapshot` | `POST /v1/window/snapshot` (composited PNG of a listed window); granted only to operator handles, never to tile handles |
-| `workspace.read` | `GET /v1/workspaces` (list the app's repos and workspaces); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
+| `workspace.read` | `GET /v1/workspaces` (list the app's repos and workspaces) and `POST /v1/wait` for the `surface_attached` / `workspace_selected` conditions; granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); granted only to operator handles, never to tile handles |
 | `workspace.create` | `POST /v1/workspace/create` (drive the real sidebar create helper for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.read` and `workspace.select` so the read/write split stays legible |
-| `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for surfaces created by the same operator handle through `workspace.create` this launch); granted only to operator handles, never to tile handles |
+| `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for any live terminal surface) and `POST /v1/wait` for the `surface_text_matches` / `prompt_ready` conditions; granted only to operator handles, never to tile handles |
 | `workspace.archive` | `POST /v1/workspace/archive` (drive the real sidebar archive action for a workspace); granted only to operator handles, never to tile handles |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
@@ -499,8 +532,7 @@ user must confirm:
 ## Surface read
 
 `POST /v1/surface/read` (operator scope, `surface.read`) returns bounded plain
-text from a terminal surface created by the same operator handle through
-`workspace.create` during this app launch:
+text from any live terminal surface:
 
 ```json
 { "surfaceID": "…", "lines": 200 }
@@ -520,11 +552,12 @@ The success envelope carries the text plus the effective bounds:
 }
 ```
 
-- **Creation-scoped authority.** The only readable terminal surfaces are those
-  whose `attachedSurfaceID` came from a completed `workspace.create` call made by
-  the same operator handle in the same launch. This is not a blanket grant to
-  read the human owner's arbitrary terminal tiles. A different operator handle, a
-  tile handle, or an unattributed surface fails `capability_denied`.
+- **Operator-scoped authority.** Any live terminal surface is readable by an
+  operator handle. The grant rests on the read being read-only, operator scope
+  being opt-in per launch, and every call landing in the audit log with the
+  surface id it touched (`surfaceRead.surfaceID`) — never the text. Tile
+  handles never carry `surface.read` and fail `capability_denied`; the
+  creation-attribution registry serves audit lineage, not access control.
 - **Ghostty text API.** The app reads GhosttyKit's plain terminal text through
   `ghostty_surface_read_text` over the whole screen/scrollback selection. No OCR
   or screenshot path is used.
@@ -641,6 +674,111 @@ is whatever the sidebar gesture left selected.
   `/v1/workspace/archive#teardown`) carrying retired-surface and killed-session
   counts — counts only, never session names.
 
+## Wait
+
+`POST /v1/wait` (operator scope) lets a caller state a condition once and have
+the app evaluate it against its own live state, answering with a typed outcome
+instead of leaving the caller to sleep and re-check. Request:
+
+```json
+{
+  "for": "surface_text_matches",
+  "predicate": { "surfaceID": "…", "pattern": "BUILD (PASSED|FAILED)" },
+  "timeoutMS": 10000
+}
+```
+
+Response (success envelope):
+
+```json
+{
+  "for": "surface_text_matches",
+  "outcome": "satisfied",
+  "waitedMS": 412,
+  "requestedTimeoutMS": 10000,
+  "effectiveTimeoutMS": 10000,
+  "observed": { "surfaceLive": true, "textMatched": true, "windowAttached": true },
+  "system": { "capabilities": [ … ] }
+}
+```
+
+Condition vocabulary (predicate fields that do not apply to a condition are
+rejected `invalid_request`, never silently ignored):
+
+| `for` | Predicate | Satisfied when | Capability |
+| --- | --- | --- | --- |
+| `surface_attached` | optional `surfaceID` | The named surface is live in the tile tree; without a predicate, the active session resolves to an attached terminal (the same rule the ui-state topology uses). | `workspace.read` |
+| `workspace_selected` | optional `workspaceID` | The named workspace is the current selection; without a predicate, any workspace is selected. Naming an archived workspace returns `not_applicable` immediately — selection of an archived workspace navigates to its repo overview and can never satisfy the wait. | `workspace.read` |
+| `surface_text_matches` | `surfaceID` + regex `pattern` (≤ 1 KiB, must compile) | The bounded terminal text matches the pattern. The tick reads the last 500 lines capped at 32 KiB — an eighth of what `surface.read` returns, because this read repeats every tick and match cost scales with input length. | `surface.read` |
+| `prompt_ready` | `surfaceID` | The surface's shell has reported a readiness signal (title or pwd — the same signals `first_prompt_ready` diagnostics count). Ready-once: the surface latches the first signal, so a TUI clearing the window title on exit cannot un-ready it. | `surface.read` |
+
+Outcomes are the typed enum `satisfied` / `timed_out` / `not_applicable` —
+never a bare boolean — and every outcome carries `observed`, the final
+evaluation tick's reading, so a timeout is diagnosable from the response alone
+(`observed` is sparse: an absent field means "not part of this condition",
+never "zero"). `observed` never carries terminal text.
+
+**Bounded by design.** A missing `timeoutMS` waits 5 s; every request is
+clamped to the 20 s ceiling (`waitMaxTimeoutMS`), reported via
+`requestedTimeoutMS` vs `effectiveTimeoutMS`. The ceiling interacts with the
+listener's socket deadlines (#1241) deliberately: the read deadline is
+cancelled once the request parses and the write deadline arms only after the
+route returns, so the wait executes in the gap between them — the ceiling is
+what bounds that gap, and it sits below `AutomationSocketClient`'s default
+30 s receive deadline so a defaulted client never times out while the server
+is still legitimately waiting. Longer waits are the caller's re-arm loop:
+repeat the request on `timed_out` until your own budget expires; each round is
+bounded and frees its listener connection slot between rounds. A pending wait
+holds one of the listener's 8 connection slots for at most the ceiling.
+
+**Cost of a tick.** Topology and selection conditions poll every 100 ms — a tick
+is a couple of lookups. Content conditions poll every 250 ms, because a tick is
+a terminal read plus a regex run. The regex is compiled once when the plan
+resolves (the same compile that validates it) and runs on a detached task, not
+the MainActor: the 1 KiB pattern cap bounds how much pattern the app parses, not
+what a match costs — backtracking cost is a function of the *input*, and a
+six-byte `(a+)+$` is already super-polynomial in it. What bounds the cost is the
+32 KiB input cap plus an abort at the wait's own deadline. A pathological pattern
+therefore spends its own wait's budget, reports `timed_out` with `textMatched`
+absent (the match was abandoned, not decided), and leaves the UI responsive
+throughout.
+
+**Composition with the events endpoint (#1227).** A wait is the
+single-condition, poll-based case of the planned events stream: the condition
+vocabulary above doubles as the event vocabulary, and `observed` uses the same
+field names the ui-state snapshot (#1259) reports (`attached`, selection
+state), so the stream can emit the same observations a wait polls for without
+a parallel representation.
+
+## Focus
+
+`GET /v1/focus` (operator scope, `window.read`) reports the app's live focus
+state truthfully:
+
+```json
+{
+  "appIsActive": false,
+  "keyWindowID": "42",
+  "firstResponderSurfaceID": "…",
+  "focusPossible": false,
+  "system": { "capabilities": [ … ] }
+}
+```
+
+- `appIsActive` is `NSApp.isActive`; `keyWindowID` is the key window's AppKit
+  window number (the identity `window.read` lists), absent when no window is
+  key; `firstResponderSurfaceID` is the terminal surface owning the key
+  window's first responder, absent when focus rests outside any terminal
+  surface.
+- **`focusPossible` is the unavailable-is-not-zero marker.** Under
+  `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` (shared desktop) or CI, the activation
+  policy bars the app from taking focus, so `focusPossible` is `false` and the
+  other fields can only be non-empty if the user focused the app themselves.
+  Callers must branch on `focusPossible` before asserting on focus: a null
+  `firstResponderSurfaceID` with `focusPossible: false` means "focus is
+  structurally unobservable under this launch policy", not "focus failed" —
+  the misreading that produced #1218's `surface_focused=0`.
+
 ## Error Codes
 
 | Code | Meaning |
@@ -667,8 +805,9 @@ environment that WorkSpaces injects into terminal surfaces.
 Every verb that talks to the socket is spelled `workspaces automation <verb>`,
 which is what `workspaces help` prints and what the examples below use. The bare
 top-level spellings (`workspaces surface …`, `tile`, `input`, `window`,
-`workspace`) remain supported as compatibility aliases onto the same dispatch
-path and behave identically — existing scripts need no edit.
+`workspace`, `wait`, `focus`) remain supported as compatibility aliases onto the
+same dispatch path and behave identically — existing scripts need no edit, and
+`scripts/api-select-smoke.sh` still drives `workspaces wait` that way.
 
 ```bash
 workspaces automation health
@@ -690,8 +829,9 @@ workspaces automation input write 'echo hi'
 workspaces automation input write 'echo hi' --submit
 ```
 
-`automation window list`, `automation window snapshot`, and `automation workspace
-list` are the operator-scope commands. Unlike the tile-scoped commands, they read
+`automation window list`, `automation window snapshot`, `automation workspace
+list`, `automation wait`, and `automation focus` are the operator-scope
+commands. Unlike the tile-scoped commands, they read
 the per-launch operator credential file (minted next to the socket by an opt-in
 launch) rather than the injected terminal environment, so they work from any
 same-user shell outside a WorkSpaces tile. Absent the credential they fail closed
@@ -712,6 +852,10 @@ workspaces automation workspace create <repo-id> feature-a --provider lume --gue
 workspaces automation workspace archive <id>                     # archive through the sidebar action path
 workspaces automation workspace archive <id> --teardown          # kill tmux + retire terminals first
 workspaces automation workspace archive <id> --json
+workspaces automation wait --for workspace_selected --workspace-id <id> --timeout-ms 10000 --json
+workspaces automation wait --for surface_text_matches --surface-id <id> --pattern 'PASS|FAIL'
+workspaces automation wait --for prompt_ready --surface-id <id>
+workspaces automation focus --json                               # truthful focus report incl. focusPossible
 ```
 
 `automation workspace list` reads the running app's repos and workspaces
@@ -743,11 +887,23 @@ confirmation message; `--json` includes the structured confirmation payload.
 Absent a live window it fails `unsupported` — it never falls back to a data-layer
 write.
 
+`automation wait` is the server-side typed wait: its exit code follows the
+outcome so `set -e` scripts branch without parsing JSON — 0 `satisfied`,
+2 `timed_out`, 3 `not_applicable`. `automation focus` prints the truthful focus
+report; never assert on its other fields without branching on `focusPossible`
+first. `automation wait` holds the socket open for the length of the
+server-side wait, so it derives its client deadline from the wait ceiling plus
+headroom rather than inheriting the default — the opposite direction from the
+inventory probe, which shortens it.
+
 ## Implementation Map
 
 | Concern | File |
 | --- | --- |
 | Wire models and envelopes | `Sources/WorkspaceManagerCore/Services/Automation/AutomationAPI.swift` |
+| Wait vocabulary, plan validation, engine | `Sources/WorkspaceManagerCore/Services/Automation/AutomationWait.swift` |
+| Focus wire models | `Sources/WorkspaceManagerCore/Services/Automation/AutomationFocus.swift` |
+| Focus enumeration (AppKit → state) | `Sources/WorkspaceManager/Views/MainWindow/AutomationFocusEnumerator.swift` |
 | Gesture-verb layer (verbs = clicks) | `Sources/WorkspaceManagerCore/Services/Automation/AutomationGestureVerbs.swift` |
 | Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
 | HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |

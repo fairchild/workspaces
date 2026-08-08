@@ -7,6 +7,9 @@ import AppKit
 import Foundation
 import GhosttyKit
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "GhosttyTerminalConfig")
 
 struct GhosttyTerminalConfig {
     private enum ShellProfileMode: String {
@@ -64,6 +67,7 @@ struct GhosttyTerminalConfig {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         terminalMultiplexingMode: TerminalMultiplexingMode? = nil,
         isTmuxAvailableOverride: Bool? = nil,
+        tmuxSupportsSessionEnvironmentFlagOverride: Bool? = nil,
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
         automationEnvironment: AutomationTerminalEnvironment? = nil,
@@ -115,10 +119,13 @@ struct GhosttyTerminalConfig {
             // target) wins over the directory derivation, so what launches is what
             // the continuity row recorded.
             let tmuxSessionName = tmuxSessionName ?? Self.tmuxSessionName(for: workingDirectory)
-            let quotedSession = Self.singleQuoted(tmuxSessionName)
-            let quotedWorkingDirectory = Self.singleQuoted(workingDirectory.path)
-            let tmuxScript =
-                "exec tmux -L workspaces new-session -A -s \(quotedSession) -c \(quotedWorkingDirectory)"
+            let tmuxScript = Self.tmuxLaunchScript(
+                sessionName: tmuxSessionName,
+                workingDirectory: workingDirectory,
+                sessionEnvironment: Self.tileScopedEnvironment(from: environment),
+                seedsEnvironmentOnCreate: tmuxSupportsSessionEnvironmentFlagOverride
+                    ?? Self.tmuxSupportsSessionEnvironmentFlag
+            )
             self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode, command: tmuxScript)
         } else {
             self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode)
@@ -201,6 +208,105 @@ struct GhosttyTerminalConfig {
 
     static func tmuxSessionName(for directory: URL) -> String {
         TmuxSessionNaming.defaultName(for: directory)
+    }
+
+    /// Environment keys whose values belong to *this tile and this launch*: the
+    /// automation handle a CLI verb resolves its caller tile from, its socket,
+    /// and the hook context that attributes command status to a host session.
+    ///
+    /// One tmux server backs every session on the `-L workspaces` socket, and a
+    /// pane's shell inherits the *server's* environment — the environment of
+    /// whichever tile happened to start it. These keys therefore travel in the
+    /// tmux session's own environment instead, so every pane sees its own tile.
+    /// Ordered, so a launch command is deterministic.
+    static let tileScopedEnvironmentKeys: [String] = [
+        AutomationAPI.socketEnvironmentKey,
+        AutomationAPI.handleEnvironmentKey,
+        "WORKSPACES_HOOKS_SOCKET",
+        "WORKSPACES_HOST_SESSION_ID",
+        "WORKSPACES_COMMAND_STATUS_ZSH",
+    ]
+
+    static func tileScopedEnvironment(from environment: [String: String]) -> [(key: String, value: String)] {
+        tileScopedEnvironmentKeys.compactMap { key in
+            environment[key].map { (key: key, value: $0) }
+        }
+    }
+
+    /// Whether the tmux this app will launch understands `new-session -e`, resolved
+    /// once per process: a surface composes its launch command synchronously, so the
+    /// question cannot be awaited per launch, and the answer cannot change under a
+    /// running app without a tmux upgrade mid-session.
+    ///
+    /// Fires a one-time notice on the fallback path, because that path is invisible
+    /// in the launch command a user would think to look at and explains a first pane
+    /// that came up holding the wrong tile's handle.
+    private static let tmuxSupportsSessionEnvironmentFlag: Bool = {
+        let probe = TmuxSessionProbe()
+        let version = probe.version()
+        let supported = TmuxSessionProbe.supportsSessionEnvironmentFlag(version: version)
+        if !supported {
+            let described = version.map { "\($0.major).\($0.minor)" } ?? "unreadable"
+            let minimum = TmuxSessionProbe.sessionEnvironmentFlagVersion
+            let required = "\(minimum.major).\(minimum.minor)"
+            log.notice(
+                """
+                tmux version \(described, privacy: .public) predates \(required, privacy: .public): \
+                no new-session -e, so each tile's environment is set after its session is created \
+                and a newly created session's first pane inherits the tmux server's environment
+                """
+            )
+        }
+        return supported
+    }()
+
+    /// The `-c` script a tmux-mode surface's shell execs: attach-or-create this
+    /// tile's session with its own tile-scoped environment.
+    ///
+    /// `new-session -e` seeds that environment when the session is created. When
+    /// `-A` instead attaches a session that survived an earlier launch, tmux
+    /// ignores `-e` and the session still carries the recorded launch's values,
+    /// so the chained `set-environment` — one tmux command sequence, run after
+    /// create-or-attach on either path — is what makes the live session name
+    /// this launch. Chaining rather than probing first is deliberate: a
+    /// `has-session` probe leaves a window in which another launch creates the
+    /// session, and the attach that follows would silently keep that launch's
+    /// handle.
+    ///
+    /// `seedsEnvironmentOnCreate` is false for a tmux older than
+    /// `TmuxSessionProbe.sessionEnvironmentFlagVersion`, which rejects `-e` and
+    /// would fail the launch outright. The chained `set-environment` still runs
+    /// there, so everything except a freshly created session's *first* pane gets
+    /// its own tile — the reattach and later-pane paths are unaffected.
+    ///
+    /// Panes spawned after this point inherit the session environment. A shell
+    /// already running in a surviving pane keeps the environment it was spawned
+    /// with; tmux cannot rewrite a live process.
+    static func tmuxLaunchScript(
+        sessionName: String,
+        workingDirectory: URL,
+        sessionEnvironment: [(key: String, value: String)],
+        seedsEnvironmentOnCreate: Bool = true
+    ) -> String {
+        let tmux = "tmux -L \(TmuxSessionProbe.socketLabel)"
+        // `=` forces an exact name match, as in TmuxSessionProbe.isSessionAlive.
+        let exactTarget = singleQuoted("=\(sessionName)")
+
+        var script =
+            "exec \(tmux) new-session -A -s \(singleQuoted(sessionName)) -c \(singleQuoted(workingDirectory.path))"
+        // On the create path the first pane's shell spawns as part of `new-session`,
+        // before the chained commands run, so `-e` — not the `set-environment`
+        // below — is what that pane inherits. These pairs stay on `new-session`.
+        if seedsEnvironmentOnCreate {
+            for pair in sessionEnvironment {
+                script += " -e \(singleQuoted("\(pair.key)=\(pair.value)"))"
+            }
+        }
+        for pair in sessionEnvironment {
+            // `\;` reaches tmux as a bare `;` argument: its command separator.
+            script += " \\; set-environment -t \(exactTarget) \(singleQuoted(pair.key)) \(singleQuoted(pair.value))"
+        }
+        return script
     }
 
     private static func singleQuoted(_ value: String) -> String {

@@ -3,9 +3,9 @@
 //  WorkspaceManagerTests
 //
 //  Binds the alias spellings the smoke scripts type — `workspaces workspace select`,
-//  `workspaces window snapshot` — to the handlers they must reach, by running the real
-//  `workspaces` binary. `CLIVerbCatalogTests` proves canonicalization is correct in
-//  isolation; only this proves the dispatch path actually calls it.
+//  `workspaces window snapshot`, `workspaces wait` — to the handlers they must reach, by
+//  running the real `workspaces` binary. `CLIVerbCatalogTests` proves canonicalization is
+//  correct in isolation; only this proves the dispatch path actually calls it.
 //
 
 import Foundation
@@ -128,6 +128,10 @@ struct CLIDispatchBindingTests {
         arguments: [
             (["workspace", "select"], "Usage: workspaces automation workspace select"),
             (["window", "snapshot"], "Usage: workspaces automation window snapshot --out <path>"),
+            // #1265 shipped `wait`/`focus` at top level and api-select-smoke.sh types
+            // `workspaces wait`; grouping them under `automation` must not move that spelling.
+            (["wait"], "Usage: workspaces automation wait --for"),
+            (["focus", "--bogus"], "Usage: workspaces automation focus [--json]"),
         ]
     )
     func aliasSpellingsDispatchToHandlers(arguments: [String], expected: String) throws {
@@ -141,7 +145,7 @@ struct CLIDispatchBindingTests {
 
     @Test(
         "Alias and grouped spellings produce identical output",
-        arguments: [["workspace", "select"], ["window", "snapshot"]]
+        arguments: [["workspace", "select"], ["window", "snapshot"], ["wait"], ["focus", "--bogus"]]
     )
     func aliasAndGroupedSpellingsAgree(arguments: [String]) throws {
         let alias = try runCLI(arguments)

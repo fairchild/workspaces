@@ -34,7 +34,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private(set) var socketPath: String?
     private var teardownObserver: Any?
     private var didStart = false
-    private var defaults: UserDefaults = .standard
+    private var defaults: UserDefaults = LaunchPreferences.defaults
     private var socketURLOverride: URL?
     private var installerFactory: @Sendable (String) async -> any ClaudeSettingsInstalling = {
         _ in

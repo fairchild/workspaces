@@ -50,6 +50,13 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
     private var lastScaleAndSize: GhosttySurfaceScaleCalculator.ScaleAndSize?
     private var trackingAreaInstalled = false
     var workingDirectoryPath: String { workingDirectory.path }
+    /// Whether the shell has reported a prompt-readiness signal (title or pwd — the same
+    /// signals `TerminalReadinessDiagnostics` counts as `first_prompt_ready`). A latch, not a
+    /// reading of the current title and pwd: both of those are resettable, so a TUI that
+    /// clears the window title on exit would otherwise un-ready a surface that has been ready
+    /// for minutes. The Automation API's `prompt_ready` wait condition reads it as "the shell
+    /// finished initializing and rendered a prompt", which is a fact about the past.
+    private(set) var hasObservedPromptReadySignal = false
     var contextMenuProvider: (() -> NSMenu?)?
     var onScrollbarStateChange: ((GhosttyScrollbarState) -> Void)?
     var onTerminalTitleChanged: ((String) -> Void)?
@@ -221,6 +228,7 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
     }
 
     private func observePromptReadinessSignal(_ signal: TerminalReadinessDiagnostics.Signal) {
+        hasObservedPromptReadySignal = true
         readinessDiagnostics.observeShellSignal(signal)
         completePromptReadinessSignpostsIfNeeded(signal: signal)
     }

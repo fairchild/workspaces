@@ -19,13 +19,13 @@ public enum CLIVerbCatalog {
     /// Grouped subcommands of `workspaces automation ...` — every verb that talks to the
     /// app's automation socket.
     public static let automationVerbs: Set<String> = [
-        "health", "context", "surface", "tile", "input", "window", "workspace",
+        "health", "context", "surface", "tile", "input", "window", "workspace", "wait", "focus",
     ]
 
     /// Top-level spellings kept as compatibility aliases for the grouped automation verbs
     /// (`workspaces workspace list` means `workspaces automation workspace list`).
     public static let topLevelAutomationAliases: Set<String> = [
-        "surface", "tile", "input", "window", "workspace",
+        "surface", "tile", "input", "window", "workspace", "wait", "focus",
     ]
 
     /// Every first-argument spelling the CLI claims, so path-launch dispatch never swallows
@@ -88,10 +88,12 @@ public enum CLIVerbCatalog {
           workspaces automation workspace select <workspace-id> [--json]
           workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
           workspaces automation workspace archive <workspace-id> [--teardown] [--json]
+          workspaces automation wait --for <condition> [--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]
+          workspaces automation focus [--json]
 
         Compatibility:
-          'surface', 'tile', 'input', 'window', and 'workspace' still work as
-          top-level verbs and mean 'automation <verb>'.
+          'surface', 'tile', 'input', 'window', 'workspace', 'wait', and 'focus'
+          still work as top-level verbs and mean 'automation <verb>'.
 
         Two planes:
           'ws' and 'repo' manage the CLI-local plane and work without the app;
