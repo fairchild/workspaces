@@ -10,8 +10,8 @@ category: plan
 A dependable Mac-native control surface for terminal-based coding agents: pick
 the right repo or workspace quickly, keep long-lived terminal context intact,
 attach the minimum useful chrome around that terminal. Remote runtimes,
-activity feeds, and web surfaces earn their place by making that loop more
-reliable, and terminal-first is the promise they answer to.
+activity feeds, and web surfaces get added only when they make that loop more
+reliable.
 
 ## The Bet
 
@@ -50,10 +50,10 @@ and build against it.
 
 ## How work gets made
 
-Most code arrives through the factory, the label-driven pipeline that turns
-issues I release into reviewed PRs — which is why the bet's failure condition
-names machinery: the pipeline can stay green and productive while the product
-drifts. App identities separate worker and reviewer actions, and per-run
+Most code arrives through the factory — the label-driven pipeline that turns
+issues I release into reviewed PRs, and the machinery that could stay green
+and productive while the product drifts. App identities separate worker and
+reviewer actions, and per-run
 telemetry measures cost and intervention, so how much authority to delegate
 becomes answerable from evidence. Merge authority is mine — auto-merge is
 specified and disabled, the main-merge ruleset requires one approving review —
@@ -65,13 +65,13 @@ stay owner-merged. Details in `docs/development/agent-factory-v2-plan.md`.
 Work is promoted through GitHub milestones when it strengthens the core loop
 and has an explicit verification path, and each lane — desktop, web,
 automation — runs one active milestone at a time unless the milestone
-description records an independence argument. Evidence gates all of it:
-changes cross desktop, web, and sandboxed runtimes, so captured behavior and
+description records an independence argument. Evidence gates all of it.
+Changes cross desktop, web, and sandboxed runtimes, so captured behavior and
 recurring performance measurement come before shipping. Regression risk is
 cheapest to reduce right before a surface grows, so structural and dependency
-debt gets paid ahead of breadth, and automation earns its expansion — activity
-and notifications should reconnect and catch up reliably before they get more
-entrypoints, which they do not yet (#547).
+debt gets paid ahead of breadth. Activity and notifications should reconnect
+and catch up reliably before they get more entrypoints, which they do not
+yet (#547).
 
 `idea` marks speculative directions that might never be built; actionable work
 uses the normal lane and state labels whether or not it has a milestone yet.
