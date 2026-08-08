@@ -142,6 +142,19 @@ smoke_cleanup_created_worktree() {
     local workspace_path
     workspace_path="$(smoke_read_event_field workspacePath workspace_created)"
     [[ -n "$workspace_path" && -d "$workspace_path" ]] || return 0
+
+    # Refuse to act on a path outside this run's own isolation boundary — a
+    # reused/stale events.jsonl must never make cleanup follow a workspacePath
+    # outside WORKSPACES_SYNTHETIC_ROOT (the #1245 boundary). An unset boundary
+    # (setup never got far enough to export it) fails safe the same way: skip.
+    case "$workspace_path" in
+        "${WORKSPACES_SYNTHETIC_ROOT:-/dev/null/unset}"/*) ;;
+        *)
+            echo "warning: workspace_created reported a path outside WORKSPACES_SYNTHETIC_ROOT ($workspace_path) — skipping its cleanup." >&2
+            return 0
+            ;;
+    esac
+
     chmod -R u+w "$workspace_path" >/dev/null 2>&1 || true
     rm -rf "$workspace_path" >/dev/null 2>&1 || true
 
@@ -183,27 +196,30 @@ smoke_wait_for_event() {
 }
 
 # smoke_finalize_and_exit <exit-code> [<message>] — single finalize path for
-# every outcome (pass, fail, signal). Clears all traps first so a late signal
-# takes its default action instead of re-entering; FINALIZED guards the one
-# command window before the traps drop. Cleanup is unconditional (see file
-# header). If the caller defined a `smoke_write_summary <exit-code>
-# <message>` function, it runs after cleanup so it can report what cleanup
-# did.
+# every outcome (pass, fail, signal). FINALIZED guards re-entrancy (a second
+# call, from smoke_on_exit firing after an explicit call already ran, just
+# exits). TERM/INT/HUP are ignored (not restored to default) for the duration
+# of cleanup so a second signal during teardown can't kill it mid-cleanup;
+# EXIT is cleared immediately so this function's own `exit` below doesn't
+# re-enter smoke_on_exit. Cleanup is unconditional (see file header) and a
+# failing optional `smoke_write_summary <exit-code> <message>` callback
+# cannot swallow the real exit code — the final exit always uses $exit_code.
 smoke_finalize_and_exit() {
-    trap - EXIT TERM INT HUP
-    local exit_code="$1"
-    local message="${2:-}"
     if [[ "$FINALIZED" == true ]]; then
-        exit "$exit_code"
+        exit "$1"
     fi
     FINALIZED=true
+    trap '' TERM INT HUP
+    trap - EXIT
+    local exit_code="$1"
+    local message="${2:-}"
 
     smoke_cleanup_app
     smoke_cleanup_repo
     smoke_cleanup_created_worktree
 
     if declare -F smoke_write_summary >/dev/null 2>&1; then
-        smoke_write_summary "$exit_code" "$message"
+        smoke_write_summary "$exit_code" "$message" || true
     fi
 
     [[ -n "$message" ]] && smoke_log "$message"
@@ -211,15 +227,13 @@ smoke_finalize_and_exit() {
     exit "$exit_code"
 }
 
-# smoke_on_exit — EXIT trap. Catches a nonzero exit that fell through without
-# an explicit smoke_finalize_and_exit call (e.g. `set -e` aborting on an
-# unguarded command) and routes it through the same finalize path.
+# smoke_on_exit — EXIT trap. If it fires at all, smoke_finalize_and_exit has
+# never run yet for this exit (finalize clears the EXIT trap as its first
+# act), so this always finalizes — whether the script fell through an
+# unguarded `set -e` abort, or `smoke_fail` exited directly.
 smoke_on_exit() {
     local exit_code="$?"
-    trap - EXIT
-    if [[ "$exit_code" -ne 0 && "$RUN_STATUS" != "passed" ]]; then
-        smoke_finalize_and_exit "$exit_code" "${FAILURE_MESSAGE:-Smoke run failed.}"
-    fi
+    smoke_finalize_and_exit "$exit_code" "${FAILURE_MESSAGE:-Smoke run failed.}"
 }
 
 # smoke_on_signal <name> <number> — TERM/INT/HUP do not fire the EXIT trap (a
