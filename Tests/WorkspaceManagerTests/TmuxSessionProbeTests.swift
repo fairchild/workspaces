@@ -210,6 +210,54 @@ struct TmuxSessionProbeTests {
         #expect(pending.didRun)
     }
 
+    /// The deadline verdict is the only thing standing between a wedged `tmux -V` and
+    /// a capability answer read off a run that never finished, so it is asserted here
+    /// against a child whose output and exit status are otherwise spotless: the same
+    /// child answers under the real wait, and answers nothing once the run is scored
+    /// as having outlived its deadline. Scoring the child clean anyway hands the
+    /// launch a version the run never established.
+    @Test("A run scored as outliving its deadline yields no answer, however clean it looks")
+    func deadlineMissIsNotACleanRun() {
+        let cleanChild = ["-c", "printf 'tmux 3.5a\\n'"]
+
+        let answered = TmuxSessionProbe.synchronousOutput(
+            executable: "/bin/sh",
+            arguments: cleanChild,
+            environment: nil
+        )
+        #expect(answered?.contains("3.5a") == true)
+
+        let scoredAsTimedOut = TmuxSessionProbe.synchronousOutput(
+            executable: "/bin/sh",
+            arguments: cleanChild,
+            environment: nil,
+            awaitExit: { exited, _ in
+                // Let the child finish and be reaped first, so its status and output
+                // are both clean and the verdict is the only reason to reject the run.
+                exited.wait()
+                return false
+            }
+        )
+        #expect(scoredAsTimedOut == nil)
+    }
+
+    /// The same property through the production wait: a child that closes stdout and
+    /// then outlives its deadline is killed and yields nothing, so a wedged `tmux -V`
+    /// costs one bounded stall rather than a capability answer or an unbounded one.
+    /// The deadline is scaled from this machine's measured child round trip — the
+    /// child sleeps far past any of them, so the assertion does not ride a clock.
+    @Test("A child that outlives its deadline is killed and yields nothing")
+    func wedgedChildYieldsNothing() async {
+        let timeout = await LaunchBudget.deadline(launches: 1, floor: 0.5, ceiling: 5)
+        let output = TmuxSessionProbe.synchronousOutput(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'tmux 3.5a\\n'; exec 1>&-; exec sleep 30"],
+            environment: nil,
+            timeout: timeout
+        )
+        #expect(output == nil)
+    }
+
     private func adjacent(_ arguments: [String], _ first: String, _ second: String) -> Bool {
         guard let index = arguments.firstIndex(of: first), index + 1 < arguments.count else { return false }
         return arguments[index + 1] == second

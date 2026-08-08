@@ -198,9 +198,31 @@ public struct TmuxSessionProbe: Sendable {
         }
     }
 
-    /// Production synchronous runner: a bounded `Process` run yielding stdout on a
-    /// zero exit. The watchdog kills the child at the deadline, which closes the
-    /// pipe, so neither the read nor the wait is open-ended.
+    /// Production synchronous runner: `synchronousOutput` at the standard deadline.
+    public static let defaultSynchronousOutputRunner: SynchronousOutputRunner = { executable, arguments, environment in
+        synchronousOutput(executable: executable, arguments: arguments, environment: environment)
+    }
+
+    /// Scores a run against its deadline: true when the child exited before it.
+    /// Production waits on the child's own termination semaphore; the seam is a
+    /// parameter so the deadline-exceeded verdict can be driven without racing a
+    /// real deadline.
+    typealias ExitWaiter = @Sendable (DispatchSemaphore, TimeInterval) -> Bool
+
+    static let defaultExitWaiter: ExitWaiter = { exited, timeout in
+        exited.wait(timeout: .now() + timeout) == .success
+    }
+
+    /// How long a synchronous run may take before its child is killed and the run
+    /// scored as no answer. It bounds a main-thread stall, so it is short.
+    static let synchronousRunTimeout: TimeInterval = 5
+
+    /// A bounded `Process` run yielding stdout on a zero exit. The watchdog kills the
+    /// child at the deadline and the exit wait carries the same deadline; the read
+    /// ends when the last writer closes the pipe, which for a `tmux -V` child — it
+    /// forks nothing — is that kill. A run whose child outlives the deadline yields
+    /// no answer: whatever reached the pipe is not a version this tmux stands behind,
+    /// and `terminationStatus` is only defined once the child has exited.
     ///
     /// It blocks the calling thread outright and never runs that thread's run loop.
     /// Callers reach this from inside a lazy static initializer on the main thread —
@@ -209,7 +231,13 @@ public struct TmuxSessionProbe: Sendable {
     /// same `swift_once`, and libdispatch traps the recursive lock. Hence the
     /// termination semaphore rather than `Process.waitUntilExit()`, which runs the
     /// caller's run loop by design.
-    public static let defaultSynchronousOutputRunner: SynchronousOutputRunner = { executable, arguments, environment in
+    static func synchronousOutput(
+        executable: String,
+        arguments: [String],
+        environment: [String: String]?,
+        timeout: TimeInterval = TmuxSessionProbe.synchronousRunTimeout,
+        awaitExit: ExitWaiter = TmuxSessionProbe.defaultExitWaiter
+    ) -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -231,13 +259,13 @@ public struct TmuxSessionProbe: Sendable {
         let watchdog = DispatchWorkItem {
             if process.isRunning { process.terminate() }
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5, execute: watchdog)
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: watchdog)
         let data = output.fileHandleForReading.readDataToEndOfFile()
-        let exitedBeforeDeadline = exited.wait(timeout: .now() + 5) == .success
+        let exitedBeforeDeadline = awaitExit(exited, timeout)
         watchdog.cancel()
 
         // `terminationStatus` is only defined once the child has exited, which the
-        // semaphore is what establishes.
+        // wait is what establishes.
         guard exitedBeforeDeadline, process.terminationStatus == 0 else { return nil }
         return String(decoding: data, as: UTF8.self)
     }
