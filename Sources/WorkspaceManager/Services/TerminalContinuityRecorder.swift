@@ -5,8 +5,9 @@
 //  Ordered, bounded pipeline for terminal continuity writes (#1239). Enqueues on
 //  the main actor in call order and executes on a single consumer task, so a
 //  close (ended) can never be overtaken by an earlier in-flight upsert; upserts
-//  whose row state is unchanged since the last write are dropped, so a snapshot
-//  touching N sessions costs O(changed) writes. Failures are logged, not silent.
+//  whose row state is unchanged since the last landed write are dropped, so a
+//  snapshot touching N sessions costs O(changed) writes. Failures are logged,
+//  not silent, and release their dedup entry so the next snapshot retries.
 //
 
 import Foundation
@@ -63,7 +64,8 @@ final class TerminalContinuityRecorder {
     }
 
     /// Upserts the session's continuity row iff its persisted state changed since
-    /// the last write this recorder issued for it.
+    /// the last write this recorder landed for it. A write that throws forfeits
+    /// its dedup entry, so the same state offered again is written again.
     func record(
         _ session: HostTerminalSession,
         terminalMode: String,
@@ -79,7 +81,7 @@ final class TerminalContinuityRecorder {
         guard lastWrittenBySessionID[session.id] != state else { return }
         lastWrittenBySessionID[session.id] = state
         let sink = sink
-        operations.yield {
+        operations.yield { [weak self] in
             do {
                 try await sink.recordTerminalSession(
                     session,
@@ -91,8 +93,18 @@ final class TerminalContinuityRecorder {
                 log.error(
                     "[TerminalContinuityRecorder] session upsert failed for \(session.id.uuidString, privacy: .public): \(String(describing: error), privacy: .public)"
                 )
+                await self?.forgetWrittenState(for: session.id, ifStill: state)
             }
         }
+    }
+
+    /// Drops the dedup entry a failed write committed at enqueue, so the next
+    /// snapshot carrying that same state writes again instead of being deduped
+    /// against a row the store never got. A newer state enqueued since keeps its
+    /// entry: that write is the one the row should end up at.
+    private func forgetWrittenState(for sessionID: UUID, ifStill state: RecordedState) {
+        guard lastWrittenBySessionID[sessionID] == state else { return }
+        lastWrittenBySessionID.removeValue(forKey: sessionID)
     }
 
     /// Ends the session's continuity row. The close moment is captured here, at

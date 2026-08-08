@@ -280,8 +280,17 @@ public actor LocalStateStore {
     /// `host_session_id`: the conflict update is guarded on `ended_at IS NULL`,
     /// so an in-flight upsert that lands after `markTerminalSessionEnded` is a
     /// no-op instead of resurrecting a closed tile into the restore set (#1239).
-    /// Session identity is a fresh UUID per surface, so no live flow ever needs
-    /// to revive an ended row.
+    ///
+    /// Ids are not fresh per surface across runs. With `restoreSessionsOnLaunch`
+    /// off — the default — launch rehydrates the previous run's tabs from the
+    /// terminal continuity manifest under their recorded ids, so this store does
+    /// see a later run upsert an id it already holds. Those rows are live ones:
+    /// closing a surface ends its row and drops it from the manifest off the same
+    /// session-list change, so the guard passes and the row moves to the current
+    /// run. An ended id can only come back if a crash loses the manifest write
+    /// after the close landed, and there the guard holds the row ended — the
+    /// surface runs but stays out of the continuity and restore listings until it
+    /// is closed and reopened under a new id.
     public func recordTerminalSession(
         _ session: HostTerminalSession,
         terminalMode: String,

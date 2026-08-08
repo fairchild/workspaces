@@ -25,10 +25,13 @@ actor ContinuityWriteLog: TerminalContinuityWriting {
     struct WriteFailure: Error {}
 
     private(set) var operations: [ContinuityWriteOperation] = []
-    private var failingSessionIDs: Set<UUID> = []
+    private var remainingFailuresBySessionID: [UUID: Int] = [:]
 
-    func failRecords(for sessionID: UUID) {
-        failingSessionIDs.insert(sessionID)
+    /// Throw on the next `times` upserts for this session. The default fails
+    /// every one; a finite count models a transient failure the sink recovers
+    /// from, without a mid-flight mutation racing the pipeline.
+    func failRecords(for sessionID: UUID, times: Int = .max) {
+        remainingFailuresBySessionID[sessionID] = times
     }
 
     func recordTerminalSession(
@@ -37,7 +40,10 @@ actor ContinuityWriteLog: TerminalContinuityWriting {
         isActive: Bool,
         hooksSocketPath: String?
     ) async throws {
-        guard !failingSessionIDs.contains(session.id) else { throw WriteFailure() }
+        if let remaining = remainingFailuresBySessionID[session.id], remaining > 0 {
+            remainingFailuresBySessionID[session.id] = remaining - 1
+            throw WriteFailure()
+        }
         operations.append(.record(session.id, isActive: isActive))
     }
 
@@ -112,6 +118,45 @@ struct TerminalContinuityRecorderTests {
                 .record(healthy.id, isActive: true),
                 .ended(healthy.id),
             ])
+    }
+
+    /// The dedup entry is committed at enqueue, so a write that throws must give
+    /// it back — otherwise one transient sink failure suppresses that state's
+    /// row for as long as it stays unchanged.
+    @Test("A sink failure releases its dedup entry; the next identical snapshot writes")
+    func failedWriteIsRetriedByNextIdenticalSnapshot() async throws {
+        let sink = ContinuityWriteLog()
+        let recorder = TerminalContinuityRecorder(sink: sink)
+        let session = makeSession(path: "/tmp/workspaces/transient")
+        await sink.failRecords(for: session.id, times: 1)
+
+        recorder.record(session, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
+        await recorder.waitUntilDrained()
+        #expect(await sink.operations.isEmpty)
+
+        // Byte-identical to the failed snapshot: dedup alone would drop it.
+        recorder.record(session, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
+        await recorder.waitUntilDrained()
+
+        #expect(await sink.operations == [.record(session.id, isActive: true)])
+    }
+
+    /// A newer state enqueued after a failure keeps its own dedup entry: the
+    /// failed write is stale, and re-offering the newer state is a no-op.
+    @Test("A failure behind a newer state does not re-open the newer state's dedup entry")
+    func failureBehindNewerStateKeepsNewerDedupEntry() async throws {
+        let sink = ContinuityWriteLog()
+        let recorder = TerminalContinuityRecorder(sink: sink)
+        let session = makeSession(path: "/tmp/workspaces/superseded")
+        await sink.failRecords(for: session.id, times: 1)
+
+        recorder.record(session, terminalMode: "shell", isActive: true, hooksSocketPath: nil)
+        recorder.record(session, terminalMode: "shell", isActive: false, hooksSocketPath: nil)
+        await recorder.waitUntilDrained()
+        recorder.record(session, terminalMode: "shell", isActive: false, hooksSocketPath: nil)
+        await recorder.waitUntilDrained()
+
+        #expect(await sink.operations == [.record(session.id, isActive: false)])
     }
 
     /// The #1239 race acceptance: a close in the middle of a snapshot storm —

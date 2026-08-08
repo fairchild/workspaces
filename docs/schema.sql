@@ -55,8 +55,11 @@ ON CONFLICT(key) DO UPDATE SET
 -- - ended_at is terminal for a host_session_id (#1239): the runtime upsert is
 --   guarded on ended_at IS NULL and close keeps its first ended_at, so an
 --   in-flight write racing a close can never resurrect a closed row into the
---   restore set. Session identity is a fresh UUID per surface; nothing revives
---   an ended row.
+--   restore set. host_session_id is reused across runs on the default
+--   (restoreSessionsOnLaunch off) path, where launch rehydrates the previous
+--   run's tabs from the continuity manifest under their recorded ids; those rows
+--   are live, so the guard passes and they move to the current run. A row that
+--   is already ended stays ended under any later upsert.
 -- - last_seen_at advances when a state-changing write lands (the runtime drops
 --   upserts whose row state is unchanged), not on every layout snapshot.
 CREATE TABLE IF NOT EXISTS terminal_sessions (
