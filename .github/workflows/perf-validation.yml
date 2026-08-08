@@ -16,6 +16,9 @@ on:
       - scripts/perf-runner.sh
       - scripts/perf_schema.py
       - scripts/perf-compare.py
+      - scripts/perf_channel_baseline.py
+      - scripts/perf/**
+      - scripts/main-window-hotspots-baseline.py
       - scripts/new-workspace-perf.sh
       - scripts/tests/test_perf_tools.py
       - scripts/launch-installed-diagnostics.sh
@@ -175,6 +178,47 @@ jobs:
       - name: Capture perf baseline
         run: ./scripts/perf-baseline.sh 3 6 --record --assert-budget
 
+      # The launch lanes alone leave the key-flow scenarios unmeasured; the cron
+      # runs the full runnable contract so hot-spot and channel regressions
+      # surface daily, not only in ad-hoc re-baselines (#1238). Each loop runs
+      # every scenario even after a failure so one budget miss cannot hide the
+      # rest, then fails the step listing every failing scenario.
+      - name: Run main-window hot-spot scenarios (assert budget)
+        id: hotspot_scenarios
+        run: |
+          set -uo pipefail
+          mkdir -p perf-artifacts
+          failures=""
+          for scenario in main_window_agent_activity_burst main_window_session_switcher_snapshot main_window_workspace_create_ui_stall main_window_idle_cpu_diagnostics_closed main_window_resident_memory_20_workspaces; do
+            if ! ./scripts/perf-runner.sh --scenario "$scenario" --assert-budget --output-dir "perf-artifacts/$scenario"; then
+              failures="$failures $scenario"
+            fi
+          done
+          if [ -n "$failures" ]; then
+            echo "Hot-spot scenarios failed budget assertion:$failures" >&2
+            echo "Hot-spot scenarios failed budget assertion:$failures" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Run channel scenarios (assert budget)
+        # Budget misses in the hot-spot step must not hide the channel verdicts;
+        # earlier build/setup failures still skip this step.
+        if: ${{ success() || steps.hotspot_scenarios.outcome == 'failure' }}
+        run: |
+          set -uo pipefail
+          mkdir -p perf-artifacts
+          failures=""
+          for scenario in channel1_hook_ingest_burst channel2_statusline_burst channel1_sidebar_churn channel1_long_session_memory; do
+            if ! ./scripts/perf-runner.sh --scenario "$scenario" --assert-budget --output-dir "perf-artifacts/$scenario"; then
+              failures="$failures $scenario"
+            fi
+          done
+          if [ -n "$failures" ]; then
+            echo "Channel scenarios failed budget assertion:$failures" >&2
+            echo "Channel scenarios failed budget assertion:$failures" >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
       - name: Collect perf artifacts
         if: always()
         run: |
@@ -198,6 +242,9 @@ jobs:
           path: perf-artifacts
           if-no-files-found: warn
 
+  # A skipped measurement must be visibly distinct from a passing one: this job
+  # fails the run on purpose. Green-by-skip hid a down tart-ui lane for weeks
+  # while the schedule reported success daily (#1238; lane revival is #1240).
   perf-validation-skipped:
     needs: runner-lane-health
     if: needs.runner-lane-health.outputs.lane_available != 'true'
@@ -209,13 +256,15 @@ jobs:
           LANE_STATUS: ${{ needs.runner-lane-health.outputs.lane_status }}
         run: |
           cat <<EOF > perf-validation-skipped.md
-          Perf validation did not run because the dedicated tart-ui lane was not available or could not be inspected.
+          Perf validation DID NOT MEASURE ANYTHING: the dedicated tart-ui lane was not available or could not be inspected.
           lane_available: ${LANE_AVAILABLE}
           lane_status: ${LANE_STATUS}
           If lane_status is inspection_blocked, the workflow token could not query the runner inventory.
-          Treat this as infrastructure visibility state, not a product regression.
+          Treat this as infrastructure state (see #1240 for lane revival), not a product regression —
+          but do not treat it as a passing perf run: no metric was captured.
           See the runner-lane-health artifact for the runner inventory snapshot.
           EOF
+          cat perf-validation-skipped.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload skip artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
@@ -223,3 +272,10 @@ jobs:
           name: perf-validation-skipped-${{ github.run_id }}
           path: perf-validation-skipped.md
           if-no-files-found: error
+
+      - name: Fail the run so a skipped measurement cannot read as green
+        env:
+          LANE_STATUS: ${{ needs.runner-lane-health.outputs.lane_status }}
+        run: |
+          echo "Perf measurement lane unavailable (lane_status=${LANE_STATUS}). A skipped measurement is not a passing one." >&2
+          exit 1

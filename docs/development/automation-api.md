@@ -42,7 +42,16 @@ processes only receive automation environment when their surface is created.
 Allowed and denied requests are appended to `automation-audit.jsonl` next to
 the socket state. The audit log stores route-level metadata and error codes,
 not terminal input or output. Each event carries an `operatorHandle` boolean so
-operator calls are distinguishable from tile calls (`[A1]`).
+operator calls are distinguishable from tile calls (`[A1]`). The file rotates
+at 5 MB (two rotated files kept, `.1`/`.2`). A completed mutation whose
+response could not be written back to a disconnected caller appends a follow-up
+entry with `responseUndelivered: true`; reconcile with a read verb.
+
+Both socket ends carry deadlines: the listener closes connections that do not
+deliver a full request within 10 s, bounds response writes the same way, and
+answers connections over its small concurrency cap with a `busy` error. The
+client sets 30 s send/receive socket timeouts, so a hung app surfaces as a
+typed timeout in the CLI instead of a wedged shell.
 
 ### Operator scope (`[A1]`)
 
@@ -158,11 +167,15 @@ because no live window is attached, the intent surfaces that error; if the verb
 returns `confirmation_required`, the intent maps it to the native App Intents
 confirmation prompt before reporting the outcome.
 
-App Intents intentionally work independently of the Automation API and Operator
-Scope experiments. They are user-initiated by Shortcuts/Siri/Spotlight and run
-in process, so their handle is registered only in memory and never leaves the
-app or exposes a socket. The experiments continue to gate the external socket
-surface and the process-readable operator credential used by CLI/dev/CI callers.
+App Intents are user-initiated by Shortcuts/Siri/Spotlight and run in process,
+so their handle is registered only in memory and never leaves the app or
+exposes a socket. Minting is still gated on the Operator Scope experiment — the
+same opt-in the socket-side credential requires, re-checked on every intent
+call — so with the experiment off the intents fail closed with a clear
+disabled error (`capability_denied`). The Automation API experiment continues
+to gate only the external socket surface and the process-readable operator
+credential used by CLI/dev/CI callers; App Intents do not require the
+listener.
 
 ## Envelope
 
@@ -179,6 +192,12 @@ Every route returns a versioned JSON envelope:
   "error": { "code": "missing_handle", "message": "Missing automation handle." }
 }
 ```
+
+Error payloads may carry a `retryable` boolean documenting retry semantics:
+`true` marks a transient failure the same request may clear (`terminal_active`),
+`false` marks a condition that will not resolve without intervention
+(`close_blocked_by_confirmation`). Codes without retry guidance omit the field —
+absent means "unspecified", never "false".
 
 ## Routes
 
@@ -215,12 +234,12 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null,"select":true,"fromRef":"origin/main"}`; `providerID` defaults to `local`, `select` defaults to `true`, and `fromRef` is omitted by default. Returns `completed` with the created workspace and, when selected, the attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
 | `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from a terminal surface created by the same operator handle through `workspace.create` this launch. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is the `attachedSurfaceID` from that create result. Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles and non-created/unattributed surfaces fail `capability_denied`. See [Surface read](#surface-read). |
-| `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. Returns `completed` with the archived workspace id and post-gesture selection state, or `confirmation_required` if the UI path ever reaches a modal. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
+| `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. `{"teardownTerminals":true}` kills the workspace's tmux sessions and retires its terminal tiles first, so a live terminal cannot fail the call. Returns `completed` with the archived workspace id, post-gesture selection state, and (after teardown) a teardown report, or `confirmation_required` if the UI path ever reaches a modal. A live terminal without teardown fails typed: `terminal_active` (`retryable: true`) on the exit-timeout, `close_blocked_by_confirmation` (`retryable: false`) when the close-confirmation blocks. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
 | `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` from a primary tile. Each successful split creates a new terminal surface in the caller's tab. Secondary split-tile callers return `unsupported` in V1. |
-| `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. |
+| `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. The result reports `outcome: "requested"` with `changed: false` — close is fire-and-forget and Ghostty may still prompt, so the API never claims the close landed. |
 | `POST /v1/input/write` | Experimental. Pastes `text` into the caller's own PTY; `submit: true` then presses Return as a synthetic key event (never an appended `\r`, which bracketed paste would insert literally). Body is `{"text": "...", "submit": false}`, at most 32 KiB UTF-8 of text. Requires the `input.write` capability, granted only while the Automation Input Write experiment is on. |
 
 Mutation bodies must be projections over the supported operation, not raw tile
@@ -545,14 +564,25 @@ did:
 `POST /v1/workspace/archive` (operator scope, `workspace.archive`) archives a
 workspace by driving the same sidebar archive action exposed from the workspace
 row menu. The body names the target by a `workspaceID` obtained from
-`workspace.read`:
+`workspace.read`, with an optional teardown opt-in:
 
 ```json
-{ "workspaceID": "…" }
+{ "workspaceID": "…", "teardownTerminals": false }
 ```
 
-The success envelope reports the structured gesture outcome and the selection
-state left behind by the real archive gesture:
+`teardownTerminals` defaults to false, preserving the original semantics: the
+archive path retires the workspace's terminal sessions gracefully and a live
+terminal fails the call with a typed error (below). With `true`, the app force-
+tears the workspace's terminals down first — its tmux sessions are killed (in
+tmux mode the client counts as a live process, so a plain close would raise the
+headlessly-unanswerable Ghostty close confirmation; killing the session first is
+what frees the close), the surfaces close, and the tile-tree rows retire —
+before the archive gesture runs. This is the operator loop-closure verb: a loop
+that opened a workspace can deterministically close it.
+
+The success envelope reports the structured gesture outcome, the selection
+state left behind by the real archive gesture, and — when teardown ran — a
+report of what died:
 
 ```json
 {
@@ -561,6 +591,10 @@ state left behind by the real archive gesture:
   "changed": true,
   "archivedWorkspaceID": "…",
   "selectedWorkspaceID": "…",
+  "teardown": {
+    "retiredSurfaceIDs": [ "…" ],
+    "killedTmuxSessions": [ "wm-…" ]
+  },
   "system": { "capabilities": [ … ] }
 }
 ```
@@ -580,11 +614,21 @@ is whatever the sidebar gesture left selected.
   confirmation payload shape as `workspace.create`.
 - **Failure mapping.** A live-window-less app fails `unsupported` (never a
   data-layer fallback), and an unknown or non-UUID `workspaceID` fails
-  `invalid_request`.
+  `invalid_request`. A live terminal without teardown fails typed instead of
+  generic: the exit-timeout is `terminal_active` with `retryable: true` (the
+  terminal may finish exiting; or re-issue with `teardownTerminals`), and a
+  close blocked by the runtime's confirmation is `close_blocked_by_confirmation`
+  with `retryable: false` — a blind retry would spin on a dialog no headless
+  caller can answer. A teardown request that still cannot end a live process
+  (e.g. the tmux kill failed) returns the same `close_blocked_by_confirmation`
+  rather than retiring a terminal out from under the prompt.
 - **Operator mutation.** Requires `workspace.archive`, distinct from
   `workspace.read`, `workspace.select`, and `workspace.create`. A tile handle
   lacks it and fails `capability_denied`. The call is operator-tagged in
-  `automation-audit.jsonl` like every operator route.
+  `automation-audit.jsonl` like every operator route, and a completed teardown
+  additionally appends its own audit entry (path
+  `/v1/workspace/archive#teardown`) carrying retired-surface and killed-session
+  counts — counts only, never session names.
 
 ## Error Codes
 
@@ -599,7 +643,10 @@ is whatever the sidebar gesture left selected.
 | `route_not_found` | The route is not part of the API. |
 | `method_not_allowed` | The path exists but the HTTP method is wrong. |
 | `unsupported` | The requested V1 operation is not supported in the current context. |
+| `busy` | The listener is at its concurrent-connection cap; retry shortly. |
 | `internal_error` | Unexpected server-side failure. |
+| `terminal_active` | A lifecycle verb refused because a live terminal did not exit before the timeout. Carries `retryable: true`. |
+| `close_blocked_by_confirmation` | A terminal close was blocked by the runtime's close confirmation (live process). Carries `retryable: false`. |
 
 ## CLI
 
@@ -646,6 +693,7 @@ workspaces workspace create <repo-id> feature-a      # create local workspace th
 workspaces workspace create <repo-id> feature-a --json
 workspaces workspace create <repo-id> feature-a --provider lume --guest-os macos
 workspaces workspace archive <id>                   # archive through the sidebar action path
+workspaces workspace archive <id> --teardown        # kill tmux + retire terminals first
 workspaces workspace archive <id> --json
 ```
 

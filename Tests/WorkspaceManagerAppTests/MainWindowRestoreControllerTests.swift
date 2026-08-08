@@ -258,28 +258,92 @@ struct MainWindowRestoreControllerTests {
             surface(action: .resumeClaude(agentSessionID: "c"), directory: second),
         ])
 
-        #expect(controller.tmuxSessionDirectoriesToKill(in: target) == [first, first, second])
+        let names = controller.tmuxSessionNamesToKill(in: target) { "wm-\($0.lastPathComponent)" }
+
+        #expect(names == ["wm-alpha", "wm-alpha", "wm-beta"])
     }
 
     @Test("Only resume surfaces have their tmux session killed first")
     func onlyResumeSurfacesAreKilled() {
-        let resumeDirectory = URL(fileURLWithPath: "/Users/dev/code/beta")
         let target = plan([
             surface(action: .freshShell, directory: URL(fileURLWithPath: "/Users/dev/code/alpha")),
-            surface(action: .resumeClaude(agentSessionID: "a"), directory: resumeDirectory),
+            surface(
+                action: .resumeClaude(agentSessionID: "a"),
+                directory: URL(fileURLWithPath: "/Users/dev/code/beta")),
             surface(
                 action: .reattachTmux(sessionName: "ws-gamma"),
                 directory: URL(fileURLWithPath: "/Users/dev/code/gamma")),
         ])
 
-        #expect(controller.tmuxSessionDirectoriesToKill(in: target) == [resumeDirectory])
+        let names = controller.tmuxSessionNamesToKill(in: target) { "wm-\($0.lastPathComponent)" }
+
+        #expect(names == ["wm-beta"])
     }
 
     @Test("A plan with no resume surfaces kills nothing")
     func noResumeSurfacesKillNothing() {
         let target = plan([surface(action: .freshShell), surface(action: .reattachTmux(sessionName: "x"))])
 
-        #expect(controller.tmuxSessionDirectoriesToKill(in: target).isEmpty)
+        #expect(controller.tmuxSessionNamesToKill(in: target).isEmpty)
+    }
+
+    /// The #1233 acceptance criterion: a resume and a reattach surface can share a directory,
+    /// and the resume kill must not take down the session the reattach surface targets.
+    @Test("The kill list never contains a reattach target's session name")
+    func killListExcludesReattachTargets() {
+        let shared = URL(fileURLWithPath: "/Users/dev/code/alpha")
+        let target = plan([
+            surface(action: .reattachTmux(sessionName: "wm-alpha"), directory: shared),
+            surface(action: .resumeClaude(agentSessionID: "a"), directory: shared),
+            surface(
+                action: .resumeClaude(agentSessionID: "b"),
+                directory: URL(fileURLWithPath: "/Users/dev/code/beta")),
+        ])
+
+        let names = controller.tmuxSessionNamesToKill(in: target) { "wm-\($0.lastPathComponent)" }
+
+        #expect(names == ["wm-beta"])
+        #expect(!names.contains("wm-alpha"))
+    }
+
+    /// Reattach surfaces launch on the name that was probed alive, so a directory fallback
+    /// (workspace moved or archived) cannot silently start a fresh shell while the surviving
+    /// session — possibly with a live agent — stays orphaned.
+    @Test("Only reattach surfaces carry a tmux session name override")
+    func tmuxOverrideIsReattachOnly() {
+        #expect(controller.tmuxSessionNameOverride(for: .freshShell) == nil)
+        #expect(controller.tmuxSessionNameOverride(for: .resumeClaude(agentSessionID: "a")) == nil)
+        #expect(controller.tmuxSessionNameOverride(for: .reattachTmux(sessionName: "wm-alpha")) == "wm-alpha")
+    }
+
+    /// The #1233 shared-directory hazard, launch side: a resume surface's `-A` launch name
+    /// can be the very session another surface reattaches to (it is excluded from the kill
+    /// list). When the pre-launch probe reports that name still live, the resume command is
+    /// suppressed — attaching is fine, typing `claude --resume` into the shared shell is not.
+    @Test("A resume whose launch name is still live suppresses its initial command")
+    func liveResumeTargetSuppressesInitialCommand() {
+        let resume = surface(
+            action: .resumeClaude(agentSessionID: "a"),
+            directory: URL(fileURLWithPath: "/Users/dev/code/alpha"))
+        let derive = { (url: URL) in "wm-\(url.lastPathComponent)" }
+
+        #expect(controller.initialCommand(for: resume, liveSessionNames: ["wm-alpha"], sessionName: derive) == nil)
+        #expect(
+            controller.initialCommand(for: resume, liveSessionNames: [], sessionName: derive)
+                == RestoreLaunchCommand.claudeResume(sessionID: "a"))
+    }
+
+    @Test("Only resume surfaces contribute probe-before-launch names")
+    func probeNamesAreResumeOnly() {
+        let target = plan([
+            surface(action: .reattachTmux(sessionName: "wm-alpha")),
+            surface(action: .freshShell, directory: URL(fileURLWithPath: "/Users/dev/code/beta")),
+            surface(
+                action: .resumeClaude(agentSessionID: "a"),
+                directory: URL(fileURLWithPath: "/Users/dev/code/gamma")),
+        ])
+
+        #expect(controller.resumeLaunchSessionNames(in: target) { "wm-\($0.lastPathComponent)" } == ["wm-gamma"])
     }
 
     @Test("Every key the plan restores is claimed, deduplicated")

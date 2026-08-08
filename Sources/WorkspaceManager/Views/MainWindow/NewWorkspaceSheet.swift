@@ -107,7 +107,7 @@ struct NewWorkspaceSheet: View {
     private var preferredInitialEnvironmentID: String? {
         Self.preferredInitialEnvironmentID(
             for: environmentOptions,
-            fixtureEnabled: UIFixtureLumeEnvironment.isEnabled()
+            fixtureEnabled: SmokeScenarioDriver.isLumeFixtureEnabled
         )
     }
 

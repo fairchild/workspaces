@@ -246,6 +246,9 @@ private func runGitWithDeadline(
 public struct WorkspaceOrphanReconciler: Sendable {
     private let workspacesRoot: URL
     private let lumeWorkspaceStorageURL: URL?
+    // Normalized WORKSPACES_SYNTHETIC_ROOT path when the synthetic-run isolation
+    // boundary is active; nil in normal operation.
+    private let syntheticRootBoundary: String?
     private let worktreeLister: any WorkspaceOrphanWorktreeListing
     private let fileSystem: any WorkspaceOrphanFileSystem
     private let gitExecutable: String
@@ -269,10 +272,29 @@ public struct WorkspaceOrphanReconciler: Sendable {
         worktreeLister: any WorkspaceOrphanWorktreeListing,
         fileSystem: any WorkspaceOrphanFileSystem,
         gitExecutable: String = "/usr/bin/git",
-        gitCommandTimeout: TimeInterval = defaultGitCommandTimeout
+        gitCommandTimeout: TimeInterval = defaultGitCommandTimeout,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
-        self.workspacesRoot = workspacesRoot
-        self.lumeWorkspaceStorageURL = lumeWorkspaceStorageURL
+        // WORKSPACES_SYNTHETIC_ROOT makes that directory the only root this
+        // reconciler scans, regardless of what the caller passes: the workspaces
+        // root is forced inside it, records outside it are ignored, and Lume
+        // storage outside it is never read. This keeps synthetic runs (smokes,
+        // fixture captures) from statting the owner's real filesystem roots.
+        if let syntheticRoot = SyntheticRunRoot.url(environment: environment) {
+            workspaceOrphanLog.info(
+                "Synthetic run root active: orphan scan root overridden to \(syntheticRoot.path, privacy: .public)"
+            )
+            let boundary = normalizePath(syntheticRoot.path)
+            self.workspacesRoot = syntheticRoot
+            self.syntheticRootBoundary = boundary
+            self.lumeWorkspaceStorageURL = lumeWorkspaceStorageURL.flatMap { storageURL in
+                isPath(normalizePath(storageURL.path), inside: boundary) ? storageURL : nil
+            }
+        } else {
+            self.workspacesRoot = workspacesRoot
+            self.syntheticRootBoundary = nil
+            self.lumeWorkspaceStorageURL = lumeWorkspaceStorageURL
+        }
         self.worktreeLister = worktreeLister
         self.fileSystem = fileSystem
         self.gitExecutable = gitExecutable
@@ -358,7 +380,13 @@ public struct WorkspaceOrphanReconciler: Sendable {
         let prunableEntriesByPath = Dictionary(grouping: prunableEntries) { normalizePath($0.path) }
         let liveWorktreePaths = Set(liveEntriesByPath.keys)
 
-        let workspaceRecords = repository.workspaces.filter(\.usesHostWorkspaceFiles)
+        let workspaceRecords = repository.workspaces.filter { workspace in
+            guard workspace.usesHostWorkspaceFiles else { return false }
+            guard let syntheticRootBoundary else { return true }
+            // Records outside the synthetic boundary are host state a synthetic
+            // run must not stat.
+            return isPath(normalizePath(workspace.path), inside: syntheticRootBoundary)
+        }
         let recordedPaths = Set(workspaceRecords.map { normalizePath($0.path) })
 
         var items: [WorkspaceOrphanItem] = []

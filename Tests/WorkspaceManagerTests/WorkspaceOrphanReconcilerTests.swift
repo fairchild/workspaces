@@ -76,6 +76,41 @@ struct WorkspaceOrphanReconcilerTests {
         }
     }
 
+    /// Records every URL the reconciler asks the filesystem about, delegating
+    /// to the real filesystem for answers.
+    final class RecordingFileSystem: WorkspaceOrphanFileSystem, @unchecked Sendable {
+        private let real = DefaultWorkspaceOrphanFileSystem()
+        private let lock = NSLock()
+        private var touchedPathsStorage: [String] = []
+
+        var touchedPaths: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return touchedPathsStorage
+        }
+
+        private func record(_ url: URL) {
+            lock.lock()
+            defer { lock.unlock() }
+            touchedPathsStorage.append(url.path)
+        }
+
+        func directoryExists(at url: URL) -> Bool {
+            record(url)
+            return real.directoryExists(at: url)
+        }
+
+        func directoryNames(in url: URL) throws -> [String] {
+            record(url)
+            return try real.directoryNames(in: url)
+        }
+
+        func removeItem(at url: URL) throws {
+            record(url)
+            try real.removeItem(at: url)
+        }
+    }
+
     @Test("Detects git worktrees without SwiftData records")
     func detectsGitWorktreesWithoutRecords() async throws {
         let repo = try TestGitRepository.create()
@@ -465,6 +500,99 @@ struct WorkspaceOrphanReconcilerTests {
         try Data("#!/bin/sh\nexec sleep 30\n".utf8).write(to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url
+
+    @Test("Synthetic root set: the real workspaces root and Lume storage are never statted")
+    func syntheticRootNeverStatsRealRoots() async throws {
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let realRoot = testRoot.appendingPathComponent("real-workspaces", isDirectory: true)
+        let syntheticRoot = testRoot.appendingPathComponent("synthetic-root", isDirectory: true)
+        let realLumeStorage = testRoot.appendingPathComponent("real-lume/workspace-vms", isDirectory: true)
+        let staleWorktreeURL =
+            realRoot
+            .appendingPathComponent("sample-repo", isDirectory: true)
+            .appendingPathComponent("stale-worktree", isDirectory: true)
+        for directory in [syntheticRoot, staleWorktreeURL, realLumeStorage.appendingPathComponent("orphan-vm")] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+
+        // Caller "forgets" the boundary and hands the reconciler real host roots
+        // carrying residue; the record path points at the real root too.
+        let fileSystem = RecordingFileSystem()
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: realRoot,
+            lumeWorkspaceStorageURL: realLumeStorage,
+            worktreeLister: StaticWorktreeLister(entries: [
+                GitWorktreeEntry(path: staleWorktreeURL.path, branch: "workspace/stale", isPrunable: false)
+            ]),
+            fileSystem: fileSystem,
+            environment: [SyntheticRunRoot.environmentKey: syntheticRoot.path]
+        )
+        let result = await reconciler.scan(
+            repositories: [
+                repoSnapshot(
+                    name: "sample-repo",
+                    localPath: testRoot.appendingPathComponent("repo", isDirectory: true).path,
+                    workspaces: [
+                        workspaceSnapshot(
+                            name: "real-record",
+                            path: realRoot.appendingPathComponent("sample-repo/real-record").path
+                        )
+                    ]
+                )
+            ]
+        )
+
+        #expect(result.items.isEmpty)
+        let syntheticPrefix = syntheticRoot.standardizedFileURL.resolvingSymlinksInPath().path + "/"
+        for touched in fileSystem.touchedPaths {
+            let normalized = URL(fileURLWithPath: touched).standardizedFileURL.resolvingSymlinksInPath().path
+            #expect(
+                normalized.hasPrefix(syntheticPrefix),
+                "reconciler statted a path outside the synthetic root: \(touched)"
+            )
+        }
+    }
+
+    @Test("Synthetic root set: orphans inside the boundary are still detected")
+    func syntheticRootStillScansInsideBoundary() async throws {
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let syntheticRoot = testRoot.appendingPathComponent("synthetic-root", isDirectory: true)
+        let lumeStorage = syntheticRoot.appendingPathComponent("lume/workspace-vms", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: lumeStorage.appendingPathComponent("orphan-vm", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let missingWorkspaceURL =
+            syntheticRoot
+            .appendingPathComponent("sample-repo", isDirectory: true)
+            .appendingPathComponent("missing-workspace", isDirectory: true)
+
+        let workspace = workspaceSnapshot(
+            name: "missing-workspace",
+            path: missingWorkspaceURL.path
+        )
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: syntheticRoot,
+            lumeWorkspaceStorageURL: lumeStorage,
+            worktreeLister: StaticWorktreeLister(entries: []),
+            fileSystem: DefaultWorkspaceOrphanFileSystem(),
+            environment: [SyntheticRunRoot.environmentKey: syntheticRoot.path]
+        )
+        let result = await reconciler.scan(
+            repositories: [
+                repoSnapshot(
+                    name: "sample-repo",
+                    localPath: testRoot.appendingPathComponent("repo", isDirectory: true).path,
+                    workspaces: [workspace]
+                )
+            ]
+        )
+
+        #expect(result.items.count == 2)
+        #expect(result.items.contains { $0.kind == .workspaceRecordMissingDirectory && $0.workspaceID == workspace.id })
+        #expect(result.items.contains { $0.kind == .lumeVMWithoutWorkspace && $0.resourceName == "orphan-vm" })
     }
 
     private func makeTempDir() throws -> URL {

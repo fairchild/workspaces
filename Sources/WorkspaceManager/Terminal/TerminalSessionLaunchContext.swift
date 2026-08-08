@@ -40,6 +40,11 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
     let hostSessionID: UUID?
     let hooksSocketPath: String?
     let automationEnvironment: AutomationTerminalEnvironment?
+    /// The tmux session name this surface launches on in `.tmuxPerSession` mode.
+    /// Carrying the session's chosen name (split-pane disambiguation, restore's
+    /// probed reattach target) means surface creation never re-derives it from
+    /// the working directory. `nil` lets the config derive the default.
+    let tmuxSessionName: String?
 
     static func hostSession(
         _ session: HostTerminalSession,
@@ -52,7 +57,8 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
                 commandMode: .customCommand(customCommand),
                 hostSessionID: session.id,
                 hooksSocketPath: hooksSocketPath,
-                automationEnvironment: nil
+                automationEnvironment: nil,
+                tmuxSessionName: nil
             )
         }
 
@@ -60,7 +66,8 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
             workingDirectory: session.directoryURL,
             hostSessionID: session.id,
             hooksSocketPath: hooksSocketPath,
-            automationEnvironment: automationEnvironment
+            automationEnvironment: automationEnvironment,
+            tmuxSessionName: session.effectiveTmuxSessionName
         )
     }
 
@@ -68,14 +75,16 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
         workingDirectory: URL,
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
-        automationEnvironment: AutomationTerminalEnvironment? = nil
+        automationEnvironment: AutomationTerminalEnvironment? = nil,
+        tmuxSessionName: String? = nil
     ) -> TerminalSessionLaunchContext {
         TerminalSessionLaunchContext(
             workingDirectory: workingDirectory,
             commandMode: .directoryShell,
             hostSessionID: hostSessionID,
             hooksSocketPath: hooksSocketPath,
-            automationEnvironment: automationEnvironment
+            automationEnvironment: automationEnvironment,
+            tmuxSessionName: tmuxSessionName
         )
     }
 
@@ -92,7 +101,8 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
             commandMode: .customCommand(command),
             hostSessionID: hostSessionID,
             hooksSocketPath: hooksSocketPath,
-            automationEnvironment: nil
+            automationEnvironment: nil,
+            tmuxSessionName: nil
         )
     }
 

@@ -71,8 +71,8 @@ struct SidebarView: View {
     let onWorkspaceCreated: () -> Void
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
-    let hostLumeSmokeAutomation: HostLumeSmokeAutomationController
-    let desktopUISmokeAutomation: DesktopUISmokeAutomationController
+    /// Seam to the debug-only smoke harness; inert in release builds.
+    let smokeDriver: SmokeScenarioDriver
     let automationWorkspaceCreateBridge: AutomationWorkspaceCreateGestureBridge
 
     @AppStorage(SidebarRepoSortMode.storageKey)
@@ -265,10 +265,10 @@ struct SidebarView: View {
             pruneExpandedContainers()
             syncRepoSortSnapshot()
             Task { @MainActor in
-                await maybeDriveHostLumeSmokeAutomation()
+                await smokeDriver.driveHostLumeScenarioIfNeeded(smokeScenarioContext)
             }
             Task { @MainActor in
-                await maybeDriveDesktopUISmokeAutomation()
+                await smokeDriver.driveDesktopUIScenarioIfNeeded(smokeScenarioContext)
             }
             installAutomationWorkspaceCreateGesture()
         }
@@ -289,8 +289,7 @@ struct SidebarView: View {
         }
         .task {
             _ = await seedFixtureProviderStateIfNeeded()
-            await maybeDriveHostLumeSmokeAutomation()
-            await maybeDriveDesktopUISmokeAutomation()
+            await smokeDriver.driveScenariosIfNeeded(smokeScenarioContext)
         }
         .onChange(of: errorPresenter.current?.message) { _, message in
             guard
@@ -302,15 +301,39 @@ struct SidebarView: View {
             else { return }
             lastNotedFailureMessage = message
             Task { @MainActor in
-                await hostLumeSmokeAutomation.noteFailure(
-                    message: message,
-                    recoveryHints: hostLumeSmokeRecoveryHints(for: message)
-                )
-            }
-            Task { @MainActor in
-                await desktopUISmokeAutomation.noteFailure(message: message)
+                await smokeDriver.noteFailure(message: message)
             }
         }
+    }
+
+    /// The view capabilities the smoke scenarios drive — the same selection and
+    /// creation paths user gestures enter, packaged for `SmokeScenarioDriver`.
+    private var smokeScenarioContext: SmokeScenarioSidebarContext {
+        SmokeScenarioSidebarContext(
+            repos: repos,
+            webSources: webSources,
+            selectedWorkspace: { selectedWorkspace },
+            sidebarWorkspaces: { repos.flatMap(\.workspaces) },
+            normalizePath: normalizePath(_:),
+            presentError: presentSidebarError,
+            addRepo: { await addRepo(from: $0) },
+            createWorkspace: { repo, name, providerID, guestOS in
+                await createWorkspace(
+                    from: repo,
+                    name: name,
+                    nameSource: .manual,
+                    providerID: providerID,
+                    guestOS: guestOS
+                )
+            },
+            selectRepoTerminal: onRepoTerminalSelected,
+            selectWorkspace: selectWorkspace(_:),
+            selectWebSource: onWebSourceSelected,
+            insertWebSource: { source in
+                modelContext.insert(source)
+                return saveModelContext(action: "create desktop-ui-smoke web source")
+            }
+        )
     }
 
     private var sidebarList: some View {
@@ -892,8 +915,10 @@ struct SidebarView: View {
 
         switch result {
         case .created(let workspace):
-            await desktopUISmokeAutomation.noteWorkspaceCreated(workspace)
-            await emitDesktopUISmokeSidebarUpdate(for: workspace)
+            await smokeDriver.noteWorkspaceCreated(
+                workspace,
+                sidebarWorkspaces: { repos.flatMap(\.workspaces) }
+            )
             return .completed(
                 AutomationWorkspaceCreateEffect(
                     repoID: repo.id,
@@ -1017,7 +1042,7 @@ struct SidebarView: View {
         workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(
             message: initialCreationMessage(for: providerID)
         )
-        await hostLumeSmokeAutomation.noteWorkspacePhaseChanged(
+        await smokeDriver.noteWorkspaceCreationPhase(
             message: initialCreationMessage(for: providerID)
         )
 
@@ -1051,10 +1076,10 @@ struct SidebarView: View {
                     await MainActor.run {
                         workspaceCreationStatusByRepoID[repoID] = WorkspaceCreationStatus(message: phase)
                     }
-                    await hostLumeSmokeAutomation.noteWorkspacePhaseChanged(message: phase)
+                    await smokeDriver.noteWorkspaceCreationPhase(message: phase)
                 },
-                onPersisted: { record in
-                    await hostLumeSmokeAutomation.noteWorkspacePersisted(record)
+                onPersisted: { result in
+                    await smokeDriver.noteWorkspacePersisted(result)
                 }
             )
             creationLog.info("createWorkspaceAfterSetup: workspace created, updating selection")
@@ -1063,9 +1088,7 @@ struct SidebarView: View {
             if shouldSelect {
                 selectedWorkspace = workspace
             }
-            await hostLumeSmokeAutomation.noteWorkspaceActive(
-                HostLumeSmokeWorkspaceRecord(workspace: workspace)
-            )
+            await smokeDriver.noteWorkspaceActive(workspace)
             return workspace
         } catch {
             creationLog.error(
@@ -1364,202 +1387,6 @@ struct SidebarView: View {
                 ]
             )
         }
-    }
-
-    @MainActor
-    private func maybeDriveHostLumeSmokeAutomation() async {
-        guard hostLumeSmokeAutomation.isEnabled else { return }
-        guard let targetRepoURL = hostLumeSmokeAutomation.targetRepoURL else { return }
-
-        if let matchedRepo = hostLumeSmokeAutomation.matchingRepo(in: repos, normalizePath: normalizePath(_:)) {
-            await hostLumeSmokeAutomation.noteRepoReady(matchedRepo)
-
-            guard hostLumeSmokeAutomation.shouldStartWorkspaceCreation() else { return }
-            await hostLumeSmokeAutomation.noteWorkspaceCreationStarted(repo: matchedRepo)
-            await createWorkspace(
-                from: matchedRepo,
-                name: hostLumeSmokeAutomation.targetWorkspaceName ?? "lume-smoke",
-                nameSource: .manual,
-                providerID: LumeWorkspaceProvider.identifier,
-                guestOS: .macOS
-            )
-            return
-        }
-
-        guard FileManager.default.fileExists(atPath: targetRepoURL.path) else {
-            let message = "Smoke repo path does not exist: \(targetRepoURL.path)"
-            presentSidebarError(message)
-            return
-        }
-
-        await addRepo(from: targetRepoURL)
-    }
-
-    /// Drives the daily-driver desktop flows for the `desktop-ui-smoke`
-    /// automation mode: import the target repo if needed, create a local
-    /// workspace, confirm it lands in the sidebar with a live terminal, then
-    /// switch selection to the repo terminal and back to prove the surface
-    /// follows selection. Milestones stream to the events JSONL the host smoke
-    /// script asserts against.
-    @MainActor
-    private func maybeDriveDesktopUISmokeAutomation() async {
-        guard desktopUISmokeAutomation.isEnabled else { return }
-        guard let targetRepoURL = desktopUISmokeAutomation.targetRepoURL else { return }
-
-        guard
-            let repo = desktopUISmokeAutomation.matchingRepo(
-                in: repos,
-                normalizePath: normalizePath(_:)
-            )
-        else {
-            guard FileManager.default.fileExists(atPath: targetRepoURL.path) else {
-                let message = "Desktop UI smoke repo path does not exist: \(targetRepoURL.path)"
-                presentSidebarError(message)
-                return
-            }
-            await addRepo(from: targetRepoURL)
-            return
-        }
-
-        await desktopUISmokeAutomation.noteRepoReady(repo)
-        guard desktopUISmokeAutomation.shouldStartScenario() else { return }
-        if desktopUISmokeAutomation.usesAPICreateDriver {
-            let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
-            onRepoTerminalSelected(repo)
-            _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-                after: focusBaselineBeforeRepoPark,
-                timeout: .seconds(15)
-            )
-            await desktopUISmokeAutomation.noteAwaitingAPICreate(repo: repo)
-            return
-        }
-        await runDesktopUISmokeScenario(repo: repo)
-    }
-
-    @MainActor
-    private func runDesktopUISmokeScenario(repo: Repo) async {
-        let workspaceName = desktopUISmokeAutomation.targetWorkspaceName ?? "desktop-ui-smoke"
-
-        await desktopUISmokeAutomation.noteWorkspaceCreationStarted(repo: repo)
-
-        let focusBaselineBeforeCreate = desktopUISmokeAutomation.surfaceFocusCount
-        await createWorkspace(
-            from: repo,
-            name: workspaceName,
-            nameSource: .manual,
-            providerID: LocalWorkspaceProvider.identifier
-        )
-
-        guard let workspace = selectedWorkspace else {
-            await desktopUISmokeAutomation.noteFailure(
-                message: "Local workspace was not created or selected."
-            )
-            return
-        }
-
-        await desktopUISmokeAutomation.noteWorkspaceCreated(workspace)
-        await emitDesktopUISmokeSidebarUpdate(for: workspace)
-
-        // Flow 1: the freshly created workspace's terminal becomes ready.
-        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-            after: focusBaselineBeforeCreate,
-            timeout: .seconds(15)
-        )
-
-        // API-driven select variant: park the active surface on the repo terminal, then hand the
-        // reselect to an external `workspace.select` verb. The verb enters the same selection binding
-        // this scenario's `selectWorkspace` writes, so it must produce the identical
-        // `terminal_session_attached` milestone — and switch the active PTY off the repo terminal,
-        // which is the wrong-PTY guard proven end to end.
-        if desktopUISmokeAutomation.usesAPISelectDriver {
-            let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
-            onRepoTerminalSelected(repo)
-            _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-                after: focusBaselineBeforeRepoPark,
-                timeout: .seconds(15)
-            )
-            await desktopUISmokeAutomation.noteAwaitingAPISelect(workspace: workspace)
-            return
-        }
-
-        // Flow 2: switch selection to the repo terminal, then back to the
-        // workspace. Distinct attached session IDs prove the surface follows
-        // selection rather than stranding a stale session.
-        let focusBaselineBeforeRepo = desktopUISmokeAutomation.surfaceFocusCount
-        onRepoTerminalSelected(repo)
-        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-            after: focusBaselineBeforeRepo,
-            timeout: .seconds(15)
-        )
-
-        let focusBaselineBeforeReselect = desktopUISmokeAutomation.surfaceFocusCount
-        selectWorkspace(workspace)
-        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-            after: focusBaselineBeforeReselect,
-            timeout: .seconds(15)
-        )
-
-        // Flow 3: web main content renders through the Surface seam, then returning to the
-        // workspace routes a terminal session again (session routing is the hard gate; surface
-        // focus stays best-effort in headless runs, like Flows 1–2). about:blank keeps the gate
-        // network-independent — the milestone is the surface mount, not a page load.
-        if let webSource = ensureDesktopUISmokeWebSource() {
-            let webBaseline = desktopUISmokeAutomation.webSurfaceAttachCount
-            onWebSourceSelected(webSource)
-            let webAttached = await desktopUISmokeAutomation.waitForWebSurfaceAttach(
-                after: webBaseline,
-                timeout: .seconds(10)
-            )
-            if !webAttached {
-                await desktopUISmokeAutomation.noteFailure(
-                    message: "Web surface did not mount after web source selection."
-                )
-            }
-
-            let focusBaselineAfterWeb = desktopUISmokeAutomation.surfaceFocusCount
-            selectWorkspace(workspace)
-            _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-                after: focusBaselineAfterWeb,
-                timeout: .seconds(15)
-            )
-        }
-
-        await desktopUISmokeAutomation.noteScenarioComplete()
-    }
-
-    /// The web source Flow 3 selects, created on first run. `about:blank` renders without network.
-    @MainActor
-    private func ensureDesktopUISmokeWebSource() -> WebSource? {
-        let name = "desktop-ui-smoke-web"
-        if let existing = webSources.first(where: { $0.name == name }) {
-            return existing
-        }
-        let source = WebSource(name: name, baseURLString: "about:blank", allowedHost: "")
-        modelContext.insert(source)
-        guard saveModelContext(action: "create desktop-ui-smoke web source") else { return nil }
-        return source
-    }
-
-    /// Confirms the new workspace is present under its repo in the live sidebar
-    /// model before emitting `sidebar_updated`, polling briefly because the
-    /// `@Query` repo list can lag a save by a run loop.
-    @MainActor
-    private func emitDesktopUISmokeSidebarUpdate(for workspace: Workspace) async {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-        while ContinuousClock.now < deadline {
-            let sidebarWorkspaces = repos.flatMap(\.workspaces)
-            if sidebarWorkspaces.contains(where: { $0.id == workspace.id }) {
-                await desktopUISmokeAutomation.noteSidebarUpdated(
-                    workspace: workspace,
-                    sidebarWorkspaceCount: sidebarWorkspaces.count
-                )
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(50))
-        }
-        await desktopUISmokeAutomation.noteFailure(
-            message: "Created workspace did not appear in the sidebar: \(workspace.name)"
-        )
     }
 
     @MainActor

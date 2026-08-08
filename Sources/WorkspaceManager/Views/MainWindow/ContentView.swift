@@ -68,8 +68,8 @@ struct ContentView: View {
     @ObservedObject var appCommandState: AppCommandState
     @ObservedObject var tileTreeStore: TileTreeStore
     @ObservedObject var workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
-    @ObservedObject var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
-    @ObservedObject var desktopUISmokeAutomation: DesktopUISmokeAutomationController
+    /// Seam to the debug-only smoke harness; inert in release builds.
+    let smokeDriver: SmokeScenarioDriver
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -549,12 +549,7 @@ struct ContentView: View {
                 source: selectedWebSource,
                 tileID: webDetailTileID,
                 surfaceStore: webDetailSurfaceStore,
-                onSurfaceMounted: desktopUISmokeAutomation.isEnabled
-                    ? { source in
-                        let automation = desktopUISmokeAutomation
-                        Task { await automation.noteWebSurfaceAttached(sourceName: source.name) }
-                    }
-                    : nil
+                onSurfaceMounted: smokeDriver.webSurfaceMountObserver
             )
         } else if let selectedRepo = currentSelectedRepoForLanding {
             RepoLandingView(
@@ -622,8 +617,7 @@ struct ContentView: View {
                     try await retireTerminalSessions(inScope: key)
                 },
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-                hostLumeSmokeAutomation: hostLumeSmokeAutomation,
-                desktopUISmokeAutomation: desktopUISmokeAutomation,
+                smokeDriver: smokeDriver,
                 automationWorkspaceCreateBridge: automationWorkspaceCreateBridge
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
@@ -762,8 +756,8 @@ struct ContentView: View {
             pruneRightPaneState: pruneRightPaneState,
             syncOpenInEditorShortcutRouting: syncOpenInEditorShortcutRouting,
             refreshWorkspaceStatusAggregator: refreshWorkspaceStatusAggregator,
-            noteHostLumeSmokeLaunchReady: hostLumeSmokeAutomation.noteLaunchReady,
-            noteDesktopUISmokeLaunchReady: desktopUISmokeAutomation.noteLaunchReady
+            noteHostLumeSmokeLaunchReady: smokeDriver.noteHostLumeLaunchReady,
+            noteDesktopUISmokeLaunchReady: smokeDriver.noteDesktopUILaunchReady
         )
     }
 
@@ -990,36 +984,27 @@ struct ContentView: View {
             .onChange(of: workspaceProviderSetupCoordinator.confirmationRequest) { _, request in
                 guard let request else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteSetupConfirmationPresented(request)
-                    if hostLumeSmokeAutomation.isEnabled {
-                        DispatchQueue.main.async {
-                            workspaceProviderSetupCoordinator.confirmAndContinue()
-                        }
+                    await smokeDriver.handleProviderSetupConfirmation(request) {
+                        workspaceProviderSetupCoordinator.confirmAndContinue()
                     }
                 }
             }
             .onChange(of: workspaceProviderSetupCoordinator.progressPresentation) { _, presentation in
                 guard let presentation else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteSetupStepChanged(presentation)
+                    await smokeDriver.noteProviderSetupStepChanged(presentation)
                 }
             }
             .onChange(of: workspaceProviderSetupCoordinator.errorMessage) { _, message in
                 guard let message else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteFailure(
-                        message: message,
-                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
-                    )
+                    await smokeDriver.noteHostWorkspaceFailure(message: message)
                 }
             }
             .onChange(of: errorPresenter.message(from: .workspaceOperation)) { _, message in
                 guard let message else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteFailure(
-                        message: message,
-                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
-                    )
+                    await smokeDriver.noteHostWorkspaceFailure(message: message)
                 }
             }
     }
@@ -1548,8 +1533,7 @@ struct ContentView: View {
             sessionID: session.id,
             repoPath: repoDirectory.path
         )
-        noteDesktopUISmokeTerminalAttached(
-            kind: .repo,
+        smokeDriver.noteRepoTerminalAttached(
             sessionID: session.id,
             scopePath: repoDirectory.path
         )
@@ -1571,33 +1555,9 @@ struct ContentView: View {
                     sessionID: session.id,
                     outcome: "focused"
                 )
-                noteDesktopUISmokeSurfaceFocused(sessionID: session.id)
+                smokeDriver.noteSurfaceFocused(sessionID: session.id)
             }
         )
-    }
-
-    @MainActor
-    private func noteDesktopUISmokeTerminalAttached(
-        kind: DesktopUISmokeSelectionKind,
-        sessionID: UUID,
-        scopePath: String
-    ) {
-        guard desktopUISmokeAutomation.isEnabled else { return }
-        Task { @MainActor in
-            await desktopUISmokeAutomation.noteTerminalSessionAttached(
-                kind: kind,
-                sessionID: sessionID,
-                scopePath: scopePath
-            )
-        }
-    }
-
-    @MainActor
-    private func noteDesktopUISmokeSurfaceFocused(sessionID: UUID) {
-        guard desktopUISmokeAutomation.isEnabled else { return }
-        Task { @MainActor in
-            await desktopUISmokeAutomation.noteSurfaceFocused(sessionID: sessionID)
-        }
     }
 
     @MainActor
@@ -1651,8 +1611,7 @@ struct ContentView: View {
                 sessionID: session.id,
                 workspacePath: workspaceDirectory.path
             )
-            noteDesktopUISmokeTerminalAttached(
-                kind: .workspace,
+            smokeDriver.noteWorkspaceTerminalAttached(
                 sessionID: session.id,
                 scopePath: workspaceDirectory.path
             )
@@ -1674,7 +1633,7 @@ struct ContentView: View {
                         sessionID: session.id,
                         outcome: "focused"
                     )
-                    noteDesktopUISmokeSurfaceFocused(sessionID: session.id)
+                    smokeDriver.noteSurfaceFocused(sessionID: session.id)
                 }
             )
         }
@@ -1990,6 +1949,33 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_lifecycle_retired_sessions")
     }
 
+    /// The forced-teardown state machine for operator archive-with-teardown, wired to the live
+    /// stores: scope enumeration and retirement from the tile tree, tmux resolution/kill through
+    /// the store's seams, and the graceful retirement close from the surface store.
+    @MainActor
+    private func makeWorkspaceTerminalTeardownController() -> WorkspaceTerminalTeardownController {
+        WorkspaceTerminalTeardownController(
+            sessionsInScope: { key in
+                tileTreeStore.sessions(inScope: key).flatMap { primary in
+                    tileTreeStore.splitSessions(forPrimarySessionID: primary.id) + [primary]
+                }
+            },
+            tmuxSessionName: { session in
+                WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(
+                    of: session,
+                    mode: tileTreeStore.resolveTerminalMultiplexingMode()
+                )
+            },
+            killTmuxSession: tileTreeStore.killTmuxSession,
+            closeForRetirement: { sessionID in
+                _ = try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+            },
+            retireSessions: { key in
+                tileTreeStore.retireSessions(inScope: key)
+            }
+        )
+    }
+
     @MainActor
     private func applyTerminalSessionResult(
         _ result: MainWindowTerminalSessionController.SessionFocusResult
@@ -2233,21 +2219,13 @@ struct ContentView: View {
                     attached = selectedID == effect.workspaceID && activeSessionID != nil
                     attachedSurfaceID = attached ? activeSessionID : nil
                 }
-                if command.shouldSelect,
-                    desktopUISmokeAutomation.usesAPICreateDriver,
-                    desktopUISmokeAutomation.usesAPISelectDriver,
-                    let repo = repos.first(where: { $0.id == effect.repoID }),
-                    let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == effect.workspaceID })
-                {
-                    Task { @MainActor in
-                        let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
-                        handleRepoTerminalSelection(repo)
-                        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-                            after: focusBaselineBeforeRepoPark,
-                            timeout: .seconds(15)
-                        )
-                        await desktopUISmokeAutomation.noteAwaitingAPISelect(workspace: workspace)
-                    }
+                if command.shouldSelect {
+                    smokeDriver.noteAPIWorkspaceCreateCompleted(
+                        repoID: effect.repoID,
+                        workspaceID: effect.workspaceID,
+                        repos: repos,
+                        parkOnRepoTerminal: { handleRepoTerminalSelection($0) }
+                    )
                 }
                 return .completed(
                     AutomationWorkspaceCreateEffect(
@@ -2261,7 +2239,7 @@ struct ContentView: View {
                     )
                 )
             },
-            performArchive: { target in
+            performArchive: { target, command in
                 guard
                     let workspace = repos.flatMap(\.workspaces).first(where: {
                         $0.id == target.workspaceID
@@ -2277,14 +2255,47 @@ struct ContentView: View {
                         try await retireTerminalSessions(inScope: key)
                     }
                 )
+                var teardown: AutomationWorkspaceArchiveTeardownReport?
+                if command.teardownTerminals {
+                    let scopeKey: HostTerminalSessionKey
+                    do {
+                        scopeKey = try controller.terminalSessionKey(for: workspace)
+                    } catch {
+                        return .unsupported(
+                            "Failed to resolve the workspace's terminal scope: \(error.localizedDescription)")
+                    }
+                    switch await makeWorkspaceTerminalTeardownController().teardown(scopeKey: scopeKey) {
+                    case .completed(let report):
+                        teardown = report
+                        terminalFocusCoordinator.cancelPendingFocusRequest(
+                            reason: "workspace_archive_teardown_retired_sessions")
+                    case .closeBlockedByConfirmation(let message):
+                        return .closeBlockedByConfirmation(message)
+                    }
+                }
                 do {
                     try await controller.archive(workspace)
                     return .completed(
                         AutomationWorkspaceArchiveEffect(
                             workspaceID: workspace.id,
-                            selectedWorkspaceID: currentSelectedWorkspace?.id
+                            selectedWorkspaceID: currentSelectedWorkspace?.id,
+                            teardown: teardown
                         )
                     )
+                } catch let error as GhosttySurfaceRetirementCloseError {
+                    // The typed terminal-still-live arms (#1226): the transient timeout is
+                    // retryable; the confirmation-blocked case is not — the dialog cannot be
+                    // answered headlessly, so callers should re-issue with teardownTerminals.
+                    switch error {
+                    case .timedOut:
+                        return .terminalActive(
+                            error.localizedDescription
+                                + " Retry, or archive with teardownTerminals to close it first.")
+                    case .processStillRunning:
+                        return .closeBlockedByConfirmation(
+                            error.localizedDescription
+                                + " Archive with teardownTerminals to tear the terminal down first.")
+                    }
                 } catch {
                     return .unsupported("Failed to archive workspace: \(error.localizedDescription)")
                 }
@@ -3021,7 +3032,7 @@ struct ContentView: View {
     @MainActor
     private func computeRestorePlanIfEnabled() async {
         guard restoreSessionsOnLaunchEnabled, let localStateStore else { return }
-        await UIFixtureContinuitySeeder.waitUntilSeeded()
+        await smokeDriver.waitForFixtureContinuitySeed()
         let index = RestoreTargetIndexBuilder(
             homeDirectoryPath: resolvedDefaultHostDirectory.path,
             normalizePath: RestorePathNormalization.normalize
@@ -3079,11 +3090,12 @@ struct ContentView: View {
         restoreState.dismissBanner()
     }
 
-    /// Launch each surface in a restore plan. Reattach/fresh surfaces are a plain
-    /// directory-backed launch (the deterministic tmux name reattaches a surviving
-    /// session automatically); resume surfaces get `claude --resume` typed into
-    /// their login shell as initial input (correct PATH + hook env — see
-    /// `GhosttyTerminalConfig.initialInput`).
+    /// Launch each surface in a restore plan, one created session per continuity
+    /// row. Reattach surfaces launch on their row's recorded tmux name (a split
+    /// pane's differs from the directory derivation); resume surfaces get
+    /// `claude --resume` typed into their login shell as initial input (correct
+    /// PATH + hook env — see `GhosttyTerminalConfig.initialInput`) unless their
+    /// `-A` target is already a live session another surface owns.
     /// Then honor the plan's advisory focus by re-activating the selected surface.
     @MainActor
     private func executeRestore(_ plan: RestorePlan) async {
@@ -3099,24 +3111,54 @@ struct ContentView: View {
         // prior tmux session is gone, so a live session on the resume surface's
         // deterministic name can only be this launch's seed artifact. Kill it so
         // the resume surface starts a fresh session instead of `-A`-attaching to
-        // the retired seed's leftover shell.
+        // the retired seed's leftover shell. Names another surface reattaches to
+        // are excluded by the controller (#1233).
         let tmuxProbe = TmuxSessionProbe()
-        for directory in restoreController.tmuxSessionDirectoriesToKill(in: plan) {
-            await tmuxProbe.killSession(GhosttyTerminalConfig.tmuxSessionName(for: directory))
+        for sessionName in restoreController.tmuxSessionNamesToKill(in: plan) {
+            await tmuxProbe.killSession(sessionName)
+        }
+
+        // Probe before launch: any resume launch name still alive after the kill
+        // pass belongs to a session another surface reattaches to, so its `-A`
+        // launch would join that shared session — suppress the resume command
+        // instead of typing it into a shell another surface owns (#1233).
+        var liveResumeLaunchNames: Set<String> = []
+        for sessionName in restoreController.resumeLaunchSessionNames(in: plan)
+        where await tmuxProbe.isSessionAlive(sessionName) {
+            liveResumeLaunchNames.insert(sessionName)
         }
 
         var activatedByHostSessionID: [UUID: HostTerminalSession] = [:]
         for surface in plan.surfaces {
-            let session = activateHostSession(
+            if surface.launchDirectoryFellBack {
+                restoreLog.notice(
+                    "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) recorded directory is gone; launching in fallback \(surface.directory.path, privacy: .public)"
+                )
+            }
+            let initialCommand = restoreController.initialCommand(
+                for: surface, liveSessionNames: liveResumeLaunchNames)
+            if initialCommand == nil, case .resumeClaude = surface.action {
+                restoreLog.notice(
+                    "[Restore] surface \(surface.hostSessionID.uuidString, privacy: .public) resume target is a live session; attaching without the resume command"
+                )
+            }
+            // One session per continuity row (never key-reuse): sibling rows sharing
+            // a key — a primary and its recorded split panes — each launch on their
+            // own recorded tmux target (#1232).
+            let session = tileTreeStore.createRestoredSession(
                 key: surface.key,
                 directory: surface.directory,
-                initialCommand: restoreController.initialCommand(for: surface.action)
+                initialCommand: initialCommand,
+                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface.action)
+            )
+            hostSessionLog.info(
+                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
 
         if let selected = plan.selectedHostSessionID, let target = activatedByHostSessionID[selected] {
-            _ = activateHostSession(key: target.key, directory: target.directoryURL)
+            _ = tileTreeStore.activateExistingSession(sessionID: target.id)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
     }

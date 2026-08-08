@@ -351,6 +351,10 @@ def live_app_env_overrides(app_data: Path, extra_env: dict[str, str] | None = No
         "WORKSPACES_SHELL_PROFILE_MODE": "clean",
         "WORKSPACES_DISABLE_STATE_RESTORATION": "1",
         "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
+        # os.Logger output only reaches the captured launch log when Apple's
+        # dt-mode stderr mirroring is on; without it wait_for_surface_prewarm
+        # times out on a log line the app did emit (#1238).
+        "OS_ACTIVITY_DT_MODE": "YES",
     }
     resources_dir = resolve_ghostty_resources_dir(os.environ.copy())
     if resources_dir:

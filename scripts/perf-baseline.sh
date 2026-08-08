@@ -186,9 +186,13 @@ for i in $(seq 1 "$RUNS"); do
     pkill -f "$DEBUG_BINARY" 2>/dev/null || true
     sleep 1
 
+    # OS_ACTIVITY_DT_MODE makes os.Logger output mirror to stderr. The app's
+    # [Perf] lines are os.Logger-only, so without it a redirected debug launch
+    # captures nothing and every metric reads "missing" (#1238).
     (
         cd "$ROOT_DIR"
         if [[ "$LAUNCH_MODE" == "no-activate" ]]; then
+            OS_ACTIVITY_DT_MODE=YES \
             WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
             WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 \
             WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
@@ -197,6 +201,7 @@ for i in $(seq 1 "$RUNS"); do
             WORKSPACES_DISABLE_STATE_RESTORATION="$DISABLE_STATE_RESTORATION" \
             "$DEBUG_BINARY" -ApplePersistenceIgnoreState YES >"$LOG_FILE" 2>&1
         else
+            OS_ACTIVITY_DT_MODE=YES \
             WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
             WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO=1 \
             WORKSPACES_SHELL_PROFILE_MODE="$SHELL_PROFILE_MODE" \
@@ -223,7 +228,6 @@ MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
 PERF_SUMMARY_TIMESTAMP="$TIMESTAMP" PYTHONPATH="$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" "$GHOSTTY_RESOURCES_DIR_RESOLVED" "$SHELL_PROFILE_MODE" "$TERMINAL_DIAGNOSTICS" "$DISABLE_STATE_RESTORATION" <<'PY'
-import csv
 from datetime import datetime
 import json
 import pathlib
@@ -231,7 +235,7 @@ import re
 import statistics
 import sys
 
-from perf_schema import canonical_summary, load_contract
+from perf_schema import canonical_summary, load_contract, measured_duration_samples
 
 out_dir = pathlib.Path(sys.argv[1])
 root_dir = pathlib.Path(sys.argv[2])
@@ -250,7 +254,6 @@ shell_profile_mode = sys.argv[14]
 terminal_diagnostics = sys.argv[15]
 disable_state_restoration = sys.argv[16]
 
-duration_pattern = re.compile(r"metric=([a-z_]+) duration_ms=([0-9]+(?:\.[0-9]+)?)")
 hydration_meta_pattern = re.compile(
     r"metric=repo_hydration duration_ms=[0-9]+(?:\.[0-9]+)? discovered=(\d+) imported=(\d+)"
 )
@@ -280,8 +283,8 @@ def parse_log_timestamp(line: str):
 for log_file in sorted(out_dir.glob("run-*.log")):
     text = log_file.read_text(errors="ignore")
     per_run = {}
-    for match in duration_pattern.finditer(text):
-        per_run[match.group(1)] = float(match.group(2))
+    for metric_name, duration in measured_duration_samples(text):
+        per_run[metric_name] = duration
     for metric in metric_order:
         if metric in per_run:
             metrics[metric].append(per_run[metric])
@@ -403,17 +406,30 @@ print(f"launch_mode: {launch_mode}")
 print("\n".join(summary_lines))
 print(f"summary_json={summary_json_path}")
 
+# Metrics this scenario is asserted on. budget_results only covers metrics that
+# produced samples, so the assertion iterates this list directly: a metric with
+# no samples is a harness/capture failure and must fail the run, not pass it
+# (#1238). workspace_click_to_focus has a debug_activate reference in the
+# contract, but no launch-lane flow drives a workspace click yet, so asserting
+# it here would hard-fail the lane on a known coverage gap.
+asserted_metrics_by_scenario = {
+    "debug_no_activate": ["launch_to_first_prompt", "repo_hydration"],
+    "debug_activate": ["launch_to_first_prompt", "repo_hydration", "repo_click_to_focus"],
+}
+
 budget_exit_code = 0
 if assert_budget:
     violations = []
-    for metric_name in ["launch_to_first_prompt", "repo_hydration", "repo_click_to_focus"]:
+    for metric_name in asserted_metrics_by_scenario[scenario]:
+        stats = summary["metrics"].get(metric_name)
+        if stats is None:
+            violations.append(
+                f"  {metric_name}: MISSING (no samples captured; a missing metric is a harness failure, not a pass)"
+            )
+            continue
         budget = summary["budget_results"].get(metric_name, {})
         target = budget.get("gate_budget_ms")
         if target is None:
-            continue
-        stats = summary["metrics"].get(metric_name)
-        if stats is None:
-            violations.append(f"  {metric_name}: MISSING (no data collected)")
             continue
         median = float(stats["median"])
         if median > float(target):
@@ -434,244 +450,13 @@ if assert_budget:
 if not record:
     sys.exit(budget_exit_code)
 
-perf_dir = root_dir / "docs" / "performance"
-perf_dir.mkdir(parents=True, exist_ok=True)
-history_csv_path = perf_dir / "metrics-history.csv"
-dashboard_path = perf_dir / "dashboard.md"
-latest_json_path = perf_dir / "latest-summary.json"
-latest_json_path.write_text(json.dumps(summary, indent=2) + "\n")
+from perf_history import record_summary
 
-fieldnames = [
-    "scenario",
-    "build_kind",
-    "timestamp",
-    "runs_requested",
-    "sleep_seconds",
-    "os_version",
-    "os_build",
-    "arch",
-    "model",
-    "discovered_repos_median",
-    "imported_repos_median",
-    "launch_to_first_prompt_median_ms",
-    "repo_hydration_median_ms",
-    "repo_click_to_focus_median_ms",
-    "workspace_click_to_focus_median_ms",
-    "launch_to_first_prompt_mean_ms",
-    "repo_hydration_mean_ms",
-    "repo_click_to_focus_mean_ms",
-    "workspace_click_to_focus_mean_ms",
-    "activation_to_first_prompt_median_ms",
-]
+paths = record_summary(summary=summary, root_dir=root_dir, timestamp=timestamp)
 
-record_row = {
-    "scenario": scenario,
-    "build_kind": "debug",
-    "timestamp": timestamp,
-    "runs_requested": runs,
-    "sleep_seconds": sleep_seconds,
-    "os_version": os_version,
-    "os_build": os_build,
-    "arch": arch,
-    "model": model,
-    "discovered_repos_median": summary["metadata"]["discovered_repos_median"],
-    "imported_repos_median": summary["metadata"]["imported_repos_median"],
-    "launch_to_first_prompt_median_ms": summary["metrics"]["launch_to_first_prompt"]["median"] if summary["metrics"].get("launch_to_first_prompt") else "",
-    "repo_hydration_median_ms": summary["metrics"]["repo_hydration"]["median"] if summary["metrics"].get("repo_hydration") else "",
-    "repo_click_to_focus_median_ms": summary["metrics"]["repo_click_to_focus"]["median"] if summary["metrics"].get("repo_click_to_focus") else "",
-    "workspace_click_to_focus_median_ms": summary["metrics"]["workspace_click_to_focus"]["median"] if summary["metrics"].get("workspace_click_to_focus") else "",
-    "launch_to_first_prompt_mean_ms": summary["metrics"]["launch_to_first_prompt"]["mean"] if summary["metrics"].get("launch_to_first_prompt") else "",
-    "repo_hydration_mean_ms": summary["metrics"]["repo_hydration"]["mean"] if summary["metrics"].get("repo_hydration") else "",
-    "repo_click_to_focus_mean_ms": summary["metrics"]["repo_click_to_focus"]["mean"] if summary["metrics"].get("repo_click_to_focus") else "",
-    "workspace_click_to_focus_mean_ms": summary["metrics"]["workspace_click_to_focus"]["mean"] if summary["metrics"].get("workspace_click_to_focus") else "",
-    "activation_to_first_prompt_median_ms": summary["metadata"]["activation_to_first_prompt_median_ms"] or "",
-}
-
-existing_rows = []
-if history_csv_path.exists():
-    with history_csv_path.open(newline="") as f:
-        reader = csv.DictReader(f)
-        existing_rows = list(reader)
-
-existing_rows.append(record_row)
-
-with history_csv_path.open("w", newline="") as f:
-    writer = csv.DictWriter(f, fieldnames=fieldnames)
-    writer.writeheader()
-    for row in existing_rows:
-        writer.writerow({field: row.get(field, "") for field in fieldnames})
-
-rows = []
-with history_csv_path.open(newline="") as f:
-    reader = csv.DictReader(f)
-    rows = list(reader)
-
-metric_specs = [
-    ("launch_to_first_prompt_median_ms", "launch_to_first_prompt"),
-    ("repo_hydration_median_ms", "repo_hydration"),
-    ("repo_click_to_focus_median_ms", "repo_click_to_focus"),
-]
-
-def parse_float(value):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-def fmt_ms(value):
-    return f"{value:.2f}" if value is not None else "n/a"
-
-def delta_text(current, previous):
-    if current is None or previous is None or previous == 0:
-        return "n/a"
-    delta = current - previous
-    pct = (delta / previous) * 100.0
-    return f"{delta:+.2f} ms ({pct:+.1f}%)"
-
-def bar(value, max_value, width=24):
-    if value is None or max_value <= 0:
-        return "-" * width
-    filled = int(round((value / max_value) * width))
-    filled = max(1, min(width, filled))
-    return "#" * filled + "-" * (width - filled)
-
-latest = rows[-1] if rows else None
-previous = rows[-2] if len(rows) > 1 else None
-window = rows[-10:]
-latest_report_paths = sorted(perf_dir.glob("release-exception-validation-*.md"))
-
-dashboard_lines = []
-dashboard_lines.append("# Performance Dashboard")
-dashboard_lines.append("")
-dashboard_lines.append(f"Last updated: `{timestamp}`")
-dashboard_lines.append("")
-dashboard_lines.append("## Latest Snapshot")
-dashboard_lines.append("")
-dashboard_lines.append("| Metric | Median (ms) | Mean (ms) | Target (ms) | Status | Delta vs Previous |")
-dashboard_lines.append("|---|---:|---:|---:|---|---|")
-
-for median_key, metric_name in metric_specs:
-    median_value = parse_float(latest.get(median_key) if latest else None)
-    mean_value = parse_float(latest.get(f"{metric_name}_mean_ms") if latest else None)
-    prev_value = parse_float(previous.get(median_key) if previous else None)
-    budget = summary["budget_results"].get(metric_name, {})
-    target = budget.get("gate_budget_ms")
-    if target is None:
-        status = "ungated"
-    else:
-        status = "pass" if median_value is not None and median_value <= target else "fail"
-    dashboard_lines.append(
-        f"| `{metric_name}` | {fmt_ms(median_value)} | "
-        f"{fmt_ms(mean_value)} | <= {target if target is not None else 'n/a'} | {status} | "
-        f"{delta_text(median_value, prev_value)} |"
-    )
-
-dashboard_lines.append("")
-dashboard_lines.append("## Investigated Delta")
-dashboard_lines.append("")
-
-if latest is None or previous is None:
-    dashboard_lines.append("- Not enough recorded history yet to compare this snapshot with a previous run.")
-else:
-    latest_launch = parse_float(latest.get("launch_to_first_prompt_median_ms"))
-    previous_launch = parse_float(previous.get("launch_to_first_prompt_median_ms"))
-    latest_click = parse_float(latest.get("repo_click_to_focus_median_ms"))
-    previous_click = parse_float(previous.get("repo_click_to_focus_median_ms"))
-    latest_hydration = parse_float(latest.get("repo_hydration_median_ms"))
-    previous_hydration = parse_float(previous.get("repo_hydration_median_ms"))
-    latest_discovered = latest.get("discovered_repos_median") or "n/a"
-    previous_discovered = previous.get("discovered_repos_median") or "n/a"
-    latest_activation_delay = parse_float(latest.get("activation_to_first_prompt_median_ms"))
-    previous_activation_delay = parse_float(previous.get("activation_to_first_prompt_median_ms"))
-
-    dashboard_lines.append(
-        f"- Portfolio size changed from discovered={previous_discovered} to discovered={latest_discovered}, "
-        f"but `repo_hydration` only moved {delta_text(latest_hydration, previous_hydration)} and remains "
-        f"{'within' if latest_hydration is not None and latest_hydration <= (summary['budget_results'].get('repo_hydration', {}).get('gate_budget_ms') or 0) else 'outside'} "
-        f"the configured gate."
-    )
-
-    dashboard_lines.append(
-        f"- The large regression is concentrated in terminal readiness: `launch_to_first_prompt` changed "
-        f"{delta_text(latest_launch, previous_launch)} and `repo_click_to_focus` changed "
-        f"{delta_text(latest_click, previous_click)}."
-    )
-
-    if latest_activation_delay is not None and previous_activation_delay is not None:
-        dashboard_lines.append(
-            f"- The post-activation ready-to-type gap changed {delta_text(latest_activation_delay, previous_activation_delay)}, "
-            f"from `{previous_activation_delay:.2f} ms` to `{latest_activation_delay:.2f} ms`. "
-            "That points to terminal focus/readiness after activation as the main place the extra time moved."
-        )
-    elif latest_activation_delay is not None:
-        dashboard_lines.append(
-            f"- In the latest recorded run, the app reached `applicationDidBecomeActive` a median "
-            f"`{latest_activation_delay:.2f} ms` before `launch_to_first_prompt` completed. "
-            "That points to post-activation terminal focus/ready-to-type delay rather than repository import."
-        )
-
-    if latest_report_paths:
-        dashboard_lines.append(
-            f"- Broader release-candidate context, including `activate` and `new_workspace_sheet_ready` "
-            f"measurements, is recorded in `./{latest_report_paths[-1].name}`."
-        )
-
-dashboard_lines.append("")
-dashboard_lines.append("## Trend (Last 10 Runs)")
-dashboard_lines.append("")
-dashboard_lines.append("| Timestamp | Launch (ms) | Hydration (ms) | Repo Click-to-Focus (ms) | Workspace Click-to-Focus (ms) |")
-dashboard_lines.append("|---|---:|---:|---:|---:|")
-for row in window:
-    launch_value = parse_float(row.get("launch_to_first_prompt_median_ms"))
-    hydration_value = parse_float(row.get("repo_hydration_median_ms"))
-    click_value = parse_float(row.get("repo_click_to_focus_median_ms"))
-    ws_click_value = parse_float(row.get("workspace_click_to_focus_median_ms"))
-    dashboard_lines.append(
-        f"| {row['timestamp']} | "
-        f"{fmt_ms(launch_value)} | "
-        f"{fmt_ms(hydration_value)} | "
-        f"{fmt_ms(click_value)} | "
-        f"{fmt_ms(ws_click_value)} |"
-    )
-
-dashboard_lines.append("")
-dashboard_lines.append("## Visual Bars (Last 10 Run Window)")
-dashboard_lines.append("")
-
-for median_key, metric_name in metric_specs:
-    current = parse_float(latest.get(median_key) if latest else None)
-    target = summary["budget_results"].get(metric_name, {}).get("gate_budget_ms")
-    target_pct = (current / target * 100.0) if current is not None and target is not None and target > 0 else None
-    target_pct_text = f"{target_pct:.1f}%" if target_pct is not None else "n/a"
-    target_text = f"{target:.0f}" if target is not None else "n/a"
-    dashboard_lines.append(f"`{metric_name}` target <= {target_text} ms")
-    dashboard_lines.append("")
-    dashboard_lines.append(f"current {fmt_ms(current)} ms ({target_pct_text} of target)")
-    dashboard_lines.append(f"[{bar(current, target or 0)}]")
-    dashboard_lines.append("")
-
-dashboard_lines.append("## Run Context")
-dashboard_lines.append("")
-dashboard_lines.append(f"- OS: `{os_version}` (build `{os_build}`)")
-dashboard_lines.append(f"- Hardware: `{arch}` / `{model}`")
-dashboard_lines.append(
-    f"- Portfolio context: discovered={summary['metadata']['discovered_repos_median']} imported={summary['metadata']['imported_repos_median']}"
-)
-dashboard_lines.append(f"- Sample setup: runs={runs}, sleep={sleep_seconds}s")
-dashboard_lines.append("")
-dashboard_lines.append("## Metric Definitions")
-dashboard_lines.append("")
-dashboard_lines.append("- `launch_to_first_prompt`: launch init -> first terminal focus success (ready to type)")
-dashboard_lines.append("- `repo_hydration`: auto-discovery/import pass for `~/code` repos")
-dashboard_lines.append("- `repo_click_to_focus`: repo row click -> focused terminal session restore")
-dashboard_lines.append("- `workspace_click_to_focus`: workspace row click -> focused terminal session restore")
-dashboard_lines.append("- Detailed flow diagrams: `./metrics-reference.md`")
-
-dashboard_path.write_text("\n".join(dashboard_lines) + "\n")
-
-print(f"history_csv={history_csv_path}")
-print(f"dashboard_md={dashboard_path}")
-print(f"latest_json={latest_json_path}")
+print(f"history_csv={paths['history_csv']}")
+print(f"dashboard_md={paths['dashboard_md']}")
+print(f"latest_json={paths['latest_json']}")
 
 sys.exit(budget_exit_code)
 PY

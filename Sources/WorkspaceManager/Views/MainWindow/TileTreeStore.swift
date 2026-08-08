@@ -71,6 +71,10 @@ final class TileTreeStore: ObservableObject {
     private weak var agentSessionRegistry: AgentSessionRegistry?
     private weak var lastCommandStatusRegistry: LastCommandStatusRegistry?
     private var localStateStore: LocalStateStore?
+    /// Ordered continuity write pipeline (#1239); created at attach around the
+    /// local state store. Internal as a test seam: tests inject a recorder backed
+    /// by an in-memory sink to bind write ordering and amplification.
+    var continuityRecorder: TerminalContinuityRecorder?
     /// Stub probe used to seed `kind` on register; PR #1 ships a fail-safe
     /// `.claudeCode` default. Replace with the real probe in a foreground Agent
     /// detection follow-up.
@@ -78,6 +82,13 @@ final class TileTreeStore: ObservableObject {
     /// Set of session IDs the store has already registered with the agent registry,
     /// so we only register/deregister on real edge transitions.
     private var registeredAgentSessionIDs: Set<UUID> = []
+
+    /// Test seams for pane-scoped tmux session reclamation (#1232) and continuity
+    /// row recording (#1239): production resolves the real multiplexing mode and
+    /// kills on the workspaces socket; tests inject a fixed mode and a probe wired
+    /// to a stubbed tmux executable.
+    var resolveTerminalMultiplexingMode: () -> TerminalMultiplexingMode = { TerminalMultiplexingMode.resolve() }
+    var killTmuxSession: @Sendable (String) async -> Bool = { await TmuxSessionProbe().killSession($0) }
 
     init() {
         surfaceStore.onTerminalTitleChanged = { [weak self] _ in
@@ -145,7 +156,10 @@ final class TileTreeStore: ObservableObject {
         hooksSocketPath: String?,
         lastCommandStatusRegistry: LastCommandStatusRegistry? = nil
     ) {
-        self.localStateStore = localStateStore
+        if self.localStateStore !== localStateStore {
+            self.localStateStore = localStateStore
+            continuityRecorder = localStateStore.map { TerminalContinuityRecorder(sink: $0) }
+        }
         self.lastCommandStatusRegistry = lastCommandStatusRegistry
         self.surfaceStore.hooksSocketPath = hooksSocketPath
         self.surfaceStore.automationEnvironmentProvider = { [weak self] session in
@@ -240,6 +254,27 @@ final class TileTreeStore: ObservableObject {
         )
         publishSnapshot()
         return result
+    }
+
+    /// Restore-only activation: always creates, never key-reuses. Restore retires the
+    /// owned scope first and then launches one surface per continuity row, so sibling
+    /// rows sharing a key (a primary and its recorded split panes) each get their own
+    /// session carrying their own recorded tmux target and initial command (#1232).
+    @discardableResult
+    func createRestoredSession(
+        key: HostTerminalSessionKey,
+        directory: URL,
+        initialCommand: String? = nil,
+        tmuxSessionNameOverride: String? = nil
+    ) -> HostTerminalSession {
+        let session = coordinator.createSession(
+            key: key,
+            directory: directory,
+            initialCommand: initialCommand,
+            tmuxSessionNameOverride: tmuxSessionNameOverride
+        )
+        publishSnapshot()
+        return session
     }
 
     @discardableResult
@@ -439,7 +474,10 @@ final class TileTreeStore: ObservableObject {
             removed = true
         }
 
-        if coordinator.remove(sessionID: sessionID) != nil {
+        if let removedSession = coordinator.remove(sessionID: sessionID) {
+            // A restored split pane lives on as a tab carrying its pane-scoped
+            // override; closing that tab is the same reclaim as closing the pane.
+            killPaneScopedTmuxSession(for: removedSession)
             removeSplitState(forPrimarySessionID: sessionID)
             tabTitleOverridesBySessionID.removeValue(forKey: sessionID)
             removed = true
@@ -609,9 +647,18 @@ final class TileTreeStore: ObservableObject {
         // leaf and no split happened — abort before mutating any binding (keeps a seeded tab pristine).
         guard newTile != parentTile else { return nil }
 
+        // A non-primary pane needs its own tmux session name: the primary's is a pure
+        // function of the shared directory, so two `new-session -A` launches on that
+        // name would attach to one session — two mirrored views, one shell (#1232).
+        let splitSessionID = UUID()
         let splitSession = HostTerminalSession(
+            id: splitSessionID,
             key: primarySession.key,
-            directory: primarySession.directoryURL
+            directory: primarySession.directoryURL,
+            tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(
+                for: primarySession.directoryURL,
+                paneSessionID: splitSessionID
+            )
         )
 
         if existingTree == nil {
@@ -879,6 +926,7 @@ final class TileTreeStore: ObservableObject {
     /// is the sparse-model collapse: no entry ⇒ single pane.
     private func removeSplitState(forPrimarySessionID primarySessionID: UUID) {
         for session in dropSplitTree(forPrimarySessionID: primarySessionID) {
+            killPaneScopedTmuxSession(for: session)
             deregisterTerminalSession(session.id)
         }
     }
@@ -897,9 +945,12 @@ final class TileTreeStore: ObservableObject {
 
         let reduced = tileTreeReducer.reduce(tree, .close(tile))
 
-        sessionByTileID.removeValue(forKey: tile)
+        let paneSession = sessionByTileID.removeValue(forKey: tile)
         tileIDBySessionID.removeValue(forKey: sessionID)
         primaryIDBySplitSessionID.removeValue(forKey: sessionID)
+        if let paneSession {
+            killPaneScopedTmuxSession(for: paneSession)
+        }
 
         if reduced.leafIDs.count <= 1 {
             // Only the primary remains → collapse to the sparse single-pane shape (no tree). The
@@ -943,6 +994,41 @@ final class TileTreeStore: ObservableObject {
         return splitSessions
     }
 
+    /// The tmux session a torn-down session must reclaim, or `nil` when nothing may die:
+    /// no override, or an override equal to the directory derivation (a restored primary —
+    /// any future launch in that directory `-A`-reattaches it, same as a fresh primary),
+    /// or non-tmux mode. A pane-scoped override (`-p` suffix) is unreachable by directory
+    /// derivation, and teardown ends its continuity row, so an unkilled session would be
+    /// stranded with no reclaim path (#1232).
+    func paneScopedTmuxSessionNameToKill(for session: HostTerminalSession) -> String? {
+        guard let sessionName = session.tmuxSessionNameOverride,
+            sessionName != TmuxSessionNaming.defaultName(for: session.directoryURL),
+            resolveTerminalMultiplexingMode() == .tmuxPerSession
+        else {
+            return nil
+        }
+        return sessionName
+    }
+
+    /// Best-effort async kill of a torn-down pane's tmux session. In-app teardown only —
+    /// app quit never reaches the close paths, so directory-derived sessions (and every
+    /// session on quit) survive for cold-start restore. Failure just logs: the session
+    /// may already be gone (its shell exited, which is what ended the surface).
+    private func killPaneScopedTmuxSession(for session: HostTerminalSession) {
+        guard let sessionName = paneScopedTmuxSessionNameToKill(for: session) else { return }
+        let kill = killTmuxSession
+        Task {
+            if await kill(sessionName) {
+                log.info(
+                    "[TileTreeStore] reclaimed pane tmux session \(sessionName, privacy: .public) on close")
+            } else {
+                log.notice(
+                    "[TileTreeStore] pane tmux session \(sessionName, privacy: .public) kill failed or already gone"
+                )
+            }
+        }
+    }
+
     /// Deregisters a session from the agent subsystems if it was registered. Shared by the
     /// collapse and retire teardown paths, which differ only in their surface-store call.
     private func deregisterTerminalSession(_ sessionID: UUID) {
@@ -962,24 +1048,16 @@ final class TileTreeStore: ObservableObject {
     }
 
     private func recordTerminalSession(_ session: HostTerminalSession, isActive: Bool) {
-        guard let localStateStore else { return }
-        let terminalMode = TerminalMultiplexingMode.resolve().rawValue
-        let hooksSocketPath = surfaceStore.hooksSocketPath
-        Task {
-            try? await localStateStore.recordTerminalSession(
-                session,
-                terminalMode: terminalMode,
-                isActive: isActive,
-                hooksSocketPath: hooksSocketPath
-            )
-        }
+        continuityRecorder?.record(
+            session,
+            terminalMode: resolveTerminalMultiplexingMode().rawValue,
+            isActive: isActive,
+            hooksSocketPath: surfaceStore.hooksSocketPath
+        )
     }
 
     private func recordTerminalSessionEnded(_ sessionID: UUID) {
-        guard let localStateStore else { return }
-        Task {
-            try? await localStateStore.markTerminalSessionEnded(hostSessionID: sessionID)
-        }
+        continuityRecorder?.recordEnded(sessionID)
     }
 
     func automationEnvironment(for session: HostTerminalSession) -> AutomationTerminalEnvironment? {

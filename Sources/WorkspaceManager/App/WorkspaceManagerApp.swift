@@ -39,9 +39,11 @@ struct WorkspaceManagerApp: App {
             schema: schema,
             launchEnvironment: ProcessInfo.processInfo.environment
         )
-        if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
-            UIFixtureSeeder.seedDataIfNeeded(in: bootstrap.container.mainContext)
-        }
+        #if DEBUG
+            if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
+                UIFixtureSeeder.seedDataIfNeeded(in: bootstrap.container.mainContext)
+            }
+        #endif
 
         let localStateBootstrap = LocalStateStoreBootstrapper.bootstrap(
             launchEnvironment: ProcessInfo.processInfo.environment
@@ -54,9 +56,13 @@ struct WorkspaceManagerApp: App {
         // the primary store (see LocalStateStoreBootstrapper.bootstrap), and seeding anyway
         // would silently write a synthetic row into a real user's production database instead
         // of the isolated fixture one.
-        if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1", localStateBootstrap.store != nil {
-            UIFixtureContinuitySeeder.seedIfNeeded()
-        }
+        #if DEBUG
+            if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1",
+                localStateBootstrap.store != nil
+            {
+                UIFixtureContinuitySeeder.seedIfNeeded()
+            }
+        #endif
         Task {
             await StartupDiagnosticsStore.shared.attach(localStateStore: localStateBootstrap.store)
         }
@@ -368,8 +374,7 @@ private struct MainWindowRootView: View {
     @AppStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
     @StateObject private var tileTreeStore = TileTreeStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
-    @StateObject private var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
-    @StateObject private var desktopUISmokeAutomation: DesktopUISmokeAutomationController
+    @StateObject private var smokeDriver = SmokeScenarioDriver()
 
     init(
         appRuntimeDependencies: AppRuntimeDependencies,
@@ -377,12 +382,6 @@ private struct MainWindowRootView: View {
     ) {
         self.appRuntimeDependencies = appRuntimeDependencies
         self._appCommandState = ObservedObject(wrappedValue: appCommandState)
-        _hostLumeSmokeAutomation = StateObject(
-            wrappedValue: HostLumeSmokeAutomationController()
-        )
-        _desktopUISmokeAutomation = StateObject(
-            wrappedValue: DesktopUISmokeAutomationController()
-        )
     }
 
     var body: some View {
@@ -392,8 +391,7 @@ private struct MainWindowRootView: View {
             appCommandState: appCommandState,
             tileTreeStore: tileTreeStore,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-            hostLumeSmokeAutomation: hostLumeSmokeAutomation,
-            desktopUISmokeAutomation: desktopUISmokeAutomation
+            smokeDriver: smokeDriver
         )
         .onOpenURL { url in
             if deepLinkState.enqueue(url: url) {
@@ -425,20 +423,22 @@ private struct AgentSessionRegistryAttacher: ViewModifier {
                 hooksSocketPath: ClaudeIntegrationLifecycle.shared.socketPath,
                 lastCommandStatusRegistry: commandStatusRegistry
             )
-            if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
-                UIFixtureSeeder.seedAgentStatesIfNeeded(
-                    from: ProcessInfo.processInfo.environment,
-                    in: modelContext,
-                    registry: registry,
-                    tileTreeStore: tileTreeStore
-                )
-                UIFixtureSeeder.seedCommandStatusesIfNeeded(
-                    from: ProcessInfo.processInfo.environment,
-                    in: modelContext,
-                    commandStatusRegistry: commandStatusRegistry,
-                    tileTreeStore: tileTreeStore
-                )
-            }
+            #if DEBUG
+                if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
+                    UIFixtureSeeder.seedAgentStatesIfNeeded(
+                        from: ProcessInfo.processInfo.environment,
+                        in: modelContext,
+                        registry: registry,
+                        tileTreeStore: tileTreeStore
+                    )
+                    UIFixtureSeeder.seedCommandStatusesIfNeeded(
+                        from: ProcessInfo.processInfo.environment,
+                        in: modelContext,
+                        commandStatusRegistry: commandStatusRegistry,
+                        tileTreeStore: tileTreeStore
+                    )
+                }
+            #endif
         }
     }
 }

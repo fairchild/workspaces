@@ -97,7 +97,14 @@ Why it matters:
 - It reflects interaction responsiveness during context switching.
 
 Notes:
-- Current flow uses immediate focus request plus a short retry. You may see outcome `focused_retry`, which still means focus was successfully restored.
+- Current flow uses immediate focus request plus a short retry; a successful
+  restore ends with outcome `focused` (or `prompt_ready` via the terminal
+  readiness signal).
+- Only `outcome=prompt_ready` and `outcome=focused` are measured latency. Any
+  other termination (user navigated away, selection superseded) is an abandoned
+  interval: the cancel path logs `status=abandoned elapsed_ms=...` instead of
+  `duration_ms=...`, and `perf-baseline.sh` additionally allowlists the success
+  outcomes so abandoned idle time can never enter the median/mean pool.
 - `debug_no_activate` intentionally does not gate this metric. Shared-desktop
   no-activation mode skips foreground focus, and automation can reuse a
   prompt-ready terminal before the repo-selection timer has a foreground focus
@@ -143,7 +150,10 @@ Sub-spans (emitted via `InvestigationDiagnostics.emitFocus`):
 - `focus_request_to_first_responder` — from `TerminalFocusManager.requestFocus()` call to `makeFirstResponder` success
 
 Notes:
-- Mirrors the `repo_click_to_focus` pattern exactly. Outcome `focused` means focus was successfully restored.
+- Mirrors the `repo_click_to_focus` pattern exactly, including abandonment
+  semantics: only `outcome=prompt_ready` / `outcome=focused` intervals carry
+  `duration_ms`; cancelled or superseded intervals log
+  `status=abandoned elapsed_ms=...` and are excluded from latency summaries.
 - `debug_no_activate` intentionally does not gate this metric. Shared-desktop
   no-activation mode skips foreground focus, and automation can reuse a
   prompt-ready terminal before the workspace-selection timer has a foreground

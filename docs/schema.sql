@@ -49,7 +49,19 @@ ON CONFLICT(key) DO UPDATE SET
 --   site has that identity.
 -- - target_path captures current path-derived session keys.
 -- - backend_identifier/backend_instance_id identify provider-backed sessions.
--- - tmux_session_name is nullable because tmux is mode-dependent.
+-- - tmux_session_name is nullable because tmux is mode-dependent. When set, it is
+--   the session's *chosen* launch name (split panes carry a pane suffix beyond the
+--   directory derivation); restore probes and reattaches by this exact value.
+-- - ended_at is terminal for a host_session_id (#1239): the runtime upsert is
+--   guarded on ended_at IS NULL and close keeps its first ended_at, so an
+--   in-flight write racing a close can never resurrect a closed row into the
+--   restore set. host_session_id is reused across runs on the default
+--   (restoreSessionsOnLaunch off) path, where launch rehydrates the previous
+--   run's tabs from the continuity manifest under their recorded ids; those rows
+--   are live, so the guard passes and they move to the current run. A row that
+--   is already ended stays ended under any later upsert.
+-- - last_seen_at advances when a state-changing write lands (the runtime drops
+--   upserts whose row state is unchanged), not on every layout snapshot.
 CREATE TABLE IF NOT EXISTS terminal_sessions (
     host_session_id TEXT PRIMARY KEY NOT NULL,
     session_key TEXT NOT NULL,
