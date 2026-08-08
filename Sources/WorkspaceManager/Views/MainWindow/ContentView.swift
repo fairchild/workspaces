@@ -1990,6 +1990,33 @@ struct ContentView: View {
         terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_lifecycle_retired_sessions")
     }
 
+    /// The forced-teardown state machine for operator archive-with-teardown, wired to the live
+    /// stores: scope enumeration and retirement from the tile tree, tmux resolution/kill through
+    /// the store's seams, and the graceful retirement close from the surface store.
+    @MainActor
+    private func makeWorkspaceTerminalTeardownController() -> WorkspaceTerminalTeardownController {
+        WorkspaceTerminalTeardownController(
+            sessionsInScope: { key in
+                tileTreeStore.sessions(inScope: key).flatMap { primary in
+                    tileTreeStore.splitSessions(forPrimarySessionID: primary.id) + [primary]
+                }
+            },
+            tmuxSessionName: { session in
+                guard tileTreeStore.resolveTerminalMultiplexingMode() == .tmuxPerSession else {
+                    return nil
+                }
+                return session.effectiveTmuxSessionName
+            },
+            killTmuxSession: tileTreeStore.killTmuxSession,
+            closeForRetirement: { sessionID in
+                _ = try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
+            },
+            retireSessions: { key in
+                tileTreeStore.retireSessions(inScope: key)
+            }
+        )
+    }
+
     @MainActor
     private func applyTerminalSessionResult(
         _ result: MainWindowTerminalSessionController.SessionFocusResult
@@ -2266,7 +2293,7 @@ struct ContentView: View {
                     )
                 )
             },
-            performArchive: { target in
+            performArchive: { target, command in
                 guard
                     let workspace = repos.flatMap(\.workspaces).first(where: {
                         $0.id == target.workspaceID
@@ -2282,14 +2309,47 @@ struct ContentView: View {
                         try await retireTerminalSessions(inScope: key)
                     }
                 )
+                var teardown: AutomationWorkspaceArchiveTeardownReport?
+                if command.teardownTerminals {
+                    let scopeKey: HostTerminalSessionKey
+                    do {
+                        scopeKey = try controller.terminalSessionKey(for: workspace)
+                    } catch {
+                        return .unsupported(
+                            "Failed to resolve the workspace's terminal scope: \(error.localizedDescription)")
+                    }
+                    switch await makeWorkspaceTerminalTeardownController().teardown(scopeKey: scopeKey) {
+                    case .completed(let report):
+                        teardown = report
+                        terminalFocusCoordinator.cancelPendingFocusRequest(
+                            reason: "workspace_archive_teardown_retired_sessions")
+                    case .closeBlockedByConfirmation(let message):
+                        return .closeBlockedByConfirmation(message)
+                    }
+                }
                 do {
                     try await controller.archive(workspace)
                     return .completed(
                         AutomationWorkspaceArchiveEffect(
                             workspaceID: workspace.id,
-                            selectedWorkspaceID: currentSelectedWorkspace?.id
+                            selectedWorkspaceID: currentSelectedWorkspace?.id,
+                            teardown: teardown
                         )
                     )
+                } catch let error as GhosttySurfaceRetirementCloseError {
+                    // The typed terminal-still-live arms (#1226): the transient timeout is
+                    // retryable; the confirmation-blocked case is not — the dialog cannot be
+                    // answered headlessly, so callers should re-issue with teardownTerminals.
+                    switch error {
+                    case .timedOut:
+                        return .terminalActive(
+                            error.localizedDescription
+                                + " Retry, or archive with teardownTerminals to close it first.")
+                    case .processStillRunning:
+                        return .closeBlockedByConfirmation(
+                            error.localizedDescription
+                                + " Archive with teardownTerminals to tear the terminal down first.")
+                    }
                 } catch {
                     return .unsupported("Failed to archive workspace: \(error.localizedDescription)")
                 }

@@ -124,7 +124,7 @@ private final class FakeAutomationController: AutomationControlling {
 
     var selectCalls: [String] = []
     var createCalls: [AutomationWorkspaceCreateRequest] = []
-    var archiveCalls: [String] = []
+    var archiveCalls: [AutomationWorkspaceArchiveRequest] = []
 
     /// Named ids the fake maps to each projected outcome, so router tests can drive the wire mapping
     /// without a live app. A well-shaped-but-unknown id and a non-UUID id both project to
@@ -140,6 +140,8 @@ private final class FakeAutomationController: AutomationControlling {
     static let archiveUnknownID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     static let archiveNoWindowID = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
     static let archiveSelectedWorkspaceID = "cccccccc-cccc-cccc-cccc-cccccccccccc"
+    static let archiveTerminalActiveID = "dddddddd-dddd-dddd-dddd-dddddddddddd"
+    static let archiveRetiredSurfaceID = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee"
 
     func automationSelectWorkspace(
         for handle: String,
@@ -231,8 +233,9 @@ private final class FakeAutomationController: AutomationControlling {
 
     func automationArchiveWorkspace(
         for handle: String,
-        workspaceID: String
+        request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult {
+        let workspaceID = request.workspaceID
         guard handle == "operator" else {
             guard handle == "live" else {
                 throw AutomationServiceError(.staleHandle, "stale")
@@ -251,14 +254,25 @@ private final class FakeAutomationController: AutomationControlling {
             throw AutomationServiceError(
                 .unsupported, "No WorkSpaces window is attached; workspace.archive requires a live window.")
         }
-        archiveCalls.append(workspaceID)
+        if workspaceID == Self.archiveTerminalActiveID {
+            throw AutomationServiceError(
+                .terminalActive,
+                "Terminal 'ws' did not exit before the workspace lifecycle timeout.",
+                retryable: true)
+        }
+        archiveCalls.append(request)
         archivedWorkspaceIDs.insert(workspaceID)
         return AutomationWorkspaceArchiveResult(
             workspaceID: workspaceID,
             outcome: .completed,
             changed: true,
             archivedWorkspaceID: UUID(uuidString: workspaceID),
-            selectedWorkspaceID: UUID(uuidString: Self.archiveSelectedWorkspaceID)
+            selectedWorkspaceID: UUID(uuidString: Self.archiveSelectedWorkspaceID),
+            teardown: request.teardownTerminals == true
+                ? AutomationWorkspaceArchiveTeardownReport(
+                    retiredSurfaceIDs: [Self.archiveRetiredSurfaceID],
+                    killedTmuxSessions: ["wm-ws-12345678"])
+                : nil
         )
     }
 
@@ -1496,7 +1510,40 @@ struct AutomationAPITests {
         let expectedSelectedWorkspaceID = UUID(uuidString: FakeAutomationController.archiveSelectedWorkspaceID)
         #expect(okEnvelope.result?.selectedWorkspaceID == expectedSelectedWorkspaceID)
         #expect(okEnvelope.result?.system.capabilities.contains(.workspaceArchive) == true)
-        #expect(controller.archiveCalls == [validID])
+        #expect(okEnvelope.result?.teardown == nil)
+        #expect(controller.archiveCalls == [AutomationWorkspaceArchiveRequest(workspaceID: validID)])
+
+        let teardownBody = Data(
+            "{\"workspaceID\":\"\(validID)\",\"teardownTerminals\":true}".utf8)
+        let teardownOK = await post("operator", body: teardownBody)
+        let teardownEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceArchiveResult>.self, from: teardownOK.body)
+        #expect(teardownOK.status == 200)
+        #expect(
+            teardownEnvelope.result?.teardown?.retiredSurfaceIDs == [
+                FakeAutomationController.archiveRetiredSurfaceID
+            ])
+        #expect(teardownEnvelope.result?.teardown?.killedTmuxSessions == ["wm-ws-12345678"])
+        #expect(
+            controller.archiveCalls.last
+                == AutomationWorkspaceArchiveRequest(workspaceID: validID, teardownTerminals: true))
+
+        let badTeardown = await post(
+            "operator", body: Data("{\"workspaceID\":\"\(validID)\",\"teardownTerminals\":\"yes\"}".utf8))
+        let badTeardownEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: badTeardown.body)
+        #expect(badTeardown.status == 400)
+        #expect(badTeardownEnvelope.error?.code == .invalidRequest)
+
+        let terminalActive = await post(
+            "operator", body: body(FakeAutomationController.archiveTerminalActiveID))
+        let terminalActiveEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: terminalActive.body)
+        #expect(terminalActive.status == 409)
+        #expect(terminalActiveEnvelope.error?.code == .terminalActive)
+        #expect(terminalActiveEnvelope.error?.retryable == true)
+        let terminalActiveJSON = try #require(String(data: terminalActive.body, encoding: .utf8))
+        #expect(terminalActiveJSON.contains("\"retryable\":true"))
 
         let listed = await AutomationHTTPRouter.route(
             HTTPRequest(
@@ -1577,6 +1624,37 @@ struct AutomationAPITests {
         #expect(json.contains("\"outcome\":\"confirmation_required\""))
         #expect(json.contains("\"confirmation\""))
         #expect(json.contains("\"action\":\"workspace.archive\""))
+    }
+
+    @Test("error responses carry documented retry semantics on the wire")
+    func errorResponseRetryableEncoding() throws {
+        func encoded(_ error: AutomationErrorResponse) throws -> String {
+            let data = try AutomationJSON.encoder.encode(
+                AutomationResponseEnvelope<AutomationEmptyResult>(error: error))
+            return try #require(String(data: data, encoding: .utf8))
+        }
+
+        let transient = try encoded(
+            AutomationErrorResponse(
+                code: .terminalActive, message: "terminal still live", retryable: true))
+        #expect(transient.contains("\"code\":\"terminal_active\""))
+        #expect(transient.contains("\"retryable\":true"))
+
+        let blocked = try encoded(
+            AutomationErrorResponse(
+                code: .closeBlockedByConfirmation, message: "confirmation blocks close", retryable: false))
+        #expect(blocked.contains("\"code\":\"close_blocked_by_confirmation\""))
+        #expect(blocked.contains("\"retryable\":false"))
+
+        // Codes without retry guidance omit the field entirely, keeping the legacy wire shape.
+        let unspecified = try encoded(
+            AutomationErrorResponse(code: .unsupported, message: "no window"))
+        #expect(!unspecified.contains("retryable"))
+
+        // Decoding a legacy error without the field round-trips to nil, not false.
+        let legacy = Data("{\"code\":\"unsupported\",\"message\":\"no window\"}".utf8)
+        let decoded = try AutomationJSON.decoder.decode(AutomationErrorResponse.self, from: legacy)
+        #expect(decoded.retryable == nil)
     }
 
     @Test("POST /v1/window/snapshot captures for an operator handle and fails closed otherwise")
@@ -1911,6 +1989,55 @@ struct AutomationAPITests {
         #expect(createEvent.metadata?["workspaceCreate.select"] == "provided")
         #expect(createEvent.metadata?["workspaceCreate.fromRef"] == "provided")
         #expect(!String(describing: createEvent.metadata).contains("origin/main"))
+    }
+
+    @Test("Archive teardown gets its own audit entry with counts only")
+    func auditLogRecordsTeardownAsOwnEntry() async throws {
+        let auditURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("wm-archive-audit-\(UUID().uuidString.prefix(8)).jsonl")
+        defer { try? FileManager.default.removeItem(at: auditURL) }
+        let logger = AutomationAuditLogger(auditURL: auditURL)
+
+        let workspaceID = UUID().uuidString
+        let tmuxSessionName = "wm-ws-12345678"
+        let responseBody = try AutomationJSON.encoder.encode(
+            AutomationResponseEnvelope(
+                result: AutomationWorkspaceArchiveResult(
+                    workspaceID: workspaceID,
+                    outcome: .completed,
+                    changed: true,
+                    archivedWorkspaceID: UUID(uuidString: workspaceID),
+                    teardown: AutomationWorkspaceArchiveTeardownReport(
+                        retiredSurfaceIDs: [UUID().uuidString, UUID().uuidString],
+                        killedTmuxSessions: [tmuxSessionName]
+                    )
+                )
+            )
+        )
+        await logger.record(
+            method: "POST",
+            path: "/v1/workspace/archive",
+            headers: [AutomationAPI.handleHeader: "op"],
+            requestBody: Data("{\"workspaceID\":\"\(workspaceID)\",\"teardownTerminals\":true}".utf8),
+            responseBody: responseBody,
+            operatorHandle: true
+        )
+
+        let contents = try String(contentsOf: auditURL, encoding: .utf8)
+        let lines = contents.split(separator: "\n").map(String.init)
+        #expect(lines.count == 2)
+        let events = try lines.map { line in
+            try AutomationJSON.decoder.decode(AutomationAuditLogger.Event.self, from: Data(line.utf8))
+        }
+        let archiveEvent = try #require(events.first { $0.path == "/v1/workspace/archive" })
+        #expect(archiveEvent.metadata?["workspaceArchive.teardownTerminals"] == "true")
+        let teardownEvent = try #require(events.first { $0.path == "/v1/workspace/archive#teardown" })
+        #expect(teardownEvent.operatorHandle)
+        #expect(teardownEvent.allowed)
+        #expect(teardownEvent.metadata?["workspaceArchive.teardown.retiredSurfaceCount"] == "2")
+        #expect(teardownEvent.metadata?["workspaceArchive.teardown.killedTmuxSessionCount"] == "1")
+        // Counts only: the tmux session name never lands in the audit log.
+        #expect(!contents.contains(tmuxSessionName))
     }
 
     @Test("Audit log records surface.read metadata without terminal text")

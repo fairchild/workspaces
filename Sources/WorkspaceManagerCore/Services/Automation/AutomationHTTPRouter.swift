@@ -104,8 +104,8 @@ enum AutomationHTTPRouter {
             return try await controller.automationReadSurface(for: handle, request: read)
 
         case ("POST", "/v1/workspace/archive"):
-            let workspaceID = try decodeWorkspaceID(from: request.body)
-            return try await controller.automationArchiveWorkspace(for: handle, workspaceID: workspaceID)
+            let archive = try decodeWorkspaceArchive(from: request.body)
+            return try await controller.automationArchiveWorkspace(for: handle, request: archive)
 
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
@@ -276,6 +276,24 @@ enum AutomationHTTPRouter {
         return workspaceID
     }
 
+    /// The archive body: the same global `workspaceID` contract as `workspace.select`, plus the
+    /// optional `teardownTerminals` boolean. A present-but-non-boolean `teardownTerminals` is
+    /// rejected rather than silently treated as false, so a caller cannot believe it requested
+    /// teardown when the server ignored the field.
+    private static func decodeWorkspaceArchive(from body: Data) throws -> AutomationWorkspaceArchiveRequest {
+        let workspaceID = try decodeWorkspaceID(from: body)
+        let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        var teardownTerminals: Bool?
+        if let raw = object["teardownTerminals"] {
+            guard let flag = raw as? Bool else {
+                throw AutomationServiceError(
+                    .invalidRequest, "Request 'teardownTerminals' must be a boolean when provided.")
+            }
+            teardownTerminals = flag
+        }
+        return AutomationWorkspaceArchiveRequest(workspaceID: workspaceID, teardownTerminals: teardownTerminals)
+    }
+
     private static func decodeWorkspaceCreate(from body: Data) throws -> AutomationWorkspaceCreateRequest {
         try rejectCallerSuppliedTargetIDs(in: body, allowEmptyBody: false)
         let request: AutomationWorkspaceCreateRequest
@@ -425,6 +443,8 @@ enum AutomationHTTPRouter {
         case .routeNotFound:
             return 404
         case .unsupported:
+            return 409
+        case .terminalActive, .closeBlockedByConfirmation:
             return 409
         case .internalError:
             return 500

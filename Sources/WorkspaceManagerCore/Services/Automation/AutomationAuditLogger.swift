@@ -92,6 +92,34 @@ public actor AutomationAuditLogger {
             requestedLines: surfaceRead?.requestedLines,
             returnedLines: surfaceRead?.returnedLines
         )
+        var events = [event]
+        // A completed archive teardown gets its own audit entry (distinct from the archive request's
+        // event) so forced terminal teardown is independently visible and countable in the log.
+        // Counts only — never session names or terminal content.
+        if let teardown = archiveTeardownReport(method: method, path: path, responseBody: responseBody) {
+            events.append(
+                Event(
+                    timestamp: timestampFormatter.string(from: Date()),
+                    method: method,
+                    path: "\(path)#teardown",
+                    handlePresent: headers[AutomationAPI.handleHeader]?.isEmpty == false,
+                    operatorHandle: operatorHandle,
+                    allowed: true,
+                    errorCode: nil,
+                    metadata: [
+                        "workspaceArchive.teardown.retiredSurfaceCount": "\(teardown.retiredSurfaceIDs.count)",
+                        "workspaceArchive.teardown.killedTmuxSessionCount": "\(teardown.killedTmuxSessions.count)",
+                    ]
+                )
+            )
+        }
+
+        for event in events {
+            append(event)
+        }
+    }
+
+    private func append(_ event: Event) {
         guard let data = try? encoder.encode(event) else { return }
 
         do {
@@ -112,19 +140,39 @@ public actor AutomationAuditLogger {
         }
     }
 
+    /// The archive response's teardown report, when this request was an archive whose forced
+    /// teardown ran. Absent for non-archive routes, failed archives, and archives without teardown.
+    private nonisolated func archiveTeardownReport(
+        method: String,
+        path: String,
+        responseBody: Data
+    ) -> AutomationWorkspaceArchiveTeardownReport? {
+        guard method.uppercased() == "POST", path == "/v1/workspace/archive" else { return nil }
+        let envelope = try? AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceArchiveResult>.self,
+            from: responseBody
+        )
+        return envelope?.result?.teardown
+    }
+
     private nonisolated static func routeMetadata(method: String, path: String, body: Data) -> [String: String]? {
-        guard method.uppercased() == "POST", path == "/v1/workspace/create", !body.isEmpty,
+        guard method.uppercased() == "POST", !body.isEmpty,
             let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
         else {
             return nil
         }
 
         var metadata: [String: String] = [:]
-        if object.keys.contains("select") {
-            metadata["workspaceCreate.select"] = "provided"
+        if path == "/v1/workspace/create" {
+            if object.keys.contains("select") {
+                metadata["workspaceCreate.select"] = "provided"
+            }
+            if object.keys.contains("fromRef") {
+                metadata["workspaceCreate.fromRef"] = "provided"
+            }
         }
-        if object.keys.contains("fromRef") {
-            metadata["workspaceCreate.fromRef"] = "provided"
+        if path == "/v1/workspace/archive", let teardown = object["teardownTerminals"] as? Bool {
+            metadata["workspaceArchive.teardownTerminals"] = teardown ? "true" : "false"
         }
         return metadata.isEmpty ? nil : metadata
     }
