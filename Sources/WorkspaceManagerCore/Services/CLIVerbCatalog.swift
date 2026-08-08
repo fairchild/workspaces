@@ -46,6 +46,9 @@ public enum CLIVerbCatalog {
         return ["automation"] + arguments
     }
 
+    /// Rendered help. The probe deadline interpolates from `CLIAppProbe.deadline` — the same
+    /// constant the probe hands the socket — so the figure a caller reads before scripting a
+    /// loop cannot drift from the one the socket gets.
     public static let helpText = """
         WorkSpaces CLI
 
@@ -95,9 +98,11 @@ public enum CLIVerbCatalog {
           'automation workspace' drives the running app. 'ws list' and 'repo list'
           derive from the app only when the operator credential is readable —
           the app running without it leaves them showing the CLI-local plane
-          alone, and the app cannot see what they list. That derivation costs
-          one short probe of the app (0.5s ceiling), so a slow or hung app does
-          not stall the command; it drops back to the CLI-local plane.
+          alone, and the app cannot see what they list. That derivation
+          costs one short probe of the app, bounded at \(CLIAppProbe.deadlineDescription) per socket
+          read rather than as a whole-call budget. A probe that misses falls
+          back to the CLI-local plane, and says which way it missed on an
+          interactive terminal (or under WORKSPACES_CLI_VERBOSE=1).
 
         Launch behavior:
           - no args: open the WorkSpaces app

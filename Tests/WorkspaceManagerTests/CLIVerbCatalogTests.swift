@@ -86,6 +86,28 @@ struct CLIVerbCatalogTests {
         #expect(!help.contains("When the app is running,"))
     }
 
+    /// The snapshot below interpolates the same expression the help text does, so by itself it
+    /// would keep passing if the prose and the constant drifted apart. This reads the figure back
+    /// out of the rendered help and compares it to the deadline the probe hands the socket, so the
+    /// two spellings of the bound cannot disagree.
+    @Test("The probe bound printed in help is the constant the probe uses")
+    func helpProbeBoundTracksTheConstant() throws {
+        let help = CLIVerbCatalog.helpText
+        let match = try #require(help.firstMatch(of: try Regex("bounded at ([0-9]+(?:\\.[0-9]+)?)s")))
+        let printed = try #require(match[1].substring.flatMap { Double($0) })
+        #expect(printed == CLIAppProbe.deadline)
+    }
+
+    /// The bound is SO_RCVTIMEO/SO_SNDTIMEO on the probe socket — per blocking syscall, not a
+    /// budget for the whole call — so help must not promise a ceiling it cannot hold.
+    @Test("Help states the per-read socket bound, not a whole-call ceiling")
+    func helpDescribesPerReadBound() {
+        // Line wrapping is a rendering choice; the sentence is the contract.
+        let unwrapped = CLIVerbCatalog.helpText.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        #expect(unwrapped.contains("per socket read rather than as a whole-call budget"))
+        #expect(!unwrapped.contains("ceiling"))
+    }
+
     @Test("Help text snapshot")
     func helpSnapshot() {
         let expected = """
@@ -137,9 +159,11 @@ struct CLIVerbCatalogTests {
               'automation workspace' drives the running app. 'ws list' and 'repo list'
               derive from the app only when the operator credential is readable —
               the app running without it leaves them showing the CLI-local plane
-              alone, and the app cannot see what they list. That derivation costs
-              one short probe of the app (0.5s ceiling), so a slow or hung app does
-              not stall the command; it drops back to the CLI-local plane.
+              alone, and the app cannot see what they list. That derivation
+              costs one short probe of the app, bounded at \(CLIAppProbe.deadlineDescription) per socket
+              read rather than as a whole-call budget. A probe that misses falls
+              back to the CLI-local plane, and says which way it missed on an
+              interactive terminal (or under WORKSPACES_CLI_VERBOSE=1).
 
             Launch behavior:
               - no args: open the WorkSpaces app

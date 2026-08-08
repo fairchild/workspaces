@@ -22,8 +22,18 @@ struct CLIDispatchBindingTests {
     /// The `workspaces` product, built beside the test bundle by both `swift build` and
     /// `swift test`. Discovery walks from the most specific source outward: an explicit
     /// override, the test bundle the runner was handed, then the package's own build
-    /// directory. A missing binary fails rather than skips — without it the alias spellings
-    /// have no coverage at all.
+    /// directory.
+    ///
+    /// Why a filesystem lookup instead of a build-graph edge: SwiftPM's only way for a test
+    /// target to depend on an executable target is to *link* it, which pulls `main.swift`'s
+    /// top-level code and its AppKit dependency into the test bundle and still hands back no
+    /// path — and this test's whole point is launching the real process (argv, stdout/stderr,
+    /// exit status). What the build graph does guarantee is placement: `swift build` and
+    /// `swift test` both build every product in the package into the configuration directory
+    /// the test bundle also lands in, so the binary is beside the bundle in either flow.
+    /// A missing binary therefore means a broken invocation, not an unsupported environment,
+    /// and `runCLI` fails on it with the searched paths rather than skipping — a skip here
+    /// would leave the alias spellings the smoke scripts depend on with no coverage at all.
     private static var cliBinaryURL: URL? {
         candidateBinaryURLs.first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
@@ -70,12 +80,16 @@ struct CLIDispatchBindingTests {
 
     /// Runs the CLI with its state store redirected into a scratch directory, so dispatch is
     /// exercised without reading or writing the developer's real CLI state.
-    private func runCLI(_ arguments: [String]) throws -> Invocation? {
-        guard let binary = Self.cliBinaryURL else {
-            let searched = Self.candidateBinaryURLs.map(\.path).joined(separator: ", ")
-            Issue.record("workspaces binary not found — run 'swift build' first. Searched: \(searched)")
-            return nil
-        }
+    private func runCLI(_ arguments: [String]) throws -> Invocation {
+        let searched = Self.candidateBinaryURLs.map(\.path).joined(separator: ", ")
+        let binary = try #require(
+            Self.cliBinaryURL,
+            """
+            workspaces binary not found — build the package first ('swift build' or 'swift test' \
+            builds it into the same configuration directory as this bundle), or point \
+            WORKSPACES_TEST_CLI_BINARY at it. Searched: \(searched)
+            """
+        )
 
         let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("cli-dispatch-\(UUID().uuidString)")
@@ -117,7 +131,7 @@ struct CLIDispatchBindingTests {
         ]
     )
     func aliasSpellingsDispatchToHandlers(arguments: [String], expected: String) throws {
-        guard let result = try runCLI(arguments) else { return }
+        let result = try runCLI(arguments)
         #expect(result.stderr.contains(expected))
         // The failure mode this guards: dispatching the raw vector instead of the
         // canonicalized one leaves 'workspace'/'window' unknown at top level.
@@ -130,9 +144,8 @@ struct CLIDispatchBindingTests {
         arguments: [["workspace", "select"], ["window", "snapshot"]]
     )
     func aliasAndGroupedSpellingsAgree(arguments: [String]) throws {
-        guard let alias = try runCLI(arguments), let grouped = try runCLI(["automation"] + arguments) else {
-            return
-        }
+        let alias = try runCLI(arguments)
+        let grouped = try runCLI(["automation"] + arguments)
         #expect(alias.stderr == grouped.stderr)
         #expect(alias.stdout == grouped.stdout)
         #expect(alias.status == grouped.status)
@@ -140,7 +153,7 @@ struct CLIDispatchBindingTests {
 
     @Test("An unclaimed first argument still fails as an unknown command")
     func unknownVerbStaysUnknown() throws {
-        guard let result = try runCLI(["nonsense", "select"]) else { return }
+        let result = try runCLI(["nonsense", "select"])
         #expect(result.stderr.contains("Unknown command 'nonsense'"))
         #expect(result.status == 1)
     }

@@ -30,6 +30,9 @@ private final class CLIApp {
     private let workspaceService: WorkspaceService = .shared
     private let gitService: GitService = .shared
 
+    /// Set once the invocation has said something about the plane split; see `emitPlaneHint`.
+    private var planeHintEmitted = false
+
     func run(arguments: [String]) async throws -> Int32 {
         guard arguments.first != nil else {
             return try await launchApp(request: nil)
@@ -1452,7 +1455,7 @@ private final class CLIApp {
             throw CLIError(guidance)
         }
         if appRunningWithoutOperatorCredential() {
-            writeStderr(CLIPlaneComposer.operatorCredentialMissingHint)
+            emitPlaneHint(CLIPlaneComposer.operatorCredentialMissingHint, evenWhenQuiet: true)
         }
         throw CLIError("Repository not found: \(token)")
     }
@@ -1521,32 +1524,29 @@ private final class CLIApp {
         throw CLIError("Workspace not found: \(token)")
     }
 
-    /// Send/receive deadline for the inventory probe, in seconds. Short on purpose: nobody asked
-    /// for this request. It runs behind `ws list`, `repo list`, and selector resolution to enrich
-    /// output the CLI can already produce alone, so a hung or wedged app has to cost the shell
-    /// noticeably less than the interactive operator verbs a user typed and is waiting on. Half a
-    /// second clears a healthy local round trip (unix socket, one main-actor hop) with room for a
-    /// mid-render app, and reads as immediate when it does fire.
-    private static let appInventoryProbeDeadline: TimeInterval = 0.5
-
     /// The running app's repo/workspace inventory via the operator socket, or nil when the
-    /// appless plane is in effect (no operator credential, no listener, a timeout, or a failed
-    /// read). Every local verb that consults the app plane funnels through this one seam, so the
-    /// probe's bound has exactly one place to live.
+    /// appless plane is in effect (no operator credential, no listener, a timeout, or a reply the
+    /// CLI could not read). Every local verb that consults the app plane funnels through this one
+    /// seam, so the probe's bound and its failure taxonomy each have one place to live —
+    /// `CLIAppProbe`, which `workspaces help` renders the deadline from.
     ///
     /// `deadline` reaches the socket as SO_RCVTIMEO/SO_SNDTIMEO, so it bounds each blocking
     /// syscall rather than the call as a whole: an app that trickles a chunk per interval could
     /// still outlast it. It converts the failure mode that matters — an app that accepts the
     /// connection and then stops answering — from an unbounded hang into a fall back to the
     /// appless plane, which is what every other probe failure already does.
+    ///
+    /// Falling back stays the behavior in every case; what a miss no longer does is stay mute.
+    /// `noteProbeOutcome` renders the reason where a person will read it.
     private func appInventory(
-        withDeadline deadline: TimeInterval = CLIApp.appInventoryProbeDeadline
+        withDeadline deadline: TimeInterval = CLIAppProbe.deadline
     ) -> AutomationWorkspaceInventory? {
         guard let credential = try? loadOperatorCredential() else {
+            noteProbeOutcome(.noOperatorCredential(appRunning: appIsRunning()))
             return nil
         }
-        guard
-            let result = try? operatorRequest(
+        do {
+            let result = try operatorRequest(
                 AutomationWorkspacesResult.self,
                 credential: credential,
                 method: "GET",
@@ -1554,10 +1554,11 @@ private final class CLIApp {
                 body: Data(),
                 timeout: deadline
             )
-        else {
+            return AutomationWorkspaceInventory(repos: result.repos, workspaces: result.workspaces)
+        } catch {
+            noteProbeOutcome(CLIAppProbe.outcome(forProbeError: error))
             return nil
         }
-        return AutomationWorkspaceInventory(repos: result.repos, workspaces: result.workspaces)
     }
 
     /// True when the app is running but no operator credential is readable — `appInventory`
@@ -1567,7 +1568,40 @@ private final class CLIApp {
         guard (try? loadOperatorCredential()) == nil else {
             return false
         }
-        return !NSRunningApplication.runningApplications(withBundleIdentifier: Self.appBundleIdentifier).isEmpty
+        return appIsRunning()
+    }
+
+    private func appIsRunning() -> Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: Self.appBundleIdentifier).isEmpty
+    }
+
+    /// Says why the app plane was skipped, at most once per invocation.
+    private func noteProbeOutcome(_ outcome: CLIAppProbe.Outcome) {
+        guard let hint = outcome.hint else { return }
+        emitPlaneHint(hint, evenWhenQuiet: false)
+    }
+
+    /// One plane hint per invocation, whichever surface raises it first, so a verb that probes and
+    /// then explains a miss does not say the same thing twice.
+    ///
+    /// Audibility: probe hints reach an interactive stderr, or any stderr under
+    /// `WORKSPACES_CLI_VERBOSE=1`. A piped or captured stderr sees nothing new, which keeps the
+    /// output scripts parse byte-identical while the promise `workspaces help` makes about two
+    /// planes stays honest for the person at the terminal. Hints raised on a path the user
+    /// explicitly hit — a selector that missed both planes — pass `evenWhenQuiet: true` and print
+    /// regardless, because there the hint is part of the answer.
+    private func emitPlaneHint(_ hint: String, evenWhenQuiet: Bool) {
+        guard !planeHintEmitted, evenWhenQuiet || Self.planeHintsAudible else { return }
+        planeHintEmitted = true
+        writeStderr(hint)
+    }
+
+    private static var planeHintsAudible: Bool {
+        let verbose = ProcessInfo.processInfo.environment["WORKSPACES_CLI_VERBOSE"]?.lowercased()
+        if verbose == "1" || verbose == "true" {
+            return true
+        }
+        return isatty(STDERR_FILENO) == 1
     }
 
     private func runInteractiveSession(in directory: URL, command: String?) throws -> Int32 {
