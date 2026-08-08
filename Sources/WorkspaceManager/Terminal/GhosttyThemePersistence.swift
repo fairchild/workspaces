@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import WorkspaceManagerCore
 
 /// UserDefaults-backed storage of the selected light/dark Terminal Theme pair.
 ///
@@ -25,24 +26,24 @@ enum GhosttyThemePersistence {
         var hasSelection: Bool { !lightTheme.isEmpty || !darkTheme.isEmpty }
     }
 
-    static func load(from defaults: UserDefaults = .standard) -> Pair {
+    static func load(from defaults: UserDefaults = LaunchPreferences.defaults) -> Pair {
         Pair(
             lightTheme: defaults.string(forKey: lightThemeKey) ?? "",
             darkTheme: defaults.string(forKey: darkThemeKey) ?? ""
         )
     }
 
-    static func save(_ pair: Pair, to defaults: UserDefaults = .standard) {
+    static func save(_ pair: Pair, to defaults: UserDefaults = LaunchPreferences.defaults) {
         defaults.set(pair.lightTheme, forKey: lightThemeKey)
         defaults.set(pair.darkTheme, forKey: darkThemeKey)
     }
 
     /// Recently committed theme names, most-recent-first.
-    static func loadRecents(from defaults: UserDefaults = .standard) -> [String] {
+    static func loadRecents(from defaults: UserDefaults = LaunchPreferences.defaults) -> [String] {
         defaults.stringArray(forKey: recentsKey) ?? []
     }
 
-    static func saveRecents(_ recents: [String], to defaults: UserDefaults = .standard) {
+    static func saveRecents(_ recents: [String], to defaults: UserDefaults = LaunchPreferences.defaults) {
         defaults.set(recents, forKey: recentsKey)
     }
 }

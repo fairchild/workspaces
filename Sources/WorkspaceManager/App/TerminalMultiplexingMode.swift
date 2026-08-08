@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import WorkspaceManagerCore
 
 enum TerminalMultiplexingMode: String, CaseIterable, Identifiable, Codable {
     case ghosttyManagedSplits = "ghostty_managed_splits"
@@ -35,7 +36,7 @@ enum TerminalMultiplexingMode: String, CaseIterable, Identifiable, Codable {
     }
 
     static func resolve(
-        from userDefaults: UserDefaults = .standard,
+        from userDefaults: UserDefaults = LaunchPreferences.defaults,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> TerminalMultiplexingMode {
         resolve(rawValue: userDefaults.string(forKey: storageKey), environment: environment)

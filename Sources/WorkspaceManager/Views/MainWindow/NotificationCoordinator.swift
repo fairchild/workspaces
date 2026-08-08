@@ -88,7 +88,7 @@ final class NotificationCoordinator: NotificationCoordinatorProtocol, Observable
         eventStreamService: any EventStreamServiceProtocol = EventStreamService(),
         sessionService: any NotificationSessionServiceProtocol = NotificationSessionService(),
         credentialStore: any NotificationCredentialStoreProtocol = KeychainNotificationCredentialStore(),
-        userDefaults: UserDefaults = .standard,
+        userDefaults: UserDefaults = LaunchPreferences.defaults,
         makeDeviceAuth: @escaping @Sendable () -> any GitHubDeviceAuthProtocol = {
             GitHubDeviceAuth(clientID: NotificationConstants.gitHubAppClientID)
         }

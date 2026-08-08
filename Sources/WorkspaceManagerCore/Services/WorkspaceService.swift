@@ -99,7 +99,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         if let syntheticWorkspacesRoot {
             return syntheticWorkspacesRoot
         }
-        if let customPath = UserDefaults.standard.string(forKey: "workspacesRoot"),
+        if let customPath = LaunchPreferences.defaults.string(forKey: "workspacesRoot"),
             !customPath.isEmpty
         {
             return URL(fileURLWithPath: customPath)
@@ -108,11 +108,11 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     }
 
     public func setWorkspacesRoot(_ url: URL) {
-        UserDefaults.standard.set(url.path, forKey: "workspacesRoot")
+        LaunchPreferences.defaults.set(url.path, forKey: "workspacesRoot")
     }
 
     public func resetWorkspacesRoot() {
-        UserDefaults.standard.removeObject(forKey: "workspacesRoot")
+        LaunchPreferences.defaults.removeObject(forKey: "workspacesRoot")
     }
 
     public init(gitService: any GitServiceProtocol = GitService.shared) {

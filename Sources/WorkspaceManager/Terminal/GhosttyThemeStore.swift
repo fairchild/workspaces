@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import WorkspaceManagerCore
 
 /// Single backing store for the Terminal Theme, shared by the Settings pickers
 /// and the Cmd+Shift+P command overlay.
@@ -33,7 +34,7 @@ final class GhosttyThemeStore: ObservableObject {
     private var isPreviewing = false
 
     init(
-        defaults: UserDefaults = .standard,
+        defaults: UserDefaults = LaunchPreferences.defaults,
         debounce: Duration = .milliseconds(40),
         apply: @escaping @MainActor (_ light: String, _ dark: String) -> Void = { light, dark in
             GhosttyAppManager.shared.applyTheme(lightTheme: light, darkTheme: dark)
