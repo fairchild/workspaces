@@ -1,6 +1,6 @@
 import { ensureSchema } from "./db";
 import { signJWT, verifyJWT } from "./github-verify";
-import type { Env, FeedbackRow } from "./types";
+import { FEEDBACK_STATUSES, type Env, type FeedbackRow } from "./types";
 
 interface AdminSession {
   login: string;
@@ -177,7 +177,7 @@ async function detail(id: string, env: Env, session: AdminSession): Promise<Resp
       <p>GitHub: ${row.github_issue_url ? `<a href="${escapeHTML(row.github_issue_url)}">${escapeHTML(row.github_issue_url)}</a>` : "none"}</p>
       <ul>${attachments || "<li>No attachments</li>"}</ul>
       <form method="post">
-        <label>Status <select name="status">${["new", "triaged", "planned", "resolved", "wont_fix"].map((value) => `<option ${value === row.status ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+        <label>Status <select name="status">${FEEDBACK_STATUSES.map((value) => `<option ${value === row.status ? "selected" : ""}>${value}</option>`).join("")}</select></label>
         <label>Notes <textarea name="admin_notes">${escapeHTML(row.admin_notes ?? "")}</textarea></label>
         <button>Save</button>
       </form>

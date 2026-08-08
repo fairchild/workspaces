@@ -99,6 +99,29 @@ Admin publish accepts selected feedback IDs plus editable `title` and `body`, cr
 
 **Dedup:** publish is guarded against double-publishing — re-publishing a row that already has a `github_issue_url` is rejected with a `409` page listing the existing issue(s), so a double-click or retry can't silently mint a duplicate issue. (The guard lives in the shared `publishFeedbackAsIssue` core, which also supports a `force` override for the rare intentional re-publish.)
 
+## Agent API
+
+Token-authenticated JSON lane for trusted agents (the product-triage persona).
+Auth is `Authorization: Bearer <FEEDBACK_AGENT_TOKEN>`; the token is a
+Cloudflare secret binding set on both `feedback-store` and
+`feedback-store-preview`. When the binding is absent the lane answers `503`;
+a missing or wrong token answers `401`. Callers may declare an identity with
+`X-Agent-Actor: <slug>`; it is sanitized and recorded in the audit trail as
+`agent:<slug>` (default `agent:unknown`).
+
+- `GET /api/feedback?status=&kind=&limit=` — newest-first rows (default 50,
+  max 200). Rows never include `ip_hash`.
+- `GET /api/feedback/:id` — one row plus its full audit trail.
+- `PATCH /api/feedback/:id` — JSON `{status?, admin_notes?}`. `status` must be
+  one of `new|triaged|planned|resolved|wont_fix`. Every update writes an
+  `update` audit entry naming the actor.
+- `POST /api/feedback/publish` — JSON `{ids, title, body, force?}`. Runs the
+  same `publishFeedbackAsIssue` core as the admin UI, so the double-publish
+  guard (409 with the existing issue list) and the publish audit entry hold on
+  this lane too.
+
+`scripts/feedback-api.sh` wraps these endpoints for CLI use.
+
 ## Audit trail
 
 `feedback_audit` (append-only) records every publish from the admin UI, so a triage action is always attributable:
