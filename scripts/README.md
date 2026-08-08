@@ -102,6 +102,11 @@ Common examples:
 - `./scripts/main-window-hotspots-baseline.py --scenario <id> --output-dir <path>`
   - Lower-level runner for canonical `main_window_*` hot-spot scenarios.
   - Prefer `perf-runner.sh`; call this directly only when debugging the hotspot runner itself.
+- `./scripts/perf_channel_baseline.py --scenario <id> --output-dir <path>`
+  - Lower-level runner for canonical `channel1_*`/`channel2_*` scenarios; wraps `scripts/perf/*/run.sh`.
+  - Prefer `perf-runner.sh`; call this directly only when debugging the channel drivers themselves.
+- `./scripts/perf-history-record.py --summary <summary.json>`
+  - Appends canonical summaries to `docs/performance/metrics-history.csv` and regenerates the dashboard.
 - `./scripts/perf-compare.py before.json after.json`
   - Compares two canonical summaries and prints metric deltas plus gate status.
 - `./scripts/pr-evidence.sh --pr <N> --profile performance`

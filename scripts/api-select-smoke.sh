@@ -24,6 +24,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/synthetic-root.sh
+source "$SCRIPT_DIR/lib/synthetic-root.sh"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 CLI_BIN="$REPO_ROOT/.build/arm64-apple-macosx/debug/workspaces"
 OUTPUT_ROOT="$REPO_ROOT/output/api-select-smoke"
@@ -113,10 +115,14 @@ setup_run_dir() {
     mkdir -p "$RUN_DIR"
     ln -sfn "$RUN_DIR" "$RUN_LINK"
     EVENTS_PATH="$RUN_DIR/events.jsonl"
+    # Isolation boundary: the app's workspaces root lives inside the run dir, so
+    # created worktrees can never leak into the owner's real ~/workspaces.
+    synthetic_root_ensure "$RUN_DIR/workspaces-root" || fail "Could not establish WORKSPACES_SYNTHETIC_ROOT."
 }
 
 create_disposable_repo() {
-    SMOKE_REPO_PATH="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-api-select-XXXXXX")"
+    # Inside the run dir so a red run leaves zero residue outside it.
+    SMOKE_REPO_PATH="$(mktemp -d "$RUN_DIR/smoke-repo-XXXXXX")"
     (
         cd "$SMOKE_REPO_PATH"
         git init >/dev/null
@@ -129,6 +135,7 @@ create_disposable_repo() {
 }
 
 launch_automated_app() {
+    synthetic_root_require || fail "Refusing to launch without WORKSPACES_SYNTHETIC_ROOT."
     local app_data_dir="$RUN_DIR/app-data"
     local -a args=(
         "--no-activate"
@@ -136,6 +143,7 @@ launch_automated_app() {
         "--clean-data"
         "--window-timeout" "20"
         "--env" "WORKSPACES_DISABLE_AUTO_IMPORT=1"
+        "--env" "WORKSPACES_SYNTHETIC_ROOT=$WORKSPACES_SYNTHETIC_ROOT"
         "--env" "WORKSPACES_AUTOMATION_API=1"
         "--env" "WORKSPACES_AUTOMATION_OPERATOR=1"
         "--env" "WORKSPACES_AUTOMATION_MODE=desktop-ui-smoke"
