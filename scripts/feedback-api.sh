@@ -38,13 +38,14 @@ EOF
 
 api() {
   local method="$1" path="$2" body="${3:-}"
-  local args=(-sS -X "$method" "$BASE_URL$path"
-    -H "Authorization: Bearer $FEEDBACK_AGENT_TOKEN"
-    -H "X-Agent-Actor: $ACTOR")
+  local args=(-sS -X "$method" "$BASE_URL$path" -K - -H "X-Agent-Actor: $ACTOR")
   if [[ -n "$body" ]]; then
     args+=(-H "Content-Type: application/json" --data "$body")
   fi
-  curl "${args[@]}"
+  # Auth header arrives via stdin config (-K -) so the token never hits argv.
+  curl "${args[@]}" <<EOF
+header = "Authorization: Bearer $FEEDBACK_AGENT_TOKEN"
+EOF
   echo
 }
 
