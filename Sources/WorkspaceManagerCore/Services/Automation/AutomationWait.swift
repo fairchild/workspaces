@@ -192,7 +192,9 @@ public struct AutomationWaitPattern: @unchecked Sendable, Equatable {
     public func firstMatchExists(in text: String, budgetMS: Int) async -> Bool? {
         let pattern = self
         let budget = max(1, budgetMS)
-        return await Task.detached(priority: .userInitiated) { () -> Bool? in
+        // `.utility`: an automation wait's regex is background work on the app's behalf and has
+        // no business outranking the UI for a core while it burns its budget.
+        return await Task.detached(priority: .utility) { () -> Bool? in
             let deadline = ContinuousClock.now.advanced(by: .milliseconds(budget))
             var matched = false
             var abandoned = false

@@ -1000,7 +1000,9 @@ struct AutomationControllerTests {
             requestCloseTerminal: { _ in },
             surfaceTextReader: { _, _ in String(repeating: "a", count: 64) + "b" }
         )
-        let ceilingMS = 500
+        // Short ceiling: the match burns a core for the whole wait, and this suite runs in
+        // parallel with main-actor tests carrying their own deadlines.
+        let ceilingMS = 400
         let plan = AutomationWaitPlan(
             condition: .surfaceTextMatches(surfaceID: session.id, pattern: try AutomationWaitPattern("(a+)+$")),
             requestedTimeoutMS: ceilingMS,
@@ -1013,7 +1015,7 @@ struct AutomationControllerTests {
         let ticker = Task { @MainActor in
             while !Task.isCancelled {
                 heartbeat.tick()
-                try? await Task.sleep(for: .milliseconds(10))
+                try? await Task.sleep(for: .milliseconds(20))
             }
         }
         defer { ticker.cancel() }

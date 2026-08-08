@@ -2426,8 +2426,10 @@ struct AutomationAPITests {
         let pattern = try AutomationWaitPattern("(a+)+$")
         let text = String(repeating: "a", count: 64) + "b"
 
+        // Small budget on purpose: this burns a core for its whole duration, and the suite runs
+        // in parallel with main-actor tests that have their own deadlines.
         let started = ContinuousClock.now
-        let outcome = await pattern.firstMatchExists(in: text, budgetMS: 250)
+        let outcome = await pattern.firstMatchExists(in: text, budgetMS: 120)
         let elapsed = ContinuousClock.now - started
 
         // nil, not false: the match is undetermined, and reporting "did not match" would be a
