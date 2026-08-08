@@ -962,4 +962,65 @@ struct TileTreeStoreTests {
         #expect(registry.statuses[splitA.id] == nil)
         #expect(registry.statuses[primaryID] != nil)
     }
+
+    /// The #1239 write-amplification acceptance: a focus change in a scope with N
+    /// tabs writes only the two sessions whose active flag flipped, not all N.
+    @Test("Focus change writes O(changed) continuity rows, not O(sessions)")
+    func focusChangeWritesOnlyChangedContinuityRows() async throws {
+        let sink = ContinuityWriteLog()
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
+
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let first = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        var last = first
+        for _ in 0..<5 {
+            last = try #require(store.createTab())
+        }
+        await store.continuityRecorder?.waitUntilDrained()
+        let baseline = await sink.operations.count
+
+        // The last-created tab is active; move focus back to the first.
+        #expect(store.activateExistingSession(sessionID: first.id))
+        await store.continuityRecorder?.waitUntilDrained()
+
+        let delta = Array(await sink.operations.dropFirst(baseline))
+        #expect(delta.count == 2)
+        #expect(
+            Set(delta) == [
+                .record(first.id, isActive: true),
+                .record(last.id, isActive: false),
+            ])
+    }
+
+    /// The #1239 resurrect race at the store's own call sites: closing a tab ends
+    /// its continuity row, and the snapshots that follow never write that session
+    /// again — ended stays the last word.
+    @Test("Closing a tab ends its continuity row and later snapshots leave it ended")
+    func closingTabEndsContinuityRowAndStaysEnded() async throws {
+        let sink = ContinuityWriteLog()
+        let store = TileTreeStore()
+        let registry = AgentSessionRegistry()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
+        store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
+
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let first = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let second = try #require(store.createTab())
+
+        #expect(store.handleProcessExit(for: second.id))
+        // Post-close snapshot traffic that would have resurrected the row (#1239).
+        _ = try #require(store.createTab())
+        #expect(store.activateExistingSession(sessionID: first.id))
+        await store.continuityRecorder?.waitUntilDrained()
+
+        let secondOps = await sink.operations.filter {
+            $0 == .ended(second.id) || $0 == .record(second.id, isActive: true)
+                || $0 == .record(second.id, isActive: false)
+        }
+        #expect(secondOps.last == .ended(second.id))
+        #expect(secondOps.filter { $0 == .ended(second.id) }.count == 1)
+    }
 }

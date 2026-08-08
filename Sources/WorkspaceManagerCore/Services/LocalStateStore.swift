@@ -276,6 +276,12 @@ public actor LocalStateStore {
         try Self.writeMetadata(in: dbPool)
     }
 
+    /// Upserts a session's continuity row. Ended is terminal for a
+    /// `host_session_id`: the conflict update is guarded on `ended_at IS NULL`,
+    /// so an in-flight upsert that lands after `markTerminalSessionEnded` is a
+    /// no-op instead of resurrecting a closed tile into the restore set (#1239).
+    /// Session identity is a fresh UUID per surface, so no live flow ever needs
+    /// to revive an ended row.
     public func recordTerminalSession(
         _ session: HostTerminalSession,
         terminalMode: String,
@@ -331,8 +337,8 @@ public actor LocalStateStore {
                         is_active = excluded.is_active,
                         last_seen_at = excluded.last_seen_at,
                         run_id = excluded.run_id,
-                        run_started_at = excluded.run_started_at,
-                        ended_at = NULL
+                        run_started_at = excluded.run_started_at
+                    WHERE terminal_sessions.ended_at IS NULL
                     """,
                 arguments: [
                     session.id.uuidString,
@@ -356,14 +362,18 @@ public actor LocalStateStore {
         }
     }
 
-    public func markTerminalSessionEnded(hostSessionID: UUID) async throws {
-        let now = Self.isoString(Date())
+    /// Marks a session's row ended. Idempotent — the first close time wins, so a
+    /// repeated close cannot shift `ended_at` or `last_seen_at`. `endedAt` is the
+    /// moment the app closed the surface (captured by the caller at close, not
+    /// when a queued write executes).
+    public func markTerminalSessionEnded(hostSessionID: UUID, endedAt: Date = Date()) async throws {
+        let now = Self.isoString(endedAt)
         try await dbPool.write { db in
             try db.execute(
                 sql: """
                     UPDATE terminal_sessions
                     SET ended_at = ?, is_active = 0, last_seen_at = ?
-                    WHERE host_session_id = ?
+                    WHERE host_session_id = ? AND ended_at IS NULL
                     """,
                 arguments: [now, now, hostSessionID.uuidString])
         }

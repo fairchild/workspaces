@@ -71,6 +71,10 @@ final class TileTreeStore: ObservableObject {
     private weak var agentSessionRegistry: AgentSessionRegistry?
     private weak var lastCommandStatusRegistry: LastCommandStatusRegistry?
     private var localStateStore: LocalStateStore?
+    /// Ordered continuity write pipeline (#1239); created at attach around the
+    /// local state store. Internal as a test seam: tests inject a recorder backed
+    /// by an in-memory sink to bind write ordering and amplification.
+    var continuityRecorder: TerminalContinuityRecorder?
     /// Stub probe used to seed `kind` on register; PR #1 ships a fail-safe
     /// `.claudeCode` default. Replace with the real probe in a foreground Agent
     /// detection follow-up.
@@ -79,9 +83,10 @@ final class TileTreeStore: ObservableObject {
     /// so we only register/deregister on real edge transitions.
     private var registeredAgentSessionIDs: Set<UUID> = []
 
-    /// Test seams for pane-scoped tmux session reclamation (#1232): production resolves
-    /// the real multiplexing mode and kills on the workspaces socket; tests inject a
-    /// fixed mode and a probe wired to a stubbed tmux executable.
+    /// Test seams for pane-scoped tmux session reclamation (#1232) and continuity
+    /// row recording (#1239): production resolves the real multiplexing mode and
+    /// kills on the workspaces socket; tests inject a fixed mode and a probe wired
+    /// to a stubbed tmux executable.
     var resolveTerminalMultiplexingMode: () -> TerminalMultiplexingMode = { TerminalMultiplexingMode.resolve() }
     var killTmuxSession: @Sendable (String) async -> Bool = { await TmuxSessionProbe().killSession($0) }
 
@@ -151,7 +156,10 @@ final class TileTreeStore: ObservableObject {
         hooksSocketPath: String?,
         lastCommandStatusRegistry: LastCommandStatusRegistry? = nil
     ) {
-        self.localStateStore = localStateStore
+        if self.localStateStore !== localStateStore {
+            self.localStateStore = localStateStore
+            continuityRecorder = localStateStore.map { TerminalContinuityRecorder(sink: $0) }
+        }
         self.lastCommandStatusRegistry = lastCommandStatusRegistry
         self.surfaceStore.hooksSocketPath = hooksSocketPath
         self.surfaceStore.automationEnvironmentProvider = { [weak self] session in
@@ -1040,24 +1048,16 @@ final class TileTreeStore: ObservableObject {
     }
 
     private func recordTerminalSession(_ session: HostTerminalSession, isActive: Bool) {
-        guard let localStateStore else { return }
-        let terminalMode = TerminalMultiplexingMode.resolve().rawValue
-        let hooksSocketPath = surfaceStore.hooksSocketPath
-        Task {
-            try? await localStateStore.recordTerminalSession(
-                session,
-                terminalMode: terminalMode,
-                isActive: isActive,
-                hooksSocketPath: hooksSocketPath
-            )
-        }
+        continuityRecorder?.record(
+            session,
+            terminalMode: resolveTerminalMultiplexingMode().rawValue,
+            isActive: isActive,
+            hooksSocketPath: surfaceStore.hooksSocketPath
+        )
     }
 
     private func recordTerminalSessionEnded(_ sessionID: UUID) {
-        guard let localStateStore else { return }
-        Task {
-            try? await localStateStore.markTerminalSessionEnded(hostSessionID: sessionID)
-        }
+        continuityRecorder?.recordEnded(sessionID)
     }
 
     func automationEnvironment(for session: HostTerminalSession) -> AutomationTerminalEnvironment? {
