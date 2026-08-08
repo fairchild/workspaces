@@ -1,29 +1,37 @@
 import Foundation
 import WorkspaceManagerCore
 
+/// Launch-surface request for the code-preview fixture: which repo and file the app should open
+/// on launch. The configuration type and `UIFixturePreviewBootstrap`'s path resolution stay in
+/// every build because the launch-surface wiring names them; only the environment parser is
+/// debug-only, so release binaries carry neither the arming keys nor a way to arm them.
 struct UIFixturePreviewBootstrapConfiguration: Equatable, Sendable {
     let repoName: String
     let relativePath: String
 
-    static func from(environment: [String: String]) -> Self? {
-        guard environment["WORKSPACES_UI_FIXTURE"] == "1" else { return nil }
-        guard environment["WORKSPACES_UI_FIXTURE_OPEN_PREVIEW"] == "1" else { return nil }
+    #if DEBUG
+        static func from(environment: [String: String]) -> Self? {
+            guard environment["WORKSPACES_UI_FIXTURE"] == "1" else { return nil }
+            guard environment["WORKSPACES_UI_FIXTURE_OPEN_PREVIEW"] == "1" else { return nil }
 
-        let repoName = normalizedValue(environment["WORKSPACES_UI_FIXTURE_PREVIEW_REPO"]) ?? "skills"
-        let relativePath = normalizedValue(environment["WORKSPACES_UI_FIXTURE_PREVIEW_PATH"]) ?? "README.md"
-        guard !relativePath.isEmpty else { return nil }
+            let repoName = normalizedValue(environment["WORKSPACES_UI_FIXTURE_PREVIEW_REPO"]) ?? "skills"
+            let relativePath = normalizedValue(environment["WORKSPACES_UI_FIXTURE_PREVIEW_PATH"]) ?? "README.md"
+            guard !relativePath.isEmpty else { return nil }
 
-        return Self(
-            repoName: repoName,
-            relativePath: relativePath
-        )
-    }
+            return Self(
+                repoName: repoName,
+                relativePath: relativePath
+            )
+        }
 
-    private static func normalizedValue(_ rawValue: String?) -> String? {
-        guard let rawValue else { return nil }
-        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
+        private static func normalizedValue(_ rawValue: String?) -> String? {
+            guard let rawValue else { return nil }
+            let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+    #else
+        static func from(environment: [String: String]) -> Self? { nil }
+    #endif
 }
 
 enum UIFixturePreviewBootstrap {

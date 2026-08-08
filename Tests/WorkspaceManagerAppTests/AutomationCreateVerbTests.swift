@@ -319,8 +319,8 @@ struct AutomationCreateVerbTests {
         #expect(store.sessions.first(where: { $0.id == activeSessionID })?.directoryPath == workspacePath)
     }
 
-    @Test("surface.read is limited to surfaces created by the same operator handle")
-    func surfaceReadRequiresSameOperatorCreationAttribution() async throws {
+    @Test("surface.read reads any live terminal surface for operator handles; tile handles stay denied")
+    func surfaceReadIsOperatorScopedAcrossLiveSurfaces() async throws {
         let store = TileTreeStore()
         let repoID = UUID()
         let workspaceID = UUID()
@@ -397,25 +397,27 @@ struct AutomationCreateVerbTests {
         #expect(result.returnedLines == 2)
         #expect(reads == [surfaceID])
 
-        await expectFailure(.capabilityDenied) {
-            try controller.automationReadSurface(
-                for: otherOperator.handle,
-                request: AutomationSurfaceReadRequest(surfaceID: surfaceID.uuidString, lines: 2)
-            )
-        }
-        await expectFailure(.capabilityDenied) {
-            try controller.automationReadSurface(
-                for: operatorEntry.handle,
-                request: AutomationSurfaceReadRequest(surfaceID: otherSession.id.uuidString, lines: 2)
-            )
-        }
+        // Operator reach is any live terminal surface, not only created-this-launch ones:
+        // surface.read is read-only, opt-in per launch, and audited per call, and the wait
+        // primitive's text/prompt conditions need the same reach (#1225 relaxation).
+        let crossOperator = try controller.automationReadSurface(
+            for: otherOperator.handle,
+            request: AutomationSurfaceReadRequest(surfaceID: surfaceID.uuidString, lines: 2)
+        )
+        #expect(crossOperator.text == "two\nthree")
+        let nonCreated = try controller.automationReadSurface(
+            for: operatorEntry.handle,
+            request: AutomationSurfaceReadRequest(surfaceID: otherSession.id.uuidString, lines: 2)
+        )
+        #expect(nonCreated.surfaceID == otherSession.id.uuidString)
+
+        // Tile handles never carry surface.read — the operator-scope boundary is unchanged.
         await expectFailure(.capabilityDenied) {
             try controller.automationReadSurface(
                 for: tile.handle,
                 request: AutomationSurfaceReadRequest(surfaceID: surfaceID.uuidString, lines: 2)
             )
         }
-        #expect(reads == [surfaceID])
     }
 
     @Test("surface.read clamps over-cap line requests and byte output")

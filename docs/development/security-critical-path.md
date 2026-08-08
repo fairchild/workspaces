@@ -64,3 +64,20 @@ uv run --script scripts/audit-security-posture.py --repo fairchild/workspaces --
   the final ttyd URL after ticket redemption.
 - Keep dependency overrides current and remove them when upstream patched
   versions resolve cleanly.
+
+## Durable Lessons (2026-03 security review)
+
+Rationale behind the controls above, kept here because the incident context
+that produced them is otherwise only in git history:
+
+- Triage sanitization is theater if the agent re-fetches raw content — a
+  sanitized summary protects the human's view while the contributor runtime
+  passes full payloads into the model prompt. Defense-in-depth means limiting
+  what the agent sees, not just what the human sees.
+- Scheduled runs are a stealth attack surface: with mentions disabled, a
+  crafted issue body still waits for the next agent wake-up. Kill switches
+  must cover every entry path, and one verified switch
+  (`AGENT_AUTOMATIONS_ENABLED`) beats several partial ones.
+- Persistent self-hosted runners amplify prompt-injection impact relative to
+  ephemeral hosted runners; keeping the untrusted-code lane free of secrets
+  (the evidence workflow's two-lane design) is the load-bearing pattern.

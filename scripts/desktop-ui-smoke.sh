@@ -14,12 +14,16 @@
 # The app emits JSONL milestones; this script asserts the sequence. It is
 # headless-safe (launches with --no-activate / WORKSPACES_NO_ACTIVATE_ON_LAUNCH)
 # so it can run on a shared desktop without stealing focus. Artifacts land under
-# output/desktop-ui-smoke/<timestamp>/.
+# output/desktop-ui-smoke/<timestamp>/. Setup/teardown (run dir, disposable
+# repo, app launch/kill, unconditional cleanup) is shared with the rest of the
+# smoke family via scripts/lib/api-smoke-common.sh.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/api-smoke-common.sh
+source "$SCRIPT_DIR/lib/api-smoke-common.sh"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 CAPTURE_SCRIPT="$REPO_ROOT/scripts/capture-window.sh"
 OUTPUT_ROOT="$REPO_ROOT/output/desktop-ui-smoke"
@@ -33,25 +37,11 @@ INACTIVITY_TIMEOUT_SECONDS="$DEFAULT_INACTIVITY_SECONDS"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 RUN_DIR="$OUTPUT_ROOT/$TIMESTAMP"
 RUN_LINK="$OUTPUT_ROOT/latest"
-RUN_STATUS="failed"
-FAILURE_MESSAGE=""
-FINALIZED=false
-APP_PID=""
-LAUNCH_LOG_PATH=""
-SMOKE_REPO_PATH=""
 WORKSPACE_NAME="desktop-ui-smoke-$TIMESTAMP"
 EVENTS_PATH=""
-STARTED_AT=0
 
-log() {
-    echo "[$(date +%H:%M:%S)] $*"
-}
-
-fail() {
-    echo "ERROR: $*" >&2
-    FAILURE_MESSAGE="$*"
-    exit 1
-}
+log() { smoke_log "$@"; }
+fail() { smoke_fail "$@"; }
 
 usage() {
     cat <<'USAGE'
@@ -98,184 +88,32 @@ parse_args() {
     done
 }
 
-setup_run_dir() {
-    mkdir -p "$RUN_DIR"
-    ln -sfn "$RUN_DIR" "$RUN_LINK"
-    EVENTS_PATH="$RUN_DIR/events.jsonl"
-}
-
-cleanup_app() {
-    if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" >/dev/null 2>&1; then
-        kill "$APP_PID" >/dev/null 2>&1 || true
-        sleep 1
-    fi
-    pkill -f "$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager" >/dev/null 2>&1 || true
-}
-
-cleanup_repo() {
-    if [[ "$KEEP_ARTIFACTS" == true ]]; then
-        return
-    fi
-    if [[ -n "$SMOKE_REPO_PATH" && -d "$SMOKE_REPO_PATH" ]]; then
-        chmod -R u+w "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
-        rm -rf "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
-    fi
-}
-
-# The app creates the workspace as a git worktree under the configured
-# workspaces root (default ~/workspaces/<repo-name>/<workspace-name>) — the
-# owner's real workspace list, not a temp dir. Remove it using the path the app
-# reported in the milestone stream. Runs on every outcome (passed, failed,
-# interrupted) so no run leaves residue there; --keep-artifacts opts out.
-cleanup_created_worktrees() {
-    if [[ "$KEEP_ARTIFACTS" == true ]]; then
-        return 0
-    fi
-    [[ -f "$EVENTS_PATH" ]] || return 0
-    local workspace_path
-    workspace_path="$(
-        python3 - "$EVENTS_PATH" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-result = ""
-for raw_line in path.read_text().splitlines():
-    raw_line = raw_line.strip()
-    if not raw_line:
-        continue
-    try:
-        event = json.loads(raw_line)
-    except json.JSONDecodeError:
-        # A torn final line (app killed mid-write) must not abort cleanup.
-        continue
-    if event.get("type") == "workspace_created" and event.get("workspacePath"):
-        result = event["workspacePath"]
-print(result)
-PY
-    )"
-
-    [[ -n "$workspace_path" && -d "$workspace_path" ]] || return 0
-    chmod -R u+w "$workspace_path" >/dev/null 2>&1 || true
-    rm -rf "$workspace_path" >/dev/null 2>&1 || true
-
-    # Prune the now-empty per-repo container the worktree lived in.
-    local repo_container
-    repo_container="$(dirname "$workspace_path")"
-    if [[ -d "$repo_container" ]] && [[ -z "$(ls -A "$repo_container" 2>/dev/null)" ]]; then
-        rmdir "$repo_container" >/dev/null 2>&1 || true
-    fi
-}
-
-copy_supporting_logs() {
-    if [[ -n "$LAUNCH_LOG_PATH" && -f "$LAUNCH_LOG_PATH" ]]; then
-        cp "$LAUNCH_LOG_PATH" "$RUN_DIR/launch.log" 2>/dev/null || true
-    fi
-}
-
-write_summary() {
-    local elapsed_seconds="$1"
-    local outcome_message="$2"
+smoke_write_summary() {
+    local exit_code="$1"
+    local message="$2"
+    local elapsed_seconds
+    elapsed_seconds=$(( $(date +%s) - STARTED_AT ))
     cat >"$RUN_DIR/summary.md" <<EOF
 # Desktop UI Smoke
 
 - Outcome: $RUN_STATUS
-- Message: $outcome_message
+- Exit code: $exit_code
+- Message: $message
 - Repo path: ${SMOKE_REPO_PATH:-unknown}
 - Workspace name: ${WORKSPACE_NAME:-unknown}
 - Elapsed seconds: $elapsed_seconds
 - Events: $EVENTS_PATH
 - Launch log: ${LAUNCH_LOG_PATH:-unknown}
 EOF
-}
-
-# Single finalize path for every outcome (pass, fail, signal). Clears all
-# traps first so a late signal takes its default action instead of re-entering;
-# the FINALIZED guard covers the one-command window before the traps drop.
-finalize_and_exit() {
-    trap - EXIT TERM INT HUP
-    local exit_code="$1"
-    local message="$2"
-    if [[ "$FINALIZED" == true ]]; then
-        exit "$exit_code"
-    fi
-    FINALIZED=true
-    local elapsed_seconds
-    elapsed_seconds=$(( $(date +%s) - STARTED_AT ))
-
-    copy_supporting_logs
-    cleanup_app
-    if [[ "$RUN_STATUS" == "passed" ]]; then
-        cleanup_repo
-    fi
-    cleanup_created_worktrees
-    write_summary "$elapsed_seconds" "$message"
-    log "$message"
-    log "Run directory: $RUN_DIR"
-    exit "$exit_code"
-}
-
-on_exit() {
-    local exit_code="$?"
-    trap - EXIT
-    if [[ "$exit_code" -ne 0 && "$RUN_STATUS" != "passed" ]]; then
-        finalize_and_exit "$exit_code" "${FAILURE_MESSAGE:-Smoke run failed.}"
+    if [[ -n "$LAUNCH_LOG_PATH" && -f "$LAUNCH_LOG_PATH" ]]; then
+        cp "$LAUNCH_LOG_PATH" "$RUN_DIR/launch.log" 2>/dev/null || true
     fi
 }
 
-# Terminating signals do not fire this script's EXIT trap (a plain `kill`, and
-# what CI timeouts send), so funnel them into the same finalize path: the
-# worktree is cleaned, summary.md records the interruption, and the exit code
-# is the conventional 128+signum.
-on_signal() {
-    local signal_name="$1"
-    local signal_number="$2"
-    RUN_STATUS="interrupted"
-    finalize_and_exit "$((128 + signal_number))" "Smoke run interrupted by SIG${signal_name}."
-}
-
-create_disposable_repo() {
-    SMOKE_REPO_PATH="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-ui-smoke-XXXXXX")"
-    (
-        cd "$SMOKE_REPO_PATH"
-        git init >/dev/null
-        git config user.name "WorkspaceManager Smoke" >/dev/null
-        git config user.email "smoke@local.invalid" >/dev/null
-        printf "# Desktop UI smoke\n\nCreated %s\n" "$TIMESTAMP" >README.md
-        git add README.md
-        git commit -m "Initial smoke fixture" >/dev/null
-    )
-}
-
+# Wraps smoke_launch_app with this lane's best-effort post-launch screenshot
+# (no automation-API env — desktop-ui-smoke drives the UI directly, not the CLI).
 launch_automated_app() {
-    local app_data_dir="$RUN_DIR/app-data"
-    local launch_output
-    local -a args=(
-        "--no-activate"
-        "--data-dir" "$app_data_dir"
-        "--clean-data"
-        "--window-timeout" "20"
-        "--env" "WORKSPACES_DISABLE_AUTO_IMPORT=1"
-        "--env" "WORKSPACES_AUTOMATION_MODE=desktop-ui-smoke"
-        "--env" "WORKSPACES_AUTOMATION_REPO_PATH=$SMOKE_REPO_PATH"
-        "--env" "WORKSPACES_AUTOMATION_WORKSPACE_NAME=$WORKSPACE_NAME"
-        "--env" "WORKSPACES_AUTOMATION_EVENTS_PATH=$EVENTS_PATH"
-    )
-    if [[ "$SKIP_BUILD" == true ]]; then
-        args+=("--no-build")
-    fi
-
-    launch_output="$(
-        cd "$REPO_ROOT"
-        "$LAUNCH_SCRIPT" "${args[@]}" 2>&1 | tee "$RUN_DIR/launch-command.log"
-    )"
-
-    APP_PID="$(printf '%s\n' "$launch_output" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
-    LAUNCH_LOG_PATH="$(printf '%s\n' "$launch_output" | sed -n 's/.*Log file: \(.*\)$/\1/p' | tail -n 1)"
-
-    [[ -n "$APP_PID" ]] || fail "Could not determine WorkspaceManager pid from launch output."
-
+    smoke_launch_app
     (
         cd "$REPO_ROOT"
         "$CAPTURE_SCRIPT" --output "$RUN_DIR/01-launch.png"
@@ -505,17 +343,14 @@ monitor_until_complete() {
 
 main() {
     parse_args "$@"
-    setup_run_dir
-    STARTED_AT="$(date +%s)"
-    trap on_exit EXIT
-    trap 'on_signal TERM 15' TERM
-    trap 'on_signal INT 2' INT
-    trap 'on_signal HUP 1' HUP
+    smoke_init
+    smoke_install_traps
+    smoke_setup_run_dir
 
-    create_disposable_repo
+    smoke_create_disposable_repo "Desktop UI smoke"
     launch_automated_app
     monitor_until_complete
-    finalize_and_exit 0 "Desktop UI smoke completed successfully."
+    smoke_finalize_and_exit 0 "Desktop UI smoke completed successfully."
 }
 
 main "$@"

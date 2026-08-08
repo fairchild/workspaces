@@ -92,6 +92,44 @@ struct MainWindowLifecycleControllerTests {
         )
     }
 
+    // MARK: - Launch prologue
+
+    /// The prologue exists to get the shell started before SwiftUI's first layout pass, so the
+    /// terminal bootstrap has to be the step it runs (#1251).
+    @Test("Prologue seeds the initial host session")
+    func prologueSeedsInitialHostSession() {
+        let recorder = Recorder()
+
+        controller.runLaunchPrologue(launchActions(recorder), automationGatesTerminalBootstrap: false)
+
+        #expect(recorder.steps == ["ensureInitialHostSession"])
+    }
+
+    /// A terminal's process environment carries the automation socket path and handle, which the
+    /// listener only produces once it has bound. Starting a shell ahead of that would leave it
+    /// unreachable to the API for its whole life, so the bootstrap stays in the sequence there.
+    @Test("Prologue defers the bootstrap while the Automation API gates it")
+    func prologueDefersBootstrapWhenAutomationGatesIt() {
+        let recorder = Recorder()
+
+        controller.runLaunchPrologue(launchActions(recorder), automationGatesTerminalBootstrap: true)
+
+        #expect(recorder.steps.isEmpty)
+    }
+
+    /// The sequence still owns every step, including the one the prologue may have already run —
+    /// `ensureInitialHostSession` is idempotent, and the steps after it read the session set.
+    @Test("Prologue does not remove the bootstrap from the launch sequence")
+    func prologueLeavesLaunchSequenceComplete() async {
+        let recorder = Recorder()
+
+        controller.runLaunchPrologue(launchActions(recorder), automationGatesTerminalBootstrap: false)
+        await controller.runLaunchSequence(launchActions(recorder))
+
+        #expect(recorder.steps.filter { $0 == "ensureInitialHostSession" }.count == 2)
+        #expect(recorder.ordered("ensureInitialHostSession", before: "computeRestorePlanIfEnabled"))
+    }
+
     // MARK: - Launch
 
     /// The whole contract is the order, so this asserts the complete sequence rather than a

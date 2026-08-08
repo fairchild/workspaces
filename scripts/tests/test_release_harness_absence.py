@@ -9,7 +9,8 @@ The gate makes a negative claim — "the debug smoke/fixture harness is not in t
 release binary" — which is only worth anything if the scan actually ran. These
 tests protect that: an empty binary, a missing binary, or nm/strings returning
 nothing must error rather than certify, and a stale deferral allowlist entry
-must fail so #1237 cannot silently inherit a hole.
+must fail so a gated key cannot silently keep its exemption. #1237 gated the four
+launch-surface fixture parsers, so their keys now live in the enforced list.
 
 Safe to run without network, secrets, UI access, or live GitHub mutations: nm
 and strings are stubbed on PATH and every fixture lives in a temp directory.
@@ -35,8 +36,11 @@ EXIT_NO_SIGNAL = 3
 
 SENTINEL = "com.cloudcompute.workspaces"
 
-DEFERRED_KEYS = (
-    "WORKSPACES_UI_FIXTURE",
+# The one fixture key release still carries, because non-harness Core reads it.
+DEFERRED_KEYS = ("WORKSPACES_UI_FIXTURE",)
+
+# Launch-surface keys #1237 compiled out: present in a release binary is now a leak.
+GATED_FIXTURE_KEYS = (
     "WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER",
     "WORKSPACES_UI_FIXTURE_OPEN_DIAGNOSTICS",
     "WORKSPACES_UI_FIXTURE_OPEN_PREVIEW",
@@ -130,14 +134,26 @@ class ReleaseHarnessAbsenceTests(unittest.TestCase):
         self.assertIn(ORPHAN_BANNER_SEED_KEY, result.stderr)
 
     def test_stale_deferral_entry_fails(self) -> None:
-        """When #1237 gates a fixture key, its allowlist entry must be deleted."""
-        strings = [value for value in clean_strings() if "PREVIEW_PATH" not in value]
+        """Once a key is gated, its allowlist entry must be deleted rather than linger."""
+        strings = [value for value in clean_strings() if not value.startswith("WORKSPACES_UI_FIXTURE")]
         with HarnessFixture(symbols=clean_symbols(), strings=strings) as fixture:
             result = fixture.run()
 
         self.assertEqual(result.returncode, EXIT_LEAK, result.stdout + result.stderr)
-        self.assertIn("WORKSPACES_UI_FIXTURE_PREVIEW_PATH", result.stderr)
+        self.assertIn("WORKSPACES_UI_FIXTURE", result.stderr)
         self.assertIn("delete it from deferred_string_patterns", result.stderr)
+
+    def test_gated_launch_surface_key_is_a_leak(self) -> None:
+        """The other half of the retirement: a gated key reappearing must fail, not be tolerated."""
+        for key in GATED_FIXTURE_KEYS:
+            with self.subTest(key=key):
+                with HarnessFixture(
+                    symbols=clean_symbols(), strings=[*clean_strings(), key]
+                ) as fixture:
+                    result = fixture.run()
+
+                self.assertEqual(result.returncode, EXIT_LEAK, result.stdout + result.stderr)
+                self.assertIn(key, result.stderr)
 
 
 class HarnessFixture:

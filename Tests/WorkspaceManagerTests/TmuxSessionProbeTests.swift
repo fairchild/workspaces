@@ -126,6 +126,138 @@ struct TmuxSessionProbeTests {
         #expect(await probe.killSession("wm-repo-abcd1234") == false)
     }
 
+    // MARK: - Version capability
+
+    @Test("A tmux version line yields its major.minor across the forms tmux prints")
+    func parsesVersionLineForms() {
+        func parsed(_ output: String?) -> [Int]? {
+            TmuxSessionProbe.parseVersion(fromVersionOutput: output).map { [$0.major, $0.minor] }
+        }
+
+        #expect(parsed("tmux 3.5a\n") == [3, 5])
+        #expect(parsed("tmux next-3.6\n") == [3, 6])
+        #expect(parsed("tmux 3.2-rc3\n") == [3, 2])
+        #expect(parsed("tmux 2.8\n") == [2, 8])
+        #expect(parsed("tmux master\n") == nil)
+        #expect(parsed(nil) == nil)
+    }
+
+    /// `new-session -e` arrived in tmux 3.2. Emitting it at an older tmux is not a
+    /// degraded launch — tmux rejects the flag and the pane never comes up — so the
+    /// gate has to fail closed on anything it cannot read as new enough.
+    @Test("Only tmux 3.2 and newer are credited with new-session -e")
+    func creditsOnlyThreeTwoAndNewerWithSessionEnvironmentFlag() {
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 3, minor: 2)))
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 3, minor: 6)))
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 4, minor: 0)))
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 3, minor: 1)) == false)
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: (major: 2, minor: 9)) == false)
+        #expect(TmuxSessionProbe.supportsSessionEnvironmentFlag(version: nil) == false)
+    }
+
+    @Test("The capability probe asks tmux -V on the injected runner")
+    func capabilityProbeAsksTmuxVersion() throws {
+        let recorder = SynchronousArgumentRecorder()
+        let probe = TmuxSessionProbe(
+            runSynchronouslyForOutput: { executable, arguments, _ in
+                recorder.record(executable: executable, arguments: arguments)
+                return "tmux 3.5a\n"
+            },
+            environment: [:]
+        )
+
+        #expect(probe.supportsSessionEnvironmentFlag())
+        let call = try #require(recorder.calls.first)
+        #expect(call.executable == "/usr/bin/env")
+        #expect(call.arguments == ["tmux", "-V"])
+    }
+
+    @Test("An unavailable tmux -V reads as no new-session -e")
+    func unavailableVersionReadsAsUnsupported() {
+        let probe = TmuxSessionProbe(runSynchronouslyForOutput: { _, _, _ in nil }, environment: [:])
+        #expect(probe.version() == nil)
+        #expect(probe.supportsSessionEnvironmentFlag() == false)
+    }
+
+    /// The production runner is called from a lazy static initializer on the main
+    /// thread — a `swift_once`. Anything that runs the main run loop while that once
+    /// is held re-enters AppKit, and a nested SwiftUI layout pass composing another
+    /// terminal surface re-enters the same once; libdispatch traps that recursive
+    /// lock and the app aborts before a surface exists. So the runner has to block
+    /// the calling thread without servicing it.
+    @MainActor
+    @Test("The synchronous runner blocks without running the caller's run loop")
+    func synchronousRunnerLeavesTheCallersRunLoopAlone() {
+        let pending = RunLoopBlockFlag()
+        RunLoop.main.perform { pending.markRan() }
+
+        // The child closes stdout and then lingers, so the read finishes while the
+        // process is still alive. That window is the whole test: a runner that waits
+        // by running the run loop services the queued block inside it, and one that
+        // parks the thread does not.
+        let output = TmuxSessionProbe.defaultSynchronousOutputRunner(
+            "/bin/sh",
+            ["-c", "echo probe; exec 1>&-; sleep 0.4"],
+            nil
+        )
+
+        #expect(output?.contains("probe") == true)
+        #expect(pending.didRun == false)
+
+        // The block really was queued: it runs only once this test runs the loop,
+        // which is what makes the assertion above non-vacuous.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        #expect(pending.didRun)
+    }
+
+    /// The deadline verdict is the only thing standing between a wedged `tmux -V` and
+    /// a capability answer read off a run that never finished, so it is asserted here
+    /// against a child whose output and exit status are otherwise spotless: the same
+    /// child answers under the real wait, and answers nothing once the run is scored
+    /// as having outlived its deadline. Scoring the child clean anyway hands the
+    /// launch a version the run never established.
+    @Test("A run scored as outliving its deadline yields no answer, however clean it looks")
+    func deadlineMissIsNotACleanRun() {
+        let cleanChild = ["-c", "printf 'tmux 3.5a\\n'"]
+
+        let answered = TmuxSessionProbe.synchronousOutput(
+            executable: "/bin/sh",
+            arguments: cleanChild,
+            environment: nil
+        )
+        #expect(answered?.contains("3.5a") == true)
+
+        let scoredAsTimedOut = TmuxSessionProbe.synchronousOutput(
+            executable: "/bin/sh",
+            arguments: cleanChild,
+            environment: nil,
+            awaitExit: { exited, _ in
+                // Let the child finish and be reaped first, so its status and output
+                // are both clean and the verdict is the only reason to reject the run.
+                exited.wait()
+                return false
+            }
+        )
+        #expect(scoredAsTimedOut == nil)
+    }
+
+    /// The same property through the production wait: a child that closes stdout and
+    /// then outlives its deadline is killed and yields nothing, so a wedged `tmux -V`
+    /// costs one bounded stall rather than a capability answer or an unbounded one.
+    /// The deadline is scaled from this machine's measured child round trip — the
+    /// child sleeps far past any of them, so the assertion does not ride a clock.
+    @Test("A child that outlives its deadline is killed and yields nothing")
+    func wedgedChildYieldsNothing() async {
+        let timeout = await LaunchBudget.deadline(launches: 1, floor: 0.5, ceiling: 5)
+        let output = TmuxSessionProbe.synchronousOutput(
+            executable: "/bin/sh",
+            arguments: ["-c", "printf 'tmux 3.5a\\n'; exec 1>&-; exec sleep 30"],
+            environment: nil,
+            timeout: timeout
+        )
+        #expect(output == nil)
+    }
+
     private func adjacent(_ arguments: [String], _ first: String, _ second: String) -> Bool {
         guard let index = arguments.firstIndex(of: first), index + 1 < arguments.count else { return false }
         return arguments[index + 1] == second
@@ -137,5 +269,43 @@ private actor ArgumentRecorder {
 
     func record(executable: String, arguments: [String]) {
         calls.append((executable, arguments))
+    }
+}
+
+/// Records whether a run-loop-scheduled block has run yet. Written from the run
+/// loop and read from the thread that scheduled it, so it carries its own lock.
+private final class RunLoopBlockFlag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ran = false
+
+    var didRun: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return ran
+    }
+
+    func markRan() {
+        lock.lock()
+        ran = true
+        lock.unlock()
+    }
+}
+
+/// The synchronous seam has no suspension point to hop through, so its recorder is
+/// a lock rather than an actor.
+private final class SynchronousArgumentRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [(executable: String, arguments: [String])] = []
+
+    var calls: [(executable: String, arguments: [String])] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recorded
+    }
+
+    func record(executable: String, arguments: [String]) {
+        lock.lock()
+        recorded.append((executable, arguments))
+        lock.unlock()
     }
 }

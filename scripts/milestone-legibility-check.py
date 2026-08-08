@@ -13,8 +13,8 @@ milestone list without opening the roadmap doc:
      W = web-next) — so execution order is visible on sight, and
   2. the description leads with a ``[LANE: …]`` posture tag (lane + active/queued).
 
-The convention and its rationale live in ``backlog/ROADMAP.md`` §
-"Active milestone stack"; this check keeps the live milestones honest to it.
+The convention and its rationale live in ``docs/agents/issue-tracker.md`` §
+"Milestone Operating Contract"; this check keeps the live milestones honest to it.
 Read-only — it never edits milestones. Exit 0 when every open milestone conforms,
 1 (with a per-milestone reason) otherwise.
 """
@@ -94,7 +94,7 @@ def main() -> int:
             print(f"  - {line}")
         print(
             "\nFix: give each open milestone a '[<lane><order>]' title prefix and a "
-            "'[LANE: …]' posture header (see backlog/ROADMAP.md § 'Active milestone stack')."
+            "'[LANE: …]' posture header (see docs/agents/issue-tracker.md § 'Milestone Operating Contract')."
         )
         return 1
 

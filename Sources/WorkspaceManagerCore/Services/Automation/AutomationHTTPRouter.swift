@@ -138,6 +138,13 @@ enum AutomationHTTPRouter {
         case ("GET", "/v1/ui-state"):
             return try await controller.automationUIState(for: handle)
 
+        case ("POST", "/v1/wait"):
+            let plan = try decodeWaitPlan(from: request.body)
+            return try await controller.automationWait(for: handle, plan: plan)
+
+        case ("GET", "/v1/focus"):
+            return try await controller.automationFocus(for: handle)
+
         case (_, "/v1/context"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/context.")
         case (_, "/v1/surfaces"):
@@ -168,6 +175,10 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/input/write.")
         case (_, "/v1/ui-state"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/ui-state.")
+        case (_, "/v1/wait"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/wait.")
+        case (_, "/v1/focus"):
+            throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/focus.")
         default:
             throw AutomationServiceError(.routeNotFound, "Unsupported automation route: \(method) \(request.path)")
         }
@@ -357,6 +368,28 @@ enum AutomationHTTPRouter {
         return request
     }
 
+    /// The wait body: a typed condition (`for`), optional `predicate`, optional bounded
+    /// `timeoutMS`. Unlike the tile routes, the predicate's `surfaceID` is a global identity
+    /// the caller obtained from a create result or surface listing — the same contract as
+    /// `window.snapshot`'s windowID — so this route accepts caller-supplied ids. Vocabulary,
+    /// UUID, pattern, and timeout validation live in `AutomationWaitPlan.resolve`, the single
+    /// validator, so every malformed shape reports a typed `invalid_request` here at the wire.
+    private static func decodeWaitPlan(from body: Data) throws -> AutomationWaitPlan {
+        guard !body.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request body is required.")
+        }
+        let request: AutomationWaitRequest
+        do {
+            request = try AutomationJSON.decoder.decode(AutomationWaitRequest.self, from: body)
+        } catch {
+            throw AutomationServiceError(
+                .invalidRequest,
+                "Request body must be JSON with string 'for', optional object 'predicate', and optional integer 'timeoutMS'."
+            )
+        }
+        return try AutomationWaitPlan.resolve(request)
+    }
+
     private static func decodeSurfaceRead(from body: Data) throws -> AutomationSurfaceReadRequest {
         guard !body.isEmpty else {
             throw AutomationServiceError(.invalidRequest, "Request body is required.")
@@ -453,6 +486,8 @@ enum AutomationHTTPRouter {
             return 409
         case .terminalActive, .closeBlockedByConfirmation:
             return 409
+        case .busy:
+            return 503
         case .internalError:
             return 500
         }
@@ -485,6 +520,8 @@ extension AutomationMutationResult: CodableSendableEquatable {}
 extension AutomationInputWriteResult: CodableSendableEquatable {}
 extension AutomationEmptyResult: CodableSendableEquatable {}
 extension AutomationUIStateResult: CodableSendableEquatable {}
+extension AutomationWaitResult: CodableSendableEquatable {}
+extension AutomationFocusResult: CodableSendableEquatable {}
 
 enum AutomationJSON {
     static var encoder: JSONEncoder {

@@ -53,6 +53,39 @@ public enum AutomationAPI {
     /// the cap, the returned line is the UTF-8-safe suffix of that line.
     public static let surfaceReadMaxLines = 500
     public static let surfaceReadMaxUTF8Bytes = 256 * 1_024
+
+    /// Bounds for `POST /v1/wait` (operator scope). A wait is never open-ended: a request
+    /// without `timeoutMS` waits `waitDefaultTimeoutMS`, and any request is clamped to
+    /// `waitMaxTimeoutMS` (reported as `effectiveTimeoutMS` alongside the caller's
+    /// `requestedTimeoutMS`, the same clamp reporting `surface.read` uses for lines). The
+    /// ceiling sits below `AutomationSocketClient`'s default 30 s receive deadline because a
+    /// wait executes between the listener's read deadline (cancelled once the request
+    /// parses) and its write deadline (armed only after the route returns) — the ceiling is
+    /// what bounds that gap, and it must leave the response time to reach a defaulted
+    /// client. Longer waits are the caller's re-arm loop: repeat the request on `timed_out`
+    /// until its own budget expires, each round bounded and each freeing a listener
+    /// connection slot between rounds.
+    public static let waitDefaultTimeoutMS = 5_000
+    public static let waitMaxTimeoutMS = 20_000
+    /// How often the wait engine re-evaluates a pending condition. Content conditions
+    /// (`surface_text_matches`, `prompt_ready`) poll on the slower interval: each of their
+    /// ticks costs a full terminal read plus a regex run, where a topology/selection tick is
+    /// a couple of dictionary lookups.
+    public static let waitPollIntervalMS = 100
+    public static let waitContentPollIntervalMS = 250
+    /// Cap on the `surface_text_matches` pattern's own length. This bounds how much pattern
+    /// the app parses and stores — it does **not** bound match cost: backtracking cost is a
+    /// function of the *input*, and a six-byte `(a+)+$` is already super-polynomial in it.
+    /// Match cost is bounded by two other things: `waitTextMatchMaxUTF8Bytes` caps the input,
+    /// and the match itself runs off the MainActor under the wait's own deadline
+    /// (`AutomationWaitPattern.firstMatchExists`).
+    public static let waitPatternMaxUTF8Bytes = 1_024
+    /// Cap on the terminal text a `surface_text_matches` tick is evaluated against — an
+    /// eighth of what `surface.read` returns. Backtracking cost grows with input length, and
+    /// this condition re-runs the pattern every tick, so it reads a much shorter tail than a
+    /// one-shot read: the completion marker a wait is watching for lands at the end of the
+    /// buffer, not in the scrollback.
+    public static let waitTextMatchMaxUTF8Bytes = 32 * 1_024
 }
 
 public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equatable {
@@ -1062,6 +1095,7 @@ public enum AutomationErrorCode: String, Codable, Sendable, Equatable {
     case routeNotFound = "route_not_found"
     case methodNotAllowed = "method_not_allowed"
     case unsupported
+    case busy
     case internalError = "internal_error"
     /// A workspace lifecycle verb refused because the workspace still has a live terminal that did
     /// not exit before the lifecycle timeout. Transient — the terminal may finish exiting on its
@@ -1161,10 +1195,36 @@ public protocol AutomationControlling: AnyObject, Sendable {
     /// snapshot plus its volatile sibling. Defaulted below so existing conformers (fakes
     /// included) keep compiling; the production controller overrides it.
     func automationUIState(for handle: String) throws -> AutomationUIStateResult
+
+    /// Typed server-side wait (`POST /v1/wait`, operator scope): evaluates the plan's
+    /// condition against live app state until satisfied, the bounded timeout elapses, or the
+    /// state proves the condition unsatisfiable (`not_applicable`). Defaulted below so
+    /// existing conformers (fakes included) keep compiling; the production controller
+    /// overrides it.
+    func automationWait(
+        for handle: String,
+        plan: AutomationWaitPlan
+    ) async throws -> AutomationWaitResult
+
+    /// Truthful focus report (`GET /v1/focus`, `window.read`, operator scope), including the
+    /// explicit `focusPossible: false` state under a no-activate launch. Defaulted below so
+    /// existing conformers keep compiling; the production controller overrides it.
+    func automationFocus(for handle: String) throws -> AutomationFocusResult
 }
 
 extension AutomationControlling {
     public func automationUIState(for handle: String) throws -> AutomationUIStateResult {
         throw AutomationServiceError(.unsupported, "This controller does not implement ui.read.")
+    }
+
+    public func automationWait(
+        for handle: String,
+        plan: AutomationWaitPlan
+    ) async throws -> AutomationWaitResult {
+        throw AutomationServiceError(.unsupported, "This controller does not implement wait.")
+    }
+
+    public func automationFocus(for handle: String) throws -> AutomationFocusResult {
+        throw AutomationServiceError(.unsupported, "This controller does not implement focus.")
     }
 }

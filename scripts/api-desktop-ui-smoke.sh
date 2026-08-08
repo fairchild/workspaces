@@ -14,12 +14,16 @@
 #      the repo terminal. Repo selection is app-side because no reviewed
 #      repo-select operator verb exists.
 #
-# Artifacts land under output/api-desktop-ui-smoke/<timestamp>/.
+# Artifacts land under output/api-desktop-ui-smoke/<timestamp>/. Setup/teardown
+# (run dir, disposable repo, app launch/kill, unconditional cleanup) is shared
+# with the rest of the smoke family via scripts/lib/api-smoke-common.sh.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/api-smoke-common.sh
+source "$SCRIPT_DIR/lib/api-smoke-common.sh"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 CLI_BIN="$REPO_ROOT/.build/arm64-apple-macosx/debug/workspaces"
 OUTPUT_ROOT="$REPO_ROOT/output/api-desktop-ui-smoke"
@@ -31,16 +35,11 @@ DEFAULT_TIMEOUT_SECONDS=$((5 * 60))
 SKIP_BUILD=false
 KEEP_ARTIFACTS=false
 TOTAL_TIMEOUT_SECONDS="$DEFAULT_TIMEOUT_SECONDS"
-APP_PID=""
-LAUNCH_LOG_PATH=""
-SMOKE_REPO_PATH=""
 WORKSPACE_NAME="api-desktop-ui-smoke-$TIMESTAMP"
 EVENTS_PATH=""
-RUN_STATUS="failed"
-STARTED_AT=0
 
-log() { echo "[$(date +%H:%M:%S)] $*"; }
-fail() { echo "ERROR: $*" >&2; exit 1; }
+log() { smoke_log "$@"; }
+fail() { smoke_fail "$@"; }
 
 usage() {
     cat <<'USAGE'
@@ -48,7 +47,7 @@ Usage: ./scripts/api-desktop-ui-smoke.sh [options]
 
 Options:
   --no-build              Reuse the current debug binary
-  --keep-artifacts        Keep the disposable smoke repo after a passing run
+  --keep-artifacts        Keep the disposable smoke repo after any outcome
   --timeout-seconds <n>   Total timeout (default: 300)
   --help, -h              Show this help
 USAGE
@@ -70,75 +69,7 @@ parse_args() {
     done
 }
 
-setup_run_dir() {
-    mkdir -p "$RUN_DIR"
-    ln -sfn "$RUN_DIR" "$RUN_LINK"
-    EVENTS_PATH="$RUN_DIR/events.jsonl"
-}
-
-cleanup_app() {
-    if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" >/dev/null 2>&1; then
-        kill "$APP_PID" >/dev/null 2>&1 || true
-        sleep 1
-    fi
-    pkill -f "$REPO_ROOT/.build/arm64-apple-macosx/debug/WorkspaceManager" >/dev/null 2>&1 || true
-}
-
-read_event_field() {
-    local field="$1" event_type="$2"
-    python3 - "$EVENTS_PATH" "$field" "$event_type" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path, field, event_type = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
-value = ""
-if path.exists():
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        event = json.loads(line)
-        if event.get("type") == event_type and event.get(field):
-            value = event[field]
-print(value)
-PY
-}
-
-cleanup_created_worktree() {
-    [[ -f "$EVENTS_PATH" ]] || return 0
-    local workspace_path
-    workspace_path="$(read_event_field workspacePath workspace_created)"
-    [[ -n "$workspace_path" && -d "$workspace_path" ]] || return 0
-    chmod -R u+w "$workspace_path" >/dev/null 2>&1 || true
-    rm -rf "$workspace_path" >/dev/null 2>&1 || true
-    local repo_container
-    repo_container="$(dirname "$workspace_path")"
-    if [[ -d "$repo_container" && -z "$(ls -A "$repo_container" 2>/dev/null)" ]]; then
-        rmdir "$repo_container" >/dev/null 2>&1 || true
-    fi
-}
-
-cleanup_repo() {
-    [[ "$KEEP_ARTIFACTS" == true ]] && return 0
-    if [[ -n "$SMOKE_REPO_PATH" && -d "$SMOKE_REPO_PATH" ]]; then
-        chmod -R u+w "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
-        rm -rf "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
-    fi
-    cleanup_created_worktree
-}
-
-on_exit() {
-    local code="$?"
-    trap - EXIT
-    cleanup_app
-    [[ "$RUN_STATUS" == "passed" ]] && cleanup_repo
-    write_summary "$code"
-    log "Run directory: $RUN_DIR"
-    exit "$code"
-}
-
-write_summary() {
+smoke_write_summary() {
     local exit_code="$1"
     local elapsed_seconds
     elapsed_seconds=$(( $(date +%s) - STARTED_AT ))
@@ -158,79 +89,6 @@ EOF
     if [[ -n "$LAUNCH_LOG_PATH" && -f "$LAUNCH_LOG_PATH" ]]; then
         cp "$LAUNCH_LOG_PATH" "$RUN_DIR/launch.log" 2>/dev/null || true
     fi
-}
-
-create_disposable_repo() {
-    SMOKE_REPO_PATH="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-api-desktop-ui-XXXXXX")"
-    (
-        cd "$SMOKE_REPO_PATH"
-        git init >/dev/null
-        git config user.name "WorkspaceManager Smoke" >/dev/null
-        git config user.email "smoke@local.invalid" >/dev/null
-        printf "# API desktop UI smoke\n\nCreated %s\n" "$TIMESTAMP" >README.md
-        git add README.md
-        git commit -m "Initial smoke fixture" >/dev/null
-    )
-}
-
-launch_automated_app() {
-    local app_data_dir="$RUN_DIR/app-data"
-    local -a args=(
-        "--no-activate"
-        "--data-dir" "$app_data_dir"
-        "--clean-data"
-        "--window-timeout" "20"
-        "--env" "WORKSPACES_DISABLE_AUTO_IMPORT=1"
-        "--env" "WORKSPACES_AUTOMATION_API=1"
-        "--env" "WORKSPACES_AUTOMATION_OPERATOR=1"
-        "--env" "WORKSPACES_AUTOMATION_MODE=desktop-ui-smoke"
-        "--env" "WORKSPACES_AUTOMATION_CREATE_DRIVER=api"
-        "--env" "WORKSPACES_AUTOMATION_SELECT_DRIVER=api"
-        "--env" "WORKSPACES_AUTOMATION_REPO_PATH=$SMOKE_REPO_PATH"
-        "--env" "WORKSPACES_AUTOMATION_WORKSPACE_NAME=$WORKSPACE_NAME"
-        "--env" "WORKSPACES_AUTOMATION_EVENTS_PATH=$EVENTS_PATH"
-    )
-    [[ "$SKIP_BUILD" == true ]] && args+=("--no-build")
-
-    local launch_output
-    launch_output="$(
-        cd "$REPO_ROOT"
-        "$LAUNCH_SCRIPT" "${args[@]}" 2>&1 | tee "$RUN_DIR/launch-command.log"
-    )"
-    APP_PID="$(printf '%s\n' "$launch_output" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | tail -n 1)"
-    LAUNCH_LOG_PATH="$(printf '%s\n' "$launch_output" | sed -n 's/.*Log file: \(.*\)$/\1/p' | tail -n 1)"
-    [[ -n "$APP_PID" ]] || fail "Could not determine WorkspaceManager pid from launch output."
-}
-
-event_index() {
-    python3 - "$EVENTS_PATH" "$1" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path, target = Path(sys.argv[1]), sys.argv[2]
-idx = -1
-if path.exists():
-    for index, line in enumerate(l.strip() for l in path.read_text().splitlines() if l.strip()):
-        if json.loads(line).get("type") == target:
-            idx = index
-            break
-print(idx)
-PY
-}
-
-wait_for_event() {
-    local event_type="$1" deadline=$(( $(date +%s) + TOTAL_TIMEOUT_SECONDS ))
-    while (( $(date +%s) < deadline )); do
-        if [[ "$(event_index "$event_type")" != "-1" ]]; then
-            return 0
-        fi
-        if [[ "$(event_index failure)" != "-1" ]]; then
-            fail "App reported a failure milestone: $(read_event_field message failure)"
-        fi
-        sleep 1
-    done
-    fail "Timed out waiting for milestone: $event_type"
 }
 
 workspace_list_json() {
@@ -437,10 +295,10 @@ PY
 
 main() {
     parse_args "$@"
-    STARTED_AT="$(date +%s)"
-    trap on_exit EXIT
-    setup_run_dir
-    create_disposable_repo
+    smoke_init
+    smoke_install_traps
+    smoke_setup_run_dir
+    smoke_create_disposable_repo "API desktop UI smoke"
 
     if [[ "$SKIP_BUILD" != true ]]; then
         log "Building debug binaries..."
@@ -449,10 +307,14 @@ main() {
     [[ -x "$CLI_BIN" ]] || fail "CLI binary not found at $CLI_BIN (run swift build)."
 
     log "Launching app (API create + API select drivers)..."
-    launch_automated_app
+    smoke_launch_app \
+        "WORKSPACES_AUTOMATION_API=1" \
+        "WORKSPACES_AUTOMATION_OPERATOR=1" \
+        "WORKSPACES_AUTOMATION_CREATE_DRIVER=api" \
+        "WORKSPACES_AUTOMATION_SELECT_DRIVER=api"
 
     log "Waiting for API create handoff..."
-    wait_for_event awaiting_api_create
+    smoke_wait_for_event awaiting_api_create
 
     workspace_list_json "$RUN_DIR/workspace-list-before-create.json"
     local repo_id
@@ -464,7 +326,7 @@ main() {
     assert_create_result
 
     log "Waiting for API select handoff..."
-    wait_for_event awaiting_api_select
+    smoke_wait_for_event awaiting_api_select
 
     workspace_list_json "$RUN_DIR/workspace-list-before-select.json"
     local workspace_id
@@ -476,7 +338,7 @@ main() {
     assert_select_result "$workspace_id"
 
     log "Waiting for scenario completion..."
-    wait_for_event scenario_complete
+    smoke_wait_for_event scenario_complete
     assert_api_milestone_sequence | tee "$RUN_DIR/assertions.log"
 
     if "$CLI_BIN" window snapshot --out "$RUN_DIR/final.png" >/dev/null 2>&1; then
@@ -486,7 +348,7 @@ main() {
     fi
 
     RUN_STATUS="passed"
-    log "PASS — API-driven lane created and reselected the workspace through operator verbs."
+    smoke_finalize_and_exit 0 "PASS — API-driven lane created and reselected the workspace through operator verbs."
 }
 
 main "$@"

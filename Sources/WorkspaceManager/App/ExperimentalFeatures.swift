@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftUI
+import WorkspaceManagerCore
 
 enum ExperimentalFeature: String, CaseIterable, Identifiable {
     case automationAPI = "automationAPI"
@@ -77,7 +78,7 @@ enum ExperimentalFeatures {
 
     static func isEnabled(
         _ feature: ExperimentalFeature,
-        userDefaults: UserDefaults = .standard,
+        userDefaults: UserDefaults = LaunchPreferences.defaults,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Bool {
         isEnabled(
