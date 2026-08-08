@@ -18,6 +18,7 @@ public struct AutomationSocketClient: Sendable {
         case connectFailed(String, Int32)
         case writeFailed(Int32)
         case readFailed(Int32)
+        case timedOut(TimeInterval)
         case invalidHTTPResponse
 
         public var errorDescription: String? {
@@ -32,6 +33,9 @@ public struct AutomationSocketClient: Sendable {
                 return "Could not write automation request: errno=\(code)."
             case .readFailed(let code):
                 return "Could not read automation response: errno=\(code)."
+            case .timedOut(let seconds):
+                return "WorkSpaces Automation API did not respond within \(Int(seconds))s. "
+                    + "The app may be busy or hung; try again once it is responsive."
             case .invalidHTTPResponse:
                 return "WorkSpaces Automation API returned an invalid HTTP response."
             }
@@ -39,9 +43,13 @@ public struct AutomationSocketClient: Sendable {
     }
 
     public let socketPath: String
+    /// Socket-level send/receive deadline (SO_SNDTIMEO/SO_RCVTIMEO). A hung app surfaces as a
+    /// typed `timedOut` error instead of blocking the calling shell indefinitely.
+    public let timeout: TimeInterval
 
-    public init(socketPath: String) {
+    public init(socketPath: String, timeout: TimeInterval = 30) {
         self.socketPath = socketPath
+        self.timeout = timeout
     }
 
     public func request(
@@ -53,6 +61,7 @@ public struct AutomationSocketClient: Sendable {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw ClientError.socketOpenFailed(errno) }
         defer { close(fd) }
+        applyTimeouts(fd: fd)
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -115,12 +124,24 @@ public struct AutomationSocketClient: Sendable {
                 break
             } else if errno == EINTR {
                 continue
+            } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                throw ClientError.timedOut(timeout)
             } else {
                 throw ClientError.readFailed(errno)
             }
         }
 
         return try parseHTTPResponse(responseData)
+    }
+
+    private func applyTimeouts(fd: Int32) {
+        var deadline = timeval(
+            tv_sec: Int(timeout),
+            tv_usec: Int32((timeout - timeout.rounded(.down)) * 1_000_000)
+        )
+        let size = socklen_t(MemoryLayout<timeval>.size)
+        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &deadline, size)
+        _ = setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &deadline, size)
     }
 
     private func writeAll(_ data: Data, fd: Int32) throws {
@@ -137,6 +158,8 @@ public struct AutomationSocketClient: Sendable {
                     written += result
                 } else if result < 0 && errno == EINTR {
                     continue
+                } else if result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    throw ClientError.timedOut(timeout)
                 } else {
                     throw ClientError.writeFailed(errno)
                 }

@@ -845,7 +845,8 @@ private final class CLIApp {
             return try runWindowSnapshot(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError(
-                "Usage: workspaces automation window list [--json] | window snapshot --out <path> [--window <id>]")
+                "Usage: workspaces automation window list [--json] | automation window snapshot --out <path> [--window <id>]"
+            )
         }
     }
 
@@ -976,7 +977,7 @@ private final class CLIApp {
             return try runWorkspaceArchive(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError(
-                "Usage: workspaces automation workspace list [--json] | workspace select <id> [--json] | workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | workspace archive <id> [--json]"
+                "Usage: workspaces automation workspace list [--json] | automation workspace select <id> [--json] | automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | automation workspace archive <id> [--teardown] [--json]"
             )
         }
     }
@@ -1170,17 +1171,22 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces automation workspace archive <id> [--json]` — an operator mutation verb. Drives the
-    /// running app's real sidebar archive gesture, so the row leaves the active list exactly as it
-    /// would from the sidebar menu. `<id>` is a stable workspace id from `workspace list`.
+    /// `workspaces automation workspace archive <id> [--teardown] [--json]` — an operator mutation
+    /// verb. Drives the running app's real sidebar archive gesture, so the row leaves the active
+    /// list exactly as it would from the sidebar menu. `<id>` is a stable workspace id from
+    /// `automation workspace list`. `--teardown` asks the app to kill the workspace's tmux sessions
+    /// and retire its terminal tiles before archiving, so a live terminal cannot fail the call.
     private func runWorkspaceArchive(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces automation workspace archive <id> [--json]"
+        let usage = "workspaces automation workspace archive <id> [--teardown] [--json]"
         var json = false
+        var teardown = false
         var workspaceID: String?
         for argument in arguments {
             switch argument {
             case "--json":
                 json = true
+            case "--teardown":
+                teardown = true
             default:
                 guard workspaceID == nil else { throw CLIError("Usage: \(usage)") }
                 workspaceID = argument
@@ -1191,7 +1197,11 @@ private final class CLIApp {
         }
 
         let credential = try loadOperatorCredential()
-        let body = try JSONSerialization.data(withJSONObject: ["workspaceID": workspaceID])
+        var bodyObject: [String: Any] = ["workspaceID": workspaceID]
+        if teardown {
+            bodyObject["teardownTerminals"] = true
+        }
+        let body = try JSONSerialization.data(withJSONObject: bodyObject)
         let result = try operatorRequest(
             AutomationWorkspaceArchiveResult.self,
             credential: credential,
@@ -1209,20 +1219,31 @@ private final class CLIApp {
         case .completed:
             let selected = result.selectedWorkspaceID?.uuidString ?? "-"
             print("Archived \(result.workspaceID) — selected workspace \(selected).")
+            if let teardownReport = result.teardown {
+                print(
+                    "Teardown retired \(teardownReport.retiredSurfaceIDs.count) terminal surface(s), "
+                        + "killed \(teardownReport.killedTmuxSessions.count) tmux session(s).")
+            }
         case .confirmationRequired:
             print("Confirmation required: \(result.message ?? "the app needs confirmation to proceed.")")
         }
         return 0
     }
 
+    /// `timeout` overrides the socket client's own send/receive deadline for one call. Explicit
+    /// operator verbs leave it nil and inherit the client default, which is sized for a user who
+    /// typed the command and will wait; the passive inventory probe passes a much shorter one.
     private func operatorRequest<Result>(
         _ type: Result.Type = Result.self,
         credential: AutomationOperatorCredential,
         method: String,
         path: String,
-        body: Data
+        body: Data,
+        timeout: TimeInterval? = nil
     ) throws -> Result where Result: Codable & Sendable & Equatable {
-        let client = AutomationSocketClient(socketPath: credential.socketPath)
+        let client =
+            timeout.map { AutomationSocketClient(socketPath: credential.socketPath, timeout: $0) }
+            ?? AutomationSocketClient(socketPath: credential.socketPath)
         let response = try client.request(
             method: method,
             path: path,
@@ -1232,10 +1253,22 @@ private final class CLIApp {
         do {
             return try AutomationCLIResultPrinter.decodeEnvelope(type, from: response)
         } catch let error as AutomationServiceError {
-            throw CLIError(
-                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
-            )
+            throw CLIError(Self.automationFailureMessage(error))
         }
+    }
+
+    /// One rendering for wire failures, including the wire's retry semantics when present so
+    /// operator loops can branch without `--json`: `terminal_active (retryable)` invites a retry
+    /// or `--teardown`; `close_blocked_by_confirmation (not retryable)` says a blind retry will
+    /// spin on a prompt no caller can answer.
+    private static func automationFailureMessage(_ error: AutomationServiceError) -> String {
+        let retrySuffix: String
+        switch error.response.retryable {
+        case .some(true): retrySuffix = " (retryable)"
+        case .some(false): retrySuffix = " (not retryable)"
+        case .none: retrySuffix = ""
+        }
+        return "automation request failed: \(error.response.code.rawValue)\(retrySuffix): \(error.response.message)"
     }
 
     private func loadOperatorCredential() throws -> AutomationOperatorCredential {
@@ -1267,9 +1300,7 @@ private final class CLIApp {
         do {
             return try AutomationCLIResultPrinter.decodeEnvelope(type, from: response)
         } catch let error as AutomationServiceError {
-            throw CLIError(
-                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
-            )
+            throw CLIError(Self.automationFailureMessage(error))
         }
     }
 
@@ -1288,9 +1319,7 @@ private final class CLIApp {
         } catch let error as AutomationCLIResponseError {
             throw CLIError(error.localizedDescription)
         } catch let error as AutomationServiceError {
-            throw CLIError(
-                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
-            )
+            throw CLIError(Self.automationFailureMessage(error))
         }
     }
 
@@ -1492,23 +1521,27 @@ private final class CLIApp {
         throw CLIError("Workspace not found: \(token)")
     }
 
-    /// Default ceiling for the inventory probe, in seconds. Inert until `AutomationSocketClient`
-    /// gains a read timeout (open PR #1241) — see `appInventory(withDeadline:)`.
-    private static let appInventoryProbeDeadline: TimeInterval = 2
+    /// Send/receive deadline for the inventory probe, in seconds. Short on purpose: nobody asked
+    /// for this request. It runs behind `ws list`, `repo list`, and selector resolution to enrich
+    /// output the CLI can already produce alone, so a hung or wedged app has to cost the shell
+    /// noticeably less than the interactive operator verbs a user typed and is waiting on. Half a
+    /// second clears a healthy local round trip (unix socket, one main-actor hop) with room for a
+    /// mid-render app, and reads as immediate when it does fire.
+    private static let appInventoryProbeDeadline: TimeInterval = 0.5
 
     /// The running app's repo/workspace inventory via the operator socket, or nil when the
-    /// appless plane is in effect (no operator credential, no listener, or a failed read).
+    /// appless plane is in effect (no operator credential, no listener, a timeout, or a failed
+    /// read). Every local verb that consults the app plane funnels through this one seam, so the
+    /// probe's bound has exactly one place to live.
     ///
-    /// Every local verb that consults the app plane funnels through this one seam, so the
-    /// blocking-probe bound has exactly one place to land. `deadline` is accepted and
-    /// documented now but **inert**: `AutomationSocketClient` has no timeout parameter until
-    /// open PR #1241 lands one, and this PR does not touch that file. Once #1241 merges, the
-    /// wiring is a single line here (pass `deadline` into the client) and no call site moves.
+    /// `deadline` reaches the socket as SO_RCVTIMEO/SO_SNDTIMEO, so it bounds each blocking
+    /// syscall rather than the call as a whole: an app that trickles a chunk per interval could
+    /// still outlast it. It converts the failure mode that matters — an app that accepts the
+    /// connection and then stops answering — from an unbounded hang into a fall back to the
+    /// appless plane, which is what every other probe failure already does.
     private func appInventory(
         withDeadline deadline: TimeInterval = CLIApp.appInventoryProbeDeadline
     ) -> AutomationWorkspaceInventory? {
-        // Held, not applied: the socket client takes no timeout parameter yet (#1241).
-        _ = deadline
         guard let credential = try? loadOperatorCredential() else {
             return nil
         }
@@ -1518,7 +1551,8 @@ private final class CLIApp {
                 credential: credential,
                 method: "GET",
                 path: "/v1/workspaces",
-                body: Data()
+                body: Data(),
+                timeout: deadline
             )
         else {
             return nil

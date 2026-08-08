@@ -276,6 +276,21 @@ public actor LocalStateStore {
         try Self.writeMetadata(in: dbPool)
     }
 
+    /// Upserts a session's continuity row. Ended is terminal for a
+    /// `host_session_id`: the conflict update is guarded on `ended_at IS NULL`,
+    /// so an in-flight upsert that lands after `markTerminalSessionEnded` is a
+    /// no-op instead of resurrecting a closed tile into the restore set (#1239).
+    ///
+    /// Ids are not fresh per surface across runs. With `restoreSessionsOnLaunch`
+    /// off — the default — launch rehydrates the previous run's tabs from the
+    /// terminal continuity manifest under their recorded ids, so this store does
+    /// see a later run upsert an id it already holds. Those rows are live ones:
+    /// closing a surface ends its row and drops it from the manifest off the same
+    /// session-list change, so the guard passes and the row moves to the current
+    /// run. An ended id can only come back if a crash loses the manifest write
+    /// after the close landed, and there the guard holds the row ended — the
+    /// surface runs but stays out of the continuity and restore listings until it
+    /// is closed and reopened under a new id.
     public func recordTerminalSession(
         _ session: HostTerminalSession,
         terminalMode: String,
@@ -331,8 +346,8 @@ public actor LocalStateStore {
                         is_active = excluded.is_active,
                         last_seen_at = excluded.last_seen_at,
                         run_id = excluded.run_id,
-                        run_started_at = excluded.run_started_at,
-                        ended_at = NULL
+                        run_started_at = excluded.run_started_at
+                    WHERE terminal_sessions.ended_at IS NULL
                     """,
                 arguments: [
                     session.id.uuidString,
@@ -356,14 +371,18 @@ public actor LocalStateStore {
         }
     }
 
-    public func markTerminalSessionEnded(hostSessionID: UUID) async throws {
-        let now = Self.isoString(Date())
+    /// Marks a session's row ended. Idempotent — the first close time wins, so a
+    /// repeated close cannot shift `ended_at` or `last_seen_at`. `endedAt` is the
+    /// moment the app closed the surface (captured by the caller at close, not
+    /// when a queued write executes).
+    public func markTerminalSessionEnded(hostSessionID: UUID, endedAt: Date = Date()) async throws {
+        let now = Self.isoString(endedAt)
         try await dbPool.write { db in
             try db.execute(
                 sql: """
                     UPDATE terminal_sessions
                     SET ended_at = ?, is_active = 0, last_seen_at = ?
-                    WHERE host_session_id = ?
+                    WHERE host_session_id = ? AND ended_at IS NULL
                     """,
                 arguments: [now, now, hostSessionID.uuidString])
         }

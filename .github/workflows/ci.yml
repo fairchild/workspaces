@@ -19,6 +19,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-release-harness-absence.sh"
       - "scripts/generate-sparkle-appcast.sh"
       - "scripts/install-local.sh"
       - "scripts/notarize.sh"
@@ -48,6 +49,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-release-harness-absence.sh"
       - "scripts/generate-sparkle-appcast.sh"
       - "scripts/install-local.sh"
       - "scripts/notarize.sh"
@@ -103,6 +105,9 @@ jobs:
 
       - name: Build (release)
         run: swift build -c release
+
+      - name: Check release harness absence
+        run: ./scripts/check-release-harness-absence.sh
 
       - name: Test
         run: swift test

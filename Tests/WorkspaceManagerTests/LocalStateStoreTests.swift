@@ -525,6 +525,76 @@ struct LocalStateStoreTests {
         #expect(try await current.fetchPreviousRunID() == priorRunID.uuidString)
     }
 
+    /// The #1239 resurrect race, at the store seam: a stale in-flight upsert that
+    /// lands after close must be a complete no-op — the row stays ended and keeps
+    /// every field it closed with, so restore never offers a deliberately closed
+    /// tile.
+    @Test("A late upsert cannot resurrect an ended session row")
+    func lateUpsertCannotResurrectEndedRow() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let store = try LocalStateStore(databaseURL: fixture.url.appendingPathComponent("state.sqlite"))
+        let sessionID = UUID()
+        let session = HostTerminalSession(
+            id: sessionID,
+            key: .repoPath("/tmp/workspaces/repo"),
+            directory: URL(fileURLWithPath: "/tmp/workspaces/repo")
+        )
+
+        try await store.recordTerminalSession(
+            session, terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+        let recordedDirectory = try #require(
+            try await store.fetchContinuitySessions().first { $0.hostSessionID == sessionID }
+        ).directoryPath
+        try await store.markTerminalSessionEnded(
+            hostSessionID: sessionID, endedAt: Date(timeIntervalSince1970: 1_700_000_100))
+
+        // The stale write carries different field values; none may land.
+        try await store.recordTerminalSession(
+            HostTerminalSession(
+                id: sessionID,
+                key: .repoPath("/tmp/workspaces/elsewhere"),
+                directory: URL(fileURLWithPath: "/tmp/workspaces/elsewhere")
+            ),
+            terminalMode: "shell",
+            isActive: true,
+            hooksSocketPath: "/tmp/late.sock"
+        )
+
+        let row = try #require(
+            try await store.fetchContinuitySessions().first { $0.hostSessionID == sessionID })
+        #expect(row.endedAt == Date(timeIntervalSince1970: 1_700_000_100))
+        #expect(!row.isActive)
+        #expect(row.directoryPath == recordedDirectory)
+        #expect(row.terminalMode == "tmux_per_session")
+        #expect(try await store.fetchContinuitySessions(activeOnly: true).isEmpty)
+    }
+
+    @Test("Repeated close keeps the first ended_at")
+    func repeatedCloseKeepsFirstEndedAt() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let store = try LocalStateStore(databaseURL: fixture.url.appendingPathComponent("state.sqlite"))
+        let sessionID = UUID()
+        try await store.recordTerminalSession(
+            HostTerminalSession(
+                id: sessionID,
+                key: .repoPath("/tmp/workspaces/repo"),
+                directory: URL(fileURLWithPath: "/tmp/workspaces/repo")
+            ),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        try await store.markTerminalSessionEnded(
+            hostSessionID: sessionID, endedAt: Date(timeIntervalSince1970: 1_700_000_100))
+        try await store.markTerminalSessionEnded(
+            hostSessionID: sessionID, endedAt: Date(timeIntervalSince1970: 1_700_000_200))
+
+        let row = try #require(
+            try await store.fetchContinuitySessions().first { $0.hostSessionID == sessionID })
+        #expect(row.endedAt == Date(timeIntervalSince1970: 1_700_000_100))
+        #expect(row.lastSeenAt == Date(timeIntervalSince1970: 1_700_000_100))
+    }
+
     private func repoRoot() -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

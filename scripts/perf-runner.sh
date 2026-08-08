@@ -19,12 +19,16 @@ Scenarios:
   main_window_workspace_create_ui_stall
   main_window_idle_cpu_diagnostics_closed
   main_window_resident_memory_20_workspaces
+  channel1_hook_ingest_burst
+  channel1_sidebar_churn
+  channel1_long_session_memory
+  channel2_statusline_burst
 
 Options:
   --scenario <id>         Canonical scenario id.
   --app <path>            App bundle or binary to use for installed scenarios.
   --output-dir <path>     Output directory. Default: /tmp/workspaces-perf-runner-<timestamp>/<scenario>
-  --runs <n>              Debug scenario run count. Default: 5.
+  --runs <n>              Debug/burst scenario run count. Default: 5.
   --sleep-seconds <n>     Debug scenario sleep per run. Default: 8.
   --capture-seconds <n>   Installed scenario capture length. Default: 12.
   --record                Pass through to perf-baseline.sh for debug scenarios.
@@ -252,6 +256,19 @@ run_main_window_hotspot() {
     UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/workspaces-uv-cache}" "${cmd[@]}"
 }
 
+run_channel() {
+    local cmd=(
+        "$ROOT_DIR/scripts/perf_channel_baseline.py"
+        --scenario "$SCENARIO"
+        --output-dir "$OUTPUT_DIR"
+        --runs "$RUNS"
+    )
+    if [[ "$ASSERT_BUDGET" -eq 1 ]]; then
+        cmd+=(--assert-budget)
+    fi
+    UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/workspaces-uv-cache}" "${cmd[@]}"
+}
+
 case "$SCENARIO" in
     debug_no_activate)
         run_debug "no-activate"
@@ -270,6 +287,9 @@ case "$SCENARIO" in
         ;;
     main_window_agent_activity_burst|main_window_session_switcher_snapshot|main_window_workspace_create_ui_stall|main_window_idle_cpu_diagnostics_closed|main_window_resident_memory_20_workspaces)
         run_main_window_hotspot
+        ;;
+    channel1_hook_ingest_burst|channel1_sidebar_churn|channel1_long_session_memory|channel2_statusline_burst)
+        run_channel
         ;;
     *)
         echo "Unsupported scenario: $SCENARIO" >&2

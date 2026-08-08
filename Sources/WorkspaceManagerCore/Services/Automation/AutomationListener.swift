@@ -25,16 +25,23 @@ public actor AutomationListener {
     private let makeHealthServer: @Sendable (Date) -> AutomationServerDescriptor
     private let auditLogger: AutomationAuditLogger?
     private let logger: @Sendable (String) -> Void
+    private let maxConcurrentConnections: Int
+    private let readDeadline: Duration
+    private let writeDeadline: Duration
     private var listener: NWListener?
     private var lockFileDescriptor: Int32?
     private var statistics = Statistics()
     private var healthServer: AutomationServerDescriptor?
+    private var activeConnectionIDs: Set<ObjectIdentifier> = []
 
     public init(
         bundleIdentifier: String,
         controller: any AutomationControlling,
         socketURLOverride: URL? = nil,
         auditLogger: AutomationAuditLogger? = nil,
+        maxConcurrentConnections: Int = 8,
+        readDeadline: Duration = .seconds(10),
+        writeDeadline: Duration = .seconds(10),
         isEnabled: @escaping @Sendable () -> Bool = { true },
         makeHealthServer: @escaping @Sendable (Date) -> AutomationServerDescriptor = {
             AutomationServerDescriptor.current(launchedAt: $0, experiments: [])
@@ -55,6 +62,9 @@ public actor AutomationListener {
     ) {
         self.controller = controller
         self.auditLogger = auditLogger
+        self.maxConcurrentConnections = maxConcurrentConnections
+        self.readDeadline = readDeadline
+        self.writeDeadline = writeDeadline
         self.isEnabled = isEnabled
         self.makeHealthServer = makeHealthServer
         self.logger = logger
@@ -145,14 +155,71 @@ public actor AutomationListener {
     }
 
     private func accept(connection: NWConnection) {
+        guard activeConnectionIDs.count < maxConcurrentConnections else {
+            rejectBusy(connection: connection)
+            return
+        }
+        let id = ObjectIdentifier(connection)
+        activeConnectionIDs.insert(id)
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .cancelled, .failed:
+                guard let self else { return }
+                Task { await self.forgetConnection(id) }
+            default:
+                break
+            }
+        }
         connection.start(queue: .global(qos: .userInitiated))
-        readRequest(connection: connection, accumulated: Data())
+        let deadline = Self.deadlineWatchdog(connection: connection, after: readDeadline, label: "read")
+        readRequest(connection: connection, accumulated: Data(), deadline: deadline)
     }
 
-    private nonisolated func readRequest(connection: NWConnection, accumulated: Data) {
+    private func forgetConnection(_ id: ObjectIdentifier) {
+        activeConnectionIDs.remove(id)
+    }
+
+    /// Answers a connection over the concurrency cap with a typed `busy` envelope instead of
+    /// letting it queue behind hung peers; the caller can retry once in-flight work drains.
+    private func rejectBusy(connection: NWConnection) {
+        logger("connection rejected: concurrent connection cap (\(maxConcurrentConnections)) reached")
+        connection.start(queue: .global(qos: .userInitiated))
+        let error = AutomationErrorResponse(
+            code: .busy,
+            message: "Too many concurrent automation connections; retry shortly."
+        )
+        let envelope = AutomationResponseEnvelope<AutomationEmptyResult>(error: error)
+        let body = (try? AutomationJSON.encoder.encode(envelope)) ?? Data()
+        let response = Self.httpResponse(status: 503, body: body)
+        let watchdog = Self.deadlineWatchdog(connection: connection, after: writeDeadline, label: "busy-write")
+        connection.send(
+            content: response,
+            completion: .contentProcessed { _ in
+                watchdog.cancel()
+                connection.cancel()
+            })
+    }
+
+    /// Cancels `connection` if it is still alive when the deadline elapses, so a hung peer cannot
+    /// pin an NWConnection (and a cap slot) until app exit. Cancel the returned task on completion.
+    private nonisolated static func deadlineWatchdog(
+        connection: NWConnection,
+        after limit: Duration,
+        label: String
+    ) -> Task<Void, Never> {
+        Task { [weak connection] in
+            try? await Task.sleep(for: limit)
+            guard !Task.isCancelled else { return }
+            log.error("[AutomationListener] \(label, privacy: .public) deadline exceeded; cancelling connection")
+            connection?.cancel()
+        }
+    }
+
+    private nonisolated func readRequest(connection: NWConnection, accumulated: Data, deadline: Task<Void, Never>) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, isComplete, error in
             if let error {
                 log.error("[AutomationListener] read error: \(String(describing: error), privacy: .public)")
+                deadline.cancel()
                 connection.cancel()
                 return
             }
@@ -161,6 +228,7 @@ public actor AutomationListener {
             if let data { buffer.append(data) }
 
             if let request = HTTPRequest.parse(buffer) {
+                deadline.cancel()
                 Task { [weak connection] in
                     guard let connection else { return }
                     await self.respond(request: request, connection: connection)
@@ -169,17 +237,19 @@ public actor AutomationListener {
             }
 
             if isComplete {
+                deadline.cancel()
                 connection.cancel()
                 return
             }
 
             if buffer.count > 1_048_576 {
                 log.error("[AutomationListener] oversized request, dropping")
+                deadline.cancel()
                 connection.cancel()
                 return
             }
 
-            self.readRequest(connection: connection, accumulated: buffer)
+            self.readRequest(connection: connection, accumulated: buffer, deadline: deadline)
         }
     }
 
@@ -215,9 +285,33 @@ public actor AutomationListener {
             responseBody: result.body,
             operatorHandle: operatorHandle
         )
+        // The request above already ran; if the peer disconnected (or the write stalls past the
+        // deadline), append a best-effort marker for the response whose delivery failed, carrying
+        // that response's outcome so an undelivered denial still audits as denied.
+        let auditLogger = auditLogger
+        let method = request.method
+        let path = request.path
+        let handlePresent = request.headers[AutomationAPI.handleHeader]?.isEmpty == false
+        let outcome = AutomationAuditLogger.responseOutcome(from: result.body)
+        let watchdog = Self.deadlineWatchdog(connection: connection, after: writeDeadline, label: "write")
         connection.send(
             content: response,
-            completion: .contentProcessed { _ in
+            completion: .contentProcessed { error in
+                watchdog.cancel()
+                if error != nil, let auditLogger {
+                    let route = "\(method) \(path)"
+                    log.error("[AutomationListener] response undelivered for \(route, privacy: .public)")
+                    Task {
+                        await auditLogger.recordResponseUndelivered(
+                            method: method,
+                            path: path,
+                            handlePresent: handlePresent,
+                            operatorHandle: operatorHandle,
+                            allowed: outcome.allowed,
+                            errorCode: outcome.errorCode
+                        )
+                    }
+                }
                 connection.cancel()
             })
     }
@@ -269,6 +363,7 @@ public actor AutomationListener {
         case 404: reason = "Not Found"
         case 405: reason = "Method Not Allowed"
         case 409: reason = "Conflict"
+        case 503: reason = "Service Unavailable"
         default: reason = "Error"
         }
 

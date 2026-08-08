@@ -84,7 +84,7 @@ public enum CLIVerbCatalog {
           workspaces automation workspace list [--json]
           workspaces automation workspace select <workspace-id> [--json]
           workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
-          workspaces automation workspace archive <workspace-id> [--json]
+          workspaces automation workspace archive <workspace-id> [--teardown] [--json]
 
         Compatibility:
           'surface', 'tile', 'input', 'window', and 'workspace' still work as
