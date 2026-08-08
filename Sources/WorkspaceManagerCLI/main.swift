@@ -41,11 +41,11 @@ private final class CLIApp {
 
         // Top-level automation aliases ('workspaces workspace list') canonicalize into the
         // grouped form ('workspaces automation workspace list') before dispatch, so both
-        // spellings share one code path.
+        // spellings share one code path. Canonicalization only ever prepends, so the
+        // non-empty guarantee from the guard above carries through it.
         let canonical = CLIVerbCatalog.canonicalArguments(arguments)
-        guard let command = canonical.first else {
-            return try await launchApp(request: nil)
-        }
+        precondition(!canonical.isEmpty, "canonicalArguments emptied a non-empty argument vector")
+        let command = canonical[0]
 
         var state = try stateStore.load()
         let tail = Array(canonical.dropFirst())
@@ -1422,6 +1422,9 @@ private final class CLIApp {
         {
             throw CLIError(guidance)
         }
+        if appRunningWithoutOperatorCredential() {
+            writeStderr(CLIPlaneComposer.operatorCredentialMissingHint)
+        }
         throw CLIError("Repository not found: \(token)")
     }
 
@@ -1458,6 +1461,10 @@ private final class CLIApp {
             switch CLIPlaneComposer.matchWorkspace(token: token, in: inventory) {
             case .match(let match):
                 let now = Date()
+                // A local record at the same path is superseded by the app-derived one, but
+                // the fields the app never knew about are the local plane's own: keep the
+                // user's default command and the original creation time.
+                let superseded = state.workspaces.first { $0.path == match.path }
                 let record = WorkspaceRecord(
                     id: match.workspaceID,
                     name: match.name,
@@ -1465,9 +1472,9 @@ private final class CLIApp {
                     repoPath: match.repoPath ?? "",
                     path: match.path,
                     gitBranch: match.branch ?? "",
-                    createdAt: now,
+                    createdAt: superseded?.createdAt ?? now,
                     lastAccessedAt: now,
-                    defaultCommand: nil
+                    defaultCommand: superseded?.defaultCommand
                 )
                 state.workspaces.removeAll { $0.path == record.path }
                 state.workspaces.append(record)
@@ -1485,9 +1492,23 @@ private final class CLIApp {
         throw CLIError("Workspace not found: \(token)")
     }
 
+    /// Default ceiling for the inventory probe, in seconds. Inert until `AutomationSocketClient`
+    /// gains a read timeout (open PR #1241) — see `appInventory(withDeadline:)`.
+    private static let appInventoryProbeDeadline: TimeInterval = 2
+
     /// The running app's repo/workspace inventory via the operator socket, or nil when the
     /// appless plane is in effect (no operator credential, no listener, or a failed read).
-    private func appInventory() -> AutomationWorkspaceInventory? {
+    ///
+    /// Every local verb that consults the app plane funnels through this one seam, so the
+    /// blocking-probe bound has exactly one place to land. `deadline` is accepted and
+    /// documented now but **inert**: `AutomationSocketClient` has no timeout parameter until
+    /// open PR #1241 lands one, and this PR does not touch that file. Once #1241 merges, the
+    /// wiring is a single line here (pass `deadline` into the client) and no call site moves.
+    private func appInventory(
+        withDeadline deadline: TimeInterval = CLIApp.appInventoryProbeDeadline
+    ) -> AutomationWorkspaceInventory? {
+        // Held, not applied: the socket client takes no timeout parameter yet (#1241).
+        _ = deadline
         guard let credential = try? loadOperatorCredential() else {
             return nil
         }
@@ -1503,6 +1524,16 @@ private final class CLIApp {
             return nil
         }
         return AutomationWorkspaceInventory(repos: result.repos, workspaces: result.workspaces)
+    }
+
+    /// True when the app is running but no operator credential is readable — `appInventory`
+    /// returns nil, every cross-plane hint stays silent, and a repo the app tracks reads as
+    /// simply missing. That is the 2026-08-07 probe scenario, so the miss paths say so.
+    private func appRunningWithoutOperatorCredential() -> Bool {
+        guard (try? loadOperatorCredential()) == nil else {
+            return false
+        }
+        return !NSRunningApplication.runningApplications(withBundleIdentifier: Self.appBundleIdentifier).isEmpty
     }
 
     private func runInteractiveSession(in directory: URL, command: String?) throws -> Int32 {
@@ -1713,9 +1744,11 @@ private struct CLIError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// The CLI's path spelling and the one `CLIPlaneComposer` compares against the app's
+/// descriptors are the same pipeline, so a trailing slash or a symlinked spelling of the
+/// same directory never reads as two different places across the planes.
 private func normalizePath(_ path: String) -> URL {
-    let expanded = NSString(string: path).expandingTildeInPath
-    return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath()
+    CLIPathNormalizer.normalizedURL(path)
 }
 
 private func validateGitRepository(at url: URL) throws {

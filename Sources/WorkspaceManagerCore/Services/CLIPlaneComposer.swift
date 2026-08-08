@@ -82,7 +82,10 @@ public enum CLIPlaneComposer {
                 lines.append("\(marker) \(displayName(for: workspace, in: app))\t\(workspace.path)\t\(branch)")
             }
         }
-        lines.append(contentsOf: localOnlySection(local: local, appPaths: Set(app.workspaces.map(\.path))))
+        // Only the active workspaces count as "the app can see this": a local record whose
+        // path matches an *archived* app workspace is still CLI-local as far as the listing
+        // above is concerned, so it belongs in the CLI-local section rather than nowhere.
+        lines.append(contentsOf: localOnlySection(local: local, appPaths: normalizedPaths(active.map(\.path))))
         return lines
     }
 
@@ -108,20 +111,29 @@ public enum CLIPlaneComposer {
                 lines.append("\(marker) \(repo.name)\t\(repo.path)\t\(repo.repoID.uuidString)")
             }
         }
-        lines.append(contentsOf: localOnlySection(local: local, appPaths: Set(app.repos.map(\.path))))
+        lines.append(contentsOf: localOnlySection(local: local, appPaths: normalizedPaths(app.repos.map(\.path))))
         return lines
     }
 
     /// A stderr notice for `repo add` when the app is running but does not track the added
     /// path — the write only landed on the CLI-local plane. Nil when the app tracks it.
     public static func repoAddNotice(app: AutomationWorkspaceInventory, addedRepoPath: String) -> String? {
-        guard !app.repos.contains(where: { $0.path == addedRepoPath }) else {
+        let normalizedAdded = CLIPathNormalizer.normalized(addedRepoPath)
+        guard !app.repos.contains(where: { CLIPathNormalizer.normalized($0.path) == normalizedAdded }) else {
             return nil
         }
         return "note: the running app does not track this repo; 'repo add' registered it for the "
             + "CLI-local (appless) plane only. Open it in the app ('workspaces \(addedRepoPath)') "
             + "to register it there."
     }
+
+    /// The app is running but mints no operator credential, so its inventory is invisible to
+    /// the CLI and every cross-plane hint above stays silent — the exact shape of the
+    /// 2026-08-07 probe, where `repo add` landed CLI-local and the app never saw it.
+    public static let operatorCredentialMissingHint =
+        "note: the WorkSpaces app is running but exposes no operator credential, so the CLI "
+        + "cannot see the app's repos or workspaces. Relaunch it with the Automation Operator "
+        + "experiment enabled (or WORKSPACES_AUTOMATION_OPERATOR=1) to bridge the two planes."
 
     /// When a repo token misses the CLI-local store but names a repo the running app tracks
     /// (by name or path), explains the plane split and both ways out. Nil when the app does
@@ -131,8 +143,12 @@ public enum CLIPlaneComposer {
         normalizedTokenPath: String?,
         app: AutomationWorkspaceInventory
     ) -> String? {
+        let normalizedToken = normalizedTokenPath.map(CLIPathNormalizer.normalized)
         let matched = app.repos.first { repo in
-            repo.name == token || repo.path == token || repo.path == normalizedTokenPath
+            if repo.name == token || repo.path == token {
+                return true
+            }
+            return CLIPathNormalizer.normalized(repo.path) == normalizedToken
         }
         guard let matched else {
             return nil
@@ -173,8 +189,12 @@ public enum CLIPlaneComposer {
         }
     }
 
+    private static func normalizedPaths(_ paths: [String]) -> Set<String> {
+        Set(paths.map(CLIPathNormalizer.normalized))
+    }
+
     private static func localOnlySection(local: [LocalRow], appPaths: Set<String>) -> [String] {
-        let localOnly = local.filter { !appPaths.contains($0.path) }
+        let localOnly = local.filter { !appPaths.contains(CLIPathNormalizer.normalized($0.path)) }
         guard !localOnly.isEmpty else {
             return []
         }

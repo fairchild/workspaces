@@ -76,6 +76,16 @@ struct CLIVerbCatalogTests {
         }
     }
 
+    @Test("Help states the real activation condition, not just a running app")
+    func helpNamesOperatorCredentialCondition() {
+        let help = CLIVerbCatalog.helpText
+        #expect(help.contains("Automation Operator experiment enabled"))
+        #expect(help.contains("WORKSPACES_AUTOMATION_OPERATOR=1"))
+        #expect(help.contains("derive from the app only when the operator credential is readable"))
+        // "the app is running" alone would overstate when the two-plane view engages.
+        #expect(!help.contains("When the app is running,"))
+    }
+
     @Test("Help text snapshot")
     func helpSnapshot() {
         let expected = """
@@ -101,8 +111,9 @@ struct CLIVerbCatalogTests {
               workspaces recent
               workspaces doctor
 
-            Automation commands (operator scope; require a running app with the
-            automation experiments enabled):
+            Automation commands (operator scope; require the app running with the
+            Automation Operator experiment enabled — or WORKSPACES_AUTOMATION_OPERATOR=1
+            — which is what mints the operator credential these verbs read):
               workspaces automation health
               workspaces automation context --json
               workspaces automation surface list --json
@@ -123,9 +134,10 @@ struct CLIVerbCatalogTests {
 
             Two planes:
               'ws' and 'repo' manage the CLI-local plane and work without the app;
-              'automation workspace' drives the running app. When the app is running,
-              'ws list' and 'repo list' derive from the app and label CLI-local-only
-              entries.
+              'automation workspace' drives the running app. 'ws list' and 'repo list'
+              derive from the app only when the operator credential is readable —
+              the app running without it leaves them showing the CLI-local plane
+              alone, and the app cannot see what they list.
 
             Launch behavior:
               - no args: open the WorkSpaces app

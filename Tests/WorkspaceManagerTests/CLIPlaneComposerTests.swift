@@ -83,6 +83,53 @@ struct CLIPlaneComposerTests {
         #expect(!lines.contains(where: { $0.contains("/ws/old") }))
     }
 
+    @Test("A local record matching an archived app workspace still lists as CLI-local")
+    func workspaceListKeepsLocalRowShadowedByArchivedAppWorkspace() {
+        let local = [CLIPlaneComposer.LocalRow(displayName: "demo/old", path: "/ws/old")]
+        let lines = CLIPlaneComposer.workspaceListLines(app: makeInventory(), local: local)
+        #expect(
+            lines == [
+                "Workspaces (running app):",
+                "* demo/feature\t/ws/feature\tfeature-branch",
+                "",
+                "CLI-local only (not visible to the app):",
+                "  demo/old\t/ws/old",
+            ]
+        )
+    }
+
+    @Test("Divergent path spellings of the same directory are one row, not two")
+    func workspaceListNormalizesPathSpellings() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("cli-plane-\(UUID().uuidString)")
+        let real = root.appendingPathComponent("real")
+        let link = root.appendingPathComponent("link")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let inventory = makeInventory(
+            workspaces: [
+                AutomationWorkspaceDescriptor(
+                    workspaceID: Self.wsID,
+                    repoID: Self.repoID,
+                    name: "feature",
+                    path: real.path,
+                    branch: nil,
+                    status: "ready",
+                    isArchived: false,
+                    backend: "local",
+                    isSelected: false
+                )
+            ]
+        )
+        let local = [
+            CLIPlaneComposer.LocalRow(displayName: "demo/feature", path: link.path + "/")
+        ]
+        let lines = CLIPlaneComposer.workspaceListLines(app: inventory, local: local)
+        #expect(!lines.contains("CLI-local only (not visible to the app):"))
+    }
+
     @Test("With an app that has no active workspaces, the section says none")
     func workspaceListEmptyApp() {
         let inventory = makeInventory(workspaces: [])
@@ -140,6 +187,14 @@ struct CLIPlaneComposerTests {
         let miss = CLIPlaneComposer.missingLocalRepoGuidance(
             token: "unknown", normalizedTokenPath: "/nope", app: inventory)
         #expect(miss == nil)
+    }
+
+    @Test("The credential-missing hint names the activation condition, not just 'app running'")
+    func operatorCredentialMissingHintNamesActivation() {
+        let hint = CLIPlaneComposer.operatorCredentialMissingHint
+        #expect(hint.contains("running but exposes no operator credential"))
+        #expect(hint.contains("Automation Operator"))
+        #expect(hint.contains("WORKSPACES_AUTOMATION_OPERATOR=1"))
     }
 
     // MARK: Workspace matching

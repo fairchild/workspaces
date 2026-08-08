@@ -373,8 +373,11 @@ mutation rides this route.
   (whether it is the workspace currently selected in the app). Each repo carries
   `isSelected` (whether it is the repo selected for its landing view).
 - **Live app state.** The listing reflects what the *running app* currently has,
-  read from the live SwiftData models and selection state — distinct from the
-  CLI's own local-state store (`workspaces ws list`).
+  read from the live SwiftData models and selection state. It is also the source
+  `workspaces ws list` derives from whenever the operator credential is readable:
+  that verb prints this inventory and then labels the rows that exist only in the
+  CLI's own local-state store. Without the credential it falls back to the
+  local-state store alone.
 
 ## Workspace create
 
