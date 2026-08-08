@@ -448,6 +448,8 @@ enum AutomationHTTPRouter {
             return 409
         case .terminalActive, .closeBlockedByConfirmation:
             return 409
+        case .busy:
+            return 503
         case .internalError:
             return 500
         }
