@@ -1,6 +1,6 @@
 # UI Fixture Mode
 
-In-memory SwiftData seeding plus deterministic agent-status and command-status seeding so the app can launch into a known visual state for screenshots, design review, and visual regression. Scope: the seeded model state is in-memory and no real agents drive the sessions. The rest of the app still does its normal launch IO — outside `CI=1`, `ClaudeIntegrationLifecycle` binds a Unix socket under Application Support keyed by pid (`Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:55-60`), `LocalStateStore` writes SQLite under the dev-data dir, and the synthetic `HostTerminalSession`s spawn real PTYs (which fall back to `$HOME` when the seeded path doesn't exist — see "Known limits"). For a truly hermetic capture environment, set `CI=1` and a dedicated `WORKSPACES_DATA_DIR`.
+In-memory SwiftData seeding plus deterministic agent-status and command-status seeding so the app can launch into a known visual state for screenshots, design review, and visual regression. Scope: the seeded model state is in-memory and no real agents drive the sessions. The rest of the app still does its normal launch IO — outside `CI=1`, `ClaudeIntegrationLifecycle` binds a Unix socket under Application Support keyed by pid (`Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:55-60`), `LocalStateStore` writes SQLite under the dev-data dir, and the synthetic `HostTerminalSession`s spawn real PTYs (which fall back to `$HOME` when the seeded path doesn't exist — see "Known limits"). For a truly hermetic capture environment, set `CI=1`, a dedicated `WORKSPACES_DATA_DIR`, and an isolation signal for preferences (see "Preferences isolation").
 
 ## Quick start
 
@@ -43,6 +43,24 @@ For repeatable captures, prefer the wrapper:
 | `WORKSPACES_UI_FIXTURE_COMMAND_STATUSES` | optional | Comma-separated `<workspace-name>:<status>` pairs that drive specific terminal sessions into synthetic `LastCommandStatus` values. |
 | `WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER` | optional | `1` opens the Cmd-P Session Switcher after fixture launch for deterministic overlay captures. |
 | `WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER` | optional | `1` seeds a synthetic previous-run continuity row (see "Staging the restore banner" below) so the cold-start restore banner has something to offer. Also requires `WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=1` — the banner itself is gated behind that experiment independently of fixture mode. |
+
+## Preferences isolation
+
+`WORKSPACES_DATA_DIR` scopes the SwiftData store and the SQLite sidecar; `UserDefaults` is a third state axis, and a launch that ignores it inherits whatever selection the last dev or fixture session left behind — which costs a spurious terminal attach at launch and makes "clean launch" assertions unreliable (#1252).
+
+| Variable | Effect |
+|----------|--------|
+| `WORKSPACES_SYNTHETIC_ROOT` | Any non-blank value marks the run synthetic: preferences resolve to the shared scratch suite `com.cloudcompute.workspaces.isolated`, which the app wipes at bootstrap. Every isolated launch therefore starts with no stored selection, theme, or settings state. |
+| `WORKSPACES_PREFERENCES_SUITE` | Names an explicit suite instead. Nothing wipes it on the app's behalf, so this is the form to use for isolation without a synthetic root, for parallel isolated launches that must not share one suite, or when preferences should survive a relaunch inside one run. A name that resolves back to a persistent domain (the app id, `WorkspaceManager`, the global domain) is ignored. |
+
+Both are read once at bootstrap (`Sources/WorkspaceManagerCore/Services/LaunchPreferences.swift`) and the resolved store backs every `@AppStorage` and settings read in the app. Unset, the app reads and writes the persistent domain exactly as before. The resolved domain is logged at launch:
+
+```bash
+log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact | grep LaunchPreferences
+# [LaunchPreferences] domain=scratch suite=com.cloudcompute.workspaces.isolated reset=true isolated=true
+```
+
+Helper processes that share the environment (the `workspaces` CLI driving a live isolated app) resolve to the same suite without clearing it — only the app's own bootstrap resets.
 
 ### `WORKSPACES_UI_FIXTURE_AGENT_STATES` grammar
 

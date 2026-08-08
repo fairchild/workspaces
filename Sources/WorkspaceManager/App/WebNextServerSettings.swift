@@ -24,7 +24,7 @@ enum WebNextServerSettings {
     static let port = 3140
 
     static func resolvedConfiguration(
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = LaunchPreferences.defaults
     ) -> WebNextServerConfiguration {
         let configured = defaults.string(forKey: rootStorageKey)?
             .trimmingCharacters(in: .whitespacesAndNewlines)

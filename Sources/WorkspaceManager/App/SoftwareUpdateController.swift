@@ -9,6 +9,7 @@ import AppKit
 import Combine
 import Foundation
 import Sparkle
+import WorkspaceManagerCore
 
 enum SoftwareUpdateConstants {
     static let feedURLString = "https://github.com/fairchild/workspaces/releases/latest/download/appcast.xml"
@@ -75,7 +76,7 @@ final class SoftwareUpdateController: NSObject, ObservableObject, NSMenuItemVali
 
     init(
         startUpdater: Bool = true,
-        userDefaults: UserDefaults = .standard,
+        userDefaults: UserDefaults = LaunchPreferences.defaults,
         manualCheckDisclosurePresenter: @escaping @MainActor () -> Bool = SoftwareUpdateController
             .presentManualCheckDisclosure
     ) {

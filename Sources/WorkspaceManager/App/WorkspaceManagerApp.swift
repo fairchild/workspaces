@@ -34,6 +34,11 @@ struct WorkspaceManagerApp: App {
     let sharedModelContainer: ModelContainer
 
     init() {
+        // First statement of the launch: resolving the preferences domain — and
+        // wiping it, when the run is isolated — has to happen before anything
+        // reads a stored value through it.
+        LaunchPreferences.bootstrapForApplicationLaunch()
+
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
         let bootstrap = ModelStoreBootstrapper.bootstrap(
             schema: schema,
@@ -111,6 +116,7 @@ struct WorkspaceManagerApp: App {
             .environment(\.agentSessionRegistry, agentSessionRegistry)
             .environment(\.lastCommandStatusRegistry, lastCommandStatusRegistry)
             .environment(\.localStateStore, localStateStore)
+            .defaultAppStorage(LaunchPreferences.defaults)
             .frame(minWidth: 1000, minHeight: 700)
             .onAppear {
                 softwareUpdateController.installCheckForUpdatesMenuItem()
@@ -323,11 +329,13 @@ struct WorkspaceManagerApp: App {
 
         Window("Keyboard Shortcuts", id: KeyboardShortcutsView.windowID) {
             KeyboardShortcutsView()
+                .defaultAppStorage(LaunchPreferences.defaults)
         }
         .windowResizability(.contentSize)
 
         Window("Session History", id: SessionHistoryView.windowID) {
             SessionHistoryView(store: localStateStore)
+                .defaultAppStorage(LaunchPreferences.defaults)
         }
 
         Settings {
@@ -340,6 +348,7 @@ struct WorkspaceManagerApp: App {
                 .environmentObject(lastCommandStatusRegistry)
                 .environment(\.agentSessionRegistry, agentSessionRegistry)
                 .environment(\.lastCommandStatusRegistry, lastCommandStatusRegistry)
+                .defaultAppStorage(LaunchPreferences.defaults)
         }
     }
 }
@@ -371,7 +380,11 @@ private struct MainWindowRootView: View {
     private let appRuntimeDependencies: AppRuntimeDependencies
     @ObservedObject private var appCommandState: AppCommandState
     @State private var deepLinkState = WorkspaceDeepLinkState()
-    @AppStorage(MainWindowLastSurface.storageKey) private var lastSurfaceRawValue = ""
+    // Bound to the resolved store explicitly: the restored surface is the state an
+    // isolated launch must not inherit, so it does not depend on `defaultAppStorage`
+    // reaching this declaration through the environment.
+    @AppStorage(MainWindowLastSurface.storageKey, store: LaunchPreferences.defaults)
+    private var lastSurfaceRawValue = ""
     @StateObject private var tileTreeStore = TileTreeStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var smokeDriver = SmokeScenarioDriver()
