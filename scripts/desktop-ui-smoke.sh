@@ -20,6 +20,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# shellcheck source=lib/synthetic-root.sh
+source "$SCRIPT_DIR/lib/synthetic-root.sh"
 LAUNCH_SCRIPT="$REPO_ROOT/scripts/launch-dev.sh"
 CAPTURE_SCRIPT="$REPO_ROOT/scripts/capture-window.sh"
 OUTPUT_ROOT="$REPO_ROOT/output/desktop-ui-smoke"
@@ -35,6 +37,7 @@ RUN_DIR="$OUTPUT_ROOT/$TIMESTAMP"
 RUN_LINK="$OUTPUT_ROOT/latest"
 RUN_STATUS="failed"
 FAILURE_MESSAGE=""
+FINALIZED=false
 APP_PID=""
 LAUNCH_LOG_PATH=""
 SMOKE_REPO_PATH=""
@@ -58,7 +61,7 @@ Usage: ./scripts/desktop-ui-smoke.sh [options]
 
 Options:
   --no-build               Reuse the current debug binary
-  --keep-artifacts         Keep the disposable smoke repo after a passing run
+  --keep-artifacts         Keep the smoke repo and created worktree, any outcome
   --timeout-seconds <n>    Total timeout for the smoke (default: 300)
   --inactivity-seconds <n> Fail if no new event progress occurs (default: 90)
   --help, -h               Show this help
@@ -101,6 +104,9 @@ setup_run_dir() {
     mkdir -p "$RUN_DIR"
     ln -sfn "$RUN_DIR" "$RUN_LINK"
     EVENTS_PATH="$RUN_DIR/events.jsonl"
+    # Isolation boundary: the app's workspaces root lives inside the run dir, so
+    # created worktrees can never leak into the owner's real ~/workspaces.
+    synthetic_root_ensure "$RUN_DIR/workspaces-root" || fail "Could not establish WORKSPACES_SYNTHETIC_ROOT."
 }
 
 cleanup_app() {
@@ -119,14 +125,17 @@ cleanup_repo() {
         chmod -R u+w "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
         rm -rf "$SMOKE_REPO_PATH" >/dev/null 2>&1 || true
     fi
-    cleanup_created_worktrees
 }
 
-# The app creates the workspace as a git worktree under the configured
-# workspaces root (default ~/workspaces/<repo-name>/<workspace-name>). Remove it
-# using the path the app reported in the milestone stream so a passing run leaves
-# no residue on disk.
+# The app creates the workspace as a git worktree under the synthetic workspaces
+# root inside the run dir (WORKSPACES_SYNTHETIC_ROOT/<repo-name>/<workspace-name>).
+# Remove it using the path the app reported in the milestone stream. Runs on
+# every outcome (passed, failed, interrupted) so no run leaves residue;
+# --keep-artifacts opts out.
 cleanup_created_worktrees() {
+    if [[ "$KEEP_ARTIFACTS" == true ]]; then
+        return 0
+    fi
     [[ -f "$EVENTS_PATH" ]] || return 0
     local workspace_path
     workspace_path="$(
@@ -141,7 +150,11 @@ for raw_line in path.read_text().splitlines():
     raw_line = raw_line.strip()
     if not raw_line:
         continue
-    event = json.loads(raw_line)
+    try:
+        event = json.loads(raw_line)
+    except json.JSONDecodeError:
+        # A torn final line (app killed mid-write) must not abort cleanup.
+        continue
     if event.get("type") == "workspace_created" and event.get("workspacePath"):
         result = event["workspacePath"]
 print(result)
@@ -182,9 +195,17 @@ write_summary() {
 EOF
 }
 
+# Single finalize path for every outcome (pass, fail, signal). Clears all
+# traps first so a late signal takes its default action instead of re-entering;
+# the FINALIZED guard covers the one-command window before the traps drop.
 finalize_and_exit() {
+    trap - EXIT TERM INT HUP
     local exit_code="$1"
     local message="$2"
+    if [[ "$FINALIZED" == true ]]; then
+        exit "$exit_code"
+    fi
+    FINALIZED=true
     local elapsed_seconds
     elapsed_seconds=$(( $(date +%s) - STARTED_AT ))
 
@@ -193,6 +214,7 @@ finalize_and_exit() {
     if [[ "$RUN_STATUS" == "passed" ]]; then
         cleanup_repo
     fi
+    cleanup_created_worktrees
     write_summary "$elapsed_seconds" "$message"
     log "$message"
     log "Run directory: $RUN_DIR"
@@ -207,8 +229,20 @@ on_exit() {
     fi
 }
 
+# Terminating signals do not fire this script's EXIT trap (a plain `kill`, and
+# what CI timeouts send), so funnel them into the same finalize path: the
+# worktree is cleaned, summary.md records the interruption, and the exit code
+# is the conventional 128+signum.
+on_signal() {
+    local signal_name="$1"
+    local signal_number="$2"
+    RUN_STATUS="interrupted"
+    finalize_and_exit "$((128 + signal_number))" "Smoke run interrupted by SIG${signal_name}."
+}
+
 create_disposable_repo() {
-    SMOKE_REPO_PATH="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-ui-smoke-XXXXXX")"
+    # Inside the run dir so a red run leaves zero residue outside it.
+    SMOKE_REPO_PATH="$(mktemp -d "$RUN_DIR/smoke-repo-XXXXXX")"
     (
         cd "$SMOKE_REPO_PATH"
         git init >/dev/null
@@ -221,6 +255,7 @@ create_disposable_repo() {
 }
 
 launch_automated_app() {
+    synthetic_root_require || fail "Refusing to launch without WORKSPACES_SYNTHETIC_ROOT."
     local app_data_dir="$RUN_DIR/app-data"
     local launch_output
     local -a args=(
@@ -229,6 +264,7 @@ launch_automated_app() {
         "--clean-data"
         "--window-timeout" "20"
         "--env" "WORKSPACES_DISABLE_AUTO_IMPORT=1"
+        "--env" "WORKSPACES_SYNTHETIC_ROOT=$WORKSPACES_SYNTHETIC_ROOT"
         "--env" "WORKSPACES_AUTOMATION_MODE=desktop-ui-smoke"
         "--env" "WORKSPACES_AUTOMATION_REPO_PATH=$SMOKE_REPO_PATH"
         "--env" "WORKSPACES_AUTOMATION_WORKSPACE_NAME=$WORKSPACE_NAME"
@@ -403,11 +439,20 @@ if types[-1] != "scenario_complete":
 
 focus_events = [e for e in events if e.get("type") == "surface_focused"]
 focus_timeouts = [e for e in events if e.get("type") == "surface_focus_timed_out"]
+# The app emits surface_focus_not_applicable when it launched non-activating:
+# focus cannot fire in that mode, so report it as unavailable, not as zero.
+focus_not_applicable = any(
+    e.get("type") == "surface_focus_not_applicable" for e in events
+)
+focus_summary = (
+    "surface focus n/a (no-activate launch)"
+    if focus_not_applicable
+    else f"{len(focus_events)} surface focuses, {len(focus_timeouts)} focus timeouts"
+)
 print(
     f"OK: {len(attaches)} terminal attaches, "
     f"{len(web_attaches)} web surface attaches, "
-    f"{len(focus_events)} surface focuses, "
-    f"{len(focus_timeouts)} focus timeouts"
+    f"{focus_summary}"
 )
 PY
 }
@@ -471,6 +516,9 @@ main() {
     setup_run_dir
     STARTED_AT="$(date +%s)"
     trap on_exit EXIT
+    trap 'on_signal TERM 15' TERM
+    trap 'on_signal INT 2' INT
+    trap 'on_signal HUP 1' HUP
 
     create_disposable_repo
     launch_automated_app

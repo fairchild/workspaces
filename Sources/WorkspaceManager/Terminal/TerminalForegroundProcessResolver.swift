@@ -28,13 +28,15 @@ struct TerminalForegroundProcessResolver: Sendable {
     private static let cache = CacheBox()
 
     private let probe: TmuxSessionProbe
-    private let tmuxSessionName: @Sendable (URL) -> String
+    /// The session's effective tmux name — the chosen (possibly split-pane) name,
+    /// not a directory re-derivation, so sibling panes probe their own sessions.
+    private let tmuxSessionName: @Sendable (HostTerminalSession) -> String
     /// The non-shell program running in a directory (via `lsof` cwd match), or nil.
     private let cwdProgramName: @Sendable (URL) async -> String?
 
     init(
         probe: TmuxSessionProbe = TmuxSessionProbe(),
-        tmuxSessionName: @escaping @Sendable (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) },
+        tmuxSessionName: @escaping @Sendable (HostTerminalSession) -> String = { $0.effectiveTmuxSessionName },
         cwdProgramName: @escaping @Sendable (URL) async -> String? = TerminalForegroundProcessResolver
             .defaultCwdProgramName
     ) {
@@ -55,7 +57,7 @@ struct TerminalForegroundProcessResolver: Sendable {
         }
         var resolved: String?
         if mode == .tmuxPerSession {
-            resolved = await probe.foregroundCommand(forSessionNamed: tmuxSessionName(session.directoryURL))
+            resolved = await probe.foregroundCommand(forSessionNamed: tmuxSessionName(session))
         }
         if resolved == nil {
             resolved = await cwdProgramName(session.directoryURL)

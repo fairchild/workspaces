@@ -191,6 +191,28 @@ struct WorkspaceServiceTests {
         return false
     }
 
+    // MARK: - Workspace Root Configuration Tests
+
+    @Test("workspacesRoot prefers the synthetic run root over the configured root")
+    func workspacesRootPrefersSyntheticRoot() async throws {
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let customRoot = testRoot.appendingPathComponent("custom-root", isDirectory: true)
+        let syntheticRoot = testRoot.appendingPathComponent("synthetic-root", isDirectory: true)
+
+        let original = setWorkspacesRoot(customRoot)
+        defer { restoreWorkspacesRoot(original) }
+
+        let service = WorkspaceService(
+            materializer: RecordingWorkspaceMaterializer(),
+            environment: [SyntheticRunRoot.environmentKey: syntheticRoot.path]
+        )
+        let resolvedRoot = await service.workspacesRoot
+        #expect(resolvedRoot.path == syntheticRoot.path)
+        // Init creates the synthetic root, not a root outside the boundary.
+        #expect(FileManager.default.fileExists(atPath: syntheticRoot.path))
+    }
+
     // MARK: - runLifecycleScript Tests
 
     @Test("Returns success when script is missing")

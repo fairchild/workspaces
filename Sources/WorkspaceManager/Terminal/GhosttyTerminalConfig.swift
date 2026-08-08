@@ -52,7 +52,8 @@ struct GhosttyTerminalConfig {
                 isTmuxAvailableOverride: isTmuxAvailableOverride,
                 hostSessionID: launchContext.hostSessionID,
                 hooksSocketPath: launchContext.hooksSocketPath,
-                automationEnvironment: launchContext.automationEnvironment
+                automationEnvironment: launchContext.automationEnvironment,
+                tmuxSessionName: launchContext.tmuxSessionName
             )
         }
     }
@@ -65,7 +66,8 @@ struct GhosttyTerminalConfig {
         isTmuxAvailableOverride: Bool? = nil,
         hostSessionID: UUID? = nil,
         hooksSocketPath: String? = nil,
-        automationEnvironment: AutomationTerminalEnvironment? = nil
+        automationEnvironment: AutomationTerminalEnvironment? = nil,
+        tmuxSessionName: String? = nil
     ) {
         self.fontSize = fontSize
         self.workingDirectory = workingDirectory.path
@@ -90,15 +92,9 @@ struct GhosttyTerminalConfig {
             environment[AutomationAPI.handleEnvironmentKey] = automationEnvironment.handle
         }
 
-        if let path = environment["PATH"] {
-            environment["PATH"] = [
-                "/opt/homebrew/bin",
-                "/usr/local/bin",
-                "/usr/bin",
-                "/bin",
-                path,
-            ].joined(separator: ":")
-        }
+        // Shared with TmuxSessionProbe.defaultEnvironment, so a session the probe
+        // reports alive is one this launch gate can also see tmux for.
+        environment["PATH"] = TmuxSessionProbe.pathPrependingToolPaths(environment["PATH"])
 
         let shell = environment["SHELL"] ?? "/bin/zsh"
         let shellName = URL(fileURLWithPath: shell).lastPathComponent.lowercased()
@@ -115,7 +111,10 @@ struct GhosttyTerminalConfig {
             )
 
         if mode == .tmuxPerSession, tmuxAvailable {
-            let tmuxSessionName = Self.tmuxSessionName(for: workingDirectory)
+            // The chosen name (split-pane disambiguation, restore's probed reattach
+            // target) wins over the directory derivation, so what launches is what
+            // the continuity row recorded.
+            let tmuxSessionName = tmuxSessionName ?? Self.tmuxSessionName(for: workingDirectory)
             let quotedSession = Self.singleQuoted(tmuxSessionName)
             let quotedWorkingDirectory = Self.singleQuoted(workingDirectory.path)
             let tmuxScript =
@@ -201,44 +200,7 @@ struct GhosttyTerminalConfig {
     }
 
     static func tmuxSessionName(for directory: URL) -> String {
-        let normalizedPath = directory
-            .standardizedFileURL
-            .resolvingSymlinksInPath()
-            .path
-
-        let baseComponent = directory.lastPathComponent.isEmpty ? "session" : directory.lastPathComponent
-        let sanitizedBase = sanitizeSessionComponent(baseComponent)
-        let hash = fnv1a64(normalizedPath)
-        let hashPrefix = String(format: "%016llx", hash).prefix(8)
-        return "wm-\(sanitizedBase)-\(hashPrefix)"
-    }
-
-    private static func sanitizeSessionComponent(_ value: String) -> String {
-        let transformed = value.lowercased().map { character -> Character in
-            if character.isASCII, character.isLetter || character.isNumber {
-                return character
-            }
-            return "-"
-        }
-
-        let collapsed = String(transformed)
-            .replacingOccurrences(of: "-+", with: "-", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
-
-        if collapsed.isEmpty {
-            return "session"
-        }
-
-        return String(collapsed.prefix(20))
-    }
-
-    private static func fnv1a64(_ value: String) -> UInt64 {
-        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-        for byte in value.utf8 {
-            hash ^= UInt64(byte)
-            hash &*= 0x0100_0000_01b3
-        }
-        return hash
+        TmuxSessionNaming.defaultName(for: directory)
     }
 
     private static func singleQuoted(_ value: String) -> String {

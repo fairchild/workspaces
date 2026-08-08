@@ -168,7 +168,9 @@ workspaces tile close
 ```
 
 The request is scoped to the caller. There is no V1 command for closing an
-arbitrary tile by ID.
+arbitrary tile by ID. The response reports `outcome: "requested"` with
+`changed: false`: close is fire-and-forget and the app may still prompt, so
+the API reports the request without claiming the tile closed.
 
 ## Write Into The Current Tile (Experimental)
 
@@ -231,11 +233,17 @@ workspaces workspace list
 workspaces workspace create <repo-id> feature-a
 workspaces workspace select <workspace-id>
 workspaces workspace archive <workspace-id>
+workspaces workspace archive <workspace-id> --teardown
 ```
 
 `workspace archive` drives the same sidebar archive action as the row menu. On
 success, the workspace leaves the active list and `workspace list --json`
-reports it with `isArchived: true`.
+reports it with `isArchived: true`. A live terminal fails the plain call with a
+typed error — `terminal_active (retryable)` on the exit-timeout, or
+`close_blocked_by_confirmation (not retryable)` when a running process would
+raise the close confirmation. `--teardown` closes the loop instead: the app
+kills the workspace's tmux sessions, retires its terminal tiles, then archives
+in one call.
 
 ## Shell Alias Ideas
 

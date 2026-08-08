@@ -113,9 +113,19 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     /// through the login-shell/tmux path (correct PATH, hook env) and does not mark the
     /// session remote. `nil` for a plain shell.
     public let initialCommand: String?
+    /// Chosen tmux session name when it must differ from the directory derivation:
+    /// a split pane's disambiguated name, or the probed name a restore reattaches
+    /// to. `nil` means the default directory-derived name.
+    public let tmuxSessionNameOverride: String?
 
     public var directoryURL: URL {
         URL(fileURLWithPath: directoryPath)
+    }
+
+    /// The tmux session name this surface launches on in `.tmuxPerSession` mode:
+    /// the override when one was chosen, otherwise the directory derivation.
+    public var effectiveTmuxSessionName: String {
+        tmuxSessionNameOverride ?? TmuxSessionNaming.defaultName(for: directoryURL)
     }
 
     public var isRemote: Bool {
@@ -127,13 +137,15 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
         key: HostTerminalSessionKey,
         directory: URL,
         customCommand: String? = nil,
-        initialCommand: String? = nil
+        initialCommand: String? = nil,
+        tmuxSessionNameOverride: String? = nil
     ) {
         self.id = id
         self.key = key.normalized()
         self.directoryPath = Self.normalize(directory).path
         self.customCommand = customCommand
         self.initialCommand = initialCommand
+        self.tmuxSessionNameOverride = tmuxSessionNameOverride
     }
 
     static func normalize(_ url: URL) -> URL {
@@ -298,6 +310,28 @@ public struct HostTerminalSessionCoordinator: Sendable {
     @discardableResult
     public mutating func activate(sessionID: UUID) -> HostTerminalSession? {
         guard let session = session(withID: sessionID) else { return nil }
+        setActiveSessionID(session.id)
+        return session
+    }
+
+    /// Always-create activation for restore wiring. Each restore surface maps 1:1 to a
+    /// recorded continuity row and the owned scope is retired before restore runs, so
+    /// `activate`'s key-reuse would collapse sibling pane rows into one session and drop
+    /// the later rows' initial commands and recorded tmux targets (#1232).
+    @discardableResult
+    public mutating func createSession(
+        key: HostTerminalSessionKey,
+        directory: URL,
+        initialCommand: String? = nil,
+        tmuxSessionNameOverride: String? = nil
+    ) -> HostTerminalSession {
+        let session = HostTerminalSession(
+            key: key,
+            directory: directory,
+            initialCommand: initialCommand,
+            tmuxSessionNameOverride: tmuxSessionNameOverride
+        )
+        sessions.append(session)
         setActiveSessionID(session.id)
         return session
     }

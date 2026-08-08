@@ -28,7 +28,7 @@ private final class UnroutedAutomationController: AutomationControlling {
     ) async throws -> AutomationWorkspaceCreateResult { throw unrouted }
     func automationArchiveWorkspace(
         for handle: String,
-        workspaceID: String
+        request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult { throw unrouted }
     func automationWindowSnapshot(
         for handle: String,

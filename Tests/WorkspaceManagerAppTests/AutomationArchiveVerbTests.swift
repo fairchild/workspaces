@@ -18,6 +18,7 @@ import Testing
 struct AutomationArchiveVerbTests {
     private func expectFailure(
         _ code: AutomationErrorCode,
+        retryable: Bool? = nil,
         _ body: () async throws -> some Any
     ) async {
         do {
@@ -25,6 +26,7 @@ struct AutomationArchiveVerbTests {
             Issue.record("Expected \(code.rawValue) but the call succeeded.")
         } catch let error as AutomationServiceError {
             #expect(error.response.code == code)
+            #expect(error.response.retryable == retryable)
         } catch {
             Issue.record("Expected AutomationServiceError but got \(error).")
         }
@@ -59,7 +61,7 @@ struct AutomationArchiveVerbTests {
                 AutomationWorkspaceSelectEffect(
                     selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
             },
-            performArchive: { target in
+            performArchive: { target, _ in
                 .completed(
                     AutomationWorkspaceArchiveEffect(
                         workspaceID: target.workspaceID,
@@ -69,13 +71,100 @@ struct AutomationArchiveVerbTests {
         let (controller, _, handle) = operatorController(gestureVerbs: verbs)
 
         let result = try await controller.automationArchiveWorkspace(
-            for: handle, workspaceID: id.uuidString)
+            for: handle, request: AutomationWorkspaceArchiveRequest(workspaceID: id.uuidString))
 
         #expect(result.outcome == .completed)
         #expect(result.changed)
         #expect(result.archivedWorkspaceID == id)
         #expect(result.selectedWorkspaceID == selected)
+        #expect(result.teardown == nil)
         #expect(result.system.capabilities.contains(.workspaceArchive))
+    }
+
+    @Test("teardownTerminals rides the command into the gesture and the report rides the result")
+    func teardownCommandAndReport() async throws {
+        let id = UUID()
+        let report = AutomationWorkspaceArchiveTeardownReport(
+            retiredSurfaceIDs: [UUID().uuidString, UUID().uuidString],
+            killedTmuxSessions: ["wm-ws-12345678"]
+        )
+        var receivedCommand: AutomationWorkspaceArchiveCommand?
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: { [id] in
+                $0 == id
+                    ? AutomationGestureVerbs.WorkspaceTarget(workspaceID: id, name: "ws", isArchived: false)
+                    : nil
+            },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            performArchive: { target, command in
+                receivedCommand = command
+                return .completed(
+                    AutomationWorkspaceArchiveEffect(
+                        workspaceID: target.workspaceID,
+                        selectedWorkspaceID: nil,
+                        teardown: report))
+            }
+        )
+        let (controller, _, handle) = operatorController(gestureVerbs: verbs)
+
+        let result = try await controller.automationArchiveWorkspace(
+            for: handle,
+            request: AutomationWorkspaceArchiveRequest(
+                workspaceID: id.uuidString, teardownTerminals: true))
+
+        #expect(receivedCommand?.teardownTerminals == true)
+        #expect(receivedCommand?.workspaceID == id)
+        #expect(result.outcome == .completed)
+        #expect(result.teardown == report)
+    }
+
+    @Test("terminal-still-live maps to typed terminal_active with retryable true")
+    func terminalActiveIsTypedRetryable() async throws {
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: {
+                AutomationGestureVerbs.WorkspaceTarget(workspaceID: $0, name: "ws", isArchived: false)
+            },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            performArchive: { _, _ in
+                .terminalActive("Terminal 'ws' did not exit before the workspace lifecycle timeout.")
+            }
+        )
+        let (controller, _, handle) = operatorController(gestureVerbs: verbs)
+
+        await expectFailure(.terminalActive, retryable: true) {
+            try await controller.automationArchiveWorkspace(
+                for: handle, request: AutomationWorkspaceArchiveRequest(workspaceID: UUID().uuidString))
+        }
+    }
+
+    @Test("confirmation-blocked teardown maps to typed close_blocked_by_confirmation, not retryable")
+    func closeBlockedByConfirmationIsTypedNonRetryable() async throws {
+        let verbs = AutomationGestureVerbs(
+            resolveWorkspace: {
+                AutomationGestureVerbs.WorkspaceTarget(workspaceID: $0, name: "ws", isArchived: false)
+            },
+            performSelection: { _ in
+                AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
+            },
+            performArchive: { _, _ in
+                .closeBlockedByConfirmation("Terminal teardown was blocked by the close confirmation.")
+            }
+        )
+        let (controller, _, handle) = operatorController(gestureVerbs: verbs)
+
+        await expectFailure(.closeBlockedByConfirmation, retryable: false) {
+            try await controller.automationArchiveWorkspace(
+                for: handle,
+                request: AutomationWorkspaceArchiveRequest(
+                    workspaceID: UUID().uuidString, teardownTerminals: true))
+        }
     }
 
     @Test("a tile handle lacks workspace.archive and is denied")
@@ -91,7 +180,7 @@ struct AutomationArchiveVerbTests {
 
         await expectFailure(.capabilityDenied) {
             try await controller.automationArchiveWorkspace(
-                for: tile.handle, workspaceID: UUID().uuidString)
+                for: tile.handle, request: AutomationWorkspaceArchiveRequest(workspaceID: UUID().uuidString))
         }
     }
 
@@ -101,7 +190,7 @@ struct AutomationArchiveVerbTests {
 
         await expectFailure(.unsupported) {
             try await controller.automationArchiveWorkspace(
-                for: handle, workspaceID: UUID().uuidString)
+                for: handle, request: AutomationWorkspaceArchiveRequest(workspaceID: UUID().uuidString))
         }
     }
 
@@ -116,7 +205,7 @@ struct AutomationArchiveVerbTests {
                 AutomationWorkspaceSelectEffect(
                     selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
             },
-            performArchive: { target in
+            performArchive: { target, _ in
                 drove = true
                 return .completed(
                     AutomationWorkspaceArchiveEffect(workspaceID: target.workspaceID, selectedWorkspaceID: nil))
@@ -128,7 +217,7 @@ struct AutomationArchiveVerbTests {
 
         await expectFailure(.unsupported) {
             try await controller.automationArchiveWorkspace(
-                for: handle, workspaceID: UUID().uuidString)
+                for: handle, request: AutomationWorkspaceArchiveRequest(workspaceID: UUID().uuidString))
         }
         #expect(!drove)
     }
@@ -141,12 +230,13 @@ struct AutomationArchiveVerbTests {
                 AutomationWorkspaceSelectEffect(
                     selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
             },
-            performArchive: { _ in .unsupported("should not run") }
+            performArchive: { _, _ in .unsupported("should not run") }
         )
         let (controller, _, handle) = operatorController(gestureVerbs: verbs)
 
         await expectFailure(.invalidRequest) {
-            try await controller.automationArchiveWorkspace(for: handle, workspaceID: "not-a-uuid")
+            try await controller.automationArchiveWorkspace(
+                for: handle, request: AutomationWorkspaceArchiveRequest(workspaceID: "not-a-uuid"))
         }
     }
 
@@ -159,7 +249,7 @@ struct AutomationArchiveVerbTests {
                 AutomationWorkspaceSelectEffect(
                     selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
             },
-            performArchive: { _ in
+            performArchive: { _, _ in
                 performed = true
                 return .unsupported("should not run")
             }
@@ -168,7 +258,7 @@ struct AutomationArchiveVerbTests {
 
         await expectFailure(.invalidRequest) {
             try await controller.automationArchiveWorkspace(
-                for: handle, workspaceID: UUID().uuidString)
+                for: handle, request: AutomationWorkspaceArchiveRequest(workspaceID: UUID().uuidString))
         }
         #expect(!performed)
     }

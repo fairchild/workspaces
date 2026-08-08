@@ -269,9 +269,10 @@ final class AutomationController: AutomationControlling {
 
     func automationArchiveWorkspace(
         for handle: String,
-        workspaceID: String
+        request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult {
         let entry = try resolveOperator(handle, requiring: .workspaceArchive)
+        let workspaceID = request.workspaceID
         guard let uuid = UUID(uuidString: workspaceID) else {
             throw AutomationServiceError(.invalidRequest, "workspaceID must be a UUID.")
         }
@@ -284,7 +285,11 @@ final class AutomationController: AutomationControlling {
         }
 
         let capabilities = entry.capabilities
-        switch await gestureVerbs.archiveWorkspace(uuid) {
+        let command = AutomationWorkspaceArchiveCommand(
+            workspaceID: uuid,
+            teardownTerminals: request.teardownTerminals ?? false
+        )
+        switch await gestureVerbs.archiveWorkspace(command) {
         case .completed(let effect):
             return AutomationWorkspaceArchiveResult(
                 workspaceID: workspaceID,
@@ -292,6 +297,7 @@ final class AutomationController: AutomationControlling {
                 changed: true,
                 archivedWorkspaceID: effect.workspaceID,
                 selectedWorkspaceID: effect.selectedWorkspaceID,
+                teardown: effect.teardown,
                 system: AutomationSystemDescriptor(capabilities: capabilities)
             )
         case .confirmationRequired(let confirmation):
@@ -308,6 +314,10 @@ final class AutomationController: AutomationControlling {
         case .notFound:
             throw AutomationServiceError(
                 .invalidRequest, "No workspace with id \(workspaceID) is tracked by the app.")
+        case .terminalActive(let message):
+            throw AutomationServiceError(.terminalActive, message, retryable: true)
+        case .closeBlockedByConfirmation(let message):
+            throw AutomationServiceError(.closeBlockedByConfirmation, message, retryable: false)
         }
     }
 
@@ -464,8 +474,12 @@ final class AutomationController: AutomationControlling {
     func automationCloseTile(for handle: String) throws -> AutomationMutationResult {
         let resolved = try resolve(handle, requiring: .tileClose)
         requestCloseTerminal(resolved.entry.hostSessionID)
+        // Close is fire-and-forget into the app's close-confirmation path — Ghostty may still
+        // prompt — so the result reports the request as `requested` without claiming the tile
+        // closed. `closedSurfaceID` names the surface the request targeted.
         return AutomationMutationResult(
-            changed: true,
+            changed: false,
+            outcome: .requested,
             closedSurfaceID: resolved.entry.hostSessionID.uuidString
         )
     }

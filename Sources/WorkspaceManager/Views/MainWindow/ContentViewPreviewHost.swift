@@ -20,12 +20,7 @@ private struct ContentViewPreviewHost: View {
     @StateObject private var appCommandState = AppCommandState()
     @StateObject private var tileTreeStore = TileTreeStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
-    @StateObject private var hostLumeSmokeAutomation = HostLumeSmokeAutomationController(
-        environment: [:]
-    )
-    @StateObject private var desktopUISmokeAutomation = DesktopUISmokeAutomationController(
-        environment: [:]
-    )
+    @StateObject private var smokeDriver = SmokeScenarioDriver(environment: [:])
 
     var body: some View {
         ContentView(
@@ -34,8 +29,7 @@ private struct ContentViewPreviewHost: View {
             appCommandState: appCommandState,
             tileTreeStore: tileTreeStore,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-            hostLumeSmokeAutomation: hostLumeSmokeAutomation,
-            desktopUISmokeAutomation: desktopUISmokeAutomation
+            smokeDriver: smokeDriver
         )
     }
 }

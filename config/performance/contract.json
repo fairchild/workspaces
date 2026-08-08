@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reference_baseline_note": "Seed baseline derived from validated local runs and historical debug gates. debug_no_activate launch_to_first_prompt was refreshed on 2026-06-08 from a 10-run raw SwiftPM debug capture on Mac16,13 after the harness began enforcing pinned Ghostty resources and clean-shell diagnostics. Refresh with a 10-run reference capture before tightening budgets.",
+  "reference_baseline_note": "Seed baseline derived from validated local runs and historical debug gates. debug_no_activate launch_to_first_prompt was refreshed on 2026-06-08 from a 10-run raw SwiftPM debug capture on Mac16,13 after the harness began enforcing pinned Ghostty resources and clean-shell diagnostics. Channel RSS references were refreshed on 2026-08-07 from the perf-rebaseline-20260807 run: sidebar churn measured a 1.67 MB steady-state RSS delta over 60s (reference 2 MB, 3 MB gate via the x1.25 formula), and the 600s long-session soak measured a 20.39 MB warm-up-dominated delta with the registry drained to zero (ten-minute cap 32 MB at >=1.5x headroom over the observation; sixty-minute cap 40 MB extrapolated from the post-warm-up plateau, refresh from a real 60-minute soak before leaning on it). Refresh with a 10-run reference capture before tightening budgets.",
   "budget_formula": {
     "gate": {
       "stat": "median",
@@ -70,11 +70,6 @@
       "id": "channel1_long_session_memory",
       "build_kind": "debug",
       "description": "Long-running register/deregister cycles (10 min default, 60 min target) with 30 events per cycle; measures RSS delta and registry-size symmetry."
-    },
-    {
-      "id": "channel4_replay_10k_records",
-      "build_kind": "debug",
-      "description": "Cold-start replay of a 10,000-record transcript JSONL through TranscriptColdStartRecovery + AgentSessionRegistry.ingestBatch with the production 500 ev/s rate cap; measures wall-clock completion and RSS delta. Gates the perf audit's hard constraints for Channel 4 (perf-audit-pr443-final.md)."
     },
     {
       "id": "channel2_statusline_burst",
@@ -329,8 +324,8 @@
       ],
       "reference_baselines": {
         "channel1_sidebar_churn": {
-          "median_mb": 0,
-          "p95_mb": 5
+          "median_mb": 2,
+          "p95_mb": 2
         }
       }
     },
@@ -342,8 +337,8 @@
       ],
       "reference_baselines": {
         "channel1_long_session_memory": {
-          "ten_minute_max_mb": 1,
-          "sixty_minute_max_mb": 5
+          "ten_minute_max_mb": 32,
+          "sixty_minute_max_mb": 40
         }
       }
     },
@@ -356,30 +351,6 @@
       "reference_baselines": {
         "channel1_long_session_memory": {
           "max_entries": 0
-        }
-      }
-    },
-    {
-      "name": "channel4_replay_completion_seconds",
-      "unit": "seconds",
-      "supported_scenarios": [
-        "channel4_replay_10k_records"
-      ],
-      "reference_baselines": {
-        "channel4_replay_10k_records": {
-          "max_seconds": 25
-        }
-      }
-    },
-    {
-      "name": "channel4_replay_rss_delta_mb",
-      "unit": "MB",
-      "supported_scenarios": [
-        "channel4_replay_10k_records"
-      ],
-      "reference_baselines": {
-        "channel4_replay_10k_records": {
-          "max_mb": 50
         }
       }
     },

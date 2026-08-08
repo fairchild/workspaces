@@ -1,5 +1,24 @@
 import SwiftUI
 
+/// Recovery-affordance hints for Lume-related failure messages: pure string
+/// matching over the message, feeding both the production error alert's
+/// recovery buttons and (in debug builds) the host-Lume smoke's failure events.
+func lumeRecoveryHints(for message: String?) -> [String] {
+    guard let message else { return [] }
+    let normalized = message.lowercased()
+
+    if normalized.contains("lume")
+        || normalized.contains("macos vm")
+        || normalized.contains("vm runtime")
+        || normalized.contains("restore image")
+        || normalized.contains("virtual machine not found")
+    {
+        return ["Open VM Runtime", "Open Lume Log"]
+    }
+
+    return []
+}
+
 /// One presentation model for main-window errors. Producers build a `MainWindowError` and
 /// hand it to the presenter; a view renders a single alert from `current` via
 /// `mainWindowErrorAlert`. This is the seam the main window and its sibling views (ContentView,
@@ -62,7 +81,7 @@ struct MainWindowErrorRecoveryAction: Identifiable, Equatable {
     /// "Open Lume Log" pair the sidebar showed whenever the message carried host-Lume recovery
     /// hints. Empty when the message has no such hints.
     static func lumeRecoveryActions(forMessage message: String?) -> [MainWindowErrorRecoveryAction] {
-        guard !hostLumeSmokeRecoveryHints(for: message).isEmpty else { return [] }
+        guard !lumeRecoveryHints(for: message).isEmpty else { return [] }
         return [
             MainWindowErrorRecoveryAction(title: "Open VM Runtime", kind: .openVMRuntime),
             MainWindowErrorRecoveryAction(title: "Open Lume Log", kind: .openLumeLog),

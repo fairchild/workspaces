@@ -4,6 +4,7 @@ import json
 import math
 import os
 import plistlib
+import re
 import statistics
 import subprocess
 from pathlib import Path
@@ -13,10 +14,45 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT_PATH = REPO_ROOT / "config" / "performance" / "contract.json"
 
+# Click-to-focus intervals only measure latency when they end in a
+# terminal-success outcome. Every other outcome (superseded, web_source_selected,
+# repo_overview_selected, ...) is an abandoned interval whose elapsed wall time
+# is idle time, not latency. The allowlist is intentional: a new cancel reason
+# cannot silently rejoin the sample pool.
+CLICK_TO_FOCUS_METRICS = frozenset({"repo_click_to_focus", "workspace_click_to_focus"})
+CLICK_TO_FOCUS_SUCCESS_OUTCOMES = frozenset({"prompt_ready", "focused"})
+
+_DURATION_LINE_PATTERN = re.compile(
+    r"metric=(?P<metric>[a-z_]+) duration_ms=(?P<duration>[0-9]+(?:\.[0-9]+)?)"
+)
+_OUTCOME_PATTERN = re.compile(r"outcome=(?P<outcome>[A-Za-z0-9_]+)")
+
 
 def load_contract(path: Path | None = None) -> dict[str, Any]:
     contract_path = path or DEFAULT_CONTRACT_PATH
     return json.loads(contract_path.read_text(encoding="utf-8"))
+
+
+def measured_duration_samples(text: str) -> list[tuple[str, float]]:
+    """Yield (metric, duration_ms) pairs that represent measured latency.
+
+    Abandoned click-to-focus intervals log `status=abandoned elapsed_ms=...`
+    and never match; this filter additionally rejects any click-to-focus
+    `duration_ms` line (from older builds or future regressions) whose outcome
+    is not a terminal success.
+    """
+    samples: list[tuple[str, float]] = []
+    for line in text.splitlines():
+        match = _DURATION_LINE_PATTERN.search(line)
+        if match is None:
+            continue
+        metric = match.group("metric")
+        if metric in CLICK_TO_FOCUS_METRICS:
+            outcome = _OUTCOME_PATTERN.search(line)
+            if outcome is None or outcome.group("outcome") not in CLICK_TO_FOCUS_SUCCESS_OUTCOMES:
+                continue
+        samples.append((metric, float(match.group("duration"))))
+    return samples
 
 
 def percentile(values: list[float], percentile_value: float) -> float:

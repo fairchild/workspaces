@@ -981,7 +981,7 @@ private final class CLIApp {
             return try runWorkspaceArchive(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError(
-                "Usage: workspaces workspace list [--json] | workspace select <id> [--json] | workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | workspace archive <id> [--json]"
+                "Usage: workspaces workspace list [--json] | workspace select <id> [--json] | workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | workspace archive <id> [--teardown] [--json]"
             )
         }
     }
@@ -1175,17 +1175,22 @@ private final class CLIApp {
         return 0
     }
 
-    /// `workspaces workspace archive <id> [--json]` — an operator mutation verb. Drives the
-    /// running app's real sidebar archive gesture, so the row leaves the active list exactly as it
-    /// would from the sidebar menu. `<id>` is a stable workspace id from `workspace list`.
+    /// `workspaces workspace archive <id> [--teardown] [--json]` — an operator mutation verb.
+    /// Drives the running app's real sidebar archive gesture, so the row leaves the active list
+    /// exactly as it would from the sidebar menu. `<id>` is a stable workspace id from
+    /// `workspace list`. `--teardown` asks the app to kill the workspace's tmux sessions and
+    /// retire its terminal tiles before archiving, so a live terminal cannot fail the call.
     private func runWorkspaceArchive(arguments: [String]) throws -> Int32 {
-        let usage = "workspaces workspace archive <id> [--json]"
+        let usage = "workspaces workspace archive <id> [--teardown] [--json]"
         var json = false
+        var teardown = false
         var workspaceID: String?
         for argument in arguments {
             switch argument {
             case "--json":
                 json = true
+            case "--teardown":
+                teardown = true
             default:
                 guard workspaceID == nil else { throw CLIError("Usage: \(usage)") }
                 workspaceID = argument
@@ -1196,7 +1201,11 @@ private final class CLIApp {
         }
 
         let credential = try loadOperatorCredential()
-        let body = try JSONSerialization.data(withJSONObject: ["workspaceID": workspaceID])
+        var bodyObject: [String: Any] = ["workspaceID": workspaceID]
+        if teardown {
+            bodyObject["teardownTerminals"] = true
+        }
+        let body = try JSONSerialization.data(withJSONObject: bodyObject)
         let result = try operatorRequest(
             AutomationWorkspaceArchiveResult.self,
             credential: credential,
@@ -1214,6 +1223,11 @@ private final class CLIApp {
         case .completed:
             let selected = result.selectedWorkspaceID?.uuidString ?? "-"
             print("Archived \(result.workspaceID) — selected workspace \(selected).")
+            if let teardownReport = result.teardown {
+                print(
+                    "Teardown retired \(teardownReport.retiredSurfaceIDs.count) terminal surface(s), "
+                        + "killed \(teardownReport.killedTmuxSessions.count) tmux session(s).")
+            }
         case .confirmationRequired:
             print("Confirmation required: \(result.message ?? "the app needs confirmation to proceed.")")
         }
@@ -1237,10 +1251,22 @@ private final class CLIApp {
         do {
             return try AutomationCLIResultPrinter.decodeEnvelope(type, from: response)
         } catch let error as AutomationServiceError {
-            throw CLIError(
-                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
-            )
+            throw CLIError(Self.automationFailureMessage(error))
         }
+    }
+
+    /// One rendering for wire failures, including the wire's retry semantics when present so
+    /// operator loops can branch without `--json`: `terminal_active (retryable)` invites a retry
+    /// or `--teardown`; `close_blocked_by_confirmation (not retryable)` says a blind retry will
+    /// spin on a prompt no caller can answer.
+    private static func automationFailureMessage(_ error: AutomationServiceError) -> String {
+        let retrySuffix: String
+        switch error.response.retryable {
+        case .some(true): retrySuffix = " (retryable)"
+        case .some(false): retrySuffix = " (not retryable)"
+        case .none: retrySuffix = ""
+        }
+        return "automation request failed: \(error.response.code.rawValue)\(retrySuffix): \(error.response.message)"
     }
 
     private func loadOperatorCredential() throws -> AutomationOperatorCredential {
@@ -1272,9 +1298,7 @@ private final class CLIApp {
         do {
             return try AutomationCLIResultPrinter.decodeEnvelope(type, from: response)
         } catch let error as AutomationServiceError {
-            throw CLIError(
-                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
-            )
+            throw CLIError(Self.automationFailureMessage(error))
         }
     }
 
@@ -1293,9 +1317,7 @@ private final class CLIApp {
         } catch let error as AutomationCLIResponseError {
             throw CLIError(error.localizedDescription)
         } catch let error as AutomationServiceError {
-            throw CLIError(
-                "automation request failed: \(error.response.code.rawValue): \(error.response.message)"
-            )
+            throw CLIError(Self.automationFailureMessage(error))
         }
     }
 
@@ -1830,7 +1852,7 @@ private func printHelp() {
           workspaces workspace list [--json]
           workspaces workspace select <workspace-id> [--json]
           workspaces workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
-          workspaces workspace archive <workspace-id> [--json]
+          workspaces workspace archive <workspace-id> [--teardown] [--json]
           workspaces help
 
         Launch behavior:
