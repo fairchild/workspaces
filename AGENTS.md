@@ -6,13 +6,13 @@ Mac-native app for managing AI coding sessions with embedded terminal.
 
 Craft matters. Plan work so it can land mergeably: correct, coherent with the product, reviewable, verified, and leaving the system easier to operate. Keep changes native-feeling, tightly scoped, evidence-backed, and consistent with existing architecture and UI patterns. Before opening or reviewing a PR, use `docs/development/mergeability-standard.md` for the surface-specific checklist. Substantive PRs run the `codex-review-loop` skill before opening (reflect → directed codex review → attributed reactions; skip codex for metadata/docs-only diffs).
 
-When the user asks to implement a change, default to carrying it through to a PR: branch if needed, make the edit, verify it, commit, rebase on the latest `origin/main`, push, open the PR, and report its status. Treat this as a strong default, not a mandate; pause short of PR creation when the user asks for exploration only, says not to publish, or evidence/permissions are blocked. At the start of a multi-PR working session, propose the authority contract explicitly (who reviews, who flips ready, who merges) instead of discovering it one approval at a time — it was the single biggest cycle-time lever in the 2026-07-02 cycle.
+When the user asks to implement a change, default to carrying it through to a PR: branch if needed, make the edit, verify it, commit, rebase on the latest `origin/main`, push, open the PR, and report its status. Treat this as a strong default, not a mandate; pause short of PR creation when the user asks for exploration only, says not to publish, or evidence/permissions are blocked. At the start of a multi-PR working session, propose the authority contract explicitly (who reviews, who flips ready, who merges) instead of discovering it one approval at a time.
 
 ## Startup Instruction Budget
 
-`AGENTS.md` is startup context for every repo session. Keep it under about **4,500 tokens** unless the added guidance is more important than the recurring context cost. Token count is the real constraint — word count diverges from it on table-dense content and is not a reliable proxy, so measure tokens directly rather than words. Prefer tightening, deduplicating, or moving detailed policy into linked docs over expanding this file.
+`AGENTS.md` is startup context for every repo session. Keep it under about **4,500 tokens** unless the added guidance is more important than the recurring context cost; measure tokens directly — word count is not a reliable proxy, especially on table-dense content. Prefer tightening, deduplicating, or moving detailed policy into linked docs over expanding this file.
 
-Continuous improvement of `AGENTS.md` is important to the health and longevity of the codebase: it is how this repo teaches future agents to meet product, quality, evidence, and operational objectives. Improve it when the guidance becomes clearer, shorter, or more actionable. When encoding a lesson, place it at the cheapest surface that fires at the right moment — machinery (CI gates, scripts) over skills, skills over linked docs, this file last — and when a lesson graduates upward (e.g. prose becomes a script), delete the prose it replaces.
+Continuous improvement of `AGENTS.md` is important to the health of the codebase: it is how this repo teaches future agents to meet product, quality, evidence, and operational objectives. Improve it whenever guidance can become clearer, shorter, or more actionable. When encoding a lesson, place it at the cheapest surface that fires at the right moment — machinery (CI gates, scripts) over skills, skills over linked docs, this file last — and when a lesson graduates upward (e.g. prose becomes a script), delete the prose it replaces.
 
 ## Agent skills
 
@@ -20,16 +20,13 @@ Continuous improvement of `AGENTS.md` is important to the health and longevity o
 
 Issues and PRDs live in GitHub Issues for `fairchild/workspaces`. See `docs/agents/issue-tracker.md`.
 
-When the user asks to work a GitHub issue, or gives an issue link/number, treat it as a backlog claim even if the `backlog` skill was not named.
-Before implementation, read the issue, apply the `claimed` label, remove `ready` if present, and post a claim comment naming the active Codex thread title/name and session ID.
-If either identifier is unavailable, say so explicitly in the comment instead of omitting it.
-Then continue through the issue lifecycle in `backlog/AGENTS.md`.
+When the user asks to work a GitHub issue, or gives an issue link/number, treat it as a backlog claim even if the `backlog` skill was not named: read the issue, apply the `claimed` label (removing `ready` if present), and post a claim comment naming the active Codex thread title/name and session ID — say so explicitly if either is unavailable — then continue through the issue lifecycle in `backlog/AGENTS.md`.
 
 ### Triage labels
 
 Use lane + state labels: `agent`/`human` for ownership, `ready`/`claimed`/`review`/`mergeable` for lifecycle, and `needs-human` only for human intervention blockers. See `docs/agents/triage-labels.md`.
 
-**Author label (required on agent-authored PRs).** The GitHub account is shared across all agents, so a PR's author/assignee can't tell workstreams apart — and almost every PR here is agent-authored. When you open a PR, add exactly one `author:<agent>` label naming yourself (e.g. `author:claude-code`, `author:codex`, `author:april`, `author:fable-orchestrator`); `gh label create` it if it doesn't exist yet. Human-authored PRs carry none. This makes attribution filterable (`gh pr list --label author:<agent>`) since author is meaningless on a shared account. Slug rules + vocabulary: `docs/agents/triage-labels.md` § "Author Labels".
+**Author label (required on agent-authored PRs).** The GitHub account is shared across all agents, so when you open a PR, add exactly one `author:<agent>` label naming yourself (e.g. `author:claude-code`, `author:codex`), creating the label if it doesn't exist yet. Slug rules, vocabulary, and rationale: `docs/agents/triage-labels.md` § "Author Labels".
 
 ### Domain docs
 
@@ -37,23 +34,21 @@ Single-context repo; use root docs plus `docs/decisions/` for architectural deci
 
 ### Local state schema
 
-The native app's local SQLite sidecar schema lives in `docs/schema.sql`, with the implementation plan in `docs/development/local-state-store-plan.md`. Keep the schema doc manually in sync with `LocalStateStore` migrations whenever tables, indexes, or persisted meanings change.
+The native app's local SQLite sidecar schema lives in `docs/schema.sql` (implementation plan: `docs/development/local-state-store-plan.md`). Keep the schema doc manually in sync with `LocalStateStore` migrations whenever tables, indexes, or persisted meanings change.
 
 ## Dev Verification Practice (required)
 
 When changing terminal/keyboard/sidebar behavior, run the canonical self-verification loop in `docs/development/libghostty-integration.md` § "Agent self-verification runbook" — this is the short form:
 
 1. `./scripts/build-ghosttykit.sh` (once / after pin changes), then `swift build`.
-2. Launch only the debug binary: `./scripts/launch-dev.sh --no-build` (`--no-activate` on a shared desktop with the user present, `--watch` to keep logs attached); `./scripts/dev-smoke.sh --no-build` is the fastest sanity check.
-3. Confirm you're testing the debug app, not `/Applications`: `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`. Debug builds show a `DEV` Dock badge and a persistent toolbar `DEV` badge (no window subtitle). Kill `/Applications/WorkSpaces.app` if both are running.
-4. Verify shortcuts (`Cmd+B` sidebar, `Cmd+D` split) via logs — app logging is `os.Logger` (subsystem `com.cloudcompute.workspaces`), which does **not** land in `.dev-data/logs/` (stdout/stderr only). Start `/usr/bin/log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact` before triggering the action; expect `"[GhosttyAppManager] action=new_split direction="`.
-5. Capture evidence without forcing activation: `./scripts/capture-window.sh`. With `--no-activate`, pause your own input, capture, resume — capture-only, not input-driving. Reserve activation-driving scripts (e.g. `./scripts/shortcut-pass-through-smoke.sh`, Ghostty Splits mode) for when foreground input is acceptable; otherwise use Tart/Lume or a separate macOS user/session.
-6. Run `./scripts/desktop-ui-smoke.sh --no-build` (`mise run dev-ui-smoke`) end to end: creates a workspace via the UI, switches selection workspace→repo→workspace, and asserts the JSONL milestone sequence under `output/desktop-ui-smoke/<timestamp>/`. Headless-safe; terminal-attach + follows-selection are hard gates, `surface_focused` is best-effort — scheduled non-PR-blocking for now.
-7. `mise` shortcuts: `dev-launch`, `dev-watch`, `dev-smoke`, `dev-ui-smoke`, `dev-lume-ensure`, `dev-lume-preflight`, `dev-lume-standalone-validate`, `dev-lume-macos-smoke`.
+2. Launch only the debug binary: `./scripts/launch-dev.sh --no-build` (`--no-activate` on a shared desktop with the user present, `--watch` to keep logs attached); `./scripts/dev-smoke.sh --no-build` is the fastest sanity check. On launch failure, inspect the newest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle.
+3. Confirm you're testing the debug app (`DEV` Dock badge + persistent toolbar badge), not `/Applications`: `ps aux | rg '.build/arm64-apple-macosx/debug/WorkspaceManager'`; kill `/Applications/WorkSpaces.app` if both are running.
+4. Verify shortcuts (`Cmd+B` sidebar, `Cmd+D` split) via logs — app logging is `os.Logger` (subsystem `com.cloudcompute.workspaces`), which does **not** land in `.dev-data/logs/` (stdout/stderr only). Start `/usr/bin/log stream --predicate 'subsystem == "com.cloudcompute.workspaces"' --level info --style compact` before triggering; expect `"[GhosttyAppManager] action=new_split direction="`.
+5. Capture evidence without forcing activation: `./scripts/capture-window.sh` (capture-only, not input-driving; with `--no-activate`, pause your own input during capture). Reserve activation-driving scripts for when foreground input is acceptable; otherwise use Tart/Lume or a separate macOS user/session.
+6. Run `./scripts/desktop-ui-smoke.sh --no-build` (`mise run dev-ui-smoke`) end to end — headless-safe UI lane; gate semantics and milestone details are in the runbook.
+7. `mise` shortcuts: `dev-launch`, `dev-watch`, `dev-smoke`, `dev-ui-smoke`, plus the `dev-lume-*` family.
 
-Launcher contract: `launch-dev.sh` reports success only once the debug process is alive and a visible window exists; on failure, inspect the latest `.dev-data/logs/launch-diagnostics-<timestamp>/` bundle.
-
-**Lume.** Run `mise run dev-lume-ensure` before any Lume work (idempotent, self-healing; daemon must run from the installed binary, LaunchAgent `KeepAlive: true`). Storage contract, validation lanes, unattended overrides, and the app smoke's automation mode are canonical in `docs/development/lume-integration.md`, `docs/development/lume-validation.md`, `docs/development/lume-recreate-runbook.md`, `docs/development/lume-runner-setup.md`.
+**Lume.** Run `mise run dev-lume-ensure` before any Lume work (idempotent, self-healing). Daemon requirements, storage contract, validation lanes, unattended overrides, and the app smoke's automation mode are canonical in `docs/development/lume-integration.md`, `lume-validation.md`, `lume-recreate-runbook.md`, `lume-runner-setup.md`.
 
 Shortcut/split routing: `docs/development/shortcut-routing.md`. Shared-desktop isolation: `backlog/done/shared-desktop-focus-contention-followup.md`.
 
@@ -62,19 +57,13 @@ Shortcut/split routing: `docs/development/shortcut-routing.md`. Shared-desktop i
 Evidence is a merge gate. Do not create a PR without it. In order:
 
 1. **Run tests** — `swift test`, `cd web-next && pnpm test`, or `cd web && pnpm test`
-2. **Capture evidence** — for macOS-app UI, first-choice is the app evidence lane: `./scripts/evidence.sh --pr <number> --fixture <scenario>` (launches a fixture state, snapshots the main window via operator scope, uploads — no activation, no focus steal). Otherwise `./scripts/evidence.sh --pr <number> --name <slug>` (test output; web screenshots without auth: `mise run web:dev`). Fallbacks (ImageRenderer, qlmanage logs, VM lane) in `docs/development/evidence.md`.
+2. **Capture evidence** — for macOS-app UI, first choice is the app evidence lane: `./scripts/evidence.sh --pr <number> --fixture <scenario>` (fixture state, operator-scope window snapshot, upload — no activation, no focus steal). Otherwise `./scripts/evidence.sh --pr <number> --name <slug>` (test output; web screenshots without auth: `mise run web:dev`).
 3. **Paste the uploaded evidence URLs into the PR body**
 4. **Only then create the PR** — no `[pending-ci]` unless evidence is genuinely impossible locally
 
-```bash
-./scripts/evidence.sh --pr <N> --name <slug>                  # capture + upload + print markdown
-./scripts/evidence.sh --pr <N> --name <slug> --file <path>    # upload an existing file
-mise run evidence -- --pr <N> --name <slug>
-```
+Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. Setup, token sourcing, fallback lanes, and troubleshooting: `docs/development/evidence.md`. Remote (claude.ai) sessions lack the token, mise, and a matching Playwright browser — the sanctioned workarounds are canonical in `docs/development/remote-sessions.md`.
 
-Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. The script auto-sources `.env` (and sibling worktree env files) for `EVIDENCE_UPLOAD_TOKEN`; if a worktree lacks `.env`, run `./scripts/setup --env-only` before claiming evidence is blocked. Uploads go to `https://evidence.cloudcompute.com/`. Full guide: `docs/development/evidence.md`. Remote (claude.ai) sessions lack the token, mise, and a matching Playwright browser — the sanctioned workarounds (green-CI-link evidence, raw-pnpm equivalents, `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`) are canonical in `docs/development/remote-sessions.md`.
-
-PR summary style: prefer concise Markdown links for completed checks/artifacts (e.g. `[Web CI passed](url)`). Readability preference, not a merge gate.
+PR summary style: prefer concise Markdown links for completed checks/artifacts (e.g. `[Web CI passed](url)`) — readability preference, not a merge gate.
 
 ## High-Signal Lessons
 
@@ -85,9 +74,9 @@ PR summary style: prefer concise Markdown links for completed checks/artifacts (
 - **Release version metadata must have one source of truth.** Tag, app version, and packaged artifact version should be validated against each other before a release is created.
 - **If the app opens or closes unexpectedly on a dev machine, check the launching process first.** CI/self-hosted runner behavior can look like an app bug.
 - **Vercel `Sandbox.create({env: {...}})` does NOT propagate to `sandbox.runCommand()`.** Write env vars to an `env.sh` and `source` it at the top of the script. See `docs/development/agent-chat-sandbox.md` § "Claude CLI Authentication".
-- **Ship a diagnostic probe instead of your third guess.** Terminal arc #306→#309: two guess-fixes merged green and failed in production; one temporary probe (#308) revealed the root cause in a single ship cycle. When you're guessing, stop and instrument.
+- **Ship a diagnostic probe instead of your third guess.** Terminal arc #306→#309: two guess-fixes merged green and failed in production; one probe found the root cause in one ship cycle. When you're guessing, stop and instrument.
 - **"Tests green" ≠ "works in production" for agent paths.** For changes touching `createSandbox`, `restoreSnapshot`, `createTerminalSandbox`, or `streamOutput`, send a real chat message in production and read the agent stream before declaring victory.
-- **The tracker lags the code — verify before planning from it.** Three grooming/planning passes in a row (2026-06-28 ×2, 2026-07-02) found open issues whose work had already shipped. Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
+- **The tracker lags the code — verify before planning from it.** Repeated grooming passes have found open issues whose work had already shipped. Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
 
 ## Commit Hygiene
 
@@ -105,18 +94,7 @@ mise run lint                  # swift-format lint --strict (CI fails without it
 
 ### Web dashboard (`web/`, maintenance mode — see § Two Web Apps)
 
-Always use the `mise run web:*` tasks, never raw pnpm chains — catalog, caveats, and anti-patterns in `web/docs/local-dev.md`. Tasks live in `web/.mise.toml` (not chain-loaded from root): run after `cd web/` or with `mise -C web run ...`. Most used:
-
-```bash
-mise run web:check                          # typecheck + lint + unit tests
-mise run web:dev                            # seed DB + auth bypass + dev server
-DEV_GH_TOKEN=$(gh auth token) mise run web:dev   # bypass with real GitHub API access
-mise run web:e2e                            # Playwright E2E
-mise run web:evidence -- --pr <N> --name <slug>
-mise run web:deps -- <pkg>                  # add dep + fix package.json formatting
-```
-
-Known caveat: `fast/unauth-*` specs need `NODE_ENV=production` — they fail under `pnpm dev` by design (see `web/docs/local-dev.md`).
+Always use the `mise run web:*` tasks, never raw pnpm chains — full catalog, caveats, and anti-patterns in `web/docs/local-dev.md`. Tasks live in `web/.mise.toml` (not chain-loaded from root): run after `cd web/` or with `mise -C web run ...`. Most used: `web:check` (typecheck + lint + unit tests), `web:dev` (seeded dev server + auth bypass), `web:e2e`, `web:evidence -- --pr <N> --name <slug>`, `web:deps -- <pkg>`.
 
 `web-next/` (active app) has no mise integration — plain `pnpm`, per `web-next/CONTRIBUTING.md`.
 
@@ -132,7 +110,7 @@ Task → doc and symbol → file pointer tables live in `docs/agents/code-map.md
 
 Where a file's purpose isn't obvious from its name, it opens with a short (≈2–4 line) top-of-file doc block stating **what it does and why** — present tense (what the file is, not the history of how it got there). Add one when creating or substantially editing such a file; skip self-evident utils and tests.
 
-This doubles as a fast index when exploring: `head` a file or `rg` a shared phrase to summarize a whole family without opening them — e.g. `rg -n "^ \* Persistence for"` lists every persistence module with its one-liner. Lean on this before reading files in explore mode, and keep the blocks accurate so it stays trustworthy.
+This doubles as a fast index when exploring: `head` a file or `rg` a shared phrase (e.g. `rg -n "^ \* Persistence for"`) to summarize a whole family without opening them. Lean on this before reading files in explore mode, and keep the blocks accurate so it stays trustworthy.
 
 ## Key Patterns
 
@@ -150,7 +128,7 @@ This doubles as a fast index when exploring: `head` a file or `rg` a shared phra
 
 5. **Keyboard Focus**: Ghostty-style retry-based focus restoration. See `docs/development/solution-terminal-keyboard.md`.
 
-6. **App Activation Policy**: All `NSApp.activate` calls — launch and runtime — route through `AppActivationPolicy` (`Sources/WorkspaceManager/App/AppActivationPolicy.swift`). Normal launch: full foreground. `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: dock visible, no focus steal ever (launch *or* runtime — the env var name is historical). `CI=true`: fully invisible accessory app. Any script that launches the app headlessly should set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`. This prevents focus stealing on self-hosted runners and shared desktops.
+6. **App Activation Policy**: All `NSApp.activate` calls — launch and runtime — route through `AppActivationPolicy` (`Sources/WorkspaceManager/App/AppActivationPolicy.swift`). Normal launch: full foreground. `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`: dock visible, no focus steal ever (launch *or* runtime — the env var name is historical). `CI=true`: fully invisible accessory app. Any script that launches the app headlessly should set `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1`.
 
 ## Testing
 
@@ -169,18 +147,18 @@ Tests use **Swift Testing** (`@Suite`, `@Test`, `#expect`), not XCTest. Test beh
 - Protect data contracts: Codable roundtrips, git porcelain format values
 - Use `defer { cleanup() }` for temp directories
 - For behavior-preserving refactors, verify tests bind by mutating the extracted logic and confirming failures; a surviving mutation means the test gets rewritten, not the check dropped.
-- Wait on the observable state change, not on a tuned wall clock. The cost of launching a child and getting an answer out of it spans two orders of magnitude between a laptop and a loaded hosted runner (0.3s vs 35s measured), so any fixed budget is a bet against it — scale from `Helpers/LaunchBudget.swift` instead, and measure the whole round trip rather than a bare spawn. Where a real-time bound genuinely *is* the property (an OS-imposed ceiling), gate that one test with a named reason rather than stretching the number.
+- Wait on the observable state change, not a tuned wall clock — child-process round trips span two orders of magnitude between a laptop and a loaded runner (0.3s vs 35s measured), so scale any such deadline from `Helpers/LaunchBudget.swift` and measure the whole round trip. Where a real-time bound genuinely *is* the property (an OS-imposed ceiling), gate that one test with a named reason.
 
 ## Two Web Apps
 
 Two Next.js apps in this repo are not interchangeable:
 
 - **`web-next/`** is the active app — sessions-first UI, deployed at `folio.cloudcompute.com`, also embedded locally in the macOS app over loopback HTTP (`web-next/docs/decisions/embedded-native-contract.md`). New web work happens here — stack + local dev: `web-next/CONTRIBUTING.md`.
-- **`web/`** has been in maintenance mode since #754 (2026-07-08): no new development, old chat/terminal demoted, still serves GitHub webhook ingestion. Its managed PR reviewer was retired separately on 2026-08-02 (`docs/decisions/managed-reviewer-retirement.md`) — not a #754 consequence. Stack + local dev: `web/README.md`.
+- **`web/`** has been in maintenance mode since #754 (2026-07-08): no new development, old chat/terminal demoted, still serves GitHub webhook ingestion. Its managed PR reviewer was retired separately (`docs/decisions/managed-reviewer-retirement.md`). Stack + local dev: `web/README.md`.
 
 ## Multi-Agent Coordination
 
-Agents coordinate through the GitHub-native state machine — issue labels (`docs/agents/triage-labels.md`) and PR review, not chat or Discussions. `docs/decisions/factory-label-control-plane.md` records why: an audit found keyword triggers and reaction-scraping on Discussions failed silently, while label events are durable and reconcilable.
+Agents coordinate through the GitHub-native state machine — issue labels (`docs/agents/triage-labels.md`) and PR review, not chat or Discussions (why: `docs/decisions/factory-label-control-plane.md`).
 
 ### QA of the web/ app
 
