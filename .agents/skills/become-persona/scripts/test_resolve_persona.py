@@ -40,6 +40,8 @@ class ResolvePersonaTests(unittest.TestCase):
         self.assertEqual(resolver.resolve_alias("april", personas).display_name, "April Clearwater")
         self.assertEqual(resolver.resolve_alias("plat", personas).display_name, "Plat Ironwood")
         self.assertEqual(resolver.resolve_alias("peter", personas).display_name, "Peter Planner")
+        self.assertEqual(resolver.resolve_alias("mara", personas).display_name, "Mara Fielding")
+        self.assertEqual(resolver.resolve_alias("pm", personas).display_name, "Mara Fielding")
 
     def test_parse_requested_text_accepts_command_form(self) -> None:
         alias, remaining = resolver.parse_requested_text(["/become april review this layout"])
