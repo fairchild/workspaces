@@ -171,15 +171,16 @@ When `--record` is used, repo docs are updated:
 - `docs/performance/dashboard.md`
 - `docs/performance/metrics-reference.md`
 
-Recording cadence: the daily `perf-validation` cron runs
-`./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui
-lane is available. The cron gates on budgets and uploads the refreshed
-history/dashboard as run artifacts only — its token is read-only
-(`contents: read`), so committing `docs/performance/` updates back to the repo
-stays a manual/orchestrated step (download the artifact or re-record locally,
-then commit). When the lane is down the workflow fails visibly instead of
-skipping green. To append an ad-hoc canonical summary (a re-baseline output
-dir, an installed-lane run) without re-measuring:
+Recording cadence: opt-in, on the owner's laptop, one approved session at a
+time — `./scripts/perf-baseline.sh 3 6 --record --assert-budget`, then commit
+the refreshed `docs/performance/` files as part of that session. There is no
+schedule; staleness is read from the dashboard's `Last updated` timestamp. The
+full protocol, the hot-spot and channel scenario lists, and the measurement
+hygiene preconditions (per-sample kill gate, quiet-machine load, UserDefaults
+isolation) are in
+[docs/decisions/perf-measurement-laptop-optin.md](decisions/perf-measurement-laptop-optin.md).
+To append an ad-hoc canonical summary (a re-baseline output dir, an
+installed-lane run) without re-measuring:
 
 ```bash
 uv run --script scripts/perf-history-record.py --summary <output-dir>/summary.json
@@ -213,16 +214,23 @@ registry drained to zero (ten-minute cap 32 MB, >=1.5x headroom over the
 observation; sixty-minute cap 40 MB extrapolated from the post-warm-up plateau
 — refresh it from a real 60-minute soak before leaning on it).
 
-## Automated CI perf workflow
+## Where perf runs (no CI lane)
 
-The dedicated GitHub Actions workflow is `.github/workflows/perf-validation.yml`.
+There is no perf workflow. Benchmarks run on the owner's laptop, opt-in per
+approved session —
+[docs/decisions/perf-measurement-laptop-optin.md](decisions/perf-measurement-laptop-optin.md)
+is the protocol of record.
 
-- Trigger it manually with `workflow_dispatch` when you want an on-demand baseline.
-- It also runs on a nightly `schedule` so trend data keeps moving without blocking normal pushes.
-- It runs on `[self-hosted, tart-ui]`, not in the main `CI` workflow, so app-launching perf checks stay off the interactive desktop.
-- It rebuilds the app before capture, but leaves the full Swift test suite to the main `CI` workflow on GitHub-hosted macOS; this avoids headless keychain-specific failures on the Tart lane from blocking perf artifact generation.
-- On `codex/**` branches, pushes that change the perf workflow, perf script, or app/test sources also trigger it so branch-local validation is possible before merge.
-- A separate ubuntu-hosted runner-lane-health job classifies tart-ui availability so offline runners are treated as infra state, not product regressions.
+- The contract budgets are `median × 1.25` derived on `Mac16,13 / M4`. A budget
+  is a claim about specific hardware, so only that hardware may assert it; an
+  off-host run of the four channel scenarios is advisory at best.
+- Every scenario except the four channel ones launches the real GUI app through
+  `launch-dev.sh`'s visible-window gate, which needs a real WindowServer session.
+- Behavioral CI coverage is `ui-smoke-advisory.yml` on hosted `macos-15`. It
+  answers "did the app still work", not "how fast was it".
+- Staleness is read from `docs/performance/dashboard.md`'s `Last updated`
+  timestamp. "The last recorded measurement is from `<date>`" is the honest
+  statement when no recent session has run — not "perf is green".
 
 ## Installed-build parity workflow
 

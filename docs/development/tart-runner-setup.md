@@ -1,6 +1,15 @@
 # Tart UI Runner Setup
 
-Use this runbook to provision the dedicated `[self-hosted, tart-ui]` lane for UI and perf automation without touching the interactive desktop runner.
+> **Status: archival.** The `[self-hosted, tart-ui]` lane is retired and no
+> workflow targets it — see
+> [../decisions/perf-measurement-laptop-optin.md](../decisions/perf-measurement-laptop-optin.md).
+> UI smoke moved to GitHub-hosted `macos-15` (`ui-smoke-advisory.yml`); perf
+> benchmarks moved to the owner's laptop, opt-in per run. This runbook is kept
+> because the provisioning mechanics are still correct if a Tart lane is ever
+> stood up again — but nothing consumes it today, and none of it has been
+> re-verified since retirement.
+
+Use this runbook to provision a dedicated `[self-hosted, tart-ui]` lane for UI and perf automation without touching the interactive desktop runner.
 
 ## Host prerequisites
 
@@ -110,18 +119,17 @@ gh api repos/fairchild/workspaces/actions/runners \
 
 Confirm there is an online runner whose labels include `tart-ui`.
 
-## 4. Dispatch the smoke workflow
+## 4. Prove the lane before routing work to it
 
-The repo includes a manual smoke workflow at `.github/workflows/tart-ui-smoke.yml`.
+`.github/workflows/tart-ui-smoke.yml` used to live here and was deleted with the
+lane. If you revive this lane, write its replacement first: a
+`workflow_dispatch` job on `[self-hosted, tart-ui]` that checks out and prints
+`sw_vers`, `swift --version`, and `xcodebuild -version`, plus a `tart-ui` entry
+back in `.github/actionlint.yaml`.
 
-Pushes to `codex/**` branches that touch the workflow or `scripts/runner.sh` also trigger the smoke run so the lane can be validated pre-merge.
-
-```bash
-gh workflow run tart-ui-smoke.yml --ref <branch-with-workflow>
-gh run watch --exit-status "$(gh run list --workflow tart-ui-smoke.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-```
-
-The run should execute on `[self-hosted, tart-ui]` and print `sw_vers`, `swift --version`, and `xcodebuild -version`.
+Do not put anything on a schedule until one manually dispatched run completes end
+to end. The retired lane accumulated 160 scheduled runs and zero successful
+measurements, which is the failure this ordering prevents.
 
 ## Day-two operations
 
