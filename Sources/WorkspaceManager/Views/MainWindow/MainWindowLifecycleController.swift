@@ -48,6 +48,27 @@ struct MainWindowLifecycleController {
         let detachAutomationGestureVerbs: () -> Void
     }
 
+    /// The part of launch that runs synchronously inside `onAppear`, ahead of the launch task.
+    ///
+    /// Only the terminal bootstrap lives here, and only because it is on the `launch_to_first_prompt`
+    /// critical path: the interval opens at `applicationDidFinishLaunching` and closes when the first
+    /// shell signals a prompt, so the shell cannot start until this session exists. A task body queued
+    /// from `onAppear` does not begin until SwiftUI's first layout pass releases the main actor —
+    /// measured at 270–360 ms on a cold debug launch (#1251) — and the shell start waits out all of it.
+    /// Seeding the session here instead lets the first render pass realize the terminal.
+    ///
+    /// `ensureInitialHostSession` is idempotent (it no-ops once the store has sessions), so
+    /// `runLaunchSequence` still calls it and its ordering guarantees hold whether or not this ran.
+    ///
+    /// `automationGatesTerminalBootstrap` is the one case that keeps the bootstrap in the sequence:
+    /// with the Automation API on, a terminal's process environment carries the automation socket
+    /// path and handle, and those exist only after the listener binds. A shell started before that
+    /// would be unreachable to the API for its whole life, so on that path the bootstrap waits.
+    func runLaunchPrologue(_ actions: LaunchActions, automationGatesTerminalBootstrap: Bool) {
+        guard !automationGatesTerminalBootstrap else { return }
+        actions.ensureInitialHostSession()
+    }
+
     /// Launch order is load-bearing. Automation integration installs the verb layer before
     /// anything can drive it; the initial host session must exist before a restore plan is
     /// computed against it; and the fixtures need the surface lifecycle resolved before they

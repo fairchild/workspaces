@@ -803,6 +803,10 @@ struct ContentView: View {
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
+                lifecycleController.runLaunchPrologue(
+                    launchActions,
+                    automationGatesTerminalBootstrap: AutomationIntegrationLifecycle.shared.isEnabled
+                )
                 Task { @MainActor in
                     await lifecycleController.runLaunchSequence(launchActions)
                 }
