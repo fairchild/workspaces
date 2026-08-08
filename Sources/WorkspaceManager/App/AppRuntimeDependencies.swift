@@ -20,20 +20,22 @@ struct AppRuntimeDependencies {
     ) -> AppRuntimeDependencies {
         let webNextServerService = makeWebNextServerService()
 
-        if UIFixtureLumeEnvironment.isEnabled(environment: environment) {
-            let runtimeService = UIFixtureLumeRuntimeService()
-            return AppRuntimeDependencies(
-                lumeRuntimeService: runtimeService,
-                workspaceProviderRegistry: WorkspaceProviderRegistry(
-                    providers: [
-                        LocalWorkspaceProvider(),
-                        UIFixtureDaytonaWorkspaceProvider(),
-                        UIFixtureLumeWorkspaceProvider(runtimeService: runtimeService),
-                    ]
-                ),
-                webNextServerService: webNextServerService
-            )
-        }
+        #if DEBUG
+            if UIFixtureLumeEnvironment.isEnabled(environment: environment) {
+                let runtimeService = UIFixtureLumeRuntimeService()
+                return AppRuntimeDependencies(
+                    lumeRuntimeService: runtimeService,
+                    workspaceProviderRegistry: WorkspaceProviderRegistry(
+                        providers: [
+                            LocalWorkspaceProvider(),
+                            UIFixtureDaytonaWorkspaceProvider(),
+                            UIFixtureLumeWorkspaceProvider(runtimeService: runtimeService),
+                        ]
+                    ),
+                    webNextServerService: webNextServerService
+                )
+            }
+        #endif
 
         let runtimeService: any LumeRuntimeServiceProtocol = DeferredLumeRuntimeService {
             LumeRuntimeService.shared

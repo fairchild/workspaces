@@ -74,10 +74,10 @@ struct HostLumeSmokeAutomationTests {
     @Test("Recovery hints point to VM runtime and logs for Lume failures")
     func recoveryHintsCoverLumeFailures() {
         #expect(
-            hostLumeSmokeRecoveryHints(
+            lumeRecoveryHints(
                 for: "Failed to create macOS VM workspace: Virtual machine not found"
             ) == ["Open VM Runtime", "Open Lume Log"]
         )
-        #expect(hostLumeSmokeRecoveryHints(for: "A local workspace failed") == [])
+        #expect(lumeRecoveryHints(for: "A local workspace failed") == [])
     }
 }

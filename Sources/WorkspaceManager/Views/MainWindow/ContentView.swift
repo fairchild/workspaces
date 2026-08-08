@@ -68,8 +68,8 @@ struct ContentView: View {
     @ObservedObject var appCommandState: AppCommandState
     @ObservedObject var tileTreeStore: TileTreeStore
     @ObservedObject var workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
-    @ObservedObject var hostLumeSmokeAutomation: HostLumeSmokeAutomationController
-    @ObservedObject var desktopUISmokeAutomation: DesktopUISmokeAutomationController
+    /// Seam to the debug-only smoke harness; inert in release builds.
+    let smokeDriver: SmokeScenarioDriver
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -549,12 +549,7 @@ struct ContentView: View {
                 source: selectedWebSource,
                 tileID: webDetailTileID,
                 surfaceStore: webDetailSurfaceStore,
-                onSurfaceMounted: desktopUISmokeAutomation.isEnabled
-                    ? { source in
-                        let automation = desktopUISmokeAutomation
-                        Task { await automation.noteWebSurfaceAttached(sourceName: source.name) }
-                    }
-                    : nil
+                onSurfaceMounted: smokeDriver.webSurfaceMountObserver
             )
         } else if let selectedRepo = currentSelectedRepoForLanding {
             RepoLandingView(
@@ -622,8 +617,7 @@ struct ContentView: View {
                     try await retireTerminalSessions(inScope: key)
                 },
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-                hostLumeSmokeAutomation: hostLumeSmokeAutomation,
-                desktopUISmokeAutomation: desktopUISmokeAutomation,
+                smokeDriver: smokeDriver,
                 automationWorkspaceCreateBridge: automationWorkspaceCreateBridge
             )
             .navigationSplitViewColumnWidth(min: 200, ideal: 260, max: 350)
@@ -762,8 +756,8 @@ struct ContentView: View {
             pruneRightPaneState: pruneRightPaneState,
             syncOpenInEditorShortcutRouting: syncOpenInEditorShortcutRouting,
             refreshWorkspaceStatusAggregator: refreshWorkspaceStatusAggregator,
-            noteHostLumeSmokeLaunchReady: hostLumeSmokeAutomation.noteLaunchReady,
-            noteDesktopUISmokeLaunchReady: desktopUISmokeAutomation.noteLaunchReady
+            noteHostLumeSmokeLaunchReady: smokeDriver.noteHostLumeLaunchReady,
+            noteDesktopUISmokeLaunchReady: smokeDriver.noteDesktopUILaunchReady
         )
     }
 
@@ -990,36 +984,27 @@ struct ContentView: View {
             .onChange(of: workspaceProviderSetupCoordinator.confirmationRequest) { _, request in
                 guard let request else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteSetupConfirmationPresented(request)
-                    if hostLumeSmokeAutomation.isEnabled {
-                        DispatchQueue.main.async {
-                            workspaceProviderSetupCoordinator.confirmAndContinue()
-                        }
+                    await smokeDriver.handleProviderSetupConfirmation(request) {
+                        workspaceProviderSetupCoordinator.confirmAndContinue()
                     }
                 }
             }
             .onChange(of: workspaceProviderSetupCoordinator.progressPresentation) { _, presentation in
                 guard let presentation else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteSetupStepChanged(presentation)
+                    await smokeDriver.noteProviderSetupStepChanged(presentation)
                 }
             }
             .onChange(of: workspaceProviderSetupCoordinator.errorMessage) { _, message in
                 guard let message else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteFailure(
-                        message: message,
-                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
-                    )
+                    await smokeDriver.noteHostWorkspaceFailure(message: message)
                 }
             }
             .onChange(of: errorPresenter.message(from: .workspaceOperation)) { _, message in
                 guard let message else { return }
                 Task { @MainActor in
-                    await hostLumeSmokeAutomation.noteFailure(
-                        message: message,
-                        recoveryHints: hostLumeSmokeRecoveryHints(for: message)
-                    )
+                    await smokeDriver.noteHostWorkspaceFailure(message: message)
                 }
             }
     }
@@ -1548,8 +1533,7 @@ struct ContentView: View {
             sessionID: session.id,
             repoPath: repoDirectory.path
         )
-        noteDesktopUISmokeTerminalAttached(
-            kind: .repo,
+        smokeDriver.noteRepoTerminalAttached(
             sessionID: session.id,
             scopePath: repoDirectory.path
         )
@@ -1571,33 +1555,9 @@ struct ContentView: View {
                     sessionID: session.id,
                     outcome: "focused"
                 )
-                noteDesktopUISmokeSurfaceFocused(sessionID: session.id)
+                smokeDriver.noteSurfaceFocused(sessionID: session.id)
             }
         )
-    }
-
-    @MainActor
-    private func noteDesktopUISmokeTerminalAttached(
-        kind: DesktopUISmokeSelectionKind,
-        sessionID: UUID,
-        scopePath: String
-    ) {
-        guard desktopUISmokeAutomation.isEnabled else { return }
-        Task { @MainActor in
-            await desktopUISmokeAutomation.noteTerminalSessionAttached(
-                kind: kind,
-                sessionID: sessionID,
-                scopePath: scopePath
-            )
-        }
-    }
-
-    @MainActor
-    private func noteDesktopUISmokeSurfaceFocused(sessionID: UUID) {
-        guard desktopUISmokeAutomation.isEnabled else { return }
-        Task { @MainActor in
-            await desktopUISmokeAutomation.noteSurfaceFocused(sessionID: sessionID)
-        }
     }
 
     @MainActor
@@ -1651,8 +1611,7 @@ struct ContentView: View {
                 sessionID: session.id,
                 workspacePath: workspaceDirectory.path
             )
-            noteDesktopUISmokeTerminalAttached(
-                kind: .workspace,
+            smokeDriver.noteWorkspaceTerminalAttached(
                 sessionID: session.id,
                 scopePath: workspaceDirectory.path
             )
@@ -1674,7 +1633,7 @@ struct ContentView: View {
                         sessionID: session.id,
                         outcome: "focused"
                     )
-                    noteDesktopUISmokeSurfaceFocused(sessionID: session.id)
+                    smokeDriver.noteSurfaceFocused(sessionID: session.id)
                 }
             )
         }
@@ -2260,26 +2219,13 @@ struct ContentView: View {
                     attached = selectedID == effect.workspaceID && activeSessionID != nil
                     attachedSurfaceID = attached ? activeSessionID : nil
                 }
-                if command.shouldSelect,
-                    desktopUISmokeAutomation.usesAPICreateDriver,
-                    desktopUISmokeAutomation.usesAPISelectDriver,
-                    let repo = repos.first(where: { $0.id == effect.repoID }),
-                    let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == effect.workspaceID })
-                {
-                    Task { @MainActor in
-                        let attachBaselineBeforeRepoPark = desktopUISmokeAutomation.terminalAttachCount
-                        let focusBaselineBeforeRepoPark = desktopUISmokeAutomation.surfaceFocusCount
-                        handleRepoTerminalSelection(repo)
-                        _ = await desktopUISmokeAutomation.waitForTerminalAttach(
-                            after: attachBaselineBeforeRepoPark,
-                            timeout: .seconds(15)
-                        )
-                        _ = await desktopUISmokeAutomation.waitForSurfaceFocus(
-                            after: focusBaselineBeforeRepoPark,
-                            timeout: .seconds(15)
-                        )
-                        await desktopUISmokeAutomation.noteAwaitingAPISelect(workspace: workspace)
-                    }
+                if command.shouldSelect {
+                    smokeDriver.noteAPIWorkspaceCreateCompleted(
+                        repoID: effect.repoID,
+                        workspaceID: effect.workspaceID,
+                        repos: repos,
+                        parkOnRepoTerminal: { handleRepoTerminalSelection($0) }
+                    )
                 }
                 return .completed(
                     AutomationWorkspaceCreateEffect(
@@ -3086,7 +3032,7 @@ struct ContentView: View {
     @MainActor
     private func computeRestorePlanIfEnabled() async {
         guard restoreSessionsOnLaunchEnabled, let localStateStore else { return }
-        await UIFixtureContinuitySeeder.waitUntilSeeded()
+        await smokeDriver.waitForFixtureContinuitySeed()
         let index = RestoreTargetIndexBuilder(
             homeDirectoryPath: resolvedDefaultHostDirectory.path,
             normalizePath: RestorePathNormalization.normalize

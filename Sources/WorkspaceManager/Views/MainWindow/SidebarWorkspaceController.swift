@@ -95,7 +95,7 @@ struct SidebarWorkspaceController {
         guestOS: WorkspaceGuestOS? = nil,
         fromRef: String? = nil,
         progress: WorkspaceProviderProgressHandler? = nil,
-        onPersisted: (@MainActor @Sendable (HostLumeSmokeWorkspaceRecord) async -> Void)? = nil
+        onPersisted: (@MainActor @Sendable (WorkspaceProviderCreationResult) async -> Void)? = nil
     ) async throws -> Workspace {
         guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
             throw ControllerError.message("Workspace provider '\(providerID)' is not registered.")
@@ -138,7 +138,7 @@ struct SidebarWorkspaceController {
                         )
                     }
                     log.info("createWorkspace: persist handler upsert complete")
-                    await onPersisted?(HostLumeSmokeWorkspaceRecord(result: partialResult))
+                    await onPersisted?(partialResult)
                 }
             )
 
@@ -149,7 +149,7 @@ struct SidebarWorkspaceController {
                 existingWorkspace: &persistedWorkspace
             )
             log.info("createWorkspace: final upsert complete")
-            await onPersisted?(HostLumeSmokeWorkspaceRecord(result: finalResult))
+            await onPersisted?(finalResult)
 
             guard let persistedWorkspace else {
                 throw ControllerError.message("Failed to create workspace record.")

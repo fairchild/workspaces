@@ -118,7 +118,7 @@ struct WorkspaceEnvironmentOptionsController {
         registry: WorkspaceProviderRegistry,
         runtimeService: any LumeRuntimeServiceProtocol
     ) async -> WorkspaceEnvironmentSheetState? {
-        guard UIFixtureLumeEnvironment.isEnabled() else { return nil }
+        guard SmokeScenarioDriver.isLumeFixtureEnabled else { return nil }
 
         let snapshot = await runtimeService.snapshot()
         var resolvedState = prepareSheetStateForPresentation(
