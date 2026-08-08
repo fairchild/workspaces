@@ -137,7 +137,9 @@ struct CLIVerbCatalogTests {
               'automation workspace' drives the running app. 'ws list' and 'repo list'
               derive from the app only when the operator credential is readable —
               the app running without it leaves them showing the CLI-local plane
-              alone, and the app cannot see what they list.
+              alone, and the app cannot see what they list. That derivation costs
+              one short probe of the app (0.5s ceiling), so a slow or hung app does
+              not stall the command; it drops back to the CLI-local plane.
 
             Launch behavior:
               - no args: open the WorkSpaces app
