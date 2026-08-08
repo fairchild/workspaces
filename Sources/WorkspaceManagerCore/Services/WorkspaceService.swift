@@ -84,6 +84,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     private let materializer: any WorkspaceMaterializer
     private let cleanupFailureReporter: @Sendable (WorkspaceCleanupFailure) -> Void
+    private let syntheticWorkspacesRoot: URL?
 
     // MARK: - Workspace Root Configuration
 
@@ -92,7 +93,12 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
             .appendingPathComponent("workspaces")
     }()
 
+    // WORKSPACES_SYNTHETIC_ROOT (the synthetic-run isolation boundary) wins over
+    // the user-configured root so smoke/capture runs never touch the real one.
     public var workspacesRoot: URL {
+        if let syntheticWorkspacesRoot {
+            return syntheticWorkspacesRoot
+        }
         if let customPath = UserDefaults.standard.string(forKey: "workspacesRoot"),
             !customPath.isEmpty
         {
@@ -115,22 +121,31 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     init(
         materializer: any WorkspaceMaterializer,
-        cleanupFailureReporter: @escaping @Sendable (WorkspaceCleanupFailure) -> Void = defaultCleanupFailureReporter
+        cleanupFailureReporter: @escaping @Sendable (WorkspaceCleanupFailure) -> Void = defaultCleanupFailureReporter,
+        environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.materializer = materializer
         self.cleanupFailureReporter = cleanupFailureReporter
-        Self.ensureDefaultWorkspacesRootExists()
+        self.syntheticWorkspacesRoot = SyntheticRunRoot.url(environment: environment)
+        if let syntheticWorkspacesRoot {
+            log.info(
+                "Synthetic run root active: workspaces root overridden to \(syntheticWorkspacesRoot.path, privacy: .public)"
+            )
+        }
+        // Under a synthetic root, the default root is never used — creating it
+        // would be a write outside the isolation boundary.
+        Self.ensureWorkspacesRootExists(at: syntheticWorkspacesRoot ?? Self.defaultWorkspacesRoot)
     }
 
-    private static func ensureDefaultWorkspacesRootExists() {
+    private static func ensureWorkspacesRootExists(at root: URL) {
         do {
             try FileManager.default.createDirectory(
-                at: defaultWorkspacesRoot,
+                at: root,
                 withIntermediateDirectories: true
             )
         } catch {
             log.warning(
-                "Failed to create default workspaces root at \(defaultWorkspacesRoot.path): \(error.localizedDescription)"
+                "Failed to create workspaces root at \(root.path): \(error.localizedDescription)"
             )
         }
     }
