@@ -11,10 +11,6 @@ import SwiftUI
 import WorkspaceManagerCore
 import os.log
 
-private let creationLog = Logger(
-    subsystem: "com.cloudcompute.workspaces",
-    category: "WorkspaceCreation"
-)
 private let workspaceProviderLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "WorkspaceProvider")
 private let uiFixtureLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "UIFixtureSeeder")
 private let archivedWorkspacePurgeLog = Logger(
@@ -22,7 +18,6 @@ private let archivedWorkspacePurgeLog = Logger(
     category: "ArchivedWorkspacePurge"
 )
 private let perfLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "PerformanceSignposts")
-private let terminalContinuityLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "TerminalContinuity")
 private let hostSessionLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "HostSession")
 private let restoreLog = Logger(subsystem: "com.cloudcompute.workspaces", category: "Restore")
 
@@ -151,6 +146,122 @@ struct ContentView: View {
         WorkspaceProviderSetupActionRunner(coordinator: workspaceProviderSetupCoordinator)
     }
 
+    /// The selection cluster's collaborators, bound to this view's live state. Rebuilt per
+    /// access — the closures must read the current `@Query` results and write the current
+    /// `@State` boxes, not a snapshot taken when the view was first evaluated.
+    private var selectionController: MainWindowSelectionController {
+        MainWindowSelectionController(
+            dependencies: MainWindowSelectionController.Dependencies(
+                state: $viewState,
+                lastSurfaceRawValue: $lastSurfaceRawValue,
+                repos: { repos },
+                webSources: { webSources },
+                selectedWorkspace: { currentSelectedWorkspace },
+                selectedWebSource: { currentSelectedWebSource },
+                selectedRepoForLanding: { currentSelectedRepoForLanding },
+                tileTreeStore: tileTreeStore,
+                focusCoordinator: terminalFocusCoordinator,
+                smokeDriver: smokeDriver,
+                webDetailSurfaceStore: webDetailSurfaceStore,
+                providerRegistry: workspaceProviderRegistry,
+                providerSetupActionRunner: workspaceProviderSetupActionRunner,
+                bootstrapController: bootstrapController,
+                modelContext: modelContext,
+                abandonPendingRemoteConnection: { reason in
+                    abandonPendingRemoteConnection(reason: reason)
+                },
+                applyNavigationDestination: { destination in
+                    applyNavigationDestination(destination)
+                },
+                markRepoAccessed: { markAccessed(repo: $0) },
+                markWorkspaceAccessed: { markAccessed(workspace: $0) },
+                markWebSourceAccessed: { markAccessed(webSource: $0) },
+                acknowledgeAttention: { acknowledgeVisitedAttentionTarget($0) },
+                acknowledgeAgentSession: { acknowledgeVisitedAgentSession($0) },
+                activateHostSession: MainWindowHostSessionActivator { key, directory, customCommand in
+                    activateHostSession(key: key, directory: directory, customCommand: customCommand)
+                },
+                persistTerminalContinuity: { targetKind, targetID, rootURL, launchURL in
+                    terminalContinuityController.persist(
+                        targetKind: targetKind,
+                        targetID: targetID,
+                        rootURL: rootURL,
+                        launchURL: launchURL
+                    )
+                },
+                restoredLaunchDirectoryForRepo: { terminalContinuityController.restoredLaunchDirectory(for: $0) },
+                restoredLaunchDirectoryForWorkspace: {
+                    terminalContinuityController.restoredLaunchDirectory(for: $0)
+                },
+                clearCodePreview: { clearCodePreview() },
+                presentWorkspaceOperationError: { presentWorkspaceOperationError($0) }
+            )
+        )
+    }
+
+    private var landingActionController: MainWindowLandingActionController {
+        MainWindowLandingActionController(
+            dependencies: MainWindowLandingActionController.Dependencies(
+                repoForNewWorkspace: $repoForNewWorkspaceFromLanding,
+                isPreparingNewWorkspaceSheet: $isPreparingLandingNewWorkspaceSheet,
+                modelContext: modelContext,
+                workspaceService: workspaceService,
+                providerRegistry: workspaceProviderRegistry,
+                providerSetupActionRunner: workspaceProviderSetupActionRunner,
+                externalEditorService: externalEditorService,
+                webSources: { webSources },
+                retireTerminalSessions: { key in
+                    try await retireTerminalSessions(inScope: key)
+                },
+                selectWorkspace: { handleWorkspaceSelection($0) },
+                selectWebSource: { handleWebSourceSelection($0) },
+                abandonPendingRemoteConnection: { reason in
+                    abandonPendingRemoteConnection(reason: reason)
+                },
+                seedEnvironmentStateIfNeeded: { await seedLandingWorkspaceEnvironmentStateIfNeeded() },
+                prepareEnvironmentStateForPresentation: {
+                    workspaceEnvironmentSheetState =
+                        workspaceEnvironmentOptionsController.prepareSheetStateForPresentation(
+                            existingState: workspaceEnvironmentSheetState,
+                            registry: workspaceProviderRegistry
+                        )
+                },
+                refreshEnvironmentState: { trigger in
+                    await refreshLandingWorkspaceEnvironmentState(trigger: trigger)
+                },
+                environmentOptionCount: { environmentOptions(for: $0).count },
+                lumeStateDescription: { lumeRuntimeSnapshot?.state.rawValue ?? "pending" },
+                presentLandingError: { presentLandingError($0) },
+                presentOpenInEditorError: { presentOpenInEditorError($0) }
+            )
+        )
+    }
+
+    private var automationGestureVerbs: MainWindowAutomationGestureVerbs {
+        MainWindowAutomationGestureVerbs(
+            dependencies: MainWindowAutomationGestureVerbs.Dependencies(
+                repos: { repos },
+                selectedWorkspace: selectedWorkspaceBinding,
+                selectedWorkspaceID: { currentSelectedWorkspace?.id },
+                tileTreeStore: tileTreeStore,
+                focusCoordinator: terminalFocusCoordinator,
+                smokeDriver: smokeDriver,
+                createBridge: automationWorkspaceCreateBridge,
+                modelContext: modelContext,
+                workspaceService: workspaceService,
+                providerRegistry: workspaceProviderRegistry,
+                retireTerminalSessions: { key in
+                    try await retireTerminalSessions(inScope: key)
+                },
+                makeTeardownController: { makeWorkspaceTerminalTeardownController() },
+                attachWorkspaceSessionWithoutSelection: {
+                    selectionController.attachWorkspaceSessionWithoutSelection($0)
+                },
+                selectRepoTerminal: { handleRepoTerminalSelection($0) }
+            )
+        )
+    }
+
     private var sessionPresentation: HostTerminalSessionPresentation {
         tileTreeStore.sessionPresentation
     }
@@ -166,34 +277,17 @@ struct ContentView: View {
         )
     }
 
-    private var archivedWorkspaceTerminalScopeKeys: Set<HostTerminalSessionKey> {
-        Set(
-            repos
-                .flatMap(\.workspaces)
-                .filter { $0.status == .archived }
-                .compactMap(terminalSessionKey(for:))
+    private var terminalContinuityController: MainWindowTerminalContinuityController {
+        MainWindowTerminalContinuityController(
+            dependencies: MainWindowTerminalContinuityController.Dependencies(
+                manifestRawValue: $terminalContinuityManifestRawValue,
+                repos: { repos },
+                tileTreeStore: tileTreeStore,
+                providerRegistry: workspaceProviderRegistry,
+                terminalMode: { terminalMultiplexingMode },
+                defaultHomeURL: resolvedDefaultHostDirectory
+            )
         )
-    }
-
-    private var terminalContinuityInputs:
-        (
-            sessions: [HostTerminalSession],
-            activeSessionID: UUID?,
-            activeSessionIDByScopeKey: [HostTerminalSessionKey: UUID]
-        )
-    {
-        let excludedScopeKeys = archivedWorkspaceTerminalScopeKeys
-        let sessions = tileTreeStore.sessions.filter { !excludedScopeKeys.contains($0.key) }
-        let validSessionIDs = Set(sessions.map(\.id))
-        let activeSessionID =
-            tileTreeStore.activeSessionID.flatMap {
-                validSessionIDs.contains($0) ? $0 : sessions.last?.id
-            } ?? sessions.last?.id
-        let activeSessionIDByScopeKey = tileTreeStore.activeSessionIDByScopeKey.filter {
-            !excludedScopeKeys.contains($0.key) && validSessionIDs.contains($0.value)
-        }
-
-        return (sessions, activeSessionID, activeSessionIDByScopeKey)
     }
 
     private var currentSelectedWorkspace: Workspace? {
@@ -561,7 +655,7 @@ struct ContentView: View {
                 onOpenTerminal: handleRepoTerminalSelection,
                 onNewWorkspace: { repo in
                     Task { @MainActor in
-                        await presentNewWorkspaceFromLanding(repo)
+                        await landingActionController.presentNewWorkspaceSheet(for: repo)
                     }
                 },
                 onNewWebSource: { repo in
@@ -569,11 +663,11 @@ struct ContentView: View {
                 },
                 onArchiveWorkspace: { workspace in
                     Task { @MainActor in
-                        await archiveWorkspaceFromLanding(workspace)
+                        await landingActionController.archiveWorkspace(workspace)
                     }
                 },
                 onOpenWorkspaceInEditor: { workspace in
-                    openWorkspaceInDefaultEditorFromLanding(workspace)
+                    landingActionController.openWorkspaceInDefaultEditor(workspace)
                 }
             )
         } else {
@@ -823,11 +917,11 @@ struct ContentView: View {
             .onChange(of: tileTreeStore.sessions) { _, _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
                 refreshSessionSwitcherSnapshotIfPresented()
-                persistTerminalContinuitySnapshot()
+                terminalContinuityController.persistSnapshot()
             }
             .onChange(of: tileTreeStore.activeSessionID) { _, _ in
                 refreshSessionSwitcherSnapshotIfPresented()
-                persistTerminalContinuitySnapshot()
+                terminalContinuityController.persistSnapshot()
             }
             .task {
                 prewarmPerfTerminalSurfacesIfNeeded()
@@ -1054,7 +1148,7 @@ struct ContentView: View {
                     isCreateDisabled: false
                 ) { name, nameSource, providerID, guestOS in
                     Task { @MainActor in
-                        await createWorkspaceFromLanding(
+                        await landingActionController.createWorkspace(
                             repo: repo,
                             name: name,
                             nameSource: nameSource,
@@ -1067,7 +1161,7 @@ struct ContentView: View {
             .sheet(item: $webSourceCreationTarget) { target in
                 NewWebSourceSheet(target: target) { rawURL, displayName, additionalAllowedDomainsRaw in
                     Task { @MainActor in
-                        addWebSource(
+                        landingActionController.addWebSource(
                             rawURL: rawURL,
                             displayName: displayName,
                             additionalAllowedDomainsRaw: additionalAllowedDomainsRaw,
@@ -1157,67 +1251,6 @@ struct ContentView: View {
     @MainActor
     private func setSelectedRepoForLanding(_ repo: Repo?) {
         viewState.selectedRepoForLandingID = repo?.id
-    }
-
-    @MainActor
-    private func presentNewWorkspaceFromLanding(_ repo: Repo) async {
-        InvestigationDiagnostics.emitSheet(
-            phase: "landing_sheet_flow_started",
-            fields: ["repo_id": repo.id.uuidString]
-        )
-        let attemptID = PerformanceSignposts.beginNewWorkspaceSheetReady(trigger: "landing")
-
-        if await seedLandingWorkspaceEnvironmentStateIfNeeded() {
-            InvestigationDiagnostics.emitSheet(
-                phase: "landing_fixture_seeded",
-                fields: ["repo_id": repo.id.uuidString]
-            )
-            repoForNewWorkspaceFromLanding = repo
-            InvestigationDiagnostics.emitSheet(
-                phase: "landing_sheet_context_set",
-                fields: [
-                    "repo_id": repo.id.uuidString,
-                    "option_count": "\(environmentOptions(for: repo).count)",
-                ]
-            )
-            PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
-                attemptID: attemptID,
-                outcome: "success"
-            )
-        }
-
-        workspaceEnvironmentSheetState = workspaceEnvironmentOptionsController.prepareSheetStateForPresentation(
-            existingState: workspaceEnvironmentSheetState,
-            registry: workspaceProviderRegistry
-        )
-        repoForNewWorkspaceFromLanding = repo
-        isPreparingLandingNewWorkspaceSheet = true
-        InvestigationDiagnostics.emitSheet(
-            phase: "landing_sheet_context_set",
-            fields: [
-                "repo_id": repo.id.uuidString,
-                "option_count": "\(environmentOptions(for: repo).count)",
-            ]
-        )
-        PerformanceSignposts.endNewWorkspaceSheetReadyIfNeeded(
-            attemptID: attemptID,
-            outcome: "success"
-        )
-
-        Task { @MainActor in
-            defer {
-                isPreparingLandingNewWorkspaceSheet = false
-            }
-            await refreshLandingWorkspaceEnvironmentState(trigger: "landing_sheet_open")
-            InvestigationDiagnostics.emitSheet(
-                phase: "landing_environment_refresh_completed",
-                fields: [
-                    "repo_id": repo.id.uuidString,
-                    "lume_state": lumeRuntimeSnapshot?.state.rawValue ?? "pending",
-                    "option_count": "\(environmentOptions(for: repo).count)",
-                ]
-            )
-        }
     }
 
     /// Show the embedded web-next surface. `redirect` is the post-sign-in path
@@ -1396,20 +1429,11 @@ struct ContentView: View {
 
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                     Task { @MainActor in
-                        await presentNewWorkspaceFromLanding(repo)
+                        await landingActionController.presentNewWorkspaceSheet(for: repo)
                     }
                 }
             }
         }
-    }
-
-    @MainActor
-    private func clearInvalidLastSurfaceIfNeeded() {
-        lastSurfaceRawValue = bootstrapController.sanitizedLastSurfaceRawValue(
-            rawValue: lastSurfaceRawValue,
-            repos: repos,
-            webSources: webSources
-        )
     }
 
     /// Web sources removed from the model lose their per-source web store immediately — deletion
@@ -1425,491 +1449,48 @@ struct ContentView: View {
 
     @MainActor
     private func reconcileSelectionAfterModelChange() {
-        clearInvalidLastSurfaceIfNeeded()
-
-        if let selectedWebSource = viewState.selectedWebSource,
-            currentSelectedWebSource == nil
-        {
-            setSelectedWebSource(nil)
-            // Hard release happens in releaseRemovedWebSources (deletion-diff authority);
-            // this path only repairs the dangling selection.
-            handleSelectedWebSourceRemoval(selectedWebSource)
-            return
-        }
-
-        if let selectedWorkspace = viewState.selectedWorkspace,
-            currentSelectedWorkspace == nil
-        {
-            handleSelectedWorkspaceRemoval(selectedWorkspace)
-            return
-        }
-
-        if viewState.selectedRepoForLandingID != nil,
-            currentSelectedRepoForLanding == nil
-        {
-            handleSelectedRepoRemoval()
-        }
-    }
-
-    @MainActor
-    private func handleSelectedWorkspaceRemoval(_ removedWorkspace: MainWindowWorkspaceSelection) {
-        setSelectedWorkspace(nil)
-        clearCodePreview()
-
-        if let surface = bootstrapController.fallbackSurfaceAfterRemovingWorkspace(
-            repoID: removedWorkspace.repoID,
-            repos: repos,
-            webSources: webSources
-        ) {
-            viewState.didResolveInitialSurface = true
-            applyLaunchSurface(surface)
-            return
-        }
-
-        viewState.didResolveInitialSurface = false
-    }
-
-    @MainActor
-    private func handleSelectedRepoRemoval() {
-        setSelectedRepoForLanding(nil)
-        clearCodePreview()
-
-        applyFallbackAfterInvalidSelection()
-    }
-
-    @MainActor
-    private func applyFallbackAfterInvalidSelection() {
-        viewState.didResolveInitialSurface = false
-        if let surface = bootstrapController.fallbackSurface(repos: repos, webSources: webSources) {
-            viewState.didResolveInitialSurface = true
-            applyLaunchSurface(surface)
-        }
+        selectionController.reconcileSelectionAfterModelChange()
     }
 
     @MainActor
     private func applyLaunchSurface(_ surface: MainWindowLaunchSurface) {
-        switch surface {
-        case .repoOverview(let repo):
-            handleRepoSelection(repo)
-        case .repoTerminal(let repo):
-            handleRepoTerminalSelection(
-                repo,
-                preferredDirectory: restoredLaunchDirectory(for: repo)
-            )
-        case .workspace(let workspace):
-            handleWorkspaceSelection(
-                workspace,
-                preferredDirectory: restoredLaunchDirectory(for: workspace)
-            )
-        case .webView(let source):
-            handleWebSourceSelection(source)
-        }
+        selectionController.applyLaunchSurface(surface)
     }
 
     @MainActor
     private func handleRepoSelection(_ repo: Repo) {
-        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "repo_overview_selected")
-        abandonPendingRemoteConnection(reason: "repo_overview_selected")
-        markAccessed(repo: repo)
-        applyNavigationDestination(.repoOverview(repo))
+        selectionController.selectRepoOverview(repo)
     }
 
     @MainActor
     private func handleRepoTerminalSelection(_ repo: Repo) {
-        handleRepoTerminalSelection(repo, preferredDirectory: nil)
+        selectionController.selectRepoTerminal(repo)
     }
 
     @MainActor
     private func handleRepoTerminalSelection(_ repo: Repo, preferredDirectory: URL?) {
-        let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
-        let launchDirectory = preferredSessionDirectory(
-            preferredDirectory,
-            inside: repoDirectory
-        )
-
-        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "repo_terminal_selected")
-        abandonPendingRemoteConnection(reason: "repo_terminal_selected")
-        let session = activateHostSession(
-            key: .repoPath(repoDirectory.path),
-            directory: launchDirectory
-        )
-        terminalFocusCoordinator.beginRepoClickMeasurement(
-            sessionID: session.id,
-            repoPath: repoDirectory.path
-        )
-        smokeDriver.noteRepoTerminalAttached(
-            sessionID: session.id,
-            scopePath: repoDirectory.path
-        )
-        markAccessed(repo: repo)
-        acknowledgeVisitedAttentionTarget(.repo(repo.id))
-        applyNavigationDestination(.repoTerminal(repo))
-        persistTerminalContinuity(
-            targetKind: .repo,
-            targetID: repo.id,
-            rootURL: repoDirectory,
-            launchURL: launchDirectory
-        )
-        terminalFocusCoordinator.requestMainTerminalFocus(
-            targetSessionID: session.id,
-            surfaceStore: tileTreeStore.surfaceStore,
-            activeSessionID: tileTreeStore.activeSessionID,
-            onTargetFocused: {
-                terminalFocusCoordinator.completeRepoClickMeasurement(
-                    sessionID: session.id,
-                    outcome: "focused"
-                )
-                smokeDriver.noteSurfaceFocused(sessionID: session.id)
-            }
-        )
-    }
-
-    @MainActor
-    private func attachWorkspaceSessionWithoutSelection(_ workspace: Workspace) -> UUID? {
-        guard workspace.status == .active else { return nil }
-        guard workspace.backend == .local else { return nil }
-
-        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
-        let session = tileTreeStore.ensureSession(
-            key: .hostPath(workspaceDirectory.path),
-            directory: workspaceDirectory
-        ).session
-        _ = tileTreeStore.terminalSurfaceView(for: session)
-        return session.id
+        selectionController.selectRepoTerminal(repo, preferredDirectory: preferredDirectory)
     }
 
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace) {
-        handleWorkspaceSelection(workspace, preferredDirectory: nil)
+        selectionController.selectWorkspace(workspace)
     }
 
     @MainActor
     private func handleWorkspaceSelection(_ workspace: Workspace, preferredDirectory: URL?) {
-        terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_selected")
-        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "workspace_selected")
-
-        guard workspace.status != .archived else {
-            abandonPendingRemoteConnection(reason: "archived_workspace_selected")
-            if let repo = workspace.sourceRepo {
-                applyNavigationDestination(.repoOverview(repo))
-            } else {
-                setSelectedWorkspace(nil)
-            }
-            return
-        }
-
-        if workspace.backend != .local {
-            handleProviderBackedWorkspaceSelection(workspace)
-        } else {
-            abandonPendingRemoteConnection(reason: "local_workspace_selected")
-            let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
-            let launchDirectory = preferredSessionDirectory(
-                preferredDirectory,
-                inside: workspaceDirectory
-            )
-            let session = activateHostSession(
-                key: .hostPath(workspaceDirectory.path),
-                directory: launchDirectory
-            )
-            terminalFocusCoordinator.beginWorkspaceClickMeasurement(
-                sessionID: session.id,
-                workspacePath: workspaceDirectory.path
-            )
-            smokeDriver.noteWorkspaceTerminalAttached(
-                sessionID: session.id,
-                scopePath: workspaceDirectory.path
-            )
-            markAccessed(workspace: workspace)
-            acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
-            applyNavigationDestination(.workspaceTerminal(workspace))
-            persistTerminalContinuity(
-                targetKind: .workspace,
-                targetID: workspace.id,
-                rootURL: workspaceDirectory,
-                launchURL: launchDirectory
-            )
-            terminalFocusCoordinator.requestMainTerminalFocus(
-                targetSessionID: session.id,
-                surfaceStore: tileTreeStore.surfaceStore,
-                activeSessionID: tileTreeStore.activeSessionID,
-                onTargetFocused: {
-                    terminalFocusCoordinator.completeWorkspaceClickMeasurement(
-                        sessionID: session.id,
-                        outcome: "focused"
-                    )
-                    smokeDriver.noteSurfaceFocused(sessionID: session.id)
-                }
-            )
-        }
-
-    }
-
-    @MainActor
-    private func handleProviderBackedWorkspaceSelection(_ workspace: Workspace) {
-        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
-            presentWorkspaceOperationError(
-                "No workspace provider is registered for '\(workspace.backendIdentifier)'."
-            )
-            return
-        }
-
-        let providerTarget = WorkspaceProviderTarget(workspace)
-        let sessionKey = provider.sessionKey(for: providerTarget)
-        if workspace.status == .active,
-            let existing = tileTreeStore.activeSession(inScope: sessionKey)
-        {
-            abandonPendingRemoteConnection(reason: "remote_workspace_reused_existing_session")
-            markAccessed(workspace: workspace)
-            acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
-            applyNavigationDestination(.workspaceTerminal(workspace))
-            tileTreeStore.activateExistingSession(sessionID: existing.id)
-            acknowledgeVisitedAgentSession(existing.id)
-            terminalFocusCoordinator.requestMainTerminalFocus(
-                targetSessionID: existing.id,
-                surfaceStore: tileTreeStore.surfaceStore,
-                activeSessionID: tileTreeStore.activeSessionID
-            )
-            return
-        }
-
-        Task { @MainActor in
-            do {
-                try await workspaceProviderSetupActionRunner.run(
-                    provider: provider,
-                    action: .openTerminal(workspaceName: workspace.name)
-                ) {
-                    await connectToProviderBackedWorkspace(workspace, provider: provider)
-                }
-            } catch {
-                presentWorkspaceOperationError(error.localizedDescription)
-            }
-        }
-    }
-
-    @MainActor
-    private func connectToProviderBackedWorkspace(
-        _ workspace: Workspace,
-        provider: any WorkspaceProviderProtocol
-    ) async {
-        viewState.connectingWorkspaceID = workspace.id
-
-        do {
-            let launchSpec = try await provider.terminalLaunchSpec(for: WorkspaceProviderTarget(workspace))
-
-            guard viewState.connectingWorkspaceID == workspace.id else { return }
-            viewState.connectingWorkspaceID = nil
-            workspace.status = launchSpec.statusAfterLaunch
-            try? modelContext.save()
-            let session = activateHostSession(
-                key: launchSpec.sessionKey,
-                directory: launchSpec.workingDirectory,
-                customCommand: launchSpec.customCommand
-            )
-            viewState.columnVisibility = .all
-            acknowledgeVisitedAttentionTarget(.workspace(workspace.id))
-            terminalFocusCoordinator.requestMainTerminalFocus(
-                targetSessionID: session.id,
-                surfaceStore: tileTreeStore.surfaceStore,
-                activeSessionID: tileTreeStore.activeSessionID
-            )
-            workspaceProviderLog.info(
-                "[WorkspaceProvider] Session created for \(workspace.backendIdentifier, privacy: .public) workspace \(workspace.name, privacy: .public)"
-            )
-        } catch {
-            workspaceProviderLog.error(
-                "[WorkspaceProvider] Failed to connect to \(workspace.backendIdentifier, privacy: .public) workspace \(workspace.name, privacy: .public): \(error.localizedDescription, privacy: .public)"
-            )
-            guard viewState.connectingWorkspaceID == workspace.id else { return }
-            viewState.connectingWorkspaceID = nil
-            presentWorkspaceOperationError(error.localizedDescription)
-        }
+        selectionController.selectWorkspace(workspace, preferredDirectory: preferredDirectory)
     }
 
     @MainActor
     private func handleWebSourceSelection(_ source: WebSource) {
-        viewState.connectingWorkspaceID = nil
-        terminalFocusCoordinator.cancelPendingRepoClickMeasurement(reason: "web_source_selected")
-        terminalFocusCoordinator.cancelPendingFocusRequest(reason: "web_source_selected")
-        abandonPendingRemoteConnection(reason: "web_source_selected")
-        applyNavigationDestination(.webView(source))
-        // Reselecting inside the deferred-release window rescues the source's live page before the
-        // pane re-mounts (mounting would cancel too; this makes the intent explicit and immediate).
-        webDetailSurfaceStore.webStore(forSourceID: source.id).cancelPendingRelease()
-        markAccessed(webSource: source)
+        selectionController.selectWebSource(source)
     }
 
     @MainActor
     private func handleWorkspaceCreated() {
         guard currentSelectedWorkspace == nil else { return }
         viewState.isRightPaneVisible = false
-    }
-
-    @MainActor
-    private func createWorkspaceFromLanding(
-        repo: Repo,
-        name: String,
-        nameSource: WorkspaceNameSource,
-        providerID: String,
-        guestOS: WorkspaceGuestOS?
-    ) async {
-        do {
-            guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
-                presentLandingError("Workspace provider '\(providerID)' is not registered.")
-                return
-            }
-
-            try await workspaceProviderSetupActionRunner.run(
-                provider: provider,
-                action: .createWorkspace(name: name, guestOS: guestOS)
-            ) {
-                do {
-                    try await createWorkspaceFromLanding(
-                        repo: repo,
-                        name: name,
-                        nameSource: nameSource,
-                        providerID: providerID,
-                        guestOS: guestOS,
-                        skipSetup: true
-                    )
-                } catch {
-                    presentLandingError("Failed to create workspace: \(error.localizedDescription)")
-                }
-            } perform: {
-                do {
-                    try await createWorkspaceFromLanding(
-                        repo: repo,
-                        name: name,
-                        nameSource: nameSource,
-                        providerID: providerID,
-                        guestOS: guestOS,
-                        skipSetup: true
-                    )
-                } catch {
-                    presentLandingError("Failed to create workspace: \(error.localizedDescription)")
-                }
-            }
-        } catch {
-            presentLandingError("Failed to create workspace: \(error.localizedDescription)")
-        }
-    }
-
-    @MainActor
-    private func createWorkspaceFromLanding(
-        repo: Repo,
-        name: String,
-        nameSource: WorkspaceNameSource,
-        providerID: String,
-        guestOS: WorkspaceGuestOS?,
-        skipSetup: Bool
-    ) async throws {
-        creationLog.info(
-            "createWorkspaceFromLanding: repo=\(repo.name) provider=\(providerID) skipSetup=\(skipSetup)"
-        )
-        let controller = SidebarWorkspaceController(
-            modelContext: modelContext,
-            workspaceService: workspaceService,
-            workspaceProviderRegistry: workspaceProviderRegistry,
-            retireTerminalSessions: { key in
-                try await retireTerminalSessions(inScope: key)
-            }
-        )
-        let workspace = try await controller.createWorkspace(
-            from: repo,
-            name: name,
-            nameSource: nameSource,
-            providerID: providerID,
-            guestOS: guestOS,
-            progress: { _ in },
-            onPersisted: nil
-        )
-        creationLog.info("createWorkspaceFromLanding: workspace created successfully")
-
-        if skipSetup {
-            abandonPendingRemoteConnection(reason: "workspace_created")
-            handleWorkspaceSelection(workspace)
-        }
-    }
-
-    @MainActor
-    private func archiveWorkspaceFromLanding(_ workspace: Workspace) async {
-        let controller = SidebarWorkspaceController(
-            modelContext: modelContext,
-            workspaceService: workspaceService,
-            workspaceProviderRegistry: workspaceProviderRegistry,
-            retireTerminalSessions: { key in
-                try await retireTerminalSessions(inScope: key)
-            }
-        )
-        do {
-            try await controller.archive(workspace)
-        } catch {
-            presentLandingError("Failed to archive workspace: \(error.localizedDescription)")
-        }
-    }
-
-    @MainActor
-    private func openWorkspaceInDefaultEditorFromLanding(_ workspace: Workspace) {
-        do {
-            try OpenInEditorShortcutFlow.perform(
-                target: .project(rootURL: workspace.workspaceURL),
-                editorID: nil,
-                externalEditorService: externalEditorService,
-                trigger: .uiPrimaryAction
-            )
-        } catch {
-            presentOpenInEditorError(error)
-        }
-    }
-
-    @MainActor
-    private func addWebSource(
-        rawURL: String,
-        displayName: String,
-        additionalAllowedDomainsRaw: String,
-        target: WebSourceCreationTarget
-    ) {
-        do {
-            let source = try WebSourceCreationSupport.makeSource(
-                rawURL: rawURL,
-                displayName: displayName,
-                additionalAllowedDomainsRaw: additionalAllowedDomainsRaw,
-                target: target,
-                existingSources: webSources
-            )
-
-            modelContext.insert(source)
-            try modelContext.save()
-            handleWebSourceSelection(source)
-        } catch {
-            if let validationError = error as? WebSourceValidationError {
-                if let description = validationError.errorDescription {
-                    presentLandingError(description)
-                }
-            } else {
-                presentLandingError(error.localizedDescription)
-            }
-            modelContext.rollback()
-        }
-    }
-
-    @MainActor
-    private func handleSelectedWebSourceRemoval(_ source: MainWindowWebSourceSelection) {
-        if let lastSurface = MainWindowLastSurface.decode(from: lastSurfaceRawValue),
-            lastSurface.kind == .webView,
-            lastSurface.id == source.webSourceID
-        {
-            lastSurfaceRawValue = ""
-        }
-
-        viewState.didResolveInitialSurface = false
-        if let surface = bootstrapController.fallbackSurfaceAfterRemovingWebSource(
-            ownerWorkspaceID: source.ownerWorkspaceID,
-            ownerRepoID: source.ownerRepoID,
-            repos: repos
-        ) {
-            viewState.didResolveInitialSurface = true
-            applyLaunchSurface(surface)
-        }
     }
 
     @MainActor
@@ -2144,166 +1725,7 @@ struct ContentView: View {
                     selectedRepoID: viewState.selectedRepoForLandingID
                 )
             },
-            gestureVerbs: makeAutomationGestureVerbs()
-        )
-    }
-
-    /// The gesture-verb layer backing `workspace.select`. Its `performSelection` writes the exact same
-    /// `selectedWorkspaceBinding` a sidebar click writes — the setter runs `handleWorkspaceSelection`,
-    /// which attaches the terminal and requests focus. Because the verb enters this binding (not a
-    /// service or SwiftData write), an API-driven select produces the identical user-visible reactions
-    /// a click does: sidebar highlight, terminal attach, focus request. The layer holds only these two
-    /// closures — no backend handle — so a verb cannot silently bypass the UI.
-    @MainActor
-    private func makeAutomationGestureVerbs() -> AutomationGestureVerbs {
-        AutomationGestureVerbs(
-            resolveWorkspace: { workspaceID in
-                guard
-                    let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == workspaceID })
-                else {
-                    return nil
-                }
-                return AutomationGestureVerbs.WorkspaceTarget(
-                    workspaceID: workspace.id,
-                    name: workspace.name,
-                    isArchived: workspace.status == .archived
-                )
-            },
-            performSelection: { target in
-                guard
-                    let workspace = repos.flatMap(\.workspaces).first(where: {
-                        $0.id == target.workspaceID
-                    })
-                else {
-                    return AutomationWorkspaceSelectEffect(
-                        selectedWorkspaceID: nil, attachedSurfaceID: nil, attachedTerminal: false)
-                }
-                // Enter the real selection path: write the binding whose setter runs
-                // handleWorkspaceSelection (terminal attach + focus request), exactly as a click does.
-                selectedWorkspaceBinding.wrappedValue = workspace
-                // Read back what the gesture did. Selection landing on the target workspace (not the
-                // archived → repo-overview branch) with a live active session is the terminal attach;
-                // that active session is the surface a following input would land in — the wrong-PTY
-                // guard, observable rather than assumed.
-                let selectedID = currentSelectedWorkspace?.id
-                let activeSessionID = tileTreeStore.activeSessionID
-                let attached = selectedID == workspace.id && activeSessionID != nil
-                return AutomationWorkspaceSelectEffect(
-                    selectedWorkspaceID: selectedID,
-                    attachedSurfaceID: attached ? activeSessionID : nil,
-                    attachedTerminal: attached
-                )
-            },
-            resolveRepo: { repoID in
-                guard let repo = repos.first(where: { $0.id == repoID }) else {
-                    return nil
-                }
-                return AutomationGestureVerbs.RepoTarget(
-                    repoID: repo.id,
-                    name: repo.name,
-                    path: repo.localPath
-                )
-            },
-            performCreation: { _, command in
-                let outcome = await automationWorkspaceCreateBridge.createWorkspace(command)
-                guard case .completed(let effect) = outcome else {
-                    return outcome
-                }
-                var attachedSurfaceID: UUID?
-                var attached = false
-                if !command.shouldSelect,
-                    let workspace = repos.flatMap(\.workspaces).first(where: { $0.id == effect.workspaceID })
-                {
-                    attachedSurfaceID = attachWorkspaceSessionWithoutSelection(workspace)
-                    attached = attachedSurfaceID != nil
-                }
-                let selectedID = currentSelectedWorkspace?.id
-                let activeSessionID = tileTreeStore.activeSessionID
-                if command.shouldSelect {
-                    attached = selectedID == effect.workspaceID && activeSessionID != nil
-                    attachedSurfaceID = attached ? activeSessionID : nil
-                }
-                if command.shouldSelect {
-                    smokeDriver.noteAPIWorkspaceCreateCompleted(
-                        repoID: effect.repoID,
-                        workspaceID: effect.workspaceID,
-                        repos: repos,
-                        parkOnRepoTerminal: { handleRepoTerminalSelection($0) }
-                    )
-                }
-                return .completed(
-                    AutomationWorkspaceCreateEffect(
-                        repoID: effect.repoID,
-                        workspaceID: effect.workspaceID,
-                        workspaceName: effect.workspaceName,
-                        workspacePath: effect.workspacePath,
-                        selectedWorkspaceID: selectedID,
-                        attachedSurfaceID: attachedSurfaceID,
-                        attachedTerminal: attached
-                    )
-                )
-            },
-            performArchive: { target, command in
-                guard
-                    let workspace = repos.flatMap(\.workspaces).first(where: {
-                        $0.id == target.workspaceID
-                    })
-                else {
-                    return .notFound
-                }
-                let controller = SidebarWorkspaceController(
-                    modelContext: modelContext,
-                    workspaceService: workspaceService,
-                    workspaceProviderRegistry: workspaceProviderRegistry,
-                    retireTerminalSessions: { key in
-                        try await retireTerminalSessions(inScope: key)
-                    }
-                )
-                var teardown: AutomationWorkspaceArchiveTeardownReport?
-                if command.teardownTerminals {
-                    let scopeKey: HostTerminalSessionKey
-                    do {
-                        scopeKey = try controller.terminalSessionKey(for: workspace)
-                    } catch {
-                        return .unsupported(
-                            "Failed to resolve the workspace's terminal scope: \(error.localizedDescription)")
-                    }
-                    switch await makeWorkspaceTerminalTeardownController().teardown(scopeKey: scopeKey) {
-                    case .completed(let report):
-                        teardown = report
-                        terminalFocusCoordinator.cancelPendingFocusRequest(
-                            reason: "workspace_archive_teardown_retired_sessions")
-                    case .closeBlockedByConfirmation(let message):
-                        return .closeBlockedByConfirmation(message)
-                    }
-                }
-                do {
-                    try await controller.archive(workspace)
-                    return .completed(
-                        AutomationWorkspaceArchiveEffect(
-                            workspaceID: workspace.id,
-                            selectedWorkspaceID: currentSelectedWorkspace?.id,
-                            teardown: teardown
-                        )
-                    )
-                } catch let error as GhosttySurfaceRetirementCloseError {
-                    // The typed terminal-still-live arms (#1226): the transient timeout is
-                    // retryable; the confirmation-blocked case is not — the dialog cannot be
-                    // answered headlessly, so callers should re-issue with teardownTerminals.
-                    switch error {
-                    case .timedOut:
-                        return .terminalActive(
-                            error.localizedDescription
-                                + " Retry, or archive with teardownTerminals to close it first.")
-                    case .processStillRunning:
-                        return .closeBlockedByConfirmation(
-                            error.localizedDescription
-                                + " Archive with teardownTerminals to tear the terminal down first.")
-                    }
-                } catch {
-                    return .unsupported("Failed to archive workspace: \(error.localizedDescription)")
-                }
-            }
+            gestureVerbs: automationGestureVerbs.makeVerbs()
         )
     }
 
@@ -2509,7 +1931,7 @@ struct ContentView: View {
         if !restoreSessionsOnLaunchEnabled,
             !tileTreeStore.hasSessions,
             let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
-                .hostSessionSnapshot(excludingScopeKeys: archivedWorkspaceTerminalScopeKeys)
+                .hostSessionSnapshot(excludingScopeKeys: terminalContinuityController.archivedWorkspaceScopeKeys)
         {
             tileTreeStore.restoreSessions(
                 snapshot.sessions,
@@ -2812,75 +2234,6 @@ struct ContentView: View {
         lastSurfaceRawValue = surface.rawValue
     }
 
-    private func persistTerminalContinuity(
-        targetKind: TerminalContinuityManifest.TargetKind,
-        targetID: UUID,
-        rootURL: URL,
-        launchURL: URL
-    ) {
-        let continuityInputs = terminalContinuityInputs
-        let manifest = TerminalContinuityManifest(
-            targetKind: targetKind,
-            targetID: targetID,
-            rootURL: rootURL,
-            launchURL: launchURL,
-            terminalMode: terminalMultiplexingMode,
-            sessions: continuityInputs.sessions,
-            activeSessionID: continuityInputs.activeSessionID,
-            activeSessionIDByScopeKey: continuityInputs.activeSessionIDByScopeKey
-        )
-        terminalContinuityManifestRawValue = manifest.rawValue
-        terminalContinuityLog.info(
-            "[TerminalContinuity] persisted kind=\(targetKind.rawValue, privacy: .public) id=\(targetID.uuidString, privacy: .public) root=\(manifest.rootPath, privacy: .public) launch=\(manifest.launchPath, privacy: .public) tmux_session=\(manifest.tmuxSessionName, privacy: .public) mode=\(manifest.terminalMode.rawValue, privacy: .public)"
-        )
-    }
-
-    private func persistTerminalContinuitySnapshot() {
-        let continuityInputs = terminalContinuityInputs
-        let manifest = TerminalContinuityManifest.snapshot(
-            previous: TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue),
-            defaultHomeURL: resolvedDefaultHostDirectory,
-            terminalMode: terminalMultiplexingMode,
-            sessions: continuityInputs.sessions,
-            activeSessionID: continuityInputs.activeSessionID,
-            activeSessionIDByScopeKey: continuityInputs.activeSessionIDByScopeKey
-        )
-        terminalContinuityManifestRawValue = manifest.rawValue
-    }
-
-    private func restoredLaunchDirectory(for repo: Repo) -> URL? {
-        let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
-        return TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
-            .launchDirectory(
-                for: .repo,
-                targetID: repo.id,
-                rootURL: repoDirectory
-            )
-    }
-
-    private func restoredLaunchDirectory(for workspace: Workspace) -> URL? {
-        guard workspace.backend == .local else { return nil }
-        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
-        return TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
-            .launchDirectory(
-                for: .workspace,
-                targetID: workspace.id,
-                rootURL: workspaceDirectory
-            )
-    }
-
-    private func terminalSessionKey(for workspace: Workspace) -> HostTerminalSessionKey? {
-        if workspace.backend == .local {
-            return .hostPath(normalizePath(workspace.workspaceURL.path))
-        }
-
-        guard let provider = workspaceProviderRegistry.provider(for: workspace) else {
-            return nil
-        }
-
-        return provider.sessionKey(for: WorkspaceProviderTarget(workspace)).normalized()
-    }
-
     private func terminalContextMenu(for session: HostTerminalSession) -> NSMenu? {
         guard let target = webSourceCreationTarget(for: session) else { return nil }
 
@@ -2999,35 +2352,12 @@ struct ContentView: View {
         AppActivationPolicy.shared.activateAndFocusFrontWindowIfAllowed()
     }
 
-    private func preferredSessionDirectory(_ preferredDirectory: URL?, inside root: URL) -> URL {
-        guard let preferredDirectory else { return root }
-
-        let normalizedRoot = root.standardizedFileURL.resolvingSymlinksInPath()
-        let normalizedPreferred = preferredDirectory.standardizedFileURL.resolvingSymlinksInPath()
-        guard path(normalizedPreferred.path, isInside: normalizedRoot.path) else {
-            return normalizedRoot
-        }
-
-        var isDirectory = ObjCBool(false)
-        guard
-            FileManager.default.fileExists(atPath: normalizedPreferred.path, isDirectory: &isDirectory),
-            isDirectory.boolValue
-        else {
-            return normalizedRoot
-        }
-
-        return normalizedPreferred
-    }
-
     private func path(_ path: String, isInside root: String) -> Bool {
-        if path == root { return true }
-        guard root != "/" else { return true }
-        return path.hasPrefix(root + "/")
+        MainWindowPathResolution.path(path, isInside: root)
     }
 
     private func normalizePath(_ rawPath: String) -> String {
-        let expanded = NSString(string: rawPath).expandingTildeInPath
-        return URL(fileURLWithPath: expanded).standardizedFileURL.resolvingSymlinksInPath().path
+        MainWindowPathResolution.normalize(rawPath)
     }
 
     /// Cold-start restore (experimental, opt-in): compute what could be restored

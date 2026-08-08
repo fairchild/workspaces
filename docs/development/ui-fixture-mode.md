@@ -2,6 +2,8 @@
 
 In-memory SwiftData seeding plus deterministic agent-status and command-status seeding so the app can launch into a known visual state for screenshots, design review, and visual regression. Scope: the seeded model state is in-memory and no real agents drive the sessions. The rest of the app still does its normal launch IO — outside `CI=1`, `ClaudeIntegrationLifecycle` binds a Unix socket under Application Support keyed by pid (`Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:55-60`), `LocalStateStore` writes SQLite under the dev-data dir, and the synthetic `HostTerminalSession`s spawn real PTYs (which fall back to `$HOME` when the seeded path doesn't exist — see "Known limits"). For a truly hermetic capture environment, set `CI=1`, a dedicated `WORKSPACES_DATA_DIR`, and an isolation signal for preferences (see "Preferences isolation").
 
+Fixture mode is debug-only. The seeding harness was compiled out of release builds in #1235 and the four launch-surface parsers (`_OPEN_PREVIEW`, `_OPEN_DIAGNOSTICS`, `_OPEN_SESSION_SWITCHER`, `_SELECT_WEB_SOURCE`) followed in #1237, so every variable below is inert in a release binary — `scripts/check-release-harness-absence.sh` enforces that. Drive fixtures from `./scripts/launch-dev.sh` (debug), never from an installed release app.
+
 ## Quick start
 
 ```bash

@@ -59,28 +59,6 @@ string_patterns=(
     WORKSPACES_UI_FIXTURE_AGENT_STATES
     WORKSPACES_UI_FIXTURE_COMMAND_STATUSES
     WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER
-    desktop-ui-smoke-web
-    host-lume-macos-smoke
-)
-
-# Fixture env keys that still reach release builds, by scope decision rather
-# than oversight. #1235 gated the harness that acts on state; the four
-# UIFixture*Bootstrap parsers (session switcher, diagnostics, preview, web
-# source) only read these keys to pick a launch surface, and they are woven into
-# the launch-surface wiring (MainWindowSurfaceResolutionController /
-# MainWindowBootstrapController / MainWindowLaunchActionHandler) that Wave-3
-# #1237 restructures — gating them is deferred to that wave.
-#
-# WORKSPACES_UI_FIXTURE additionally reaches release through non-harness Core
-# (LocalStateStore, ModelStoreStatus select an in-memory store from it), so it
-# outlives #1237 by design.
-#
-# The allowlist is self-retiring in both directions: while a key is listed its
-# presence is reported, never failed; once #1237 compiles a key out, the stale
-# entry fails until it is deleted. Deleting an entry before the key is gated
-# fails too, because the key falls back to the string_patterns check above.
-deferred_string_patterns=(
-    WORKSPACES_UI_FIXTURE
     WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER
     WORKSPACES_UI_FIXTURE_OPEN_DIAGNOSTICS
     WORKSPACES_UI_FIXTURE_OPEN_PREVIEW
@@ -88,6 +66,25 @@ deferred_string_patterns=(
     WORKSPACES_UI_FIXTURE_PREVIEW_PATH
     WORKSPACES_UI_FIXTURE_SELECT_WEB_SOURCE
     WORKSPACES_UI_FIXTURE_WEB_SOURCE
+    desktop-ui-smoke-web
+    host-lume-macos-smoke
+)
+
+# Fixture env keys that still reach release builds, by scope decision rather than
+# oversight. #1237 gated the four UIFixture*Bootstrap parsers behind #if DEBUG,
+# so the seven launch-surface keys they used to read graduated from this list to
+# string_patterns above, where absence is now enforced rather than tolerated.
+#
+# WORKSPACES_UI_FIXTURE stays: it reaches release through non-harness Core —
+# LocalStateStore and ModelStoreStatus select an in-memory store from it — so it
+# is not a parser leak and has no gating story pending.
+#
+# The allowlist is self-retiring in both directions: while a key is listed its
+# presence is reported, never failed; once a key is compiled out, the stale entry
+# fails until it is deleted. Deleting an entry before the key is gated fails too,
+# because the key falls back to the string_patterns check above.
+deferred_string_patterns=(
+    WORKSPACES_UI_FIXTURE
 )
 
 nm_output="$(nm "$BINARY" 2>/dev/null || true)"
@@ -129,7 +126,7 @@ done
 
 for pattern in "${deferred_string_patterns[@]}"; do
     if grep -q "$pattern" <<<"$strings_output"; then
-        echo "allowed: '$pattern' present (fixture bootstrap parsers, deferred to #1237)"
+        echo "allowed: '$pattern' present (non-harness Core reads it; see deferred_string_patterns)"
     else
         echo "FAIL: '$pattern' is allowlisted but absent from $BINARY" >&2
         echo "       it is gated now — delete it from deferred_string_patterns" >&2
@@ -143,4 +140,4 @@ if ((failures > 0)); then
 fi
 
 echo "release harness check passed: no harness symbols or strings in $BINARY"
-echo "  (${#deferred_string_patterns[@]} fixture env keys remain by deferral to #1237)"
+echo "  (${#deferred_string_patterns[@]} fixture env key(s) allowed by scope decision)"
