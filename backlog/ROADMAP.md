@@ -25,6 +25,22 @@ agents:
 Terminal-first is the promise. Web, automation, and remote-runtime work must
 strengthen the terminal workflow.
 
+## The Bet
+
+The current goal is that this becomes my preferred daily driver — the app I
+reach for by choice, for real work, not the one I tolerate because I wrote it.
+
+The bet is that strong quality controls and consistent patterns, coupled with
+automated development, let me dial it in to exactly the app I want without
+compromise. Quality investment normally reads as a tax on shaping a thing;
+here it should be what makes shaping cheap enough to keep doing — automated
+development turns a well-controlled codebase into one I can keep refining
+rather than one I have to be careful around.
+
+It's working when I stop noticing the app: pick context, get a terminal, work.
+It's failing if the machinery keeps merging PRs while the app stops moving
+toward what I actually want.
+
 ## The Three Surfaces
 
 **Desktop app.** The product's center: a terminal-first main window over a
