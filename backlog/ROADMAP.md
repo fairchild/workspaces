@@ -5,101 +5,78 @@ category: plan
 
 # Workspaces Roadmap
 
-This document holds direction: what the product is for and the rules that
-decide what gets worked on. Live state lives in GitHub — open milestones carry
-current focus, issues carry everything else, git and merged PRs carry shipped
-history, and durable rationale lives in decision docs and `docs/retros/`. If a
-statement here needs updating more than a few times a year, it belongs in one
-of those places instead.
+## What it's for
 
-## Vision
-
-Build a dependable Mac-native control surface for terminal-based coding
-agents:
-
-- select the right repo or workspace quickly
-- keep long-lived terminal context intact
-- attach the minimum useful chrome around that terminal
-- add remote runtimes and activity feeds only when they make that workflow more reliable
-
-Terminal-first is the promise. Web, automation, and remote-runtime work must
-strengthen the terminal workflow.
+A dependable Mac-native control surface for terminal-based coding agents: pick
+the right repo or workspace quickly, keep long-lived terminal context intact,
+attach the minimum useful chrome around that terminal. Remote runtimes,
+activity feeds, and web surfaces earn their place by making that loop more
+reliable, and terminal-first is the promise they answer to.
 
 ## The Bet
 
-The current goal is that this becomes my preferred daily driver — the app I
-reach for by choice, for real work, not the one I tolerate because I wrote it.
+The goal is that this becomes my preferred daily driver — the app I reach for
+by choice, for real work, not the one I tolerate because I wrote it.
 
 The bet is that strong quality controls and consistent patterns, coupled with
 automated development, let me dial it in to exactly the app I want without
-compromise. Quality investment normally reads as a tax on shaping a thing;
-here it should be what makes shaping cheap enough to keep doing — automated
-development turns a well-controlled codebase into one I can keep refining
-rather than one I have to be careful around.
+compromise. Quality investment usually reads as a tax on shaping a thing. Here
+it should be the opposite: automated development ought to make refinement
+cheap enough that I keep doing it. If that's wrong, I'll see it as PRs merging
+steadily while the app stops moving toward what I actually want. It works when
+I stop noticing the app: pick context, get a terminal, work.
 
-It's working when I stop noticing the app: pick context, get a terminal, work.
-It's failing if the machinery keeps merging PRs while the app stops moving
-toward what I actually want.
+The bet is on one user. I expect that taking that seriously leaves high-quality
+reusable parts along the way — libraries, packages, a good experience — and if
+I like it, some other cohort likely would; Folio, the conversation experience,
+is already one of them: an installable package with MFWiki as its first outside
+consumer.
 
-## The Three Surfaces
+## The Surfaces
 
-**Desktop app.** The product's center: a terminal-first main window over a
-recursive tile tree, with repo overview, persistent sessions, and Ghostty
-underneath. Desktop work protects the layout model, terminal context, and
-local-continuity foundations while continuing to harden restore and
-provider-specific behavior.
+**Desktop.** The center of the product: a terminal-first window over a
+recursive tile tree, with repo overview and Ghostty underneath. Work here
+protects the layout model, terminal context, and the local state history
+continuity depends on. Restoring sessions on launch is still a default-off
+experiment, so continuity across relaunch remains a goal the foundations
+support.
 
-**Web.** `web-next` (folio.cloudcompute.com) is the active web surface,
-embedded in the desktop app and run against real compute; the earlier `web/`
-dashboard is in maintenance mode, though it still operates live webhook
-ingestion. Most web work is judged by whether it makes the desktop loop more
-continuous — session continuity, cost visibility, calm. Folio, the
-conversation experience, is also a reusable package with Workspaces as its
-public source and MFWiki as its first external consumer; that extraction is
-judged on its own terms.
+**Web.** `web-next` ships at folio.cloudcompute.com, embedded in the desktop
+app; the earlier `web/` dashboard is in maintenance mode and still carries live
+GitHub webhook ingestion. Web work is judged by whether it makes the desktop
+loop more continuous — session continuity, cost visibility, calm. Folio's
+extraction is judged separately, on whether an outside consumer can install it
+and build against it.
 
-**Factory.** The label-driven pipeline turns owner-released issues into
-reviewed PRs. App identities separate worker and reviewer actions, and per-run
-telemetry measures cost and intervention. Merge authority expands only from
-measured reviewer agreement; privileged paths remain owner-merged. The factory
-is measured by throughput, intervention rate, and review effort.
+## How work gets made
 
-## Operating Principles
+Most code arrives through the factory, the label-driven pipeline that turns
+issues I release into reviewed PRs — which is why the bet's failure condition
+names machinery: the pipeline can stay green and productive while the product
+drifts. App identities separate worker and reviewer actions, and per-run
+telemetry measures cost and intervention, so how much authority to delegate
+becomes answerable from evidence. Merge authority is mine — auto-merge is
+specified and disabled, the main-merge ruleset requires one approving review —
+and widens only as measured reviewer agreement accumulates; privileged paths
+stay owner-merged. Details in `docs/development/agent-factory-v2-plan.md`.
 
-The product is three surfaces that do not age at the same rate, and the
-dominant risk is complexity management across them rather than feature
-absence. Priority follows from that, in order:
-
-- **Protect the core loop.** Choose context, get a ready terminal, inspect
-  changes, continue without surprise. Judged by: launch and restore stay
-  boring, session reuse and focus stay correct under rapid switching, the
-  sidebar stays calm as capabilities grow.
-- **Fix dependency debt before adding breadth.** Reducing regression risk is
-  most valuable exactly when a surface is about to grow.
-- **Remote runtimes are held to local's bar.** VM-backed workspaces belong in
-  the product when provider identity is explicit, provisioning is
-  understandable, and the architecture stays small enough to evolve safely.
-- **Automation earns expansion through trust.** Activity, notifications, and
-  the factory should help coordination without becoming a second product.
-  Judged by: reliable reconnect and catch-up, low auth churn, entrypoints
-  that reflect the actual value of what they surface.
-- **Evidence gates delivery.** Changes cross desktop, web, and sandboxed
-  runtimes; require captured behavior and recurring performance measurement
-  before shipping.
-
-## Promotion Model
+## Promotion
 
 Work is promoted through GitHub milestones when it strengthens the core loop
-and has an explicit verification path. Each lane — desktop, web, automation —
-runs one active milestone at a time unless an independence argument is
-recorded in the milestone description. Themes under consideration stay as
-tracker issues: `idea` marks speculative directions; actionable work uses the
-normal lane and state labels whether or not it has a milestone yet.
+and has an explicit verification path, and each lane — desktop, web,
+automation — runs one active milestone at a time unless the milestone
+description records an independence argument. Evidence gates all of it:
+changes cross desktop, web, and sandboxed runtimes, so captured behavior and
+recurring performance measurement come before shipping. Regression risk is
+cheapest to reduce right before a surface grows, so structural and dependency
+debt gets paid ahead of breadth, and automation earns its expansion — activity
+and notifications should reconnect and catch up reliably before they get more
+entrypoints, which they do not yet (#547).
 
-Current focus reads directly off the
-[open milestones](https://github.com/fairchild/workspaces/milestones); the
-milestone operating contract (lane prefixes, posture headers, the legibility
-gate) lives in `docs/agents/issue-tracker.md`.
-
-When an arc completes, GitHub retains its execution state; durable rationale
-and lessons go into code, tests, skills, decision docs, or `docs/retros/`.
+`idea` marks speculative directions that might never be built; actionable work
+uses the normal lane and state labels whether or not it has a milestone yet.
+Current focus reads off the
+[open milestones](https://github.com/fairchild/workspaces/milestones), and the
+milestone operating contract lives in `docs/agents/issue-tracker.md`. Anything
+here that would need updating more than a few times a year belongs in GitHub
+or a decision doc instead.
