@@ -184,26 +184,88 @@ print(value)
 PY
 }
 
-# Prints the 0-based index of the first event of type $1, or -1.
+# Prints the 0-based index of the first event of type $1 at or after index ${3:-0}, optionally
+# narrowed to selectionKind $2, or -1. The kind and start-index narrowing is what makes a
+# barrier assert the attach this run drove rather than an earlier one of the same type.
 event_index() {
-    python3 - "$EVENTS_PATH" "$1" <<'PY'
+    python3 - "$EVENTS_PATH" "$1" "${2:-}" "${3:-0}" <<'PY'
 import json, sys
 from pathlib import Path
-path, target = Path(sys.argv[1]), sys.argv[2]
+path, target, kind, start = Path(sys.argv[1]), sys.argv[2], sys.argv[3], int(sys.argv[4])
 idx = -1
 if path.exists():
-    for i, line in enumerate(l.strip() for l in path.read_text().splitlines() if l.strip()):
-        if json.loads(line).get("type") == target:
+    lines = [l.strip() for l in path.read_text().splitlines() if l.strip()]
+    for i, line in enumerate(lines):
+        if i < start:
+            continue
+        event = json.loads(line)
+        if event.get("type") == target and (not kind or event.get("selectionKind") == kind):
             idx = i
             break
 print(idx)
 PY
 }
 
+# Prints the top-level string field $2 from the JSON document at $1, or "".
+read_json_field() {
+    python3 - "$1" "$2" <<'PY'
+import json, sys
+from pathlib import Path
+value = json.loads(Path(sys.argv[1]).read_text()).get(sys.argv[2])
+print("" if value is None else value)
+PY
+}
+
+# The waits are assertions on what the select gesture left behind, not latency barriers:
+# `workspace select` returns only after the real selection gesture completed, so both are
+# expected to report waitedMS 0. What makes them load-bearing is the predicates — the
+# workspace this script asked for must be the selected one, and the surface the select result
+# claims it attached must be live in the tile tree, checked here against app state rather than
+# against the app's own milestone stream.
+assert_wait_outcomes() {
+    python3 - "$RUN_DIR/wait-workspace-selected.json" "$RUN_DIR/wait-surface-attached.json" "$1" "$2" <<'PY'
+import json, sys
+from pathlib import Path
+
+selected, attached = (json.loads(Path(p).read_text()) for p in sys.argv[1:3])
+expected_workspace_id, expected_surface_id = sys.argv[3], sys.argv[4]
+failures = []
+
+# UUID spellings differ in case across the JSONL, the verb result, and the wait observation;
+# the identity does not.
+def uuid_eq(left, right):
+    return isinstance(left, str) and left.lower() == right.lower()
+
+observed_selection = selected.get("observed", {}).get("selectedWorkspaceID")
+observed_surface = attached.get("observed", {}).get("attachedSurfaceID")
+
+if selected.get("outcome") != "satisfied":
+    failures.append(f"workspace_selected outcome={selected.get('outcome')} observed={selected.get('observed')}")
+if not uuid_eq(observed_selection, expected_workspace_id):
+    failures.append(f"workspace_selected observed selection {observed_selection} != requested {expected_workspace_id}")
+if attached.get("outcome") != "satisfied":
+    failures.append(f"surface_attached outcome={attached.get('outcome')} observed={attached.get('observed')}")
+if not uuid_eq(observed_surface, expected_surface_id):
+    failures.append(
+        f"surface_attached observed surface {observed_surface} "
+        f"!= select result's attachedSurfaceID {expected_surface_id}"
+    )
+
+if failures:
+    print("ASSERTION FAILED: server-side waits did not confirm the select post-conditions", file=sys.stderr)
+    for failure in failures:
+        print(f"  - {failure}", file=sys.stderr)
+    sys.exit(1)
+print(f"OK: waits confirm workspace {expected_workspace_id} selected and surface {expected_surface_id} attached")
+PY
+}
+
+# wait_for_event <type> [selectionKind] [start-index]
 wait_for_event() {
-    local event_type="$1" deadline=$(( $(date +%s) + TOTAL_TIMEOUT_SECONDS ))
+    local event_type="$1" kind="${2:-}" start="${3:-0}"
+    local deadline=$(( $(date +%s) + TOTAL_TIMEOUT_SECONDS ))
     while (( $(date +%s) < deadline )); do
-        if [[ "$(event_index "$event_type")" != "-1" ]]; then
+        if [[ "$(event_index "$event_type" "$kind" "$start")" != "-1" ]]; then
             return 0
         fi
         # Surface an app-side failure milestone immediately rather than waiting out the timeout.
@@ -212,7 +274,7 @@ wait_for_event() {
         fi
         sleep 1
     done
-    fail "Timed out waiting for milestone: $event_type"
+    fail "Timed out waiting for milestone: $event_type${kind:+ (selectionKind=$kind)}"
 }
 
 main() {
@@ -244,8 +306,28 @@ main() {
     log "Driving API select: workspaces workspace select $workspace_id"
     "$CLI_BIN" workspace select "$workspace_id" --json | tee "$RUN_DIR/select-result.json"
 
-    log "Waiting for terminal_session_attached from the API-driven select…"
-    wait_for_event terminal_session_attached
+    local attached_surface_id
+    attached_surface_id="$(read_json_field "$RUN_DIR/select-result.json" attachedSurfaceID)"
+    [[ -n "$attached_surface_id" ]] || fail "workspace select reported no attachedSurfaceID."
+
+    # Two server-side typed waits (POST /v1/wait) check the selection and the terminal attach
+    # against the app's own live state, each bound to the id this run cares about. A
+    # timed_out/not_applicable outcome exits non-zero (2/3) and fails the run under set -e;
+    # assert_wait_outcomes then checks the observations, not just the outcomes.
+    log "Confirming the selection server-side (workspaces wait)…"
+    "$CLI_BIN" wait --for workspace_selected --workspace-id "$workspace_id" --timeout-ms 20000 --json \
+        | tee "$RUN_DIR/wait-workspace-selected.json"
+    "$CLI_BIN" wait --for surface_attached --surface-id "$attached_surface_id" --timeout-ms 20000 --json \
+        | tee "$RUN_DIR/wait-surface-attached.json"
+    assert_wait_outcomes "$workspace_id" "$attached_surface_id"
+
+    # The milestone stream is written asynchronously relative to the verb's return, so the
+    # ordering assertion below needs its own barrier. The waits above prove app state; this
+    # proves the app emitted the milestone that state should have produced. The
+    # awaiting_api_select poll earlier stays JSONL-based for the same reason — that milestone
+    # is scenario-driver state the wait vocabulary does not model.
+    log "Waiting for the post-handoff terminal_session_attached to reach the milestone stream…"
+    wait_for_event terminal_session_attached workspace $((await_idx + 1))
 
     # Assert a workspace-scoped terminal attach occurred AFTER the handoff — i.e. the API verb, not
     # the app's own scenario, drove it.
