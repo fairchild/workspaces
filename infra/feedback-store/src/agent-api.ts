@@ -3,7 +3,7 @@
  * Read/list feedback rows, update status/notes, and publish through the same
  * guarded core as the admin UI, so dedup and the audit trail hold everywhere.
  */
-import { ensureSchema, recordAudit } from "./db";
+import { auditStatement, ensureSchema } from "./db";
 import { publishFeedbackAsIssue } from "./publish";
 import { FEEDBACK_STATUSES, type Env, type FeedbackAuditRow, type FeedbackRow } from "./types";
 
@@ -43,9 +43,8 @@ export async function handleAgentAPI(request: Request, env: Env): Promise<Respon
 async function list(url: URL, env: Env): Promise<Response> {
   const status = url.searchParams.get("status") ?? "";
   const kind = url.searchParams.get("kind") ?? "";
-  const limit = Math.min(
-    Math.max(Number(url.searchParams.get("limit")) || LIST_LIMIT_DEFAULT, 1),
-    LIST_LIMIT_MAX
+  const limit = Math.floor(
+    Math.min(Math.max(Number(url.searchParams.get("limit")) || LIST_LIMIT_DEFAULT, 1), LIST_LIMIT_MAX)
   );
 
   let query = "SELECT * FROM feedback";
@@ -83,7 +82,7 @@ async function detail(id: string, env: Env): Promise<Response> {
 }
 
 async function update(id: string, request: Request, env: Env): Promise<Response> {
-  let body: { status?: string; admin_notes?: string };
+  let body: { status?: string; admin_notes?: string | null };
   try {
     body = await request.json();
   } catch {
@@ -91,9 +90,9 @@ async function update(id: string, request: Request, env: Env): Promise<Response>
   }
 
   const sets: string[] = [];
-  const bindings: string[] = [];
+  const bindings: (string | null)[] = [];
   if (body.status !== undefined) {
-    if (!(FEEDBACK_STATUSES as readonly string[]).includes(body.status)) {
+    if (typeof body.status !== "string" || !(FEEDBACK_STATUSES as readonly string[]).includes(body.status)) {
       return Response.json(
         { error: `invalid status; expected one of: ${FEEDBACK_STATUSES.join(", ")}` },
         { status: 400 }
@@ -103,8 +102,11 @@ async function update(id: string, request: Request, env: Env): Promise<Response>
     bindings.push(body.status);
   }
   if (body.admin_notes !== undefined) {
+    if (body.admin_notes !== null && typeof body.admin_notes !== "string") {
+      return Response.json({ error: "admin_notes must be a string or null" }, { status: 400 });
+    }
     sets.push("admin_notes = ?");
-    bindings.push(String(body.admin_notes));
+    bindings.push(body.admin_notes);
   }
   if (!sets.length) {
     return Response.json({ error: "nothing to update; pass status and/or admin_notes" }, { status: 400 });
@@ -115,10 +117,11 @@ async function update(id: string, request: Request, env: Env): Promise<Response>
     .first<FeedbackRow>();
   if (!existing) return Response.json({ error: "not found" }, { status: 404 });
 
-  await env.FEEDBACK_DB.prepare(`UPDATE feedback SET ${sets.join(", ")} WHERE id = ?`)
-    .bind(...bindings, id)
-    .run();
-  await recordAudit(env, id, actorFrom(request), "update", JSON.stringify(body));
+  // One D1 batch = one transaction: the row change and its audit entry land or fail together.
+  await env.FEEDBACK_DB.batch([
+    env.FEEDBACK_DB.prepare(`UPDATE feedback SET ${sets.join(", ")} WHERE id = ?`).bind(...bindings, id),
+    auditStatement(env, id, actorFrom(request), "update", JSON.stringify(body)),
+  ]);
 
   const updated = await env.FEEDBACK_DB.prepare("SELECT * FROM feedback WHERE id = ?")
     .bind(id)

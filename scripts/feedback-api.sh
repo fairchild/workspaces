@@ -6,10 +6,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ -z "${FEEDBACK_AGENT_TOKEN:-}" && -f "$REPO_ROOT/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$REPO_ROOT/.env"
-  set +a
+  # Extract only the token in a subshell so unrelated .env secrets never enter
+  # this process (or its curl/python children).
+  FEEDBACK_AGENT_TOKEN="$(
+    # shellcheck disable=SC1091
+    source "$REPO_ROOT/.env" >/dev/null 2>&1
+    printf '%s' "${FEEDBACK_AGENT_TOKEN:-}"
+  )"
 fi
 
 BASE_URL="${FEEDBACK_API_BASE:-https://feedback.cloudcompute.com}"
@@ -38,7 +41,7 @@ EOF
 
 api() {
   local method="$1" path="$2" body="${3:-}"
-  local args=(-sS -X "$method" "$BASE_URL$path" -K - -H "X-Agent-Actor: $ACTOR")
+  local args=(-sS --fail-with-body -X "$method" "$BASE_URL$path" -K - -H "X-Agent-Actor: $ACTOR")
   if [[ -n "$body" ]]; then
     args+=(-H "Content-Type: application/json" --data "$body")
   fi

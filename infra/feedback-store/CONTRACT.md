@@ -124,6 +124,6 @@ a missing or wrong token answers `401`. Callers may declare an identity with
 
 ## Audit trail
 
-`feedback_audit` (append-only) records every publish from the admin UI, so a triage action is always attributable:
+`feedback_audit` (append-only) records every publish and every agent-lane update, so a triage action is always attributable:
 
-- `id` INTEGER PK, `feedback_id` TEXT, `at` INTEGER ms, `actor` TEXT (the admin login), `action` TEXT (currently `publish`), `detail` TEXT nullable (the issue URL).
+- `id` INTEGER PK, `feedback_id` TEXT, `at` INTEGER ms, `actor` TEXT (the admin login for admin-UI publishes, `agent:<slug>` for agent-lane actions), `action` TEXT (`publish` or `update`), `detail` TEXT nullable (the issue URL for publishes, the request body JSON for updates).

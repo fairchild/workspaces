@@ -16,6 +16,9 @@ class FakeD1 {
   async exec() {
     return {} as unknown;
   }
+  async batch(statements: FakeStatement[]) {
+    return Promise.all(statements.map((statement) => statement.run()));
+  }
 }
 
 class FakeStatement {
@@ -44,7 +47,10 @@ class FakeStatement {
     }
     rows.sort((a, b) => b.created_at - a.created_at);
     if (this.sql.includes("LIMIT ?")) {
-      rows = rows.slice(0, Number(this.args[arg++]));
+      const limit = this.args[arg++];
+      // Real SQLite rejects non-integer LIMIT bindings ("datatype mismatch").
+      if (!Number.isInteger(limit)) throw new Error("datatype mismatch");
+      rows = rows.slice(0, limit as number);
     }
     return { results: rows.map((r) => ({ ...r })) as T[] };
   }
@@ -158,6 +164,19 @@ describe("agent API reads", () => {
     expect(body.audit[0].actor).toBe("agent:mara");
   });
 
+  test("fractional limit params are floored to a valid integer binding", async () => {
+    const db = new FakeD1();
+    db.feedback.push(makeRow({ id: "a", created_at: 1 }));
+    db.feedback.push(makeRow({ id: "b", created_at: 2 }));
+    db.feedback.push(makeRow({ id: "c", created_at: 3 }));
+
+    const response = await handleAgentAPI(apiRequest("/api/feedback?limit=2.5"), makeEnv(db));
+    const body = (await response.json()) as { rows: { id: string }[] };
+
+    expect(response.status).toBe(200);
+    expect(body.rows.map((r) => r.id)).toEqual(["c", "b"]);
+  });
+
   test("detail 404s on unknown ids", async () => {
     const response = await handleAgentAPI(apiRequest("/api/feedback/missing"), makeEnv(new FakeD1()));
     expect(response.status).toBe(404);
@@ -184,6 +203,25 @@ describe("agent API updates", () => {
     expect(db.audit).toHaveLength(1);
     expect(db.audit[0].actor).toBe("agent:mara");
     expect(db.audit[0].action).toBe("update");
+  });
+
+  test("admin_notes null clears the field; non-string notes are rejected", async () => {
+    const db = new FakeD1();
+    db.feedback.push(makeRow({ id: "a", admin_notes: "old note" }));
+    const env = makeEnv(db);
+
+    const cleared = await handleAgentAPI(
+      apiRequest("/api/feedback/a", { method: "PATCH", body: JSON.stringify({ admin_notes: null }) }),
+      env
+    );
+    const body = (await cleared.json()) as { row: { admin_notes: string | null } };
+    const rejected = await handleAgentAPI(
+      apiRequest("/api/feedback/a", { method: "PATCH", body: JSON.stringify({ admin_notes: 42 }) }),
+      env
+    );
+
+    expect(body.row.admin_notes).toBeNull();
+    expect(rejected.status).toBe(400);
   });
 
   test("rejects unknown statuses and empty updates", async () => {
