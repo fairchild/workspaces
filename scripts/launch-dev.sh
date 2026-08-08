@@ -100,9 +100,12 @@ Isolation notes:
 - This simulates explicit state isolation and avoids leaking dev state into
   global user directories.
 - It does not emulate full OS sandboxing; it isolates app persistence scope.
-- --fixture additionally establishes/requires WORKSPACES_SYNTHETIC_ROOT (a
-  caller-provided value wins; otherwise a default under the data dir), so the
-  launch-time workspace-orphan scan never reads the real ~/workspaces root.
+- Fixture launches — --fixture, or WORKSPACES_UI_FIXTURE=1 inherited from the
+  environment or passed via --env — additionally establish/require
+  WORKSPACES_SYNTHETIC_ROOT (a caller-provided value wins; otherwise a default
+  under the data dir), so the launch-time workspace-orphan scan never reads the
+  real ~/workspaces root. A value that is the real root, or contains it, is
+  rejected rather than launched.
 USAGE
 }
 
@@ -344,18 +347,42 @@ configure_fixture_mode() {
     if [[ "$FIXTURE_MODE" == true ]]; then
         ENV_VARS+=("WORKSPACES_UI_FIXTURE=1")
         ENV_VARS+=("WORKSPACES_DISABLE_AUTO_IMPORT=1")
+    fi
+    if fixture_launch_requested; then
         configure_synthetic_root
     fi
 }
 
-# Belt-and-braces isolation guard for --fixture: scripts/lib/app-capture.sh (the
-# evidence lane's first-choice path) already establishes WORKSPACES_SYNTHETIC_ROOT
-# before invoking this script, so the launch-time workspace-orphan scan only ever
-# sees synthetic state there. Any other fixture-launching path — a bare
-# `./scripts/launch-dev.sh --fixture` for manual capture, a future caller — used
-# to skip that boundary entirely and let the orphan scan fall through to the real
-# ~/workspaces (#1217). This makes the guard unconditional for every --fixture
-# launch instead of relying on each caller to remember it: an inherited/`--env`
+# Fixture mode is a property of the launch, not of the --fixture flag. The app
+# enables it on the exact value WORKSPACES_UI_FIXTURE=1 whatever the source
+# (SidebarView, the UIFixture*Bootstrap types), and the env-only form
+# `WORKSPACES_UI_FIXTURE=1 ./scripts/launch-dev.sh --no-build` is the first
+# recipe docs/development/ui-fixture-mode.md teaches — so keying the isolation
+# guard on the flag alone would leave the most-used shape unguarded. Key it on
+# the value the app will actually see instead: the last `--env` assignment if
+# any (how `env` itself resolves duplicates), otherwise the inherited one.
+# --fixture wins outright because it appends its own =1 above.
+fixture_launch_requested() {
+    [[ "$FIXTURE_MODE" == true ]] && return 0
+
+    local entry value="${WORKSPACES_UI_FIXTURE:-}"
+    if [[ ${#ENV_VARS[@]} -gt 0 ]]; then
+        for entry in "${ENV_VARS[@]}"; do
+            [[ "$entry" == WORKSPACES_UI_FIXTURE=* ]] && value="${entry#WORKSPACES_UI_FIXTURE=}"
+        done
+    fi
+    [[ "$value" == "1" ]]
+}
+
+# Belt-and-braces isolation guard for fixture launches: scripts/lib/app-capture.sh
+# (the evidence lane's first-choice path) already establishes
+# WORKSPACES_SYNTHETIC_ROOT before invoking this script, so the launch-time
+# workspace-orphan scan only ever sees synthetic state there. Every other
+# fixture-launching path — a bare `./scripts/launch-dev.sh --fixture` for manual
+# capture, the documented env-only recipe, a future caller — used to skip that
+# boundary entirely and let the orphan scan fall through to the real ~/workspaces
+# (#1217). This makes the guard unconditional for every fixture launch instead of
+# relying on each caller to remember it: an inherited/`--env`
 # WORKSPACES_SYNTHETIC_ROOT wins (matching synthetic_root_ensure's contract),
 # otherwise a default under this launch's data dir is created, and the launch
 # refuses to proceed without one. Never runs for a normal (non-fixture) launch.
@@ -369,21 +396,23 @@ configure_fixture_mode() {
 configure_synthetic_root() {
     local entry resolved=""
     local -a filtered=()
-    for entry in "${ENV_VARS[@]}"; do
-        if [[ "$entry" == WORKSPACES_SYNTHETIC_ROOT=* ]]; then
-            resolved="${entry#WORKSPACES_SYNTHETIC_ROOT=}"
-        else
-            filtered+=("$entry")
-        fi
-    done
+    if [[ ${#ENV_VARS[@]} -gt 0 ]]; then
+        for entry in "${ENV_VARS[@]}"; do
+            if [[ "$entry" == WORKSPACES_SYNTHETIC_ROOT=* ]]; then
+                resolved="${entry#WORKSPACES_SYNTHETIC_ROOT=}"
+            else
+                filtered+=("$entry")
+            fi
+        done
+    fi
     ENV_VARS=()
     [[ ${#filtered[@]} -gt 0 ]] && ENV_VARS=("${filtered[@]}")
     [[ -n "$resolved" ]] && WORKSPACES_SYNTHETIC_ROOT="$resolved"
 
     synthetic_root_ensure "$DATA_DIR/workspaces-root" \
-        || fail "Could not establish WORKSPACES_SYNTHETIC_ROOT for --fixture launch."
+        || fail "Could not establish WORKSPACES_SYNTHETIC_ROOT for this fixture launch."
     synthetic_root_require \
-        || fail "Refusing --fixture launch without WORKSPACES_SYNTHETIC_ROOT."
+        || fail "Refusing a fixture launch without a synthetic WORKSPACES_SYNTHETIC_ROOT."
 
     ENV_VARS+=("WORKSPACES_SYNTHETIC_ROOT=$WORKSPACES_SYNTHETIC_ROOT")
 }
