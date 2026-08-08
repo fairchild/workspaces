@@ -135,6 +135,9 @@ enum AutomationHTTPRouter {
                 submit: write.submit ?? false
             )
 
+        case ("GET", "/v1/ui-state"):
+            return try await controller.automationUIState(for: handle)
+
         case (_, "/v1/context"):
             throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/context.")
         case (_, "/v1/surfaces"):
@@ -163,6 +166,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/close.")
         case (_, "/v1/input/write"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/input/write.")
+        case (_, "/v1/ui-state"):
+            throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/ui-state.")
         default:
             throw AutomationServiceError(.routeNotFound, "Unsupported automation route: \(method) \(request.path)")
         }
@@ -479,6 +484,7 @@ extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}
 extension AutomationMutationResult: CodableSendableEquatable {}
 extension AutomationInputWriteResult: CodableSendableEquatable {}
 extension AutomationEmptyResult: CodableSendableEquatable {}
+extension AutomationUIStateResult: CodableSendableEquatable {}
 
 enum AutomationJSON {
     static var encoder: JSONEncoder {

@@ -106,6 +106,7 @@ REPO="workspaces"
 FIXTURE=""
 FIXTURE_TIMEOUT=45
 KEEP_RUNNING=false
+NO_UPLOAD=false
 
 usage() {
   cat <<EOF
@@ -126,6 +127,9 @@ App evidence lane (first-choice UI capture — sanctioned by [A1]):
                       or inline:<agent-states>. See docs/development/ui-fixture-mode.md.
   --timeout <s>       Readiness timeout for the app launch (default: ${FIXTURE_TIMEOUT})
   --keep-running      Leave the launched app running after capture (debugging)
+  --no-upload         Tokenless local run: capture (and ui-state verify) as usual,
+                      then print the local artifact path + sha256 instead of
+                      uploading. Upload always requires EVIDENCE_UPLOAD_TOKEN.
 
   -h, --help          Show this help
 EOF
@@ -142,6 +146,7 @@ while [[ $# -gt 0 ]]; do
     --fixture) FIXTURE="$2"; shift 2 ;;
     --timeout) FIXTURE_TIMEOUT="$2"; shift 2 ;;
     --keep-running) KEEP_RUNNING=true; shift ;;
+    --no-upload) NO_UPLOAD=true; shift ;;
     -h|--help) usage ;;
     *) echo "error: unknown option: $1" >&2; usage ;;
   esac
@@ -160,17 +165,20 @@ if [[ -z "$PR" ]] || [[ -z "$NAME" ]]; then
   usage
 fi
 
-if [[ -z "${EVIDENCE_UPLOAD_TOKEN:-}" ]]; then
-  echo "error: EVIDENCE_UPLOAD_TOKEN not set." >&2
-  echo "  Add it to $REPO_ROOT/.env, run ./scripts/setup --env-only to symlink it from an existing checkout, or export it directly." >&2
-  echo "  The token value is stored in GitHub repo secrets." >&2
-  exit 1
-fi
+# The upload-token gate runs after capture (see below), so a tokenless worktree
+# still produces the local PNG and the ui-state golden diff — only the upload
+# itself requires EVIDENCE_UPLOAD_TOKEN.
 
 # App evidence lane: launch a named fixture state and snapshot the main window
 # through operator scope. Headless-safe and locked-screen-aware — see
 # docs/development/evidence.md § "App evidence lane".
 if [[ -n "$FIXTURE" ]]; then
+  # Scenario extras that ride process-environment inheritance into the app
+  # (launch-dev.sh preserves the caller's environment). The orphan-banner seed
+  # travels this way so the capture library needs no per-scenario knowledge.
+  if fixture_resolve_scenario "$FIXTURE" && [[ -n "${FIXTURE_SEED_ORPHAN_BANNER:-}" ]]; then
+    export WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER=1
+  fi
   FILE="/tmp/evidence-${NAME}-$(date +%Y%m%d-%H%M%S).png"
   if [[ "$KEEP_RUNNING" != "true" ]]; then
     trap app_capture_stop EXIT
@@ -178,6 +186,18 @@ if [[ -n "$FIXTURE" ]]; then
   if ! app_capture_window "$FILE" "$FIXTURE" "$FIXTURE_TIMEOUT"; then
     echo "error: app evidence capture failed for fixture '$FIXTURE'." >&2
     exit 1
+  fi
+
+  # Structural assertion: when the scenario has a ui-state golden, diff the live
+  # GET /v1/ui-state read against it while the app is still up. A mismatch fails
+  # the lane — the PNG alone proves rendering, not correctness (issue #1228).
+  if [[ "$FIXTURE" != inline:* && -f "$REPO_ROOT/fixtures/ui-state/$FIXTURE.json" ]]; then
+    echo "→ verifying ui-state golden for scenario '$FIXTURE'…" >&2
+    if ! "$SCRIPT_DIR/ui-state-golden.sh" verify --scenario "$FIXTURE"; then
+      echo "error: ui-state golden mismatch for '$FIXTURE' (see diff above)." >&2
+      echo "       If the change is intentional: ./scripts/ui-state-golden.sh update --scenario $FIXTURE" >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -191,6 +211,38 @@ fi
 if [[ ! -f "$FILE" ]]; then
   echo "error: file not found: $FILE" >&2
   exit 1
+fi
+
+# report_local_artifact — the sanctioned tokenless degrade: name the local file
+# and its sha256, plus PR-body-ready markdown, so evidence stays attributable
+# even when it cannot be uploaded from this worktree.
+report_local_artifact() {
+  local sha
+  sha=$(shasum -a 256 "$FILE" | cut -d' ' -f1)
+  echo "" >&2
+  echo "Local artifact (not uploaded): $FILE" >&2
+  echo "sha256: $sha" >&2
+  echo "" >&2
+  echo "Markdown:" >&2
+  echo "- Local evidence (tokenless): \`$(basename "$FILE")\` — sha256 \`$sha\`" >&2
+  echo "" >&2
+  printf '%s\n' "$FILE"
+}
+
+# Upload gate: capture and the ui-state diff have already run; only the upload
+# itself needs the token.
+if [[ "$NO_UPLOAD" == "true" ]]; then
+  report_local_artifact
+  exit 0
+fi
+
+if [[ -z "${EVIDENCE_UPLOAD_TOKEN:-}" ]]; then
+  echo "error: EVIDENCE_UPLOAD_TOKEN not set — capture succeeded, upload skipped." >&2
+  echo "  Add it to $REPO_ROOT/.env, run ./scripts/setup --env-only to symlink it from an existing checkout, or export it directly." >&2
+  echo "  The token value is stored in GitHub repo secrets." >&2
+  echo "  For an intentional tokenless run, pass --no-upload." >&2
+  report_local_artifact > /dev/null
+  exit 2
 fi
 
 # Upload

@@ -944,7 +944,7 @@ struct AutomationAPITests {
         #expect(
             entry.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive,
+                .workspaceArchive, .uiRead,
             ])
         // Operator mutation capabilities are reviewed gesture verbs; an operator handle still never
         // carries tile mutation or input.write.
@@ -1049,7 +1049,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive,
+                .workspaceArchive, .uiRead,
             ])
         #expect(controller.windowCalls == ["operator"])
 
@@ -1132,7 +1132,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive,
+                .workspaceArchive, .uiRead,
             ])
         #expect(controller.workspaceCalls == ["operator"])
 
@@ -1866,7 +1866,7 @@ struct AutomationAPITests {
         #expect(
             loaded?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive,
+                .workspaceArchive, .uiRead,
             ])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -1899,7 +1899,7 @@ struct AutomationAPITests {
         #expect(
             registry.resolve(mintedCredential.handle)?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive,
+                .workspaceArchive, .uiRead,
             ]
         )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)

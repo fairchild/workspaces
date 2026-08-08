@@ -25,7 +25,7 @@ public enum AutomationAPI {
     /// Operator handles still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
         AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
-        .workspaceCreate, .surfaceRead, .workspaceArchive,
+        .workspaceCreate, .surfaceRead, .workspaceArchive, .uiRead,
     ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
@@ -70,6 +70,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case workspaceCreate = "workspace.create"
     case surfaceRead = "surface.read"
     case workspaceArchive = "workspace.archive"
+    case uiRead = "ui.read"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -1155,4 +1156,15 @@ public protocol AutomationControlling: AnyObject, Sendable {
     /// events, so operator calls are distinguishable in `automation-audit.jsonl` without the audit
     /// logger seeing the opaque handle's scope. A missing/stale handle is not an operator handle.
     func automationHandleIsOperator(_ handle: String) -> Bool
+
+    /// Structural UI-state read (`ui.read`, operator scope): the golden-comparable chrome
+    /// snapshot plus its volatile sibling. Defaulted below so existing conformers (fakes
+    /// included) keep compiling; the production controller overrides it.
+    func automationUIState(for handle: String) throws -> AutomationUIStateResult
+}
+
+extension AutomationControlling {
+    public func automationUIState(for handle: String) throws -> AutomationUIStateResult {
+        throw AutomationServiceError(.unsupported, "This controller does not implement ui.read.")
+    }
 }

@@ -14,6 +14,10 @@ final class AutomationController: AutomationControlling {
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
     private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
     private var surfaceTextReader: @MainActor (TileTreeStore, UUID) -> String?
+    /// The structural UI-state read (`ui.read`). `nil` when no window has installed it,
+    /// which is the `unsupported` condition — like the gesture layer, the read never
+    /// fabricates chrome state without a live window behind it.
+    private var uiState: (@MainActor () -> AutomationUIStateCapture)?
     /// The gesture-verb layer — the single place workspace mutation verbs enter
     /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
     /// condition: a mutation verb cannot run without a live window, and never falls back.
@@ -37,7 +41,8 @@ final class AutomationController: AutomationControlling {
         gestureVerbs: AutomationGestureVerbs? = nil,
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
-        }
+        },
+        uiState: (@MainActor () -> AutomationUIStateCapture)? = nil
     ) {
         self.handleRegistry = handleRegistry
         self.tileTreeStore = tileTreeStore
@@ -51,6 +56,7 @@ final class AutomationController: AutomationControlling {
         self.surfaceTextReader = surfaceTextReader
         self.gestureVerbs = gestureVerbs
         self.isInputWriteEnabled = isInputWriteEnabled
+        self.uiState = uiState
     }
 
     func update(
@@ -63,12 +69,16 @@ final class AutomationController: AutomationControlling {
         windowSnapshot: (@MainActor (String) async -> WindowSnapshotOutcome)? = nil,
         workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil,
         surfaceTextReader: (@MainActor (TileTreeStore, UUID) -> String?)? = nil,
-        gestureVerbs: AutomationGestureVerbs? = nil
+        gestureVerbs: AutomationGestureVerbs? = nil,
+        uiState: (@MainActor () -> AutomationUIStateCapture)? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
         self.gestureVerbs = gestureVerbs
+        if let uiState {
+            self.uiState = uiState
+        }
         if let webSurfaces {
             self.webSurfaces = webSurfaces
         }
@@ -96,6 +106,10 @@ final class AutomationController: AutomationControlling {
     /// rather than driving a stale gesture. A window reappearing reinstalls it via `configure`.
     func detachGestureVerbs() {
         gestureVerbs = nil
+        // The ui-state read is window-bound the same way: with no window there is no
+        // rendered chrome to report, so a post-teardown read fails `unsupported` rather
+        // than describing a window that no longer exists.
+        uiState = nil
     }
 
     func automationContext(for handle: String) throws -> AutomationContextResult {
@@ -381,6 +395,24 @@ final class AutomationController: AutomationControlling {
 
     func automationHandleIsOperator(_ handle: String) -> Bool {
         handleRegistry.resolve(handle)?.isOperator ?? false
+    }
+
+    func automationUIState(for handle: String) throws -> AutomationUIStateResult {
+        // Operator scope, read-only: like the other operator reads, resolved without the
+        // tile-liveness check. A tile handle lacks ui.read and fails capability_denied.
+        let entry = try resolveOperator(handle, requiring: .uiRead)
+        guard let uiState else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; ui.read requires a live window."
+            )
+        }
+        let capture = uiState()
+        return AutomationUIStateResult(
+            state: capture.state,
+            volatile: capture.volatile,
+            system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+        )
     }
 
     func automationWebSurfaces(for handle: String) throws -> AutomationWebSurfacesResult {

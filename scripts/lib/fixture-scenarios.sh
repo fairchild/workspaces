@@ -12,14 +12,15 @@
 
 # fixture_resolve_scenario <name>
 # Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, FIXTURE_SEED_RESTORE_BANNER,
-# and FIXTURE_SCENARIO_ID for the named scenario. "inline:<agent-states>" passes a raw
-# agent-states spec straight through. Returns non-zero (and sets nothing) for an
-# unknown name.
+# FIXTURE_SEED_ORPHAN_BANNER, and FIXTURE_SCENARIO_ID for the named scenario.
+# "inline:<agent-states>" passes a raw agent-states spec straight through. Returns
+# non-zero (and sets nothing) for an unknown name.
 fixture_resolve_scenario() {
     local name="$1"
     FIXTURE_AGENT_STATES=""
     FIXTURE_COMMAND_STATUSES=""
     FIXTURE_SEED_RESTORE_BANNER=""
+    FIXTURE_SEED_ORPHAN_BANNER=""
     FIXTURE_SCENARIO_ID=""
 
     if [[ "$name" == inline:* ]]; then
@@ -46,6 +47,14 @@ fixture_resolve_scenario() {
             # alongside the seed.
             FIXTURE_SEED_RESTORE_BANNER=1
             ;;
+        orphan-banner)
+            # Stages the workspace-orphan cleanup banner via a deterministic synthetic
+            # item (issue #1228). The env var reaches the app by inheritance — the
+            # evidence lane exports WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER=1 before
+            # launching; fixture mode also suppresses the real filesystem orphan scan
+            # so dev-machine leftovers never leak into any scenario's capture.
+            FIXTURE_SEED_ORPHAN_BANNER=1
+            ;;
         clean)
             ;;
         *)
@@ -59,5 +68,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner clean
 }

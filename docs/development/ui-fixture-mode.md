@@ -43,6 +43,7 @@ For repeatable captures, prefer the wrapper:
 | `WORKSPACES_UI_FIXTURE_COMMAND_STATUSES` | optional | Comma-separated `<workspace-name>:<status>` pairs that drive specific terminal sessions into synthetic `LastCommandStatus` values. |
 | `WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER` | optional | `1` opens the Cmd-P Session Switcher after fixture launch for deterministic overlay captures. |
 | `WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER` | optional | `1` seeds a synthetic previous-run continuity row (see "Staging the restore banner" below) so the cold-start restore banner has something to offer. Also requires `WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=1` — the banner itself is gated behind that experiment independently of fixture mode. |
+| `WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER` | optional | `1` stages the workspace-orphan cleanup banner with one deterministic synthetic item (`UIFixtureOrphanBannerBootstrap`). Fixture mode always replaces the real filesystem orphan scan — with the synthetic item when this is set, with an empty result otherwise — so dev-machine leftovers never leak into captures or ui-state goldens (issue #1228). The `orphan-banner` scenario sets it. |
 
 ### `WORKSPACES_UI_FIXTURE_AGENT_STATES` grammar
 

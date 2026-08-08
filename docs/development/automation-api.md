@@ -232,6 +232,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/tile/split` | Splits `left`, `right`, `up`, or `down` from a primary tile. Each successful split creates a new terminal surface in the caller's tab. Secondary split-tile callers return `unsupported` in V1. |
 | `POST /v1/tile/close` | Requests close for the caller tile through the normal close-confirmation path. The result reports `outcome: "requested"` with `changed: false` — close is fire-and-forget and Ghostty may still prompt, so the API never claims the close landed. |
 | `POST /v1/input/write` | Experimental. Pastes `text` into the caller's own PTY; `submit: true` then presses Return as a synthetic key event (never an appended `\r`, which bracketed paste would insert literally). Body is `{"text": "...", "submit": false}`, at most 32 KiB UTF-8 of text. Requires the `input.write` capability, granted only while the Automation Input Write experiment is on. |
+| `GET /v1/ui-state` | **Operator scope.** Returns the structural UI state the main window currently renders: selection, banner presence, name-sorted sidebar rows with status tokens, the attention pill text, and terminal tab/split topology, plus a `volatile` sibling (SwiftData ids, shell-controlled tab titles) that golden diffs never compare. Read-only; the same MainActor read as `GET /v1/workspaces`, extended to visible chrome. Requires `ui.read`; a tile handle lacks it and fails `capability_denied`. See [UI state](#ui-state). |
 
 Mutation bodies must be projections over the supported operation, not raw tile
 state. For example:
@@ -265,6 +266,7 @@ handle.
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
 | `input.write` | `POST /v1/input/write` (experimental; granted per-handle only while the Automation Input Write experiment is enabled, and re-checked per request) |
+| `ui.read` | `GET /v1/ui-state` (structural UI-state read for golden assertions); granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 
 Under-capable handles fail with `capability_denied`.
 
@@ -620,6 +622,25 @@ is whatever the sidebar gesture left selected.
   additionally appends its own audit entry (path
   `/v1/workspace/archive#teardown`) carrying retired-surface and killed-session
   counts — counts only, never session names.
+
+## UI state
+
+`GET /v1/ui-state` (`ui.read`, operator scope) answers "what is the window
+showing?" in structural terms so agents can assert on rendering outcomes
+instead of attaching screenshots humans must eyeball. The `state` subtree is
+run-stable by schema contract — selection, sorted banner ids, name-sorted
+sidebar sections/rows with `status` + agent `attention` tokens, the attention
+pill's rendered text, and terminal `attached`/`tabCount`/`splitCount` — while
+the `volatile` sibling carries per-launch SwiftData ids and shell-controlled
+tab titles for callers that want to act on what they read. Golden documents
+under `fixtures/ui-state/<scenario>.json` pin `state` per fixture scenario;
+`UIStateGolden` (unit-tested, pure) is the comparison authority, the evidence
+lane diffs live reads against goldens and fails on mismatch, and goldens change
+only through the explicit `scripts/ui-state-golden.sh update` flow — see
+`fixtures/ui-state/README.md`. With no live window attached the route fails
+`unsupported`, matching the gesture verbs. The snapshot is a plain Codable
+value so the deferred event stream (#1227) can embed the same representation
+(e.g. a `ui_state_changed` event) rather than inventing a second schema.
 
 ## Error Codes
 

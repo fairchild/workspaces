@@ -2140,8 +2140,41 @@ struct ContentView: View {
                     selectedRepoID: viewState.selectedRepoForLandingID
                 )
             },
-            gestureVerbs: makeAutomationGestureVerbs()
+            gestureVerbs: makeAutomationGestureVerbs(),
+            uiState: {
+                AutomationUIStateEnumerator.capture(
+                    repos: repos,
+                    selectedWorkspaceID: viewState.selectedWorkspace?.workspaceID,
+                    selectedRepoID: viewState.selectedRepoForLandingID,
+                    workspaceStatuses: workspaceStatusAggregator.workspaceStatuses,
+                    // The pill's own resolver, so the reported count can never diverge
+                    // from the rendered "N need you" text.
+                    attentionCount: AttentionSummaryResolver.resolve(
+                        attentionItems: workspaceStatusAggregator.attentionItems,
+                        repos: repos
+                    ).count,
+                    banners: visibleAutomationBanners,
+                    tileTreeStore: tileTreeStore
+                )
+            }
         )
+    }
+
+    /// The banners `splitViewBody` currently stacks above the split view, as stable ids
+    /// for the ui-state projection; the conditions mirror `splitViewBody`'s `if` chain.
+    @MainActor
+    private var visibleAutomationBanners: [AutomationUIBanner] {
+        var banners: [AutomationUIBanner] = []
+        if modelStoreStatusController.shouldShowDegradedWarning {
+            banners.append(.modelStoreDegraded)
+        }
+        if !workspaceOrphanState.visibleItems.isEmpty {
+            banners.append(.workspaceOrphanCleanup)
+        }
+        if restoreState.bannerPlan != nil {
+            banners.append(.restoreSessions)
+        }
+        return banners
     }
 
     /// The gesture-verb layer backing `workspace.select`. Its `performSelection` writes the exact same
@@ -2380,6 +2413,12 @@ struct ContentView: View {
 
     @MainActor
     private func refreshWorkspaceOrphans(trigger: String) async {
+        // Fixture mode replaces the filesystem scan wholesale: real leftovers on a dev
+        // machine would make captures (and ui-state goldens) machine-dependent.
+        if let fixtureItems = UIFixtureOrphanBannerBootstrap.fixtureScanResult() {
+            workspaceOrphanState.applyScanResult(fixtureItems)
+            return
+        }
         let scanStartedAt = Date()
         let snapshots = workspaceOrphanController.repositorySnapshots(repos: repos)
         let reconciler = await makeWorkspaceOrphanReconciler()

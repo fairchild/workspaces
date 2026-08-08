@@ -88,6 +88,36 @@ public struct WorkspaceOrphanItem: Identifiable, Sendable, Equatable, Hashable {
     public let gitBranch: String?
     public let hasPrunableGitMetadata: Bool
 
+    /// Memberwise construction for callers outside this module — the UI-fixture seam
+    /// (synthetic banner items) and tests. Scan results keep using the static factories.
+    public init(
+        id: String,
+        kind: WorkspaceOrphanKind,
+        repoID: UUID?,
+        repoName: String?,
+        repoLocalPath: String?,
+        workspaceID: UUID?,
+        workspaceName: String?,
+        resourceName: String,
+        path: String?,
+        storagePath: String?,
+        gitBranch: String?,
+        hasPrunableGitMetadata: Bool
+    ) {
+        self.id = id
+        self.kind = kind
+        self.repoID = repoID
+        self.repoName = repoName
+        self.repoLocalPath = repoLocalPath
+        self.workspaceID = workspaceID
+        self.workspaceName = workspaceName
+        self.resourceName = resourceName
+        self.path = path
+        self.storagePath = storagePath
+        self.gitBranch = gitBranch
+        self.hasPrunableGitMetadata = hasPrunableGitMetadata
+    }
+
     public var pathURL: URL? {
         path.map { URL(fileURLWithPath: $0) }
     }
