@@ -265,7 +265,10 @@ struct SidebarView: View {
             pruneExpandedContainers()
             syncRepoSortSnapshot()
             Task { @MainActor in
-                await smokeDriver.driveScenariosIfNeeded(smokeScenarioContext)
+                await smokeDriver.driveHostLumeScenarioIfNeeded(smokeScenarioContext)
+            }
+            Task { @MainActor in
+                await smokeDriver.driveDesktopUIScenarioIfNeeded(smokeScenarioContext)
             }
             installAutomationWorkspaceCreateGesture()
         }

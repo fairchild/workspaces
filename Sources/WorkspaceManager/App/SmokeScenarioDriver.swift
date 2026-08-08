@@ -55,7 +55,7 @@ struct SmokeScenarioSidebarContext {
             await driveDesktopUIScenarioIfNeeded(context)
         }
 
-        private func driveHostLumeScenarioIfNeeded(_ context: SmokeScenarioSidebarContext) async {
+        func driveHostLumeScenarioIfNeeded(_ context: SmokeScenarioSidebarContext) async {
             guard hostLume.isEnabled else { return }
             guard let targetRepoURL = hostLume.targetRepoURL else { return }
 
@@ -87,7 +87,7 @@ struct SmokeScenarioSidebarContext {
         /// switch selection to the repo terminal and back to prove the surface
         /// follows selection. Milestones stream to the events JSONL the host smoke
         /// script asserts against.
-        private func driveDesktopUIScenarioIfNeeded(_ context: SmokeScenarioSidebarContext) async {
+        func driveDesktopUIScenarioIfNeeded(_ context: SmokeScenarioSidebarContext) async {
             guard desktopUI.isEnabled else { return }
             guard let targetRepoURL = desktopUI.targetRepoURL else { return }
 
@@ -427,6 +427,8 @@ struct SmokeScenarioSidebarContext {
         nonisolated static var isLumeFixtureEnabled: Bool { false }
 
         func driveScenariosIfNeeded(_ context: SmokeScenarioSidebarContext) async {}
+        func driveHostLumeScenarioIfNeeded(_ context: SmokeScenarioSidebarContext) async {}
+        func driveDesktopUIScenarioIfNeeded(_ context: SmokeScenarioSidebarContext) async {}
         func noteFailure(message: String) async {}
         func noteWorkspaceCreationPhase(message: String) async {}
         func noteWorkspacePersisted(_ result: WorkspaceProviderCreationResult) async {}
