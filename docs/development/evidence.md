@@ -36,7 +36,7 @@ normal pipeline, and prints the markdown link — then stops the launched app:
 ```
 
 Named scenarios (`phase-1-release`, `m6-status-sliver`, `attention-only`,
-`clean`, or `inline:<agent-states>`) come from
+`restore-banner`, `orphan-banner`, `clean`, or `inline:<agent-states>`) come from
 [`scripts/lib/fixture-scenarios.sh`](../../scripts/lib/fixture-scenarios.sh) and
 match the release-screenshot catalog; the env grammar behind them lives in
 [ui-fixture-mode.md](ui-fixture-mode.md). `--name` defaults to the scenario.
@@ -57,6 +57,34 @@ Failure behavior is fast and explicit (never a hang): a clear message when the
 app can't launch, when operator scope is missing (no credential minted), when the
 snapshot fails, or when `EVIDENCE_UPLOAD_TOKEN` is absent. Readiness waits are
 bounded (`--timeout`, default 45s).
+
+**Structural assertion (ui-state goldens).** When the scenario has a golden under
+`fixtures/ui-state/<scenario>.json`, the lane also fetches `GET /v1/ui-state`
+from the still-running app and diffs the structural state — selection, banner
+presence, sidebar rows, pill text, terminal topology — against the golden,
+failing the lane on mismatch. A PNG proves the window rendered; the golden diff
+proves *what* rendered. Goldens change only through the explicit
+`./scripts/ui-state-golden.sh update --scenario <name>` flow (never
+auto-regenerated on mismatch); comparison semantics are canonical in the
+unit-tested `UIStateGolden` Swift comparator. See `fixtures/ui-state/README.md`.
+
+Some chrome cannot exist at first paint — the orphan banner is decided by the
+deferred startup pass that runs ~2s after the window renders — so a golden may
+declare a `settle` bound (`{"timeoutSeconds": N, "pollSeconds": M}`). The lane then
+re-fetches on that interval until the state matches or the bound elapses, failing
+with the bound and the final mismatch rather than racing it. When a settle applies
+the lane re-snapshots afterwards, so the PNG shows the state the golden verified
+rather than the pre-settle frame. Goldens without deferred chrome declare none and
+stay single-shot.
+
+**Tokenless capture (local degrade).** The upload-token gate runs *after*
+capture and the ui-state diff, so a worktree without `EVIDENCE_UPLOAD_TOKEN`
+still produces the local PNG and the golden verdict. Pass `--no-upload` for an
+intentional tokenless run: the script prints the local artifact path, its
+sha256, and PR-body-ready markdown (`- Local evidence (tokenless): \`file\` —
+sha256 \`hash\``). Without `--no-upload`, a missing token still fails (exit 2)
+after printing the same local-artifact report — uploads always require the
+token.
 
 **Content gate (permanent contract).** The operator credential proves the automation
 listener is up, not that the window has painted its first frame — so the lane retries

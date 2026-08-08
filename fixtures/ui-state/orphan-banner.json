@@ -1,0 +1,81 @@
+{
+  "scenario": "orphan-banner",
+  "ignore": [],
+  "settle": {
+    "timeoutSeconds": 20,
+    "pollSeconds": 1
+  },
+  "state": {
+    "banners": [
+      "workspace_orphan_cleanup"
+    ],
+    "selection": {
+      "kind": "none"
+    },
+    "sidebar": [
+      {
+        "isSelected": false,
+        "name": "bertram-chat",
+        "workspaces": [
+          {
+            "isSelected": false,
+            "name": "bugfix-422",
+            "status": "active"
+          },
+          {
+            "isSelected": false,
+            "name": "feature-auth",
+            "status": "active"
+          },
+          {
+            "isSelected": false,
+            "name": "refactor-state",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "isSelected": false,
+        "name": "bread-builder",
+        "workspaces": [
+          {
+            "isSelected": false,
+            "name": "refactor-runtime",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "isSelected": false,
+        "name": "services",
+        "workspaces": []
+      },
+      {
+        "isSelected": false,
+        "name": "skills",
+        "workspaces": [
+          {
+            "isSelected": false,
+            "name": "skills-v13",
+            "status": "active"
+          }
+        ]
+      },
+      {
+        "isSelected": false,
+        "name": "superpowers",
+        "workspaces": []
+      },
+      {
+        "isSelected": false,
+        "name": "workspaces",
+        "workspaces": []
+      }
+    ],
+    "terminal": {
+      "attached": true,
+      "splitCount": 0,
+      "tabCount": 1
+    }
+  }
+}

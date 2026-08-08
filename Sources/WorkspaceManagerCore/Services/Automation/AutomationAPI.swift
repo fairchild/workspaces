@@ -25,7 +25,7 @@ public enum AutomationAPI {
     /// Operator handles still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
         AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
-        .workspaceCreate, .surfaceRead, .workspaceArchive,
+        .workspaceCreate, .surfaceRead, .workspaceArchive, .uiRead,
     ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
@@ -103,6 +103,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case workspaceCreate = "workspace.create"
     case surfaceRead = "surface.read"
     case workspaceArchive = "workspace.archive"
+    case uiRead = "ui.read"
 }
 
 public enum AutomationSurfaceKind: String, Codable, Sendable, Equatable {
@@ -1190,6 +1191,11 @@ public protocol AutomationControlling: AnyObject, Sendable {
     /// logger seeing the opaque handle's scope. A missing/stale handle is not an operator handle.
     func automationHandleIsOperator(_ handle: String) -> Bool
 
+    /// Structural UI-state read (`ui.read`, operator scope): the golden-comparable chrome
+    /// snapshot plus its volatile sibling. Defaulted below so existing conformers (fakes
+    /// included) keep compiling; the production controller overrides it.
+    func automationUIState(for handle: String) throws -> AutomationUIStateResult
+
     /// Typed server-side wait (`POST /v1/wait`, operator scope): evaluates the plan's
     /// condition against live app state until satisfied, the bounded timeout elapses, or the
     /// state proves the condition unsatisfiable (`not_applicable`). Defaulted below so
@@ -1207,6 +1213,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
 }
 
 extension AutomationControlling {
+    public func automationUIState(for handle: String) throws -> AutomationUIStateResult {
+        throw AutomationServiceError(.unsupported, "This controller does not implement ui.read.")
+    }
+
     public func automationWait(
         for handle: String,
         plan: AutomationWaitPlan

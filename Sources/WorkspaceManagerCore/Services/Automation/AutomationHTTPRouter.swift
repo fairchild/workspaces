@@ -135,6 +135,9 @@ enum AutomationHTTPRouter {
                 submit: write.submit ?? false
             )
 
+        case ("GET", "/v1/ui-state"):
+            return try await controller.automationUIState(for: handle)
+
         case ("POST", "/v1/wait"):
             let plan = try decodeWaitPlan(from: request.body)
             return try await controller.automationWait(for: handle, plan: plan)
@@ -170,6 +173,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/close.")
         case (_, "/v1/input/write"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/input/write.")
+        case (_, "/v1/ui-state"):
+            throw AutomationServiceError(.methodNotAllowed, "Use GET /v1/ui-state.")
         case (_, "/v1/wait"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/wait.")
         case (_, "/v1/focus"):
@@ -514,6 +519,7 @@ extension AutomationWebSurfaceSnapshotResult: CodableSendableEquatable {}
 extension AutomationMutationResult: CodableSendableEquatable {}
 extension AutomationInputWriteResult: CodableSendableEquatable {}
 extension AutomationEmptyResult: CodableSendableEquatable {}
+extension AutomationUIStateResult: CodableSendableEquatable {}
 extension AutomationWaitResult: CodableSendableEquatable {}
 extension AutomationFocusResult: CodableSendableEquatable {}
 
