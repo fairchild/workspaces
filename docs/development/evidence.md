@@ -92,7 +92,7 @@ the snapshot until the PNG carries rendered content (a bounded luminance-spread 
 and fails with `window never rendered non-blank content` rather than uploading a blank.
 This is what catches the locked-screen case below: on a locked screen
 `ghostty_surface_new` (Metal) and the composited `CGWindowList` path both fail to
-render, so the gate refuses and you fall back to the VM / `tart-ui` lane (per
+render, so the gate refuses and you fall back to the local VM lane (per
 [#915](https://github.com/fairchild/workspaces/issues/915)). This gate exists because a
 real blank frame once passed a naive file-exists/dimensions check — never smoke-test a
 capture by size alone.
@@ -107,10 +107,14 @@ Reach for a fallback only when the lane above cannot apply, in this order:
    view, not the composited window.
 3. **`qlmanage`-rendered test logs** — for non-UI changes where the evidence is
    test output, not pixels (render the log to PNG, then `--file --no-capture`).
-4. **VM / `tart-ui` lane** — the full-fidelity fallback for the one case the
-   in-process lane cannot cover: **a locked screen.** Every composited capture
+4. **Local VM lane** (Tart/Lume on your own machine) — the full-fidelity
+   fallback for the one case the in-process lane cannot cover: **a locked
+   screen.** Every composited capture
    path (`CGWindowList` and ScreenCaptureKit) returns no pixels while the session
-   is locked, so locked-screen evidence runs in a VM. Unlocked
+   is locked, so locked-screen evidence runs in a VM. This is a VM you start
+   locally; the CI `tart-ui` runner lane is retired
+   ([../decisions/perf-measurement-laptop-optin.md](../decisions/perf-measurement-laptop-optin.md)).
+   Unlocked
    background/occluded windows capture fine with the lane above.
 
 ### Web UI evidence
@@ -208,7 +212,7 @@ Three layers, from gentlest to strongest:
 | Auth redirect on localhost | Web middleware requires session | Use `DEV_BYPASS_AUTH=1 pnpm dev` |
 | `screencapture` fails | No display (headless/SSH) | Use the `--fixture` app lane, or `--file` with an existing screenshot |
 | `operator credential did not appear` | Fixture launch didn't enable operator scope, or the app failed to start | Check `.dev-data/logs/launch-diagnostics-*`; the lane sets `WORKSPACES_AUTOMATION_API=1` + `WORKSPACES_AUTOMATION_OPERATOR=1` for you |
-| Snapshot `unsupported` on a locked screen | Composited capture returns no pixels while locked | Use the VM / `tart-ui` fallback lane |
+| Snapshot `unsupported` on a locked screen | Composited capture returns no pixels while locked | Use the local VM fallback lane |
 | URL returns 404 | Upload didn't complete | Re-run `evidence.sh`, check network |
 
 ## Architecture

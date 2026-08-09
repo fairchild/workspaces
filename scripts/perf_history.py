@@ -299,11 +299,11 @@ def render_dashboard(
     lines.append("## Recording Cadence")
     lines.append("")
     lines.append(
-        "- The daily `perf-validation` cron measures the launch lanes via "
-        "`./scripts/perf-baseline.sh 3 6 --record --assert-budget` whenever the tart-ui lane is up "
-        "and uploads the refreshed history/dashboard as run artifacts; committing them back to the "
-        "repo is a manual/orchestrated step. A run that cannot measure fails visibly instead of "
-        "skipping green."
+        "- Measurement is opt-in on the owner's laptop, one approved session at a time: "
+        "`./scripts/perf-baseline.sh 3 6 --record --assert-budget`, then commit the refreshed "
+        "`docs/performance/` files. No schedule runs this — read staleness off the `Last updated` "
+        "timestamp above, not off a workflow's colour. Protocol and hygiene preconditions: "
+        "`docs/decisions/perf-measurement-laptop-optin.md`."
     )
     lines.append(
         "- Ad-hoc canonical summaries (e.g. re-baseline output dirs) are appended with "
