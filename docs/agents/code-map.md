@@ -6,6 +6,8 @@ Pointers from a task or symbol to the file that answers it — moved out of `AGE
 
 | Task | Primary Doc | Skip |
 |------|-------------|------|
+| Surface-specific agent context (auto-loaded per directory) | Sources/AGENTS.md, Tests/AGENTS.md, web/AGENTS.md, web-next/AGENTS.md, backlog/AGENTS.md | - |
+| High-signal lessons ledger (full history + rationale) | docs/agents/lessons.md | - |
 | Understand the app | README.md | backlog/ |
 | Architectural decisions | ARCHITECTURE.md | backlog/ |
 | Implement a component | docs/original_spec.md (find relevant section) | Read whole file |

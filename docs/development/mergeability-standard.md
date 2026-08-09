@@ -38,6 +38,10 @@ The parser accepts near-miss labels (`Scope`, `Edge cases`, `Follow-ups`, …)
 but not unlabeled narrative bullets. PRs touching release paths additionally
 need a `Release/ops preconditions` field.
 
+PR summary style: prefer concise Markdown links for completed checks and
+artifacts (e.g. `[Web CI passed](url)`). Readability preference, not a merge
+gate.
+
 ## Surface Checklists
 
 ### Desktop App

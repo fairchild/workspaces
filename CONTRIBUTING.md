@@ -188,7 +188,7 @@ The Daytona remote-workspace surface (`Sources/WorkspaceManagerCore/Services/Day
 
 ## Agent Self-Verification
 
-A bundled [tart-gui-automation](.agents/skills/tart-gui-automation/) skill lets Claude Code (or any coding agent) build and launch the app in an ephemeral Tart macOS VM, capture screenshots, and verify UI behavior without touching the host. See the CLAUDE.md "Dev Verification Practice" section for the workflow.
+A bundled [tart-gui-automation](.agents/skills/tart-gui-automation/) skill lets Claude Code (or any coding agent) build and launch the app in an ephemeral Tart macOS VM, capture screenshots, and verify UI behavior without touching the host. See `Sources/AGENTS.md` § "Dev Verification Practice" for the workflow.
 
 Requires [Tart](https://github.com/cirruslabs/tart) and a macOS guest image (`macos-tahoe-xcode`).
 
