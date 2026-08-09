@@ -130,9 +130,13 @@ test.describe("Public docs", () => {
 	test("shows friendly page metadata before exact details", async ({ page }) => {
 		await page.goto("/docs/performance/dashboard");
 
-		await expect(page.locator("#doc-updated")).toHaveText("Updated Mar 22, 2026");
+		// The perf dashboard is a generated doc, so its timestamp moves with every
+		// perf run — the property under test is the friendly shape, not a date.
+		await expect(page.locator("#doc-updated")).toHaveText(
+			/^Updated [A-Z][a-z]{2} \d{1,2}, \d{4}$/,
+		);
 		await expect(page.locator("#doc-updated")).not.toContainText(
-			"2026-03-22T10:29:08-0700",
+			/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/,
 		);
 		await expect(page.getByText("Document details")).toHaveCount(0);
 		await expect(page.locator("#content")).not.toContainText("Last updated:");
