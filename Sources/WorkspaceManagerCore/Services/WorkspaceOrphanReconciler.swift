@@ -233,6 +233,7 @@ public struct WorkspaceOrphanScanResult: Sendable, Equatable {
 public enum WorkspaceOrphanReconciliationError: LocalizedError, Equatable {
     case unsupportedCleanupItem
     case gitCommandFailed(args: [String], stderr: String)
+    case gitCommandTimedOut(args: [String], timeout: TimeInterval)
 
     public var errorDescription: String? {
         switch self {
@@ -240,7 +241,35 @@ public enum WorkspaceOrphanReconciliationError: LocalizedError, Equatable {
             return "This cleanup item does not contain enough information to clean safely."
         case .gitCommandFailed(let args, let stderr):
             return "git \(args.joined(separator: " ")) failed: \(stderr)"
+        case .gitCommandTimedOut(let args, let timeout):
+            return "git \(args.joined(separator: " ")) timed out after \(Int(timeout))s"
         }
+    }
+}
+
+/// Hard deadline for reconciler-issued git commands: long enough for a slow
+/// disk, short enough that a repo on a network mount or holding a stale
+/// index.lock cannot wedge the startup scan or the cleanup banner.
+private let defaultGitCommandTimeout: TimeInterval = 30
+
+/// Runs a reconciler git command under the deadline, surfacing expiry as the
+/// typed `gitCommandTimedOut` error so callers log or present it like any
+/// other reconciliation failure instead of hanging.
+private func runGitWithDeadline(
+    executable: String,
+    arguments: [String],
+    at repositoryURL: URL,
+    timeout: TimeInterval
+) async throws -> ProcessResult {
+    do {
+        return try await ProcessRunner.run(
+            executable: executable,
+            arguments: arguments,
+            currentDirectory: repositoryURL,
+            timeout: timeout
+        )
+    } catch ProcessRunnerError.timedOut {
+        throw WorkspaceOrphanReconciliationError.gitCommandTimedOut(args: arguments, timeout: timeout)
     }
 }
 
@@ -252,6 +281,8 @@ public struct WorkspaceOrphanReconciler: Sendable {
     private let syntheticRootBoundary: String?
     private let worktreeLister: any WorkspaceOrphanWorktreeListing
     private let fileSystem: any WorkspaceOrphanFileSystem
+    private let gitExecutable: String
+    private let gitCommandTimeout: TimeInterval
 
     public init(
         workspacesRoot: URL,
@@ -270,6 +301,8 @@ public struct WorkspaceOrphanReconciler: Sendable {
         lumeWorkspaceStorageURL: URL?,
         worktreeLister: any WorkspaceOrphanWorktreeListing,
         fileSystem: any WorkspaceOrphanFileSystem,
+        gitExecutable: String = "/usr/bin/git",
+        gitCommandTimeout: TimeInterval = defaultGitCommandTimeout,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         // WORKSPACES_SYNTHETIC_ROOT makes that directory the only root this
@@ -294,6 +327,8 @@ public struct WorkspaceOrphanReconciler: Sendable {
         }
         self.worktreeLister = worktreeLister
         self.fileSystem = fileSystem
+        self.gitExecutable = gitExecutable
+        self.gitCommandTimeout = gitCommandTimeout
     }
 
     public func scan(
@@ -338,10 +373,11 @@ public struct WorkspaceOrphanReconciler: Sendable {
         }
 
         let arguments = ["worktree", "remove", "--force", path]
-        let result = try await ProcessRunner.run(
-            executable: "/usr/bin/git",
+        let result = try await runGitWithDeadline(
+            executable: gitExecutable,
             arguments: arguments,
-            currentDirectory: repoLocalURL
+            at: repoLocalURL,
+            timeout: gitCommandTimeout
         )
         guard result.success else {
             let reason = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -469,10 +505,11 @@ public struct WorkspaceOrphanReconciler: Sendable {
 
     private func deleteWorkspaceBranchBestEffort(_ branch: String, at repoURL: URL) async {
         do {
-            let result = try await ProcessRunner.run(
-                executable: "/usr/bin/git",
+            let result = try await runGitWithDeadline(
+                executable: gitExecutable,
                 arguments: ["branch", "-D", branch],
-                currentDirectory: repoURL
+                at: repoURL,
+                timeout: gitCommandTimeout
             )
             if !result.success {
                 let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
@@ -507,11 +544,15 @@ protocol WorkspaceOrphanWorktreeListing: Sendable {
 }
 
 struct GitPorcelainWorktreeLister: WorkspaceOrphanWorktreeListing {
+    var executable: String = "/usr/bin/git"
+    var timeout: TimeInterval = defaultGitCommandTimeout
+
     func worktrees(for repositoryURL: URL) async throws -> [GitWorktreeEntry] {
-        let result = try await ProcessRunner.run(
-            executable: "/usr/bin/git",
+        let result = try await runGitWithDeadline(
+            executable: executable,
             arguments: ["worktree", "list", "--porcelain"],
-            currentDirectory: repositoryURL
+            at: repositoryURL,
+            timeout: timeout
         )
         guard result.success else {
             let reason = result.stderr.isEmpty ? "Unknown error" : result.stderr
