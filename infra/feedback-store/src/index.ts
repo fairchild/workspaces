@@ -1,4 +1,5 @@
 import { handleAdmin } from "./admin";
+import { handleAgentAPI } from "./agent-api";
 import { handlePublish } from "./publish";
 import { handleSubmit } from "./submit";
 import type { Env } from "./types";
@@ -14,6 +15,10 @@ export default {
 
       if (request.method === "POST" && url.pathname === "/feedback") {
         return handleSubmit(request, env);
+      }
+
+      if (url.pathname.startsWith("/api/")) {
+        return handleAgentAPI(request, env);
       }
 
       if (url.pathname === "/admin/publish" && request.method === "POST") {

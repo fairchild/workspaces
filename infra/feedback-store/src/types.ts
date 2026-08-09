@@ -1,9 +1,13 @@
+export const FEEDBACK_STATUSES = ["new", "triaged", "planned", "resolved", "wont_fix"] as const;
+export type FeedbackStatus = (typeof FEEDBACK_STATUSES)[number];
+
 export interface Env {
   FEEDBACK_DB: D1Database;
   FEEDBACK_BUCKET: R2Bucket;
   JWT_SIGNING_SECRET: string;
   ADMIN_SESSION_SECRET: string;
   ADMIN_ALLOWLIST: string;
+  FEEDBACK_AGENT_TOKEN?: string;
   GITHUB_CLIENT_ID: string;
   GITHUB_CLIENT_SECRET: string;
   GITHUB_ISSUE_TOKEN?: string;
