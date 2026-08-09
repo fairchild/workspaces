@@ -4,23 +4,23 @@ Mac-native app for managing AI coding sessions with embedded terminal.
 
 ## How Context Is Organized
 
-This file carries repo-wide invariants and a routing table; surface-specific guidance lives in nested `AGENTS.md` files (`Sources/`, `Tests/`, `web/`, `web-next/`, `backlog/`), which Claude Code loads automatically when working under those directories. If your harness doesn't auto-load nested files, read the file for the surface you're touching before editing — the § Routing table maps tasks to files. `CLAUDE.md` is a symlink to `AGENTS.md` at every level; read one, not both.
+This file holds repo-wide invariants plus a routing table; surface guidance lives in nested `AGENTS.md` files (`Sources/`, `Tests/`, `web/`, `web-next/`, `backlog/`). Claude Code auto-loads them per directory; if your harness doesn't, read your surface's file before editing (§ Routing maps tasks to files). `CLAUDE.md` symlinks to `AGENTS.md` at every level — read one, not both.
 
 ## Quality and Mergeability
 
-Craft matters. Plan work so it can land mergeably: correct, coherent with the product, reviewable, verified, and leaving the system easier to operate. Keep changes native-feeling, tightly scoped, evidence-backed, and consistent with existing architecture and UI patterns. Before opening or reviewing a PR, use `docs/development/mergeability-standard.md` for the surface-specific checklist. Substantive PRs run the `codex-review-loop` skill before opening (skip codex for metadata/docs-only diffs).
+Craft matters. Plan work to land mergeably: correct, native-feeling, tightly scoped, reviewable, evidence-backed, consistent with existing architecture and UI patterns, and leaving the system easier to operate. Before opening or reviewing a PR, run the surface checklist in `docs/development/mergeability-standard.md`; substantive PRs run the `codex-review-loop` skill first (skip codex for metadata/docs-only diffs).
 
-When the user asks to implement a change, default to carrying it through to a PR: branch if needed, make the edit, verify it, commit, rebase on the latest `origin/main`, push, open the PR, and report its status. Pause short of PR creation when the user asks for exploration only, says not to publish, or evidence/permissions are blocked. At the start of a multi-PR working session, propose the authority contract explicitly (who reviews, who flips ready, who merges) instead of discovering it one approval at a time.
+Default to carrying an implementation request through to a PR: branch if needed, edit, verify, commit, rebase on latest `origin/main`, push, open the PR, report status. Pause short of the PR when the user wants exploration only, says not to publish, or evidence/permissions are blocked. At the start of a multi-PR session, propose the authority contract up front (who reviews, who flips ready, who merges).
 
 ## Startup Instruction Budget
 
-Root `AGENTS.md` is startup context for every session: keep it under about **4,500 tokens**, measured directly with a tokenizer — word/char counts are not reliable proxies. Nested `AGENTS.md` files are conditional context; the same discipline applies per surface. When encoding a lesson, place it at the cheapest surface that fires at the right moment — machinery (CI gates, scripts) over skills, skills over linked docs, these files last — and when a lesson graduates upward, delete the prose it replaces.
+Root `AGENTS.md` is startup context for every session: keep it under about **4,500 tokens**, measured with a tokenizer (word/char counts are unreliable proxies); nested `AGENTS.md` files are conditional context, same discipline per surface. Encode each lesson at the cheapest surface that fires at the right moment — machinery (CI gates, scripts) over skills over linked docs over these files — and when a lesson graduates upward, delete the prose it replaces.
 
 ## Issues, Labels, Coordination
 
-Issues and PRDs live in GitHub Issues for `fairchild/workspaces` (`docs/agents/issue-tracker.md`). When the user asks to work an issue or gives an issue link/number, treat it as a backlog claim even if the `backlog` skill was not named: read the issue, apply the `claimed` label (removing `ready` if present), post a claim comment naming the active Codex thread title/name and session ID — say so explicitly if either is unavailable — then continue through the lifecycle in `backlog/AGENTS.md`.
+Issues and PRDs live in GitHub Issues for `fairchild/workspaces` (`docs/agents/issue-tracker.md`). Any issue link/number or ask to work an issue is a backlog claim, `backlog` skill named or not: read the issue, apply `claimed` (remove `ready`), post a claim comment naming the active Codex thread title/name and session ID (say explicitly if either is unavailable), then follow the lifecycle in `backlog/AGENTS.md`.
 
-Labels: `agent`/`human` for ownership, `ready`/`claimed`/`review`/`mergeable` for lifecycle, `needs-human` only for human intervention blockers (`docs/agents/triage-labels.md`). **Agent-authored PRs carry exactly one `author:<agent>` label** naming yourself (e.g. `author:claude-code`), created if missing — slug rules: `docs/agents/triage-labels.md` § "Author Labels".
+Labels: `agent`/`human` ownership, `ready`/`claimed`/`review`/`mergeable` lifecycle, `needs-human` only for human-intervention blockers. **Agent-authored PRs carry exactly one `author:<agent>` label** naming yourself (e.g. `author:claude-code`), created if missing. Both: `docs/agents/triage-labels.md` (slugs: § "Author Labels").
 
 Agents coordinate through the GitHub-native state machine — issue labels and PR review, not chat or Discussions (why: `docs/decisions/factory-label-control-plane.md`).
 
@@ -45,10 +45,11 @@ Full ledger with history and the surface-specific lessons: `docs/agents/lessons.
 
 ## Conventions
 
-- Commit hygiene: no screenshot artifacts (`output/`) in commits unless explicitly requested. Never delete build/test state with ad-hoc `rm -rf` — it trips shell-permission prompts that stall unattended sessions; use the surface's allowlisted cleaner (see its `AGENTS.md`) or an existing script/mise task, and file the gap if none covers your case.
-- New standalone Python utilities are single-file UV scripts: `#!/usr/bin/env -S uv run --script` plus a PEP 723 metadata block. Prefer `uv run --script <path>` in docs/examples; package/module layout only when explicitly requested or tooling requires it.
-- File purpose blocks: where a file's purpose isn't obvious from its name, it opens with a ≈2–4 line present-tense doc block stating what it does and why. Add one when creating or substantially editing such a file; keep them accurate — `head`/`rg` over these blocks is the fast index when exploring.
-- Two web apps, not interchangeable: `web-next/` is active (all new web work); `web/` is maintenance mode. Each directory's `AGENTS.md` has the details.
+- Commit hygiene: no screenshot artifacts (`output/`) unless explicitly requested. Never `rm -rf` build/test state — it trips shell-permission prompts that stall unattended sessions; use the surface's allowlisted cleaner (its `AGENTS.md`) or an existing script/mise task; file the gap if none fits.
+- New standalone Python utilities: single-file UV scripts (`#!/usr/bin/env -S uv run --script` + PEP 723 block), invoked as `uv run --script <path>` in docs/examples; package layout only when explicitly requested or tooling requires it.
+- File purpose blocks: files whose purpose isn't obvious from the name open with a ≈2–4 line present-tense what-and-why block. Add one when creating or substantially editing such a file; keep them accurate — `head`/`rg` over these blocks is the fast exploration index.
+- Two web apps, not interchangeable: `web-next/` is active (all new web work); `web/` is maintenance mode.
+- Any script or automation that launches the app headlessly sets `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` — never steal desktop focus (activation modes: `Sources/AGENTS.md` § Key Patterns).
 - Don't modify `Package.swift` unless adding dependencies.
 
 ## Quick Commands
@@ -64,12 +65,13 @@ mise run lint                  # swift-format lint --strict (CI fails without it
 
 | Working on | Read first |
 |---|---|
-| Terminal / keyboard / sidebar / desktop UI | `Sources/AGENTS.md`; runbook: `docs/development/libghostty-integration.md` § "Agent self-verification runbook" |
+| Terminal / keyboard / sidebar / desktop UI | `Sources/AGENTS.md` (dev-verification loop **required**); runbook: `docs/development/libghostty-integration.md` § "Agent self-verification runbook" |
 | Swift tests | `Tests/AGENTS.md` |
 | `web/` dashboard (maintenance mode) | `web/AGENTS.md` |
 | `web-next/` (active web app) | `web-next/AGENTS.md`, then `web-next/CONTRIBUTING.md` |
 | Issue lifecycle / backlog | `backlog/AGENTS.md` |
 | Lume VMs | `mise run dev-lume-ensure` first; `docs/development/lume-integration.md` |
+| Release / signing / notarization | `RELEASING.md`; runner lanes: `CONTRIBUTING.md` § "CI Runner Lanes" |
 | Milestone delivery / subagent fan-out | `.agents/skills/drive/SKILL.md` / `.agents/skills/subagent-delegation/SKILL.md` |
 | Symbol/task → file lookup | `docs/agents/code-map.md` |
 | Lessons ledger | `docs/agents/lessons.md` |

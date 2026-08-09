@@ -21,5 +21,5 @@ Master record of hard-won, repo-wide lessons: full statement, rationale, and his
 
 ## Release and dev-machine ops — ledger only
 
-- **Release version metadata must have one source of truth.** Tag, app version, and packaged artifact version should be validated against each other before a release is created.
+- **Release version metadata must have one source of truth.** Tag, app version, and packaged artifact version should be validated against each other before a release is created. Graduated to machinery: `scripts/release-version.sh assert-tag-match`, and tag-driven releases fail fast on mismatch (`RELEASING.md`).
 - **If the app opens or closes unexpectedly on a dev machine, check the launching process first.** CI/self-hosted runner behavior can look like an app bug.
