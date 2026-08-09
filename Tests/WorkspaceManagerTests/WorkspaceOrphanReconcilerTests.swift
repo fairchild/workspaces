@@ -500,6 +500,7 @@ struct WorkspaceOrphanReconcilerTests {
         try Data("#!/bin/sh\nexec sleep 30\n".utf8).write(to: url)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url
+    }
 
     @Test("Synthetic root set: the real workspaces root and Lume storage are never statted")
     func syntheticRootNeverStatsRealRoots() async throws {
