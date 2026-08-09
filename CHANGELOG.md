@@ -2,6 +2,13 @@
 
 ## [0.24.0] - 2026-08-09
 
+No new user-facing capability in this release. The work went into consolidation —
+40 fixes, and 13 refactors that mostly decompose `ContentView` into focused units
+(#1160) — plus infrastructure behind the agent factory, roughly a third of the
+commits on its own. What features did land serve testing and operation rather than
+the product: typed wait and focus primitives, per-scenario UI-state goldens, and a
+synthetic-run isolation boundary.
+
 ### Added
 - validate active compute provider (#1043)
 - add Folio conversation ports (#1057)
