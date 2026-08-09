@@ -20,6 +20,7 @@ Pointers from a task or symbol to the file that answers it — moved out of `AGE
 | UI fixture mode + release screenshots | docs/development/ui-fixture-mode.md | - |
 | Local SQLite state schema | docs/schema.sql | - |
 | Local state store plan | docs/development/local-state-store-plan.md | - |
+| Env vars not reaching a GUI-launched app (launchd vs shell, launchctl/Keychain) | docs/development/macos-gui-app-environment.md | - |
 | Lume integration / daemon reliability | docs/development/lume-integration.md | - |
 | Lume validation lanes | docs/development/lume-validation.md | - |
 | Lume runner setup | docs/development/lume-runner-setup.md | - |
