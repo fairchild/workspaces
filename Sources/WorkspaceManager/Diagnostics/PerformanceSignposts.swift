@@ -88,6 +88,27 @@ enum PerformanceSignposts {
         recordDiagnostic(metric: "launch_to_first_prompt", durationMs: durationMs, labels: ["trigger": trigger])
     }
 
+    /// Records how the first terminal session came to exist on this launch.
+    ///
+    /// `launch_to_first_prompt` closes when the first shell reaches a prompt, so the amount of
+    /// work standing between launch and that prompt depends on which path seeded the session
+    /// (`caller`) and what it seeded (`branch`: a manifest restore of N sessions, a fresh
+    /// default-home shell, or a no-op because the other path already ran). Both vary per launch,
+    /// and #1251's residual is a bimodal distribution — so each sample carries its own mode here
+    /// instead of the mode being argued from the shape of the distribution afterwards.
+    ///
+    /// Deliberately `event=`, not `metric=`: this is a label for the sample, not a latency
+    /// sample, and the duration parsers key on `metric=… duration_ms=…`.
+    static func noteInitialHostSessionBootstrap(
+        caller: String,
+        branch: String,
+        sessionCount: Int
+    ) {
+        log.info(
+            "[Perf] event=initial_host_session caller=\(caller, privacy: .public) branch=\(branch, privacy: .public) sessions=\(sessionCount, privacy: .public)"
+        )
+    }
+
     static func beginRepoHydration(rootPath: String) {
         lock.lock()
         defer { lock.unlock() }

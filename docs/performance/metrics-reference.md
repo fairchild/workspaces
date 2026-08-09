@@ -54,6 +54,35 @@ sequenceDiagram
     Focus->>Perf: endLaunchToFirstPromptIfNeeded("terminal_focus")
 ```
 
+Notes:
+- **Three state axes decide what a launch does before the prompt**, and a sample is
+  only comparable to another sample that started from the same state.
+  `WORKSPACES_DATA_DIR` scopes the SwiftData store and the SQLite sidecar;
+  `WORKSPACES_PREFERENCES_SUITE` scopes `UserDefaults`, where the terminal
+  continuity manifest lives; the process table decides whether the machine was
+  quiet. Before #1258 the preferences axis was uncontrolled, so the debug lanes
+  restored whatever sessions the last dev or fixture launch happened to leave
+  behind (#1251, #1252).
+- **`perf-baseline.sh --preferences`** picks how the preferences axis behaves across
+  a run's samples. `clean` (default) wipes the run's scratch suite before every
+  sample, so each launch seeds a fresh default-home shell. `carry-over` wipes once
+  per invocation, so sample 1 seeds continuity state and samples 2..N restore it —
+  the shape the lane had when nothing isolated the domain. Neither mode ever reads
+  or writes the developer's own preferences; the suite is named per invocation and
+  removed on exit.
+- **Each sample carries the branch it took.** `[Perf] event=initial_host_session
+  caller=<prologue|sequence> branch=<manifest_restore|fresh_seed|noop>
+  sessions=<n>` says which launch path seeded the session and what it seeded, and
+  `summary.json` lifts it into `metadata.launch_samples` alongside the duration.
+  Read the correlation there rather than inferring the mode from the shape of the
+  distribution. `caller` matters because the prologue seeds ahead of SwiftUI's
+  first layout pass and the sequence seeds after it (#1276); `branch` matters
+  because restoring N sessions is not the same work as seeding one.
+- **The lane refuses to measure next to a live instance.** Each sample gates on the
+  process table being empty rather than on a fixed sleep — a previous measurement
+  pass on this metric was invalidated by instances accumulating one per sample
+  until the timings meant nothing (#1277).
+
 ### `repo_hydration`
 
 What it measures:

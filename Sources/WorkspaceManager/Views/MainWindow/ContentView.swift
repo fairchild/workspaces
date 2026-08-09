@@ -1966,7 +1966,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func ensureInitialHostSession() {
+    private func ensureInitialHostSession(caller: MainWindowLifecycleController.BootstrapCaller) {
         // When durable restore is enabled, let the RestorePlan own repo/workspace
         // (re)creation so a resume surface is never shadowed by a manifest-seeded
         // session on the same key (issue #783 #3). The default-home fallback below
@@ -1982,15 +1982,25 @@ struct ContentView: View {
                 activeSessionID: snapshot.activeSessionID,
                 activeSessionIDByScopeKey: snapshot.activeSessionIDByScopeKey
             )
+            PerformanceSignposts.noteInitialHostSessionBootstrap(
+                caller: caller.rawValue,
+                branch: "manifest_restore",
+                sessionCount: tileTreeStore.sessions.count
+            )
             return
         }
 
-        terminalSessionController.ensureInitialHostSession(
+        let seeded = terminalSessionController.ensureInitialHostSession(
             tileTreeStore: tileTreeStore,
             defaultHomeDirectory: resolvedDefaultHostDirectory,
             activateHostSession: { key, directory, customCommand in
                 activateHostSession(key: key, directory: directory, customCommand: customCommand)
             }
+        )
+        PerformanceSignposts.noteInitialHostSessionBootstrap(
+            caller: caller.rawValue,
+            branch: seeded == nil ? "noop" : "fresh_seed",
+            sessionCount: tileTreeStore.sessions.count
         )
     }
 

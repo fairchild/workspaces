@@ -12,10 +12,20 @@ import Foundation
 
 @MainActor
 struct MainWindowLifecycleController {
+    /// Which launch path invoked the terminal bootstrap. Both paths call it and it is
+    /// idempotent, so the caller that actually seeded the session decides whether the first
+    /// render pass has a terminal to realize — the split `launch_to_first_prompt` reads as
+    /// bimodal (#1251). The bootstrap reports its caller so a perf sample carries the mode it
+    /// ran in rather than leaving it to be inferred from the timing distribution.
+    enum BootstrapCaller: String, Sendable {
+        case prologue
+        case sequence
+    }
+
     /// Steps the window runs once, on first appearance.
     struct LaunchActions {
         let configureAutomationIntegration: () async -> Void
-        let ensureInitialHostSession: () -> Void
+        let ensureInitialHostSession: (BootstrapCaller) -> Void
         let computeRestorePlanIfEnabled: () async -> Void
         let prewarmPerfTerminalSurfacesIfNeeded: () -> Void
         let resolveSurfaceLifecycle: () -> Void
@@ -66,7 +76,7 @@ struct MainWindowLifecycleController {
     /// would be unreachable to the API for its whole life, so on that path the bootstrap waits.
     func runLaunchPrologue(_ actions: LaunchActions, automationGatesTerminalBootstrap: Bool) {
         guard !automationGatesTerminalBootstrap else { return }
-        actions.ensureInitialHostSession()
+        actions.ensureInitialHostSession(.prologue)
     }
 
     /// Launch order is load-bearing. Automation integration installs the verb layer before
@@ -76,7 +86,7 @@ struct MainWindowLifecycleController {
     /// step has run, because that signal is what their harnesses wait on.
     func runLaunchSequence(_ actions: LaunchActions) async {
         await actions.configureAutomationIntegration()
-        actions.ensureInitialHostSession()
+        actions.ensureInitialHostSession(.sequence)
         await actions.computeRestorePlanIfEnabled()
         actions.prewarmPerfTerminalSurfacesIfNeeded()
         actions.resolveSurfaceLifecycle()
