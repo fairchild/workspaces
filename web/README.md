@@ -1,6 +1,6 @@
 # Spaces Web
 
-> **Maintenance mode since #754 (2026-07-08).** No new development; old chat/terminal are demoted. This app still serves GitHub webhook ingestion. The active session surface is **`web-next/`**, deployed at `folio.cloudcompute.com` and embedded in the macOS app — see `AGENTS.md` § "Two Web Apps" and `web-next/CONTRIBUTING.md`.
+> **Maintenance mode since #754 (2026-07-08).** No new development; old chat/terminal are demoted. This app still serves GitHub webhook ingestion. The active session surface is **`web-next/`**, deployed at `folio.cloudcompute.com` and embedded in the macOS app — see `web/AGENTS.md`, `web-next/AGENTS.md`, and `web-next/CONTRIBUTING.md`.
 
 Next.js dashboard for the Workspaces app — chat with AI agents, manage sandbox sessions, and access terminal shells directly in the browser.
 
