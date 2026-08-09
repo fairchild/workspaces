@@ -21,6 +21,7 @@ The catalog lives in `references/personas.toml`.
 - `april` / `april-clearwater` — April Clearwater, Application Lead
 - `plat` / `plat-ironwood` — Plat Ironwood, Platform Lead
 - `peter` / `peter-planner` — Peter Planner, Planning Lead
+- `mara` / `pm` / `product-manager` — Mara Fielding, Product Lead
 
 ## Workflow
 
@@ -70,6 +71,7 @@ If the resolver cannot run, read these files directly:
 - April: `.agents/skills/cofounder-contributor/references/april-clearwater.md`
 - Plat: `.agents/skills/cofounder-contributor/references/plat-ironwood.md`
 - Peter: `.agents/skills/peter-planner/references/peter-planner.md`
+- Mara: `.agents/skills/product-manager/references/mara-fielding.md`
 - Repo memory: `.agents/MEMORY.md`
 - Shared memory: `~/.ai-memory/shared/*.md`
 
