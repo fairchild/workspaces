@@ -24,6 +24,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+from perf_history import LEGACY_PROTOCOL_EPOCH, history_row_from_summary, render_dashboard
 from perf_schema import evaluate_budgets, load_contract, measured_duration_samples
 
 SUMMARIZE_PERF_LOG = (
@@ -325,6 +326,83 @@ class PerfSummarizerTests(unittest.TestCase):
             self.assertEqual(payload["scenario"], "installed_login_shell")
             self.assertIn("launch_to_first_prompt", payload["metrics"])
             self.assertIn("terminal_first_output", payload["metrics"])
+
+
+class PerfHistoryEpochTests(unittest.TestCase):
+    """Rows are only comparable within one measurement protocol (#1251)."""
+
+    @staticmethod
+    def summary(median_ms: float, epoch: str | None) -> dict:
+        metadata = {"build_kind": "debug", "runs_requested": 10, "sleep_seconds": 8}
+        if epoch is not None:
+            metadata["protocol_epoch"] = epoch
+        return {
+            "scenario": "debug_no_activate",
+            "metrics": {"launch_to_first_prompt": {"median": median_ms, "mean": median_ms}},
+            "metadata": metadata,
+        }
+
+    def test_summary_without_an_epoch_records_as_legacy(self) -> None:
+        row = history_row_from_summary(self.summary(592.0, None), "2026-06-08T00:00:00-0700")
+
+        self.assertEqual(row["protocol_epoch"], LEGACY_PROTOCOL_EPOCH)
+
+    def test_declared_epoch_is_carried_onto_the_row(self) -> None:
+        row = history_row_from_summary(
+            self.summary(830.0, "isolated-preferences-v1"), "2026-08-08T22:00:00-0700"
+        )
+
+        self.assertEqual(row["protocol_epoch"], "isolated-preferences-v1")
+
+    def render(self, rows: list[dict]) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            return render_dashboard(
+                rows, rows_summary(rows[-1]), "2026-08-08T22:00:00-0700", Path(tmp)
+            )
+
+    def test_first_row_of_a_new_epoch_has_no_delta(self) -> None:
+        """The only same-scenario predecessor is legacy, so there is nothing to compare to.
+
+        Reporting +238 ms here would attribute the protocol switch to the app.
+        """
+        dashboard = self.render(
+            [
+                history_row_from_summary(self.summary(592.0, None), "2026-06-08T00:00:00-0700"),
+                history_row_from_summary(
+                    self.summary(830.0, "isolated-preferences-v1"), "2026-08-08T22:00:00-0700"
+                ),
+            ]
+        )
+
+        self.assertNotIn("+238.00 ms", dashboard)
+        self.assertIn("n/a", dashboard)
+
+    def test_delta_skips_a_legacy_row_to_reach_the_same_epoch(self) -> None:
+        """An out-of-order legacy append must not become the baseline for an isolated row."""
+        dashboard = self.render(
+            [
+                history_row_from_summary(
+                    self.summary(700.0, "isolated-preferences-v1"), "2026-08-08T20:00:00-0700"
+                ),
+                history_row_from_summary(self.summary(592.0, None), "2026-08-08T21:00:00-0700"),
+                history_row_from_summary(
+                    self.summary(830.0, "isolated-preferences-v1"), "2026-08-08T22:00:00-0700"
+                ),
+            ]
+        )
+
+        self.assertIn("+130.00 ms", dashboard)
+        self.assertNotIn("+238.00 ms", dashboard)
+
+
+def rows_summary(row: dict) -> dict:
+    """The summary shape `render_dashboard` reads alongside the rows."""
+    return {
+        "scenario": row["scenario"],
+        "metrics": {"launch_to_first_prompt": {"median": float(row["launch_to_first_prompt_median_ms"])}},
+        "metadata": {"protocol_epoch": row["protocol_epoch"]},
+        "budget_results": {},
+    }
 
 
 if __name__ == "__main__":

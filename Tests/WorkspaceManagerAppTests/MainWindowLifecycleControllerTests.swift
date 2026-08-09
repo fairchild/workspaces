@@ -20,6 +20,10 @@ struct MainWindowLifecycleControllerTests {
     /// Records which steps ran, in order. A step name appearing twice is a duplicate run.
     private final class Recorder {
         private(set) var steps: [String] = []
+        /// Which launch path invoked the terminal bootstrap, in order. The step name alone
+        /// can't tell the prologue's call from the sequence's — and that distinction is what
+        /// the caller label exists to carry into a perf sample (#1251).
+        private(set) var bootstrapCallers: [MainWindowLifecycleController.BootstrapCaller] = []
 
         func record(_ name: String) {
             steps.append(name)
@@ -27,6 +31,15 @@ struct MainWindowLifecycleControllerTests {
 
         func step(_ name: String) -> () -> Void {
             { [weak self] in self?.record(name) }
+        }
+
+        func bootstrapStep(
+            _ name: String
+        ) -> (MainWindowLifecycleController.BootstrapCaller) -> Void {
+            { [weak self] caller in
+                self?.record(name)
+                self?.bootstrapCallers.append(caller)
+            }
         }
 
         /// Suspends before recording, so an ordering that only holds when nothing yields
@@ -52,7 +65,7 @@ struct MainWindowLifecycleControllerTests {
     private func launchActions(_ recorder: Recorder) -> MainWindowLifecycleController.LaunchActions {
         MainWindowLifecycleController.LaunchActions(
             configureAutomationIntegration: recorder.asyncStep("configureAutomationIntegration"),
-            ensureInitialHostSession: recorder.step("ensureInitialHostSession"),
+            ensureInitialHostSession: recorder.bootstrapStep("ensureInitialHostSession"),
             computeRestorePlanIfEnabled: recorder.asyncStep("computeRestorePlanIfEnabled"),
             prewarmPerfTerminalSurfacesIfNeeded: recorder.step("prewarmPerfTerminalSurfaces"),
             resolveSurfaceLifecycle: recorder.step("resolveSurfaceLifecycle"),
@@ -128,6 +141,30 @@ struct MainWindowLifecycleControllerTests {
 
         #expect(recorder.steps.filter { $0 == "ensureInitialHostSession" }.count == 2)
         #expect(recorder.ordered("ensureInitialHostSession", before: "computeRestorePlanIfEnabled"))
+    }
+
+    /// Both calls are the same idempotent step, so only the label distinguishes the launch that
+    /// seeded its session before the first layout pass from the one that seeded it after.
+    @Test("Bootstrap reports which launch path called it")
+    func bootstrapReportsCallingPath() async {
+        let recorder = Recorder()
+
+        controller.runLaunchPrologue(launchActions(recorder), automationGatesTerminalBootstrap: false)
+        await controller.runLaunchSequence(launchActions(recorder))
+
+        #expect(recorder.bootstrapCallers == [.prologue, .sequence])
+    }
+
+    /// A gated launch and a launch whose prologue simply lost the race produce the same timing;
+    /// the caller label is what tells them apart in a sample.
+    @Test("Gated prologue leaves the sequence as the only bootstrap caller")
+    func gatedPrologueReportsSequenceAsOnlyCaller() async {
+        let recorder = Recorder()
+
+        controller.runLaunchPrologue(launchActions(recorder), automationGatesTerminalBootstrap: true)
+        await controller.runLaunchSequence(launchActions(recorder))
+
+        #expect(recorder.bootstrapCallers == [.sequence])
     }
 
     // MARK: - Launch

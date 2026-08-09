@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "reference_baseline_note": "Seed baseline derived from validated local runs and historical debug gates. debug_no_activate launch_to_first_prompt was refreshed on 2026-06-08 from a 10-run raw SwiftPM debug capture on Mac16,13 after the harness began enforcing pinned Ghostty resources and clean-shell diagnostics. Channel RSS references were refreshed on 2026-08-07 from the perf-rebaseline-20260807 run: sidebar churn measured a 1.67 MB steady-state RSS delta over 60s (reference 2 MB, 3 MB gate via the x1.25 formula), and the 600s long-session soak measured a 20.39 MB warm-up-dominated delta with the registry drained to zero (ten-minute cap 32 MB at >=1.5x headroom over the observation; sixty-minute cap 40 MB extrapolated from the post-warm-up plateau, refresh from a real 60-minute soak before leaning on it). Refresh with a 10-run reference capture before tightening budgets.",
+  "reference_baseline_note": "Seed baseline derived from validated local runs and historical debug gates. debug_no_activate launch_to_first_prompt was refreshed on 2026-06-08 from a 10-run raw SwiftPM debug capture on Mac16,13 after the harness began enforcing pinned Ghostty resources and clean-shell diagnostics. Channel RSS references were refreshed on 2026-08-07 from the perf-rebaseline-20260807 run: sidebar churn measured a 1.67 MB steady-state RSS delta over 60s (reference 2 MB, 3 MB gate via the x1.25 formula), and the 600s long-session soak measured a 20.39 MB warm-up-dominated delta with the registry drained to zero (ten-minute cap 32 MB at >=1.5x headroom over the observation; sixty-minute cap 40 MB extrapolated from the post-warm-up plateau, refresh from a real 60-minute soak before leaning on it). Refresh with a 10-run reference capture before tightening budgets. Debug launch references were re-examined on 2026-08-08 (#1251) under a protocol that isolates the preferences domain per run, gates each sample on no live instance, and stamps every sample with its bootstrap branch and machine load: 10 runs per lane, Mac16,13, load 1m ~3.6 (no-activate) and ~4.6 (activate). debug_activate's launch_to_first_prompt seed of 220 ms was never achievable \u2014 it was faster than the no-activate lane, and the capture shows the two lanes measure the same cost (fast mode 532 vs 549 ms; median 803 vs 830 ms), so it now carries the same 592/631 reference. debug_no_activate keeps 592/631 deliberately even though the measured median is 830 ms: the distribution is bimodal (2/10 samples at ~550 ms, 8/10 at ~830 ms) with branch, seeding path, preferences state, and load all held constant, so the reference is still achievable on this build and the ~280 ms step is a live defect rather than a cost to bless. Rows in metrics-history.csv predating 2026-08-08 came from a lane whose UserDefaults domain was not isolated; compare across that boundary with care.",
   "budget_formula": {
     "gate": {
       "stat": "median",
@@ -118,8 +118,8 @@
           "p95_ms": 631
         },
         "debug_activate": {
-          "median_ms": 220,
-          "p95_ms": 300
+          "median_ms": 592,
+          "p95_ms": 631
         },
         "installed_clean_shell": {
           "median_ms": 640,
