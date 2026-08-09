@@ -164,42 +164,70 @@ resolve_ghostty_resources_dir() {
 # UserDefaults is a third state axis WORKSPACES_DATA_DIR never covered: the terminal
 # continuity manifest lives there, so an un-isolated lane restored whatever sessions the
 # last dev or fixture launch left behind and no sample could be attributed to a known
-# starting state (#1251). #1258 made the domain switchable; this names the suite. The app
-# never wipes an explicitly named suite, so its lifetime belongs to this script.
-PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
+# starting state (#1251). #1258 made the domain switchable; this names the suite.
+#
+# #1258's contract is that an explicitly named suite belongs to whoever named it, and that
+# holds here: a caller-provided WORKSPACES_PREFERENCES_SUITE is used as-is and never reset
+# or removed, which also means the per-sample wipe `--preferences clean` promises is the
+# caller's to perform. Only a suite this run invented is a suite this run may clear.
+if [[ -n "${WORKSPACES_PREFERENCES_SUITE:-}" ]]; then
+    PREFERENCES_SUITE="$WORKSPACES_PREFERENCES_SUITE"
+    PREFERENCES_SUITE_OWNER="caller"
+else
+    PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
+    PREFERENCES_SUITE_OWNER="lane"
+fi
 
 reset_preferences_suite() {
+    [[ "$PREFERENCES_SUITE_OWNER" == "lane" ]] || return 0
     defaults delete "$PREFERENCES_SUITE" >/dev/null 2>&1 || true
 }
 
+# `pgrep -f` matches a regex against whole command lines, and this path is full of `.`
+# metacharacters that would otherwise match anything. Escaped, the pattern means the binary
+# it names — and it is only ever used to *observe* the process table. Signals go to the pid
+# this invocation launched, never to whatever a pattern happens to match (#1280).
+DEBUG_BINARY_PATTERN="$(printf '%s' "$DEBUG_BINARY" | sed 's/[][\\.*^$(){}?+|]/\\&/g')"
+
 debug_instance_pids() {
-    pgrep -f "$DEBUG_BINARY" 2>/dev/null || true
+    pgrep -f -- "$DEBUG_BINARY_PATTERN" 2>/dev/null || true
 }
 
-# A sample that overlaps a live instance measures a loaded machine rather than a launch.
-# That is how the previous measurement pass on this lane was invalidated: instances
-# accumulated one per sample until the timings meant nothing (#1277). Gate on the process
-# table being empty rather than on a fixed sleep.
-wait_for_quiet_machine() {
+# A sample that overlaps a live instance measures a loaded machine rather than a launch —
+# how the previous measurement pass on this lane was invalidated, with instances
+# accumulating one per sample until the timings meant nothing (#1277). Read-only on
+# purpose: an instance this run did not start belongs to someone else (a `launch-dev.sh`
+# app, a concurrent capture), so the lane refuses to measure rather than killing it.
+assert_no_debug_instance() {
     local label="$1"
-    local pids=""
+    local pids
+    pids="$(debug_instance_pids)"
+    [[ -z "$pids" ]] && return 0
+    echo "  [$label] a debug WorkspaceManager from this worktree is running: $(echo "$pids" | tr '\n' ' ')" >&2
+    echo "  [$label] refusing to measure beside it — stop it and re-run." >&2
+    return 1
+}
+
+# TERM, then KILL, and only ever the pid this invocation launched.
+stop_launched_app() {
+    local pid="$1"
     local attempt
+    kill "$pid" 2>/dev/null || true
     for attempt in $(seq 1 40); do
-        pids="$(debug_instance_pids)"
-        [[ -z "$pids" ]] && return 0
-        if [[ "$attempt" -eq 1 ]]; then
-            echo "$pids" | xargs kill >/dev/null 2>&1 || true
-        elif [[ "$attempt" -eq 20 ]]; then
-            echo "  [$label] escalating to SIGKILL: $(echo "$pids" | tr '\n' ' ')"
-            echo "$pids" | xargs kill -9 >/dev/null 2>&1 || true
-        fi
+        kill -0 "$pid" 2>/dev/null || return 0
         sleep 0.25
     done
-    echo "  [$label] debug instance survived teardown: $(debug_instance_pids | tr '\n' ' ')" >&2
+    echo "  escalating to SIGKILL for launched pid $pid"
+    kill -9 "$pid" 2>/dev/null || true
+    for attempt in $(seq 1 20); do
+        kill -0 "$pid" 2>/dev/null || return 0
+        sleep 0.25
+    done
     return 1
 }
 
 cleanup_preferences_suite() {
+    [[ "$PREFERENCES_SUITE_OWNER" == "lane" ]] || return 0
     reset_preferences_suite
     rm -f "$HOME/Library/Preferences/$PREFERENCES_SUITE.plist"
 }
@@ -241,7 +269,10 @@ echo "  ghostty resources: ${GHOSTTY_RESOURCES_DIR_RESOLVED:-unavailable}"
 echo "  shell profile mode: $SHELL_PROFILE_MODE"
 echo "  terminal diagnostics: $TERMINAL_DIAGNOSTICS"
 echo "  preferences mode: $PREFERENCES_MODE"
-echo "  preferences suite: $PREFERENCES_SUITE"
+echo "  preferences suite: $PREFERENCES_SUITE (owner: $PREFERENCES_SUITE_OWNER)"
+if [[ "$PREFERENCES_SUITE_OWNER" == "caller" ]]; then
+    echo "  note: caller-provided suite — this lane never resets it, so --preferences $PREFERENCES_MODE describes the caller's handling, not the lane's."
+fi
 
 reset_preferences_suite
 
@@ -249,11 +280,7 @@ for i in $(seq 1 "$RUNS"); do
     LOG_FILE="$OUTPUT_DIR/run-$i.log"
     echo "[$i/$RUNS] Launching app..."
 
-    # Only the debug binary is ever killed here, never the installed /Applications app.
-    wait_for_quiet_machine "pre-run $i" || {
-        echo "Refusing to measure while a debug instance is live." >&2
-        exit 1
-    }
+    assert_no_debug_instance "pre-run $i" || exit 1
 
     if [[ "$PREFERENCES_MODE" == "clean" ]]; then
         reset_preferences_suite
@@ -269,6 +296,9 @@ for i in $(seq 1 "$RUNS"); do
     # OS_ACTIVITY_DT_MODE makes os.Logger output mirror to stderr. The app's
     # [Perf] lines are os.Logger-only, so without it a redirected debug launch
     # captures nothing and every metric reads "missing" (#1238).
+    #
+    # `exec` so the subshell becomes the app: APP_PID is then the pid teardown signals,
+    # rather than a wrapper whose death would leave the app running.
     (
         cd "$ROOT_DIR"
         if [[ "$LAUNCH_MODE" == "no-activate" ]]; then
@@ -280,7 +310,7 @@ for i in $(seq 1 "$RUNS"); do
             WORKSPACES_SHELL_PROFILE_MODE="$SHELL_PROFILE_MODE" \
             WORKSPACES_TERMINAL_DIAGNOSTICS="$TERMINAL_DIAGNOSTICS" \
             WORKSPACES_DISABLE_STATE_RESTORATION="$DISABLE_STATE_RESTORATION" \
-            "$DEBUG_BINARY" -ApplePersistenceIgnoreState YES >"$LOG_FILE" 2>&1
+            exec "$DEBUG_BINARY" -ApplePersistenceIgnoreState YES >"$LOG_FILE" 2>&1
         else
             OS_ACTIVITY_DT_MODE=YES \
             WORKSPACES_DATA_DIR="$PERF_DATA_DIR" \
@@ -289,22 +319,25 @@ for i in $(seq 1 "$RUNS"); do
             WORKSPACES_SHELL_PROFILE_MODE="$SHELL_PROFILE_MODE" \
             WORKSPACES_TERMINAL_DIAGNOSTICS="$TERMINAL_DIAGNOSTICS" \
             WORKSPACES_DISABLE_STATE_RESTORATION="$DISABLE_STATE_RESTORATION" \
-            "$DEBUG_BINARY" -ApplePersistenceIgnoreState YES >"$LOG_FILE" 2>&1
+            exec "$DEBUG_BINARY" -ApplePersistenceIgnoreState YES >"$LOG_FILE" 2>&1
         fi
     ) &
     APP_PID=$!
 
     sleep "$SLEEP_SECONDS"
-    kill "$APP_PID" 2>/dev/null || true
+    stop_launched_app "$APP_PID" || {
+        echo "sample $i: the launched app survived SIGKILL (pid $APP_PID)" >&2
+        exit 1
+    }
     wait "$APP_PID" 2>/dev/null || true
-    wait_for_quiet_machine "post-run $i" || true
+    assert_no_debug_instance "post-run $i" || exit 1
 
     echo "run=$i" >> "$OUTPUT_DIR/perf-lines.log"
     rg "\\[Perf\\]|\\[LaunchPreferences\\]" "$LOG_FILE" >> "$OUTPUT_DIR/perf-lines.log" || true
     echo "" >> "$OUTPUT_DIR/perf-lines.log"
 done
 
-wait_for_quiet_machine "post-run sweep" || true
+assert_no_debug_instance "post-run sweep" || exit 1
 
 OS_VERSION="$(sw_vers -productVersion)"
 OS_BUILD="$(sw_vers -buildVersion)"
@@ -312,7 +345,7 @@ ARCH="$(uname -m)"
 MODEL="$(sysctl -n hw.model 2>/dev/null || echo unknown)"
 TIMESTAMP="$(date '+%Y-%m-%dT%H:%M:%S%z')"
 
-PERF_SUMMARY_TIMESTAMP="$TIMESTAMP" PYTHONPATH="$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" "$GHOSTTY_RESOURCES_DIR_RESOLVED" "$SHELL_PROFILE_MODE" "$TERMINAL_DIAGNOSTICS" "$DISABLE_STATE_RESTORATION" "$PREFERENCES_MODE" "$PREFERENCES_SUITE" <<'PY'
+PERF_SUMMARY_TIMESTAMP="$TIMESTAMP" PYTHONPATH="$ROOT_DIR/scripts${PYTHONPATH:+:$PYTHONPATH}" python3 - "$OUTPUT_DIR" "$ROOT_DIR" "$RUNS" "$SLEEP_SECONDS" "$RECORD" "$TIMESTAMP" "$OS_VERSION" "$OS_BUILD" "$ARCH" "$MODEL" "$LAUNCH_MODE" "$ASSERT_BUDGET" "$GHOSTTY_RESOURCES_DIR_RESOLVED" "$SHELL_PROFILE_MODE" "$TERMINAL_DIAGNOSTICS" "$DISABLE_STATE_RESTORATION" "$PREFERENCES_MODE" "$PREFERENCES_SUITE" "$PREFERENCES_SUITE_OWNER" <<'PY'
 from datetime import datetime
 import json
 import pathlib
@@ -340,6 +373,7 @@ terminal_diagnostics = sys.argv[15]
 disable_state_restoration = sys.argv[16]
 preferences_mode = sys.argv[17]
 preferences_suite = sys.argv[18]
+preferences_suite_owner = sys.argv[19]
 
 hydration_meta_pattern = re.compile(
     r"metric=repo_hydration duration_ms=[0-9]+(?:\.[0-9]+)? discovered=(\d+) imported=(\d+)"
@@ -348,7 +382,15 @@ timestamp_prefix_pattern = re.compile(r"^(?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.
 bootstrap_pattern = re.compile(
     r"event=initial_host_session caller=(?P<caller>\w+) branch=(?P<branch>\w+) sessions=(?P<sessions>\d+)"
 )
-preferences_pattern = re.compile(r"\[LaunchPreferences\] domain=(?P<domain>\w+)")
+# `domain=scratch` alone is not proof of isolation: when the defaults system refuses a
+# suite the app logs the refusal and falls back to the persistent domain, still under a
+# scratch resolution. `isolated=` is the field that says which store actually backed the
+# launch, so the sample reports that rather than the intent.
+preferences_pattern = re.compile(
+    r"\[LaunchPreferences\] domain=(?P<domain>\w+)"
+    r"(?:\s+suite=(?P<suite>\S+))?"
+    r"(?:.*?\bisolated=(?P<isolated>\w+))?"
+)
 run_index_pattern = re.compile(r"run-(?P<index>\d+)\.log$")
 
 metric_order = [
@@ -420,7 +462,19 @@ for log_file in sorted(out_dir.glob("run-*.log"), key=run_index):
             "preferences_domain": (
                 preferences_match.group("domain") if preferences_match else None
             ),
+            "preferences_isolated": (
+                preferences_match.group("isolated") if preferences_match else None
+            ),
+            "preferences_suite": (
+                preferences_match.group("suite") if preferences_match else None
+            ),
             "load_average_1m": load_by_run.get(run_index(log_file)),
+            # The SwiftData store and SQLite sidecar are shared by every sample in an
+            # invocation and are not reset between them — sample 1 imports the discovered
+            # repos, samples 2..N open a populated store. `--preferences clean` says nothing
+            # about that axis, so the hydration cost each sample actually paid is reported
+            # here rather than left to be assumed equal.
+            "repo_hydration_ms": per_run.get("repo_hydration"),
         }
     )
 
@@ -515,8 +569,12 @@ summary = canonical_summary(
             "shell_profile_mode": shell_profile_mode,
             "terminal_diagnostics": terminal_diagnostics,
             "disable_state_restoration": disable_state_restoration,
+            # Names the protocol this row was measured under, so the dashboard never
+            # reports the switch to an isolated preferences domain as an app-side delta.
+            "protocol_epoch": "isolated-preferences-v1",
             "preferences_mode": preferences_mode,
             "preferences_suite": preferences_suite,
+            "preferences_suite_owner": preferences_suite_owner,
             "launch_samples": launch_samples,
         }
     },
@@ -553,9 +611,42 @@ for sample in launch_samples:
         f"seeded_by={sample['seeded_by'] or 'none'} "
         f"branch={sample['branch'] or 'none'} "
         f"sessions={sample['sessions'] if sample['sessions'] is not None else 'none'} "
-        f"preferences={sample['preferences_domain'] or 'unreported'} "
-        f"load1m={'?' if sample['load_average_1m'] is None else format(sample['load_average_1m'], '.2f')}"
+        f"preferences={sample['preferences_domain'] or 'unreported'}"
+        f"/isolated={sample['preferences_isolated'] or '?'} "
+        f"load1m={'?' if sample['load_average_1m'] is None else format(sample['load_average_1m'], '.2f')} "
+        f"hydration={'?' if sample['repo_hydration_ms'] is None else format(sample['repo_hydration_ms'], '.2f')}"
     )
+
+# Isolation has to fail closed. A sample whose log carries no [LaunchPreferences] line, or
+# reports the persistent domain, or names a different suite, is a sample whose starting state
+# is unknown — and an unknown starting state is exactly what this lane exists to remove. That
+# is a harness failure rather than a slow launch, so the run exits non-zero and records
+# nothing; summary.json is still written, because diagnosing the failure needs it.
+isolation_failures = []
+for sample in launch_samples:
+    domain = sample["preferences_domain"]
+    isolated = sample["preferences_isolated"]
+    suite = sample["preferences_suite"]
+    if domain is None:
+        isolation_failures.append(f"  run={sample['run']}: no [LaunchPreferences] line in the run log")
+    elif domain != "scratch":
+        isolation_failures.append(f"  run={sample['run']}: resolved domain={domain}, not the scratch suite")
+    elif isolated != "true":
+        isolation_failures.append(
+            f"  run={sample['run']}: domain=scratch but isolated={isolated} — the defaults system refused the suite"
+        )
+    elif suite is not None and suite != preferences_suite:
+        isolation_failures.append(
+            f"  run={sample['run']}: launched against suite={suite}, expected {preferences_suite}"
+        )
+
+if isolation_failures:
+    print("")
+    print("ISOLATION FAILURES (preferences domain not pinned; measurements discarded):")
+    for failure in isolation_failures:
+        print(failure)
+    print("")
+    sys.exit(2)
 
 sample_loads = [
     sample["load_average_1m"] for sample in launch_samples if sample["load_average_1m"] is not None

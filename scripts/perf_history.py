@@ -35,7 +35,15 @@ HISTORY_FIELDNAMES = [
     "repo_click_to_focus_mean_ms",
     "workspace_click_to_focus_mean_ms",
     "activation_to_first_prompt_median_ms",
+    "protocol_epoch",
 ]
+
+# Which measurement protocol produced a row. Rows are only comparable within an epoch:
+# `legacy-unisolated` runs read whatever the persistent UserDefaults domain held and had no
+# gate against measuring beside a live instance, so a delta across the boundary mixes an app
+# change with a protocol change (#1251). Summaries that do not declare an epoch are legacy
+# by definition — the field was introduced with the isolated protocol.
+LEGACY_PROTOCOL_EPOCH = "legacy-unisolated"
 
 _ROW_METRICS = [
     "launch_to_first_prompt",
@@ -75,6 +83,7 @@ def history_row_from_summary(summary: dict[str, Any], timestamp: str) -> dict[st
         "discovered_repos_median": metadata.get("discovered_repos_median", ""),
         "imported_repos_median": metadata.get("imported_repos_median", ""),
         "activation_to_first_prompt_median_ms": metadata.get("activation_to_first_prompt_median_ms") or "",
+        "protocol_epoch": metadata.get("protocol_epoch") or LEGACY_PROTOCOL_EPOCH,
     }
     for metric in _ROW_METRICS:
         row[f"{metric}_median_ms"] = _metric_stat(summary, metric, "median")
@@ -149,12 +158,19 @@ def render_dashboard(
     metadata = summary.get("metadata", {})
     budget_results = summary.get("budget_results", {})
     latest = rows[-1] if rows else None
-    # Delta baselines only mean something within one scenario; history now mixes
-    # debug and installed lanes, so compare against the previous same-scenario row.
+    # Delta baselines only mean something within one scenario and one measurement
+    # protocol; history mixes debug and installed lanes, and it spans the boundary where
+    # the debug lanes started isolating the preferences domain. Compare against the
+    # previous row that matches both, so a delta never reports a protocol change as an app
+    # change.
     previous = None
     if latest is not None:
         for row in reversed(rows[:-1]):
-            if row.get("scenario", "") == latest.get("scenario", ""):
+            same_scenario = row.get("scenario", "") == latest.get("scenario", "")
+            same_epoch = (row.get("protocol_epoch") or LEGACY_PROTOCOL_EPOCH) == (
+                latest.get("protocol_epoch") or LEGACY_PROTOCOL_EPOCH
+            )
+            if same_scenario and same_epoch:
                 previous = row
                 break
     window = rows[-10:]
