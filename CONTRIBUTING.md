@@ -168,15 +168,30 @@ brew install --cask swiftbar
 **CLI status check** (no SwiftBar needed):
 
 ```bash
-./scripts/runner-status.sh          # snapshot
-./scripts/runner-status.sh --watch  # live 5s refresh
+./scripts/runners.py            # every runner on this machine
+./scripts/runners.py --offline  # skip the GitHub API (~0.4s)
+./scripts/runners.py --disk     # add per-runner disk usage
+./scripts/runners.py --json     # machine-readable snapshot
 ```
+
+`runners.py` discovers runner directories by glob and reconciles three sources
+that drift apart silently — the local `.runner` config, launchd job state, and
+GitHub's own runner list. A runner is healthy only when all three agree, so a
+registration deleted server-side while launchd still lists the job shows up as
+`dead` rather than merely quiet. Exit status is 1 when any runner is dead, which
+makes it usable as a gate.
+
+It supersedes `runner-status.sh`, which reads a hardcoded list of three runner
+directories and never asks GitHub anything. On a machine with twelve runner
+directories that meant nine were invisible, and a runner whose registration had
+been deleted was indistinguishable from one that was merely offline.
 
 ### Runner scripts reference
 
 | Script | Purpose |
 |--------|---------|
-| `runner-status.sh` | CLI status of all runners, WorkspaceManager processes, recent jobs |
+| `runners.py` | Status of every runner: local config, launchd, and GitHub reconciled |
+| `runner-status.sh` | Superseded by `runners.py`; hardcodes three runner dirs, no GitHub check |
 | `runner-ci-menubar.5s.sh` | SwiftBar plugin (installed into plugin folder) |
 | `install-runner-ci-menubar.sh` | Installs the SwiftBar plugin as a durable local copy |
 | `runner-notify-start.sh` | Runner hook: logs job start to activity log |
