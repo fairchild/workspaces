@@ -21,3 +21,11 @@ persona_path = ".agents/skills/peter-planner/references/peter-planner.md"
 aliases = ["peter", "peter-planner", "planner"]
 memory_keys = ["peter-planner", "peter"]
 strip_sections_from = ["## Output Format"]
+
+[personas.mara]
+display_name = "Mara Fielding"
+role = "Product Lead"
+persona_path = ".agents/skills/product-manager/references/mara-fielding.md"
+aliases = ["mara", "mara-fielding", "pm", "product", "product-manager", "product-lead"]
+memory_keys = ["mara-fielding", "mara"]
+strip_sections_from = ["## Output Format"]

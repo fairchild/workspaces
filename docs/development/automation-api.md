@@ -395,7 +395,7 @@ that is not compositing (minimized, off the active Space, or locked screen) →
 `unsupported`; an over-cap PNG → `unsupported`; an internal capture/encode error
 → `internal_error`. Locked-screen full-window capture is not achievable in-process
 (every composited path fails when the session is locked); that evidence keeps the
-VM / `tart-ui` fallback lane.
+local VM fallback lane.
 
 ## Workspace list
 

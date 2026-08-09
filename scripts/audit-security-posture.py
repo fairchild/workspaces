@@ -22,7 +22,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_RUNNER_LABELS = {"signing-host", "lume-macos"}
-ADVISORY_RUNNER_LABELS = {"tart-ui"}
 EXPECTED_ENVIRONMENTS = {"release"}
 EXPECTED_REPO_SECRETS = {
     "APPLE_API_ISSUER_ID",
@@ -142,7 +141,6 @@ def remote_runner_checks(repo: str) -> list[Check]:
         if isinstance(label, dict) and label.get("name")
     }
     missing_required = sorted(REQUIRED_RUNNER_LABELS - labels)
-    missing_advisory = sorted(ADVISORY_RUNNER_LABELS - labels)
     return [
         Check(
             "fail" if missing_required else "pass",
@@ -150,13 +148,6 @@ def remote_runner_checks(repo: str) -> list[Check]:
             f"missing: {', '.join(missing_required)}"
             if missing_required
             else "required labels present",
-        ),
-        Check(
-            "warn" if missing_advisory else "pass",
-            "advisory runner labels",
-            f"missing: {', '.join(missing_advisory)}"
-            if missing_advisory
-            else "advisory labels present",
         ),
     ]
 

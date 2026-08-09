@@ -1067,6 +1067,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             environment["TERM"] = "xterm-256color"
         }
 
+        // Un-timed by design: installer downloads legitimately run long and the
+        // install flow owns cancellation (scripts/check-subprocess-timeouts.py allowlist).
         let result = try await ProcessRunner.run(
             executable: "/bin/bash",
             arguments: [
@@ -1139,6 +1141,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
             self.cachedExecutablePath = nil
         }
 
+        // Un-timed by design: `which` is a fast local lookup and runtime probing
+        // has outer deadlines (scripts/check-subprocess-timeouts.py allowlist).
         if let whichResult = try? await ProcessRunner.run(
             executable: "/usr/bin/which",
             arguments: ["lume"]
@@ -1173,6 +1177,8 @@ public actor LumeRuntimeService: LumeRuntimeServiceProtocol {
 
     private func commandOutput(executable: String, arguments: [String]) async throws -> String {
         let commandStartedAt = Date()
+        // Un-timed by design: lume host commands (VM lifecycle) legitimately run
+        // long under caller-owned deadlines (scripts/check-subprocess-timeouts.py allowlist).
         let result = try await ProcessRunner.run(executable: executable, arguments: arguments)
         guard result.success else {
             log.error(

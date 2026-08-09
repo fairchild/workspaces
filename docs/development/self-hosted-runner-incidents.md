@@ -29,11 +29,17 @@ Interpretation:
 
 1. Capture runner state with the self-hosted-runner tooling.
 2. Attach the lane-health artifact or local runner evidence.
-3. Mark the perf result as skipped or infra-blocked.
-4. Do not treat the skipped perf lane as proof of a product regression.
+3. Mark the affected job as infra-blocked, not failed-on-merit.
+4. Do not treat an infra-blocked job as proof of a product regression — and do
+   not treat it as a pass either. It produced no result.
+
+Perf is no longer one of these lanes: benchmarks run on the owner's laptop,
+opt-in per approved session
+([../decisions/perf-measurement-laptop-optin.md](../decisions/perf-measurement-laptop-optin.md)).
+A missing perf number is now a staleness reading off the dashboard, not a runner
+incident.
 
 ## Related Files
 
-- `.github/workflows/perf-validation.yml`
 - `.agents/skills/self-hosted-runners/SKILL.md`
 - `scripts/runner.sh`

@@ -23,6 +23,19 @@ export async function ensureSchema(env: Env): Promise<void> {
   );
 }
 
+/** Bound audit insert, for callers that batch it atomically with the mutation it records. */
+export function auditStatement(
+  env: Env,
+  feedbackId: string,
+  actor: string,
+  action: string,
+  detail?: string
+): D1PreparedStatement {
+  return env.FEEDBACK_DB.prepare(
+    "INSERT INTO feedback_audit (feedback_id, at, actor, action, detail) VALUES (?, ?, ?, ?, ?)"
+  ).bind(feedbackId, Date.now(), actor, action, detail ?? null);
+}
+
 /** Record an actor's action against a feedback row. Never throws on the caller's path. */
 export async function recordAudit(
   env: Env,
@@ -31,9 +44,5 @@ export async function recordAudit(
   action: string,
   detail?: string
 ): Promise<void> {
-  await env.FEEDBACK_DB.prepare(
-    "INSERT INTO feedback_audit (feedback_id, at, actor, action, detail) VALUES (?, ?, ?, ?, ?)"
-  )
-    .bind(feedbackId, Date.now(), actor, action, detail ?? null)
-    .run();
+  await auditStatement(env, feedbackId, actor, action, detail).run();
 }

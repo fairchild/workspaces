@@ -374,7 +374,10 @@ Enforcement points:
 
 - `./scripts/perf-baseline.sh --assert-budget`
 - `./scripts/perf-runner.sh --scenario <id> --assert-budget`
-- `.github/workflows/perf-validation.yml`
+
+Both run on the owner's laptop, opt-in per approved session — budgets are
+`Mac16,13`-derived, so nothing off-host may assert them. No CI workflow enforces
+them; see [../decisions/perf-measurement-laptop-optin.md](../decisions/perf-measurement-laptop-optin.md).
 
 Release signoff uses installed-build verification:
 

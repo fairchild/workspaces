@@ -37,7 +37,7 @@ Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an ex
 
 ## High-Signal Lessons (unconditional)
 
-- **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-15`) for generic build/test jobs, `[self-hosted, tart-ui]` for UI/perf automation, `[self-hosted, lume-macos]` for agent execution (preferred, with ubuntu-latest fallback), and `[self-hosted, signing-host]` for release/signing/notarization.
+- **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-15`) for generic build/test jobs and for the UI smoke lane (`ui-smoke-advisory.yml`), `[self-hosted, lume-macos]` for agent execution (preferred, with ubuntu-latest fallback), and `[self-hosted, signing-host]` for release/signing/notarization. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
 - **Ship a diagnostic probe instead of your third guess.** When you're guessing, stop and instrument.
 - **The tracker lags the code — verify before planning from it.** Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
 

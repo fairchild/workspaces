@@ -6,6 +6,7 @@ Assume one of this repo's named agent personas in the current thread.
 /become april
 /become plat
 /become peter
+/become mara
 ```
 
 The text after `/become` is the requested persona. If the user includes more

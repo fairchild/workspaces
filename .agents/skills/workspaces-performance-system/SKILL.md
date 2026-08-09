@@ -124,19 +124,27 @@ Debug scenario failures are useful branch-trend evidence. They do not block a
 release by themselves when the packaged app verifier passes and the debug
 environment difference is explicitly classified.
 
-### 6. Separate infra failures from perf regressions
+### 6. Measurement is laptop-local and opt-in; report absence as absence
 
-For CI and scheduled runs, read:
-
-- `.github/workflows/perf-validation.yml`
-- `docs/development/self-hosted-runner-incidents.md`
+No workflow measures performance. Benchmarks run on the owner's laptop, one
+approved session at a time — `docs/decisions/perf-measurement-laptop-optin.md`
+is the protocol, including the per-sample kill gate, the quiet-machine load
+precondition, and the `WORKSPACES_SYNTHETIC_ROOT` preferences isolation.
 
 Rules:
 
-- `runner-lane-health` answers whether the lane is available.
-- `perf-validation` answers whether the product met the scenario.
-- Do not report `tart-ui` offline or runner disconnects as app regressions.
-- On PRs, local evidence plus build/test is merge-critical; self-hosted perf stays advisory until lane stability is proven.
+- Read staleness from `docs/performance/dashboard.md`'s `Last updated`
+  timestamp. If it is old, say "the last recorded measurement is from `<date>`"
+  — never "perf is green" and never "perf is failing".
+- A scenario nobody ran produced no result. Report it as not measured, distinct
+  from measured-and-passed. This is the lesson the deleted perf cron encoded
+  (#1238): a skipped measurement that reads as a pass hid a dead lane for weeks.
+- Budgets are `Mac16,13`-derived. A number from other hardware is not comparable
+  to them; the four channel scenarios can run anywhere but their budgets still
+  cannot be asserted off-host.
+- Runner health belongs to `docs/development/self-hosted-runner-incidents.md`
+  and concerns the release and agent-execution lanes, not perf.
+- On PRs, local evidence plus build/test is merge-critical.
 
 ## Outputs To Produce
 
@@ -163,8 +171,9 @@ When this skill is used successfully, produce:
 - `scripts/verify-installed-perf.sh`
 - `scripts/perf-baseline.sh`
 - `scripts/new-workspace-perf.sh`
-- `.github/workflows/perf-validation.yml`
 - `.github/workflows/release.yml`
+- `docs/decisions/perf-measurement-laptop-optin.md`
 - `docs/performance-testing.md`
+- `docs/performance/dashboard.md`
 - `docs/performance/metrics-reference.md`
 - `docs/development/self-hosted-runner-incidents.md`

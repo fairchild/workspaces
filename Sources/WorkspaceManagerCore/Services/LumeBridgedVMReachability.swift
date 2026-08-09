@@ -143,6 +143,8 @@ struct LumeBridgedVMReachability: Sendable {
 
     private func ipAddressFromARP(forMACAddress macAddress: String, interfaceName: String) async -> String? {
         guard
+            // Un-timed by design: `arp -an` reads a local table and reachability
+            // probing has outer deadlines (scripts/check-subprocess-timeouts.py allowlist).
             let result = try? await ProcessRunner.run(executable: "/usr/sbin/arp", arguments: ["-an"]),
             result.success
         else {

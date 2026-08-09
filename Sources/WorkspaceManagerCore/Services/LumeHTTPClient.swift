@@ -178,6 +178,8 @@ struct LumeHTTPClient: Sendable {
             }
         }
 
+        // Un-timed by design: curl carries its own transfer limits and Lume calls
+        // run under outer deadlines (scripts/check-subprocess-timeouts.py allowlist).
         let result = try await ProcessRunner.run(
             executable: "/usr/bin/curl",
             arguments: arguments,
