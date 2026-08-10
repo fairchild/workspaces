@@ -258,7 +258,10 @@ struct MainWindowRestoreControllerTests {
             surface(action: .resumeClaude(agentSessionID: "c"), directory: second),
         ])
 
-        let names = controller.tmuxSessionNamesToKill(in: target) { "wm-\($0.lastPathComponent)" }
+        let names = controller.tmuxSessionNamesToKill(
+            in: target,
+            ownedTmuxSessionNames: ["wm-alpha", "wm-beta"]
+        ) { "wm-\($0.lastPathComponent)" }.kill
 
         #expect(names == ["wm-alpha", "wm-alpha", "wm-beta"])
     }
@@ -275,7 +278,10 @@ struct MainWindowRestoreControllerTests {
                 directory: URL(fileURLWithPath: "/Users/dev/code/gamma")),
         ])
 
-        let names = controller.tmuxSessionNamesToKill(in: target) { "wm-\($0.lastPathComponent)" }
+        let names = controller.tmuxSessionNamesToKill(
+            in: target,
+            ownedTmuxSessionNames: ["wm-alpha", "wm-beta", "wm-gamma"]
+        ) { "wm-\($0.lastPathComponent)" }.kill
 
         #expect(names == ["wm-beta"])
     }
@@ -284,7 +290,16 @@ struct MainWindowRestoreControllerTests {
     func noResumeSurfacesKillNothing() {
         let target = plan([surface(action: .freshShell), surface(action: .reattachTmux(sessionName: "x"))])
 
-        #expect(controller.tmuxSessionNamesToKill(in: target).isEmpty)
+        // Both halves, and a permissive owned set: with an empty set a mutation that treated
+        // fresh/reattach surfaces as candidates would hide them in `skippedUnowned` and still
+        // pass on `kill` alone.
+        let scope = controller.tmuxSessionNamesToKill(
+            in: target,
+            ownedTmuxSessionNames: ["wm-x", "wm-alpha", "x"]
+        ) { "wm-\($0.lastPathComponent)" }
+
+        #expect(scope.kill.isEmpty)
+        #expect(scope.skippedUnowned.isEmpty)
     }
 
     /// The #1233 acceptance criterion: a resume and a reattach surface can share a directory,
@@ -300,10 +315,55 @@ struct MainWindowRestoreControllerTests {
                 directory: URL(fileURLWithPath: "/Users/dev/code/beta")),
         ])
 
-        let names = controller.tmuxSessionNamesToKill(in: target) { "wm-\($0.lastPathComponent)" }
+        let names = controller.tmuxSessionNamesToKill(
+            in: target,
+            ownedTmuxSessionNames: ["wm-alpha", "wm-beta"]
+        ) { "wm-\($0.lastPathComponent)" }.kill
 
         #expect(names == ["wm-beta"])
         #expect(!names.contains("wm-alpha"))
+    }
+
+    /// `-L workspaces` is a same-user shared socket and the candidate name is a directory
+    /// derivation, so the same name can belong to a session a person or another tool started.
+    /// This launch may only kill what it is holding (#1267).
+    @Test("A session this launch does not own survives the pre-restore kill pass")
+    func unownedSessionIsNotKilled() {
+        let target = plan([
+            surface(
+                action: .resumeClaude(agentSessionID: "a"),
+                directory: URL(fileURLWithPath: "/Users/dev/code/alpha"))
+        ])
+
+        let scope = controller.tmuxSessionNamesToKill(
+            in: target,
+            ownedTmuxSessionNames: []
+        ) { "wm-\($0.lastPathComponent)" }
+
+        #expect(scope.kill.isEmpty)
+        #expect(scope.skippedUnowned == ["wm-alpha"])
+    }
+
+    /// The other half of the acceptance: scoping to owned names must not stop the pass from
+    /// reclaiming this launch's own seed, which is the reason the kill exists at all.
+    @Test("This launch's own seed is still reclaimed alongside a foreign session")
+    func ownedSeedIsStillKilledWhileForeignSurvives() {
+        let target = plan([
+            surface(
+                action: .resumeClaude(agentSessionID: "a"),
+                directory: URL(fileURLWithPath: "/Users/dev/code/alpha")),
+            surface(
+                action: .resumeClaude(agentSessionID: "b"),
+                directory: URL(fileURLWithPath: "/Users/dev/code/beta")),
+        ])
+
+        let scope = controller.tmuxSessionNamesToKill(
+            in: target,
+            ownedTmuxSessionNames: ["wm-beta"]
+        ) { "wm-\($0.lastPathComponent)" }
+
+        #expect(scope.kill == ["wm-beta"])
+        #expect(scope.skippedUnowned == ["wm-alpha"])
     }
 
     /// Reattach surfaces launch on the name that was probed alive, so a directory fallback
