@@ -158,11 +158,12 @@ Developer ID, notarization, and Sparkle release secrets.
 
 The workflow is split into three jobs:
 
-- `build-sign-notarize-release` runs on `[self-hosted, signing-host]` with
-  read-only repository permissions. It imports the Developer ID certificate into
-  a temporary keychain, builds and signs the app, notarizes the DMG, generates
+- `build-sign-notarize-release` runs on GitHub-hosted `macos-15` with read-only
+  repository permissions. It imports the Developer ID certificate into a
+  temporary keychain, builds and signs the app, notarizes the DMG, generates
   the Sparkle appcast, uploads release assets as workflow artifacts, then
-  deletes the temporary keychain.
+  deletes the temporary keychain. Every credential comes from repository
+  secrets, so the job carries no dependency on a particular machine.
 - `publish-github-release` runs on `ubuntu-latest` with `contents: write`. It
   downloads the signed artifacts and creates or updates the GitHub Release.
 - `validate-published-release-assets` runs on GitHub-hosted macOS with
@@ -295,7 +296,7 @@ users.
 
    - Workflow: `.github/workflows/release.yml`
    - Trigger: `push` tag `v*`
-   - Runner lane: `[self-hosted, signing-host]`
+   - Runner: GitHub-hosted `macos-15`
    - Protected environment: `release`
 
    Guardrails:
@@ -304,8 +305,8 @@ users.
      requested release tag.
    - Release preflight waits for in-flight `build-and-test` checks on the exact
      source commit before signing starts.
-   - Temporary signing keychain is cleaned up and prior keychain defaults are
-     restored on the shared `signing-host` runner.
+   - Temporary signing keychain is created and destroyed within the job, so a
+     failed run leaves no signing material behind on the runner.
 
 4. **Final download and update check**
 

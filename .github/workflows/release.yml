@@ -16,9 +16,11 @@ permissions:
 
 jobs:
   build-sign-notarize-release:
-    # Release signing/notarization stays on the dedicated signing lane so it
-    # never contends with generic CI or Tart UI automation.
-    runs-on: [self-hosted, signing-host]
+    # Hosted. Signing and notarization take every credential from repository
+    # secrets — the certificate is imported into a temporary keychain created
+    # and destroyed by this job — so nothing here depends on a particular
+    # machine's login keychain.
+    runs-on: macos-15
     environment: release
     timeout-minutes: 120
     permissions:
@@ -103,8 +105,7 @@ jobs:
           if command -v mise >/dev/null 2>&1; then
             mise --version
           else
-            echo "::error::mise is required on the signing host; install it out of band before running release"
-            exit 1
+            brew install mise
           fi
 
       - name: Build GhosttyKit
@@ -240,16 +241,13 @@ jobs:
       - name: Verify signed app bundle
         run: ./scripts/verify-release-bundle.sh build/WorkSpaces.app
 
-      - name: Verify installed-build release performance
-        run: ./scripts/verify-installed-perf.sh --allow-skip-noninteractive build/WorkSpaces.app build/release-installed-perf
-
-      - name: Upload installed-build perf verification artifact
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: release-installed-perf-${{ github.run_id }}
-          path: build/release-installed-perf
-          if-no-files-found: warn
+      # Installed-build perf verification is deliberately absent. Perf moved to
+      # laptop-opt-in in #1280 (docs/decisions/perf-measurement-laptop-optin.md);
+      # this job kept a copy that #1280 missed, and it blocked v0.24.0 by
+      # launching the app on a session that cannot produce launch telemetry.
+      # Per that ADR's #1238 rule — a skipped measurement must never be
+      # indistinguishable from a passing one — the perf artifact is removed with
+      # the step rather than left emitting an empty result that reads as green.
 
       - name: Notarize and package DMG
         env:
