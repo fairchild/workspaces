@@ -99,14 +99,17 @@ jobs:
             exit 1
           fi
 
+      # Pinned by SHA like every other action here. mise resolves the toolchain
+      # that builds the signed binary, so it must not be bootstrapped from an
+      # unpinned source — the previous "fail closed, install it out of band"
+      # rule protected that on a host we controlled, and a SHA-pinned action is
+      # how the same guarantee is kept on an ephemeral hosted image.
       - name: Ensure mise
-        run: |
-          set -euo pipefail
-          if command -v mise >/dev/null 2>&1; then
-            mise --version
-          else
-            brew install mise
-          fi
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.1.10
+          install: true
+          cache: true
 
       - name: Build GhosttyKit
         run: ./scripts/build-ghosttykit.sh
@@ -241,13 +244,15 @@ jobs:
       - name: Verify signed app bundle
         run: ./scripts/verify-release-bundle.sh build/WorkSpaces.app
 
-      # Installed-build perf verification is deliberately absent. Perf moved to
-      # laptop-opt-in in #1280 (docs/decisions/perf-measurement-laptop-optin.md);
-      # this job kept a copy that #1280 missed, and it blocked v0.24.0 by
-      # launching the app on a session that cannot produce launch telemetry.
-      # Per that ADR's #1238 rule — a skipped measurement must never be
-      # indistinguishable from a passing one — the perf artifact is removed with
-      # the step rather than left emitting an empty result that reads as green.
+      # Reads committed evidence instead of measuring. This job runs on a hosted
+      # image with no display, where launching the app yields no launch telemetry
+      # — that is what blocked v0.24.0. Perf is measured on a laptop, opt-in, per
+      # docs/decisions/perf-measurement-laptop-optin.md, and recorded in
+      # docs/performance_benchmarks.csv. Pass at 0 releases stale, warn at 1,
+      # block at 2, and fail outright when the file is missing: #1238's rule is
+      # that a skipped measurement must never read as a passing one.
+      - name: Verify release performance benchmarks are current
+        run: ./scripts/check-perf-benchmarks.py --tag "${{ github.ref_type == 'tag' && github.ref_name || 'HEAD' }}" --format github
 
       - name: Notarize and package DMG
         env:
