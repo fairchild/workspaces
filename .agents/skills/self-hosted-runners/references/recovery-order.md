@@ -16,34 +16,40 @@ Questions to answer first:
 - Which labels does that job require?
 - Which runners advertise those labels right now?
 
-## 2. Prefer the native lane first
+## 2. Confirm the job targets a lane that still exists
 
-For `lume-macos`, try the Lume guest first:
+`signing-host` is the only self-hosted lane. `lume-macos` and `tart-ui` are both
+retired and `.github/actionlint.yaml` rejects them, so a job waiting on either is
+a workflow bug — fix the workflow rather than standing a VM back up.
+
+For a fuller local picture than `summarize_runner_state.py` gives:
 
 ```bash
-uv run --script .agents/skills/self-hosted-runners/scripts/probe_lume_runner_guest.py
+./scripts/runners.py
 ```
 
-If the guest is healthy, keep the lane on the VM.
+It reconciles local runner config, launchd, and GitHub registration, and reports
+`dead` when launchd has permanently given up on a runner.
 
 ## 3. Re-register stale runners instead of poking blindly
 
 If the logs say the registration was deleted, do not just restart the listener. Re-register it with a fresh token.
 
+GitHub deletes registrations for runners that have not connected recently, so an
+idle lane can die on its own and stay dead — launchd logs `no retry needed` and
+never restarts it.
+
 ## 4. Verify build readiness before rerunning CI
 
-For `lume-macos`, verify:
+For `signing-host`, verify:
 
-- SSH works
 - the runner service can start
 - `xcodebuild -version` works
 - `xcode-select -p` points at a real Xcode app
 
-If those fail, do not rerun the workflow on that guest.
+If those fail, do not rerun the workflow on that host.
 
-## 5. Use a host fallback only when the native lane is not viable
-
-If the Lume guest is not build-ready, register a fresh host fallback runner with a fresh name and the `lume-macos` label.
+## 5. Use a fresh host runner rather than salvaging a strange one
 
 Prefer a fresh directory and name over reusing a strange local runner state.
 

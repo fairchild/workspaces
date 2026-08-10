@@ -1,9 +1,10 @@
-# Only lanes that workflows may legitimately target. `tart-ui` is absent on
-# purpose: the lane is retired (docs/decisions/perf-measurement-laptop-optin.md),
-# so actionlint now flags any workflow that reaches for it again.
+# Only lanes that workflows may legitimately target. `tart-ui` and `lume-macos`
+# are absent on purpose: both lanes are retired (tart-ui per
+# docs/decisions/perf-measurement-laptop-optin.md, lume-macos per #1288
+# follow-up — agent evidence moved to hosted macos-15), so actionlint now flags
+# any workflow that reaches for either again.
 self-hosted-runner:
   labels:
-    - lume-macos
     - signing-host
 
 config-variables: null
