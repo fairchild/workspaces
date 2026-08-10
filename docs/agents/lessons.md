@@ -4,7 +4,7 @@ Master record of hard-won, repo-wide lessons: full statement, rationale, and his
 
 ## Unconditional — fire from root `AGENTS.md`
 
-- **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-15`) for generic build/test jobs and for the UI smoke lane (`ui-smoke-advisory.yml`), `[self-hosted, lume-macos]` for agent execution (preferred, with ubuntu-latest fallback), and `[self-hosted, signing-host]` for release/signing/notarization. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
+- **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-15`) for generic build/test jobs, for the UI smoke lane (`ui-smoke-advisory.yml`), and for agent evidence (`_evidence.yml`); use `[self-hosted, signing-host]` for release/signing/notarization. `signing-host` is the only self-hosted lane — `lume-macos` and `tart-ui` are retired and `.github/actionlint.yaml` rejects them. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
 - **Ship a diagnostic probe instead of your third guess.** Terminal arc #306→#309: two guess-fixes merged green and failed in production; one temporary probe (#308) revealed the root cause in a single ship cycle. When you're guessing, stop and instrument.
 - **The tracker lags the code — verify before planning from it.** Three grooming/planning passes in a row (2026-06-28 ×2, 2026-07-02) found open issues whose work had already shipped. Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
 

@@ -1,4 +1,4 @@
 interface:
   display_name: "Self-Hosted Runners"
-  short_description: "Inspect and recover this repo's signing-host and lume-macos lanes."
+  short_description: "Inspect and recover this repo's signing-host lane."
   default_prompt: "Use $self-hosted-runners to inspect the current GitHub runner inventory, classify which lane is blocked, recover the smallest viable runner path, and explain the next action."

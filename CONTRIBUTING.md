@@ -108,7 +108,7 @@ workspaces/
 
 ## CI Runner Lanes
 
-Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-15`) and is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. The behavioral UI smoke lane (`ui-smoke-advisory.yml`) runs on the same hosted `macos-15` image. Self-hosted jobs must use explicit lanes: `[self-hosted, lume-macos]` for agent execution and `[self-hosted, signing-host]` for release/signing/notarization.
+Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-15`) and is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. The behavioral UI smoke lane (`ui-smoke-advisory.yml`) and the agent evidence lane (`_evidence.yml`) run on the same hosted `macos-15` image. Self-hosted work uses one explicit lane: `[self-hosted, signing-host]` for release/signing/notarization.
 
 Performance benchmarks are not a CI lane. They run on the owner's laptop, opt-in per run, because the contract budgets are `Mac16,13`-derived and no cloud runner can carry them — see [docs/decisions/perf-measurement-laptop-optin.md](./docs/decisions/perf-measurement-laptop-optin.md) for the protocol and the measurement-hygiene preconditions.
 
