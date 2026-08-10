@@ -139,6 +139,14 @@ Review rules:
 - Only use `approve` or `approve_with_followups` when the evidence contract is fully accounted for and unblocked.
 - Separate code-quality feedback from evidence-gate feedback in your review body.
 
+**What this runner can verify.** Reviews run on `ubuntu-latest` — no Swift toolchain, no
+macOS, no app to launch. You can read Swift and reason about it; you cannot build it, run
+`swift test`, or run `mise run lint`. So "this does not compile" is not a claim reading alone
+supports. Check the PR's own check runs first: a green `build-and-test` on the head SHA
+settles it, and is more reliable than a language rule derived by hand. If your reading still
+disagrees with a green lane, report the discrepancy and ask rather than blocking on it — a
+false compile-error block costs the author a round trip and the owner a force-merge (#1286).
+
 ```
 ---
 action: review_pr
