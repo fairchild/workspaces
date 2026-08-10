@@ -72,11 +72,48 @@ a different window.
 
 The clue worth carrying forward is that **the step size differs by lane while the fast mode
 does not**. The fast mode sits at ~550 ms in both lanes; the slow mode is ~830 ms without
-activation and ~1030 ms with it. A fixed timer would add the same amount in both. A wait on
-an event — the window becoming key, first-responder assignment, surface realization landing
-in a later run-loop pass — would take longer exactly where activation puts more work in
-front of it. That is a hypothesis, not a finding; the next pass instruments the first-layout
-and surface-realization path rather than guessing a fourth time.
+activation and ~1030 ms with it. A fixed timer would add the same amount in both; a wait on
+an event would not.
+
+## Where the step actually is (2026-08-09)
+
+The first-layout hypothesis above is **falsified**, and it did not need new instrumentation
+to falsify — the captures already contained the answer. Every sample in both lanes ends on
+`trigger=terminal_set_title`, so the interval always closes the same way, and aligning a fast
+run's log timeline against a slow one shows them identical to within ~20 ms through
+`surface_create_succeeded`. The entire gap appears afterwards.
+
+Correlating per sample:
+
+| lane | pearson(`launch_to_first_prompt`, first shell's `terminal_first_output`) |
+|---|---|
+| `debug_no_activate` | r = 1.000 (n=10) |
+| `debug_activate` | r = 1.000 (n=10) |
+
+All of the launch variance is the first shell's time to first output. Surface creation itself
+is constant (~390 ms in both modes); the split lives entirely between
+`surface_create_succeeded` and the shell's first byte — ~103 ms in the fast mode against
+~416 ms in the slow one.
+
+Two things narrow it further:
+
+- **The second shell never pays it.** The repo-selection session created ~100 ms later in the
+  same process reaches first output in 89–120 ms (no-activate) and 137–174 ms (activate),
+  every sample, with no bimodality. Whatever this is, it is a first-surface cost.
+- **It is not the shell.** Clean profile mode spawns `/bin/zsh -f` — no rc files at all.
+  Spawning exactly that under a PTY outside the app, 20 samples, gives 7–69 ms with a median
+  of 22 ms and one mode. zsh is three orders away from explaining a 300 ms step.
+
+So the residual is inside the app's own surface-to-first-byte path: after libghostty reports
+the surface created, the first PTY's first byte arrives either ~100 ms or ~420 ms later, and
+only for the first surface of the process. Ruled out at this point: the continuity manifest,
+the bootstrap branch, which path seeded the session, SwiftUI's first layout pass, surface
+creation, machine load, and the shell.
+
+The next probe belongs inside that window — when libghostty actually forks the PTY relative
+to `surface_create_succeeded`, and when its read loop is first scheduled. Distinguishing "the
+child is forked late" from "the child is forked promptly and its output is delivered late"
+is the fork in the road, and neither is observable from the logs the app emits today.
 
 ## Reference consequences
 
