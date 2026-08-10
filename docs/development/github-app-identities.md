@@ -65,6 +65,8 @@ When seeding contributor status through a PR, merge with a merge commit. Squash 
 
 Do not repeat this process for `workspaces-claude-pr-reviewer`. That app is intentionally review-only.
 
+Do not grant any contributor app the `workflows` permission. `workspaces-factory` lacks it permanently: workflow-file changes must be pushed under owner credentials so a human authorizes every harness change (`docs/decisions/factory-harness-human-gate.md`).
+
 ## Verification Checklist
 
 Before relying on the approval policy:
