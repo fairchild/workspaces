@@ -16,9 +16,11 @@ permissions:
 
 jobs:
   build-sign-notarize-release:
-    # Release signing/notarization stays on the dedicated signing lane so it
-    # never contends with generic CI or Tart UI automation.
-    runs-on: [self-hosted, signing-host]
+    # Hosted. Signing and notarization take every credential from repository
+    # secrets — the certificate is imported into a temporary keychain created
+    # and destroyed by this job — so nothing here depends on a particular
+    # machine's login keychain.
+    runs-on: macos-15
     environment: release
     timeout-minutes: 120
     permissions:
@@ -97,15 +99,17 @@ jobs:
             exit 1
           fi
 
+      # Pinned by SHA like every other action here. mise resolves the toolchain
+      # that builds the signed binary, so it must not be bootstrapped from an
+      # unpinned source — the previous "fail closed, install it out of band"
+      # rule protected that on a host we controlled, and a SHA-pinned action is
+      # how the same guarantee is kept on an ephemeral hosted image.
       - name: Ensure mise
-        run: |
-          set -euo pipefail
-          if command -v mise >/dev/null 2>&1; then
-            mise --version
-          else
-            echo "::error::mise is required on the signing host; install it out of band before running release"
-            exit 1
-          fi
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.1.10
+          install: true
+          cache: true
 
       - name: Build GhosttyKit
         run: ./scripts/build-ghosttykit.sh
@@ -240,16 +244,15 @@ jobs:
       - name: Verify signed app bundle
         run: ./scripts/verify-release-bundle.sh build/WorkSpaces.app
 
-      - name: Verify installed-build release performance
-        run: ./scripts/verify-installed-perf.sh --allow-skip-noninteractive build/WorkSpaces.app build/release-installed-perf
-
-      - name: Upload installed-build perf verification artifact
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: release-installed-perf-${{ github.run_id }}
-          path: build/release-installed-perf
-          if-no-files-found: warn
+      # Reads committed evidence instead of measuring. This job runs on a hosted
+      # image with no display, where launching the app yields no launch telemetry
+      # — that is what blocked v0.24.0. Perf is measured on a laptop, opt-in, per
+      # docs/decisions/perf-measurement-laptop-optin.md, and recorded in
+      # docs/performance_benchmarks.csv. Pass at 0 releases stale, warn at 1,
+      # block at 2, and fail outright when the file is missing: #1238's rule is
+      # that a skipped measurement must never read as a passing one.
+      - name: Verify release performance benchmarks are current
+        run: ./scripts/check-perf-benchmarks.py --tag "${{ github.ref_type == 'tag' && github.ref_name || 'HEAD' }}" --format github
 
       - name: Notarize and package DMG
         env:

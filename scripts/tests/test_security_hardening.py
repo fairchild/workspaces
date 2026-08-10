@@ -223,11 +223,29 @@ class SecurityHardeningTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, workflow)
 
-    def test_release_workflow_fails_closed_when_mise_is_missing(self) -> None:
+    def test_release_workflow_never_bootstraps_mise_from_an_unpinned_source(self) -> None:
+        """mise resolves the toolchain that builds the signed binary.
+
+        The original rule was "fail closed, install it out of band", which held
+        while release ran on a host we provisioned by hand. On an ephemeral
+        hosted image nothing is installed out of band, so the invariant is
+        restated rather than dropped: mise may be provisioned, but only from a
+        SHA-pinned action, never from a package manager resolving whatever is
+        current at release time.
+        """
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
-        self.assertIn("mise is required on the signing host", workflow)
-        self.assertIn("exit 1", workflow)
-        self.assertNotIn("brew install mise", workflow)
+
+        for unpinned in ("brew install mise", "curl", "| sh", "| bash"):
+            self.assertNotIn(unpinned, workflow, f"unpinned mise bootstrap: {unpinned}")
+
+        self.assertRegex(
+            workflow,
+            r"uses: jdx/mise-action@[0-9a-f]{40}",
+            "mise must come from a SHA-pinned action",
+        )
+        self.assertRegex(
+            workflow, r"version: \d{4}\.\d+\.\d+", "the mise version itself must be pinned"
+        )
 
     def test_mise_configs_keep_trust_surface_small(self) -> None:
         allowed = {

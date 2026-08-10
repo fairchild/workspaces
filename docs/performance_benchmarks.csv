@@ -1,0 +1,2 @@
+release_tag,commit,timestamp,scenario,build_kind,protocol_epoch,launch_to_first_prompt_median_ms,repo_hydration_median_ms,repo_click_to_focus_median_ms,workspace_click_to_focus_median_ms,os_version,arch,model,notes
+v0.23.0,4dfb83f2,2026-07-11T04:15:00Z,installed_clean_shell,installed,isolated-preferences,,,,,,,,seed row — metrics intentionally blank; see docs/performance_benchmarks.md
