@@ -35,7 +35,7 @@ Proven live 2026-08-08/09 on [#1280](https://github.com/fairchild/workspaces/pul
 
 3. **The PR carries `needs-human` and merges only on the owner's explicit approval, recorded as a PR comment before the merge.** #1280's record names the approval and where it was given ("Merging on Michael's explicit approval, given in chat 2026-08-08"), so the trail survives the chat it came from.
 
-4. **A ruleset bypass granted to expedite is temporary and revoked immediately after use.** #1244 merged under a bypass Michael granted the App on 2026-08-08, recorded in a PR comment at merge time. While such a bypass stands the control is suspended, and a report covering that window should say so rather than describe the steady state. Re-verified 2026-08-10: `main-merge`'s only bypass actor is the admin repository role — no App-integration bypass remains.
+4. **A ruleset bypass granted to expedite is temporary and revoked immediately after use.** #1244 merged under a bypass Michael granted on 2026-08-08, recorded in a PR comment at merge time. While such a bypass stands the control is suspended, and a report covering that window should say so rather than describe the steady state. Re-verified 2026-08-10: that grant is **still present** — `main-merge` carries an admin-repository-role bypass with mode `always` (the panel grant landed on the role, not the App; before the grant, an admin-privileged merge failed the review rule, so this entry is the grant). Because the owner account is agent-operated, a role bypass suspends the control for agents too. Removing it is the open action item; this sentence should be updated when it is.
 
 ## What the boundary does not cover
 
