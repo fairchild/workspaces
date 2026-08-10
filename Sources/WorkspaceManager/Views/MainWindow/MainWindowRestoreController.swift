@@ -87,27 +87,49 @@ struct MainWindowRestoreController {
         Set(plan.surfaces.map(\.key))
     }
 
-    /// Tmux session names to kill before restore. The planner only chose resume because the
-    /// prior tmux session is gone, so a live session on the resume surface's directory-derived
-    /// name can only be this launch's seed artifact — killing it stops the resume surface
-    /// `-A`-attaching to a leftover shell instead of starting fresh. A name another surface is
-    /// reattaching to is never killed: a resume and a reattach surface can share a directory,
-    /// and the derived name would then be the reattach target (#1233).
+    /// How the pre-restore tmux pass is split: what may die, and what was left alone because
+    /// this launch cannot claim it.
+    struct TmuxTeardownScope: Equatable {
+        let kill: [String]
+        let skippedUnowned: [String]
+    }
+
+    /// Tmux session names to kill before restore, scoped to sessions this launch owns.
+    ///
+    /// Killing exists so a resume surface starts fresh instead of `-A`-attaching to the shell
+    /// its pre-restore seed left behind. The candidate name is the resume surface's directory
+    /// derivation, and that derivation is the whole problem: `-L workspaces` is a same-user
+    /// shared socket, so the same name can equally belong to a session a person or another
+    /// tool started. The planner concluded "the prior tmux session is gone" at plan time from
+    /// recorded continuity rows, which says nothing about who holds that name now (#1267).
+    ///
+    /// So a candidate only dies when it matches a session this launch is holding —
+    /// `ownedTmuxSessionNames`, the effective names of the sessions about to be retired.
+    /// Everything else is reported in `skippedUnowned` for the caller to log and left running.
+    ///
+    /// A name another surface is reattaching to is never a candidate at all: a resume and a
+    /// reattach surface can share a directory, and the derived name would then be the reattach
+    /// target (#1233).
     func tmuxSessionNamesToKill(
         in plan: RestorePlan,
+        ownedTmuxSessionNames: Set<String>,
         sessionName: (URL) -> String = { GhosttyTerminalConfig.tmuxSessionName(for: $0) }
-    ) -> [String] {
+    ) -> TmuxTeardownScope {
         let reattachTargets = Set(
             plan.surfaces.compactMap { surface -> String? in
                 guard case .reattachTmux(let name) = surface.action else { return nil }
                 return name
             }
         )
-        return plan.surfaces.compactMap { surface in
+        let candidates = plan.surfaces.compactMap { surface -> String? in
             guard case .resumeClaude = surface.action else { return nil }
             let name = sessionName(surface.directory)
             return reattachTargets.contains(name) ? nil : name
         }
+        return TmuxTeardownScope(
+            kill: candidates.filter { ownedTmuxSessionNames.contains($0) },
+            skippedUnowned: candidates.filter { !ownedTmuxSessionNames.contains($0) }
+        )
     }
 
     /// The directory-derived tmux names resume surfaces will `new-session -A`-launch on.

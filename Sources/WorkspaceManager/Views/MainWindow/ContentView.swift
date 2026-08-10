@@ -2491,6 +2491,12 @@ struct ContentView: View {
         // pre-restore seed (the default-home fallback) left on those keys, so a
         // resume/reattach surface is created fresh and the coordinator's key-reuse
         // path can't drop its initial command.
+        // Read before retiring: these are the tmux names this launch is holding, and they are
+        // what makes a kill below attributable. After the retire loop the sessions are gone and
+        // the app can no longer tell its own seed from a stranger's session on the shared
+        // socket (#1267).
+        let ownedTmuxSessionNames = Set(tileTreeStore.sessions.map(\.effectiveTmuxSessionName))
+
         for key in restoreController.ownedSessionKeys(in: plan) {
             _ = tileTreeStore.retireSessions(inScope: key)
         }
@@ -2502,7 +2508,16 @@ struct ContentView: View {
         // the retired seed's leftover shell. Names another surface reattaches to
         // are excluded by the controller (#1233).
         let tmuxProbe = TmuxSessionProbe()
-        for sessionName in restoreController.tmuxSessionNamesToKill(in: plan) {
+        let teardownScope = restoreController.tmuxSessionNamesToKill(
+            in: plan,
+            ownedTmuxSessionNames: ownedTmuxSessionNames
+        )
+        for sessionName in teardownScope.skippedUnowned {
+            restoreLog.info(
+                "[Restore] leaving tmux session \(sessionName, privacy: .public) alone: this launch did not create it"
+            )
+        }
+        for sessionName in teardownScope.kill {
             await tmuxProbe.killSession(sessionName)
         }
 
