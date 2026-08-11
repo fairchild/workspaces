@@ -127,6 +127,21 @@ echo "  app_args:"
 for entry in "${APP_ARGS[@]}"; do
     echo "    $entry"
 done
+# App logging is os.Logger, which writes to the unified log rather than
+# stdout/stderr — including the `[Perf]` metric lines summarize_perf_log.py
+# reads. Appending the subsystem's entries keeps the captured log complete for
+# consumers that only see this file.
+append_unified_log() {
+    local since="$1"
+    log show \
+        --info \
+        --start "$since" \
+        --predicate 'subsystem == "com.cloudcompute.workspaces"' \
+        --style compact >>"$LOG_FILE" 2>/dev/null || true
+}
+
+CAPTURE_START="$(date '+%Y-%m-%d %H:%M:%S')"
+
 if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
     echo "  capture_seconds: $CAPTURE_SECONDS"
     env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" > >(tee "$LOG_FILE") 2>&1 &
@@ -134,6 +149,8 @@ if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
     sleep "$CAPTURE_SECONDS"
     kill "$APP_PID" 2>/dev/null || true
     wait "$APP_PID" 2>/dev/null || true
+    append_unified_log "$CAPTURE_START"
 else
     env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" 2>&1 | tee "$LOG_FILE"
+    append_unified_log "$CAPTURE_START"
 fi
