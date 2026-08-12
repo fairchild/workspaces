@@ -79,6 +79,12 @@ fi
 [[ -x "$APP_BINARY" ]] || fail "App binary not found: $APP_BINARY"
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle not found: $APP_BUNDLE"
 
+# The packaging checks below run rg inside `if` conditions, where a missing
+# binary is indistinguishable from "no matches" — set -e does not fire there.
+# Absent this guard, a host without rg reports a clean bundle without ever
+# looking at the log.
+command -v rg >/dev/null 2>&1 || fail "rg (ripgrep) is required but not on PATH"
+
 mkdir -p "$OUTPUT_DIR"
 mkdir -p "$OUTPUT_DIR/app-data"
 
