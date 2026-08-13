@@ -59,6 +59,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Net-new: nothing checked Actions schema before. The nearest thing,
+  # scripts/validate-release-changes.py, runs `YAML.load_file` on release.yml —
+  # that proves the file is YAML, not that it is a workflow GitHub will accept,
+  # so the check the PR readiness gate takes as evidence for workflow changes
+  # cannot see a misspelled key, a bad `needs:`, an undefined matrix reference,
+  # or an unknown runner label. This job can. It reads .github/actionlint.yaml,
+  # so a workflow reaching for a decommissioned self-hosted lane fails here.
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # Pinned binary verified by checksum rather than a third-party action,
+      # matching how mise-security.yml provisions its pinned tool.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint
+          sudo install -m 755 /tmp/actionlint /usr/local/bin/actionlint
+          actionlint --version
+
+      # shellcheck at --severity=warning: actionlint shells out to it for every
+      # `run:` block, and real shell bugs should fail. Style opinions should not
+      # — plain actionlint is red on main today over two SC2129 "consider using
+      # { cmd; } >> file" notes in release.yml, and a gate that starts red
+      # teaches people to ignore it. `shellcheck --version` runs first so the
+      # job fails loudly if the image ever stops shipping it, rather than
+      # quietly linting less than it claims to.
+      - name: Lint workflows
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          actionlint -shellcheck "shellcheck --severity=warning"
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
