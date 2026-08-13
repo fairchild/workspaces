@@ -64,8 +64,8 @@ class StalenessTests(unittest.TestCase):
         self.assertGreaterEqual(gate.releases_since([], {"v0.23.0"}, "v0.25.0"), gate.BLOCK_AFTER)
 
 
-class ExitCodeTests(unittest.TestCase):
-    """The gate's contract with the release workflow is its exit code."""
+class GateFixture:
+    """A throwaway git repo with real release tags, plus a CSV to point at."""
 
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -86,13 +86,30 @@ class ExitCodeTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def run_gate(self, tag: str) -> int:
+    def gate_result(self, tag: str, *extra: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [sys.executable, str(SCRIPT_PATH), "--tag", tag, "--csv", str(self.csv), "--repo-root", str(self.root)],
+            [
+                sys.executable,
+                str(SCRIPT_PATH),
+                "--tag",
+                tag,
+                "--csv",
+                str(self.csv),
+                "--repo-root",
+                str(self.root),
+                *extra,
+            ],
             capture_output=True,
             text=True,
             timeout=60,
-        ).returncode
+        )
+
+    def run_gate(self, tag: str) -> int:
+        return self.gate_result(tag).returncode
+
+
+class ExitCodeTests(GateFixture, unittest.TestCase):
+    """The gate's contract with the release workflow is its exit code."""
 
     def test_missing_file_blocks_rather_than_passes(self) -> None:
         # The whole point: no evidence must not read as good evidence.
@@ -118,6 +135,33 @@ class ExitCodeTests(unittest.TestCase):
         # No tags exist in this fresh repo, so v0.23.0 sits 2 behind v0.25.0.
         write_csv(self.csv, ["v0.23.0"])
         self.assertEqual(self.run_gate("v0.25.0"), 1)
+
+
+class GithubAnnotationTests(GateFixture, unittest.TestCase):
+    """`--format github` is reachable only from release.yml.
+
+    CI runs the gate in plain format, so without these the annotation branch in
+    emit() executes for the first time during a release — and a typo confined to
+    that branch fails the release rather than the PR that wrote it.
+    """
+
+    def test_blocking_gate_annotates_as_an_error(self) -> None:
+        result = self.gate_result("v0.25.0", "--format", "github")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("::error::", result.stdout)
+
+    def test_one_release_stale_annotates_as_a_warning_without_blocking(self) -> None:
+        write_csv(self.csv, ["v0.24.0"])
+        result = self.gate_result("v0.25.0", "--format", "github")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("::warning::", result.stdout)
+
+    def test_plain_format_stays_free_of_annotations(self) -> None:
+        write_csv(self.csv, ["v0.24.0"])
+        result = self.gate_result("v0.25.0")
+        self.assertEqual(result.returncode, 0)
+        self.assertNotIn("::warning::", result.stdout)
+        self.assertNotIn("::error::", result.stdout)
 
 
 class CommittedDataTests(unittest.TestCase):

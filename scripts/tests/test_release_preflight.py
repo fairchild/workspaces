@@ -13,6 +13,7 @@ published, especially when GitHub check-runs spill past the first API page.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -23,6 +24,52 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "release-preflight.sh"
+CI_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ci.yml"
+
+
+def ci_workflow_script_paths() -> set[str]:
+    """The scripts/ entries in ci.yml's push path filter."""
+    return set(re.findall(r'^\s+- "(scripts/[^"*]+)"$', CI_WORKFLOW_PATH.read_text(), re.M))
+
+
+def preflight_relevant_script_paths() -> set[str]:
+    """The scripts/ entries in release-preflight.sh's is_ci_relevant_path case."""
+    body = SCRIPT_PATH.read_text()
+    block = body[body.index("is_ci_relevant_path()") :]
+    block = block[: block.index("return 1")]
+    return set(re.findall(r"(scripts/[A-Za-z0-9_.-]+)", block))
+
+
+class CiRelevantPathParityTests(unittest.TestCase):
+    """release-preflight.sh hand-duplicates ci.yml's path filter.
+
+    The two lists decide the same thing from opposite ends: which changes oblige
+    a build-and-test run. When they disagree, preflight can read a commit as
+    having no CI-relevant changes and wave a release through on a file CI was
+    watching. Nothing coupled them, so this does.
+    """
+
+    def test_every_ci_watched_script_is_release_relevant(self) -> None:
+        missing = ci_workflow_script_paths() - preflight_relevant_script_paths()
+        self.assertEqual(
+            missing,
+            set(),
+            "ci.yml triggers build-and-test for these scripts but "
+            "release-preflight.sh's is_ci_relevant_path does not list them, so a "
+            "release can skip waiting for the CI they gate: "
+            f"{sorted(missing)}",
+        )
+
+    def test_every_release_relevant_script_is_ci_watched(self) -> None:
+        missing = preflight_relevant_script_paths() - ci_workflow_script_paths()
+        self.assertEqual(
+            missing,
+            set(),
+            "release-preflight.sh waits for build-and-test on these scripts but "
+            "ci.yml never runs it for them, so preflight waits for a check that "
+            "will not arrive: "
+            f"{sorted(missing)}",
+        )
 
 
 class ReleasePreflightTests(unittest.TestCase):

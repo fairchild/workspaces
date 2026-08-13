@@ -9,6 +9,10 @@ on:
       - ".github/workflows/ci-fallback.yml"
       - ".github/workflows/release.yml"
       - ".swift-format"
+      # Direct inputs to this job's provisioning: mise-action reads both to
+      # resolve and lock the Zig that builds GhosttyKit.
+      - ".mise.toml"
+      - "mise.lock"
       - "WorkSpacesCloudCI.xcodeproj/**"
       - "Package.swift"
       - "Package.resolved"
@@ -19,6 +23,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-perf-benchmarks.py"
       - "scripts/check-release-harness-absence.sh"
       - "scripts/check-subprocess-timeouts.py"
       - "scripts/generate-sparkle-appcast.sh"
@@ -40,6 +45,10 @@ on:
       - ".github/workflows/ci-fallback.yml"
       - ".github/workflows/release.yml"
       - ".swift-format"
+      # Direct inputs to this job's provisioning: mise-action reads both to
+      # resolve and lock the Zig that builds GhosttyKit.
+      - ".mise.toml"
+      - "mise.lock"
       - "WorkSpacesCloudCI.xcodeproj/**"
       - "Package.swift"
       - "Package.resolved"
@@ -50,6 +59,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-perf-benchmarks.py"
       - "scripts/check-release-harness-absence.sh"
       - "scripts/check-subprocess-timeouts.py"
       - "scripts/generate-sparkle-appcast.sh"
@@ -78,15 +88,31 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 90
     steps:
+      # Same checkout shape as release.yml. fetch-depth: 0 is not incidental —
+      # check-perf-benchmarks.py orders releases with `git tag --list`, and the
+      # default single-commit checkout carries no tags at all, so the gate would
+      # take a degenerate path here and the real one during a release.
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
+      # Provisioning below mirrors release.yml step for step, and must keep
+      # doing so. release.yml only ever executes on a tag push, so an
+      # environmental assumption that holds nowhere else is discovered by a
+      # failed release — v0.24.0 burned four of them that way. This job runs on
+      # the same macos-15 image, so matching the provisioning here is what makes
+      # a PR able to fail instead.
       - name: Ensure mise
-        run: |
-          if command -v mise >/dev/null 2>&1; then
-            mise --version
-          else
-            brew install mise
-          fi
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.4
+          install: true
+          cache: true
+
+      # check-perf-benchmarks.py is a UV script and .mise.toml does not provide
+      # uv. release.yml learned this the hard way (#1298).
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Build GhosttyKit
         run: ./scripts/build-ghosttykit.sh
@@ -108,8 +134,36 @@ jobs:
       - name: Build (debug)
         run: swift build
 
-      - name: Build (release)
-        run: swift build -c release
+      # The release lane's own build path, minus signing. It runs
+      # `swift build -c release` itself and reuses .build, so the marginal cost
+      # over the bare release build this replaces is roughly bundling time —
+      # and in exchange the bundling, Sparkle linkage, and resource-copy steps
+      # that only ever ran during a release now run on every PR.
+      - name: Build (release, unsigned bundle)
+        run: ./scripts/build-release.sh --no-sign
+
+      # Proves the release perf gate can execute on this runner. Absent uv made
+      # it exit 127 during v0.24.0, and a release rather than a PR is where that
+      # surfaced.
+      #
+      # Positive proof, not tolerance: the probe runs against a fixture whose
+      # only row matches the tag being asked about, so a working script has
+      # exactly one answer — gap 0, "ok", exit 0. Inferring health from "exited
+      # 0 or 1" instead would pass a script that is merely broken in a way that
+      # exits 1, which a SyntaxError, a failed uv bootstrap, and a stray
+      # sys.exit(1) all are.
+      #
+      # Freshness of the real benchmarks stays release policy and is not
+      # asserted here. --format github coverage lives in
+      # scripts/tests/test_check_perf_benchmarks.py, which runs on the cheap
+      # Ubuntu lane rather than costing macOS minutes.
+      - name: Release perf gate is runnable
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/perf-benchmarks-probe.csv"
+          head -1 docs/performance_benchmarks.csv > "$fixture"
+          echo "v0.0.0-probe,0000000,2026-01-01T00:00:00Z,probe,installed,probe,,,,,,,,runnability probe" >> "$fixture"
+          ./scripts/check-perf-benchmarks.py --tag v0.0.0-probe --csv "$fixture"
 
       - name: Check release harness absence
         run: ./scripts/check-release-harness-absence.sh
