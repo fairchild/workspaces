@@ -107,11 +107,12 @@ jobs:
       - name: Ensure mise
         uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
         with:
-          # Not covered by scripts/mise-pin-refresh.py (see its PIN_SITES), so
-          # this one is bumped by hand. Upstream prunes release assets from old
-          # versions, which fails this step on a cache miss rather than at pin
-          # time — keep it recent.
-          version: 2026.8.4
+          # Refreshed by scripts/mise-pin-refresh.py, which finds this step by
+          # scanning for jdx/mise-action rather than by carrying a roster.
+          # Upstream prunes release assets from old versions, and this step
+          # fails on a cache miss rather than at pin time, so an unrefreshed pin
+          # here surfaces as a 404 mid-release (#1297).
+          version: 2026.8.5
           install: true
           cache: true
 
