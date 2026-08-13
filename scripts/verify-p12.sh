@@ -9,7 +9,7 @@
 #   P12=/absolute/path/to/cert.p12 P12_PASSWORD='...' ./scripts/verify-p12.sh --non-interactive
 #
 # Optional:
-#   --team-id NVSFDGS2TD     Expected Apple Team ID (default: NVSFDGS2TD)
+#   --team-id LKVN4J3C6C     Expected Apple Team ID (default: LKVN4J3C6C)
 #   --password-env NAME      Env var name for password (default: P12_PASSWORD)
 #   --non-interactive        Fail instead of prompting for password
 #   --help                   Show this help
