@@ -3,6 +3,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/lib/perf-process.sh"
+
 usage() {
     cat <<'EOF'
 Usage:
@@ -144,11 +147,19 @@ CAPTURE_START="$(date '+%Y-%m-%d %H:%M:%S')"
 
 if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
     echo "  capture_seconds: $CAPTURE_SECONDS"
+    perf_assert_no_instance "$APP_PATH" "$(basename "$0")"
     env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" > >(tee "$LOG_FILE") 2>&1 &
     APP_PID=$!
     sleep "$CAPTURE_SECONDS"
-    kill "$APP_PID" 2>/dev/null || true
+    perf_stop_launched_app "$APP_PID" || {
+        echo "the launched app survived SIGKILL (pid $APP_PID)" >&2
+        exit 1
+    }
+    # `wait` only after the pid is confirmed gone: against an app that ignores
+    # SIGTERM it blocks forever, and the interrupt that ends that wait is what
+    # leaves the instance behind.
     wait "$APP_PID" 2>/dev/null || true
+    perf_assert_clean_exit "$APP_PATH" "$(basename "$0")"
     append_unified_log "$CAPTURE_START"
 else
     env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" 2>&1 | tee "$LOG_FILE"
