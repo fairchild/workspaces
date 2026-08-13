@@ -2454,7 +2454,9 @@ struct AutomationAPITests {
         let (match, released) = await MainActor.run { () -> (Task<Bool?, Never>, DispatchTimeoutResult) in
             // Started with this actor already held, so the match cannot have run before the block:
             // starting it outside would let a contended runner finish it first and pass vacuously.
-            let match = Task.detached { () -> Bool? in
+            // `.userInitiated` because the pool has to schedule it while the main thread is held —
+            // the one way this test can fail spuriously is a pool with no worker free to start it.
+            let match = Task.detached(priority: .userInitiated) { () -> Bool? in
                 defer { matchFinished.signal() }
                 // Small budget: this burns a core, and it burns it while the MainActor is held.
                 return await pattern.firstMatchExists(in: text, budgetMS: 120)
