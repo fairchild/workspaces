@@ -251,10 +251,53 @@ There are two normal lanes:
 Both lanes use the same protected signing, notarization, appcast, manifest,
 artifact upload, and published-asset validation workflow.
 
+### Rehearse from `main` before tagging
+
+A manual `Release` dispatch from `main` runs the whole signing, notarization,
+appcast, manifest, and published-asset path and publishes the result as
+`workspaces-v<version>-main.<run_number>`, a prerelease that leaves the stable
+channel and the Sparkle feed untouched. It is the only way to exercise the
+release environment without spending a version number to find out whether it
+works.
+
+That environment is worth exercising deliberately because `release.yml` is its
+only consumer and only runs on a tag push, so an assumption that holds nowhere
+else in CI is discovered when a release breaks. v0.24.0 found four in a row that
+way: a perf gate reading a log stream that no longer carried the metrics
+(#1296), a mise pin whose upstream release assets had been pruned (#1297), a uv
+the workflow never installed (#1298), and a red `main`.
+
+The rehearsal was routine through v0.23.0 — dispatched 2026-06-26, 06-28, 06-30,
+and 07-07, green every time — and was skipped ahead of v0.24.0. It also covers
+more ground now than it did then: #1293 moved signing and notarization from the
+self-hosted `signing-host` runner to a hosted `macos-15` image, and as of
+2026-08-13 every hosted attempt has failed before reaching the notarization
+step, so notarization has not yet run green on the current runner.
+
+So, before Method 1:
+
+1. Dispatch `Release` from `main` (Actions > `Release` > `Run workflow` >
+   Ref: `main`) and let it finish. Mechanics and tester handoff: Method 1A.
+2. Confirm the published prerelease is real, not just listed:
+
+   ```bash
+   gh release download workspaces-v0.21.0-main.42 \
+       --repo fairchild/workspaces \
+       --pattern "WorkSpaces-0.21.0.dmg" \
+       --dir /tmp/workspaces-rehearsal \
+       --clobber
+   xcrun stapler validate /tmp/workspaces-rehearsal/WorkSpaces-0.21.0.dmg
+   ```
+
+3. Only then tag.
+
+A rehearsal that fails costs a run number. A tag that fails costs a tag, a
+changelog entry, and a version.
+
 ### Method 1: Stable Release
 
 Use this after tester signoff or when you are ready to publish directly to all
-users.
+users, and after a green rehearsal from `main` (above).
 
 1. **Open a stable release metadata PR**
 
@@ -330,7 +373,10 @@ users.
 ### Method 1A: Optional Tester Prerelease
 
 Use this when several changes have landed on `main` and you want testers to
-exercise the signed, notarized app before publishing a new stable release.
+exercise the signed, notarized app before publishing a new stable release. It is
+also the mechanism behind the pre-tag rehearsal above — the same dispatch serves
+both, so a rehearsal costs nothing extra when you were going to hand testers a
+build anyway.
 
 1. **Open a prerelease metadata PR**
 
