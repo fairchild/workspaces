@@ -328,9 +328,11 @@ struct DesktopUISmokeAutomationTests {
             .appendingPathComponent("desktop-ui-smoke-\(UUID().uuidString).jsonl")
     }
 
-    /// Reads what is already on disk. Every milestone these tests assert on is emitted inside an
-    /// awaited `note…` call, and the writer actor finishes the write before that call returns, so
-    /// there is nothing to settle for: the events are there or the code is wrong.
+    /// Reads what is already on disk. Every milestone read this way is emitted inside an awaited
+    /// controller call — a `note…`, or `waitForSurfaceFocus`'s own timeout and not-applicable
+    /// paths — and the writer actor finishes the write before that call returns, so there is
+    /// nothing to settle for: the events are there or the code is wrong. The one milestone with an
+    /// unawaited producer, `scenario_complete`, is waited for through `awaitEvents` instead.
     private static func readEvents(at url: URL) throws -> [[String: Any]] {
         try parseEvents(at: url)
     }
