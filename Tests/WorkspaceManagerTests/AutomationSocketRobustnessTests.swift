@@ -130,6 +130,42 @@ private func uniqueSocketPath(_ prefix: String) -> String {
 
 @Suite("AutomationSocketRobustness", .serialized)
 struct AutomationSocketRobustnessTests {
+    /// Failure-only ceiling for everything this suite waits on. Each wait ends on the state it is
+    /// waiting for, so a healthy run never spends this and a starved one pays latency instead of a
+    /// verdict. Sized past the worst starvation measured in a full parallel run, where tests whose
+    /// own work is sub-second took ~50s of wall clock.
+    private static let observationCeiling: TimeInterval = 60
+
+    /// Polls `condition` until it holds, suspending between attempts. Returns the moment it does,
+    /// so `ceiling` is only ever spent by a run that was going to fail.
+    private static func waitUntil(
+        ceiling: TimeInterval = observationCeiling,
+        _ condition: @Sendable () async -> Bool
+    ) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(ceiling))
+        while ContinuousClock.now < deadline {
+            if await condition() { return true }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return await condition()
+    }
+
+    /// Connects once the listener is accepting. `start()` returning does not mean the socket
+    /// accepts yet, and how long that takes is scheduling rather than a property under test.
+    private static func connectWhenAccepting(
+        to path: String,
+        receiveTimeout: TimeInterval,
+        ceiling: TimeInterval = observationCeiling
+    ) async -> Int32 {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(ceiling))
+        while ContinuousClock.now < deadline {
+            let fd = RawUnixSocket.connect(to: path, receiveTimeout: receiveTimeout)
+            if fd >= 0 { return fd }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return RawUnixSocket.connect(to: path, receiveTimeout: receiveTimeout)
+    }
+
     @Test("Listener read deadline closes a hung client connection")
     @MainActor
     func readDeadlineClosesHungClient() async throws {
@@ -142,17 +178,21 @@ struct AutomationSocketRobustnessTests {
             readDeadline: .milliseconds(200)
         )
         try await listener.start()
-        try await Task.sleep(for: .milliseconds(250))
 
-        // Connect and send nothing; the server must hang up on its own within the deadline.
-        let fd = RawUnixSocket.connect(to: socket.path, receiveTimeout: 10)
+        // Connect and send nothing; the server must hang up on its own.
+        let fd = await Self.connectWhenAccepting(
+            to: socket.path,
+            receiveTimeout: Self.observationCeiling
+        )
         defer { if fd >= 0 { close(fd) } }
         #expect(fd >= 0)
 
         var buffer = [UInt8](repeating: 0, count: 64)
         let count = Darwin.read(fd, &buffer, buffer.count)
-        // EOF (0) proves the listener cancelled the hung connection; a negative return here
-        // means the generous client-side timeout fired first, i.e. no server deadline.
+        // EOF (0) proves the listener cancelled the hung connection. The client-side timeout is
+        // sized to be unreachable rather than merely generous, so a negative return means no
+        // server deadline fired at all — where a 10s client timeout was racing the 200ms server
+        // deadline, and lost whenever the watchdog's own resumption was delayed past it.
         #expect(count == 0)
         await listener.stop()
     }
@@ -167,18 +207,30 @@ struct AutomationSocketRobustnessTests {
             socketURLOverride: socket,
             auditLogger: nil,
             maxConcurrentConnections: 1,
-            readDeadline: .seconds(30)
+            // Has to outlive the whole test: this connection's job is to hold the only slot, so a
+            // deadline the test can reach would hang it up and dissolve the precondition — which
+            // is what a 30s deadline did on a runner where this suite takes ~50s to get its turns.
+            readDeadline: .seconds(600)
         )
         try await listener.start()
-        try await Task.sleep(for: .milliseconds(250))
 
         // Occupy the single slot with a connection that never sends a request.
-        let heldFD = RawUnixSocket.connect(to: socket.path, receiveTimeout: 30)
+        let heldFD = await Self.connectWhenAccepting(
+            to: socket.path,
+            receiveTimeout: Self.observationCeiling
+        )
         defer { if heldFD >= 0 { close(heldFD) } }
         #expect(heldFD >= 0)
-        try await Task.sleep(for: .milliseconds(300))
 
-        let client = AutomationSocketClient(socketPath: socket.path, timeout: 10)
+        // Wait for the server to register that connection before sending anything else. This is
+        // the precondition, not a formality: a request that arrives first takes the only slot and
+        // the server hangs up the intended holder as busy, after which the cap can never engage.
+        // Sleeping a fixed interval here bet on registration being prompt; polling with real
+        // requests would race it outright.
+        let slotHeld = await Self.waitUntil { await listener.activeConnectionCount == 1 }
+        #expect(slotHeld)
+
+        let client = AutomationSocketClient(socketPath: socket.path, timeout: Self.observationCeiling)
         let response = try client.request(method: "GET", path: "/v1/health")
         let envelope = try AutomationJSON.decoder.decode(
             AutomationResponseEnvelope<AutomationEmptyResult>.self,
@@ -202,6 +254,8 @@ struct AutomationSocketRobustnessTests {
         #expect(serverFD >= 0)
 
         // The backlog completes the connect and buffers the request, but nothing ever responds.
+        // Short and fixed on purpose — expiring is the property here, and with no server to answer
+        // there is nothing load can do but postpone the expiry it is asserting on.
         let client = AutomationSocketClient(socketPath: path, timeout: 0.3)
         do {
             _ = try client.request(method: "GET", path: "/v1/health")

@@ -154,6 +154,11 @@ public actor AutomationListener {
         }
     }
 
+    /// Connections currently occupying a cap slot. Exists for tests that must observe the cap
+    /// engaging — a test that sends its own request before the server has registered the
+    /// connection meant to hold the slot gets the slot itself, and hangs up the holder as busy.
+    var activeConnectionCount: Int { activeConnectionIDs.count }
+
     private func accept(connection: NWConnection) {
         guard activeConnectionIDs.count < maxConcurrentConnections else {
             rejectBusy(connection: connection)
