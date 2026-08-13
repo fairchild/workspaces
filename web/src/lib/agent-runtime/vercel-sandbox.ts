@@ -91,9 +91,9 @@ const DEV_TTYD_TOKEN_SECRET = "dev-only-fallback-do-not-use-in-prod";
  * against a stale cached snapshot. Keep in sync with
  * `scripts/verify-mise-security.sh` (MISE_EXPECTED_*).
  */
-const MISE_VERSION = "v2026.7.1";
+const MISE_VERSION = "v2026.8.5";
 const MISE_SHA256 =
-	"1fd2f4337ea305fff1971460ea57b977c70de04e8f6184368b7745251504c2d5";
+	"ee362b6d96c648e27325a8bc7ee866bde4fffc20c88c777c5eb5c3b5c6f3e226";
 
 /**
  * Content fingerprint of the pinned tools baked into the base snapshot. Any
