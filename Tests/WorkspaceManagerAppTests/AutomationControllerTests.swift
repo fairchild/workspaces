@@ -104,11 +104,13 @@ struct AutomationControllerTests {
 
     /// Polls a MainActor condition until it holds. The ceiling bounds failure only — a healthy run
     /// returns the moment the state lands — so a slow machine pays latency instead of a verdict.
-    /// Sized well past the worst main-actor starvation seen on a hosted runner (~20s for a single
-    /// test's turns) rather than past any particular hop's nominal delay.
+    /// Sized past the worst main-actor starvation measured in a full parallel run (a 120ms hop
+    /// inside a test that took 34s of wall clock), not past any particular hop's nominal delay.
+    /// A generous ceiling costs nothing on a healthy machine and everything it costs is paid by a
+    /// run that was going to fail anyway.
     @discardableResult
     private func waitForMainActorState(
-        ceiling: Duration = .seconds(30),
+        ceiling: Duration = .seconds(60),
         _ condition: () -> Bool
     ) async -> Bool {
         let deadline = ContinuousClock.now.advanced(by: ceiling)
