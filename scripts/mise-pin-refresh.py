@@ -5,16 +5,17 @@
 # ///
 """Refresh every mise pin in the repo to the latest stable upstream release.
 
-`--check` exits 3 when the pin is stale (0 when current); `--apply` rewrites the
-pin version + linux-x64 sha256 across the literal pin sites, taking the sha from
-upstream's SHASUMS256.txt, and rewrites the version of every `jdx/mise-action`
-step in .github/workflows. Run weekly by a scheduled Claude routine
+`--check` (the default) exits 3 when the pin is stale, 0 when current; `--apply`
+rewrites the version across PIN_SITES, taking the linux-x64 sha256 from
+upstream's SHASUMS256.txt. Run weekly by a scheduled Claude routine
 (.claude/commands/mise-pin-refresh.md, #866); also runnable locally.
 
-Workflow pins are discovered, not listed. release.yml's pin sat outside this
-script's roster until upstream pruned its assets and it 404'd mid-release
-(#1297) — a pin nothing refreshes is worse than no pin, and a hardcoded roster
-is how one goes unnoticed.
+Sites are listed, not discovered, and their format is declared: the workflow
+pins feed jdx/mise-action, which takes a bare version, while everything else
+carries the tag as upstream writes it. Registration is enforced from the other
+side — test_security_hardening.py fails when a workflow uses mise-action without
+appearing here, which is what let release.yml's pin age until upstream pruned
+its assets and it 404'd mid-release (#1297).
 """
 
 import argparse
@@ -25,18 +26,17 @@ import urllib.request
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Sites carrying the version as upstream writes it, tag prefix and all.
+# (path, prefix) — "v" carries upstream's tag verbatim, "" is a bare version.
 PIN_SITES = (
-    "scripts/verify-mise-security.sh",
-    "web/src/lib/agent-runtime/vercel-sandbox.ts",
-    "scripts/tests/test_security_hardening.py",
+    ("scripts/verify-mise-security.sh", "v"),
+    ("web/src/lib/agent-runtime/vercel-sandbox.ts", "v"),
+    ("scripts/tests/test_security_hardening.py", "v"),
+    (".github/workflows/release.yml", ""),
+    (".github/workflows/ci.yml", ""),
 )
-WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
-VERIFIER = REPO_ROOT / PIN_SITES[0]
-# jdx/mise-action takes a bare version; the `v` prefix is not accepted there.
+VERIFIER = REPO_ROOT / PIN_SITES[0][0]
 MISE_ACTION = "jdx/mise-action@"
-VERSION_LINE = re.compile(r"(\s+version:\s*)(\S+)(\s*)$")
-NEXT_ITEM = re.compile(r"\s+- (uses|name):")
+WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
 
 def fetch(url: str) -> bytes:
@@ -69,90 +69,67 @@ def upstream_sha(version: str) -> str:
     sys.exit(f"mise-{version}-linux-x64 not found in upstream SHASUMS256.txt")
 
 
-def workflow_pin_sites() -> list[Path]:
-    """Every workflow that pins mise through jdx/mise-action."""
-    return sorted(p for p in WORKFLOW_DIR.glob("*.yml") if MISE_ACTION in p.read_text())
+def workflows_using_mise_action() -> set[str]:
+    """Repo-relative paths of workflows with a jdx/mise-action step.
 
-
-def rewrite_workflow_pin(text: str, bare_version: str) -> tuple[str, int, int]:
-    """Point each jdx/mise-action step at bare_version.
-
-    Returns the new text, how many action steps carried a `version:`, and how
-    many of those had to change. Scanning line by line rather than parsing YAML
-    keeps this dependency-free; the walk stops at the next list item so a later
-    step's `version:` can never be captured by an earlier action.
+    Both extensions: GitHub accepts .yaml, and a pin this script never sees is
+    the exact problem being guarded against.
     """
-    lines = text.splitlines(keepends=True)
-    found = changed = 0
-    for index, line in enumerate(lines):
-        if MISE_ACTION not in line:
-            continue
-        for offset in range(index + 1, min(index + 12, len(lines))):
-            match = VERSION_LINE.match(lines[offset])
-            if match:
-                found += 1
-                if match.group(2) != bare_version:
-                    lines[offset] = f"{match.group(1)}{bare_version}{match.group(3)}"
-                    changed += 1
-                break
-            if NEXT_ITEM.match(lines[offset]):
-                break
-    return "".join(lines), found, changed
+    return {
+        str(path.relative_to(REPO_ROOT))
+        for pattern in ("*.yml", "*.yaml")
+        for path in WORKFLOW_DIR.glob(pattern)
+        if MISE_ACTION in path.read_text()
+    }
 
 
-def workflow_drift(pinned: str) -> list[tuple[Path, str]]:
-    """Workflow pins that disagree with the managed version."""
-    drift = []
-    for path in workflow_pin_sites():
-        _, found, changed = rewrite_workflow_pin(path.read_text(), pinned.removeprefix("v"))
-        if found == 0:
-            drift.append((path, "no version: on its jdx/mise-action step"))
-        elif changed:
-            drift.append((path, f"not pinned to {pinned}"))
-    return drift
+def rewrite(text: str, prefix: str, old: str, new: str, old_sha: str, new_sha: str) -> str:
+    """Point one site at the new version.
+
+    Bare sites are matched through their `version:` key rather than on the
+    version alone, so a matrix entry, a block scalar, or another action's input
+    elsewhere in the same workflow cannot be caught by the rewrite.
+    """
+    if prefix:
+        return text.replace(old, new).replace(old_sha, new_sha)
+    return text.replace(
+        f"version: {old.removeprefix('v')}", f"version: {new.removeprefix('v')}"
+    )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="rewrite pin sites (default: check only)")
+    parser.add_argument("--apply", action="store_true", help="rewrite pin sites")
+    parser.add_argument("--check", action="store_true", help="report only (the default)")
     args = parser.parse_args()
 
     old_version, old_sha = current_pin()
-    drift = workflow_drift(old_version)
-    for path, why in drift:
-        print(f"drift: {path.relative_to(REPO_ROOT)} {why}")
-
     new_version = latest_stable()
-    if new_version == old_version and not drift:
+    if new_version == old_version:
         print(f"pin {old_version} is current")
         return 0
-    if new_version != old_version:
-        print(f"stale: pin {old_version} -> latest stable {new_version}")
+    print(f"stale: pin {old_version} -> latest stable {new_version}")
     if not args.apply:
         return 3
 
-    if new_version != old_version:
-        new_sha = upstream_sha(new_version)
-        for site in PIN_SITES:
-            path = REPO_ROOT / site
-            text = path.read_text()
-            updated = text.replace(old_version, new_version).replace(old_sha, new_sha)
-            if updated == text:
-                sys.exit(f"{site}: no pin occurrences found; refresh script out of sync")
-            path.write_text(updated)
-            print(f"updated {site}")
-        print(f"sha256 {new_sha} (from upstream SHASUMS256.txt)")
-
-    bare = new_version.removeprefix("v")
-    for path in workflow_pin_sites():
+    new_sha = upstream_sha(new_version)
+    # Every site is rewritten in memory and checked before anything is written.
+    # A site that has drifted out of sync therefore aborts the run instead of
+    # leaving the tree half-updated with the verifier already claiming the new
+    # version — which reads as current on the next run and hides the rest.
+    pending: list[tuple[Path, str]] = []
+    for site, prefix in PIN_SITES:
+        path = REPO_ROOT / site
         text = path.read_text()
-        updated, found, changed = rewrite_workflow_pin(text, bare)
-        rel = path.relative_to(REPO_ROOT)
-        if found == 0:
-            sys.exit(f"{rel}: jdx/mise-action step has no version: to update")
-        if changed:
-            path.write_text(updated)
-            print(f"updated {rel} ({changed} mise-action pin(s) -> {bare})")
+        updated = rewrite(text, prefix, old_version, new_version, old_sha, new_sha)
+        if updated == text:
+            sys.exit(f"{site}: no pin occurrences found; refresh script out of sync")
+        pending.append((path, updated))
+
+    for path, text in pending:
+        path.write_text(text)
+        print(f"updated {path.relative_to(REPO_ROOT)}")
+    print(f"sha256 {new_sha} (from upstream SHASUMS256.txt)")
     return 0
 
 

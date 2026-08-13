@@ -12,6 +12,7 @@ Lume password handling, pinned actions, and setup/mise trust boundaries.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import plistlib
@@ -30,30 +31,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CODEX_ENVIRONMENT = (REPO_ROOT / ".codex/environments/workspaces.toml").read_text()
 assert 'script = "./scripts/setup --fast"' in CODEX_ENVIRONMENT
 
-MISE_ACTION = "jdx/mise-action@"
+def mise_pin_refresher():
+    """scripts/mise-pin-refresh.py, imported despite the hyphens in its name.
 
-
-def mise_action_pins() -> dict[str, str]:
-    """{workflow filename: pinned version} for every jdx/mise-action step.
-
-    Found by scanning rather than from a list, so a workflow added tomorrow is
-    covered without anyone remembering to register it — the same reason
-    scripts/mise-pin-refresh.py discovers its workflow sites.
+    The guard reads the refresher's own PIN_SITES rather than restating it: two
+    copies of that list could disagree, and a guard that disagrees with the tool
+    it guards is worse than no guard.
     """
-    pins: dict[str, str] = {}
-    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
-        lines = path.read_text().splitlines()
-        for index, line in enumerate(lines):
-            if MISE_ACTION not in line:
-                continue
-            for following in lines[index + 1 : index + 12]:
-                match = re.match(r"\s+version:\s*(\S+)\s*$", following)
-                if match:
-                    pins[path.name] = match.group(1)
-                    break
-                if re.match(r"\s+- (uses|name):", following):
-                    break
-    return pins
+    spec = importlib.util.spec_from_file_location(
+        "mise_pin_refresh", REPO_ROOT / "scripts" / "mise-pin-refresh.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class SecurityHardeningTests(unittest.TestCase):
@@ -358,27 +348,57 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
 
-    def test_workflow_mise_pins_track_the_managed_version(self) -> None:
-        """Every jdx/mise-action pin equals the version mise-pin-refresh.py manages.
+    def test_every_workflow_using_mise_action_is_registered_for_refresh(self) -> None:
+        """A workflow cannot use mise-action without mise-pin-refresh.py knowing.
 
-        release.yml pinned mise at a version whose upstream release assets had
-        been pruned, so the signing lane 404'd on a cache miss mid-release
-        (#1297). The pin was not the problem; nothing refreshing it was. This
-        fails the PR that lets a workflow pin drift from the managed one —
-        including a newly added workflow the refresher has never seen.
+        release.yml pinned mise outside the refresher's roster. The pin aged,
+        upstream pruned its release assets, and because the action resolves the
+        version at run time rather than at pin time it surfaced as a 404 during
+        a release (#1297). An unrefreshed pin is worse than no pin: it reads as
+        deliberate while guaranteeing an eventual 404.
         """
+        refresher = mise_pin_refresher()
+        registered = {site for site, _ in refresher.PIN_SITES if site.startswith(".github/")}
+        using = refresher.workflows_using_mise_action()
+
+        self.assertTrue(using, "no jdx/mise-action steps found; has the action been renamed?")
+        self.assertEqual(
+            using - registered,
+            set(),
+            "these workflows use jdx/mise-action but are absent from "
+            f"mise-pin-refresh.py's PIN_SITES, so nothing refreshes their pin: "
+            f"{sorted(using - registered)}",
+        )
+        self.assertEqual(
+            registered - using,
+            set(),
+            "mise-pin-refresh.py lists these workflows but they no longer use "
+            f"jdx/mise-action, so --apply will abort: {sorted(registered - using)}",
+        )
+
+    def test_every_mise_action_step_carries_the_managed_version(self) -> None:
+        """Counted, not parsed: one pinned `version:` per mise-action step.
+
+        `version` is optional on jdx/mise-action and omitting it installs the
+        latest release — an unpinned step no refresh can repair, because there
+        is nothing to rewrite. Counting occurrences catches a second step that a
+        search-near-the-action check walks straight past, and needs no YAML
+        parse to do it.
+        """
+        refresher = mise_pin_refresher()
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
         managed = re.search(r'^MISE_EXPECTED_VERSION="v([^"]+)"', verify_mise, re.M).group(1)
 
-        pins = mise_action_pins()
-        self.assertTrue(pins, "no jdx/mise-action pins found; has the action been renamed?")
-        for workflow, version in sorted(pins.items()):
+        for site in sorted(refresher.workflows_using_mise_action()):
+            text = (REPO_ROOT / site).read_text()
+            steps = text.count(refresher.MISE_ACTION)
+            pinned = text.count(f"version: {managed}")
             self.assertEqual(
-                version,
-                managed,
-                f".github/workflows/{workflow} pins mise {version}, but the managed pin is "
-                f"{managed}. Run `uv run --script scripts/mise-pin-refresh.py --apply` — it "
-                "discovers workflow pins, so a new workflow needs no registration.",
+                pinned,
+                steps,
+                f"{site} has {steps} jdx/mise-action step(s) but {pinned} line(s) reading "
+                f"`version: {managed}`. Every step needs the managed version written plainly "
+                "— unquoted, no trailing comment — so this count stays meaningful.",
             )
 
     def test_mise_security_workflow_runs_for_mise_changes(self) -> None:
