@@ -163,7 +163,7 @@ brew install --cask swiftbar
 
 - Menu bar shows `CI` with a status icon (gray checkmark = idle, orange hammer = running)
 - Click to expand: per-runner status, recent activity log
-- Hooks log every job start/complete to `~/.local/share/runner-activity.log`
+- Hooks log every job start/end to `~/.local/share/runner-activity.log`
 
 **CLI status check** (no SwiftBar needed):
 
@@ -181,6 +181,12 @@ registration deleted server-side while launchd still lists the job shows up as
 `dead` rather than merely quiet. Exit status is 1 when any runner is dead, which
 makes it usable as a gate.
 
+The recent-jobs block reports what each finished job actually did. The
+completed-job hook cannot know that — job status reaches a runner only through
+the API — so the hook records the run id and `runners.py` resolves the verdict
+when it renders. Anything GitHub has not confirmed reads `? unknown` rather than
+as a pass, and lines predating the run id stay that way permanently.
+
 It supersedes `runner-status.sh`, which reads a hardcoded list of three runner
 directories and never asks GitHub anything. On a machine with twelve runner
 directories that meant nine were invisible, and a runner whose registration had
@@ -195,7 +201,7 @@ been deleted was indistinguishable from one that was merely offline.
 | `runner-ci-menubar.5s.sh` | SwiftBar plugin (installed into plugin folder) |
 | `install-runner-ci-menubar.sh` | Installs the SwiftBar plugin as a durable local copy |
 | `runner-notify-start.sh` | Runner hook: logs job start to activity log |
-| `runner-notify-complete.sh` | Runner hook: logs job completion to activity log |
+| `runner-notify-complete.sh` | Runner hook: logs that a job ended, plus the run id to resolve its outcome against |
 | `install-runner-hooks.sh` | Installs hooks on all runners (copies scripts, updates .env) |
 
 Parked, revival intended (owner decision 2026-08-02): kept despite low day-to-day use while the primary CI lane is GitHub-hosted/Lume-backed — do not re-flag as dead code in future cleanup passes.
