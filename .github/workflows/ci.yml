@@ -19,6 +19,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-perf-benchmarks.py"
       - "scripts/check-release-harness-absence.sh"
       - "scripts/check-subprocess-timeouts.py"
       - "scripts/generate-sparkle-appcast.sh"
@@ -50,6 +51,7 @@ on:
       - "Tests/**"
       - "scripts/build-ghosttykit.sh"
       - "scripts/build-release.sh"
+      - "scripts/check-perf-benchmarks.py"
       - "scripts/check-release-harness-absence.sh"
       - "scripts/check-subprocess-timeouts.py"
       - "scripts/generate-sparkle-appcast.sh"
@@ -80,13 +82,22 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
+      # Provisioning below mirrors release.yml step for step, and must keep
+      # doing so. release.yml only ever executes on a tag push, so an
+      # environmental assumption that holds nowhere else is discovered by a
+      # failed release — v0.24.0 burned four of them that way. This job runs on
+      # the same macos-15 image, so matching the provisioning here is what makes
+      # a PR able to fail instead.
       - name: Ensure mise
-        run: |
-          if command -v mise >/dev/null 2>&1; then
-            mise --version
-          else
-            brew install mise
-          fi
+        uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
+        with:
+          version: 2026.8.4
+          install: true
+          cache: true
+
+      # check-perf-benchmarks.py is a UV script and .mise.toml does not provide
+      # uv. release.yml learned this the hard way (#1298).
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Build GhosttyKit
         run: ./scripts/build-ghosttykit.sh
@@ -108,8 +119,42 @@ jobs:
       - name: Build (debug)
         run: swift build
 
-      - name: Build (release)
-        run: swift build -c release
+      # The release lane's own build path, minus signing. It runs
+      # `swift build -c release` itself and reuses .build, so the marginal cost
+      # over the bare release build this replaces is roughly bundling time —
+      # and in exchange the bundling, Sparkle linkage, and resource-copy steps
+      # that only ever ran during a release now run on every PR.
+      - name: Build (release, unsigned bundle)
+        run: ./scripts/build-release.sh --no-sign
+
+      # Can-it-run only. Whether benchmarks are *fresh* is release policy, not
+      # PR policy: 0 (current) and 1 (stale or missing) are both fine here. What
+      # must not reach a tag is the gate being unable to execute at all — absent
+      # uv exited 127 during v0.24.0 and the release, not a PR, is where that
+      # surfaced.
+      #
+      # Plain format, not --format github: the release lane wants ::error::
+      # annotations because there staleness blocks, but emitting them from a
+      # step that passes on staleness by design would paint every PR run with a
+      # failure the run does not have.
+      - name: Release perf gate is runnable
+        run: |
+          set +e
+          output="$(./scripts/check-perf-benchmarks.py --tag HEAD 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -gt 1 ]; then
+            echo "::error::check-perf-benchmarks.py exited $status (expected 0 or 1); the release perf gate cannot execute on this runner"
+            exit 1
+          fi
+          case "$output" in
+            *"Traceback (most recent call last)"*)
+              echo "::error::check-perf-benchmarks.py crashed; an exit 1 from a traceback is not a policy verdict"
+              exit 1
+              ;;
+          esac
+          echo "runnable (exit $status)"
 
       - name: Check release harness absence
         run: ./scripts/check-release-harness-absence.sh
