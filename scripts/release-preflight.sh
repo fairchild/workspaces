@@ -147,6 +147,9 @@ is_ci_relevant_path() {
             WorkspaceManager.entitlements | \
             scripts/build-ghosttykit.sh | \
             scripts/build-release.sh | \
+            scripts/check-perf-benchmarks.py | \
+            scripts/check-release-harness-absence.sh | \
+            scripts/check-subprocess-timeouts.py | \
             scripts/generate-sparkle-appcast.sh | \
             scripts/install-local.sh | \
             scripts/notarize.sh | \

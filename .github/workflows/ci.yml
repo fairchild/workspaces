@@ -9,6 +9,10 @@ on:
       - ".github/workflows/ci-fallback.yml"
       - ".github/workflows/release.yml"
       - ".swift-format"
+      # Direct inputs to this job's provisioning: mise-action reads both to
+      # resolve and lock the Zig that builds GhosttyKit.
+      - ".mise.toml"
+      - "mise.lock"
       - "WorkSpacesCloudCI.xcodeproj/**"
       - "Package.swift"
       - "Package.resolved"
@@ -41,6 +45,10 @@ on:
       - ".github/workflows/ci-fallback.yml"
       - ".github/workflows/release.yml"
       - ".swift-format"
+      # Direct inputs to this job's provisioning: mise-action reads both to
+      # resolve and lock the Zig that builds GhosttyKit.
+      - ".mise.toml"
+      - "mise.lock"
       - "WorkSpacesCloudCI.xcodeproj/**"
       - "Package.swift"
       - "Package.resolved"
@@ -80,7 +88,14 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 90
     steps:
+      # Same checkout shape as release.yml. fetch-depth: 0 is not incidental —
+      # check-perf-benchmarks.py orders releases with `git tag --list`, and the
+      # default single-commit checkout carries no tags at all, so the gate would
+      # take a degenerate path here and the real one during a release.
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       # Provisioning below mirrors release.yml step for step, and must keep
       # doing so. release.yml only ever executes on a tag push, so an
@@ -127,34 +142,28 @@ jobs:
       - name: Build (release, unsigned bundle)
         run: ./scripts/build-release.sh --no-sign
 
-      # Can-it-run only. Whether benchmarks are *fresh* is release policy, not
-      # PR policy: 0 (current) and 1 (stale or missing) are both fine here. What
-      # must not reach a tag is the gate being unable to execute at all — absent
-      # uv exited 127 during v0.24.0 and the release, not a PR, is where that
+      # Proves the release perf gate can execute on this runner. Absent uv made
+      # it exit 127 during v0.24.0, and a release rather than a PR is where that
       # surfaced.
       #
-      # Plain format, not --format github: the release lane wants ::error::
-      # annotations because there staleness blocks, but emitting them from a
-      # step that passes on staleness by design would paint every PR run with a
-      # failure the run does not have.
+      # Positive proof, not tolerance: the probe runs against a fixture whose
+      # only row matches the tag being asked about, so a working script has
+      # exactly one answer — gap 0, "ok", exit 0. Inferring health from "exited
+      # 0 or 1" instead would pass a script that is merely broken in a way that
+      # exits 1, which a SyntaxError, a failed uv bootstrap, and a stray
+      # sys.exit(1) all are.
+      #
+      # Freshness of the real benchmarks stays release policy and is not
+      # asserted here. --format github coverage lives in
+      # scripts/tests/test_check_perf_benchmarks.py, which runs on the cheap
+      # Ubuntu lane rather than costing macOS minutes.
       - name: Release perf gate is runnable
         run: |
-          set +e
-          output="$(./scripts/check-perf-benchmarks.py --tag HEAD 2>&1)"
-          status=$?
-          set -e
-          printf '%s\n' "$output"
-          if [ "$status" -gt 1 ]; then
-            echo "::error::check-perf-benchmarks.py exited $status (expected 0 or 1); the release perf gate cannot execute on this runner"
-            exit 1
-          fi
-          case "$output" in
-            *"Traceback (most recent call last)"*)
-              echo "::error::check-perf-benchmarks.py crashed; an exit 1 from a traceback is not a policy verdict"
-              exit 1
-              ;;
-          esac
-          echo "runnable (exit $status)"
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/perf-benchmarks-probe.csv"
+          head -1 docs/performance_benchmarks.csv > "$fixture"
+          echo "v0.0.0-probe,0000000,2026-01-01T00:00:00Z,probe,installed,probe,,,,,,,,runnability probe" >> "$fixture"
+          ./scripts/check-perf-benchmarks.py --tag v0.0.0-probe --csv "$fixture"
 
       - name: Check release harness absence
         run: ./scripts/check-release-harness-absence.sh
