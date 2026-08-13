@@ -263,6 +263,14 @@ OUTCOME: dict[str, tuple[str, str]] = {
 }
 
 
+OUTCOME_CACHE = HOME / ".local/share/runner-activity-outcomes.json"
+
+# Each unresolved line costs one `gh api` call (~1s). Past this many, the
+# oldest stay unresolved and render as unknown — degrading toward "I don't
+# know" is safe; degrading toward "it passed" is the bug being fixed.
+RESOLVE_LIMIT = 16
+
+
 @dataclass(frozen=True)
 class JobRef:
     """The GitHub run a completed-job line points at."""
@@ -274,6 +282,27 @@ class JobRef:
     def api_path(self, full_repo: str) -> str:
         base = f"repos/{full_repo}/actions/runs/{self.run}"
         return base if self.attempt <= 1 else f"{base}/attempts/{self.attempt}"
+
+    def key(self, full_repo: str) -> str:
+        return f"{full_repo}#{self.run}#{self.attempt}"
+
+
+def cached_outcomes() -> dict[str, str]:
+    """Verdicts already fetched. A concluded attempt never changes its mind,
+    so this is a permanent record, not a staleness risk."""
+    try:
+        stored = json.loads(OUTCOME_CACHE.read_text())
+        return stored if isinstance(stored, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def remember_outcomes(verdicts: dict[str, str]) -> None:
+    try:
+        OUTCOME_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        OUTCOME_CACHE.write_text(json.dumps(verdicts, sort_keys=True, indent=0))
+    except OSError:
+        pass
 
 
 def job_ref(line: str) -> JobRef | None:
@@ -289,28 +318,37 @@ def job_ref(line: str) -> JobRef | None:
 
 
 def conclusions(lines: Iterable[str], runners: list[Runner], offline: bool) -> dict[JobRef, str]:
-    """Ask GitHub how each logged run actually ended.
+    """How each logged run actually ended, per GitHub.
 
     The completed-job hook has no access to job status — it is API-only, per
     docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/run-scripts
-    — so the log records identity and the verdict is fetched here.
+    — so the log records identity and the verdict is fetched here, then kept.
+    Only lines never seen before cost a call, which is why a log that grows by
+    a job a week does not turn into a per-invocation tax.
     """
-    if offline:
-        return {}
     full = {r.repo.split("/")[-1]: r.repo for r in runners if "/" in r.repo}
     refs = sorted(
         {ref for ref in map(job_ref, lines) if ref and ref.repo in full},
-        key=lambda r: (r.repo, r.run, r.attempt),
+        key=lambda r: (r.repo, int(r.run), r.attempt),
     )
     if not refs:
         return {}
 
-    def fetch(ref: JobRef) -> tuple[JobRef, str]:
-        payload = gh_json(ref.api_path(full[ref.repo]))
-        return ref, payload.get("conclusion") or ""
+    stored = cached_outcomes()
+    found = {ref: stored[ref.key(full[ref.repo])] for ref in refs if ref.key(full[ref.repo]) in stored}
+    pending = [ref for ref in refs if ref not in found][-RESOLVE_LIMIT:]
+    if offline or not pending:
+        return found
 
-    with cf.ThreadPoolExecutor(max_workers=min(8, len(refs))) as pool:
-        return {ref: verdict for ref, verdict in pool.map(fetch, refs) if verdict}
+    def fetch(ref: JobRef) -> tuple[JobRef, str]:
+        return ref, gh_json(ref.api_path(full[ref.repo])).get("conclusion") or ""
+
+    with cf.ThreadPoolExecutor(max_workers=min(8, len(pending))) as pool:
+        fresh = {ref: verdict for ref, verdict in pool.map(fetch, pending) if verdict}
+    if fresh:
+        # Runs still in flight resolve to "" and are deliberately not stored.
+        remember_outcomes(stored | {ref.key(full[ref.repo]): v for ref, v in fresh.items()})
+    return found | fresh
 
 
 def outcome(line: str, found: dict[JobRef, str]) -> str:

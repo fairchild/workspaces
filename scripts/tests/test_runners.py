@@ -175,6 +175,15 @@ class JobOutcomeTests(unittest.TestCase):
     LEGACY = "2026-08-10T02:04:48Z  DONE   workspaces      Release/build  v0.24.0"
     START = "2026-08-10T01:59:00Z  START  workspaces      Release/build  v0.24.0"
 
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.original = runners.OUTCOME_CACHE
+        runners.OUTCOME_CACHE = Path(self.tmp.name) / "outcomes.json"
+
+    def tearDown(self) -> None:
+        runners.OUTCOME_CACHE = self.original
+        self.tmp.cleanup()
+
     def test_failed_run_reads_as_failure_not_as_completion(self) -> None:
         ref = runners.job_ref(self.END)
         assert ref is not None
@@ -226,6 +235,76 @@ class JobOutcomeTests(unittest.TestCase):
     def test_a_repo_with_no_local_runner_is_not_queried(self) -> None:
         # Nothing maps "workspaces" to an owner, so there is no URL to ask.
         self.assertEqual(runners.conclusions([self.END], [], offline=False), {})
+
+
+class OutcomeResolutionTests(unittest.TestCase):
+    """Asking GitHub is the only way to know, so ask once and keep the answer.
+
+    A concluded attempt never changes its verdict, which makes the answer
+    cacheable forever and keeps the cost proportional to new jobs rather than
+    to how often the tool is run.
+    """
+
+    LINE = "2026-08-10T02:04:48Z  END    workspaces  Release/build  v0.24.0  run=31345686688"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.original_cache = runners.OUTCOME_CACHE
+        self.original_gh = runners.gh_json
+        runners.OUTCOME_CACHE = Path(self.tmp.name) / "outcomes.json"
+        self.calls: list[str] = []
+        self.runners = [make(repo="fairchild/workspaces")]
+
+    def tearDown(self) -> None:
+        runners.OUTCOME_CACHE = self.original_cache
+        runners.gh_json = self.original_gh
+        self.tmp.cleanup()
+
+    def answer(self, conclusion: str | None) -> None:
+        def fake(path: str) -> dict:
+            self.calls.append(path)
+            return {"conclusion": conclusion}
+
+        runners.gh_json = fake
+
+    def resolve(self, lines: list[str] | None = None, offline: bool = False) -> dict:
+        return runners.conclusions(lines or [self.LINE], self.runners, offline=offline)
+
+    def test_a_verdict_is_fetched_once_and_then_remembered(self) -> None:
+        self.answer("failure")
+        self.assertEqual(list(self.resolve().values()), ["failure"])
+        self.assertEqual(len(self.calls), 1)
+
+        self.answer(None)  # a second fetch would now return nothing
+        self.assertEqual(list(self.resolve().values()), ["failure"])
+        self.assertEqual(len(self.calls), 1, "cached verdict was re-fetched")
+
+    def test_a_run_still_in_flight_is_not_remembered_as_a_verdict(self) -> None:
+        self.answer(None)
+        self.assertEqual(self.resolve(), {})
+        self.answer("success")
+        self.assertEqual(list(self.resolve().values()), ["success"])
+
+    def test_offline_still_reports_what_is_already_known(self) -> None:
+        self.answer("failure")
+        self.resolve()
+        self.assertEqual(list(self.resolve(offline=True).values()), ["failure"])
+
+    def test_offline_with_nothing_known_resolves_nothing(self) -> None:
+        self.answer("failure")
+        self.assertEqual(self.resolve(offline=True), {})
+        self.assertEqual(self.calls, [])
+
+    def test_a_long_log_resolves_its_newest_lines_and_leaves_the_rest_unknown(self) -> None:
+        self.answer("success")
+        lines = [
+            f"2026-08-10T02:04:48Z  END    workspaces  CI/build  main  run={31000000000 + n}"
+            for n in range(runners.RESOLVE_LIMIT + 4)
+        ]
+        found = self.resolve(lines)
+        self.assertEqual(len(self.calls), runners.RESOLVE_LIMIT)
+        self.assertIn("unknown", runners.outcome(lines[0], found))
+        self.assertIn("success", runners.outcome(lines[-1], found))
 
 
 class CompletedHookTests(unittest.TestCase):

@@ -187,6 +187,11 @@ the API — so the hook records the run id and `runners.py` resolves the verdict
 when it renders. Anything GitHub has not confirmed reads `? unknown` rather than
 as a pass, and lines predating the run id stay that way permanently.
 
+A concluded attempt never revises its verdict, so answers are kept in
+`~/.local/share/runner-activity-outcomes.json` and only unseen lines cost an API
+call — which is also what lets `--offline` show real outcomes for jobs already
+looked up. Delete that file to re-fetch everything.
+
 It supersedes `runner-status.sh`, which reads a hardcoded list of three runner
 directories and never asks GitHub anything. On a machine with twelve runner
 directories that meant nine were invisible, and a runner whose registration had
