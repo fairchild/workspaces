@@ -65,9 +65,25 @@ gh api repos/fairchild/workspaces/actions/runners \
 
 Confirm at least one online runner now includes `signing-host`.
 
-## 4. Verify release scheduling
+## 4. Point the release workflow back at the lane
 
-Dispatch or observe a `Release` workflow run and confirm the job lands on the expected lane:
+Steps 1–3 make the runner available; they do not route anything to it. As shipped,
+`build-sign-notarize-release` in `.github/workflows/release.yml` is `runs-on: macos-15`,
+so dispatching `Release` now will not touch this runner no matter how healthy it is.
+Reverting is a one-line, deliberate change:
+
+```yaml
+  build-sign-notarize-release:
+    runs-on: [self-hosted, signing-host]
+```
+
+Land that through a PR that says which hosted signing or notarization failure
+prompted it — `scripts/audit-security-posture.py` fails on it by design, and
+`.github/actionlint.yaml` still accepts the label so lint will not block you.
+
+## 5. Verify release scheduling
+
+With the revert merged, dispatch or observe a `Release` run and confirm the job lands on the expected lane:
 
 ```bash
 gh workflow run release.yml --ref main

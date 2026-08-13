@@ -18,9 +18,12 @@ Questions to answer first:
 
 ## 2. Confirm the job targets a lane that still exists
 
-`signing-host` is the only self-hosted lane. `lume-macos` and `tart-ui` are both
-retired and `.github/actionlint.yaml` rejects them, so a job waiting on either is
-a workflow bug — fix the workflow rather than standing a VM back up.
+No lane does. Every workflow runs hosted, so any job waiting on a self-hosted
+label is a workflow bug — fix the workflow rather than standing hardware back up.
+`lume-macos` and `tart-ui` are retired and `.github/actionlint.yaml` rejects
+them; `signing-host` is still accepted by lint and still carried by
+`blue-workspaces`, but no workflow targets it, so a job queued against it will
+wait forever on a runner that is idle by design.
 
 For a fuller local picture than `summarize_runner_state.py` gives:
 

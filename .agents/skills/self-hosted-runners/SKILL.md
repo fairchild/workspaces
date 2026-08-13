@@ -1,23 +1,26 @@
 ---
 name: self-hosted-runners
 description: >
-  Inspect, recover, and operate this repo's self-hosted GitHub Actions
-  runners on the signing-host lane.
-  Use when jobs are queued, runners show offline or busy unexpectedly,
-  release jobs do not start, or when you need a host fallback runner on
-  the current machine.
+  Inspect and retire this repo's remaining self-hosted GitHub Actions runner.
+  Use when a runner shows offline or busy unexpectedly, or when reasoning
+  about the signing-host retirement. No workflow dispatches to a self-hosted
+  runner, so a queued or failing job is never a runner-health problem.
 ---
 
 # Self-Hosted Runners
 
 Use this skill when the problem is runner health, scheduling, or lane ownership rather than repo code.
 
-This repo has one self-hosted lane:
+**No workflow in this repo dispatches to a self-hosted runner.** Release signing
+and notarization moved to hosted `macos-15` in #1293. `blue-workspaces` still
+carries the `signing-host` label and stays registered as the revert path until a
+hosted release notarizes — it takes no jobs in the meantime.
 
-- `signing-host` for release signing and notarization
+That makes runner health the wrong diagnosis for a stuck release. A queued or
+failed release job is a workflow, CI, or credential problem; check
+`scripts/release-preflight.sh`'s output before looking at any runner.
 
-Everything else that used to be self-hosted no longer is, so do not go looking
-for a lane when one of these is the real question. Behavioral UI smoke runs on
+Behavioral UI smoke runs on
 GitHub-hosted `macos-15` (`ui-smoke-advisory.yml`). Agent evidence — the
 `gather` job in `_evidence.yml` — runs on hosted `macos-15` too; the
 `lume-macos` VM lane that once carried it is retired. Perf benchmarks run on the
@@ -60,11 +63,11 @@ Include one specific run when a queued or failed run is the immediate problem:
 ### 2. Recover the lane with the smallest safe change
 5. If a host fallback runner goes online and then flips offline while the local process is still alive, treat that as a host-side communication problem rather than a repo problem.
 
-For `signing-host`:
-
-1. Confirm at least one runner is online with the `signing-host` label.
-2. Start the configured runner on the intended machine.
-3. Verify the release run lands on that lane before debugging signing details.
+For `signing-host`: nothing to recover. No workflow targets it, so bringing the
+runner online cannot affect a release. Restoring releases to it means editing
+`runs-on` in `release.yml` back to `[self-hosted, signing-host]` first — a
+deliberate revert, not a recovery step. Take it only if hosted signing or
+notarization is what failed, and say so in the PR.
 
 ### 3. Use the lane-specific repo runbooks
 

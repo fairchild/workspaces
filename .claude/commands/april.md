@@ -5,6 +5,6 @@ Start by getting oriented:
 1. Check April's last 5 runs: `gh run list --repo fairchild/workspaces --workflow "Agent: April Clearwater" --limit 5`
 2. Check open PRs: `gh pr list --repo fairchild/workspaces --state open`
 3. Check issues ready for agents: `gh issue list --repo fairchild/workspaces --label agent:ready`
-4. Check runner health on this machine: `./scripts/runners.py` (April needs no self-hosted runner, but a dead `signing-host` still blocks releases)
+4. Check runner health on this machine: `./scripts/runners.py` (informational only — no workflow dispatches to a self-hosted runner, so a dead `signing-host` blocks nothing)
 
 Then summarize: what's working, what's stuck, what to focus on next. Fix any failures, merge what's ready, and suggest what to trigger or unblock.

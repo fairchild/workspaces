@@ -108,7 +108,7 @@ workspaces/
 
 ## CI Runner Lanes
 
-Every lane runs on GitHub-hosted macOS (`macos-15`): generic lint/build/test CI, the behavioral UI smoke lane (`ui-smoke-advisory.yml`), the agent evidence lane (`_evidence.yml`), and release/signing/notarization. Generic CI is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. No workflow targets a self-hosted runner.
+Every lane that needs macOS runs on GitHub-hosted `macos-15`: generic lint/build/test CI, the behavioral UI smoke lane (`ui-smoke-advisory.yml`), the agent evidence lane (`_evidence.yml`), and release/signing/notarization. Agent and metadata jobs run on `ubuntu-latest`. Generic CI is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. No workflow targets a self-hosted runner.
 
 Performance benchmarks are not a CI lane. They run on the owner's laptop, opt-in per run, because the contract budgets are `Mac16,13`-derived and no cloud runner can carry them — see [docs/decisions/perf-measurement-laptop-optin.md](./docs/decisions/perf-measurement-laptop-optin.md) for the protocol and the measurement-hygiene preconditions.
 
