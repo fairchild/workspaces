@@ -2440,6 +2440,38 @@ struct AutomationAPITests {
         #expect(elapsed < .seconds(30))
     }
 
+    @Test("A catastrophic match runs to its budget with the MainActor blocked — it never needs it")
+    func waitPatternMatchesWithoutTheMainActor() async throws {
+        // Why the app stays drawable through a pathological wait: the match never asks for the
+        // MainActor. Proven by holding that actor for the match's whole life and letting only the
+        // match's completion release it, so the claim is an ordering rather than a measurement of
+        // how responsive a shared runner felt — the shape that made the tick-tally version of this
+        // check flaky enough to abort a release (#1300).
+        let pattern = try AutomationWaitPattern("(a+)+$")
+        let text = String(repeating: "a", count: 64) + "b"
+        let matchFinished = DispatchSemaphore(value: 0)
+
+        let (match, released) = await MainActor.run { () -> (Task<Bool?, Never>, DispatchTimeoutResult) in
+            // Started with this actor already held, so the match cannot have run before the block:
+            // starting it outside would let a contended runner finish it first and pass vacuously.
+            // `.userInitiated` because the pool has to schedule it while the main thread is held —
+            // the one way this test can fail spuriously is a pool with no worker free to start it.
+            let match = Task.detached(priority: .userInitiated) { () -> Bool? in
+                defer { matchFinished.signal() }
+                // Small budget: this burns a core, and it burns it while the MainActor is held.
+                return await pattern.firstMatchExists(in: text, budgetMS: 120)
+            }
+            // Blocking, not suspending: a suspension would hand the actor back and prove nothing.
+            // The timeout is the failure path, never the pass path — a match that needs this actor
+            // makes the wait expire and the test fail instead of hanging the suite.
+            return (match, matchFinished.wait(timeout: .now() + 30))
+        }
+
+        #expect(released == .success)
+        // Abandoned at the budget, off-actor, while nothing could run on the MainActor.
+        #expect(await match.value == nil)
+    }
+
     // MARK: - Wait engine (virtual time — no sleeps)
 
     /// Virtual clock for the wait engine: `sleepMS` advances the counter instantly, so the
