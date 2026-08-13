@@ -248,6 +248,125 @@ def last_logged_job() -> float | None:
     return None
 
 
+JOB_LINE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s+(?P<kind>START|END|DONE)\s+"
+    r"(?P<repo>\S+)\s+(?P<job>\S+)\s+(?P<ref>\S+)"
+    r"(?:\s+run=(?P<run>\d+))?(?:\s+attempt=(?P<attempt>\d+))?\s*$"
+)
+
+OUTCOME_GLYPH: dict[str, tuple[str, str]] = {
+    "success": ("✓", "32"),
+    "failure": ("✗", "31"),
+    "cancelled": ("⊘", "33"),
+    "timed_out": ("⊘", "33"),
+    "startup_failure": ("✗", "31"),
+}
+
+
+OUTCOME_CACHE = HOME / ".local/share/runner-activity-outcomes.json"
+
+# Each unresolved line costs one `gh api` call (~1s). Past this many, the
+# oldest stay unresolved and render as unknown — degrading toward "I don't
+# know" is safe; degrading toward "it passed" is the bug being fixed.
+RESOLVE_LIMIT = 16
+
+
+@dataclass(frozen=True)
+class JobRef:
+    """The GitHub run a completed-job line points at."""
+
+    repo: str          # basename, as the hook logs it
+    run: str
+    attempt: int = 1
+
+    def api_path(self, full_repo: str) -> str:
+        base = f"repos/{full_repo}/actions/runs/{self.run}"
+        return base if self.attempt <= 1 else f"{base}/attempts/{self.attempt}"
+
+    def key(self, full_repo: str) -> str:
+        return f"{full_repo}#{self.run}#{self.attempt}"
+
+
+def cached_outcomes() -> dict[str, str]:
+    """Verdicts already fetched. A concluded attempt never changes its mind,
+    so this is a permanent record, not a staleness risk."""
+    try:
+        stored = json.loads(OUTCOME_CACHE.read_text())
+        return stored if isinstance(stored, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def remember_outcomes(verdicts: dict[str, str]) -> None:
+    try:
+        OUTCOME_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        OUTCOME_CACHE.write_text(json.dumps(verdicts, sort_keys=True, indent=0))
+    except OSError:
+        pass
+
+
+def job_ref(line: str) -> JobRef | None:
+    """The run an END line identifies, or None when the line identifies none.
+
+    START lines describe a job that had not finished, and the legacy DONE
+    format predates run ids, so neither can be resolved to an outcome.
+    """
+    found = JOB_LINE.match(line)
+    if not found or found.group("kind") != "END" or not found.group("run"):
+        return None
+    return JobRef(found.group("repo"), found.group("run"), int(found.group("attempt") or 1))
+
+
+def conclusions(lines: Iterable[str], runners: list[Runner], offline: bool) -> dict[JobRef, str]:
+    """How each logged run actually ended, per GitHub.
+
+    The completed-job hook has no access to job status — it is API-only, per
+    docs.github.com/en/actions/how-tos/manage-runners/self-hosted-runners/run-scripts
+    — so the log records identity and the verdict is fetched here, then kept.
+    Only lines never seen before cost a call, which is why a log that grows by
+    a job a week does not turn into a per-invocation tax.
+    """
+    full = {r.repo.split("/")[-1]: r.repo for r in runners if "/" in r.repo}
+    refs = sorted(
+        {ref for ref in map(job_ref, lines) if ref and ref.repo in full},
+        key=lambda r: (r.repo, int(r.run), r.attempt),
+    )
+    if not refs:
+        return {}
+
+    stored = cached_outcomes()
+    found = {ref: stored[ref.key(full[ref.repo])] for ref in refs if ref.key(full[ref.repo]) in stored}
+    pending = [ref for ref in refs if ref not in found][-RESOLVE_LIMIT:]
+    if offline or not pending:
+        return found
+
+    def fetch(ref: JobRef) -> tuple[JobRef, str]:
+        return ref, gh_json(ref.api_path(full[ref.repo])).get("conclusion") or ""
+
+    with cf.ThreadPoolExecutor(max_workers=min(8, len(pending))) as pool:
+        fresh = {ref: verdict for ref, verdict in pool.map(fetch, pending) if verdict}
+    if fresh:
+        # Runs still in flight resolve to "" and are deliberately not stored.
+        remember_outcomes(stored | {ref.key(full[ref.repo]): v for ref, v in fresh.items()})
+    return found | fresh
+
+
+def outcome(line: str, found: dict[JobRef, str]) -> str:
+    """Suffix stating what a finished job did — never inferred from the line.
+
+    A hook line records only that the job stopped. Anything GitHub has not
+    confirmed renders as unknown; keeping that ambiguity visible is the point,
+    since reading "it ended" as "it passed" is what hid a failed release.
+    """
+    parsed = JOB_LINE.match(line)
+    if not parsed or parsed.group("kind") == "START":
+        return ""
+    ref = job_ref(line)
+    verdict = found.get(ref, "") if ref else ""
+    glyph, code = OUTCOME_GLYPH.get(verdict, ("?", "90"))
+    return "  " + paint(f"{glyph} {verdict or 'unknown'}", code)
+
+
 ENTRY = re.compile(r"^===== (\S+) =====$", re.M)
 IN_FLIGHT = re.compile(r"--- CI job processes in flight ---\n(.*?)(?=\n--- |\Z)", re.S)
 
@@ -355,8 +474,9 @@ def render(runners: list[Runner], repos: dict[str, RepoState], args) -> None:
     print()
     print(paint("RECENT JOBS", "1") + dim(f"  {ACTIVITY_LOG}"))
     if log_lines:
+        found = conclusions(log_lines, runners, args.offline)
         for line in log_lines:
-            print(f"  {line}")
+            print(f"  {line}{outcome(line, found)}")
         newest = last_logged_job()
         note = f"  newest entry {ago(newest)}"
         print(dim(note) if newest and time.time() - newest < 7 * 86400

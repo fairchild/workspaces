@@ -6,10 +6,10 @@
 """Tests for scripts/runners.py — the self-hosted runner status view.
 
 Intent: the tool exists because dead runners were invisible for weeks, so the
-behaviour worth locking is that it never reports a dead signal as healthy. Two
+behaviour worth locking is that it never reports a dead signal as healthy. Three
 classes of test: the verdict a runner gets when its three sources of truth
-disagree, and the freshness of the activity log being read from log *content*
-rather than file mtime.
+disagree, the freshness of the activity log being read from log *content* rather
+than file mtime, and a finished job never reading as a passing one.
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from __future__ import annotations
 import calendar
 import importlib.util
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -25,6 +26,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "runners.py"
+COMPLETE_HOOK = REPO_ROOT / "scripts" / "runner-notify-complete.sh"
 
 spec = importlib.util.spec_from_file_location("runners", SCRIPT_PATH)
 assert spec and spec.loader
@@ -158,6 +160,227 @@ class GitconfigCorrelationTests(unittest.TestCase):
 
     def test_absent_watcher_yields_nothing_rather_than_a_false_all_clear(self) -> None:
         self.assertEqual(runners.gitconfig_writes(), [])
+
+
+class JobOutcomeTests(unittest.TestCase):
+    """"The job ended" is not "the job passed", and the log line cannot say which.
+
+    A failed v0.24.0 release was read as a successful one because the completed
+    hook wrote DONE the moment the job stopped. Job status is API-only, so the
+    outcome shown here comes from GitHub or is reported as unknown.
+    """
+
+    END = "2026-08-10T02:04:48Z  END    workspaces      Release/build  v0.24.0  run=31345686688"
+    RERUN = END + "  attempt=2"
+    LEGACY = "2026-08-10T02:04:48Z  DONE   workspaces      Release/build  v0.24.0"
+    START = "2026-08-10T01:59:00Z  START  workspaces      Release/build  v0.24.0"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.original = runners.OUTCOME_CACHE
+        runners.OUTCOME_CACHE = Path(self.tmp.name) / "outcomes.json"
+
+    def tearDown(self) -> None:
+        runners.OUTCOME_CACHE = self.original
+        self.tmp.cleanup()
+
+    def test_failed_run_reads_as_failure_not_as_completion(self) -> None:
+        ref = runners.job_ref(self.END)
+        assert ref is not None
+        rendered = runners.outcome(self.END, {ref: "failure"})
+        self.assertIn("failure", rendered)
+        self.assertNotIn("success", rendered)
+
+    def test_confirmed_success_says_so(self) -> None:
+        ref = runners.job_ref(self.END)
+        assert ref is not None
+        self.assertIn("success", runners.outcome(self.END, {ref: "success"}))
+
+    def test_unresolved_run_is_unknown_rather_than_a_pass(self) -> None:
+        # GitHub unreachable, --offline, or a run since deleted.
+        self.assertIn("unknown", runners.outcome(self.END, {}))
+        self.assertNotIn("success", runners.outcome(self.END, {}))
+
+    def test_legacy_done_lines_claim_nothing(self) -> None:
+        # Seven months of history predate run ids; they must stay unresolvable
+        # rather than borrow a verdict from a neighbouring line.
+        self.assertIsNone(runners.job_ref(self.LEGACY))
+        self.assertIn("unknown", runners.outcome(self.LEGACY, {}))
+
+    def test_start_lines_carry_no_outcome_at_all(self) -> None:
+        self.assertEqual(runners.outcome(self.START, {}), "")
+
+    def test_a_rerun_does_not_inherit_the_first_attempts_verdict(self) -> None:
+        first, again = runners.job_ref(self.END), runners.job_ref(self.RERUN)
+        assert first is not None and again is not None
+        self.assertNotEqual(first, again)
+        self.assertIn("unknown", runners.outcome(self.RERUN, {first: "success"}))
+
+    def test_attempts_resolve_against_the_attempt_endpoint(self) -> None:
+        first, again = runners.job_ref(self.END), runners.job_ref(self.RERUN)
+        assert first is not None and again is not None
+        self.assertEqual(
+            first.api_path("fairchild/workspaces"),
+            "repos/fairchild/workspaces/actions/runs/31345686688",
+        )
+        self.assertEqual(
+            again.api_path("fairchild/workspaces"),
+            "repos/fairchild/workspaces/actions/runs/31345686688/attempts/2",
+        )
+
+    def test_offline_resolves_nothing_instead_of_guessing(self) -> None:
+        runner = make(repo="fairchild/workspaces")
+        self.assertEqual(runners.conclusions([self.END], [runner], offline=True), {})
+
+    def test_a_repo_with_no_local_runner_is_not_queried(self) -> None:
+        # Nothing maps "workspaces" to an owner, so there is no URL to ask.
+        self.assertEqual(runners.conclusions([self.END], [], offline=False), {})
+
+
+class OutcomeResolutionTests(unittest.TestCase):
+    """Asking GitHub is the only way to know, so ask once and keep the answer.
+
+    A concluded attempt never changes its verdict, which makes the answer
+    cacheable forever and keeps the cost proportional to new jobs rather than
+    to how often the tool is run.
+    """
+
+    LINE = "2026-08-10T02:04:48Z  END    workspaces  Release/build  v0.24.0  run=31345686688"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.original_cache = runners.OUTCOME_CACHE
+        self.original_gh = runners.gh_json
+        runners.OUTCOME_CACHE = Path(self.tmp.name) / "outcomes.json"
+        self.calls: list[str] = []
+        self.runners = [make(repo="fairchild/workspaces")]
+
+    def tearDown(self) -> None:
+        runners.OUTCOME_CACHE = self.original_cache
+        runners.gh_json = self.original_gh
+        self.tmp.cleanup()
+
+    def answer(self, conclusion: str | None) -> None:
+        def fake(path: str) -> dict:
+            self.calls.append(path)
+            return {"conclusion": conclusion}
+
+        runners.gh_json = fake
+
+    def resolve(self, lines: list[str] | None = None, offline: bool = False) -> dict:
+        return runners.conclusions(lines or [self.LINE], self.runners, offline=offline)
+
+    def test_a_verdict_is_fetched_once_and_then_remembered(self) -> None:
+        self.answer("failure")
+        self.assertEqual(list(self.resolve().values()), ["failure"])
+        self.assertEqual(len(self.calls), 1)
+
+        self.answer(None)  # a second fetch would now return nothing
+        self.assertEqual(list(self.resolve().values()), ["failure"])
+        self.assertEqual(len(self.calls), 1, "cached verdict was re-fetched")
+
+    def test_a_run_still_in_flight_is_not_remembered_as_a_verdict(self) -> None:
+        self.answer(None)
+        self.assertEqual(self.resolve(), {})
+        self.answer("success")
+        self.assertEqual(list(self.resolve().values()), ["success"])
+
+    def test_offline_still_reports_what_is_already_known(self) -> None:
+        self.answer("failure")
+        self.resolve()
+        self.assertEqual(list(self.resolve(offline=True).values()), ["failure"])
+
+    def test_offline_with_nothing_known_resolves_nothing(self) -> None:
+        self.answer("failure")
+        self.assertEqual(self.resolve(offline=True), {})
+        self.assertEqual(self.calls, [])
+
+    def test_a_long_log_resolves_its_newest_lines_and_leaves_the_rest_unknown(self) -> None:
+        self.answer("success")
+        lines = [
+            f"2026-08-10T02:04:48Z  END    workspaces  CI/build  main  run={31000000000 + n}"
+            for n in range(runners.RESOLVE_LIMIT + 4)
+        ]
+        found = self.resolve(lines)
+        self.assertEqual(len(self.calls), runners.RESOLVE_LIMIT)
+        self.assertIn("unknown", runners.outcome(lines[0], found))
+        self.assertIn("success", runners.outcome(lines[-1], found))
+
+
+class CompletedHookTests(unittest.TestCase):
+    """The hook records identity and never fails the job it is reporting on."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = Path(self.tmp.name)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def fire(self, **env: str) -> str:
+        result = subprocess.run(
+            ["bash", str(COMPLETE_HOOK)],
+            capture_output=True,
+            text=True,
+            env={"HOME": str(self.home), "PATH": os.environ.get("PATH", ""), **env},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = self.home / ".local/share/runner-activity.log"
+        return log.read_text() if log.is_file() else ""
+
+    def test_logs_the_end_of_the_job_and_the_run_to_ask_about(self) -> None:
+        line = self.fire(
+            GITHUB_REPOSITORY="fairchild/workspaces",
+            GITHUB_JOB="build-sign-notarize-release",
+            GITHUB_WORKFLOW="Release",
+            GITHUB_REF_NAME="v0.24.0",
+            GITHUB_RUN_ID="31345686688",
+        ).strip()
+        self.assertIn("END", line)
+        self.assertNotIn("DONE", line)
+        self.assertEqual(runners.job_ref(line), runners.JobRef("workspaces", "31345686688", 1))
+
+    def test_a_rerun_records_which_attempt_it_was(self) -> None:
+        line = self.fire(
+            GITHUB_REPOSITORY="fairchild/workspaces",
+            GITHUB_JOB="build",
+            GITHUB_WORKFLOW="Release",
+            GITHUB_REF_NAME="v0.24.0",
+            GITHUB_RUN_ID="31345686688",
+            GITHUB_RUN_ATTEMPT="2",
+        ).strip()
+        ref = runners.job_ref(line)
+        assert ref is not None
+        self.assertEqual(ref.attempt, 2)
+
+    def test_first_attempt_stays_unadorned(self) -> None:
+        line = self.fire(
+            GITHUB_REPOSITORY="fairchild/workspaces",
+            GITHUB_JOB="build",
+            GITHUB_WORKFLOW="Release",
+            GITHUB_REF_NAME="main",
+            GITHUB_RUN_ID="1",
+            GITHUB_RUN_ATTEMPT="1",
+        )
+        self.assertNotIn("attempt=", line)
+
+    def test_a_job_with_no_run_id_still_logs_and_still_exits_clean(self) -> None:
+        # A hook that exits non-zero fails the CI job it is only observing, so
+        # missing environment degrades the line rather than the run.
+        line = self.fire().strip()
+        self.assertIn("END", line)
+        self.assertIsNone(runners.job_ref(line))
+
+    def test_line_stays_parseable_when_the_ref_is_hostile(self) -> None:
+        line = self.fire(
+            GITHUB_REPOSITORY="fairchild/workspaces",
+            GITHUB_JOB="build",
+            GITHUB_WORKFLOW="Release",
+            GITHUB_REF_NAME='we|ird"ref',
+            GITHUB_RUN_ID="99",
+        ).strip()
+        self.assertNotIn("|", line)
+        self.assertEqual(runners.job_ref(line), runners.JobRef("workspaces", "99", 1))
 
 
 class FormattingTests(unittest.TestCase):
