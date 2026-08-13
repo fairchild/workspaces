@@ -30,6 +30,31 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CODEX_ENVIRONMENT = (REPO_ROOT / ".codex/environments/workspaces.toml").read_text()
 assert 'script = "./scripts/setup --fast"' in CODEX_ENVIRONMENT
 
+MISE_ACTION = "jdx/mise-action@"
+
+
+def mise_action_pins() -> dict[str, str]:
+    """{workflow filename: pinned version} for every jdx/mise-action step.
+
+    Found by scanning rather than from a list, so a workflow added tomorrow is
+    covered without anyone remembering to register it — the same reason
+    scripts/mise-pin-refresh.py discovers its workflow sites.
+    """
+    pins: dict[str, str] = {}
+    for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        lines = path.read_text().splitlines()
+        for index, line in enumerate(lines):
+            if MISE_ACTION not in line:
+                continue
+            for following in lines[index + 1 : index + 12]:
+                match = re.match(r"\s+version:\s*(\S+)\s*$", following)
+                if match:
+                    pins[path.name] = match.group(1)
+                    break
+                if re.match(r"\s+- (uses|name):", following):
+                    break
+    return pins
+
 
 class SecurityHardeningTests(unittest.TestCase):
     def run_bash(self, script: str, *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -332,6 +357,29 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("MISE_VERSION='${MISE_VERSION}'", sandbox)
         self.assertIn("sha256sum -c -", sandbox)
         self.assertNotIn("mise-latest-linux-x64", sandbox)
+
+    def test_workflow_mise_pins_track_the_managed_version(self) -> None:
+        """Every jdx/mise-action pin equals the version mise-pin-refresh.py manages.
+
+        release.yml pinned mise at a version whose upstream release assets had
+        been pruned, so the signing lane 404'd on a cache miss mid-release
+        (#1297). The pin was not the problem; nothing refreshing it was. This
+        fails the PR that lets a workflow pin drift from the managed one —
+        including a newly added workflow the refresher has never seen.
+        """
+        verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
+        managed = re.search(r'^MISE_EXPECTED_VERSION="v([^"]+)"', verify_mise, re.M).group(1)
+
+        pins = mise_action_pins()
+        self.assertTrue(pins, "no jdx/mise-action pins found; has the action been renamed?")
+        for workflow, version in sorted(pins.items()):
+            self.assertEqual(
+                version,
+                managed,
+                f".github/workflows/{workflow} pins mise {version}, but the managed pin is "
+                f"{managed}. Run `uv run --script scripts/mise-pin-refresh.py --apply` — it "
+                "discovers workflow pins, so a new workflow needs no registration.",
+            )
 
     def test_mise_security_workflow_runs_for_mise_changes(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/mise-security.yml").read_text()
