@@ -1,12 +1,19 @@
 # Signing Runner Setup
 
-Use this runbook to provision or relabel the dedicated `[self-hosted, signing-host]` lane required by the `Release` workflow.
+> **The `Release` workflow no longer uses this lane.** Signing and notarization
+> run on hosted `macos-15`, taking every credential from repository secrets. This
+> runbook is retained as the revert path: hosted notarization has not yet run
+> green, and until it does, `blue-workspaces` stays registered with `signing-host`
+> so releases can be moved back with a one-line `runs-on` change. Once a hosted
+> release notarizes, the runner is deregistered and this document goes with it.
 
-## Why this exists
+Use this runbook to provision or relabel the dedicated `[self-hosted, signing-host]` lane.
 
-The release workflow intentionally does not run on a generic self-hosted runner. It targets `[self-hosted, signing-host]` so signing and notarization stay isolated from routine desktop CI and Tart UI automation.
+## Why it existed
 
-`signing-host` is a mutable GitHub runner label, not repo state. If no online runner advertises it, `Release` jobs will remain queued even when self-hosted runners are otherwise healthy.
+Targeting `[self-hosted, signing-host]` rather than a generic self-hosted runner kept signing and notarization isolated from routine desktop CI and Tart UI automation.
+
+`signing-host` is a mutable GitHub runner label, not repo state. A workflow that targets it will queue indefinitely if no online runner advertises it, even when other self-hosted runners are healthy.
 
 Runner readiness is separate from protected environment approval. The release
 workflow may wait on the GitHub `release` environment before checkout, signing

@@ -37,7 +37,7 @@ Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an ex
 
 ## High-Signal Lessons (unconditional)
 
-- **Never use bare `self-hosted` for workflows in this repo.** Use GitHub-hosted macOS (`macos-15`) for generic build/test jobs, for the UI smoke lane (`ui-smoke-advisory.yml`), and for agent evidence (`_evidence.yml`); use `[self-hosted, signing-host]` for release/signing/notarization. `signing-host` is the only self-hosted lane — `lume-macos` and `tart-ui` are retired and `.github/actionlint.yaml` rejects them. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
+- **Every workflow lane is GitHub-hosted `macos-15`** — generic build/test, the UI smoke lane (`ui-smoke-advisory.yml`), agent evidence (`_evidence.yml`), and release/signing/notarization. No workflow targets a self-hosted runner, so never write one in: `lume-macos` and `tart-ui` are retired and `.github/actionlint.yaml` rejects them. `blue-workspaces` still carries `signing-host` and stays registered until a hosted release notarizes — it is a fallback, not a lane. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
 - **Ship a diagnostic probe instead of your third guess.** When you're guessing, stop and instrument.
 - **The tracker lags the code — verify before planning from it.** Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
 

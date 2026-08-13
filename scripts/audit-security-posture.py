@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -21,7 +22,11 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_RUNNER_LABELS = {"signing-host", "lume-macos"}
+# Lanes that were decommissioned. `tart-ui` per
+# docs/decisions/perf-measurement-laptop-optin.md, `lume-macos` per the #1288
+# follow-up. A workflow reaching for either is targeting hardware that is gone.
+RETIRED_RUNNER_LABELS = {"lume-macos", "tart-ui"}
+SELF_HOSTED_RUNS_ON = re.compile(r"runs-on:\s*\[\s*self-hosted\s*,\s*([A-Za-z0-9_-]+)\s*\]")
 EXPECTED_ENVIRONMENTS = {"release"}
 EXPECTED_REPO_SECRETS = {
     "APPLE_API_ISSUER_ID",
@@ -66,6 +71,20 @@ def gh_json(args: list[str]) -> object:
     return json.loads(result.stdout)
 
 
+def self_hosted_lanes(workflow_dir: Path) -> dict[str, set[str]]:
+    """Self-hosted lane label -> workflows targeting it, read from the workflows.
+
+    Derived rather than hardcoded: the previous fixed expectation outlived the
+    lanes it named and kept asserting a release runner the workflows had already
+    stopped using.
+    """
+    lanes: dict[str, set[str]] = {}
+    for path in sorted(workflow_dir.glob("*.yml")):
+        for label in SELF_HOSTED_RUNS_ON.findall(path.read_text(encoding="utf-8")):
+            lanes.setdefault(label, set()).add(path.name)
+    return lanes
+
+
 def local_workflow_checks() -> list[Check]:
     checks: list[Check] = []
     workflow_dir = REPO_ROOT / ".github/workflows"
@@ -91,9 +110,22 @@ def local_workflow_checks() -> list[Check]:
     )
     checks.append(
         Check(
-            "pass" if "runs-on: [self-hosted, signing-host]" in release else "fail",
-            "release workflow uses signing-host runner",
-            "signing-host label referenced" if "signing-host" in release else "missing",
+            "pass" if "runs-on: macos-15" in release else "fail",
+            "release workflow runs on a hosted image",
+            "macos-15" if "runs-on: macos-15" in release else "no hosted runs-on found",
+        )
+    )
+
+    lanes = self_hosted_lanes(workflow_dir)
+    retired = sorted(
+        f"{label} ({', '.join(sorted(lanes[label]))})"
+        for label in lanes.keys() & RETIRED_RUNNER_LABELS
+    )
+    checks.append(
+        Check(
+            "fail" if retired else "pass",
+            "no workflow targets a retired runner lane",
+            "; ".join(retired) if retired else "none targeted",
         )
     )
 
@@ -140,14 +172,22 @@ def remote_runner_checks(repo: str) -> list[Check]:
         for label in runner.get("labels", [])
         if isinstance(label, dict) and label.get("name")
     }
-    missing_required = sorted(REQUIRED_RUNNER_LABELS - labels)
+    required = set(self_hosted_lanes(REPO_ROOT / ".github/workflows"))
+    missing_required = sorted(required - labels)
+    if not required:
+        detail = (
+            f"no workflow targets a self-hosted lane; {len(runners)} runner(s) still registered"
+            if runners
+            else "no workflow targets a self-hosted lane; none registered"
+        )
+        return [Check("pass", "self-hosted lanes workflows depend on", detail)]
     return [
         Check(
             "fail" if missing_required else "pass",
-            "release/agent runner labels",
+            "self-hosted lanes workflows depend on",
             f"missing: {', '.join(missing_required)}"
             if missing_required
-            else "required labels present",
+            else f"present: {', '.join(sorted(required))}",
         ),
     ]
 

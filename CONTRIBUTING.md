@@ -108,17 +108,17 @@ workspaces/
 
 ## CI Runner Lanes
 
-Generic lint/build/test CI runs on GitHub-hosted macOS (`macos-15`) and is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. The behavioral UI smoke lane (`ui-smoke-advisory.yml`) and the agent evidence lane (`_evidence.yml`) run on the same hosted `macos-15` image. Self-hosted work uses one explicit lane: `[self-hosted, signing-host]` for release/signing/notarization.
+Every lane runs on GitHub-hosted macOS (`macos-15`): generic lint/build/test CI, the behavioral UI smoke lane (`ui-smoke-advisory.yml`), the agent evidence lane (`_evidence.yml`), and release/signing/notarization. Generic CI is path-scoped to product, test, build, and release inputs so docs, backlog, skill, and changelog-only pushes do not consume the hosted macOS queue. No workflow targets a self-hosted runner.
 
 Performance benchmarks are not a CI lane. They run on the owner's laptop, opt-in per run, because the contract budgets are `Mac16,13`-derived and no cloud runner can carry them — see [docs/decisions/perf-measurement-laptop-optin.md](./docs/decisions/perf-measurement-laptop-optin.md) for the protocol and the measurement-hygiene preconditions.
 
-For this repo, the default self-hosted runner layout is:
+One self-hosted runner is still registered, and nothing dispatches to it:
 
 | Runner | Labels | Location |
 |--------|--------|----------|
-| `blue-workspaces` | `self-hosted-macos`, optionally `signing-host` when it is serving as the release lane | `~/.local/share/actions-runner-workspaces` |
+| `blue-workspaces` | `self-hosted-macos`, `signing-host` | `~/.local/share/actions-runner-workspaces` |
 
-The release workflow requires at least one online runner advertising the `signing-host` label before dispatch. That label is operational state in GitHub, not something stored in the repo. If `blue-workspaces` is not carrying the release lane, move `signing-host` to whichever signing-capable runner should own releases. See [docs/development/signing-runner-setup.md](./docs/development/signing-runner-setup.md).
+It is kept as the revert path while hosted signing and notarization are still unproven — notarization last succeeded self-hosted on 2026-07-11 and has not yet run green on `macos-15`. Once a hosted release notarizes, the runner is deregistered and `signing-host` comes out of `.github/actionlint.yaml`. Until then the provisioning runbook stays valid: [docs/development/signing-runner-setup.md](./docs/development/signing-runner-setup.md).
 
 ### Focus stealing prevention
 

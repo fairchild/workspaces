@@ -53,7 +53,7 @@ Homebrew's `gettext` may be keg-only, so the script prepends
    - Distribution: none
 10. Start a manual build and verify that the GitHub check reports back.
 
-Keep release signing/notarization on the existing GitHub Actions signing-host lane until the Xcode Cloud validation lane has proven stable.
+Keep release signing/notarization on the existing GitHub Actions release workflow (hosted `macos-15`) until the Xcode Cloud validation lane has proven stable.
 
 ## Debugging Builds (read this before guessing)
 

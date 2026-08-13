@@ -45,40 +45,12 @@ jobs:
           GITHUB_SERVER_URL: ${{ github.server_url }}
         run: uv run --script scripts/agent-triage-request.py claim
 
-  april-check-runner:
+  april:
     needs: claim
     if: needs.claim.outputs.matched == 'true' && needs.claim.outputs.requested_agent == 'april-clearwater'
+    # Linux. April writes code and prose; anything needing a Mac is macOS
+    # evidence, and that is `april-evidence` below on hosted macos-15.
     runs-on: ubuntu-latest
-    timeout-minutes: 2
-    outputs:
-      runner: ${{ steps.pick.outputs.runner }}
-      is_macos: ${{ steps.pick.outputs.is_macos }}
-    steps:
-      - name: Generate app token
-        id: app-token
-        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
-        with:
-          app-id: ${{ secrets.APRIL_APP_ID }}
-          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
-      - name: Check lume-macos runner availability
-        id: pick
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          STATUS=$(gh api repos/${{ github.repository }}/actions/runners \
-            --jq '.runners[] | select(.labels[].name == "lume-macos") | .status' 2>/dev/null || echo "unknown")
-          if [ "$STATUS" = "online" ]; then
-            echo "runner=[\"self-hosted\", \"lume-macos\"]" >> "$GITHUB_OUTPUT"
-            echo "is_macos=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "runner=\"ubuntu-latest\"" >> "$GITHUB_OUTPUT"
-            echo "is_macos=false" >> "$GITHUB_OUTPUT"
-          fi
-
-  april:
-    needs: [claim, april-check-runner]
-    if: needs.claim.outputs.matched == 'true' && needs.claim.outputs.requested_agent == 'april-clearwater'
-    runs-on: ${{ fromJSON(needs.april-check-runner.outputs.runner) }}
     timeout-minutes: 30
     concurrency:
       group: agent-approved-april-${{ needs.claim.outputs.target_type }}-${{ needs.claim.outputs.target_number }}
@@ -143,8 +115,8 @@ jobs:
           ALLOW_PRIVILEGED_PATCH: ${{ needs.claim.outputs.privileged_patch_approved }}
 
   april-evidence:
-    needs: [claim, april-check-runner, april]
-    if: needs.claim.outputs.matched == 'true' && needs.claim.outputs.requested_agent == 'april-clearwater' && needs.april-check-runner.outputs.is_macos == 'false' && needs.april.outputs.needs_macos_evidence == 'true'
+    needs: [claim, april]
+    if: needs.claim.outputs.matched == 'true' && needs.claim.outputs.requested_agent == 'april-clearwater' && needs.april.outputs.needs_macos_evidence == 'true'
     uses: ./.github/workflows/_evidence.yml
     with:
       pr_branch: ${{ needs.april.outputs.pr_branch }}
