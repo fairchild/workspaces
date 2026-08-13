@@ -254,7 +254,7 @@ JOB_LINE = re.compile(
     r"(?:\s+run=(?P<run>\d+))?(?:\s+attempt=(?P<attempt>\d+))?\s*$"
 )
 
-OUTCOME: dict[str, tuple[str, str]] = {
+OUTCOME_GLYPH: dict[str, tuple[str, str]] = {
     "success": ("✓", "32"),
     "failure": ("✗", "31"),
     "cancelled": ("⊘", "33"),
@@ -363,7 +363,7 @@ def outcome(line: str, found: dict[JobRef, str]) -> str:
         return ""
     ref = job_ref(line)
     verdict = found.get(ref, "") if ref else ""
-    glyph, code = OUTCOME.get(verdict, ("?", "90"))
+    glyph, code = OUTCOME_GLYPH.get(verdict, ("?", "90"))
     return "  " + paint(f"{glyph} {verdict or 'unknown'}", code)
 
 
