@@ -21,6 +21,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "audit-security-posture.py"
 
@@ -216,6 +218,38 @@ class ReleaseLane(unittest.TestCase):
             targets = audit.job_targets(workflow_dir(Path(raw), release=release))
         offenders = [t.job for t in targets if t.workflow == "release.yml" and t.self_hosted]
         self.assertEqual(offenders, ["build-sign-notarize-release"])
+
+    def test_signing_host_is_retired_not_merely_unused(self) -> None:
+        """`blue-workspaces` was deregistered 2026-08-13; nothing carries the label.
+
+        Before that the lane was idle but real, so a revert only had to be
+        deliberate. Now it targets hardware that does not exist, which queues
+        the job forever instead of failing it — the same shape as `lume-macos`.
+        """
+        import tempfile
+
+        release = """\
+            name: Release
+            on: workflow_dispatch
+            jobs:
+              build-sign-notarize-release:
+                runs-on: [self-hosted, signing-host]
+                steps:
+                  - run: "true"
+            """
+        with tempfile.TemporaryDirectory() as raw:
+            targets = audit.job_targets(workflow_dir(Path(raw), release=release))
+        retired = [
+            t.job
+            for t in targets
+            if {label.lower() for label in t.labels} & audit.RETIRED_RUNNER_LABELS
+        ]
+        self.assertEqual(retired, ["build-sign-notarize-release"])
+
+    def test_actionlint_allows_no_self_hosted_label(self) -> None:
+        """Lint and the audit have to agree, or one of them waves the revert through."""
+        config = yaml.safe_load((REPO_ROOT / ".github/actionlint.yaml").read_text())
+        self.assertEqual(config["self-hosted-runner"]["labels"], [])
 
 
 if __name__ == "__main__":
