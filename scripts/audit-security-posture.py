@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pyyaml"]
 # ///
 """Report operational security posture for release and agent automation.
 
@@ -19,9 +19,17 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-REQUIRED_RUNNER_LABELS = {"signing-host", "lume-macos"}
+# Lanes that were decommissioned. `tart-ui` per
+# docs/decisions/perf-measurement-laptop-optin.md, `lume-macos` per the #1288
+# follow-up. A workflow reaching for either is targeting hardware that is gone.
+RETIRED_RUNNER_LABELS = {"lume-macos", "tart-ui"}
+# OS and architecture qualifiers, not lanes: they narrow which self-hosted
+# machine takes the job, they do not name a purpose.
+RUNNER_QUALIFIER_LABELS = {"self-hosted", "macos", "linux", "windows", "arm64", "x64", "x86"}
 EXPECTED_ENVIRONMENTS = {"release"}
 EXPECTED_REPO_SECRETS = {
     "APPLE_API_ISSUER_ID",
@@ -66,6 +74,88 @@ def gh_json(args: list[str]) -> object:
     return json.loads(result.stdout)
 
 
+@dataclass(frozen=True)
+class JobTarget:
+    workflow: str
+    job: str
+    labels: tuple[str, ...]
+    dynamic: bool
+
+    @property
+    def self_hosted(self) -> bool:
+        return "self-hosted" in {label.lower() for label in self.labels}
+
+    @property
+    def lanes(self) -> list[str]:
+        """Purpose labels, with OS/arch qualifiers dropped.
+
+        A target of `[self-hosted, macOS, ARM64]` names no lane but is still
+        self-hosted, so it reports under its own name rather than disappearing
+        once the qualifiers are filtered out.
+        """
+        named = [label for label in self.labels if label.lower() not in RUNNER_QUALIFIER_LABELS]
+        return named or ["self-hosted (unqualified)"]
+
+
+def workflow_paths(workflow_dir: Path) -> list[Path]:
+    return sorted([*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")])
+
+
+def job_targets(workflow_dir: Path) -> list[JobTarget]:
+    """Every job's `runs-on`, parsed as YAML rather than matched as text.
+
+    `runs-on` accepts a scalar, a sequence, a `group`/`labels` mapping, or an
+    expression, and any of them can carry comments or quoting. A line matcher
+    reads several of those as "nothing self-hosted here" — the exact false PASS
+    this check exists to prevent — so the structure is parsed, and anything that
+    only resolves at run time is marked `dynamic` instead of assumed empty.
+    """
+    targets: list[JobTarget] = []
+    for path in workflow_paths(workflow_dir):
+        try:
+            document = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            targets.append(JobTarget(path.name, "<unparseable>", (), True))
+            continue
+        if not isinstance(document, dict):
+            continue
+        jobs = document.get("jobs")
+        if not isinstance(jobs, dict):
+            continue
+        for name, job in jobs.items():
+            if not isinstance(job, dict) or "runs-on" not in job:
+                continue  # reusable-workflow call: `uses:`, no runner of its own
+            targets.append(_target(path.name, str(name), job["runs-on"]))
+    return targets
+
+
+def _target(workflow: str, job: str, runs_on: object) -> JobTarget:
+    if isinstance(runs_on, dict):  # {group: ..., labels: [...]}
+        raw = [runs_on.get("group"), *(runs_on.get("labels") or [])]
+    elif isinstance(runs_on, (list, tuple)):
+        raw = list(runs_on)
+    else:
+        raw = [runs_on]
+    labels = [str(item) for item in raw if item is not None]
+    return JobTarget(workflow, job, tuple(labels), any("${{" in label for label in labels))
+
+
+def self_hosted_lanes(workflow_dir: Path) -> dict[str, set[str]]:
+    """Self-hosted lane label -> workflows targeting it, read from the workflows.
+
+    Derived rather than hardcoded: the previous fixed expectation outlived the
+    lanes it named and kept asserting a release runner the workflows had already
+    stopped using.
+    """
+    lanes: dict[str, set[str]] = {}
+    for target in job_targets(workflow_dir):
+        if not target.self_hosted:
+            continue
+        for lane in target.lanes:
+            lanes.setdefault(lane, set()).add(target.workflow)
+    return lanes
+
+
 def local_workflow_checks() -> list[Check]:
     checks: list[Check] = []
     workflow_dir = REPO_ROOT / ".github/workflows"
@@ -89,11 +179,53 @@ def local_workflow_checks() -> list[Check]:
             "release environment referenced" if "environment: release" in release else "missing",
         )
     )
+    targets = job_targets(workflow_dir)
+
+    # Every release job, not "some job somewhere is hosted": reverting only the
+    # signing job to self-hosted leaves the other jobs hosted, so a check that
+    # merely finds one hosted `runs-on` passes the regression it guards against.
+    release_self_hosted = sorted(
+        f"{target.job} ({', '.join(target.labels)})"
+        for target in targets
+        if target.workflow == "release.yml" and target.self_hosted
+    )
     checks.append(
         Check(
-            "pass" if "runs-on: [self-hosted, signing-host]" in release else "fail",
-            "release workflow uses signing-host runner",
-            "signing-host label referenced" if "signing-host" in release else "missing",
+            "fail" if release_self_hosted else "pass",
+            "every release job runs on a hosted image",
+            "; ".join(release_self_hosted)
+            if release_self_hosted
+            else "no release job targets a self-hosted runner",
+        )
+    )
+
+    retired = sorted(
+        f"{target.workflow}:{target.job} ({', '.join(target.labels)})"
+        for target in targets
+        if {label.lower() for label in target.labels} & RETIRED_RUNNER_LABELS
+    )
+    checks.append(
+        Check(
+            "fail" if retired else "pass",
+            "no workflow targets a retired runner lane",
+            "; ".join(retired) if retired else "none targeted",
+        )
+    )
+
+    # Separate check, because "found no retired lane" and "could read every
+    # target" are different claims and a run-time expression only supports the
+    # first. Folding them together reports a clean bill for a lane the audit
+    # never actually saw.
+    unresolved = sorted(
+        f"{target.workflow}:{target.job}" for target in targets if target.dynamic
+    )
+    checks.append(
+        Check(
+            "fail" if unresolved else "pass",
+            "every runs-on is statically verifiable",
+            "resolves only at run time: " + ", ".join(unresolved)
+            if unresolved
+            else "no expression-valued runs-on",
         )
     )
 
@@ -140,14 +272,22 @@ def remote_runner_checks(repo: str) -> list[Check]:
         for label in runner.get("labels", [])
         if isinstance(label, dict) and label.get("name")
     }
-    missing_required = sorted(REQUIRED_RUNNER_LABELS - labels)
+    required = set(self_hosted_lanes(REPO_ROOT / ".github/workflows"))
+    missing_required = sorted(required - labels)
+    if not required:
+        detail = (
+            f"no workflow targets a self-hosted lane; {len(runners)} runner(s) still registered"
+            if runners
+            else "no workflow targets a self-hosted lane; none registered"
+        )
+        return [Check("pass", "self-hosted lanes workflows depend on", detail)]
     return [
         Check(
             "fail" if missing_required else "pass",
-            "release/agent runner labels",
+            "self-hosted lanes workflows depend on",
             f"missing: {', '.join(missing_required)}"
             if missing_required
-            else "required labels present",
+            else f"present: {', '.join(sorted(required))}",
         ),
     ]
 

@@ -1,12 +1,19 @@
 # Signing Runner Setup
 
-Use this runbook to provision or relabel the dedicated `[self-hosted, signing-host]` lane required by the `Release` workflow.
+> **The `Release` workflow no longer uses this lane.** Signing and notarization
+> run on hosted `macos-15`, taking every credential from repository secrets. This
+> runbook is retained as the revert path: hosted notarization has not yet run
+> green, and until it does, `blue-workspaces` stays registered with `signing-host`
+> so releases can be moved back with a one-line `runs-on` change. Once a hosted
+> release notarizes, the runner is deregistered and this document goes with it.
 
-## Why this exists
+Use this runbook to provision or relabel the dedicated `[self-hosted, signing-host]` lane.
 
-The release workflow intentionally does not run on a generic self-hosted runner. It targets `[self-hosted, signing-host]` so signing and notarization stay isolated from routine desktop CI and Tart UI automation.
+## Why it existed
 
-`signing-host` is a mutable GitHub runner label, not repo state. If no online runner advertises it, `Release` jobs will remain queued even when self-hosted runners are otherwise healthy.
+Targeting `[self-hosted, signing-host]` rather than a generic self-hosted runner kept signing and notarization isolated from routine desktop CI and Tart UI automation.
+
+`signing-host` is a mutable GitHub runner label, not repo state. A workflow that targets it will queue indefinitely if no online runner advertises it, even when other self-hosted runners are healthy.
 
 Runner readiness is separate from protected environment approval. The release
 workflow may wait on the GitHub `release` environment before checkout, signing
@@ -58,9 +65,25 @@ gh api repos/fairchild/workspaces/actions/runners \
 
 Confirm at least one online runner now includes `signing-host`.
 
-## 4. Verify release scheduling
+## 4. Point the release workflow back at the lane
 
-Dispatch or observe a `Release` workflow run and confirm the job lands on the expected lane:
+Steps 1–3 make the runner available; they do not route anything to it. As shipped,
+`build-sign-notarize-release` in `.github/workflows/release.yml` is `runs-on: macos-15`,
+so dispatching `Release` now will not touch this runner no matter how healthy it is.
+Reverting is a one-line, deliberate change:
+
+```yaml
+  build-sign-notarize-release:
+    runs-on: [self-hosted, signing-host]
+```
+
+Land that through a PR that says which hosted signing or notarization failure
+prompted it — `scripts/audit-security-posture.py` fails on it by design, and
+`.github/actionlint.yaml` still accepts the label so lint will not block you.
+
+## 5. Verify release scheduling
+
+With the revert merged, dispatch or observe a `Release` run and confirm the job lands on the expected lane:
 
 ```bash
 gh workflow run release.yml --ref main

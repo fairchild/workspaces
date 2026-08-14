@@ -117,8 +117,8 @@ jobs:
           cache: true
 
       # check-perf-benchmarks.py and summarize_perf_log.py are UV scripts, and
-      # .mise.toml does not provide uv — without this the signing host resolves
-      # it from ambient PATH, which a launchd-started runner does not inherit.
+      # .mise.toml does not provide uv — without this the job resolves it from
+      # ambient PATH, which the hosted image does not carry.
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
       - name: Build GhosttyKit

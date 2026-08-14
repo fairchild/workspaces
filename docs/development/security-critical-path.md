@@ -27,12 +27,16 @@ not a broad public security stance.
 
 ## Release And Update Chain
 
-- Release signing stays on `[self-hosted, signing-host]` behind the protected
-  `release` environment.
+- Release signing runs on hosted `macos-15` behind the protected `release`
+  environment. Every credential comes from repository secrets and the
+  certificate is imported into a temporary keychain the job creates and
+  destroys, so no signing material persists on the runner.
 - The signing job has read-only repository permissions; publication is isolated
   in a separate `contents: write` job.
-- The signing workflow fails closed if required host tools such as `mise` are
-  missing instead of installing them live.
+- Host tooling comes from SHA-pinned actions at pinned versions — `mise` via
+  `jdx/mise-action`, `uv` via `astral-sh/setup-uv` — never from an unpinned
+  `curl | sh` or a package manager resolving latest at run time.
+  `scripts/tests/test_security_hardening.py` enforces this.
 - Cleanup removes decoded certificate, provisioning profile, App Store Connect
   API key, and temporary keychain artifacts in `always()`.
 - Sparkle appcasts are verified cryptographically against `SUPublicEDKey` and

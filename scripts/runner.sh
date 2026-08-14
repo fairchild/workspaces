@@ -154,7 +154,7 @@ cmd_setup() {
 
     if [[ "${RUNNER_LABELS}" == "self-hosted-macos,macos,$(uname -m)" ]]; then
         log_warn "RUNNER_LABELS is using the generic default (${RUNNER_LABELS})."
-        log_warn "Repo workflows target explicit lanes ('lume-macos', 'signing-host'); set RUNNER_LABELS accordingly before setup."
+        log_warn "No repo workflow currently dispatches to a self-hosted runner; a runner registered with these labels will sit idle."
     fi
 
     if [ ! -f "${RUNNER_DIR}/config.sh" ]; then
@@ -316,9 +316,10 @@ Examples:
   $0 status    # Check if running
 
 Notes:
-  The default RUNNER_LABELS (${RUNNER_LABELS}) is a generic label set. Repo
-  workflows only target explicit lanes (lume-macos, signing-host), so export
-  RUNNER_LABELS before setup when provisioning a workflow runner.
+  The default RUNNER_LABELS (${RUNNER_LABELS}) is a generic label set. No repo
+  workflow currently dispatches to a self-hosted runner — every lane is hosted
+  macos-15 — so a runner set up here will idle unless a workflow is pointed at
+  it. See docs/development/signing-runner-setup.md.
 EOF
 }
 
