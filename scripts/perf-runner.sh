@@ -38,6 +38,7 @@ EOF
 }
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT_DIR/scripts/lib/perf-process.sh"
 SCENARIO=""
 APP_PATH="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 RUNS=5
@@ -268,6 +269,23 @@ run_channel() {
     fi
     UV_CACHE_DIR="${UV_CACHE_DIR:-/tmp/workspaces-uv-cache}" "${cmd[@]}"
 }
+
+# Whole-run sweep. Each lane already gates its own teardown, but a scenario that
+# exits early — an unsupported flag, a failed summarizer, an interrupt — skips
+# that gate, and the survivor only reappears as a slower number in whatever runs
+# next. Checked for both build kinds because a run can be pointed at either.
+sweep_survivors() {
+    local status=$?
+    local label="perf-runner sweep"
+    local binary
+    for binary in \
+        "$(normalize_installed_app_path "$APP_PATH")" \
+        "$ROOT_DIR/.build/debug/WorkspaceManager"; do
+        perf_assert_clean_exit "$binary" "$label" || status=1
+    done
+    return "$status"
+}
+trap 'sweep_survivors || exit 1' EXIT
 
 case "$SCENARIO" in
     debug_no_activate)
