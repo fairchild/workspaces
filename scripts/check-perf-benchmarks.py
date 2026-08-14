@@ -16,6 +16,9 @@ the release being cut — pass at 0, warn at 1, fail at 2 or more. Absent or emp
 evidence fails, because #1238's rule is that a skipped measurement must never be
 indistinguishable from a passing one.
 
+--tag names the release being cut: v<version>, or the tester prerelease
+workspaces-v<version>-main.<run>, which is graded as the release it rehearses.
+
 Usage: check-perf-benchmarks.py --tag v0.25.0 [--format github]
 Exit 0 when evidence is current or one release stale, 1 when it is older or missing.
 """
@@ -24,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -32,6 +36,25 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CSV = REPO_ROOT / "docs" / "performance_benchmarks.csv"
 BLOCK_AFTER = 2
 RELEASE_TAG_GLOB = "v*"
+VERSION = r"\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.]+)?"
+RELEASE_TAG_RE = re.compile(rf"^v{VERSION}$")
+PRERELEASE_TAG_RE = re.compile(rf"^workspaces-(v{VERSION})-main\.\d+$")
+
+
+def release_tag(raw: str) -> str:
+    """The release a ref cuts.
+
+    A tester prerelease (`workspaces-v0.24.0-main.7`) rehearses the release it is
+    named for, so it is graded as that release. Anything else — a branch, `HEAD`,
+    a bare commit — holds no position in a sequence of releases, and measuring a
+    distance to it yields a confident number rather than an answer.
+    """
+    prerelease = PRERELEASE_TAG_RE.match(raw)
+    if prerelease:
+        return prerelease.group(1)
+    if RELEASE_TAG_RE.match(raw):
+        return raw
+    raise ValueError(raw)
 
 
 def release_tags(repo_root: Path) -> list[str]:
@@ -97,6 +120,19 @@ def main() -> int:
     parser.add_argument("--format", choices=("plain", "github"), default="plain")
     args = parser.parse_args()
 
+    try:
+        tag = release_tag(args.tag)
+    except ValueError:
+        emit(
+            "error",
+            f"{args.tag} is not a release tag, so its distance from the newest benchmarked "
+            "release is not a number worth reporting. Pass v<version>, or the tester "
+            "prerelease workspaces-v<version>-main.<run>. The release workflow reads it "
+            "from ./scripts/release-version.sh print-tag.",
+            args.format,
+        )
+        return 1
+
     benchmarked = benchmarked_tags(args.csv)
     if not benchmarked:
         emit(
@@ -108,17 +144,17 @@ def main() -> int:
         )
         return 1
 
-    gap = releases_since(release_tags(args.repo_root), set(benchmarked), args.tag)
+    gap = releases_since(release_tags(args.repo_root), set(benchmarked), tag)
     newest = benchmarked[-1]
 
     if gap == 0:
-        print(f"ok: {args.tag} has committed performance benchmarks")
+        print(f"ok: {tag} has committed performance benchmarks")
         return 0
 
     if gap < BLOCK_AFTER:
         emit(
             "warning",
-            f"No performance benchmarks for {args.tag}; newest is {newest} "
+            f"No performance benchmarks for {tag}; newest is {newest} "
             f"({gap} release behind). Release proceeds, but the next one is blocked "
             "unless benchmarks are updated. See docs/performance_benchmarks.md.",
             args.format,
@@ -127,7 +163,7 @@ def main() -> int:
 
     emit(
         "error",
-        f"Performance benchmarks are {gap} releases stale (newest: {newest}, releasing: {args.tag}). "
+        f"Performance benchmarks are {gap} releases stale (newest: {newest}, releasing: {tag}). "
         f"Release blocked at {BLOCK_AFTER}. Run ./scripts/perf-runner.sh on a laptop and add a row "
         "to docs/performance_benchmarks.csv — see docs/performance_benchmarks.md.",
         args.format,
