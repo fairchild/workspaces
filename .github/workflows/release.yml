@@ -100,8 +100,8 @@ jobs:
             # same name even when the environment copy is empty, which presents
             # as a missing credential while a working repository value sits
             # underneath it.
-            echo "::error::Release config resolved empty: ${missing[*]}"
-            echo "Each name above is unset, or set to an empty value, in the scope this job reads."
+            echo "::error::Release config resolved empty in this job's scope: ${missing[*]}"
+            echo "Each name above is either unset or set to an empty value."
             echo "Secrets resolve environment-first: a value on the 'release' environment wins over"
             echo "the repository secret of the same name, including when it is empty. Check both scopes:"
             echo "  gh secret list --env release"
