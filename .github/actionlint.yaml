@@ -1,10 +1,12 @@
-# Only lanes that workflows may legitimately target. `tart-ui` and `lume-macos`
-# are absent on purpose: both lanes are retired (tart-ui per
-# docs/decisions/perf-measurement-laptop-optin.md, lume-macos per #1288
-# follow-up — agent evidence moved to hosted macos-15), so actionlint now flags
-# any workflow that reaches for either again.
+# Lanes a workflow may legitimately target. The list is empty: this repo has no
+# self-hosted runner. `tart-ui` went with
+# docs/decisions/perf-measurement-laptop-optin.md, `lume-macos` with the #1288
+# follow-up (agent evidence moved to hosted macos-15), and `signing-host` with
+# the deregistration of `blue-workspaces` on 2026-08-13. Any `runs-on` naming a
+# self-hosted label now fails lint rather than queueing against nothing.
+# Re-provisioning a lane means adding its label back here first — see
+# docs/development/signing-runner-setup.md.
 self-hosted-runner:
-  labels:
-    - signing-host
+  labels: []
 
 config-variables: null

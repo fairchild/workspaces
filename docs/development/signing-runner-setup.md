@@ -1,19 +1,23 @@
 # Signing Runner Setup
 
-> **The `Release` workflow no longer uses this lane.** Signing and notarization
-> run on hosted `macos-15`, taking every credential from repository secrets. This
-> runbook is retained as the revert path: hosted notarization has not yet run
-> green, and until it does, `blue-workspaces` stays registered with `signing-host`
-> so releases can be moved back with a one-line `runs-on` change. Once a hosted
-> release notarizes, the runner is deregistered and this document goes with it.
+> **The `Release` workflow no longer uses this lane, and the lane no longer
+> exists.** Signing and notarization run on hosted `macos-15`, taking every
+> credential from repository secrets. `blue-workspaces` — the last runner
+> carrying `signing-host` — was deregistered and removed from the host on
+> 2026-08-13, before hosted notarization had proven itself green. This runbook is
+> retained as the revert path, and that path is now a re-provision from nothing
+> rather than a one-line `runs-on` change. Retire the document once a hosted
+> release notarizes.
 
-Use this runbook to provision or relabel the dedicated `[self-hosted, signing-host]` lane.
+Use this runbook to stand the `[self-hosted, signing-host]` lane back up. Four
+things have to change together — a runner, the lint allowlist, the audit's
+retired set, and `runs-on` — and the release stays hosted until all four land.
 
 ## Why it existed
 
 Targeting `[self-hosted, signing-host]` rather than a generic self-hosted runner kept signing and notarization isolated from routine desktop CI and Tart UI automation.
 
-`signing-host` is a mutable GitHub runner label, not repo state. A workflow that targets it will queue indefinitely if no online runner advertises it, even when other self-hosted runners are healthy.
+`signing-host` is a mutable GitHub runner label. Whether a runner advertises it is not repo state and cannot be read from the tree, and a workflow targeting a label nothing advertises queues indefinitely rather than failing — which is why `.github/actionlint.yaml` and `RETIRED_RUNNER_LABELS` now mirror the label's absence in the repo, so the mistake is caught at lint time instead of at dispatch.
 
 Runner readiness is separate from protected environment approval. The release
 workflow may wait on the GitHub `release` environment before checkout, signing
@@ -33,28 +37,33 @@ gh api repos/fairchild/workspaces/actions/runners \
   --jq '.runners[] | {id, name, status, busy, labels: [.labels[].name]}'
 ```
 
-Confirm there is at least one online runner you want to use for release work.
+As of 2026-08-13 this returns nothing — the repo has no registered runners. If
+you see one, someone has already started; find out who before continuing.
 
-## 2. Assign the `signing-host` label
+## 2. Register a runner and give it the label
 
-Pick the runner by name and add the label in GitHub:
+Nothing to relabel, so start from a fresh install. `scripts/runner.sh` does the
+download, registration, and launchd wiring; its `RUNNER_LABELS` default is a
+generic set, so name the lane explicitly:
 
 ```bash
-RUNNER_NAME=blue-workspaces
-RUNNER_ID="$(
-  gh api repos/fairchild/workspaces/actions/runners \
-    --jq ".runners[] | select(.name == \"${RUNNER_NAME}\") | .id"
-)"
+RUNNER_LABELS=self-hosted-macos,signing-host \
+RUNNER_NAME=blue-workspaces \
+  ./scripts/runner.sh setup
 
-gh api --method POST \
-  "repos/fairchild/workspaces/actions/runners/${RUNNER_ID}/labels" \
-  --raw-field 'labels[]=signing-host'
+./scripts/runner.sh service-install
+./scripts/runner.sh service-start
 ```
+
+`RUNNER_DIR` defaults to `~/.local/share/actions-runner-workspaces` — where the
+removed runner lived, and where `install-runner-hooks.sh` looks. Keep it unless
+you have a reason not to.
 
 Notes:
 
 - Keep the workflow contract explicit. Do not relax `.github/workflows/release.yml` back to bare `self-hosted`.
-- If a different machine should own releases, apply `signing-host` there instead of overloading the interactive desktop runner.
+- Prefer a dedicated machine over an interactive desktop. The removed runner shared a laptop, which is why each job needed an isolated `HOME` to keep it from writing into the owner's `~/.gitconfig`.
+- To label a runner that already exists, `gh api --method POST repos/fairchild/workspaces/actions/runners/<id>/labels --raw-field 'labels[]=signing-host'`.
 
 ## 3. Verify the label is live
 
@@ -65,21 +74,28 @@ gh api repos/fairchild/workspaces/actions/runners \
 
 Confirm at least one online runner now includes `signing-host`.
 
-## 4. Point the release workflow back at the lane
+## 4. Re-admit the lane in the repo, then point the release at it
 
 Steps 1–3 make the runner available; they do not route anything to it. As shipped,
 `build-sign-notarize-release` in `.github/workflows/release.yml` is `runs-on: macos-15`,
 so dispatching `Release` now will not touch this runner no matter how healthy it is.
-Reverting is a one-line, deliberate change:
 
-```yaml
-  build-sign-notarize-release:
-    runs-on: [self-hosted, signing-host]
-```
+Three repo edits do that, and the first two gate the third — skip either and a
+deliberate revert lands as a red PR:
 
-Land that through a PR that says which hosted signing or notarization failure
-prompted it — `scripts/audit-security-posture.py` fails on it by design, and
-`.github/actionlint.yaml` still accepts the label so lint will not block you.
+1. `.github/actionlint.yaml` — add `signing-host` under `self-hosted-runner.labels`. The list is empty, so lint rejects every self-hosted label until you do.
+2. `scripts/audit-security-posture.py` — remove `signing-host` from `RETIRED_RUNNER_LABELS`. It is listed as retired because nothing carries it; once a runner does, that stops being true.
+3. `.github/workflows/release.yml`:
+
+   ```yaml
+     build-sign-notarize-release:
+       runs-on: [self-hosted, signing-host]
+   ```
+
+Land all three in one PR that says which hosted signing or notarization failure
+prompted it. The audit's "every release job runs on a hosted image" check fails
+on the third edit by design — that failure is the record of the decision, so
+explain it rather than silencing it.
 
 ## 5. Verify release scheduling
 
@@ -99,7 +115,7 @@ that gate in GitHub Actions before expecting the runner assignment to proceed.
 
 If repository release credentials are intentionally unavailable in the current environment, stop after the job is claimed by the correct runner.
 
-## 5. Move or remove the label
+## 6. Move or remove the label
 
 If release duties move to a different host:
 

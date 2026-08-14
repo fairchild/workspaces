@@ -1,20 +1,20 @@
 ---
 name: self-hosted-runners
 description: >
-  Inspect and retire this repo's remaining self-hosted GitHub Actions runner.
-  Use when a runner shows offline or busy unexpectedly, or when reasoning
-  about the signing-host retirement. No workflow dispatches to a self-hosted
-  runner, so a queued or failing job is never a runner-health problem.
+  Reason about this repo's retired self-hosted GitHub Actions lanes. Use when a
+  job is queued against a self-hosted label, or when deciding whether to
+  re-provision the signing-host lane. No runner is registered and no workflow
+  dispatches to one, so a queued or failing job is never a runner-health problem.
 ---
 
 # Self-Hosted Runners
 
 Use this skill when the problem is runner health, scheduling, or lane ownership rather than repo code.
 
-**No workflow in this repo dispatches to a self-hosted runner.** Release signing
-and notarization moved to hosted `macos-15` in #1293. `blue-workspaces` still
-carries the `signing-host` label and stays registered as the revert path until a
-hosted release notarizes — it takes no jobs in the meantime.
+**No workflow in this repo dispatches to a self-hosted runner, and none is
+registered.** Release signing and notarization moved to hosted `macos-15` in
+#1293, and `blue-workspaces` — the last runner, carrying `signing-host` — was
+deregistered and removed from the host on 2026-08-13.
 
 That makes runner health the wrong diagnosis for a stuck release. A queued or
 failed release job is a workflow, CI, or credential problem; check
@@ -28,8 +28,9 @@ owner's laptop, opt-in per approved session
 (`docs/decisions/perf-measurement-laptop-optin.md`) — the `tart-ui` lane that
 once carried those is retired as well.
 
-`.github/actionlint.yaml` lists the only labels a workflow may target, so a
-reach for a retired lane fails lint rather than queueing against nothing.
+`.github/actionlint.yaml` lists the only labels a workflow may target, and that
+list is now empty, so any reach for a self-hosted lane fails lint rather than
+queueing against nothing.
 
 Run `./scripts/runners.py` to see every runner on the current machine with its
 local config, launchd state, and GitHub registration reconciled.
@@ -54,20 +55,22 @@ Include one specific run when a queued or failed run is the immediate problem:
 ### 1. Inspect the current lane state
 
 - Run `summarize_runner_state.py` first.
-- `signing-host` is the only lane, so a blocked job is either that lane or not a
-  lane problem at all. A job queued against any other label is a workflow bug —
-  check `.github/actionlint.yaml`.
+- Every lane is retired, so a job queued against any self-hosted label is a
+  workflow bug rather than an outage — check `.github/actionlint.yaml`, which
+  should have rejected it before merge.
 - If a specific run is queued or failed, pass `--run-id`.
 - Read [references/recovery-order.md](references/recovery-order.md) for the standard recovery order.
 
 ### 2. Recover the lane with the smallest safe change
 5. If a host fallback runner goes online and then flips offline while the local process is still alive, treat that as a host-side communication problem rather than a repo problem.
 
-For `signing-host`: nothing to recover. No workflow targets it, so bringing the
-runner online cannot affect a release. Restoring releases to it means editing
-`runs-on` in `release.yml` back to `[self-hosted, signing-host]` first — a
-deliberate revert, not a recovery step. Take it only if hosted signing or
-notarization is what failed, and say so in the PR.
+For `signing-host`: nothing to recover — there is no runner to bring online.
+Restoring releases to it is a re-provision, not a recovery step: register a host
+per `docs/development/signing-runner-setup.md`, add the label back to
+`.github/actionlint.yaml`, drop it from `RETIRED_RUNNER_LABELS` in
+`scripts/audit-security-posture.py`, then change `runs-on` in `release.yml`.
+Take it only if hosted signing or notarization is what failed, and say so in the
+PR.
 
 ### 3. Use the lane-specific repo runbooks
 

@@ -25,8 +25,10 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # Lanes that were decommissioned. `tart-ui` per
 # docs/decisions/perf-measurement-laptop-optin.md, `lume-macos` per the #1288
-# follow-up. A workflow reaching for either is targeting hardware that is gone.
-RETIRED_RUNNER_LABELS = {"lume-macos", "tart-ui"}
+# follow-up, `signing-host` when `blue-workspaces` was deregistered on
+# 2026-08-13. A workflow reaching for any of them is targeting hardware that is
+# gone, so the job queues forever rather than failing.
+RETIRED_RUNNER_LABELS = {"lume-macos", "signing-host", "tart-ui"}
 # OS and architecture qualifiers, not lanes: they narrow which self-hosted
 # machine takes the job, they do not name a purpose.
 RUNNER_QUALIFIER_LABELS = {"self-hosted", "macos", "linux", "windows", "arm64", "x64", "x86"}

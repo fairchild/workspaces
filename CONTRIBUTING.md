@@ -112,13 +112,9 @@ Every lane that needs macOS runs on GitHub-hosted `macos-15`: generic lint/build
 
 Performance benchmarks are not a CI lane. They run on the owner's laptop, opt-in per run, because the contract budgets are `Mac16,13`-derived and no cloud runner can carry them — see [docs/decisions/perf-measurement-laptop-optin.md](./docs/decisions/perf-measurement-laptop-optin.md) for the protocol and the measurement-hygiene preconditions.
 
-One self-hosted runner is still registered, and nothing dispatches to it:
+No self-hosted runner is registered. `blue-workspaces` was the last one — `self-hosted-macos` plus `signing-host`, installed at `~/.local/share/actions-runner-workspaces` — and it was deregistered and removed from the host on 2026-08-13. `.github/actionlint.yaml` now allows no self-hosted label at all, so a `runs-on` reaching for one fails lint rather than queueing against hardware that is gone.
 
-| Runner | Labels | Location |
-|--------|--------|----------|
-| `blue-workspaces` | `self-hosted-macos`, `signing-host` | `~/.local/share/actions-runner-workspaces` |
-
-It is kept as the revert path while hosted signing and notarization are still unproven — notarization last succeeded self-hosted on 2026-07-11 and has not yet run green on `macos-15`. Once a hosted release notarizes, the runner is deregistered and `signing-host` comes out of `.github/actionlint.yaml`. Until then the provisioning runbook stays valid: [docs/development/signing-runner-setup.md](./docs/development/signing-runner-setup.md).
+It came out before the condition it was being held for: hosted notarization still has not run green, and the last successful notarization anywhere was self-hosted on 2026-07-11. So moving releases back is a re-provision, not a label flip — register a runner, add the label to `.github/actionlint.yaml`, drop it from `RETIRED_RUNNER_LABELS` in `scripts/audit-security-posture.py`, then change `runs-on`. The runbook covers all four: [docs/development/signing-runner-setup.md](./docs/development/signing-runner-setup.md).
 
 ### Focus stealing prevention
 
@@ -138,7 +134,7 @@ WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1 swift run WorkspaceManager
 
 ### CI visibility setup
 
-A SwiftBar menu bar plugin shows live runner status so you know when CI is active on your machine.
+A SwiftBar menu bar plugin shows live runner status so you know when CI is active on your machine. Nothing in this repo puts CI there any more, so this is for a host that has been re-provisioned — run it after the runner is registered, not before, since the hook installer writes into each runner's `.env` and has nothing to write to otherwise.
 
 **One-time setup:**
 

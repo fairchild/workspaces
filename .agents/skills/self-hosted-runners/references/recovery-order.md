@@ -20,10 +20,9 @@ Questions to answer first:
 
 No lane does. Every workflow runs hosted, so any job waiting on a self-hosted
 label is a workflow bug — fix the workflow rather than standing hardware back up.
-`lume-macos` and `tart-ui` are retired and `.github/actionlint.yaml` rejects
-them; `signing-host` is still accepted by lint and still carried by
-`blue-workspaces`, but no workflow targets it, so a job queued against it will
-wait forever on a runner that is idle by design.
+`lume-macos`, `tart-ui`, and `signing-host` are all retired, no runner is
+registered, and `.github/actionlint.yaml` allows no self-hosted label, so a job
+that somehow reaches one waits forever on hardware that does not exist.
 
 For a fuller local picture than `summarize_runner_state.py` gives:
 
@@ -44,13 +43,13 @@ never restarts it.
 
 ## 4. Verify build readiness before rerunning CI
 
-For `signing-host`, verify:
+If `signing-host` is being re-provisioned, verify on the new host:
 
 - the runner service can start
 - `xcodebuild -version` works
 - `xcode-select -p` points at a real Xcode app
 
-If those fail, do not rerun the workflow on that host.
+If those fail, do not point a release at that host.
 
 ## 5. Use a fresh host runner rather than salvaging a strange one
 
