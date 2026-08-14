@@ -64,6 +64,27 @@ class StalenessTests(unittest.TestCase):
         self.assertGreaterEqual(gate.releases_since([], {"v0.23.0"}, "v0.25.0"), gate.BLOCK_AFTER)
 
 
+class ReleaseTagTests(unittest.TestCase):
+    """What counts as "the release being cut"."""
+
+    def test_release_tag_is_itself(self) -> None:
+        self.assertEqual(gate.release_tag("v0.25.0"), "v0.25.0")
+
+    def test_prerelease_grades_as_the_release_it_rehearses(self) -> None:
+        # The tester prerelease consumes no release slot and never earns a row,
+        # so grading it as its own release charges it for the tag it de-risks.
+        self.assertEqual(gate.release_tag("workspaces-v0.25.0-main.7"), "v0.25.0")
+
+    def test_prerelease_of_a_prerelease_version_keeps_the_version(self) -> None:
+        self.assertEqual(gate.release_tag("workspaces-v1.0.0-beta.1-main.12"), "v1.0.0-beta.1")
+
+    def test_refs_that_cut_no_release_are_rejected(self) -> None:
+        for raw in ("HEAD", "main", "refs/heads/main", "", "v0.25", "0.25.0"):
+            with self.subTest(raw=raw):
+                with self.assertRaises(ValueError):
+                    gate.release_tag(raw)
+
+
 class GateFixture:
     """A throwaway git repo with real release tags, plus a CSV to point at."""
 
@@ -135,6 +156,24 @@ class ExitCodeTests(GateFixture, unittest.TestCase):
         # No tags exist in this fresh repo, so v0.23.0 sits 2 behind v0.25.0.
         write_csv(self.csv, ["v0.23.0"])
         self.assertEqual(self.run_gate("v0.25.0"), 1)
+
+    def test_prerelease_is_graded_as_the_release_it_rehearses(self) -> None:
+        # The rehearsal has to be at least as easy to pass as the tag it
+        # rehearses, or nobody rehearses. Counting it as its own release put it
+        # one further behind and blocked the cheaper check.
+        write_csv(self.csv, ["v0.24.0"])
+        result = self.gate_result("workspaces-v0.25.0-main.7")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("v0.25.0", result.stdout)
+
+    def test_a_ref_that_cuts_no_release_is_refused_rather_than_graded(self) -> None:
+        # Distance-from-benchmark is meaningless for HEAD; before, it was
+        # computed anyway and the verdict swung on where the newest row sat.
+        write_csv(self.csv, ["v0.25.0"])
+        result = self.gate_result("HEAD")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("not a release tag", result.stdout)
+        self.assertNotIn("releases stale", result.stdout)
 
 
 class GithubAnnotationTests(GateFixture, unittest.TestCase):

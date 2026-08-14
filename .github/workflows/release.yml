@@ -272,8 +272,18 @@ jobs:
       # docs/performance_benchmarks.csv. Pass at 0 releases stale, warn at 1,
       # block at 2, and fail outright when the file is missing: #1238's rule is
       # that a skipped measurement must never read as a passing one.
+      #
+      # Graded against the version being built rather than the ref, because all
+      # three entry points cut the same release: a `main` dispatch rehearsing
+      # v<version>, the tester prerelease it publishes, and the v<version> tag
+      # itself. On the tag path this is the ref — "Validate app version
+      # metadata" above has already bound them.
       - name: Verify release performance benchmarks are current
-        run: ./scripts/check-perf-benchmarks.py --tag "${{ github.ref_type == 'tag' && github.ref_name || 'HEAD' }}" --format github
+        run: |
+          set -euo pipefail
+          ./scripts/check-perf-benchmarks.py \
+            --tag "$(./scripts/release-version.sh print-tag)" \
+            --format github
 
       - name: Notarize and package DMG
         env:
