@@ -34,22 +34,45 @@ RETIRED_RUNNER_LABELS = {"lume-macos", "signing-host", "tart-ui"}
 RUNNER_QUALIFIER_LABELS = {"self-hosted", "macos", "linux", "windows", "arm64", "x64", "x86"}
 EXPECTED_ENVIRONMENTS = {"release"}
 EXPECTED_REPO_SECRETS = {
+    # The three App Store Connect names stay repository-scoped because
+    # xcode-cloud-logs.yml reads them and declares no environment. They are also
+    # on the release environment, which is why DUAL_SCOPE_EXPECTED lists them.
     "APPLE_API_ISSUER_ID",
     "APPLE_API_KEY_BASE64",
     "APPLE_API_KEY_ID",
-    "APPLE_DEVELOPER_ID_CERT_BASE64",
-    "APPLE_DEVELOPER_ID_CERT_PASSWORD",
-    "APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_API_TOKEN",
     "EVIDENCE_UPLOAD_TOKEN",
-    "SPARKLE_PRIVATE_KEY",
     "VERCEL_ORG_ID",
     "VERCEL_PROJECT_ID",
     "VERCEL_TOKEN",
 }
 LEGACY_REPO_SECRETS = {"APPLE_APP_PASSWORD"}
+# Signing credentials live only on the release environment, so a job must declare
+# `environment: release` — and clear its human approval — to read them at all.
+EXPECTED_ENVIRONMENT_SECRETS = {
+    "release": {
+        "APPLE_API_ISSUER_ID",
+        "APPLE_API_KEY_BASE64",
+        "APPLE_API_KEY_ID",
+        "APPLE_DEVELOPER_ID_CERT_BASE64",
+        "APPLE_DEVELOPER_ID_CERT_PASSWORD",
+        "APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64",
+        "SPARKLE_PRIVATE_KEY",
+    },
+}
+# An environment secret shadows the repository secret of the same name, including
+# when the environment copy is empty — that is how two empty values hid two
+# working ones during the v0.24.0 arc. Emptiness is invisible from outside (the
+# API exposes only name and timestamps), so the reachable signal is the shadowing
+# itself. These names are dual-scoped on purpose until xcode-cloud-logs.yml gets
+# its own environment; anything else in both scopes is unintended.
+DUAL_SCOPE_EXPECTED = {
+    "APPLE_API_ISSUER_ID",
+    "APPLE_API_KEY_BASE64",
+    "APPLE_API_KEY_ID",
+}
 
 
 @dataclass(frozen=True)
@@ -303,7 +326,7 @@ def remote_secret_checks(repo: str) -> list[Check]:
     }
     missing = sorted(EXPECTED_REPO_SECRETS - secrets)
     legacy = sorted(LEGACY_REPO_SECRETS & secrets)
-    return [
+    checks = [
         Check(
             "fail" if missing else "pass",
             "expected repository secrets",
@@ -315,6 +338,38 @@ def remote_secret_checks(repo: str) -> list[Check]:
             f"remove stale names: {', '.join(legacy)}" if legacy else "none found",
         ),
     ]
+
+    for environment, expected in sorted(EXPECTED_ENVIRONMENT_SECRETS.items()):
+        env_secrets = {
+            str(item.get("name"))
+            for item in gh_json(
+                ["secret", "list", "--repo", repo, "--env", environment, "--json", "name"]
+            )
+            if isinstance(item, dict) and item.get("name")
+        }
+        env_missing = sorted(expected - env_secrets)
+        shadowed = sorted((env_secrets & secrets) - DUAL_SCOPE_EXPECTED)
+        checks.append(
+            Check(
+                "fail" if env_missing else "pass",
+                f"expected {environment} environment secrets",
+                f"missing: {', '.join(env_missing)}"
+                if env_missing
+                else "all expected names present",
+            )
+        )
+        checks.append(
+            Check(
+                "warn" if shadowed else "pass",
+                f"{environment} environment shadows repository secrets",
+                f"also at repository scope, so the environment copy wins silently: "
+                f"{', '.join(shadowed)}"
+                if shadowed
+                else "no unintended dual-scoped names",
+            )
+        )
+
+    return checks
 
 
 def remote_checks(repo: str) -> list[Check]:
