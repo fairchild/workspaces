@@ -1,0 +1,29 @@
+{
+  "branch_policies": [
+    {
+      "name": "main",
+      "type": "branch"
+    },
+    {
+      "name": "v*",
+      "type": "tag"
+    },
+    {
+      "name": "workspaces-v*",
+      "type": "tag"
+    }
+  ],
+  "deployment_branch_policy": {
+    "custom_branch_policies": true,
+    "protected_branches": false
+  },
+  "name": "release",
+  "prevent_self_review": false,
+  "reviewers": [
+    {
+      "login": "fairchild",
+      "type": "User"
+    }
+  ],
+  "wait_timer": 0
+}

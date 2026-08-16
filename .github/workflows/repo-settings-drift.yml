@@ -1,5 +1,7 @@
-# Drift gate for config/github/ — verifies live GitHub repo settings (rulesets)
-# still match the committed desired state. Read-only: applying changes is a
+# Drift gate for config/github/ — verifies live GitHub repo settings (rulesets
+# and deployment environments) still match the committed desired state. The
+# environments carry the release path's approval gate and branch policies, so a
+# UI edit that weakens them surfaces here. Read-only: applying changes is a
 # deliberate local act via `scripts/github-settings.py apply` (repo admin).
 name: Repo Settings Drift
 
