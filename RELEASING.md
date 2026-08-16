@@ -194,7 +194,8 @@ Notes:
 - Add `--non-interactive` for CI-friendly usage.
 - Add `--run-release --watch` to dispatch the release workflow from `main` immediately after setup and stream the result.
 
-If you prefer to configure GitHub manually, add these **secrets** to your GitHub repository (Settings > Secrets and variables > Actions > Secrets):
+If you prefer to configure GitHub manually, add these to the **`release` environment**, not to
+repository secrets (Settings > Environments > release > Environment secrets):
 
 | Secret | Description |
 |--------|-------------|
@@ -204,6 +205,22 @@ If you prefer to configure GitHub manually, add these **secrets** to your GitHub
 | `APPLE_API_KEY_BASE64` | Base64-encoded App Store Connect API `.p8` key |
 | `APPLE_API_KEY_ID` | App Store Connect API key ID |
 | `APPLE_API_ISSUER_ID` | App Store Connect issuer ID |
+| `SPARKLE_PRIVATE_KEY` | Sparkle EdDSA private key, matching `SUPublicEDKey` |
+
+**Why the environment and not repository scope.** A repository secret is readable by any workflow
+on any branch. Scoping these to `release` means a job must declare `environment: release` and clear
+its human approval before it can read them at all — so the credentials are protected by
+construction rather than by everyone remembering not to reference them. This will surprise anyone
+adding a workflow that needs signing: the secret resolves empty until the job declares the
+environment.
+
+`xcode-cloud-logs.yml` needs the same three App Store Connect values and holds its own copies on the
+`xcode-cloud-logs` environment, which gates on a branch policy (`main` and `ci/xcode-cloud-logs`)
+rather than approval, since fetching build logs should not need a human.
+
+One scope per name matters: an environment secret shadows a repository secret of the same name
+**including when the environment copy is empty**, which reads as a missing credential while a
+working value sits underneath it.
 
 Add these **variables** to your GitHub repository (Settings > Secrets and variables > Actions > Variables):
 
