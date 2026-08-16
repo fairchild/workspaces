@@ -32,14 +32,8 @@ RETIRED_RUNNER_LABELS = {"lume-macos", "signing-host", "tart-ui"}
 # OS and architecture qualifiers, not lanes: they narrow which self-hosted
 # machine takes the job, they do not name a purpose.
 RUNNER_QUALIFIER_LABELS = {"self-hosted", "macos", "linux", "windows", "arm64", "x64", "x86"}
-EXPECTED_ENVIRONMENTS = {"release"}
+EXPECTED_ENVIRONMENTS = {"release", "xcode-cloud-logs"}
 EXPECTED_REPO_SECRETS = {
-    # The three App Store Connect names stay repository-scoped because
-    # xcode-cloud-logs.yml reads them and declares no environment. They are also
-    # on the release environment, which is why DUAL_SCOPE_EXPECTED lists them.
-    "APPLE_API_ISSUER_ID",
-    "APPLE_API_KEY_BASE64",
-    "APPLE_API_KEY_ID",
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLOUDFLARE_ACCOUNT_ID",
     "CLOUDFLARE_API_TOKEN",
@@ -52,6 +46,15 @@ LEGACY_REPO_SECRETS = {"APPLE_APP_PASSWORD"}
 # Signing credentials live only on the release environment, so a job must declare
 # `environment: release` — and clear its human approval — to read them at all.
 EXPECTED_ENVIRONMENT_SECRETS = {
+    # Both environments hold the App Store Connect triple. They are separate
+    # copies, not a shared one: release gates on human approval, while
+    # xcode-cloud-logs gates only on a branch policy, because fetching build
+    # logs should not need an approval.
+    "xcode-cloud-logs": {
+        "APPLE_API_ISSUER_ID",
+        "APPLE_API_KEY_BASE64",
+        "APPLE_API_KEY_ID",
+    },
     "release": {
         "APPLE_API_ISSUER_ID",
         "APPLE_API_KEY_BASE64",
@@ -66,13 +69,9 @@ EXPECTED_ENVIRONMENT_SECRETS = {
 # when the environment copy is empty — that is how two empty values hid two
 # working ones during the v0.24.0 arc. Emptiness is invisible from outside (the
 # API exposes only name and timestamps), so the reachable signal is the shadowing
-# itself. These names are dual-scoped on purpose until xcode-cloud-logs.yml gets
-# its own environment; anything else in both scopes is unintended.
-DUAL_SCOPE_EXPECTED = {
-    "APPLE_API_ISSUER_ID",
-    "APPLE_API_KEY_BASE64",
-    "APPLE_API_KEY_ID",
-}
+# itself. No name is dual-scoped by design any more; every credential the
+# release and log lanes use lives on an environment only.
+DUAL_SCOPE_EXPECTED: set[str] = set()
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,12 @@ concurrency:
 jobs:
   fetch:
     runs-on: ubuntu-latest
+    # The App Store Connect key this reads is Admin-scoped, so it lives on an
+    # environment rather than at repository scope, where any workflow on any
+    # branch could read it. The environment's branch policy allows only `main`
+    # and `ci/xcode-cloud-logs` — matching this workflow's triggers — so
+    # declaring the environment is not by itself enough to reach the key.
+    environment: xcode-cloud-logs
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

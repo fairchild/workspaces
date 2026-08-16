@@ -28,9 +28,19 @@ not a broad public security stance.
 ## Release And Update Chain
 
 - Release signing runs on hosted `macos-15` behind the protected `release`
-  environment. Every credential comes from repository secrets and the
-  certificate is imported into a temporary keychain the job creates and
-  destroys, so no signing material persists on the runner.
+  environment. Every credential is scoped to that environment rather than to the
+  repository, so a job must declare `environment: release` and clear its human
+  approval to read any of them — the gate covers what a job can read, not only
+  when it runs. The certificate is imported into a temporary keychain the job
+  creates and destroys, so no signing material persists on the runner.
+- `xcode-cloud-logs.yml` reads an Admin-scoped App Store Connect key, so it holds
+  its own copies on the `xcode-cloud-logs` environment. That one gates on a
+  deployment branch policy (`main` and `ci/xcode-cloud-logs`) instead of
+  approval: log fetching should not need a human, but the key should not be
+  reachable from an arbitrary branch. `scripts/audit-security-posture.py` checks
+  both environments and warns on any name present in both an environment and
+  repository scope, since the environment copy wins silently — including when it
+  is empty.
 - The signing job has read-only repository permissions; publication is isolated
   in a separate `contents: write` job.
 - Host tooling comes from SHA-pinned actions at pinned versions — `mise` via
