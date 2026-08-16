@@ -13,6 +13,13 @@ uv run --script scripts/github-settings.py apply      # push files to GitHub (ne
 uv run --script scripts/github-settings.py snapshot   # overwrite files from live state
 ```
 
+**`bypass_actors` is not managed here.** A read-only token cannot see it, so
+tracking it would make every CI check disagree with every admin check. `check`
+normalises it to `[]` on both sides, and `apply` carries the live value across
+untouched — otherwise applying an unrelated rule change would strip the
+repository-admin bypass as a side effect. Bypass-actor changes are made in the
+UI and are not drift-checked.
+
 Changing a setting is a PR that edits the JSON, then `apply` after merge.
 `.github/workflows/repo-settings-drift.yml` runs `check` on a schedule and on
 PRs touching these files, so a settings change made in the GitHub UI without a
@@ -22,6 +29,32 @@ default Actions token (rulesets are visible to anyone with read access);
 
 To manage an additional ruleset, create `rulesets/<name>.json` containing
 `{"name": "<live-name>"}` and run `snapshot`.
+
+## Environments (`environments/`)
+
+`environments/<name>.json` holds one deployment environment each: its protection
+rules (`reviewers`, `wait_timer`, `prevent_self_review`) and its deployment
+branch policy, including the exact list of allowed branches and tags. Same
+workflow as rulesets — edit the JSON in a PR, `apply` after merge, and the drift
+run catches a change made in the UI. Add one with `{"name": "<live-name>"}` and
+`snapshot`.
+
+These gate the release path, so drift here is worth catching: `release` requires
+a human approval and admits only `main` plus `v*` / `workspaces-v*` tags, and
+`xcode-cloud-logs` admits only `main` and `ci/xcode-cloud-logs`. Weakening either
+in the UI is invisible without this check.
+
+Two deliberate choices:
+
+- **Reviewers are stored by login, not id.** Numeric ids make diffs unreadable;
+  `apply` resolves the login back to an id. `apply` always sends the reviewer
+  list, because the environments `PUT` *clears* reviewers when the field is
+  omitted — which would silently remove the approval gate on `release`.
+- **Secret names live in `scripts/audit-security-posture.py`, not here.** That
+  script already checks which names exist in which scope, and duplicating the
+  list would create the second source of truth this directory exists to prevent.
+  Secret *values* appear in neither. The two tools are complementary: this one
+  owns protection rules, that one owns secret placement.
 
 ## App manifests (`apps/`)
 

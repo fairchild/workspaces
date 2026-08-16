@@ -1,0 +1,20 @@
+{
+  "branch_policies": [
+    {
+      "name": "ci/xcode-cloud-logs",
+      "type": "branch"
+    },
+    {
+      "name": "main",
+      "type": "branch"
+    }
+  ],
+  "deployment_branch_policy": {
+    "custom_branch_policies": true,
+    "protected_branches": false
+  },
+  "name": "xcode-cloud-logs",
+  "prevent_self_review": false,
+  "reviewers": [],
+  "wait_timer": 0
+}
