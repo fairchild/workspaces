@@ -54,10 +54,13 @@ def repo_slug() -> str:
 
 def render(ruleset: dict) -> str:
     desired = {key: ruleset[key] for key in WRITABLE_FIELDS if key in ruleset}
-    # Read-only tokens (e.g. the Actions token in the drift workflow) get the
-    # ruleset without bypass_actors; treat absent as empty so they compare
-    # cleanly. Actual bypass-actor drift is still caught by admin-side checks.
-    desired.setdefault("bypass_actors", [])
+    # bypass_actors is deliberately not managed here: a read-only token (the
+    # Actions token in the drift workflow) cannot see it, so tracking it would
+    # make every CI check disagree with every admin check. Normalising to []
+    # on both sides keeps the comparison honest about what this file covers.
+    # apply() carries the live value across so the field is never rewritten
+    # from this empty placeholder — see apply_ruleset.
+    desired["bypass_actors"] = []
     return json.dumps(desired, indent=2, sort_keys=True) + "\n"
 
 
@@ -256,17 +259,26 @@ def check(repo: str) -> int:
     return max(drift, check_environments(repo))
 
 
+def apply_ruleset(repo: str, path: Path, live_ids: dict[str, int]) -> None:
+    desired = json.loads(render(json.loads(path.read_text())))
+    name = desired["name"]
+    if name not in live_ids:
+        gh_api(f"repos/{repo}/rulesets", "POST", desired)
+        print(f"created: ruleset '{name}' <- {path.name}")
+        return
+    # Carry the live bypass_actors across rather than sending render()'s empty
+    # placeholder, which would strip the repository-admin bypass as a silent
+    # side effect of applying an unrelated rule change.
+    live = gh_api(f"repos/{repo}/rulesets/{live_ids[name]}")
+    desired["bypass_actors"] = live.get("bypass_actors", []) if isinstance(live, dict) else []
+    gh_api(f"repos/{repo}/rulesets/{live_ids[name]}", "PUT", desired)
+    print(f"applied: ruleset '{name}' <- {path.name} (bypass_actors left as-is)")
+
+
 def apply(repo: str) -> int:
     live_ids = live_ids_by_name(repo)
     for path in desired_files():
-        desired = json.loads(render(json.loads(path.read_text())))
-        name = desired["name"]
-        if name in live_ids:
-            gh_api(f"repos/{repo}/rulesets/{live_ids[name]}", "PUT", desired)
-            print(f"applied: ruleset '{name}' <- {path.name}")
-        else:
-            gh_api(f"repos/{repo}/rulesets", "POST", desired)
-            print(f"created: ruleset '{name}' <- {path.name}")
+        apply_ruleset(repo, path, live_ids)
     for path in environment_files():
         apply_environment(repo, path)
     return 0

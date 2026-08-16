@@ -13,6 +13,13 @@ uv run --script scripts/github-settings.py apply      # push files to GitHub (ne
 uv run --script scripts/github-settings.py snapshot   # overwrite files from live state
 ```
 
+**`bypass_actors` is not managed here.** A read-only token cannot see it, so
+tracking it would make every CI check disagree with every admin check. `check`
+normalises it to `[]` on both sides, and `apply` carries the live value across
+untouched — otherwise applying an unrelated rule change would strip the
+repository-admin bypass as a side effect. Bypass-actor changes are made in the
+UI and are not drift-checked.
+
 Changing a setting is a PR that edits the JSON, then `apply` after merge.
 `.github/workflows/repo-settings-drift.yml` runs `check` on a schedule and on
 PRs touching these files, so a settings change made in the GitHub UI without a
