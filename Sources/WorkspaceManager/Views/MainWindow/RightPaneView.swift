@@ -501,13 +501,10 @@ struct RightPaneView: View {
     @MainActor
     private func revealFileTreeLocation() {
         guard let directoryURL else { return }
-        let selectedPath =
-            FileManager.default.fileExists(atPath: directoryURL.path)
-            ? directoryURL.path
-            : nil
+        let location = FileTreeFinderLocation.resolve(directoryURL: directoryURL)
         NSWorkspace.shared.selectFile(
-            selectedPath,
-            inFileViewerRootedAtPath: directoryURL.deletingLastPathComponent().path
+            location.selectedPath,
+            inFileViewerRootedAtPath: location.viewerRootPath
         )
     }
 

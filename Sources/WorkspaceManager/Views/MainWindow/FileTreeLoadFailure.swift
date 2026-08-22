@@ -9,6 +9,46 @@
 import Foundation
 import WorkspaceManagerCore
 
+struct FileTreeFinderLocation: Equatable, Sendable {
+    let selectedPath: String?
+    let viewerRootPath: String
+
+    static func resolve(
+        directoryURL: URL,
+        fileManager: FileManager = .default
+    ) -> FileTreeFinderLocation {
+        let targetURL = directoryURL.standardizedFileURL
+        if fileManager.fileExists(atPath: targetURL.path) {
+            return FileTreeFinderLocation(
+                selectedPath: targetURL.path,
+                viewerRootPath: targetURL.deletingLastPathComponent().path
+            )
+        }
+
+        var candidateURL = targetURL.deletingLastPathComponent()
+        while true {
+            var isDirectory: ObjCBool = false
+            if fileManager.fileExists(atPath: candidateURL.path, isDirectory: &isDirectory),
+                isDirectory.boolValue
+            {
+                return FileTreeFinderLocation(
+                    selectedPath: nil,
+                    viewerRootPath: candidateURL.path
+                )
+            }
+
+            let parentURL = candidateURL.deletingLastPathComponent()
+            if parentURL.path == candidateURL.path {
+                return FileTreeFinderLocation(
+                    selectedPath: nil,
+                    viewerRootPath: parentURL.path
+                )
+            }
+            candidateURL = parentURL
+        }
+    }
+}
+
 enum FileTreeRecoveryAction: Equatable, Sendable {
     case revealInFinder
     case retry
