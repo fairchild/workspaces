@@ -83,6 +83,7 @@ extension View {
 final class RightPaneSessionState: ObservableObject {
     @Published var selectedTab: RightPaneView.Tab = .files
     @Published var fileTree: FileNode?
+    @Published var fileTreeFailure: FileTreeLoadFailure?
     @Published var changedFiles: [FileChange] = []
     @Published var isLoading = false
     @Published var lastRefresh = Date()
@@ -93,6 +94,17 @@ final class RightPaneSessionState: ObservableObject {
 
     func requestRefresh() {
         refreshRequestID = UUID()
+    }
+
+    func applyFileTreeResult(_ result: Result<FileNode, FileTreeLoadFailure>) {
+        switch result {
+        case .success(let tree):
+            fileTree = tree
+            fileTreeFailure = nil
+        case .failure(let failure):
+            fileTree = nil
+            fileTreeFailure = failure
+        }
     }
 }
 
@@ -246,9 +258,12 @@ struct RightPaneView: View {
                 case .files:
                     FileTreeTabView(
                         root: state.fileTree,
+                        failure: state.fileTreeFailure,
                         isLoading: state.isLoading,
                         expandedDirectoryPaths: $state.expandedDirectoryPaths,
-                        onFileSelected: selectFile
+                        onFileSelected: selectFile,
+                        onRetry: state.requestRefresh,
+                        onRevealInFinder: revealFileTreeLocation
                     )
                 case .changes:
                     ChangedFilesTabView(
@@ -424,6 +439,7 @@ struct RightPaneView: View {
     private func refresh() async {
         guard supportsFilesystemInspection else {
             state.fileTree = nil
+            state.fileTreeFailure = nil
             state.changedFiles = []
             state.hasLoadedOnce = true
             state.lastRefresh = Date()
@@ -440,18 +456,25 @@ struct RightPaneView: View {
         async let treeTask = loadFileTree()
         async let statusTask = loadGitStatus()
 
-        let (fileTree, changedFiles) = await (treeTask, statusTask)
-        state.fileTree = fileTree
+        let (fileTreeResult, changedFiles) = await (treeTask, statusTask)
+        state.applyFileTreeResult(fileTreeResult)
         state.changedFiles = changedFiles
     }
 
-    private func loadFileTree() async -> FileNode? {
-        guard let directoryURL else { return nil }
+    private func loadFileTree() async -> Result<FileNode, FileTreeLoadFailure> {
+        guard let directoryURL else { return .failure(.directoryUnavailable) }
         do {
-            return try await gitService.getFileTree(at: directoryURL)
+            #if DEBUG
+                if let fixture = UIFixtureFileTreeFailureBootstrapConfiguration.from(
+                    environment: ProcessInfo.processInfo.environment
+                ) {
+                    throw fixture.simulatedError
+                }
+            #endif
+            return .success(try await gitService.getFileTree(at: directoryURL))
         } catch {
             log.error("Failed to load file tree: \(error, privacy: .public)")
-            return nil
+            return .failure(FileTreeLoadFailure.classify(error))
         }
     }
 
@@ -475,6 +498,19 @@ struct RightPaneView: View {
         )
     }
 
+    @MainActor
+    private func revealFileTreeLocation() {
+        guard let directoryURL else { return }
+        let selectedPath =
+            FileManager.default.fileExists(atPath: directoryURL.path)
+            ? directoryURL.path
+            : nil
+        NSWorkspace.shared.selectFile(
+            selectedPath,
+            inFileViewerRootedAtPath: directoryURL.deletingLastPathComponent().path
+        )
+    }
+
     private var summaryText: String {
         switch displayedTab {
         case .files:
@@ -483,6 +519,9 @@ struct RightPaneView: View {
             }
             if state.isLoading {
                 return "Refreshing file tree"
+            }
+            if state.fileTreeFailure != nil {
+                return "File tree unavailable"
             }
             if let itemCount = state.fileTree?.children?.count, itemCount > 0 {
                 return "\(itemCount) top-level items"
@@ -603,12 +642,21 @@ private struct TimelineRefreshKey: Equatable {
 
 struct FileTreeTabView: View {
     let root: FileNode?
+    let failure: FileTreeLoadFailure?
     let isLoading: Bool
     @Binding var expandedDirectoryPaths: Set<String>
     let onFileSelected: (String) -> Void
+    let onRetry: () -> Void
+    let onRevealInFinder: () -> Void
 
     var body: some View {
-        if let root {
+        if let root, root.children?.isEmpty != false {
+            ContentUnavailableView(
+                "Folder is Empty",
+                systemImage: "folder",
+                description: Text("There are no files to show.")
+            )
+        } else if let root {
             List {
                 ForEach(root.children ?? [], id: \.path) { child in
                     FileNodeView(
@@ -622,11 +670,24 @@ struct FileTreeTabView: View {
         } else if isLoading {
             ProgressView()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let failure {
+            ContentUnavailableView {
+                Label("Files Unavailable", systemImage: "exclamationmark.folder")
+            } description: {
+                Text(failure.reason)
+            } actions: {
+                Button(failure.recoveryTitle, systemImage: failure.recoverySystemImage) {
+                    failure.recoveryAction.perform(
+                        retry: onRetry,
+                        revealInFinder: onRevealInFinder
+                    )
+                }
+            }
         } else {
             ContentUnavailableView(
                 "No Files",
                 systemImage: "folder",
-                description: Text("Could not load file tree")
+                description: Text("There are no files to show.")
             )
         }
     }

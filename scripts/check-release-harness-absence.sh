@@ -62,6 +62,7 @@ string_patterns=(
     WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER
     WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER
     WORKSPACES_UI_FIXTURE_OPEN_DIAGNOSTICS
+    WORKSPACES_UI_FIXTURE_FILE_TREE_FAILURE
     WORKSPACES_UI_FIXTURE_OPEN_PREVIEW
     WORKSPACES_UI_FIXTURE_PREVIEW_REPO
     WORKSPACES_UI_FIXTURE_PREVIEW_PATH
@@ -72,8 +73,9 @@ string_patterns=(
 )
 
 # Fixture env keys that still reach release builds, by scope decision rather than
-# oversight. #1237 gated the four UIFixture*Bootstrap parsers behind #if DEBUG,
-# so the seven launch-surface keys they used to read graduated from this list to
+# oversight. #1237 gated the first four UIFixture*Bootstrap parsers behind #if DEBUG;
+# the file-tree failure parser follows the same contract. Their eight launch-surface keys
+# graduated from this list to
 # string_patterns above, where absence is now enforced rather than tolerated.
 #
 # WORKSPACES_UI_FIXTURE stays: it reaches release through non-harness Core —

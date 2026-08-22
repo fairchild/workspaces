@@ -9,8 +9,8 @@ The gate makes a negative claim — "the debug smoke/fixture harness is not in t
 release binary" — which is only worth anything if the scan actually ran. These
 tests protect that: an empty binary, a missing binary, or nm/strings returning
 nothing must error rather than certify, and a stale deferral allowlist entry
-must fail so a gated key cannot silently keep its exemption. #1237 gated the four
-launch-surface fixture parsers, so their keys now live in the enforced list.
+must fail so a gated key cannot silently keep its exemption. #1237 gated the first four
+launch-surface fixture parsers; the file-tree failure parser follows their enforced contract.
 
 Safe to run without network, secrets, UI access, or live GitHub mutations: nm
 and strings are stubbed on PATH and every fixture lives in a temp directory.
@@ -43,6 +43,7 @@ DEFERRED_KEYS = ("WORKSPACES_UI_FIXTURE",)
 GATED_FIXTURE_KEYS = (
     "WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER",
     "WORKSPACES_UI_FIXTURE_OPEN_DIAGNOSTICS",
+    "WORKSPACES_UI_FIXTURE_FILE_TREE_FAILURE",
     "WORKSPACES_UI_FIXTURE_OPEN_PREVIEW",
     "WORKSPACES_UI_FIXTURE_PREVIEW_REPO",
     "WORKSPACES_UI_FIXTURE_PREVIEW_PATH",

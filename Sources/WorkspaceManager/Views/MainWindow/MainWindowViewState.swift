@@ -56,6 +56,7 @@ struct MainWindowViewState {
     var didApplyFixturePreviewBootstrap = false
     var didApplyFixtureWebBootstrap = false
     var didApplyFixtureDiagnosticsBootstrap = false
+    var didApplyFixtureFileTreeFailureBootstrap = false
     var didApplyFixtureSessionSwitcherBootstrap = false
     var didResolveInitialSurface = false
     var connectingWorkspaceID: UUID?

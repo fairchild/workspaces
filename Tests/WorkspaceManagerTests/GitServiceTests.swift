@@ -155,6 +155,16 @@ struct GitServiceTests {
 
     // MARK: - getFileTree Tests
 
+    @Test("Missing file tree root reports an unavailable directory")
+    func missingFileTreeRootReportsUnavailableDirectory() async {
+        let missingRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("missing-file-tree-\(UUID().uuidString)", isDirectory: true)
+
+        await #expect(throws: GitError.fileTreeRootUnavailable) {
+            try await GitService.shared.getFileTree(at: missingRoot)
+        }
+    }
+
     @Test("Builds correct file tree structure")
     func buildsCorrectFileTreeStructure() async throws {
         let repo = try TestGitRepository.create()
