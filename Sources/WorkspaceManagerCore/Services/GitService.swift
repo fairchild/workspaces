@@ -294,7 +294,14 @@ public actor GitService: GitServiceProtocol {
 
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: currentURL.path, isDirectory: &isDirectory) else {
+            if relativePath.isEmpty {
+                throw GitError.fileTreeRootUnavailable
+            }
             return FileNode(name: name, path: relativePath, isDirectory: false, children: nil)
+        }
+
+        if relativePath.isEmpty, !isDirectory.boolValue {
+            throw GitError.fileTreeRootUnavailable
         }
 
         if !isDirectory.boolValue {
@@ -461,6 +468,7 @@ extension String {
 public enum GitError: LocalizedError, Equatable {
     case commandFailed(args: [String], stderr: String)
     case notARepository
+    case fileTreeRootUnavailable
     case branchAlreadyExists(name: String)
     case invalidRelativePath(String)
     case pathEscapesRoot
@@ -475,6 +483,8 @@ public enum GitError: LocalizedError, Equatable {
             return "Git command failed: git \(args.joined(separator: " "))\n\(stderr)"
         case .notARepository:
             return "Not a git repository"
+        case .fileTreeRootUnavailable:
+            return "The file tree root is not an available directory"
         case .branchAlreadyExists(let name):
             return "A branch named '\(name)' already exists"
         case .invalidRelativePath(let path):

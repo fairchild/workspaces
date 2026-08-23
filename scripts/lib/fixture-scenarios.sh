@@ -12,7 +12,7 @@
 
 # fixture_resolve_scenario <name>
 # Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, FIXTURE_SEED_RESTORE_BANNER,
-# FIXTURE_SEED_ORPHAN_BANNER, and FIXTURE_SCENARIO_ID for the named scenario.
+# FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_FILE_TREE_FAILURE, and FIXTURE_SCENARIO_ID for the named scenario.
 # "inline:<agent-states>" passes a raw agent-states spec straight through. Returns
 # non-zero (and sets nothing) for an unknown name.
 fixture_resolve_scenario() {
@@ -21,6 +21,7 @@ fixture_resolve_scenario() {
     FIXTURE_COMMAND_STATUSES=""
     FIXTURE_SEED_RESTORE_BANNER=""
     FIXTURE_SEED_ORPHAN_BANNER=""
+    FIXTURE_FILE_TREE_FAILURE=""
     FIXTURE_SCENARIO_ID=""
 
     if [[ "$name" == inline:* ]]; then
@@ -55,6 +56,12 @@ fixture_resolve_scenario() {
             # so dev-machine leftovers never leak into any scenario's capture.
             FIXTURE_SEED_ORPHAN_BANNER=1
             ;;
+        file-tree-unavailable)
+            FIXTURE_FILE_TREE_FAILURE="unavailable"
+            ;;
+        file-tree-permission)
+            FIXTURE_FILE_TREE_FAILURE="permission"
+            ;;
         clean)
             ;;
         *)
@@ -68,5 +75,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner file-tree-unavailable file-tree-permission clean
 }

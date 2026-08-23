@@ -475,6 +475,10 @@ struct ContentView: View {
         UIFixtureDiagnosticsBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
+    private var fixtureFileTreeFailureBootstrapConfiguration: UIFixtureFileTreeFailureBootstrapConfiguration? {
+        UIFixtureFileTreeFailureBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
     private var fixtureSessionSwitcherBootstrapConfiguration: UIFixtureSessionSwitcherBootstrapConfiguration? {
         UIFixtureSessionSwitcherBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
@@ -1335,6 +1339,9 @@ struct ContentView: View {
 
     @MainActor
     private func applyDiagnosticsFixtureIfNeeded() {
+        if applyFileTreeFailureFixtureIfNeeded() {
+            return
+        }
         guard fixtureDiagnosticsBootstrapConfiguration != nil else { return }
         guard !viewState.didApplyFixtureDiagnosticsBootstrap else { return }
         guard deepLinkState.pendingRequest == nil else { return }
@@ -1361,6 +1368,31 @@ struct ContentView: View {
             viewState.didApplyFixtureDiagnosticsBootstrap = true
             uiFixtureLog.info("[UIFixture] Diagnostics bootstrap applied (repo=\(repo.name, privacy: .public))")
         }
+    }
+
+    @MainActor
+    @discardableResult
+    private func applyFileTreeFailureFixtureIfNeeded() -> Bool {
+        guard fixtureFileTreeFailureBootstrapConfiguration != nil else { return false }
+        guard !viewState.didApplyFixtureFileTreeFailureBootstrap else { return true }
+        guard deepLinkState.pendingRequest == nil else { return false }
+
+        if let workspace =
+            repos
+            .flatMap(\.workspaces)
+            .sorted(by: { $0.lastAccessedAt > $1.lastAccessedAt })
+            .first
+        {
+            handleWorkspaceSelection(workspace)
+            rightPaneStateStore.state(for: workspace).selectedTab = .files
+            viewState.isRightPaneVisible = true
+            viewState.didApplyFixtureFileTreeFailureBootstrap = true
+            uiFixtureLog.info(
+                "[UIFixture] File-tree failure bootstrap applied (workspace=\(workspace.name, privacy: .public))")
+            return true
+        }
+
+        return false
     }
 
     @MainActor
