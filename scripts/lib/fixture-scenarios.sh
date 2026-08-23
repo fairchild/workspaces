@@ -12,7 +12,8 @@
 
 # fixture_resolve_scenario <name>
 # Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, FIXTURE_SEED_RESTORE_BANNER,
-# FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_FILE_TREE_FAILURE, and FIXTURE_SCENARIO_ID for the named scenario.
+# FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_FILE_TREE_FAILURE, FIXTURE_SIDEBAR_ARRANGEMENT, and
+# FIXTURE_SCENARIO_ID for the named scenario.
 # "inline:<agent-states>" passes a raw agent-states spec straight through. Returns
 # non-zero (and sets nothing) for an unknown name.
 fixture_resolve_scenario() {
@@ -22,6 +23,7 @@ fixture_resolve_scenario() {
     FIXTURE_SEED_RESTORE_BANNER=""
     FIXTURE_SEED_ORPHAN_BANNER=""
     FIXTURE_FILE_TREE_FAILURE=""
+    FIXTURE_SIDEBAR_ARRANGEMENT=""
     FIXTURE_SCENARIO_ID=""
 
     if [[ "$name" == inline:* ]]; then
@@ -56,6 +58,14 @@ fixture_resolve_scenario() {
             # so dev-machine leftovers never leak into any scenario's capture.
             FIXTURE_SEED_ORPHAN_BANNER=1
             ;;
+        sidebar-recent)
+            # Flat, date-bucketed sidebar. UIFixtureSeeder spreads the seeded
+            # workspaces across now / -3d / -30d, so Today, This Week, and Earlier
+            # all render; the agent states match phase-1-release so the two captures
+            # show the same activity in the two arrangements.
+            FIXTURE_SIDEBAR_ARRANGEMENT="recent"
+            FIXTURE_AGENT_STATES="feature-auth:thinking,bugfix-422:awaitingInput,refactor-runtime:errored"
+            ;;
         file-tree-unavailable)
             FIXTURE_FILE_TREE_FAILURE="unavailable"
             ;;
@@ -75,5 +85,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner file-tree-unavailable file-tree-permission clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner sidebar-recent file-tree-unavailable file-tree-permission clean
 }

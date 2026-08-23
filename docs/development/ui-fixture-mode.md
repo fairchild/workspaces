@@ -44,6 +44,7 @@ For repeatable captures, prefer the wrapper:
 | `WORKSPACES_UI_FIXTURE_AGENT_STATES` | optional | Comma-separated `<workspace-name>:<state>` pairs that drive specific workspaces into specific `AgentRunState`s. |
 | `WORKSPACES_UI_FIXTURE_COMMAND_STATUSES` | optional | Comma-separated `<workspace-name>:<status>` pairs that drive specific terminal sessions into synthetic `LastCommandStatus` values. |
 | `WORKSPACES_UI_FIXTURE_FILE_TREE_FAILURE` | optional | `unavailable` or `permission`; opens the Detail Pane and stages the corresponding file-tree recovery state. Prefer the named `file-tree-unavailable` and `file-tree-permission` evidence scenarios. |
+| `WORKSPACES_UI_FIXTURE_SIDEBAR_ARRANGEMENT` | optional | `alphabetical`, `lastAccessed`, or `recent`; pins the sidebar arrangement for the launch, overriding the stored preference so a scenario renders the same way on any machine. Debug-only (`UIFixtureSidebarArrangementBootstrap`), enforced absent from release by `scripts/check-release-harness-absence.sh`. The `sidebar-recent` scenario sets it. |
 | `WORKSPACES_UI_FIXTURE_OPEN_SESSION_SWITCHER` | optional | `1` opens the Cmd-P Session Switcher after fixture launch for deterministic overlay captures. |
 | `WORKSPACES_UI_FIXTURE_SEED_RESTORE_BANNER` | optional | `1` seeds a synthetic previous-run continuity row (see "Staging the restore banner" below) so the cold-start restore banner has something to offer. Also requires `WORKSPACES_RESTORE_SESSIONS_ON_LAUNCH=1` — the banner itself is gated behind that experiment independently of fixture mode. |
 | `WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER` | optional | `1` stages the workspace-orphan cleanup banner with one deterministic synthetic item (`UIFixtureOrphanBannerBootstrap`, debug-only behind `#if DEBUG` per #1235/#1237 — the release build carries a stub and `scripts/check-release-harness-absence.sh` enforces the key's absence). Fixture mode always replaces the real filesystem orphan scan — with the synthetic item when this is set, with an empty result otherwise — so dev-machine leftovers never leak into captures or ui-state goldens (issue #1228). The `orphan-banner` scenario sets it. The banner is decided by deferred startup work ~2s after first paint, so its golden declares a `settle` (`fixtures/ui-state/README.md`). |
@@ -115,6 +116,8 @@ Plus one web source: `Swift Docs` (`https://docs.swift.org/`).
 Workspace paths point under `~/code/workspaces/<repo>/<workspace>/` for tab labels and `cd` targets, but **the paths don't need to exist on disk** — SwiftData accepts any string, and terminal PTYs fall back to `$HOME` when the path is missing.
 
 `feature-auth.lastAccessedAt` is bumped 60 s into the future so `MainWindowBootstrapController.fallbackSurface` picks it as the auto-selected workspace at launch.
+
+The other workspaces carry spread access dates so the Recent arrangement renders all three of its buckets from one seed: `skills-v13` and `refactor-state` sit 3 days back (This Week), `bugfix-422` and `refactor-runtime` 30 days back (Earlier). The spread is relative to the `now` passed to `seedDataIfNeeded(in:now:)`, so it is stable within a run and deterministic in tests.
 
 ## Staging the restore banner
 

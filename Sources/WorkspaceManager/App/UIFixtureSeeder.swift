@@ -27,8 +27,9 @@
 
         /// Seeds the in-memory fixture model context with the standard set of repos,
         /// web sources, and workspaces used across screenshots. No-op when the context
-        /// already has repos.
-        static func seedDataIfNeeded(in context: ModelContext) {
+        /// already has repos. Workspace access dates are spread relative to `now` so the
+        /// Recent arrangement renders all three of its buckets.
+        static func seedDataIfNeeded(in context: ModelContext, now: Date = Date()) {
             do {
                 let repoCount = try context.fetchCount(FetchDescriptor<Repo>())
                 guard repoCount == 0 else { return }
@@ -78,10 +79,14 @@
             context.insert(breadBuilderRepo)
             context.insert(swiftDocs)
 
+            let thisWeek = now.addingTimeInterval(-3 * 24 * 60 * 60)
+            let earlier = now.addingTimeInterval(-30 * 24 * 60 * 60)
+
             let skillsWorkspace = Workspace(
                 name: "skills-v13",
                 path: workspacesRoot.appendingPathComponent("skills/skills-v13", isDirectory: true),
                 sourceRepo: skillsRepo,
+                lastAccessedAt: thisWeek,
                 gitBranch: "workspace/skills-v13"
             )
             context.insert(skillsWorkspace)
@@ -92,19 +97,21 @@
                 name: "feature-auth",
                 path: workspacesRoot.appendingPathComponent("bertram-chat/feature-auth", isDirectory: true),
                 sourceRepo: bertramChatRepo,
-                lastAccessedAt: Date().addingTimeInterval(60),
+                lastAccessedAt: now.addingTimeInterval(60),
                 gitBranch: "workspace/feature-auth"
             )
             let bugfix422Workspace = Workspace(
                 name: "bugfix-422",
                 path: workspacesRoot.appendingPathComponent("bertram-chat/bugfix-422", isDirectory: true),
                 sourceRepo: bertramChatRepo,
+                lastAccessedAt: earlier,
                 gitBranch: "workspace/bugfix-422"
             )
             let refactorStateWorkspace = Workspace(
                 name: "refactor-state",
                 path: workspacesRoot.appendingPathComponent("bertram-chat/refactor-state", isDirectory: true),
                 sourceRepo: bertramChatRepo,
+                lastAccessedAt: thisWeek,
                 gitBranch: "workspace/refactor-state"
             )
             context.insert(featureAuthWorkspace)
@@ -115,6 +122,7 @@
                 name: "refactor-runtime",
                 path: workspacesRoot.appendingPathComponent("bread-builder/refactor-runtime", isDirectory: true),
                 sourceRepo: breadBuilderRepo,
+                lastAccessedAt: earlier,
                 gitBranch: "workspace/refactor-runtime"
             )
             context.insert(refactorRuntimeWorkspace)
