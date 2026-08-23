@@ -37,7 +37,10 @@ jobs:
               pull_number: context.payload.pull_request.number,
               per_page: 100,
             });
-            fs.writeFileSync(process.env.CHANGED_FILES_PATH, JSON.stringify(files.map((file) => file.filename)));
+            // previous_filename keeps a renamed release-sensitive file (e.g.
+            // Info.plist moved aside) visible to the consumer.
+            const names = files.flatMap((file) => [file.filename, file.previous_filename]).filter(Boolean);
+            fs.writeFileSync(process.env.CHANGED_FILES_PATH, JSON.stringify(names));
 
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
@@ -87,6 +90,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
+          # The perf-benchmark gate orders v* tags by creation date and fails
+          # closed without them; depth 0 brings the tags and the commits that
+          # date the lightweight ones.
+          fetch-depth: 0
 
       - uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
@@ -100,7 +107,10 @@ jobs:
               pull_number: context.payload.pull_request.number,
               per_page: 100,
             });
-            fs.writeFileSync(process.env.CHANGED_FILES_PATH, JSON.stringify(files.map((file) => file.filename)));
+            // previous_filename keeps a renamed release-sensitive file (e.g.
+            // Info.plist moved aside) visible to the consumer.
+            const names = files.flatMap((file) => [file.filename, file.previous_filename]).filter(Boolean);
+            fs.writeFileSync(process.env.CHANGED_FILES_PATH, JSON.stringify(names));
 
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
 
