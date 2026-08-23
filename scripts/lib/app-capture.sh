@@ -157,6 +157,10 @@ app_capture_window() {
         && launch_args+=(--env "WORKSPACES_UI_FIXTURE_FILE_TREE_FAILURE=$FIXTURE_FILE_TREE_FAILURE")
     [[ -n "$FIXTURE_SIDEBAR_ARRANGEMENT" ]] \
         && launch_args+=(--env "WORKSPACES_UI_FIXTURE_SIDEBAR_ARRANGEMENT=$FIXTURE_SIDEBAR_ARRANGEMENT")
+    [[ -n "$FIXTURE_CMD_T_REPO" ]] \
+        && launch_args+=(--env "WORKSPACES_UI_FIXTURE_CMD_T_REPO=$FIXTURE_CMD_T_REPO")
+    [[ -n "$FIXTURE_TRIGGER_CMD_T" ]] \
+        && launch_args+=(--env "WORKSPACES_UI_FIXTURE_TRIGGER_CMD_T=$FIXTURE_TRIGGER_CMD_T")
     if [[ -n "$FIXTURE_SEED_RESTORE_BANNER" ]]; then
         # The seed alone is inert — the restore banner is gated behind the
         # restoreSessionsOnLaunch experiment, force-enabled here so the scenario

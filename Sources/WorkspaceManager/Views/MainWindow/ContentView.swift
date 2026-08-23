@@ -483,6 +483,10 @@ struct ContentView: View {
         UIFixtureSessionSwitcherBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
+    private var fixtureTerminalTabBootstrapConfiguration: UIFixtureTerminalTabBootstrapConfiguration? {
+        UIFixtureTerminalTabBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
     private var openInEditorTarget: OpenInEditorTarget? {
         presentationController.openInEditorTarget(
             selectedCodePreview: viewState.selectedCodePreview,
@@ -559,7 +563,7 @@ struct ContentView: View {
             canToggleSidebar: true,
             canToggleInspector: true,
             canToggleTerminalPanel: true,
-            canCreateTerminalTab: tileTreeStore.hasSessions,
+            canCreateTerminalTab: terminalSessionController.canCreateTab(hasSessions: tileTreeStore.hasSessions),
             canCloseTerminalTab: tileTreeStore.hasSessions,
             canSelectNextTerminalTab: tileTreeStore.scopedSessions.count > 1,
             canSelectPreviousTerminalTab: tileTreeStore.scopedSessions.count > 1,
@@ -1315,6 +1319,10 @@ struct ContentView: View {
 
     @MainActor
     private func resolveSurfaceLifecycle() {
+        if applyTerminalTabFixtureIfNeeded() {
+            return
+        }
+
         for _ in 0..<8 {
             let action = surfaceResolutionController.nextAction(
                 context: MainWindowSurfaceResolutionContext(
@@ -1335,6 +1343,30 @@ struct ContentView: View {
 
             guard applySurfaceResolutionAction(action) else { break }
         }
+    }
+
+    @MainActor
+    @discardableResult
+    private func applyTerminalTabFixtureIfNeeded() -> Bool {
+        guard let configuration = fixtureTerminalTabBootstrapConfiguration else { return false }
+        guard !viewState.didApplyFixtureTerminalTabBootstrap else { return false }
+        guard deepLinkState.pendingRequest == nil else { return false }
+        guard
+            let repo = repos.first(where: {
+                $0.name.caseInsensitiveCompare(configuration.repoName) == .orderedSame
+            })
+        else { return true }
+
+        viewState.didApplyFixtureTerminalTabBootstrap = true
+        viewState.didResolveInitialSurface = true
+        handleRepoSelection(repo)
+        if configuration.createsTerminalTab {
+            createTerminalTabFromCurrentContext()
+        }
+        uiFixtureLog.info(
+            "[UIFixture] Cmd-T bootstrap applied (repo=\(repo.name, privacy: .public) triggered=\(configuration.createsTerminalTab, privacy: .public))"
+        )
+        return true
     }
 
     @MainActor
@@ -1633,6 +1665,7 @@ struct ContentView: View {
             let result = terminalSessionController.createTabFromCurrentContext(
                 tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
+                selectedRepoForLanding: currentSelectedRepoForLanding,
                 repos: repos,
                 normalizePath: normalizePath,
                 activateHostSession: { key, directory, customCommand in
@@ -1640,7 +1673,10 @@ struct ContentView: View {
                 }
             )
         else { return }
-        applyTerminalSessionResult(result)
+        if let navigationDestination = result.navigationDestination {
+            applyNavigationDestination(navigationDestination)
+        }
+        applyTerminalSessionResult(result.focus)
     }
 
     @MainActor

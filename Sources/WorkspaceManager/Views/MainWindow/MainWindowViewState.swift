@@ -58,6 +58,7 @@ struct MainWindowViewState {
     var didApplyFixtureDiagnosticsBootstrap = false
     var didApplyFixtureFileTreeFailureBootstrap = false
     var didApplyFixtureSessionSwitcherBootstrap = false
+    var didApplyFixtureTerminalTabBootstrap = false
     var didResolveInitialSurface = false
     var connectingWorkspaceID: UUID?
     var terminalCloseConfirmation: TerminalCloseConfirmation?

@@ -11,6 +11,16 @@ struct MainWindowTerminalSessionController {
         let syncedWorkspace: Workspace?
     }
 
+    struct TabCreationResult {
+        let focus: SessionFocusResult
+        let navigationDestination: MainWindowNavigationDestination?
+    }
+
+    /// Tab creation can bootstrap its own source session, so an empty store must not disable Cmd-T.
+    func canCreateTab(hasSessions _: Bool) -> Bool {
+        true
+    }
+
     @discardableResult
     func ensureInitialHostSession(
         tileTreeStore: TileTreeStore,
@@ -24,10 +34,21 @@ struct MainWindowTerminalSessionController {
     func createTabFromCurrentContext(
         tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
+        selectedRepoForLanding: Repo?,
         repos: [Repo],
         normalizePath: (String) -> String,
         activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
-    ) -> SessionFocusResult? {
+    ) -> TabCreationResult? {
+        if let selectedRepoForLanding {
+            return createTabFromRepoOverview(
+                selectedRepoForLanding,
+                tileTreeStore: tileTreeStore,
+                repos: repos,
+                normalizePath: normalizePath,
+                activateHostSession: activateHostSession
+            )
+        }
+
         ensureInitialHostSession(
             tileTreeStore: tileTreeStore,
             defaultHomeDirectory: defaultHomeDirectory,
@@ -35,11 +56,45 @@ struct MainWindowTerminalSessionController {
         )
 
         guard let session = tileTreeStore.createTab() else { return nil }
-        return focusResult(
-            sessionID: session.id,
-            tileTreeStore: tileTreeStore,
-            repos: repos,
-            normalizePath: normalizePath
+        return TabCreationResult(
+            focus: focusResult(
+                sessionID: session.id,
+                tileTreeStore: tileTreeStore,
+                repos: repos,
+                normalizePath: normalizePath
+            ),
+            navigationDestination: nil
+        )
+    }
+
+    private func createTabFromRepoOverview(
+        _ repo: Repo,
+        tileTreeStore: TileTreeStore,
+        repos: [Repo],
+        normalizePath: (String) -> String,
+        activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
+    ) -> TabCreationResult? {
+        let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
+        let scopeKey = HostTerminalSessionKey.repoPath(repoDirectory.path)
+        let session: HostTerminalSession
+
+        if let existingSession = tileTreeStore.activeSession(inScope: scopeKey) {
+            guard tileTreeStore.activateExistingSession(sessionID: existingSession.id),
+                let siblingSession = tileTreeStore.createTab(from: existingSession.id)
+            else { return nil }
+            session = siblingSession
+        } else {
+            session = activateHostSession(scopeKey, repoDirectory, nil)
+        }
+
+        return TabCreationResult(
+            focus: focusResult(
+                sessionID: session.id,
+                tileTreeStore: tileTreeStore,
+                repos: repos,
+                normalizePath: normalizePath
+            ),
+            navigationDestination: .repoTerminal(repo)
         )
     }
 
