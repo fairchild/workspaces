@@ -234,6 +234,39 @@ struct SidebarRecentArrangementTests {
         #expect(UIFixtureSidebarArrangement.mode(from: ["WORKSPACES_UI_FIXTURE": "1"]) == nil)
     }
 
+    @Test("Pinned workspaces leave the buckets — they have their own section above")
+    func pinnedWorkspacesAreExcludedFromBuckets() throws {
+        let repo = makeRepo(
+            "alpha",
+            workspaces: [
+                ("pinned-today", Self.now, .active),
+                ("loose-today", Self.now, .active),
+            ]
+        )
+        let pinned = try #require(repo.workspaces.first { $0.name == "pinned-today" })
+
+        #expect(renderedShape([repo]) == [["Today", "loose-today", "pinned-today"]])
+
+        pinned.pinOrder = 0
+
+        #expect(renderedShape([repo]) == [["Today", "loose-today"]])
+    }
+
+    @Test("A bucket whose only rows are pinned drops out entirely")
+    func bucketOfOnlyPinnedRowsIsOmitted() throws {
+        let repo = makeRepo(
+            "alpha",
+            workspaces: [
+                ("today", Self.now, .active),
+                ("older", days(3), .active),
+            ]
+        )
+        let older = try #require(repo.workspaces.first { $0.name == "older" })
+        older.pinOrder = 0
+
+        #expect(renderedShape([repo]) == [["Today", "today"]])
+    }
+
     @Test("Recent leaves the repo-grouped orderings alone")
     func recentDoesNotDisturbRepoSorting() {
         let controller = SidebarRepoSortController()

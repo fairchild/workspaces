@@ -293,6 +293,10 @@ public final class Workspace {
     /// `nil` while active; drives the purge-after-delay sweep.
     public var archivedAt: Date?
 
+    /// Position in the sidebar's Pinned section, renumbered 0…n on every pin change.
+    /// `nil` for an unpinned workspace.
+    public var pinOrder: Int?
+
     /// Workspace-level default agent command (e.g. `claude --resume`). Most
     /// specific tier — overrides both the repo and global defaults.
     public var defaultAgentCommand: String?
@@ -335,6 +339,10 @@ public final class Workspace {
 
     public var isRemote: Bool {
         backend != .local
+    }
+
+    public var isPinned: Bool {
+        pinOrder != nil
     }
 
     public var usesHostWorkspaceFiles: Bool {
@@ -425,6 +433,7 @@ public final class Workspace {
         status: WorkspaceStatus = .active,
         gitBranch: String? = nil,
         archivedAt: Date? = nil,
+        pinOrder: Int? = nil,
         defaultAgentCommand: String? = nil,
         backendIdentifier: String = "local",
         remoteId: String? = nil,
@@ -441,6 +450,7 @@ public final class Workspace {
         self.statusRaw = status.rawValue
         self.gitBranch = gitBranch
         self.archivedAt = archivedAt
+        self.pinOrder = pinOrder
         self.defaultAgentCommand = defaultAgentCommand
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId

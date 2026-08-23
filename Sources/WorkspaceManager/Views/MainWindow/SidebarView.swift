@@ -167,6 +167,7 @@ struct SidebarView: View {
 
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
     private let workspacePresentationController = SidebarWorkspacePresentationController()
+    private let pinController = SidebarPinController()
 
     /// Resolved once per process: fixture captures pin the arrangement by environment so a
     /// scenario renders the same way whatever the stored preference happens to be.
@@ -190,6 +191,10 @@ struct SidebarView: View {
                 (repo.id, paneCount(for: .repoPath(normalizePath(repo.localURL))))
             }
         )
+    }
+
+    private var pinnedWorkspaces: [Workspace] {
+        pinController.pinnedWorkspaces(in: repos.flatMap(\.workspaces))
     }
 
     private var recentBuckets: [RecentBucket] {
@@ -399,6 +404,8 @@ struct SidebarView: View {
 
     private var sidebarList: some View {
         List {
+            pinnedSection
+
             if repoSortMode == .recent {
                 recentSections
             } else {
@@ -446,6 +453,25 @@ struct SidebarView: View {
             return .handled
         }
         return .ignored
+    }
+
+    /// Sits above every arrangement when non-empty. Rows are flat — the repo travels with
+    /// the workspace — and in the tree arrangements the workspace also keeps its place in
+    /// its repo: Pinned is a shortcut list, not a move.
+    @ViewBuilder
+    private var pinnedSection: some View {
+        let pinned = pinnedWorkspaces
+
+        if !pinned.isEmpty {
+            Section("Pinned") {
+                ForEach(pinned) { workspace in
+                    workspaceRow(
+                        workspace,
+                        placement: .flat(repoContext: workspace.sourceRepo?.name)
+                    )
+                }
+            }
+        }
     }
 
     private var repositoriesSection: some View {
@@ -746,6 +772,7 @@ struct SidebarView: View {
             isNested: placement.isNested,
             isExpanded: placement.isNested && isWorkspaceExpanded(workspace),
             showsDisclosure: placement.isNested && !workspace.webSources.isEmpty,
+            isPinned: workspace.isPinned,
             tabsProvider: {
                 refreshForegroundProcessNames(for: sessionKey(for: workspace))
                 refreshTranscriptTails(for: sessionKey(for: workspace))
@@ -756,7 +783,8 @@ struct SidebarView: View {
             },
             onSelect: {
                 selectWorkspace(workspace)
-            }
+            },
+            onTogglePin: pinController.isPinnable(workspace) ? { togglePin(workspace) } : nil
         )
         .contextMenu {
             Button("Open in New Window") {
@@ -772,6 +800,14 @@ struct SidebarView: View {
             }
 
             Divider()
+
+            if pinController.isPinnable(workspace) {
+                Button(workspace.isPinned ? "Unpin" : "Pin") {
+                    togglePin(workspace)
+                }
+
+                Divider()
+            }
 
             if workspace.backend == .local {
                 localWorkspaceActions(workspace)
@@ -1509,6 +1545,22 @@ struct SidebarView: View {
                     "option_count": "\(environmentOptions(for: repo).count)",
                 ]
             )
+        }
+    }
+
+    @MainActor
+    private func togglePin(_ workspace: Workspace) {
+        let action = workspace.isPinned ? "unpin workspace" : "pin workspace"
+        let workspaces = repos.flatMap(\.workspaces)
+
+        if workspace.isPinned {
+            pinController.unpin(workspace, in: workspaces)
+        } else {
+            pinController.pin(workspace, in: workspaces)
+        }
+
+        if !saveModelContext(action: action) {
+            modelContext.rollback()
         }
     }
 

@@ -61,7 +61,9 @@ struct RecentBucket: Identifiable {
 
 /// Builds the Recent arrangement from live models plus a date snapshot. Every
 /// ordering decision reads the snapshot rather than the models, so rows hold their
-/// place until the view deliberately refreshes it.
+/// place until the view deliberately refreshes it. Archived and pinned workspaces
+/// drop out: the first is not live work, the second already has its own section
+/// above the buckets.
 enum SidebarRecentArrangement {
     /// "This Week" is the six calendar days before today: a row seven days back is a
     /// full week old and reads as Earlier.
@@ -85,7 +87,8 @@ enum SidebarRecentArrangement {
             if repoRootPaneCounts[repo.id, default: 0] > 0 {
                 add(.repoRoot(repo), at: snapshot[repo.id] ?? repo.lastAccessedAt)
             }
-            for workspace in repo.workspaces where workspace.status != .archived {
+            for workspace in repo.workspaces
+            where workspace.status != .archived && !workspace.isPinned {
                 add(.workspace(workspace), at: snapshot[workspace.id] ?? workspace.lastAccessedAt)
             }
         }

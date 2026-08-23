@@ -32,6 +32,7 @@ struct SidebarWorkspaceController {
     let workspaceService: any WorkspaceServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
+    private let pinController = SidebarPinController()
 
     init(
         modelContext: ModelContext,
@@ -187,6 +188,7 @@ struct SidebarWorkspaceController {
             }
         }
 
+        pinController.unpin(workspace, in: allWorkspaces())
         modelContext.delete(workspace)
         try saveModelContext(action: "update workspace list")
     }
@@ -218,6 +220,7 @@ struct SidebarWorkspaceController {
         }
         workspace.archivedAt = Date()
         workspace.status = .archived
+        pinController.unpin(workspace, in: allWorkspaces())
         try saveModelContext(action: "archive workspace")
     }
 
@@ -242,6 +245,13 @@ struct SidebarWorkspaceController {
         workspace.archivedAt = nil
         workspace.status = .active
         try saveModelContext(action: "unarchive workspace")
+    }
+
+    /// Renumbering scope for pin bookkeeping. A failed fetch narrows it to the workspace
+    /// in hand, which still leaves the Pinned section correct — `SidebarPinController`
+    /// reads `pinOrder` as a ranking, so the gap a skipped renumber leaves is harmless.
+    private func allWorkspaces() -> [Workspace] {
+        (try? modelContext.fetch(FetchDescriptor<Workspace>())) ?? []
     }
 
     private func upsertWorkspace(
