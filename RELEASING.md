@@ -268,7 +268,7 @@ There are two normal lanes:
 Both lanes use the same protected signing, notarization, appcast, manifest,
 artifact upload, and published-asset validation workflow.
 
-### Rehearse from `main` before tagging
+### Rehearsing from `main` (optional)
 
 A manual `Release` dispatch from `main` runs the whole signing, notarization,
 appcast, manifest, and published-asset path and publishes the result as
@@ -291,7 +291,18 @@ self-hosted `signing-host` runner to a hosted `macos-15` image, and as of
 2026-08-13 every hosted attempt has failed before reaching the notarization
 step, so notarization has not yet run green on the current runner.
 
-So, before Method 1:
+A rehearsal is worth its approval click after a change to `release.yml`,
+signing, notarization, or the runner image — the surfaces only this workflow
+exercises — or when testers should get a build first (Method 1A). For a
+release that changes none of those, tag directly: the release-blocking gates
+now run on the metadata PR (`release-change-validation` runs the
+perf-benchmark gate whenever `Info.plist` changes, and `prepare-release.sh`
+runs it locally in every mode), so the failure the rehearsal used to be the
+first to find fails a PR check instead. Note the rehearsal builds `main` as of
+its dispatch and is graded as the version in `Info.plist` at that commit — it
+exercises the lane, not the exact commit you will tag.
+
+To rehearse:
 
 1. Dispatch `Release` from `main` (Actions > `Release` > `Run workflow` >
    Ref: `main`) and let it finish. Mechanics and tester handoff: Method 1A.
@@ -306,7 +317,7 @@ So, before Method 1:
    xcrun stapler validate /tmp/workspaces-rehearsal/WorkSpaces-0.21.0.dmg
    ```
 
-3. Only then tag.
+3. Then tag.
 
 A rehearsal that fails costs a run number. A tag that fails costs a tag, a
 changelog entry, and a version.
@@ -314,7 +325,7 @@ changelog entry, and a version.
 ### Method 1: Stable Release
 
 Use this after tester signoff or when you are ready to publish directly to all
-users, and after a green rehearsal from `main` (above).
+users. Rehearse first (above) when the release lane itself changed.
 
 1. **Open a stable release metadata PR**
 
@@ -358,6 +369,11 @@ users, and after a green rehearsal from `main` (above).
    - Trigger: `push` tag `v*`
    - Runner: GitHub-hosted `macos-15`
    - Protected environment: `release`
+
+   The environment requires the owner's approval and waits silently until it
+   gets it. An agent driving a release opens the run's page in the owner's
+   browser the moment the run enters `waiting` (`open <run-url>`) — the
+   owner's phone notifications are not a reliable channel, the laptop is.
 
    Guardrails:
    - The tagged commit must be reachable from `origin/main`.
