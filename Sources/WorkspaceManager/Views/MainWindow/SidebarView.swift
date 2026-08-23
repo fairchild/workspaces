@@ -38,20 +38,30 @@ private struct NewWorkspaceSheetContext: Identifiable {
     var id: UUID { repo.id }
 }
 
-/// Where a workspace row sits: indented under its repo in the tree arrangements, or
-/// flat in a Recent bucket, where the repo name travels with the row as a breadcrumb.
+/// Where a workspace row sits: indented under its repo in the tree arrangements, flat in a
+/// Recent bucket, or flat in the Pinned section. The two flat placements differ only in the
+/// verbs they offer — reordering belongs to the section that has an order to change, so a
+/// pinned workspace's tree row does not repeat it.
 private enum WorkspaceRowPlacement {
     case nested
     case flat(repoContext: String?)
+    case pinned(repoContext: String?)
 
     var isNested: Bool {
         if case .nested = self { return true }
         return false
     }
 
+    var isPinnedSection: Bool {
+        if case .pinned = self { return true }
+        return false
+    }
+
     var repoContext: String? {
-        if case .flat(let repoContext) = self { return repoContext }
-        return nil
+        switch self {
+        case .nested: return nil
+        case .flat(let repoContext), .pinned(let repoContext): return repoContext
+        }
     }
 }
 
@@ -193,8 +203,12 @@ struct SidebarView: View {
         )
     }
 
+    private var allWorkspaces: [Workspace] {
+        repos.flatMap(\.workspaces)
+    }
+
     private var pinnedWorkspaces: [Workspace] {
-        pinController.pinnedWorkspaces(in: repos.flatMap(\.workspaces))
+        pinController.pinnedWorkspaces(in: allWorkspaces)
     }
 
     private var recentBuckets: [RecentBucket] {
@@ -467,7 +481,7 @@ struct SidebarView: View {
                 ForEach(pinned) { workspace in
                     workspaceRow(
                         workspace,
-                        placement: .flat(repoContext: workspace.sourceRepo?.name)
+                        placement: .pinned(repoContext: workspace.sourceRepo?.name)
                     )
                 }
             } header: {
@@ -808,6 +822,18 @@ struct SidebarView: View {
             }
 
             Divider()
+
+            if placement.isPinnedSection {
+                Button("Move Up") {
+                    movePin(workspace, by: -1)
+                }
+                .disabled(!pinController.canMove(workspace, by: -1, in: allWorkspaces))
+
+                Button("Move Down") {
+                    movePin(workspace, by: 1)
+                }
+                .disabled(!pinController.canMove(workspace, by: 1, in: allWorkspaces))
+            }
 
             if pinController.isPinnable(workspace) {
                 Button(workspace.isPinned ? "Unpin" : "Pin") {
@@ -1559,7 +1585,7 @@ struct SidebarView: View {
     @MainActor
     private func togglePin(_ workspace: Workspace) {
         let action = workspace.isPinned ? "unpin workspace" : "pin workspace"
-        let workspaces = repos.flatMap(\.workspaces)
+        let workspaces = allWorkspaces
         let snapshot = pinController.pinOrderSnapshot(of: workspaces)
 
         if workspace.isPinned {
@@ -1569,6 +1595,18 @@ struct SidebarView: View {
         }
 
         if !saveModelContext(action: action) {
+            pinController.restore(snapshot, in: workspaces)
+        }
+    }
+
+    @MainActor
+    private func movePin(_ workspace: Workspace, by offset: Int) {
+        let workspaces = allWorkspaces
+        let snapshot = pinController.pinOrderSnapshot(of: workspaces)
+
+        pinController.move(workspace, by: offset, in: workspaces)
+
+        if !saveModelContext(action: "reorder pinned workspaces") {
             pinController.restore(snapshot, in: workspaces)
         }
     }
