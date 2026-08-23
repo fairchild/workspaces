@@ -31,8 +31,11 @@ things he's working on.
   `lastEventAt`. The activity dot already shows live agents.
 - **Ordering is snapshot-stable**, same technique as the existing
   `lastAccessed` repo sort: refresh the snapshot on mode change, on appear,
-  on workspace create/delete, and on **app-became-active**
-  (`NSApplication.didBecomeActiveNotification`). Never reorder live under the
+  on workspace create/delete, and on **app-resigned-active**
+  (`NSApplication.didResignActiveNotification` — not become-active: the
+  mouse-down that reactivates the window clicks through to a row, so a
+  refresh on activation would move the clicked row; codex review, slice 1).
+  Never reorder live under the
   cursor.
 - **Repo identity in a flat row is text**: `repo / workspace` on one line,
   repo portion in secondary color, mirroring the toolbar breadcrumb. Truncate

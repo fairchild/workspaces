@@ -332,7 +332,7 @@ struct SidebarView: View {
         .onChange(of: workspaceIDs) { _, _ in
             syncRecentSnapshot(forceRefresh: true)
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
             syncRecentSnapshot(forceRefresh: true)
         }
         .onAppear {
@@ -1946,8 +1946,10 @@ struct SidebarView: View {
     }
 
     /// Re-reads the dates the Recent arrangement orders and buckets by. Called on mode
-    /// change, on appear, when the repo or workspace set changes, and when the app becomes
-    /// active — never during ordinary redraws, so rows never move under the cursor.
+    /// change, on appear, when the repo or workspace set changes, and when the app resigns
+    /// active — never during ordinary redraws, so rows never move under the cursor. Resign
+    /// rather than become: the mouse-down that reactivates the window can click through to
+    /// a row, and a refresh on activation would move that row first.
     private func syncRecentSnapshot(forceRefresh: Bool) {
         guard repoSortMode == .recent else {
             if !recentSnapshotByID.isEmpty {
