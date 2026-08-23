@@ -74,7 +74,9 @@ struct SidebarPinController {
     @discardableResult
     func move(_ workspace: Workspace, by offset: Int, in workspaces: [Workspace]) -> [Workspace] {
         var pinned = pinnedWorkspaces(in: workspaces)
-        guard let index = pinned.firstIndex(where: { $0.id == workspace.id }) else { return pinned }
+        guard offset != 0, let index = pinned.firstIndex(where: { $0.id == workspace.id }) else {
+            return pinned
+        }
 
         let destination = index + offset
         guard pinned.indices.contains(destination) else { return pinned }

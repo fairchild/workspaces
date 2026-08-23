@@ -334,4 +334,17 @@ struct SidebarPinControllerTests {
         #expect(beta.pinOrder == nil)
         #expect(alpha.pinOrder == 0)
     }
+
+    @Test("A zero-offset move leaves even a gapped section untouched, matching canMove")
+    func zeroOffsetMoveIsANoOp() {
+        let repo = makeRepo()
+        let first = makeWorkspace("first", in: repo, pinOrder: 4)
+        let second = makeWorkspace("second", in: repo, pinOrder: 9)
+        let workspaces = [first, second]
+
+        #expect(!controller.canMove(first, by: 0, in: workspaces))
+        controller.move(first, by: 0, in: workspaces)
+        #expect(first.pinOrder == 4)
+        #expect(second.pinOrder == 9)
+    }
 }
