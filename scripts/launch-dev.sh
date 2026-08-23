@@ -38,6 +38,10 @@
 # - Shared-desktop mode (do not steal foreground focus at launch):
 #     ./scripts/launch-dev.sh --no-activate
 #
+# - Trial copy next to the installed app (dogfood a branch without quitting the
+#   daily driver; state seeded once from a snapshot of the live store):
+#     ./scripts/launch-dev.sh --coexist --seed-store --data-dir .dev-data/trial --no-activate
+#
 # ==========================================================================
 
 set -euo pipefail
@@ -55,9 +59,12 @@ GHOSTTYKIT_FRAMEWORK="$REPO_ROOT/Frameworks/GhosttyKit.xcframework"
 MISE_CONFIG_PATH="$REPO_ROOT/.mise.toml"
 DEFAULT_DATA_DIR="$REPO_ROOT/.dev-data/workspacemanager"
 LOG_DIR="$REPO_ROOT/.dev-data/logs"
+APP_SUPPORT_DATA_DIR="$HOME/Library/Application Support/WorkspaceManager"
 
 DO_BUILD=true
 KILL_EXISTING=true
+COEXIST=false
+SEED_STORE=false
 RUN_IN_BACKGROUND=true
 USE_APP_SUPPORT=false
 FIXTURE_MODE=false
@@ -82,6 +89,11 @@ Usage: ./scripts/launch-dev.sh [options]
 Options:
   --no-build           Skip swift build and launch existing debug binary
   --no-kill            Do not stop existing WorkspaceManager processes
+  --coexist            Leave the installed WorkSpaces.app running; only a previous
+                       debug instance is stopped
+  --seed-store         Seed an empty data dir from a snapshot of the installed app's
+                       store (SwiftData + local-state sidecar); the live files are
+                       only read
   --foreground         Run attached to current terminal (no nohup)
   --use-app-support    Do not set WORKSPACES_DATA_DIR (use platform defaults)
   --data-dir <path>    Override isolated data root (default: ./.dev-data/workspacemanager)
@@ -127,6 +139,15 @@ parse_args() {
                 ;;
             --no-kill)
                 KILL_EXISTING=false
+                shift
+                ;;
+            --coexist)
+                COEXIST=true
+                KILL_EXISTING=false
+                shift
+                ;;
+            --seed-store)
+                SEED_STORE=true
                 shift
                 ;;
             --foreground)
@@ -287,6 +308,10 @@ list_instances_for_binary() {
 }
 
 ensure_no_installed_app_instance() {
+    if [[ "$COEXIST" == true ]]; then
+        return
+    fi
+
     local installed_instances
     installed_instances="$(list_instances_for_binary "$INSTALLED_APP_BINARY")"
     if [[ -n "$installed_instances" ]]; then
@@ -299,6 +324,13 @@ ensure_no_installed_app_instance() {
 }
 
 stop_existing_if_requested() {
+    if [[ "$COEXIST" == true ]]; then
+        log "Coexist mode: leaving the installed app running; stopping any previous debug instance..."
+        pkill -f "$DEBUG_BINARY" >/dev/null 2>&1 || true
+        sleep 1
+        return
+    fi
+
     if [[ "$KILL_EXISTING" != true ]]; then
         return
     fi
@@ -340,6 +372,38 @@ configure_data_root() {
         log "Cleaning isolated data dir: $DATA_DIR"
         rm -rf "$DATA_DIR"
         mkdir -p "$DATA_DIR"
+    fi
+}
+
+# A trial copy is only useful with the user's real repos and workspaces. Snapshot
+# the installed app's store into the isolated data dir (sqlite online backup is
+# consistent with the live app running and WAL in play); the live files are
+# never written, and any schema migration a branch carries runs on the copy.
+seed_store_if_requested() {
+    if [[ "$SEED_STORE" != true ]]; then
+        return
+    fi
+    if [[ "$USE_APP_SUPPORT" == true ]]; then
+        fail "--seed-store requires an isolated data dir (drop --use-app-support)"
+    fi
+    if [[ -f "$DATA_DIR/default.store" ]]; then
+        log "Data dir already holds a store; keeping it (pass --clean-data to reseed): $DATA_DIR"
+        return
+    fi
+    if [[ ! -f "$APP_SUPPORT_DATA_DIR/default.store" ]]; then
+        fail "No installed-app store to seed from at $APP_SUPPORT_DATA_DIR"
+    fi
+    command -v sqlite3 >/dev/null 2>&1 || fail "--seed-store requires sqlite3"
+
+    local name
+    for name in default.store local-state.sqlite; do
+        [[ -f "$APP_SUPPORT_DATA_DIR/$name" ]] || continue
+        sqlite3 "$APP_SUPPORT_DATA_DIR/$name" ".backup '$DATA_DIR/$name'"
+        log "Seeded $name from a snapshot of the installed app's store"
+    done
+    if [[ -d "$APP_SUPPORT_DATA_DIR/ghostty" && ! -e "$DATA_DIR/ghostty" ]]; then
+        cp -R "$APP_SUPPORT_DATA_DIR/ghostty" "$DATA_DIR/ghostty"
+        log "Copied ghostty config"
     fi
 }
 
@@ -682,6 +746,7 @@ main() {
     verify_debug_binary
     stop_existing_if_requested
     configure_data_root
+    seed_store_if_requested
     configure_fixture_mode
     configure_launch_behavior
     configure_ghostty_resources
