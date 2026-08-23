@@ -174,6 +174,8 @@ struct MainWindowSelectionControllerTests {
         let focus: FocusRequesterSpy
         let effects: EffectLog
         let box: StateBox
+        let tileTreeStore: TileTreeStore
+        let setupCoordinator: WorkspaceProviderSetupCoordinator
     }
 
     private func makeHarness(
@@ -184,11 +186,14 @@ struct MainWindowSelectionControllerTests {
         selectedRepoForLanding: Repo? = nil,
         restoredRepoDirectory: URL? = nil,
         restoredWorkspaceDirectory: URL? = nil,
+        providers: [any WorkspaceProviderProtocol] = [],
         context: ModelContext
     ) -> Harness {
         let focus = FocusRequesterSpy()
         let effects = EffectLog()
         let box = StateBox()
+        let tileTreeStore = TileTreeStore()
+        let setupCoordinator = WorkspaceProviderSetupCoordinator()
         let controller = MainWindowSelectionController(
             dependencies: MainWindowSelectionController.Dependencies(
                 state: Binding(get: { box.state }, set: { box.state = $0 }),
@@ -201,13 +206,13 @@ struct MainWindowSelectionControllerTests {
                 selectedWorkspace: { selectedWorkspace },
                 selectedWebSource: { selectedWebSource },
                 selectedRepoForLanding: { selectedRepoForLanding },
-                tileTreeStore: TileTreeStore(),
+                tileTreeStore: tileTreeStore,
                 focusCoordinator: focus,
                 smokeDriver: SmokeScenarioDriver(environment: [:]),
                 webDetailSurfaceStore: SurfaceStore(),
-                providerRegistry: WorkspaceProviderRegistry(providers: []),
+                providerRegistry: WorkspaceProviderRegistry(providers: providers),
                 providerSetupActionRunner: WorkspaceProviderSetupActionRunner(
-                    coordinator: WorkspaceProviderSetupCoordinator()
+                    coordinator: setupCoordinator
                 ),
                 bootstrapController: MainWindowBootstrapController(),
                 modelContext: context,
@@ -231,7 +236,14 @@ struct MainWindowSelectionControllerTests {
                 presentWorkspaceOperationError: { effects.record(error: $0) }
             )
         )
-        return Harness(controller: controller, focus: focus, effects: effects, box: box)
+        return Harness(
+            controller: controller,
+            focus: focus,
+            effects: effects,
+            box: box,
+            tileTreeStore: tileTreeStore,
+            setupCoordinator: setupCoordinator
+        )
     }
 
     // MARK: - Repo selection
@@ -387,6 +399,67 @@ struct MainWindowSelectionControllerTests {
         #expect(harness.effects.errors == ["No workspace provider is registered for 'nowhere'."])
     }
 
+    @Test("A setup-intercepted remote selection preserves the repo context when cancelled")
+    func interceptedRemoteSetupCancellationPreservesRepoContext() async throws {
+        let container = try makeContainer()
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "remote",
+            path: URL(fileURLWithPath: Workspace.remotePathSentinel),
+            sourceRepo: repo,
+            backendIdentifier: InterceptedSetupProvider.identifier,
+            remoteId: "remote-1"
+        )
+        let provider = InterceptedSetupProvider()
+        let harness = makeHarness(
+            repos: [repo],
+            selectedRepoForLanding: repo,
+            providers: [provider],
+            context: ModelContext(container)
+        )
+        _ = harness.tileTreeStore.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        )
+
+        harness.controller.selectProviderBackedWorkspace(workspace)
+        try await waitForSetupConfirmation(harness.setupCoordinator)
+
+        #expect(harness.effects.navigationDestinations.isEmpty)
+        #expect(harness.box.state.connectingWorkspaceID == nil)
+        #expect(await provider.terminalLaunchSpecCallCount == 0)
+
+        harness.setupCoordinator.cancelPendingAction()
+
+        let result = try #require(
+            MainWindowTerminalSessionController().createTabFromCurrentContext(
+                tileTreeStore: harness.tileTreeStore,
+                defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
+                selectedRepoForLanding: repo,
+                repos: [repo],
+                normalizePath: {
+                    URL(fileURLWithPath: $0).standardizedFileURL.resolvingSymlinksInPath().path
+                },
+                activateHostSession: { key, directory, customCommand in
+                    harness.tileTreeStore.activateSession(
+                        key: key,
+                        directory: directory,
+                        customCommand: customCommand
+                    ).session
+                }
+            )
+        )
+
+        #expect(harness.tileTreeStore.sessions(inScope: .defaultHome).count == 1)
+        #expect(harness.tileTreeStore.sessions(inScope: .repoPath(repo.localPath)).count == 1)
+        switch result.navigationDestination {
+        case .repoTerminal(let destinationRepo):
+            #expect(destinationRepo.id == repo.id)
+        default:
+            Issue.record("Expected cancellation to leave the repository overview authoritative")
+        }
+    }
+
     @Test("A workspace attached without selection warms only active local workspaces")
     func attachWithoutSelectionGuardsStatusAndBackend() throws {
         let container = try makeContainer()
@@ -442,7 +515,13 @@ struct MainWindowSelectionControllerTests {
             provider: GatedLaunchSpecProvider(spec: fixture.spec, whileWorking: {})
         )
 
-        #expect(harness.effects.entries == ["activate_session", "acknowledge_attention"])
+        #expect(
+            harness.effects.entries == [
+                "activate_session",
+                "navigate(workspace_terminal)",
+                "acknowledge_attention",
+            ]
+        )
         #expect(harness.effects.activatedKeys == [fixture.spec.sessionKey])
         #expect(harness.focus.events == ["request_focus"])
         #expect(fixture.workspace.status == .active)
@@ -510,6 +589,16 @@ struct MainWindowSelectionControllerTests {
         #expect(harness.effects.errors.count == 1)
         #expect(harness.box.state.connectingWorkspaceID == nil)
         #expect(harness.effects.activatedKeys.isEmpty)
+    }
+
+    private func waitForSetupConfirmation(
+        _ coordinator: WorkspaceProviderSetupCoordinator
+    ) async throws {
+        for _ in 0..<50 {
+            if coordinator.confirmationRequest != nil { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        Issue.record("Timed out waiting for provider setup interception")
     }
 
     // MARK: - Web source selection
@@ -623,4 +712,62 @@ struct MainWindowSelectionControllerTests {
 
         #expect(harness.effects.activatedDirectories == [nested])
     }
+}
+
+private actor InterceptedSetupProvider: WorkspaceProviderSetupCapable {
+    static let identifier = "intercepted-setup"
+
+    nonisolated let descriptor = WorkspaceProviderDescriptor(
+        id: "intercepted-setup",
+        displayName: "Intercepted Setup",
+        description: "Requires confirmation before terminal setup."
+    )
+
+    private(set) var terminalLaunchSpecCallCount = 0
+
+    func availability() async -> WorkspaceProviderAvailability { .available }
+
+    nonisolated func sessionKey(for workspace: WorkspaceProviderTarget) -> HostTerminalSessionKey {
+        .backendSession(providerID: descriptor.id, instanceID: workspace.terminalSessionIdentifier)
+    }
+
+    func createWorkspace(
+        request: WorkspaceProviderCreationRequest,
+        workspaceService: any WorkspaceServiceProtocol,
+        progress: WorkspaceProviderProgressHandler?,
+        persist: WorkspaceProviderPersistenceHandler?
+    ) async throws -> WorkspaceProviderCreationResult {
+        throw WorkspaceProviderError.unavailable("Not used in this test.")
+    }
+
+    func terminalLaunchSpec(for workspace: WorkspaceProviderTarget) async throws -> TerminalLaunchSpec {
+        terminalLaunchSpecCallCount += 1
+        throw WorkspaceProviderError.unavailable("Setup should intercept before launch.")
+    }
+
+    func setupRequirement(
+        for action: WorkspaceProviderSetupAction
+    ) async throws -> WorkspaceProviderSetupRequirement? {
+        .confirmation(
+            WorkspaceProviderSetupConfirmation(
+                providerID: descriptor.id,
+                providerDisplayName: descriptor.displayName,
+                state: "setupRequired",
+                title: "Set Up Provider",
+                primaryButtonTitle: "Set Up and Continue",
+                introductoryText: ["Setup is required."],
+                learnMoreLabel: nil,
+                learnMoreURL: nil,
+                explanatoryStepsTitle: "What WorkSpaces will do",
+                explanatorySteps: ["Prepare the provider"],
+                supplementaryText: nil,
+                footerText: "Cancel keeps the current surface.",
+                progressTitle: "Preparing Provider",
+                progressBody: "Preparing terminal access.",
+                initialProgress: WorkspaceProviderSetupProgress(id: "prepare", label: "Preparing")
+            )
+        )
+    }
+
+    func performSetup(progress: WorkspaceProviderSetupProgressHandler?) async throws {}
 }
