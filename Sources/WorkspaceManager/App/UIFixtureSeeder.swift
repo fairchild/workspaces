@@ -19,6 +19,7 @@
     enum UIFixtureSeeder {
         static let agentStatesEnvKey = "WORKSPACES_UI_FIXTURE_AGENT_STATES"
         static let commandStatusesEnvKey = "WORKSPACES_UI_FIXTURE_COMMAND_STATUSES"
+        static let pinnedEnvKey = "WORKSPACES_UI_FIXTURE_PINNED"
 
         /// Idempotency latch — `seedAgentStatesIfNeeded` may be invoked multiple times
         /// as views re-appear, but the synthetic events should only land once per launch.
@@ -132,6 +133,56 @@
             } catch {
                 log.error("[UIFixture] Failed to seed fixture data: \(String(describing: error), privacy: .public)")
             }
+        }
+
+        /// Reads `WORKSPACES_UI_FIXTURE_PINNED` — a comma-separated workspace-name list —
+        /// and pins those workspaces in listed order, so a capture renders the sidebar's
+        /// Pinned section whatever the stored data holds. Parsed only in fixture mode, and
+        /// only in debug builds (this whole file is `#if DEBUG`). Unknown names are logged
+        /// and skipped rather than failing the launch. Returns how many were pinned.
+        @discardableResult
+        static func seedPinnedWorkspacesIfNeeded(
+            from environment: [String: String],
+            in context: ModelContext
+        ) -> Int {
+            guard environment["WORKSPACES_UI_FIXTURE"] == "1",
+                let raw = environment[pinnedEnvKey],
+                !raw.trimmingCharacters(in: .whitespaces).isEmpty
+            else {
+                return 0
+            }
+
+            let names =
+                raw
+                .split(separator: ",", omittingEmptySubsequences: true)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            guard !names.isEmpty else { return 0 }
+
+            let workspaces = fetchAllWorkspaces(in: context)
+            var pinnedCount = 0
+            for name in names {
+                guard
+                    let workspace = workspaces.first(where: {
+                        $0.name.caseInsensitiveCompare(name) == .orderedSame
+                    })
+                else {
+                    log.error("[UIFixture] No fixture workspace named '\(name, privacy: .public)' to pin — skipping")
+                    continue
+                }
+                workspace.pinOrder = pinnedCount
+                pinnedCount += 1
+            }
+
+            guard pinnedCount > 0 else { return 0 }
+
+            do {
+                try context.save()
+            } catch {
+                log.error(
+                    "[UIFixture] Failed to seed pinned workspaces: \(String(describing: error), privacy: .public)")
+            }
+            return pinnedCount
         }
 
         /// Reads `WORKSPACES_UI_FIXTURE_AGENT_STATES`, resolves workspace names against

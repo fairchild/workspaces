@@ -599,6 +599,117 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(workspace.status == .archived)
     }
 
+    @Test("Archiving a pinned workspace unpins it and closes its gap in the Pinned section")
+    @MainActor
+    func archivingUnpins() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let archived = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/feature-a"),
+            sourceRepo: repo,
+            status: .active,
+            pinOrder: 0,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        let survivor = Workspace(
+            name: "feature-b",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/feature-b"),
+            sourceRepo: repo,
+            status: .active,
+            pinOrder: 1,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(archived)
+        context.insert(survivor)
+        try context.save()
+
+        let controller = makeController(
+            context: context,
+            workspaceService: MockWorkspaceService(),
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        try await controller.archive(archived)
+
+        #expect(archived.status == .archived)
+        #expect(archived.pinOrder == nil)
+        #expect(survivor.pinOrder == 0)
+    }
+
+    @Test("Unarchiving does not restore the pin")
+    @MainActor
+    func unarchivingLeavesTheWorkspaceUnpinned() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let workspace = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/feature-a"),
+            sourceRepo: repo,
+            status: .active,
+            pinOrder: 0,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let controller = makeController(
+            context: context,
+            workspaceService: MockWorkspaceService(),
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        try await controller.archive(workspace)
+        try await controller.unarchive(workspace)
+
+        #expect(workspace.status == .active)
+        #expect(workspace.pinOrder == nil)
+    }
+
+    @Test("Deleting a pinned workspace renumbers the ones left behind")
+    @MainActor
+    func deletingUnpins() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        let deleted = Workspace(
+            name: "feature-a",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/feature-a"),
+            sourceRepo: repo,
+            status: .active,
+            pinOrder: 0,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        let survivor = Workspace(
+            name: "feature-b",
+            path: URL(fileURLWithPath: "/tmp/workspaces/api/feature-b"),
+            sourceRepo: repo,
+            status: .active,
+            pinOrder: 1,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(deleted)
+        context.insert(survivor)
+        try context.save()
+
+        let controller = makeController(
+            context: context,
+            workspaceService: MockWorkspaceService(),
+            providers: [LocalWorkspaceProvider()]
+        )
+
+        try await controller.deleteWorkspace(deleted, deleteFiles: false)
+
+        let remaining = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(remaining.map(\.name) == ["feature-b"])
+        #expect(survivor.pinOrder == 0)
+    }
+
     @Test("Local archive records archivedAt and moves path under .archived; unarchive reverses")
     @MainActor
     func localArchiveAndUnarchiveUpdateArchivedState() async throws {

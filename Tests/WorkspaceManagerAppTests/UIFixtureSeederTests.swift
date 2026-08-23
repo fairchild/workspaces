@@ -119,6 +119,69 @@ struct UIFixtureSeederTests {
         #expect(buckets.first?.rows.map(\.name) == ["feature-auth"])
     }
 
+    @Test("The pinned env var pins the named workspaces in listed order")
+    func pinnedEnvSeedsThePinnedSection() throws {
+        let f = try freshFixtures()
+
+        let pinned = UIFixtureSeeder.seedPinnedWorkspacesIfNeeded(
+            from: [
+                "WORKSPACES_UI_FIXTURE": "1",
+                UIFixtureSeeder.pinnedEnvKey: "feature-auth,skills-v13",
+            ],
+            in: f.context
+        )
+
+        #expect(pinned == 2)
+        #expect(try workspace(named: "feature-auth", in: f.context).pinOrder == 0)
+        #expect(try workspace(named: "skills-v13", in: f.context).pinOrder == 1)
+        #expect(try workspace(named: "bugfix-422", in: f.context).pinOrder == nil)
+    }
+
+    @Test("Pinned seeding needs fixture mode, a value, and a name that resolves")
+    func pinnedEnvIsIgnoredOutsideFixtureMode() throws {
+        let f = try freshFixtures()
+        let key = UIFixtureSeeder.pinnedEnvKey
+
+        #expect(UIFixtureSeeder.seedPinnedWorkspacesIfNeeded(from: [key: "feature-auth"], in: f.context) == 0)
+        #expect(
+            UIFixtureSeeder.seedPinnedWorkspacesIfNeeded(
+                from: ["WORKSPACES_UI_FIXTURE": "1", key: "  "], in: f.context) == 0
+        )
+        #expect(
+            UIFixtureSeeder.seedPinnedWorkspacesIfNeeded(
+                from: ["WORKSPACES_UI_FIXTURE": "1", key: "no-such-workspace"], in: f.context) == 0
+        )
+        #expect(try workspace(named: "feature-auth", in: f.context).pinOrder == nil)
+    }
+
+    @Test("Pinned fixture workspaces render above the Recent buckets, not inside them")
+    func pinnedFixtureWorkspacesLeaveTheBuckets() throws {
+        let f = try freshFixtures()
+        UIFixtureSeeder.seedPinnedWorkspacesIfNeeded(
+            from: [
+                "WORKSPACES_UI_FIXTURE": "1",
+                UIFixtureSeeder.pinnedEnvKey: "feature-auth,skills-v13",
+            ],
+            in: f.context
+        )
+
+        let repos = try f.context.fetch(FetchDescriptor<Repo>())
+        let bucketed = SidebarRecentArrangement.buckets(
+            repos: repos,
+            snapshot: SidebarRecentArrangement.snapshot(for: repos),
+            repoRootPaneCounts: [:],
+            now: Date(),
+            calendar: .current
+        ).flatMap { $0.rows.map(\.name) }
+
+        #expect(!bucketed.contains("feature-auth"))
+        #expect(!bucketed.contains("skills-v13"))
+        #expect(bucketed.contains("bugfix-422"))
+
+        let pinned = SidebarPinController().pinnedWorkspaces(in: repos.flatMap(\.workspaces))
+        #expect(pinned.map(\.name) == ["feature-auth", "skills-v13"])
+    }
+
     @Test("Missing env var is a no-op")
     func absentEnvIsNoOp() throws {
         let f = try freshFixtures()

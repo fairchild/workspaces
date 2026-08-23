@@ -280,11 +280,24 @@ struct WorkspaceRow: View {
     var isNested: Bool = false
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
+    var isPinned: Bool = false
     /// Resolved lazily only when the hover card opens, so frequent agent-status
     /// updates never re-render idle rows.
     var tabsProvider: (() -> [SidebarTabSummary])? = nil
     var onToggleExpansion: (() -> Void)? = nil
     var onSelect: (() -> Void)? = nil
+    /// Nil where pinning does not apply. Non-nil rows carry a hover-visible star —
+    /// quiet discoverability, the same compromise `RepoRow`'s "+" makes.
+    var onTogglePin: (() -> Void)? = nil
+    /// Reveals the hover actions with no pointer involved. False in the app, where real
+    /// hover drives them; a still render has no pointer, so the evidence PNG sets it.
+    var revealsHoverActions: Bool = false
+
+    @State private var isHovering = false
+
+    private var showsPinAction: Bool {
+        isHovering || revealsHoverActions
+    }
 
     private var isBusy: Bool {
         statusMessage != nil || workspace.status == .provisioning
@@ -348,6 +361,14 @@ struct WorkspaceRow: View {
             } else {
                 rowContent
             }
+
+            if let onTogglePin {
+                if showsPinAction {
+                    pinButton(onTogglePin)
+                } else {
+                    pinButtonPlaceholder
+                }
+            }
         }
         .padding(.leading, isNested ? 18 : 0)
         .padding(.vertical, 4)
@@ -358,6 +379,7 @@ struct WorkspaceRow: View {
         )
         .accessibilityLabel(accessibilityDescription)
         .sidebarHoverCard(
+            onHoverChange: { isHovering = $0 },
             shouldShow: {
                 SidebarInfoCard.hasContent(
                     name: workspace.name, branch: workspace.gitBranch,
@@ -382,10 +404,38 @@ struct WorkspaceRow: View {
         if workspace.status == .archived {
             description += ", archived"
         }
+        if isPinned {
+            description += ", pinned"
+        }
         if let statusMessage {
             description += ", \(statusMessage)"
         }
         return description
+    }
+
+    private func pinButton(_ action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: isPinned ? "star.fill" : "star")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.secondary.opacity(0.08))
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .help(isPinned ? "Unpin \(workspace.name)" : "Pin \(workspace.name)")
+    }
+
+    private var pinButtonPlaceholder: some View {
+        Color.clear
+            .frame(width: 22, height: 22)
+            .accessibilityHidden(true)
     }
 
     private var rowContent: some View {

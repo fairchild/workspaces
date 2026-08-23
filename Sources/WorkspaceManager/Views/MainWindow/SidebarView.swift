@@ -167,6 +167,7 @@ struct SidebarView: View {
 
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
     private let workspacePresentationController = SidebarWorkspacePresentationController()
+    private let pinController = SidebarPinController()
 
     /// Resolved once per process: fixture captures pin the arrangement by environment so a
     /// scenario renders the same way whatever the stored preference happens to be.
@@ -190,6 +191,10 @@ struct SidebarView: View {
                 (repo.id, paneCount(for: .repoPath(normalizePath(repo.localURL))))
             }
         )
+    }
+
+    private var pinnedWorkspaces: [Workspace] {
+        pinController.pinnedWorkspaces(in: repos.flatMap(\.workspaces))
     }
 
     private var recentBuckets: [RecentBucket] {
@@ -399,6 +404,8 @@ struct SidebarView: View {
 
     private var sidebarList: some View {
         List {
+            pinnedSection
+
             if repoSortMode == .recent {
                 recentSections
             } else {
@@ -448,6 +455,33 @@ struct SidebarView: View {
         return .ignored
     }
 
+    /// Sits above every arrangement when non-empty. Rows are flat — the repo travels with
+    /// the workspace — and in the tree arrangements the workspace also keeps its place in
+    /// its repo: Pinned is a shortcut list, not a move.
+    @ViewBuilder
+    private var pinnedSection: some View {
+        let pinned = pinnedWorkspaces
+
+        if !pinned.isEmpty {
+            Section {
+                ForEach(pinned) { workspace in
+                    workspaceRow(
+                        workspace,
+                        placement: .flat(repoContext: workspace.sourceRepo?.name)
+                    )
+                }
+            } header: {
+                sidebarSectionHeader(title: "Pinned", showsSortMenu: !repos.isEmpty)
+            }
+        }
+    }
+
+    /// The arrangement menu lives on the topmost header: Pinned when it exists, otherwise
+    /// the first header of the arrangement itself.
+    private var hasPinnedRows: Bool {
+        !pinnedWorkspaces.isEmpty
+    }
+
     private var repositoriesSection: some View {
         Section {
             if repos.isEmpty {
@@ -476,7 +510,7 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } header: {
-                sidebarSectionHeader(title: "Recent", showsSortMenu: !repos.isEmpty)
+                sidebarSectionHeader(title: "Recent", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
             }
         } else {
             ForEach(Array(buckets.enumerated()), id: \.element.id) { index, bucket in
@@ -485,7 +519,7 @@ struct SidebarView: View {
                         recentRow(row)
                     }
                 } header: {
-                    sidebarSectionHeader(title: bucket.title, showsSortMenu: index == 0)
+                    sidebarSectionHeader(title: bucket.title, showsSortMenu: index == 0 && !hasPinnedRows)
                 }
             }
         }
@@ -502,7 +536,7 @@ struct SidebarView: View {
     }
 
     private var repositoriesHeader: some View {
-        sidebarSectionHeader(title: "Repositories", showsSortMenu: !repos.isEmpty)
+        sidebarSectionHeader(title: "Repositories", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
     }
 
     private func sidebarSectionHeader(title: String, showsSortMenu: Bool) -> some View {
@@ -746,6 +780,7 @@ struct SidebarView: View {
             isNested: placement.isNested,
             isExpanded: placement.isNested && isWorkspaceExpanded(workspace),
             showsDisclosure: placement.isNested && !workspace.webSources.isEmpty,
+            isPinned: workspace.isPinned,
             tabsProvider: {
                 refreshForegroundProcessNames(for: sessionKey(for: workspace))
                 refreshTranscriptTails(for: sessionKey(for: workspace))
@@ -756,7 +791,8 @@ struct SidebarView: View {
             },
             onSelect: {
                 selectWorkspace(workspace)
-            }
+            },
+            onTogglePin: pinController.isPinnable(workspace) ? { togglePin(workspace) } : nil
         )
         .contextMenu {
             Button("Open in New Window") {
@@ -772,6 +808,14 @@ struct SidebarView: View {
             }
 
             Divider()
+
+            if pinController.isPinnable(workspace) {
+                Button(workspace.isPinned ? "Unpin" : "Pin") {
+                    togglePin(workspace)
+                }
+
+                Divider()
+            }
 
             if workspace.backend == .local {
                 localWorkspaceActions(workspace)
@@ -1509,6 +1553,23 @@ struct SidebarView: View {
                     "option_count": "\(environmentOptions(for: repo).count)",
                 ]
             )
+        }
+    }
+
+    @MainActor
+    private func togglePin(_ workspace: Workspace) {
+        let action = workspace.isPinned ? "unpin workspace" : "pin workspace"
+        let workspaces = repos.flatMap(\.workspaces)
+        let snapshot = pinController.pinOrderSnapshot(of: workspaces)
+
+        if workspace.isPinned {
+            pinController.unpin(workspace, in: workspaces)
+        } else {
+            pinController.pin(workspace, in: workspaces)
+        }
+
+        if !saveModelContext(action: action) {
+            pinController.restore(snapshot, in: workspaces)
         }
     }
 

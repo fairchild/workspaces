@@ -53,6 +53,10 @@ struct WorkspaceManagerApp: App {
         #if DEBUG
             if ProcessInfo.processInfo.environment["WORKSPACES_UI_FIXTURE"] == "1" {
                 UIFixtureSeeder.seedDataIfNeeded(in: bootstrap.container.mainContext)
+                UIFixtureSeeder.seedPinnedWorkspacesIfNeeded(
+                    from: ProcessInfo.processInfo.environment,
+                    in: bootstrap.container.mainContext
+                )
             }
         #endif
 
