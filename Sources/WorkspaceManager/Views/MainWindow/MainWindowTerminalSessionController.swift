@@ -16,9 +16,10 @@ struct MainWindowTerminalSessionController {
         let navigationDestination: MainWindowNavigationDestination?
     }
 
-    /// Tab creation can bootstrap its own source session, so an empty store must not disable Cmd-T.
-    func canCreateTab(hasSessions _: Bool) -> Bool {
-        true
+    /// A visible repository overview can bootstrap its own first terminal. Other surfaces still
+    /// need an existing session so Cmd-T cannot create an invisible terminal behind web content.
+    func canCreateTab(hasSessions: Bool, selectedRepoForLanding: Repo?, isConnectingWorkspace: Bool) -> Bool {
+        !isConnectingWorkspace && (hasSessions || selectedRepoForLanding != nil)
     }
 
     @discardableResult
@@ -84,9 +85,19 @@ struct MainWindowTerminalSessionController {
             else { return nil }
             session = siblingSession
         } else {
-            session = activateHostSession(scopeKey, repoDirectory, nil)
+            let existingSessionIDs = Set(tileTreeStore.sessions.map(\.id))
+            let activatedSession = activateHostSession(scopeKey, repoDirectory, nil)
+            if existingSessionIDs.contains(activatedSession.id) {
+                guard let siblingSession = tileTreeStore.createTab(from: activatedSession.id) else { return nil }
+                session = siblingSession
+            } else {
+                session = activatedSession
+            }
         }
 
+        let navigationDestination =
+            terminalNavigationDestination(for: session, repos: repos, normalizePath: normalizePath)
+            ?? .repoTerminal(repo)
         return TabCreationResult(
             focus: focusResult(
                 sessionID: session.id,
@@ -94,7 +105,7 @@ struct MainWindowTerminalSessionController {
                 repos: repos,
                 normalizePath: normalizePath
             ),
-            navigationDestination: .repoTerminal(repo)
+            navigationDestination: navigationDestination
         )
     }
 

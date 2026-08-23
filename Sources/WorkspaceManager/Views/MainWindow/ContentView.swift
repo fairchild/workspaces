@@ -302,6 +302,18 @@ struct ContentView: View {
         mainSelectionCoordinator.cachedRepo(with: viewState.selectedRepoForLandingID)
     }
 
+    /// The repo selection is intentionally retained behind embedded web so closing web can return
+    /// to it. Cmd-T must only treat that selection as context when the overview itself is visible.
+    private var visibleRepoOverviewForTerminalTab: Repo? {
+        guard embeddedWebNext == nil,
+            currentSelectedWebSource == nil,
+            currentSelectedWorkspace == nil,
+            viewState.pendingRemoteWorkspace == nil,
+            viewState.connectingWorkspaceID == nil
+        else { return nil }
+        return currentSelectedRepoForLanding
+    }
+
     private var modelSnapshot: ModelSnapshot {
         ModelSnapshot(
             repoIDs: repos.map(\.id),
@@ -563,7 +575,12 @@ struct ContentView: View {
             canToggleSidebar: true,
             canToggleInspector: true,
             canToggleTerminalPanel: true,
-            canCreateTerminalTab: terminalSessionController.canCreateTab(hasSessions: tileTreeStore.hasSessions),
+            canCreateTerminalTab: terminalSessionController.canCreateTab(
+                hasSessions: tileTreeStore.hasSessions,
+                selectedRepoForLanding: visibleRepoOverviewForTerminalTab,
+                isConnectingWorkspace: viewState.pendingRemoteWorkspace != nil
+                    || viewState.connectingWorkspaceID != nil
+            ),
             canCloseTerminalTab: tileTreeStore.hasSessions,
             canSelectNextTerminalTab: tileTreeStore.scopedSessions.count > 1,
             canSelectPreviousTerminalTab: tileTreeStore.scopedSessions.count > 1,
@@ -1355,7 +1372,13 @@ struct ContentView: View {
             let repo = repos.first(where: {
                 $0.name.caseInsensitiveCompare(configuration.repoName) == .orderedSame
             })
-        else { return true }
+        else {
+            viewState.didApplyFixtureTerminalTabBootstrap = true
+            uiFixtureLog.error(
+                "[UIFixture] Cmd-T bootstrap skipped (repo=\(configuration.repoName, privacy: .public))"
+            )
+            return false
+        }
 
         viewState.didApplyFixtureTerminalTabBootstrap = true
         viewState.didResolveInitialSurface = true
@@ -1665,7 +1688,7 @@ struct ContentView: View {
             let result = terminalSessionController.createTabFromCurrentContext(
                 tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
-                selectedRepoForLanding: currentSelectedRepoForLanding,
+                selectedRepoForLanding: visibleRepoOverviewForTerminalTab,
                 repos: repos,
                 normalizePath: normalizePath,
                 activateHostSession: { key, directory, customCommand in

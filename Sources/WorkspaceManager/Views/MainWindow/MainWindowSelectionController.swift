@@ -228,6 +228,9 @@ struct MainWindowSelectionController {
             return
         }
 
+        // Clear any repo-overview selection before provider setup starts. Otherwise the retained
+        // overview can remain the apparent Cmd-T context while this workspace becomes active.
+        dependencies.applyNavigationDestination(.workspaceTerminal(workspace))
         Task { @MainActor in
             do {
                 try await dependencies.providerSetupActionRunner.run(

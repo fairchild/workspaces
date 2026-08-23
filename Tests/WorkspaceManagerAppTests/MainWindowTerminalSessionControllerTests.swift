@@ -36,9 +36,38 @@ struct MainWindowTerminalSessionControllerTests {
         #expect(result.focus.focusSessionID == store.activeSessionID)
     }
 
-    @Test("Creating a tab is available before any session exists")
-    func creatingTabIsAvailableBeforeAnySessionExists() {
-        #expect(controller.canCreateTab(hasSessions: false))
+    @Test("Creating a tab without sessions is available only from a repo overview")
+    func creatingTabAvailabilityRequiresSessionOrRepoOverview() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+
+        #expect(
+            controller.canCreateTab(
+                hasSessions: false,
+                selectedRepoForLanding: repo,
+                isConnectingWorkspace: false
+            )
+        )
+        #expect(
+            !controller.canCreateTab(
+                hasSessions: false,
+                selectedRepoForLanding: nil,
+                isConnectingWorkspace: false
+            )
+        )
+        #expect(
+            controller.canCreateTab(
+                hasSessions: true,
+                selectedRepoForLanding: nil,
+                isConnectingWorkspace: false
+            )
+        )
+        #expect(
+            !controller.canCreateTab(
+                hasSessions: true,
+                selectedRepoForLanding: repo,
+                isConnectingWorkspace: true
+            )
+        )
     }
 
     @Test("Creating from a repo overview opens that repo's initial terminal")
@@ -114,6 +143,44 @@ struct MainWindowTerminalSessionControllerTests {
         #expect(repoSessions.map(\.id).contains(existingRepoSession.id))
         #expect(repoSessions.map(\.id).contains(result.focus.focusSessionID))
         #expect(store.sessions(inScope: .defaultHome).map(\.id) == [otherSession.id])
+    }
+
+    @Test("Creating from a repo overview reuses a canonical workspace scope as a sibling")
+    func creatingFromRepoOverviewAddsSiblingToCanonicalWorkspaceScope() throws {
+        let fixture = makeRepoWorkspaceFixture(workspacePath: "/tmp/alpha")
+        let store = TileTreeStore()
+        let existingWorkspaceSession = store.activateSession(
+            key: .hostPath(fixture.workspace.path),
+            directory: fixture.workspace.workspaceURL
+        ).session
+
+        let result = try #require(
+            controller.createTabFromCurrentContext(
+                tileTreeStore: store,
+                defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
+                selectedRepoForLanding: fixture.repo,
+                repos: [fixture.repo],
+                normalizePath: normalizePath,
+                activateHostSession: { key, directory, customCommand in
+                    store.activateSession(
+                        key: key,
+                        directory: directory,
+                        customCommand: customCommand
+                    ).session
+                }
+            )
+        )
+
+        let workspaceSessions = store.sessions(inScope: .hostPath(fixture.workspace.path))
+        #expect(workspaceSessions.count == 2)
+        #expect(workspaceSessions.map(\.id).contains(existingWorkspaceSession.id))
+        #expect(workspaceSessions.map(\.id).contains(result.focus.focusSessionID))
+        switch result.navigationDestination {
+        case .workspaceTerminal(let destinationWorkspace):
+            #expect(destinationWorkspace.id == fixture.workspace.id)
+        default:
+            Issue.record("Expected canonical workspace reuse to preserve workspace navigation")
+        }
     }
 
     @Test("Creating from an existing terminal keeps the active session context")
@@ -331,11 +398,13 @@ struct MainWindowTerminalSessionControllerTests {
         #expect(confirmation.title == "Build")
     }
 
-    private func makeRepoWorkspaceFixture() -> (repo: Repo, workspace: Workspace) {
+    private func makeRepoWorkspaceFixture(
+        workspacePath: String = "/tmp/alpha/workspaces/feature-a"
+    ) -> (repo: Repo, workspace: Workspace) {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let workspace = Workspace(
             name: "feature-a",
-            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+            path: URL(fileURLWithPath: workspacePath),
             sourceRepo: repo
         )
         repo.workspaces = [workspace]
