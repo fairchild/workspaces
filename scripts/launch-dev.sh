@@ -364,6 +364,10 @@ configure_data_root() {
     fi
 
     DATA_DIR="$(expand_home_prefix "$DATA_DIR")"
+    # Relative --data-dir values resolve against the repo root: the synthetic
+    # fixture root derived from it must be absolute, and the app's own cwd is
+    # not a contract.
+    [[ "$DATA_DIR" == /* ]] || DATA_DIR="$REPO_ROOT/${DATA_DIR#./}"
     ENV_VARS+=("WORKSPACES_DATA_DIR=$DATA_DIR")
     ENV_VARS+=("WORKSPACES_APP_VARIANT=dev")
 
