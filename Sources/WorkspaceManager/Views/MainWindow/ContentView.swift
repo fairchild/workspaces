@@ -302,6 +302,18 @@ struct ContentView: View {
         mainSelectionCoordinator.cachedRepo(with: viewState.selectedRepoForLandingID)
     }
 
+    /// The repo selection is intentionally retained behind embedded web so closing web can return
+    /// to it. Cmd-T must only treat that selection as context when the overview itself is visible.
+    private var visibleRepoOverviewForTerminalTab: Repo? {
+        guard embeddedWebNext == nil,
+            currentSelectedWebSource == nil,
+            currentSelectedWorkspace == nil,
+            viewState.pendingRemoteWorkspace == nil,
+            viewState.connectingWorkspaceID == nil
+        else { return nil }
+        return currentSelectedRepoForLanding
+    }
+
     private var modelSnapshot: ModelSnapshot {
         ModelSnapshot(
             repoIDs: repos.map(\.id),
@@ -483,6 +495,10 @@ struct ContentView: View {
         UIFixtureSessionSwitcherBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
+    private var fixtureTerminalTabBootstrapConfiguration: UIFixtureTerminalTabBootstrapConfiguration? {
+        UIFixtureTerminalTabBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
     private var openInEditorTarget: OpenInEditorTarget? {
         presentationController.openInEditorTarget(
             selectedCodePreview: viewState.selectedCodePreview,
@@ -559,7 +575,12 @@ struct ContentView: View {
             canToggleSidebar: true,
             canToggleInspector: true,
             canToggleTerminalPanel: true,
-            canCreateTerminalTab: tileTreeStore.hasSessions,
+            canCreateTerminalTab: terminalSessionController.canCreateTab(
+                hasSessions: tileTreeStore.hasSessions,
+                selectedRepoForLanding: visibleRepoOverviewForTerminalTab,
+                isConnectingWorkspace: viewState.pendingRemoteWorkspace != nil
+                    || viewState.connectingWorkspaceID != nil
+            ),
             canCloseTerminalTab: tileTreeStore.hasSessions,
             canSelectNextTerminalTab: tileTreeStore.scopedSessions.count > 1,
             canSelectPreviousTerminalTab: tileTreeStore.scopedSessions.count > 1,
@@ -1315,6 +1336,10 @@ struct ContentView: View {
 
     @MainActor
     private func resolveSurfaceLifecycle() {
+        if applyTerminalTabFixtureIfNeeded() {
+            return
+        }
+
         for _ in 0..<8 {
             let action = surfaceResolutionController.nextAction(
                 context: MainWindowSurfaceResolutionContext(
@@ -1335,6 +1360,36 @@ struct ContentView: View {
 
             guard applySurfaceResolutionAction(action) else { break }
         }
+    }
+
+    @MainActor
+    @discardableResult
+    private func applyTerminalTabFixtureIfNeeded() -> Bool {
+        guard let configuration = fixtureTerminalTabBootstrapConfiguration else { return false }
+        guard !viewState.didApplyFixtureTerminalTabBootstrap else { return false }
+        guard deepLinkState.pendingRequest == nil else { return false }
+        guard
+            let repo = repos.first(where: {
+                $0.name.caseInsensitiveCompare(configuration.repoName) == .orderedSame
+            })
+        else {
+            viewState.didApplyFixtureTerminalTabBootstrap = true
+            uiFixtureLog.error(
+                "[UIFixture] Cmd-T bootstrap skipped (repo=\(configuration.repoName, privacy: .public))"
+            )
+            return false
+        }
+
+        viewState.didApplyFixtureTerminalTabBootstrap = true
+        viewState.didResolveInitialSurface = true
+        handleRepoSelection(repo)
+        if configuration.createsTerminalTab {
+            createTerminalTabFromCurrentContext()
+        }
+        uiFixtureLog.info(
+            "[UIFixture] Cmd-T bootstrap applied (repo=\(repo.name, privacy: .public) triggered=\(configuration.createsTerminalTab, privacy: .public))"
+        )
+        return true
     }
 
     @MainActor
@@ -1633,6 +1688,7 @@ struct ContentView: View {
             let result = terminalSessionController.createTabFromCurrentContext(
                 tileTreeStore: tileTreeStore,
                 defaultHomeDirectory: resolvedDefaultHostDirectory,
+                selectedRepoForLanding: visibleRepoOverviewForTerminalTab,
                 repos: repos,
                 normalizePath: normalizePath,
                 activateHostSession: { key, directory, customCommand in
@@ -1640,7 +1696,10 @@ struct ContentView: View {
                 }
             )
         else { return }
-        applyTerminalSessionResult(result)
+        if let navigationDestination = result.navigationDestination {
+            applyNavigationDestination(navigationDestination)
+        }
+        applyTerminalSessionResult(result.focus)
     }
 
     @MainActor

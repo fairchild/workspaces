@@ -263,6 +263,7 @@ struct MainWindowSelectionController {
                 directory: launchSpec.workingDirectory,
                 customCommand: launchSpec.customCommand
             )
+            dependencies.applyNavigationDestination(.workspaceTerminal(workspace))
             dependencies.state.wrappedValue.columnVisibility = .all
             dependencies.acknowledgeAttention(.workspace(workspace.id))
             dependencies.focusCoordinator.requestMainTerminalFocus(

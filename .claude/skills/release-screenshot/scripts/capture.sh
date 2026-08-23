@@ -95,6 +95,15 @@ if [[ -n "$FIXTURE_SEED_RESTORE_BANNER" ]]; then
     exit 2
 fi
 
+# The release-screenshot lane activates the app and only supports its original agent/status
+# scenarios. Cmd-T evidence must use the operator-scoped, no-activation app evidence lane; accepting
+# these names here would label an unstaged generic screenshot as Cmd-T proof.
+if [[ -n "$FIXTURE_CMD_T_REPO" || -n "$FIXTURE_TRIGGER_CMD_T" ]]; then
+    echo "ERROR: scenario '$scenario' requires the Cmd-T app evidence lane." >&2
+    echo "       Use: ./scripts/evidence.sh --pr <N> --fixture $scenario" >&2
+    exit 2
+fi
+
 DEFAULT_OUTPUT_DIR="$REPO_ROOT/output/release-screenshots"
 mkdir -p "$DEFAULT_OUTPUT_DIR"
 timestamp="$(date +%Y%m%d-%H%M%S)"
@@ -111,6 +120,8 @@ ws_require_cmd screencapture
 
 export WORKSPACES_UI_FIXTURE=1
 export WORKSPACES_DISABLE_AUTO_IMPORT=1
+# Prevent ambient Cmd-T fixture values from leaking into unrelated named scenarios.
+unset WORKSPACES_UI_FIXTURE_CMD_T_REPO WORKSPACES_UI_FIXTURE_TRIGGER_CMD_T || true
 if [[ -n "$agent_states" ]]; then
     export WORKSPACES_UI_FIXTURE_AGENT_STATES="$agent_states"
     ws_log "WORKSPACES_UI_FIXTURE_AGENT_STATES=${agent_states}"

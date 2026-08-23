@@ -11,6 +11,17 @@ struct MainWindowTerminalSessionController {
         let syncedWorkspace: Workspace?
     }
 
+    struct TabCreationResult {
+        let focus: SessionFocusResult
+        let navigationDestination: MainWindowNavigationDestination?
+    }
+
+    /// A visible repository overview can bootstrap its own first terminal. Other surfaces still
+    /// need an existing session so Cmd-T cannot create an invisible terminal behind web content.
+    func canCreateTab(hasSessions: Bool, selectedRepoForLanding: Repo?, isConnectingWorkspace: Bool) -> Bool {
+        !isConnectingWorkspace && (hasSessions || selectedRepoForLanding != nil)
+    }
+
     @discardableResult
     func ensureInitialHostSession(
         tileTreeStore: TileTreeStore,
@@ -24,10 +35,21 @@ struct MainWindowTerminalSessionController {
     func createTabFromCurrentContext(
         tileTreeStore: TileTreeStore,
         defaultHomeDirectory: URL,
+        selectedRepoForLanding: Repo?,
         repos: [Repo],
         normalizePath: (String) -> String,
         activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
-    ) -> SessionFocusResult? {
+    ) -> TabCreationResult? {
+        if let selectedRepoForLanding {
+            return createTabFromRepoOverview(
+                selectedRepoForLanding,
+                tileTreeStore: tileTreeStore,
+                repos: repos,
+                normalizePath: normalizePath,
+                activateHostSession: activateHostSession
+            )
+        }
+
         ensureInitialHostSession(
             tileTreeStore: tileTreeStore,
             defaultHomeDirectory: defaultHomeDirectory,
@@ -35,11 +57,55 @@ struct MainWindowTerminalSessionController {
         )
 
         guard let session = tileTreeStore.createTab() else { return nil }
-        return focusResult(
-            sessionID: session.id,
-            tileTreeStore: tileTreeStore,
-            repos: repos,
-            normalizePath: normalizePath
+        return TabCreationResult(
+            focus: focusResult(
+                sessionID: session.id,
+                tileTreeStore: tileTreeStore,
+                repos: repos,
+                normalizePath: normalizePath
+            ),
+            navigationDestination: nil
+        )
+    }
+
+    private func createTabFromRepoOverview(
+        _ repo: Repo,
+        tileTreeStore: TileTreeStore,
+        repos: [Repo],
+        normalizePath: (String) -> String,
+        activateHostSession: (HostTerminalSessionKey, URL, String?) -> HostTerminalSession
+    ) -> TabCreationResult? {
+        let repoDirectory = repo.localURL.standardizedFileURL.resolvingSymlinksInPath()
+        let scopeKey = HostTerminalSessionKey.repoPath(repoDirectory.path)
+        let session: HostTerminalSession
+
+        if let existingSession = tileTreeStore.activeSession(inScope: scopeKey) {
+            guard tileTreeStore.activateExistingSession(sessionID: existingSession.id),
+                let siblingSession = tileTreeStore.createTab(from: existingSession.id)
+            else { return nil }
+            session = siblingSession
+        } else {
+            let existingSessionIDs = Set(tileTreeStore.sessions.map(\.id))
+            let activatedSession = activateHostSession(scopeKey, repoDirectory, nil)
+            if existingSessionIDs.contains(activatedSession.id) {
+                guard let siblingSession = tileTreeStore.createTab(from: activatedSession.id) else { return nil }
+                session = siblingSession
+            } else {
+                session = activatedSession
+            }
+        }
+
+        let navigationDestination =
+            terminalNavigationDestination(for: session, repos: repos, normalizePath: normalizePath)
+            ?? .repoTerminal(repo)
+        return TabCreationResult(
+            focus: focusResult(
+                sessionID: session.id,
+                tileTreeStore: tileTreeStore,
+                repos: repos,
+                normalizePath: normalizePath
+            ),
+            navigationDestination: navigationDestination
         )
     }
 

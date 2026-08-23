@@ -18,6 +18,7 @@ struct MainWindowTerminalSessionControllerTests {
             controller.createTabFromCurrentContext(
                 tileTreeStore: store,
                 defaultHomeDirectory: defaultDirectory,
+                selectedRepoForLanding: nil,
                 repos: [],
                 normalizePath: normalizePath,
                 activateHostSession: { key, directory, customCommand in
@@ -32,7 +33,190 @@ struct MainWindowTerminalSessionControllerTests {
 
         #expect(store.sessions.count == 2)
         #expect(store.sessions.first?.key == .defaultHome)
-        #expect(result.focusSessionID == store.activeSessionID)
+        #expect(result.focus.focusSessionID == store.activeSessionID)
+    }
+
+    @Test("Creating a tab without sessions is available only from a repo overview")
+    func creatingTabAvailabilityRequiresSessionOrRepoOverview() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+
+        #expect(
+            controller.canCreateTab(
+                hasSessions: false,
+                selectedRepoForLanding: repo,
+                isConnectingWorkspace: false
+            )
+        )
+        #expect(
+            !controller.canCreateTab(
+                hasSessions: false,
+                selectedRepoForLanding: nil,
+                isConnectingWorkspace: false
+            )
+        )
+        #expect(
+            controller.canCreateTab(
+                hasSessions: true,
+                selectedRepoForLanding: nil,
+                isConnectingWorkspace: false
+            )
+        )
+        #expect(
+            !controller.canCreateTab(
+                hasSessions: true,
+                selectedRepoForLanding: repo,
+                isConnectingWorkspace: true
+            )
+        )
+    }
+
+    @Test("Creating from a repo overview opens that repo's initial terminal")
+    func creatingFromRepoOverviewOpensSelectedRepoTerminal() throws {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let store = TileTreeStore()
+        _ = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        )
+
+        let result = try #require(
+            controller.createTabFromCurrentContext(
+                tileTreeStore: store,
+                defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
+                selectedRepoForLanding: repo,
+                repos: [repo],
+                normalizePath: normalizePath,
+                activateHostSession: { key, directory, customCommand in
+                    store.activateSession(
+                        key: key,
+                        directory: directory,
+                        customCommand: customCommand
+                    ).session
+                }
+            )
+        )
+
+        let focusedSession = try #require(store.sessions.first(where: { $0.id == result.focus.focusSessionID }))
+        #expect(focusedSession.key == .repoPath(repo.localPath))
+        #expect(focusedSession.directoryURL == repo.localURL)
+        #expect(store.sessions(inScope: .repoPath(repo.localPath)).count == 1)
+        switch result.navigationDestination {
+        case .repoTerminal(let destinationRepo):
+            #expect(destinationRepo.id == repo.id)
+        default:
+            Issue.record("Expected repository overview creation to navigate to its terminal")
+        }
+    }
+
+    @Test("Creating from a repo overview adds a sibling in that repo's existing scope")
+    func creatingFromRepoOverviewAddsSiblingInSelectedRepoScope() throws {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let store = TileTreeStore()
+        let existingRepoSession = store.activateSession(
+            key: .repoPath(repo.localPath),
+            directory: repo.localURL
+        ).session
+        let otherSession = store.activateSession(
+            key: .defaultHome,
+            directory: URL(fileURLWithPath: "/Users/test")
+        ).session
+
+        let result = try #require(
+            controller.createTabFromCurrentContext(
+                tileTreeStore: store,
+                defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
+                selectedRepoForLanding: repo,
+                repos: [repo],
+                normalizePath: normalizePath,
+                activateHostSession: { key, directory, customCommand in
+                    store.activateSession(
+                        key: key,
+                        directory: directory,
+                        customCommand: customCommand
+                    ).session
+                }
+            )
+        )
+
+        let repoSessions = store.sessions(inScope: .repoPath(repo.localPath))
+        #expect(repoSessions.count == 2)
+        #expect(repoSessions.map(\.id).contains(existingRepoSession.id))
+        #expect(repoSessions.map(\.id).contains(result.focus.focusSessionID))
+        #expect(store.sessions(inScope: .defaultHome).map(\.id) == [otherSession.id])
+    }
+
+    @Test("Creating from a repo overview reuses a canonical workspace scope as a sibling")
+    func creatingFromRepoOverviewAddsSiblingToCanonicalWorkspaceScope() throws {
+        let fixture = makeRepoWorkspaceFixture(workspacePath: "/tmp/alpha")
+        let store = TileTreeStore()
+        let existingWorkspaceSession = store.activateSession(
+            key: .hostPath(fixture.workspace.path),
+            directory: fixture.workspace.workspaceURL
+        ).session
+
+        let result = try #require(
+            controller.createTabFromCurrentContext(
+                tileTreeStore: store,
+                defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
+                selectedRepoForLanding: fixture.repo,
+                repos: [fixture.repo],
+                normalizePath: normalizePath,
+                activateHostSession: { key, directory, customCommand in
+                    store.activateSession(
+                        key: key,
+                        directory: directory,
+                        customCommand: customCommand
+                    ).session
+                }
+            )
+        )
+
+        let workspaceSessions = store.sessions(inScope: .hostPath(fixture.workspace.path))
+        #expect(workspaceSessions.count == 2)
+        #expect(workspaceSessions.map(\.id).contains(existingWorkspaceSession.id))
+        #expect(workspaceSessions.map(\.id).contains(result.focus.focusSessionID))
+        switch result.navigationDestination {
+        case .workspaceTerminal(let destinationWorkspace):
+            #expect(destinationWorkspace.id == fixture.workspace.id)
+        default:
+            Issue.record("Expected canonical workspace reuse to preserve workspace navigation")
+        }
+    }
+
+    @Test("Creating from an existing terminal keeps the active session context")
+    func creatingFromExistingTerminalKeepsActiveContext() throws {
+        let fixture = makeRepoWorkspaceFixture()
+        let store = TileTreeStore()
+        let existingSession = store.activateSession(
+            key: .hostPath(fixture.workspace.path),
+            directory: fixture.workspace.workspaceURL
+        ).session
+
+        let result = try #require(
+            controller.createTabFromCurrentContext(
+                tileTreeStore: store,
+                defaultHomeDirectory: URL(fileURLWithPath: "/Users/test"),
+                selectedRepoForLanding: nil,
+                repos: [fixture.repo],
+                normalizePath: normalizePath,
+                activateHostSession: { key, directory, customCommand in
+                    store.activateSession(
+                        key: key,
+                        directory: directory,
+                        customCommand: customCommand
+                    ).session
+                }
+            )
+        )
+
+        let workspaceSessions = store.sessions(inScope: .hostPath(fixture.workspace.path))
+        #expect(workspaceSessions.count == 2)
+        #expect(workspaceSessions.map(\.id).contains(existingSession.id))
+        #expect(workspaceSessions.map(\.id).contains(result.focus.focusSessionID))
+        #expect(result.focus.syncedWorkspace?.id == fixture.workspace.id)
+        if case .some = result.navigationDestination {
+            Issue.record("Expected existing-terminal creation to preserve the current surface")
+        }
     }
 
     @Test("Selecting adjacent tab returns focus target and synced workspace")
@@ -214,11 +398,13 @@ struct MainWindowTerminalSessionControllerTests {
         #expect(confirmation.title == "Build")
     }
 
-    private func makeRepoWorkspaceFixture() -> (repo: Repo, workspace: Workspace) {
+    private func makeRepoWorkspaceFixture(
+        workspacePath: String = "/tmp/alpha/workspaces/feature-a"
+    ) -> (repo: Repo, workspace: Workspace) {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let workspace = Workspace(
             name: "feature-a",
-            path: URL(fileURLWithPath: "/tmp/alpha/workspaces/feature-a"),
+            path: URL(fileURLWithPath: workspacePath),
             sourceRepo: repo
         )
         repo.workspaces = [workspace]

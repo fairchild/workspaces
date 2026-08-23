@@ -12,8 +12,8 @@
 
 # fixture_resolve_scenario <name>
 # Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, FIXTURE_SEED_RESTORE_BANNER,
-# FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_FILE_TREE_FAILURE, FIXTURE_SIDEBAR_ARRANGEMENT, and
-# FIXTURE_SCENARIO_ID for the named scenario.
+# FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_FILE_TREE_FAILURE, FIXTURE_SIDEBAR_ARRANGEMENT,
+# FIXTURE_CMD_T_REPO, FIXTURE_TRIGGER_CMD_T, and FIXTURE_SCENARIO_ID for the named scenario.
 # "inline:<agent-states>" passes a raw agent-states spec straight through. Returns
 # non-zero (and sets nothing) for an unknown name.
 fixture_resolve_scenario() {
@@ -24,6 +24,8 @@ fixture_resolve_scenario() {
     FIXTURE_SEED_ORPHAN_BANNER=""
     FIXTURE_FILE_TREE_FAILURE=""
     FIXTURE_SIDEBAR_ARRANGEMENT=""
+    FIXTURE_CMD_T_REPO=""
+    FIXTURE_TRIGGER_CMD_T=""
     FIXTURE_SCENARIO_ID=""
 
     if [[ "$name" == inline:* ]]; then
@@ -72,6 +74,13 @@ fixture_resolve_scenario() {
         file-tree-permission)
             FIXTURE_FILE_TREE_FAILURE="permission"
             ;;
+        cmd-t-repo-overview)
+            FIXTURE_CMD_T_REPO="workspaces"
+            ;;
+        cmd-t-repo-terminal)
+            FIXTURE_CMD_T_REPO="workspaces"
+            FIXTURE_TRIGGER_CMD_T=1
+            ;;
         clean)
             ;;
         *)
@@ -85,5 +94,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner sidebar-recent file-tree-unavailable file-tree-permission clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner sidebar-recent file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
 }
