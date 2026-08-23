@@ -154,6 +154,9 @@ struct MainWindowMaintenanceController {
                         "[WorkspaceProvider] Syncing workspace '\(change.workspace.name, privacy: .public)' (\(providerID, privacy: .public)): \(change.previousStatus.rawValue, privacy: .public) -> \(change.newStatus.rawValue, privacy: .public)"
                     )
                     change.workspace.status = change.newStatus
+                    if change.newStatus == .archived {
+                        change.workspace.pinOrder = nil
+                    }
                     changed = true
                     changedCount += 1
                     providerChangedCount += 1

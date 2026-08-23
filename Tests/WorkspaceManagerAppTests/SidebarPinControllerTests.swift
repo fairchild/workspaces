@@ -177,4 +177,29 @@ struct SidebarPinControllerTests {
         #expect(refetchedLoose.pinOrder == nil)
         #expect(controller.pinnedWorkspaces(in: refetched).map(\.name) == ["pinned"])
     }
+
+    @Test("An archived workspace never appears in Pinned, even with a pinOrder left behind")
+    func archivedWorkspaceIsExcludedFromPinned() {
+        let repo = makeRepo()
+        let live = makeWorkspace("live", in: repo, pinOrder: 1)
+        let archived = makeWorkspace("archived", in: repo, pinOrder: 0, status: .archived)
+
+        #expect(controller.pinnedWorkspaces(in: [archived, live]).map(\.name) == ["live"])
+    }
+
+    @Test("A snapshot restores exactly the touched pin orders after a failed save")
+    func snapshotRestoresTouchedPinOrders() {
+        let repo = makeRepo()
+        let alpha = makeWorkspace("alpha", in: repo, pinOrder: 0)
+        let beta = makeWorkspace("beta", in: repo)
+        let workspaces = [alpha, beta]
+
+        let snapshot = controller.pinOrderSnapshot(of: workspaces)
+        controller.pin(beta, in: workspaces)
+        #expect(beta.pinOrder == 1)
+
+        controller.restore(snapshot, in: workspaces)
+        #expect(beta.pinOrder == nil)
+        #expect(alpha.pinOrder == 0)
+    }
 }

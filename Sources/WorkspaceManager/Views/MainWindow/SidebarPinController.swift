@@ -14,8 +14,26 @@ struct SidebarPinController {
     /// The pinned workspaces in display order. `pinOrder` is read as a ranking rather than
     /// as an index, so a store carrying gaps or duplicates — an older build, a mutation that
     /// never reached disk — still yields one stable order instead of an arbitrary one.
+    /// Archived rows are excluded here as well as at archive time: provider status sync can
+    /// archive a workspace without passing through `unpin`.
     func pinnedWorkspaces(in workspaces: [Workspace]) -> [Workspace] {
-        workspaces.filter(\.isPinned).sorted(by: isOrderedBefore)
+        workspaces
+            .filter { $0.isPinned && $0.status != .archived }
+            .sorted(by: isOrderedBefore)
+    }
+
+    /// `pinOrder` of every workspace a mutation may touch, keyed by id, so a failed save
+    /// restores exactly those values rather than rolling back the whole model context.
+    func pinOrderSnapshot(of workspaces: [Workspace]) -> [UUID: Int?] {
+        Dictionary(uniqueKeysWithValues: workspaces.map { ($0.id, $0.pinOrder) })
+    }
+
+    func restore(_ snapshot: [UUID: Int?], in workspaces: [Workspace]) {
+        for workspace in workspaces {
+            if let order = snapshot[workspace.id] {
+                workspace.pinOrder = order
+            }
+        }
     }
 
     /// Whether a workspace can enter the Pinned section. Archived work cannot: the section

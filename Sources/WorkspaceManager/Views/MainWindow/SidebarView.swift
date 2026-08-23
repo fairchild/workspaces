@@ -463,15 +463,23 @@ struct SidebarView: View {
         let pinned = pinnedWorkspaces
 
         if !pinned.isEmpty {
-            Section("Pinned") {
+            Section {
                 ForEach(pinned) { workspace in
                     workspaceRow(
                         workspace,
                         placement: .flat(repoContext: workspace.sourceRepo?.name)
                     )
                 }
+            } header: {
+                sidebarSectionHeader(title: "Pinned", showsSortMenu: !repos.isEmpty)
             }
         }
+    }
+
+    /// The arrangement menu lives on the topmost header: Pinned when it exists, otherwise
+    /// the first header of the arrangement itself.
+    private var hasPinnedRows: Bool {
+        !pinnedWorkspaces.isEmpty
     }
 
     private var repositoriesSection: some View {
@@ -502,7 +510,7 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } header: {
-                sidebarSectionHeader(title: "Recent", showsSortMenu: !repos.isEmpty)
+                sidebarSectionHeader(title: "Recent", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
             }
         } else {
             ForEach(Array(buckets.enumerated()), id: \.element.id) { index, bucket in
@@ -511,7 +519,7 @@ struct SidebarView: View {
                         recentRow(row)
                     }
                 } header: {
-                    sidebarSectionHeader(title: bucket.title, showsSortMenu: index == 0)
+                    sidebarSectionHeader(title: bucket.title, showsSortMenu: index == 0 && !hasPinnedRows)
                 }
             }
         }
@@ -528,7 +536,7 @@ struct SidebarView: View {
     }
 
     private var repositoriesHeader: some View {
-        sidebarSectionHeader(title: "Repositories", showsSortMenu: !repos.isEmpty)
+        sidebarSectionHeader(title: "Repositories", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
     }
 
     private func sidebarSectionHeader(title: String, showsSortMenu: Bool) -> some View {
@@ -1552,6 +1560,7 @@ struct SidebarView: View {
     private func togglePin(_ workspace: Workspace) {
         let action = workspace.isPinned ? "unpin workspace" : "pin workspace"
         let workspaces = repos.flatMap(\.workspaces)
+        let snapshot = pinController.pinOrderSnapshot(of: workspaces)
 
         if workspace.isPinned {
             pinController.unpin(workspace, in: workspaces)
@@ -1560,7 +1569,7 @@ struct SidebarView: View {
         }
 
         if !saveModelContext(action: action) {
-            modelContext.rollback()
+            pinController.restore(snapshot, in: workspaces)
         }
     }
 
