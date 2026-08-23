@@ -310,6 +310,10 @@ echo ""
 echo "Computed changelog preview"
 cat "$TMP_DIR/changelog-entry.txt"
 
+echo ""
+"$SCRIPT_DIR/check-perf-benchmarks.py" --tag "$TAG_NAME" \
+    || fail "performance-benchmark gate would block $TAG_NAME — record a row per docs/performance_benchmarks.md before releasing"
+
 if [[ "$DRY_RUN" == true ]]; then
     exit 0
 fi
