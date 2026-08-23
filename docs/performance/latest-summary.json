@@ -1,60 +1,60 @@
 {
   "artifacts": {
-    "line_count": 24,
-    "log_file": "output/perf-rebaseline-20260807/installed_login_shell/installed_login_shell.log",
+    "line_count": 35,
+    "log_file": "perf-artifacts/installed_clean_shell/installed_clean_shell.log",
     "perf_event_count": 10
   },
   "budget_results": {
     "first_prompt_ready": {
       "diagnostic_stat": "p95",
-      "diagnostic_threshold": 1350,
-      "diagnostic_threshold_ms": 1350,
-      "gate_budget": 875,
-      "gate_budget_ms": 875,
+      "diagnostic_threshold": 975,
+      "diagnostic_threshold_ms": 975,
+      "gate_budget": 675,
+      "gate_budget_ms": 675,
       "gate_stat": "median",
-      "observed_diagnostic": 303.13,
-      "observed_gate": 303.13,
-      "observed_median_ms": 303.13,
-      "observed_p95_ms": 303.13,
+      "observed_diagnostic": 315.08,
+      "observed_gate": 315.08,
+      "observed_median_ms": 315.08,
+      "observed_p95_ms": 315.08,
       "reference_baseline": {
-        "median_ms": 700,
-        "p95_ms": 900
+        "median_ms": 540,
+        "p95_ms": 650
       },
       "status": "pass",
       "unit": "ms"
     },
     "launch_to_first_prompt": {
       "diagnostic_stat": "p95",
-      "diagnostic_threshold": 1650,
-      "diagnostic_threshold_ms": 1650,
-      "gate_budget": 1125,
-      "gate_budget_ms": 1125,
+      "diagnostic_threshold": 1140,
+      "diagnostic_threshold_ms": 1140,
+      "gate_budget": 800,
+      "gate_budget_ms": 800,
       "gate_stat": "median",
-      "observed_diagnostic": 674.47,
-      "observed_gate": 674.47,
-      "observed_median_ms": 674.47,
-      "observed_p95_ms": 674.47,
+      "observed_diagnostic": 444.46,
+      "observed_gate": 444.46,
+      "observed_median_ms": 444.46,
+      "observed_p95_ms": 444.46,
       "reference_baseline": {
-        "median_ms": 900,
-        "p95_ms": 1100
+        "median_ms": 640,
+        "p95_ms": 760
       },
       "status": "pass",
       "unit": "ms"
     },
     "terminal_first_output": {
       "diagnostic_stat": "p95",
-      "diagnostic_threshold": 1350,
-      "diagnostic_threshold_ms": 1350,
-      "gate_budget": 875,
-      "gate_budget_ms": 875,
+      "diagnostic_threshold": 975,
+      "diagnostic_threshold_ms": 975,
+      "gate_budget": 675,
+      "gate_budget_ms": 675,
       "gate_stat": "median",
-      "observed_diagnostic": 303.13,
-      "observed_gate": 303.13,
-      "observed_median_ms": 303.13,
-      "observed_p95_ms": 303.13,
+      "observed_diagnostic": 315.08,
+      "observed_gate": 315.08,
+      "observed_median_ms": 315.08,
+      "observed_p95_ms": 315.08,
       "reference_baseline": {
-        "median_ms": 700,
-        "p95_ms": 900
+        "median_ms": 540,
+        "p95_ms": 650
       },
       "status": "pass",
       "unit": "ms"
@@ -69,7 +69,8 @@
     }
   },
   "diagnostic_findings": [
-    "Terminal surface events were captured for shell modes: login.",
+    "Ghostty surface creation median is 250.71 ms. That is noticeable and worth comparing between shell modes.",
+    "Terminal surface events were captured for shell modes: clean.",
     "terminal_first_output was triggered by signals: set_title.",
     "first_prompt_ready was triggered by signals: set_title.",
     "Focus diagnostics captured phases: focus_request_enqueued, focus_request_inactive_skip."
@@ -83,27 +84,28 @@
     "os_version": "26.4.1"
   },
   "findings": [
-    "Terminal surface events were captured for shell modes: login.",
+    "Ghostty surface creation median is 250.71 ms. That is noticeable and worth comparing between shell modes.",
+    "Terminal surface events were captured for shell modes: clean.",
     "terminal_first_output was triggered by signals: set_title.",
     "first_prompt_ready was triggered by signals: set_title.",
     "Focus diagnostics captured phases: focus_request_enqueued, focus_request_inactive_skip."
   ],
   "first_prompt_ready": {
     "count": 1,
-    "max": 303.13,
-    "mean": 303.13,
-    "median": 303.13,
-    "min": 303.13,
-    "p95": 303.13,
+    "max": 315.08,
+    "mean": 315.08,
+    "median": 315.08,
+    "min": 315.08,
+    "p95": 315.08,
     "unit": "ms"
   },
   "launch_to_first_prompt": {
     "count": 1,
-    "max": 674.47,
-    "mean": 674.47,
-    "median": 674.47,
-    "min": 674.47,
-    "p95": 674.47,
+    "max": 444.46,
+    "mean": 444.46,
+    "median": 444.46,
+    "min": 444.46,
+    "p95": 444.46,
     "unit": "ms"
   },
   "legacy_metric_summaries": {
@@ -148,58 +150,58 @@
       ]
     }
   },
-  "line_count": 24,
-  "log_file": "output/perf-rebaseline-20260807/installed_login_shell/installed_login_shell.log",
+  "line_count": 35,
+  "log_file": "perf-artifacts/installed_clean_shell/installed_clean_shell.log",
   "metadata": {
     "build_kind": "installed",
-    "scenario": "installed_login_shell",
+    "scenario": "installed_clean_shell",
     "schema_version": 1,
     "timestamp": null
   },
   "metrics": {
     "first_prompt_ready": {
       "count": 1,
-      "max": 303.13,
-      "mean": 303.13,
-      "median": 303.13,
-      "min": 303.13,
-      "p95": 303.13,
+      "max": 315.08,
+      "mean": 315.08,
+      "median": 315.08,
+      "min": 315.08,
+      "p95": 315.08,
       "unit": "ms"
     },
     "launch_to_first_prompt": {
       "count": 1,
-      "max": 674.47,
-      "mean": 674.47,
-      "median": 674.47,
-      "min": 674.47,
-      "p95": 674.47,
+      "max": 444.46,
+      "mean": 444.46,
+      "median": 444.46,
+      "min": 444.46,
+      "p95": 444.46,
       "unit": "ms"
     },
     "terminal_first_output": {
       "count": 1,
-      "max": 303.13,
-      "mean": 303.13,
-      "median": 303.13,
-      "min": 303.13,
-      "p95": 303.13,
+      "max": 315.08,
+      "mean": 315.08,
+      "median": 315.08,
+      "min": 315.08,
+      "p95": 315.08,
       "unit": "ms"
     },
     "terminal_investigation": {
       "count": 3,
-      "max": 303.13,
-      "mean": 206.49666666666667,
-      "median": 303.13,
-      "min": 13.23,
-      "p95": 303.13,
+      "max": 315.08,
+      "mean": 293.62333333333333,
+      "median": 315.08,
+      "min": 250.71,
+      "p95": 315.08,
       "unit": "ms"
     },
     "workspace_orphan_scan": {
       "count": 1,
-      "max": 0.76,
-      "mean": 0.76,
-      "median": 0.76,
-      "min": 0.76,
-      "p95": 0.76,
+      "max": 2.12,
+      "mean": 2.12,
+      "median": 2.12,
+      "min": 2.12,
+      "p95": 2.12,
       "unit": "ms"
     }
   },
@@ -207,7 +209,7 @@
     "first_prompt_ready:none": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -221,10 +223,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "none"
@@ -271,10 +273,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 674.47,
-          "mean": 674.47,
-          "median": 674.47,
-          "min": 674.47
+          "max": 444.46,
+          "mean": 444.46,
+          "median": 444.46,
+          "min": 444.46
         }
       },
       "phase": "none"
@@ -282,7 +284,7 @@
     "terminal_first_output:none": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -296,10 +298,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "none"
@@ -307,7 +309,7 @@
     "terminal_investigation:first_output_observed": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -321,10 +323,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "first_output_observed"
@@ -332,7 +334,7 @@
     "terminal_investigation:prompt_ready_observed": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -346,10 +348,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "prompt_ready_observed"
@@ -357,7 +359,7 @@
     "terminal_investigation:surface_create_started": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "working_directory": {
           "code": 1
@@ -371,7 +373,7 @@
     "terminal_investigation:surface_create_succeeded": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "working_directory": {
           "code": 1
@@ -382,10 +384,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 13.23,
-          "mean": 13.23,
-          "median": 13.23,
-          "min": 13.23
+          "max": 250.71,
+          "mean": 250.71,
+          "median": 250.71,
+          "min": 250.71
         }
       },
       "phase": "surface_create_succeeded"
@@ -401,10 +403,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 0.76,
-          "mean": 0.76,
-          "median": 0.76,
-          "min": 0.76
+          "max": 2.12,
+          "mean": 2.12,
+          "median": 2.12,
+          "min": 2.12
         },
         "item_count": {
           "count": 1,
@@ -471,7 +473,7 @@
     "first_prompt_ready:none": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -485,10 +487,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "none"
@@ -535,10 +537,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 674.47,
-          "mean": 674.47,
-          "median": 674.47,
-          "min": 674.47
+          "max": 444.46,
+          "mean": 444.46,
+          "median": 444.46,
+          "min": 444.46
         }
       },
       "phase": "none"
@@ -546,7 +548,7 @@
     "terminal_first_output:none": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -560,10 +562,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "none"
@@ -571,7 +573,7 @@
     "terminal_investigation:first_output_observed": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -585,10 +587,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "first_output_observed"
@@ -596,7 +598,7 @@
     "terminal_investigation:prompt_ready_observed": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "signal": {
           "set_title": 1
@@ -610,10 +612,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 303.13,
-          "mean": 303.13,
-          "median": 303.13,
-          "min": 303.13
+          "max": 315.08,
+          "mean": 315.08,
+          "median": 315.08,
+          "min": 315.08
         }
       },
       "phase": "prompt_ready_observed"
@@ -621,7 +623,7 @@
     "terminal_investigation:surface_create_started": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "working_directory": {
           "code": 1
@@ -635,7 +637,7 @@
     "terminal_investigation:surface_create_succeeded": {
       "categorical_fields": {
         "shell_profile_mode": {
-          "login": 1
+          "clean": 1
         },
         "working_directory": {
           "code": 1
@@ -646,10 +648,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 13.23,
-          "mean": 13.23,
-          "median": 13.23,
-          "min": 13.23
+          "max": 250.71,
+          "mean": 250.71,
+          "median": 250.71,
+          "min": 250.71
         }
       },
       "phase": "surface_create_succeeded"
@@ -665,10 +667,10 @@
       "numeric_fields": {
         "duration_ms": {
           "count": 1,
-          "max": 0.76,
-          "mean": 0.76,
-          "median": 0.76,
-          "min": 0.76
+          "max": 2.12,
+          "mean": 2.12,
+          "median": 2.12,
+          "min": 2.12
         },
         "item_count": {
           "count": 1,
@@ -688,33 +690,33 @@
       "phase": "none"
     }
   },
-  "scenario": "installed_login_shell",
+  "scenario": "installed_clean_shell",
   "schema_version": 1,
   "terminal_first_output": {
     "count": 1,
-    "max": 303.13,
-    "mean": 303.13,
-    "median": 303.13,
-    "min": 303.13,
-    "p95": 303.13,
+    "max": 315.08,
+    "mean": 315.08,
+    "median": 315.08,
+    "min": 315.08,
+    "p95": 315.08,
     "unit": "ms"
   },
   "terminal_investigation": {
     "count": 3,
-    "max": 303.13,
-    "mean": 206.49666666666667,
-    "median": 303.13,
-    "min": 13.23,
-    "p95": 303.13,
+    "max": 315.08,
+    "mean": 293.62333333333333,
+    "median": 315.08,
+    "min": 250.71,
+    "p95": 315.08,
     "unit": "ms"
   },
   "workspace_orphan_scan": {
     "count": 1,
-    "max": 0.76,
-    "mean": 0.76,
-    "median": 0.76,
-    "min": 0.76,
-    "p95": 0.76,
+    "max": 2.12,
+    "mean": 2.12,
+    "median": 2.12,
+    "min": 2.12,
+    "p95": 2.12,
     "unit": "ms"
   }
 }
