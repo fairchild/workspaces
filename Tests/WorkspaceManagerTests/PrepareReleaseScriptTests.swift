@@ -43,6 +43,24 @@ struct PrepareReleaseScriptTests {
         #expect(!result.stdout.contains("bootstrap fixture"))
         #expect(result.stdout.contains("- ship first feature"))
     }
+
+    @Test("dry-run is blocked when benchmarks are two releases stale")
+    func dryRunBlockedByStaleBenchmarks() throws {
+        let fixture = try ReleasePreparationFixture.create()
+        defer { fixture.cleanup() }
+
+        try fixture.commitSeed(message: "chore: bootstrap fixture")
+        try fixture.createTag("v0.1.0")
+        try fixture.commitChange(path: "feature.txt", content: "feature\n", message: "feat: first")
+        try fixture.createTag("v0.2.0")
+        try fixture.commitChange(path: "fix.txt", content: "fix\n", message: "fix: second")
+        try fixture.configureOrigin()
+
+        let result = try fixture.runPrepareRelease(version: "0.3.0", dryRun: true, expectedStatus: 1)
+
+        #expect(result.exitCode == 1)
+        #expect(result.stderr.contains("performance-benchmark gate would block v0.3.0"))
+    }
 }
 
 private struct ReleasePreparationFixture {
@@ -77,9 +95,31 @@ private struct ReleasePreparationFixture {
             at: projectRoot.appendingPathComponent("scripts/release-version.sh"),
             to: fixtureRoot.appendingPathComponent("scripts/release-version.sh")
         )
+        try FileManager.default.copyItem(
+            at: projectRoot.appendingPathComponent("scripts/check-perf-benchmarks.py"),
+            to: fixtureRoot.appendingPathComponent("scripts/check-perf-benchmarks.py")
+        )
 
         try setExecutable(fixtureRoot.appendingPathComponent("scripts/prepare-release.sh"))
         try setExecutable(fixtureRoot.appendingPathComponent("scripts/release-version.sh"))
+        try setExecutable(fixtureRoot.appendingPathComponent("scripts/check-perf-benchmarks.py"))
+
+        // The perf gate prepare-release.sh now runs reads this; a v0.1.0 row keeps
+        // the fixture at most one release stale for the passing tests, and the
+        // blocking test earns its failure by minting two newer tags.
+        try FileManager.default.createDirectory(
+            at: fixtureRoot.appendingPathComponent("docs"),
+            withIntermediateDirectories: true
+        )
+        let benchmarks = """
+            release_tag,commit,timestamp,scenario,build_kind,protocol_epoch,launch_to_first_prompt_median_ms,repo_hydration_median_ms,repo_click_to_focus_median_ms,workspace_click_to_focus_median_ms,os_version,arch,model,notes
+            v0.1.0,abc12345,2026-01-01T00:00:00Z,installed_clean_shell,installed,isolated-preferences,,,,,,,,fixture seed row
+            """
+        try (benchmarks + "\n").write(
+            to: fixtureRoot.appendingPathComponent("docs/performance_benchmarks.csv"),
+            atomically: true,
+            encoding: .utf8
+        )
 
         let plist = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -145,12 +185,12 @@ private struct ReleasePreparationFixture {
         try Self.run(["git", "remote", "add", "origin", remoteURL.path], in: rootURL)
     }
 
-    func runPrepareRelease(version: String, dryRun: Bool) throws -> ProcessResult {
+    func runPrepareRelease(version: String, dryRun: Bool, expectedStatus: Int32 = 0) throws -> ProcessResult {
         var arguments = [scriptURL.path, "--version", version]
         if dryRun {
             arguments.append("--dry-run")
         }
-        return try Self.run(["/bin/bash"] + arguments, in: rootURL, expectedStatus: 0)
+        return try Self.run(["/bin/bash"] + arguments, in: rootURL, expectedStatus: expectedStatus)
     }
 
     func cleanup() {

@@ -73,13 +73,19 @@ def validate_perf_gate() -> int:
     plist_path = REPO_ROOT / INFO_PLIST_PATH
     try:
         with plist_path.open("rb") as handle:
-            version = plistlib.load(handle)["CFBundleShortVersionString"]
-    except (OSError, KeyError, plistlib.InvalidFileException) as error:
-        print(f"error: could not read CFBundleShortVersionString from {INFO_PLIST_PATH}: {error}", file=sys.stderr)
+            data = plistlib.load(handle)
+    except (OSError, plistlib.InvalidFileException) as error:
+        print(f"error: could not read {INFO_PLIST_PATH}: {error}", file=sys.stderr)
         return 1
+    version = data.get("CFBundleShortVersionString") if isinstance(data, dict) else None
+    if not isinstance(version, str) or not version:
+        print(f"error: no CFBundleShortVersionString in {INFO_PLIST_PATH}", file=sys.stderr)
+        return 1
+    # sys.executable rather than uv: the gate script's PEP 723 block declares no
+    # dependencies, and this interpreter already satisfies its python floor.
     return run(
         [
-            "uv", "run", "--script", "scripts/check-perf-benchmarks.py",
+            sys.executable, "scripts/check-perf-benchmarks.py",
             "--tag", f"v{version}", "--format", "github",
         ]
     )
