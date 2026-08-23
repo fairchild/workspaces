@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.25.0] - 2026-08-22
+
+The sidebar gains a **Recent** arrangement: a flat, date-bucketed list (Today /
+This Week / Earlier) of the workspaces you are actually working in, each row
+carrying its repo as a `repo / workspace` breadcrumb, in place of the repository
+tree. Alphabetical and Last Accessed are unchanged. The rest is release-lane and
+dev-tooling hardening, including a launcher that runs a trial build next to the
+installed app.
+
+### Added
+- manage deployment environments as code (#1327)
+- Recent arrangement — flat, date-bucketed workspace list (#1335)
+
+### Fixed
+- name the scope when release config resolves empty (#1323)
+- grade the perf gate by the version being built, not the ref (#1324)
+- scope the App Store Connect key to an environment (#1326)
+
+### Other
+- record the v0.24.0 release-arc lessons and correct the runner rule (#1310)
+- audit the release environment, not just repository scope (#1325)
+- bump sandbox mise pin to v2026.8.6 (weekly refresh) (#1328)
+- Explain file tree failures and offer recovery (#1329)
+- launch-dev --coexist / --seed-store — a trial copy next to the installed app (#1333)
+
 ## [0.24.0] - 2026-08-09
 
 No new user-facing capability in this release. The work went into consolidation —
