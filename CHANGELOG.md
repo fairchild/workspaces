@@ -5,13 +5,17 @@
 The sidebar gains a **Recent** arrangement: a flat, date-bucketed list (Today /
 This Week / Earlier) of the workspaces you are actually working in, each row
 carrying its repo as a `repo / workspace` breadcrumb, in place of the repository
-tree. Alphabetical and Last Accessed are unchanged. The rest is release-lane and
-dev-tooling hardening, including a launcher that runs a trial build next to the
-installed app.
+tree. Workspaces can be **pinned** — hover star or right-click — into a Pinned
+section that sits above every arrangement, and reordered there with Move Up /
+Move Down. Alphabetical and Last Accessed are unchanged. The rest is release-lane
+and dev-tooling hardening, including a launcher that runs a trial build next to
+the installed app.
 
 ### Added
 - manage deployment environments as code (#1327)
 - Recent arrangement — flat, date-bucketed workspace list (#1335)
+- pin workspaces to a Pinned section above every arrangement (#1339)
+- manual pin order — Move Up / Move Down on pinned rows (#1340)
 
 ### Fixed
 - name the scope when release config resolves empty (#1323)
