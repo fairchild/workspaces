@@ -96,6 +96,29 @@ struct UIFixtureSeederTests {
         )
     }
 
+    @Test("Seeded workspace dates spread across all three Recent buckets")
+    func seedDataSpreadsRecentBuckets() throws {
+        UIFixtureSeeder.resetForTesting()
+        let schema = Schema([Repo.self, Workspace.self, WebSource.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = container.mainContext
+        let now = Date(timeIntervalSince1970: 1_755_864_000)
+        UIFixtureSeeder.seedDataIfNeeded(in: context, now: now)
+
+        let repos = try context.fetch(FetchDescriptor<Repo>())
+        let buckets = SidebarRecentArrangement.buckets(
+            repos: repos,
+            snapshot: SidebarRecentArrangement.snapshot(for: repos),
+            repoRootPaneCounts: [:],
+            now: now,
+            calendar: .current
+        )
+
+        #expect(buckets.map(\.title) == ["Today", "This Week", "Earlier"])
+        #expect(buckets.first?.rows.map(\.name) == ["feature-auth"])
+    }
+
     @Test("Missing env var is a no-op")
     func absentEnvIsNoOp() throws {
         let f = try freshFixtures()
