@@ -139,8 +139,11 @@ app_capture_window() {
     synthetic_root_ensure "$data_dir/workspaces-root" || return 1
     synthetic_root_require || return 1
 
+    # --coexist: an evidence capture must never kill the operator's installed
+    # WorkSpaces.app (or the terminal session driving the capture); only a stale
+    # debug instance is replaced. Harmless on CI, where no installed app exists.
     local -a launch_args=(
-        --no-build --no-activate --fixture --clean-data
+        --no-build --no-activate --fixture --clean-data --coexist
         --data-dir "$data_dir"
         --env "WORKSPACES_SYNTHETIC_ROOT=$WORKSPACES_SYNTHETIC_ROOT"
         --env WORKSPACES_AUTOMATION_API=1
