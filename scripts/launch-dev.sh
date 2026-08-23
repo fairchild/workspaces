@@ -326,7 +326,10 @@ ensure_no_installed_app_instance() {
 stop_existing_if_requested() {
     if [[ "$COEXIST" == true ]]; then
         log "Coexist mode: leaving the installed app running; stopping any previous debug instance..."
-        pkill -f "$DEBUG_BINARY" >/dev/null 2>&1 || true
+        local pid
+        while read -r pid _; do
+            [[ -n "$pid" ]] && kill "$pid" >/dev/null 2>&1 || true
+        done <<< "$(list_instances_for_binary "$DEBUG_BINARY")"
         sleep 1
         return
     fi
@@ -363,15 +366,27 @@ configure_data_root() {
         return
     fi
 
+    [[ -n "$DATA_DIR" ]] || fail "--data-dir requires a non-empty path"
     DATA_DIR="$(expand_home_prefix "$DATA_DIR")"
     # Relative --data-dir values resolve against the repo root: the synthetic
     # fixture root derived from it must be absolute, and the app's own cwd is
-    # not a contract.
-    [[ "$DATA_DIR" == /* ]] || DATA_DIR="$REPO_ROOT/${DATA_DIR#./}"
+    # not a contract. The physical path is then checked against the checkout
+    # and the home directory so --clean-data can never rm -rf either.
+    [[ "$DATA_DIR" == /* ]] || DATA_DIR="$REPO_ROOT/$DATA_DIR"
+    mkdir -p "$DATA_DIR"
+    DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
+    local repo_physical home_physical
+    repo_physical="$(cd "$REPO_ROOT" && pwd -P)"
+    home_physical="$(cd "$HOME" && pwd -P)"
+    case "$repo_physical/" in
+        "$DATA_DIR"/*) fail "--data-dir must not be the checkout or an ancestor of it: $DATA_DIR" ;;
+    esac
+    if [[ "$DATA_DIR" == "/" || "$DATA_DIR" == "$home_physical" ]]; then
+        fail "--data-dir must not be / or the home directory: $DATA_DIR"
+    fi
     ENV_VARS+=("WORKSPACES_DATA_DIR=$DATA_DIR")
     ENV_VARS+=("WORKSPACES_APP_VARIANT=dev")
 
-    mkdir -p "$DATA_DIR"
     if [[ "$CLEAN_DATA" == true ]]; then
         log "Cleaning isolated data dir: $DATA_DIR"
         rm -rf "$DATA_DIR"
@@ -399,16 +414,27 @@ seed_store_if_requested() {
     fi
     command -v sqlite3 >/dev/null 2>&1 || fail "--seed-store requires sqlite3"
 
-    local name
+    # Everything lands in a staging dir and is published in one step, so a
+    # failure part-way never leaves a dir that later launches treat as seeded.
+    local staging="$DATA_DIR/.seed-staging"
+    rm -rf "$staging"
+    mkdir -p "$staging"
+
+    local name target
     for name in default.store local-state.sqlite; do
         [[ -f "$APP_SUPPORT_DATA_DIR/$name" ]] || continue
-        sqlite3 "$APP_SUPPORT_DATA_DIR/$name" ".backup '$DATA_DIR/$name'"
+        # VACUUM INTO is SQL, so the destination is a string literal ('' escapes
+        # a quote); sqlite3's .backup dot-command has no such escaping.
+        target="$(printf '%s' "$staging/$name" | sed "s/'/''/g")"
+        sqlite3 "$APP_SUPPORT_DATA_DIR/$name" "VACUUM INTO '$target'"
         log "Seeded $name from a snapshot of the installed app's store"
     done
-    if [[ -d "$APP_SUPPORT_DATA_DIR/ghostty" && ! -e "$DATA_DIR/ghostty" ]]; then
-        cp -R "$APP_SUPPORT_DATA_DIR/ghostty" "$DATA_DIR/ghostty"
+    if [[ -d "$APP_SUPPORT_DATA_DIR/ghostty" ]]; then
+        cp -R "$APP_SUPPORT_DATA_DIR/ghostty" "$staging/ghostty"
         log "Copied ghostty config"
     fi
+    mv "$staging"/* "$DATA_DIR"/
+    rmdir "$staging"
 }
 
 configure_fixture_mode() {
@@ -604,18 +630,20 @@ dump_recent_log_and_fail() {
 }
 
 read_window_id() {
-    swift - <<'SWIFT'
+    WORKSPACES_LAUNCH_OWNER_PID="$APP_PID" swift - <<'SWIFT'
 import CoreGraphics
 import Foundation
 
 let ownerCandidates: Set<String> = ["WorkSpaces", "WorkspaceManager"]
+let ownerPID = Int(ProcessInfo.processInfo.environment["WORKSPACES_LAUNCH_OWNER_PID"] ?? "")
 let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
 let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
 
 for window in windows {
     let owner = window[kCGWindowOwnerName as String] as? String ?? ""
     let layer = window[kCGWindowLayer as String] as? Int ?? 1
-    guard ownerCandidates.contains(owner), layer == 0 else { continue }
+    let pid = window[kCGWindowOwnerPID as String] as? Int ?? -1
+    guard ownerCandidates.contains(owner), layer == 0, ownerPID == nil || pid == ownerPID else { continue }
 
     if let windowID = window[kCGWindowNumber as String] as? Int {
         print(windowID)
@@ -698,7 +726,7 @@ launch_background() {
     log "Verified visible window id: $WINDOW_ID"
     log "Log file: $LOG_PATH"
     if [[ "$NO_ACTIVATE_ON_LAUNCH" == true ]]; then
-        log "Shared-desktop follow-up: capture with ./scripts/capture-window.sh while leaving the app in the background."
+        log "Shared-desktop follow-up: capture with ./scripts/capture-window.sh --pid $APP_PID while leaving the app in the background."
     fi
 }
 
