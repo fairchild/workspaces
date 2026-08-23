@@ -13,6 +13,9 @@ enum SidebarRepoSortMode: String, CaseIterable, Identifiable {
 
     case alphabetical
     case lastAccessed
+    /// Flat, date-bucketed list of workspaces and active repo roots
+    /// (`SidebarRecentArrangement`) instead of the repo tree.
+    case recent
 
     var id: String { rawValue }
 
@@ -22,6 +25,8 @@ enum SidebarRepoSortMode: String, CaseIterable, Identifiable {
             return "Alphabetical"
         case .lastAccessed:
             return "Last Accessed"
+        case .recent:
+            return "Recent"
         }
     }
 }
@@ -49,7 +54,7 @@ struct SidebarRepoSortController {
         lastAccessedSnapshot: [UUID: Date]
     ) -> [Repo] {
         switch mode {
-        case .alphabetical:
+        case .alphabetical, .recent:
             return repos.sorted(by: compareAlphabetically)
         case .lastAccessed:
             return repos.sorted { lhs, rhs in
