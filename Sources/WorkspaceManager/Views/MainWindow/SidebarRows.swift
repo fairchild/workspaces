@@ -110,6 +110,9 @@ struct RepoRow: View {
     let paneCount: Int
     let isSelected: Bool
     let isExpanded: Bool
+    /// False for a flat repo root that has no subtree to show: the folder glyph opens the
+    /// repo, and neither the expansion state nor the child count is worth announcing.
+    var showsExpansion: Bool = true
     var sessionActivityTooltip: String? = nil
     let onToggleExpansion: () -> Void
     let onSelectRepo: () -> Void
@@ -124,21 +127,35 @@ struct RepoRow: View {
         onNewWorkspace != nil || onNewWebView != nil
     }
 
+    private var accessibilityDescription: String {
+        let workspaceCount = activeWorkspaceCount
+        var description = "\(repo.name), \(workspaceCount) workspace\(workspaceCount == 1 ? "" : "s")"
+        description += ", \(sessionActivity.accessibilityDescription)"
+        if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
+            description += ", \(paneCount) panes"
+        }
+        if showsExpansion {
+            description += ", \(isExpanded ? "expanded" : "collapsed")"
+        }
+        return description
+    }
+
+    private var folderIconHelp: String {
+        guard showsExpansion else { return "Open \(repo.name)" }
+        return isExpanded ? "Collapse \(repo.name)" : "Expand \(repo.name)"
+    }
+
     var body: some View {
         let repoName = repo.name
         let workspaceCount = activeWorkspaceCount
         let showsVisibleQuickActions = showsQuickActions && isHovering
-        let accessibilityDescription =
-            "\(repoName), \(workspaceCount) workspace\(workspaceCount == 1 ? "" : "s"), \(sessionActivity.accessibilityDescription)"
-            + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
-            + ", \(isExpanded ? "expanded" : "collapsed")"
 
         HStack(spacing: 10) {
             Button(action: onToggleExpansion) {
                 repoFolderIcon
             }
             .buttonStyle(.plain)
-            .help(isExpanded ? "Collapse \(repoName)" : "Expand \(repoName)")
+            .help(folderIconHelp)
 
             Button(action: onSelectRepo) {
                 repoLabelContent(repoName: repoName, workspaceCount: workspaceCount)
@@ -197,7 +214,7 @@ struct RepoRow: View {
                 tooltip: sessionActivityTooltip
             )
 
-            if workspaceCount > 1, !isExpanded {
+            if showsExpansion, workspaceCount > 1, !isExpanded {
                 WorkspaceCountBadge(
                     count: workspaceCount,
                     isCollapsed: true
@@ -257,6 +274,9 @@ struct WorkspaceRow: View {
     var statusMessage: String? = nil
     var sessionActivity: SidebarSessionActivity = .inactive
     var paneCount: Int = 0
+    /// Owning repo name, rendered as a `repo /` breadcrumb where the row is flat and its
+    /// place in the tree is not otherwise visible. Nil inside a repo's subtree.
+    var repoContext: String? = nil
     var isNested: Bool = false
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
@@ -336,12 +356,7 @@ struct WorkspaceRow: View {
             RoundedRectangle(cornerRadius: 5)
                 .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
         )
-        .accessibilityLabel(
-            "\(workspace.name), \(sessionActivity.accessibilityDescription)"
-                + (SidebarSessionActivity.showsPaneCountBadge(for: paneCount) ? ", \(paneCount) panes" : "")
-                + (workspace.status == .archived ? ", archived" : "")
-                + (statusMessage.map { ", \($0)" } ?? "")
-        )
+        .accessibilityLabel(accessibilityDescription)
         .sidebarHoverCard(
             shouldShow: {
                 SidebarInfoCard.hasContent(
@@ -358,6 +373,21 @@ struct WorkspaceRow: View {
         )
     }
 
+    private var accessibilityDescription: String {
+        var description = repoContext.map { "\($0), " } ?? ""
+        description += "\(workspace.name), \(sessionActivity.accessibilityDescription)"
+        if SidebarSessionActivity.showsPaneCountBadge(for: paneCount) {
+            description += ", \(paneCount) panes"
+        }
+        if workspace.status == .archived {
+            description += ", archived"
+        }
+        if let statusMessage {
+            description += ", \(statusMessage)"
+        }
+        return description
+    }
+
     private var rowContent: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
@@ -371,9 +401,22 @@ struct WorkspaceRow: View {
                         .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
                 }
 
+                if let repoContext {
+                    HStack(spacing: 3) {
+                        Text(repoContext)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Text("/")
+                            .foregroundStyle(.tertiary)
+                    }
+                    .font(.callout)
+                }
+
                 Text(workspace.name)
                     .font(.callout.weight(isSelected || sessionActivity.isActive ? .semibold : .regular))
                     .lineLimit(1)
+                    .layoutPriority(repoContext == nil ? 0 : 1)
 
                 if !isBusy, workspace.status != .active {
                     Text(workspace.status.label)

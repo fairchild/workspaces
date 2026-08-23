@@ -5,6 +5,7 @@
 //  Left sidebar showing repositories and workspaces
 //
 
+import Combine
 import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
@@ -35,6 +36,23 @@ private struct NewWorkspaceSheetContext: Identifiable {
     let repo: Repo
 
     var id: UUID { repo.id }
+}
+
+/// Where a workspace row sits: indented under its repo in the tree arrangements, or
+/// flat in a Recent bucket, where the repo name travels with the row as a breadcrumb.
+private enum WorkspaceRowPlacement {
+    case nested
+    case flat(repoContext: String?)
+
+    var isNested: Bool {
+        if case .nested = self { return true }
+        return false
+    }
+
+    var repoContext: String? {
+        if case .flat(let repoContext) = self { return repoContext }
+        return nil
+    }
 }
 
 struct SidebarView: View {
@@ -101,6 +119,10 @@ struct SidebarView: View {
     @State private var expandedArchivedRepoIDs: Set<UUID> = []
     @State private var workspaceCreationStatusByRepoID: [UUID: WorkspaceCreationStatus] = [:]
     @State private var repoLastAccessedSnapshotByID: [UUID: Date] = [:]
+    /// `lastAccessedAt` per repo and workspace id, plus the instant it was taken, so the
+    /// Recent arrangement's bucket boundaries are as stable as its ordering.
+    @State private var recentSnapshotByID: [UUID: Date] = [:]
+    @State private var recentSnapshotTakenAt = Date()
     @State private var isPreparingNewWorkspaceSheet = false
 
     /// Real foreground process name per plain terminal tab, resolved lazily when a hover
@@ -146,8 +168,38 @@ struct SidebarView: View {
     private let workspaceEnvironmentOptionsController = WorkspaceEnvironmentOptionsController()
     private let workspacePresentationController = SidebarWorkspacePresentationController()
 
+    /// Resolved once per process: fixture captures pin the arrangement by environment so a
+    /// scenario renders the same way whatever the stored preference happens to be.
+    private static let fixtureSortModeOverride = UIFixtureSidebarArrangement.mode(
+        from: ProcessInfo.processInfo.environment
+    )
+
     private var repoSortMode: SidebarRepoSortMode {
-        SidebarRepoSortMode(rawValue: repoSortModeRawValue) ?? .alphabetical
+        Self.fixtureSortModeOverride
+            ?? SidebarRepoSortMode(rawValue: repoSortModeRawValue)
+            ?? .alphabetical
+    }
+
+    private var workspaceIDs: Set<UUID> {
+        Set(repos.flatMap(\.workspaces).map(\.id))
+    }
+
+    private var repoRootPaneCounts: [UUID: Int] {
+        Dictionary(
+            uniqueKeysWithValues: repos.map { repo in
+                (repo.id, paneCount(for: .repoPath(normalizePath(repo.localURL))))
+            }
+        )
+    }
+
+    private var recentBuckets: [RecentBucket] {
+        SidebarRecentArrangement.buckets(
+            repos: repos,
+            snapshot: recentSnapshotByID,
+            repoRootPaneCounts: repoRootPaneCounts,
+            now: recentSnapshotTakenAt,
+            calendar: .current
+        )
     }
 
     private var sortedRepos: [Repo] {
@@ -264,6 +316,7 @@ struct SidebarView: View {
         .onChange(of: repos.map(\.id)) { _, _ in
             pruneExpandedContainers()
             syncRepoSortSnapshot()
+            syncRecentSnapshot(forceRefresh: true)
             Task { @MainActor in
                 await smokeDriver.driveHostLumeScenarioIfNeeded(smokeScenarioContext)
             }
@@ -274,12 +327,20 @@ struct SidebarView: View {
         }
         .onChange(of: repoSortModeRawValue) { _, _ in
             syncRepoSortSnapshot(forceRefresh: true)
+            syncRecentSnapshot(forceRefresh: true)
+        }
+        .onChange(of: workspaceIDs) { _, _ in
+            syncRecentSnapshot(forceRefresh: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            syncRecentSnapshot(forceRefresh: true)
         }
         .onAppear {
             installAutomationWorkspaceCreateGesture()
             initializeExpandedReposIfNeeded()
             expandContainersForSelectedWebSource()
             syncRepoSortSnapshot(forceRefresh: false)
+            syncRecentSnapshot(forceRefresh: false)
             guard !isRepoAutoImportDisabled else { return }
             guard !didAttemptDefaultRepoImport else { return }
             didAttemptDefaultRepoImport = true
@@ -338,7 +399,11 @@ struct SidebarView: View {
 
     private var sidebarList: some View {
         List {
-            repositoriesSection
+            if repoSortMode == .recent {
+                recentSections
+            } else {
+                repositoriesSection
+            }
 
             if !globalWebSources.isEmpty {
                 webSection
@@ -354,6 +419,7 @@ struct SidebarView: View {
     /// parent repo and lift selection to that parent. When a repo is selected
     /// and expanded, collapse it. Otherwise pass through.
     private func handleSidebarLeftArrow() -> KeyPress.Result {
+        guard repoSortMode != .recent else { return .ignored }
         if let workspace = selectedWorkspace, let parent = workspace.sourceRepo {
             selectedWorkspace = nil
             onRepoSelected(parent)
@@ -374,6 +440,7 @@ struct SidebarView: View {
     /// implemented yet — Finder/Xcode both treat → as expand-then-enter, but
     /// the second step is fiddly and not yet warranted.)
     private func handleSidebarRightArrow() -> KeyPress.Result {
+        guard repoSortMode != .recent else { return .ignored }
         if let repo = selectedRepo, !isRepoExpanded(repo) {
             toggleRepoExpansion(repo)
             return .handled
@@ -397,11 +464,52 @@ struct SidebarView: View {
         }
     }
 
+    /// Flat, date-bucketed arrangement. Only the first bucket's header carries the sort
+    /// menu; the empty state still renders one so Recent is never a mode you can't leave.
+    @ViewBuilder
+    private var recentSections: some View {
+        let buckets = recentBuckets
+
+        if buckets.isEmpty {
+            Section {
+                Text("No recent workspaces")
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+            } header: {
+                sidebarSectionHeader(title: "Recent", showsSortMenu: !repos.isEmpty)
+            }
+        } else {
+            ForEach(Array(buckets.enumerated()), id: \.element.id) { index, bucket in
+                Section {
+                    ForEach(bucket.rows) { row in
+                        recentRow(row)
+                    }
+                } header: {
+                    sidebarSectionHeader(title: bucket.title, showsSortMenu: index == 0)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func recentRow(_ row: RecentRow) -> some View {
+        switch row {
+        case .workspace(let workspace):
+            workspaceRow(workspace, placement: .flat(repoContext: workspace.sourceRepo?.name))
+        case .repoRoot(let repo):
+            repoListRow(repo, showsChildren: false)
+        }
+    }
+
     private var repositoriesHeader: some View {
+        sidebarSectionHeader(title: "Repositories", showsSortMenu: !repos.isEmpty)
+    }
+
+    private func sidebarSectionHeader(title: String, showsSortMenu: Bool) -> some View {
         HStack(spacing: 8) {
-            Text("Repositories")
+            Text(title)
             Spacer(minLength: 8)
-            if !repos.isEmpty {
+            if showsSortMenu {
                 Menu {
                     ForEach(SidebarRepoSortMode.allCases) { mode in
                         Button {
@@ -488,8 +596,10 @@ struct SidebarView: View {
         }
     }
 
+    /// `showsChildren: false` is the Recent arrangement's flat repo root — no subtree, so
+    /// the folder glyph selects the repo rather than toggling an expansion nothing shows.
     @ViewBuilder
-    private func repoListRow(_ repo: Repo) -> some View {
+    private func repoListRow(_ repo: Repo, showsChildren: Bool = true) -> some View {
         let normalizedRepoPath = normalizePath(repo.localURL)
         let repoSessionKey = HostTerminalSessionKey.repoPath(normalizedRepoPath)
         let baselineActivity = sessionActivity(for: repoSessionKey)
@@ -501,21 +611,18 @@ struct SidebarView: View {
             sessionActivity: bubbledActivity,
             paneCount: paneCount(for: repoSessionKey),
             isSelected: selectedRepo?.id == repo.id,
-            isExpanded: isRepoExpanded(repo),
+            isExpanded: showsChildren && isRepoExpanded(repo),
+            showsExpansion: showsChildren,
             sessionActivityTooltip: bubbleTooltip(for: repo, bubbled: bubbledActivity, baseline: baselineActivity),
             onToggleExpansion: {
-                toggleRepoExpansion(repo)
+                if showsChildren {
+                    toggleRepoExpansion(repo)
+                } else {
+                    selectRepo(repo, sessionKey: repoSessionKey, expanding: false)
+                }
             },
             onSelectRepo: {
-                sidebarHasKeyFocus = true
-                if !isRepoExpanded(repo) {
-                    expansionController.expandRepo(repo.id)
-                }
-                if paneCount(for: repoSessionKey) > 0 {
-                    onRepoTerminalSelected(repo)
-                } else {
-                    onRepoSelected(repo)
-                }
+                selectRepo(repo, sessionKey: repoSessionKey, expanding: showsChildren)
             },
             onNewWorkspace: {
                 Task { @MainActor in
@@ -569,8 +676,20 @@ struct SidebarView: View {
             }
         }
 
-        if isRepoExpanded(repo) {
+        if showsChildren, isRepoExpanded(repo) {
             repoChildrenList(repo)
+        }
+    }
+
+    private func selectRepo(_ repo: Repo, sessionKey: HostTerminalSessionKey, expanding: Bool) {
+        sidebarHasKeyFocus = true
+        if expanding, !isRepoExpanded(repo) {
+            expansionController.expandRepo(repo.id)
+        }
+        if paneCount(for: sessionKey) > 0 {
+            onRepoTerminalSelected(repo)
+        } else {
+            onRepoSelected(repo)
         }
     }
 
@@ -613,16 +732,20 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func workspaceRow(_ workspace: Workspace) -> some View {
+    private func workspaceRow(
+        _ workspace: Workspace,
+        placement: WorkspaceRowPlacement = .nested
+    ) -> some View {
         WorkspaceRow(
             workspace: workspace,
             isSelected: selectedWorkspace?.id == workspace.id,
             statusMessage: workspaceStatusMessage(workspace),
             sessionActivity: sessionActivity(for: sessionKey(for: workspace)),
             paneCount: paneCount(for: sessionKey(for: workspace)),
-            isNested: true,
-            isExpanded: isWorkspaceExpanded(workspace),
-            showsDisclosure: !workspace.webSources.isEmpty,
+            repoContext: placement.repoContext,
+            isNested: placement.isNested,
+            isExpanded: placement.isNested && isWorkspaceExpanded(workspace),
+            showsDisclosure: placement.isNested && !workspace.webSources.isEmpty,
             tabsProvider: {
                 refreshForegroundProcessNames(for: sessionKey(for: workspace))
                 refreshTranscriptTails(for: sessionKey(for: workspace))
@@ -670,7 +793,7 @@ struct SidebarView: View {
             }
         }
 
-        if isWorkspaceExpanded(workspace) {
+        if placement.isNested, isWorkspaceExpanded(workspace) {
             workspaceWebSourceList(workspace)
         }
     }
@@ -1802,6 +1925,7 @@ struct SidebarView: View {
     private func updateRepoSortMode(_ mode: SidebarRepoSortMode) {
         repoSortModeRawValue = mode.rawValue
         syncRepoSortSnapshot(forceRefresh: true)
+        syncRecentSnapshot(forceRefresh: true)
     }
 
     private func syncRepoSortSnapshot(forceRefresh: Bool = false) {
@@ -1818,6 +1942,28 @@ struct SidebarView: View {
 
         if forceRefresh || repoLastAccessedSnapshotByID.isEmpty {
             repoLastAccessedSnapshotByID = repoSortController.snapshot(for: repos)
+        }
+    }
+
+    /// Re-reads the dates the Recent arrangement orders and buckets by. Called on mode
+    /// change, on appear, when the repo or workspace set changes, and when the app becomes
+    /// active — never during ordinary redraws, so rows never move under the cursor.
+    private func syncRecentSnapshot(forceRefresh: Bool) {
+        guard repoSortMode == .recent else {
+            if !recentSnapshotByID.isEmpty {
+                recentSnapshotByID.removeAll()
+            }
+            return
+        }
+
+        recentSnapshotByID = SidebarRecentArrangement.prunedSnapshot(
+            recentSnapshotByID,
+            validIDs: SidebarRecentArrangement.identifiers(in: repos)
+        )
+
+        if forceRefresh || recentSnapshotByID.isEmpty {
+            recentSnapshotByID = SidebarRecentArrangement.snapshot(for: repos)
+            recentSnapshotTakenAt = Date()
         }
     }
 }
