@@ -4,7 +4,7 @@
 //
 //  Pin bookkeeping for the sidebar's Pinned section: which workspaces belong to it, in
 //  what order, and the 0…n renumbering that keeps that order contiguous through every
-//  pin, unpin, archive, and delete. Pure — the caller owns the save.
+//  pin, unpin, reorder, archive, and delete. Pure — the caller owns the save.
 //
 
 import Foundation
@@ -65,7 +65,36 @@ struct SidebarPinController {
     /// what reaches the store is contiguous and the display order is what was persisted.
     @discardableResult
     func renumber(in workspaces: [Workspace]) -> [Workspace] {
+        numberInPlace(pinnedWorkspaces(in: workspaces))
+    }
+
+    /// Shifts a pinned workspace `offset` places within the Pinned section. A workspace the
+    /// section does not hold, and a destination outside it, leave the store untouched — the
+    /// affordance offers the verb and the invariant lives here.
+    @discardableResult
+    func move(_ workspace: Workspace, by offset: Int, in workspaces: [Workspace]) -> [Workspace] {
+        var pinned = pinnedWorkspaces(in: workspaces)
+        guard let index = pinned.firstIndex(where: { $0.id == workspace.id }) else { return pinned }
+
+        let destination = index + offset
+        guard pinned.indices.contains(destination) else { return pinned }
+
+        pinned.insert(pinned.remove(at: index), at: destination)
+        return numberInPlace(pinned)
+    }
+
+    /// Whether `move(_:by:in:)` would change anything — what disables Move Up on the first
+    /// pinned row and Move Down on the last.
+    func canMove(_ workspace: Workspace, by offset: Int, in workspaces: [Workspace]) -> Bool {
         let pinned = pinnedWorkspaces(in: workspaces)
+        guard offset != 0, let index = pinned.firstIndex(where: { $0.id == workspace.id }) else {
+            return false
+        }
+        return pinned.indices.contains(index + offset)
+    }
+
+    @discardableResult
+    private func numberInPlace(_ pinned: [Workspace]) -> [Workspace] {
         for (index, workspace) in pinned.enumerated() where workspace.pinOrder != index {
             workspace.pinOrder = index
         }

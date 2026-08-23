@@ -187,6 +187,138 @@ struct SidebarPinControllerTests {
         #expect(controller.pinnedWorkspaces(in: [archived, live]).map(\.name) == ["live"])
     }
 
+    @Test("Moving up swaps a row with the one above it and renumbers the section")
+    func movingUpReordersTheSection() {
+        let repo = makeRepo()
+        let first = makeWorkspace("first", in: repo, pinOrder: 0)
+        let second = makeWorkspace("second", in: repo, pinOrder: 1)
+        let third = makeWorkspace("third", in: repo, pinOrder: 2)
+        let all = [first, second, third]
+
+        controller.move(third, by: -1, in: all)
+
+        #expect(controller.pinnedWorkspaces(in: all).map(\.name) == ["first", "third", "second"])
+        #expect(first.pinOrder == 0)
+        #expect(third.pinOrder == 1)
+        #expect(second.pinOrder == 2)
+    }
+
+    @Test("Moving down swaps a row with the one below it")
+    func movingDownReordersTheSection() {
+        let repo = makeRepo()
+        let first = makeWorkspace("first", in: repo, pinOrder: 0)
+        let second = makeWorkspace("second", in: repo, pinOrder: 1)
+        let all = [first, second]
+
+        controller.move(first, by: 1, in: all)
+
+        #expect(controller.pinnedWorkspaces(in: all).map(\.name) == ["second", "first"])
+        #expect(second.pinOrder == 0)
+        #expect(first.pinOrder == 1)
+    }
+
+    @Test("Moving past either end of the section changes nothing")
+    func movingAtTheBoundariesIsANoOp() {
+        let repo = makeRepo()
+        let first = makeWorkspace("first", in: repo, pinOrder: 0)
+        let second = makeWorkspace("second", in: repo, pinOrder: 1)
+        let all = [first, second]
+
+        controller.move(first, by: -1, in: all)
+        controller.move(second, by: 1, in: all)
+
+        #expect(controller.pinnedWorkspaces(in: all).map(\.name) == ["first", "second"])
+        #expect(first.pinOrder == 0)
+        #expect(second.pinOrder == 1)
+        #expect(controller.canMove(first, by: -1, in: all) == false)
+        #expect(controller.canMove(second, by: 1, in: all) == false)
+        #expect(controller.canMove(first, by: 1, in: all))
+        #expect(controller.canMove(second, by: -1, in: all))
+    }
+
+    @Test("Moving an unpinned workspace leaves the section alone")
+    func movingAnUnpinnedWorkspaceIsANoOp() {
+        let repo = makeRepo()
+        let pinned = makeWorkspace("pinned", in: repo, pinOrder: 0)
+        let loose = makeWorkspace("loose", in: repo)
+        let all = [pinned, loose]
+
+        controller.move(loose, by: -1, in: all)
+        controller.move(loose, by: 1, in: all)
+
+        #expect(loose.pinOrder == nil)
+        #expect(controller.pinnedWorkspaces(in: all).map(\.name) == ["pinned"])
+        #expect(pinned.pinOrder == 0)
+        #expect(controller.canMove(loose, by: 1, in: all) == false)
+    }
+
+    @Test("An archived workspace carrying a stale pinOrder cannot be moved")
+    func movingAnArchivedWorkspaceIsANoOp() {
+        let repo = makeRepo()
+        let live = makeWorkspace("live", in: repo, pinOrder: 0)
+        let archived = makeWorkspace("archived", in: repo, pinOrder: 1, status: .archived)
+        let all = [live, archived]
+
+        controller.move(archived, by: -1, in: all)
+
+        #expect(archived.pinOrder == 1)
+        #expect(live.pinOrder == 0)
+        #expect(controller.canMove(archived, by: -1, in: all) == false)
+    }
+
+    @Test("A move renumbers a gapped section rather than preserving its gaps")
+    func movingRepairsGaps() {
+        let repo = makeRepo()
+        let gapped = makeWorkspace("gapped", in: repo, pinOrder: 7)
+        let low = makeWorkspace("low", in: repo, pinOrder: 2)
+        let all = [gapped, low]
+
+        controller.move(gapped, by: -1, in: all)
+
+        #expect(controller.pinnedWorkspaces(in: all).map(\.name) == ["gapped", "low"])
+        #expect(gapped.pinOrder == 0)
+        #expect(low.pinOrder == 1)
+    }
+
+    @Test("A move of more than one place lands the row where it was asked to go")
+    func movingSeveralPlacesLandsAtTheOffset() {
+        let repo = makeRepo()
+        let first = makeWorkspace("first", in: repo, pinOrder: 0)
+        let second = makeWorkspace("second", in: repo, pinOrder: 1)
+        let third = makeWorkspace("third", in: repo, pinOrder: 2)
+        let all = [first, second, third]
+
+        controller.move(third, by: -2, in: all)
+
+        #expect(controller.pinnedWorkspaces(in: all).map(\.name) == ["third", "first", "second"])
+        #expect(all.compactMap(\.pinOrder).sorted() == [0, 1, 2])
+    }
+
+    @Test("A reordered section survives a round trip through the model store")
+    @MainActor
+    func reorderedPinOrderPersists() throws {
+        let schema = Schema([Repo.self, Workspace.self, WebSource.self])
+        let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
+        let container = try ModelContainer(for: schema, configurations: [configuration])
+        let context = container.mainContext
+
+        let repo = makeRepo()
+        let first = makeWorkspace("first", in: repo, pinOrder: 0)
+        let second = makeWorkspace("second", in: repo, pinOrder: 1)
+        let third = makeWorkspace("third", in: repo, pinOrder: 2)
+        context.insert(repo)
+        for workspace in [first, second, third] {
+            context.insert(workspace)
+        }
+
+        controller.move(third, by: -2, in: [first, second, third])
+        try context.save()
+
+        let refetched = try context.fetch(FetchDescriptor<Workspace>())
+        #expect(controller.pinnedWorkspaces(in: refetched).map(\.name) == ["third", "first", "second"])
+        #expect(refetched.compactMap(\.pinOrder).sorted() == [0, 1, 2])
+    }
+
     @Test("A snapshot restores exactly the touched pin orders after a failed save")
     func snapshotRestoresTouchedPinOrders() {
         let repo = makeRepo()
