@@ -30,6 +30,26 @@ struct RuntimeProcessMemoryTests {
         #expect(lifetimeMax > 0)
     }
 
+    @Test("Overlay replaces readable pids and falls back for unreadable ones")
+    func overlayReplacesAndFallsBack() {
+        let readable = RuntimeProcessSample(
+            pid: 100, parentPID: 1, name: "a", command: "a",
+            cpuPercent: 0, residentMemoryBytes: 1_024)
+        let unreadable = RuntimeProcessSample(
+            pid: 200, parentPID: 1, name: "b", command: "b",
+            cpuPercent: 0, residentMemoryBytes: 2_048)
+
+        let overlaid = LiveRuntimeProcessSnapshotProvider.overlayingPhysicalFootprint(
+            [readable, unreadable]
+        ) { pid in
+            pid == 100 ? 8_192 : nil
+        }
+
+        #expect(overlaid[0].residentMemoryBytes == 8_192)
+        #expect(overlaid[1].residentMemoryBytes == 2_048)
+        #expect(overlaid.map(\.pid) == [100, 200])
+    }
+
     @Test("A dead pid reads as nil, not zero")
     func deadPIDReadsNil() {
         // PID from far beyond the live range; if it somehow exists, skip the

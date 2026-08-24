@@ -281,12 +281,19 @@ public struct LiveRuntimeProcessSnapshotProvider: RuntimeProcessSnapshotProvidin
         }
 
         let samples = RuntimeDiagnosticsParser.parsePS(processResult.stdout, cwdByPID: cwdByPID)
-        return samples.map { sample in
-            // `ps rss` excludes compressed pages and graphics memory and
-            // under-reported this app ~7x against Activity Monitor (#1347 D1).
-            // Physical footprint is what the kernel's own limits act on;
-            // same-user processes read it without privileges, others keep rss.
-            guard let footprint = RuntimeProcessMemory.physicalFootprint(pid: sample.pid) else {
+        return Self.overlayingPhysicalFootprint(samples)
+    }
+
+    /// `ps rss` excludes compressed pages and graphics memory and
+    /// under-reported this app ~9x against Activity Monitor (#1347 D1).
+    /// Physical footprint is what the kernel's own limits act on; same-user
+    /// processes read it without privileges, unreadable pids keep their rss.
+    static func overlayingPhysicalFootprint(
+        _ samples: [RuntimeProcessSample],
+        reader: (Int32) -> Int64? = RuntimeProcessMemory.physicalFootprint(pid:)
+    ) -> [RuntimeProcessSample] {
+        samples.map { sample in
+            guard let footprint = reader(sample.pid) else {
                 return sample
             }
             return RuntimeProcessSample(
