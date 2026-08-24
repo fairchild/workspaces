@@ -440,9 +440,57 @@ struct LocalStateStoreTests {
         let rows = try await current.fetchPreviousRunSessions(limit: 100)
         #expect(rows.map(\.hostSessionID) == [prevID])
 
-        // The old broad query still sees BOTH stale runs — the bug being fixed.
+        // Startup hygiene (#1347 D4): opening the current run ends active rows
+        // from runs older than the prior one, so the broad active listing no
+        // longer accumulates every never-cleanly-closed run.
         let broad = try await current.fetchContinuitySessions(activeOnly: true, limit: 100)
-        #expect(Set(broad.map(\.hostSessionID)) == [staleID, prevID])
+        #expect(broad.map(\.hostSessionID) == [prevID])
+    }
+
+    @Test("Startup ends stale active rows from runs older than the prior run")
+    func startupEndsStaleOlderRunSessions() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let ancientID = UUID()
+        let priorID = UUID()
+        let run1 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try await run1.recordTerminalSession(
+            HostTerminalSession(
+                id: ancientID, key: .repoPath("/code/ancient"),
+                directory: URL(fileURLWithPath: "/code/ancient")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let run2 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        try await run2.recordTerminalSession(
+            HostTerminalSession(
+                id: priorID, key: .repoPath("/code/prior"),
+                directory: URL(fileURLWithPath: "/code/prior")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+
+        // The issue's acceptance shape: active-flag count equals live tiles
+        // plus the single restorable prior run — never older runs.
+        let dbQueue = try DatabaseQueue(path: db.path)
+        let rows = try await dbQueue.read { db in
+            try Row.fetchAll(
+                db,
+                sql: """
+                    SELECT host_session_id, is_active, ended_at
+                    FROM terminal_sessions ORDER BY run_started_at
+                    """)
+        }
+        let byID = Dictionary(
+            uniqueKeysWithValues: rows.map { ($0["host_session_id"] as String, $0) })
+        #expect(byID[ancientID.uuidString]?["is_active"] as Int? == 0)
+        #expect((byID[ancientID.uuidString]?["ended_at"] as String?) != nil)
+        #expect(byID[priorID.uuidString]?["is_active"] as Int? == 1)
+        #expect((byID[priorID.uuidString]?["ended_at"] as String?) == nil)
     }
 
     @Test("fetchPreviousRunSessions excludes ended prior-run rows and current-run rows")

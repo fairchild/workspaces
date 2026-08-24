@@ -274,6 +274,46 @@ public actor LocalStateStore {
         dbPool = try DatabasePool(path: databaseURL.path, configuration: configuration)
         try Self.migrator.migrate(dbPool)
         try Self.writeMetadata(in: dbPool)
+        try Self.endStaleSessionsFromOlderRuns(
+            in: dbPool,
+            currentRunID: self.runID,
+            currentRunStartedAt: self.runStartedAt
+        )
+    }
+
+    /// Startup hygiene (#1347 D4): rows still flagged active from runs *older
+    /// than the most-recent prior run* can never be offered again — cold-start
+    /// restore reads only that single prior run, and continuity rehydration
+    /// upserts move live ids to the current run — yet they polluted every
+    /// `is_active = 1` listing and blocked agent-event retention (135 "active"
+    /// rows vs 13 live tiles measured on 2026-08-23). End them here. The prior
+    /// run's rows are deliberately untouched so restore and rehydration see
+    /// exactly what they saw before.
+    private static func endStaleSessionsFromOlderRuns(
+        in dbPool: DatabasePool,
+        currentRunID: String,
+        currentRunStartedAt: String
+    ) throws {
+        let now = isoString(Date())
+        try dbPool.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE terminal_sessions
+                    SET is_active = 0, ended_at = ?
+                    WHERE is_active = 1
+                      AND ended_at IS NULL
+                      AND run_id != ?
+                      AND run_id IS NOT (
+                          SELECT run_id
+                          FROM terminal_sessions
+                          WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                          ORDER BY run_started_at DESC
+                          LIMIT 1
+                      )
+                    """,
+                arguments: [now, currentRunID, currentRunStartedAt]
+            )
+        }
     }
 
     /// Upserts a session's continuity row. Ended is terminal for a

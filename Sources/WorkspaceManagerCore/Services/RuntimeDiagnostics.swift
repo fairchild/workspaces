@@ -5,6 +5,7 @@
 //  Lightweight process and trace diagnostics for the WorkSpaces Detail Pane.
 //
 
+import Darwin
 import Foundation
 
 public struct RuntimeProcessSample: Codable, Equatable, Identifiable, Sendable {
@@ -279,7 +280,58 @@ public struct LiveRuntimeProcessSnapshotProvider: RuntimeProcessSnapshotProvidin
             cwdByPID = [:]
         }
 
-        return RuntimeDiagnosticsParser.parsePS(processResult.stdout, cwdByPID: cwdByPID)
+        let samples = RuntimeDiagnosticsParser.parsePS(processResult.stdout, cwdByPID: cwdByPID)
+        return samples.map { sample in
+            // `ps rss` excludes compressed pages and graphics memory and
+            // under-reported this app ~7x against Activity Monitor (#1347 D1).
+            // Physical footprint is what the kernel's own limits act on;
+            // same-user processes read it without privileges, others keep rss.
+            guard let footprint = RuntimeProcessMemory.physicalFootprint(pid: sample.pid) else {
+                return sample
+            }
+            return RuntimeProcessSample(
+                pid: sample.pid,
+                parentPID: sample.parentPID,
+                name: sample.name,
+                command: sample.command,
+                cpuPercent: sample.cpuPercent,
+                residentMemoryBytes: footprint,
+                cpuTimeSeconds: sample.cpuTimeSeconds,
+                currentDirectory: sample.currentDirectory
+            )
+        }
+    }
+}
+
+public enum RuntimeProcessMemory {
+    /// The kernel's physical footprint for `pid` (what Activity Monitor's
+    /// "Memory" column and the cpu/memory resource limits act on), via
+    /// `proc_pid_rusage`. Returns nil when the pid is gone or belongs to
+    /// another user without inspection rights.
+    public static func physicalFootprint(pid: Int32) -> Int64? {
+        var info = rusage_info_current()
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0)
+            }
+        }
+        guard result == 0 else { return nil }
+        guard info.ri_phys_footprint <= UInt64(Int64.max) else { return nil }
+        return Int64(info.ri_phys_footprint)
+    }
+
+    /// High-water physical footprint over the process lifetime; nil under the
+    /// same conditions as ``physicalFootprint(pid:)``.
+    public static func lifetimeMaxPhysicalFootprint(pid: Int32) -> Int64? {
+        var info = rusage_info_current()
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) {
+                proc_pid_rusage(pid, RUSAGE_INFO_CURRENT, $0)
+            }
+        }
+        guard result == 0 else { return nil }
+        guard info.ri_lifetime_max_phys_footprint <= UInt64(Int64.max) else { return nil }
+        return Int64(info.ri_lifetime_max_phys_footprint)
     }
 }
 
