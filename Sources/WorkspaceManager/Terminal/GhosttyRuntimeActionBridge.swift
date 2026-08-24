@@ -251,6 +251,7 @@ enum GhosttyRuntimeActionBridge {
 
         case GHOSTTY_ACTION_SET_TITLE:
             let title = action.action.set_title.title.flatMap { String(cString: $0) } ?? ""
+            LaunchWindowProbe.noteShellSignalAction(kind: "set_title")
             runOnMainAsync {
                 guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
                 surfaceView.updateTerminalTitle(title)
@@ -273,6 +274,7 @@ enum GhosttyRuntimeActionBridge {
 
         case GHOSTTY_ACTION_PWD:
             let pwd = action.action.pwd.pwd.flatMap { String(cString: $0) }
+            LaunchWindowProbe.noteShellSignalAction(kind: "pwd")
             runOnMainAsync {
                 guard let surfaceView = resolveSurfaceView(sourceSurfaceAddress) else { return }
                 surfaceView.updateWorkingDirectory(pwd)

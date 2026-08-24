@@ -81,6 +81,7 @@ enum PerformanceSignposts {
 
         let state = signposter.beginInterval("LaunchToFirstPrompt")
         launchInterval = ActiveInterval(state: state, startedAt: clock.now)
+        LaunchWindowProbe.open()
     }
 
     static func endLaunchToFirstPromptIfNeeded(trigger: String) {
@@ -98,6 +99,7 @@ enum PerformanceSignposts {
 
         guard let interval else { return }
 
+        LaunchWindowProbe.close(trigger: trigger)
         signposter.endInterval("LaunchToFirstPrompt", interval.state)
         let durationMs = milliseconds(since: interval.startedAt)
         log.info(
