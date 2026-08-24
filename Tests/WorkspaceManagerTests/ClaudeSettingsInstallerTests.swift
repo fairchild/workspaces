@@ -201,7 +201,6 @@ struct ClaudeSettingsInstallerTests {
             "UserPromptSubmit",
             "PreToolUse",
             "PostToolUse",
-            "PostToolBatch",
             "PostToolUseFailure",
             "PermissionRequest",
             "Notification",
@@ -407,5 +406,134 @@ struct ClaudeSettingsInstallerTests {
         #expect(await installer.isInstalled() == false)
         try await installer.install()
         #expect(await installer.isInstalled() == true)
+    }
+
+    @Test("Install unsubscribes WorkSpaces from retired PostToolBatch, keeps third-party handlers")
+    func retiredPostToolBatchScrub() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        let existing: [String: Any] = [
+            "hooks": [
+                "PostToolBatch": [
+                    [
+                        "hooks": [
+                            ["type": "command", "command": eventForwarder, "async": true],
+                            ["type": "command", "command": "/usr/local/bin/third-party-hook"],
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: settingsURL)
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let updated = try readJSON(settingsURL)
+        let handlers = hookGroups(named: "PostToolBatch", in: updated)
+            .flatMap { hookHandlers(in: $0) }
+        #expect(handlers.contains { ($0["command"] as? String) == eventForwarder } == false)
+        #expect(handlers.contains { ($0["command"] as? String) == "/usr/local/bin/third-party-hook" })
+        #expect(await installer.isInstalled())
+    }
+
+    @Test("Retired-event scrub preserves unusual third-party shapes verbatim")
+    func retiredScrubPreservesUnusualShapes() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        // A bare third-party handler dict, an opaque string entry, and a
+        // matcher-carrying group holding one WorkSpaces handler: only ours may
+        // go, everything else survives in its original shape.
+        let existing: [String: Any] = [
+            "hooks": [
+                "PostToolBatch": [
+                    ["type": "command", "command": "/usr/local/bin/bare-third-party"],
+                    "opaque-string-entry",
+                    [
+                        "matcher": "Bash",
+                        "hooks": [["type": "command", "command": eventForwarder, "async": true]],
+                    ],
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: settingsURL)
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let updated = try readJSON(settingsURL)
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+        let entries = hooks["PostToolBatch"] as? [Any] ?? []
+        #expect(entries.count == 3)
+        let bare = entries.first as? [String: Any]
+        #expect(bare?["command"] as? String == "/usr/local/bin/bare-third-party")
+        #expect(bare?["hooks"] == nil)
+        #expect(entries.dropFirst().first as? String == "opaque-string-entry")
+        let group = entries.last as? [String: Any]
+        #expect(group?["matcher"] as? String == "Bash")
+        #expect((group?["hooks"] as? [Any])?.isEmpty == true)
+        #expect(await installer.isInstalled())
+    }
+
+    @Test("Retired-event scrub leaves a non-array PostToolBatch value untouched")
+    func retiredScrubLeavesNonArrayValue() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        let existing: [String: Any] = ["hooks": ["PostToolBatch": "not-an-array"]]
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: settingsURL)
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let updated = try readJSON(settingsURL)
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+        #expect(hooks["PostToolBatch"] as? String == "not-an-array")
+    }
+
+    @Test("Install removes the PostToolBatch key when only WorkSpaces subscribed")
+    func retiredPostToolBatchKeyRemoved() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        let existing: [String: Any] = [
+            "hooks": [
+                "PostToolBatch": [
+                    ["hooks": [["type": "command", "command": eventForwarder, "async": true]]]
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: settingsURL)
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let updated = try readJSON(settingsURL)
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+        #expect(hooks["PostToolBatch"] == nil)
+        #expect(hooks["PostToolUse"] != nil)
+        #expect(await installer.isInstalled())
     }
 }

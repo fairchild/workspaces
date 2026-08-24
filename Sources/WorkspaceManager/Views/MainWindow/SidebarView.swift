@@ -82,7 +82,11 @@ struct SidebarView: View {
     let paneCountBySessionKey: [HostTerminalSessionKey: Int]
     let activeSessionKey: HostTerminalSessionKey?
     let hostSessions: [HostTerminalSession]
-    let agentStatusBySessionID: [UUID: AgentSessionStatus]
+    /// Per-session status lookup. The production closure is the registry's
+    /// `observedStatus(for:)`, so status reads during row rendering register
+    /// Observation dependencies scoped to the sessions on screen — one agent
+    /// event invalidates the sidebar, not the whole window (#1347).
+    let agentStatus: (UUID) -> AgentSessionStatus?
     /// Display title for a terminal tab (user override → live terminal title →
     /// directory). Resolved lazily by the hover card; mirrors the tab bar's title.
     let titleForSession: @MainActor (HostTerminalSession) -> String
@@ -1712,7 +1716,7 @@ struct SidebarView: View {
             paneCountBySessionKey: paneCountBySessionKey,
             activeSessionKey: activeSessionKey,
             sessions: hostSessions,
-            agentStatusBySessionID: agentStatusBySessionID
+            agentStatus: agentStatus
         )
     }
 
@@ -1724,12 +1728,12 @@ struct SidebarView: View {
             hostSessions
             .filter { $0.key == normalizedKey }
             .map { session in
-                let agentStatus = agentStatusBySessionID[session.id]
+                let sessionAgentStatus = agentStatus(session.id)
                 let title = titleForSession(session)
                 // Plain tabs prefer the real foreground process name; agent tabs keep their
                 // agent-driven title unchanged.
                 let displayTitle =
-                    agentStatus == nil
+                    sessionAgentStatus == nil
                     ? TerminalForegroundProcessResolver.preferredTabTitle(
                         foregroundName: foregroundNameBySessionID[session.id],
                         terminalTitle: title)
@@ -1738,11 +1742,12 @@ struct SidebarView: View {
                 // just presence of a cached entry) keeps a stale tail from a prior Claude session
                 // from leaking onto a non-Claude agent that later reuses the same host session id.
                 let transcriptTail =
-                    agentStatus?.kind == .claudeCode ? transcriptTailBySessionID[session.id] : nil
+                    sessionAgentStatus?.kind == .claudeCode
+                    ? transcriptTailBySessionID[session.id] : nil
                 return SidebarTabSummary(
                     id: session.id,
                     title: displayTitle,
-                    agentStatus: agentStatus,
+                    agentStatus: sessionAgentStatus,
                     transcriptTail: transcriptTail
                 )
             }
@@ -1761,7 +1766,7 @@ struct SidebarView: View {
         let mode = TerminalMultiplexingMode.resolve()
         let normalizedKey = key.normalized()
         let plainSessions = hostSessions.filter {
-            $0.key == normalizedKey && agentStatusBySessionID[$0.id] == nil
+            $0.key == normalizedKey && agentStatus($0.id) == nil
         }
         guard !plainSessions.isEmpty else { return }
         let resolver = foregroundResolver
@@ -1785,13 +1790,13 @@ struct SidebarView: View {
     private func refreshTranscriptTails(for key: HostTerminalSessionKey) {
         let normalizedKey = key.normalized()
         let agentSessions = hostSessions.filter {
-            $0.key == normalizedKey && agentStatusBySessionID[$0.id]?.kind == .claudeCode
+            $0.key == normalizedKey && agentStatus($0.id)?.kind == .claudeCode
         }
         guard !agentSessions.isEmpty else { return }
         let resolver = transcriptTailResolver
         Task { @MainActor in
             for session in agentSessions {
-                guard let status = agentStatusBySessionID[session.id] else { continue }
+                guard let status = agentStatus(session.id) else { continue }
                 let tail = await resolver.tail(
                     cwd: status.cwd, agentSessionID: status.agentSessionID, kind: status.kind)
                 if let tail, transcriptTailBySessionID[session.id] != tail {

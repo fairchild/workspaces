@@ -67,7 +67,7 @@ struct MainWindowHotSpotPerfTests {
                     let status = presentation.freshestAgentStatus(
                         for: key,
                         sessions: fixture.sessions,
-                        agentStatusBySessionID: statuses
+                        agentStatus: { statuses[$0] }
                     )
                     return WorkspaceStatusAggregator.WorkspaceInput(
                         workspaceID: workspace.id,
@@ -82,7 +82,7 @@ struct MainWindowHotSpotPerfTests {
                 let status = presentation.freshestAgentStatus(
                     for: key,
                     sessions: fixture.sessions,
-                    agentStatusBySessionID: statuses
+                    agentStatus: { statuses[$0] }
                 )
                 return WorkspaceStatusAggregator.RepoInput(
                     repoID: repo.id,

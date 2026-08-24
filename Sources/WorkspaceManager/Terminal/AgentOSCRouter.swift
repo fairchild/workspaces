@@ -49,7 +49,7 @@ final class AgentOSCRouter {
     ) {
         guard let hostID = resolveHostSession?(surfaceView) else { return }
         guard let registry else { return }
-        let kind = registry.statuses[hostID]?.kind ?? .unknown
+        let kind = registry.status(for: hostID)?.kind ?? .unknown
         let event = AgentUpdateIntake.terminalNotificationEvent(kind: kind, title: title, body: body)
         registry.apply(
             events: [event],
@@ -67,7 +67,7 @@ final class AgentOSCRouter {
     ) {
         guard let hostID = resolveHostSession?(surfaceView) else { return }
         guard let registry else { return }
-        let kind = registry.statuses[hostID]?.kind ?? .unknown
+        let kind = registry.status(for: hostID)?.kind ?? .unknown
         let event = AgentUpdateIntake.terminalBellEvent(kind: kind)
         registry.apply(
             events: [event],

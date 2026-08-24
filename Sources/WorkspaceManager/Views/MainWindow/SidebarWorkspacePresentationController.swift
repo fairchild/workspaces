@@ -27,18 +27,20 @@ struct SidebarWorkspacePresentationController {
     }
 
     /// Pick the freshest registered `AgentSessionStatus` whose host session shares `key`.
-    /// Returns `nil` when no session for that key has a registered status.
+    /// Returns `nil` when no session for that key has a registered status. The lookup
+    /// closure form lets a SwiftUI body pass `observedStatus(for:)` so only the
+    /// sessions actually rendered register Observation dependencies.
     func freshestAgentStatus(
         for key: HostTerminalSessionKey,
         sessions: [HostTerminalSession],
-        agentStatusBySessionID: [UUID: AgentSessionStatus]
+        agentStatus: (UUID) -> AgentSessionStatus?
     ) -> AgentSessionStatus? {
-        guard !agentStatusBySessionID.isEmpty, !sessions.isEmpty else { return nil }
+        guard !sessions.isEmpty else { return nil }
         let normalizedKey = key.normalized()
         return
             sessions
             .filter { $0.key == normalizedKey }
-            .compactMap { agentStatusBySessionID[$0.id] }
+            .compactMap { agentStatus($0.id) }
             .max { $0.lastEventAt < $1.lastEventAt }
     }
 
@@ -47,7 +49,7 @@ struct SidebarWorkspacePresentationController {
         paneCountBySessionKey: [HostTerminalSessionKey: Int],
         activeSessionKey: HostTerminalSessionKey?,
         sessions: [HostTerminalSession] = [],
-        agentStatusBySessionID: [UUID: AgentSessionStatus] = [:]
+        agentStatus: (UUID) -> AgentSessionStatus? = { _ in nil }
     ) -> SidebarSessionActivity {
         // Prefer the agent-derived activity when the registry has a status for any
         // session sharing this key. Fall back to the existing pane-count signal so
@@ -61,7 +63,7 @@ struct SidebarWorkspacePresentationController {
         let candidate = freshestAgentStatus(
             for: key,
             sessions: sessions,
-            agentStatusBySessionID: agentStatusBySessionID
+            agentStatus: agentStatus
         )
 
         guard let candidate else { return baseline }

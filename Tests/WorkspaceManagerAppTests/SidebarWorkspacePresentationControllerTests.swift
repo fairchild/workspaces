@@ -62,7 +62,7 @@ struct SidebarWorkspacePresentationControllerTests {
             paneCountBySessionKey: [key: 1],
             activeSessionKey: nil,
             sessions: [session],
-            agentStatusBySessionID: [session.id: status]
+            agentStatus: { [session.id: status][$0] }
         )
         #expect(activity == .awaitingInput)
     }
@@ -85,7 +85,7 @@ struct SidebarWorkspacePresentationControllerTests {
             paneCountBySessionKey: [key: 1],
             activeSessionKey: key,
             sessions: [session],
-            agentStatusBySessionID: [session.id: status]
+            agentStatus: { [session.id: status][$0] }
         )
         if case .errored(let category) = activity {
             #expect(category == .rateLimit)
@@ -112,7 +112,7 @@ struct SidebarWorkspacePresentationControllerTests {
             paneCountBySessionKey: [key: 1],
             activeSessionKey: key,
             sessions: [session],
-            agentStatusBySessionID: [session.id: status]
+            agentStatus: { [session.id: status][$0] }
         )
         #expect(activeActivity == .active)
 
@@ -121,7 +121,7 @@ struct SidebarWorkspacePresentationControllerTests {
             paneCountBySessionKey: [key: 1],
             activeSessionKey: nil,
             sessions: [session],
-            agentStatusBySessionID: [session.id: status]
+            agentStatus: { [session.id: status][$0] }
         )
         #expect(liveActivity == .live)
     }
@@ -136,7 +136,7 @@ struct SidebarWorkspacePresentationControllerTests {
             paneCountBySessionKey: [key: 2],
             activeSessionKey: key,
             sessions: [session],
-            agentStatusBySessionID: [:]
+            agentStatus: { _ in nil }
         )
         #expect(activity == .active)
     }

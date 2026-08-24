@@ -153,11 +153,12 @@ struct PerfChannel2Tests {
         let parallelism = 8
         let socketPath = socket.path
 
+        // Coalesced ingest (#1347): publish count is the coalescing ratio;
+        // delivery is confirmed via listener statistics.
         let updateTimestamps = LockedArrayC2<Date>()
         let cancellable = await MainActor.run {
-            registry.$statuses
-                .dropFirst()
-                .sink { _ in updateTimestamps.append(Date()) }
+            registry.statusesDidChange
+                .sink { updateTimestamps.append(Date()) }
         }
         defer { cancellable.cancel() }
 
@@ -172,7 +173,11 @@ struct PerfChannel2Tests {
             body: try JSONSerialization.data(withJSONObject: bind),
             hostSessionID: hostID
         )
-        try await Task.sleep(nanoseconds: 100_000_000)
+        let bindDeadline = Date().addingTimeInterval(2.0)
+        while await listener.currentStatistics().ingestedEvents < 1, Date() < bindDeadline {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let statsAfterBind = await listener.currentStatistics()
         updateTimestamps.reset()
 
         // Build N varied status-line bodies — vary cost so each ingest mutates state.
@@ -215,35 +220,41 @@ struct PerfChannel2Tests {
         }
         let httpDoneAt = Date()
 
-        let deadline = Date().addingTimeInterval(5.0)
-        while updateTimestamps.count < totalEvents && Date() < deadline {
+        // Wait up to 10s for every status-line update to drain through
+        // coalesced flushes.
+        let deadline = Date().addingTimeInterval(10.0)
+        var ingestedDelta = 0
+        while Date() < deadline {
+            let stats = await listener.currentStatistics()
+            ingestedDelta = stats.statusLineUpdates - statsAfterBind.statusLineUpdates
+            if ingestedDelta >= totalEvents { break }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         let updates = updateTimestamps.snapshot()
-        let sends = sendTimestamps.snapshot().sorted()
+        _ = sendTimestamps.snapshot()
 
-        let pairCount = min(sends.count, updates.count)
-        let registryLatencies: [Double] = (0..<pairCount).map { i in
-            updates[i].timeIntervalSince(sends[i]) * 1000
-        }
+        let flushLagMS = max(
+            0, (updates.last.map { $0.timeIntervalSince(httpDoneAt) } ?? 0) * 1000)
 
         let httpStats = Self.summarize(httpLatencies.snapshot())
-        let regStats = Self.summarize(registryLatencies)
 
         let payload: [String: Any] = [
             "scenario": "channel2_statusline_burst",
             "events_sent": totalEvents,
             "parallelism": parallelism,
-            "events_observed": updates.count,
+            "events_observed": ingestedDelta,
             "wall_clock_ms": httpDoneAt.timeIntervalSince(started) * 1000,
             "metrics": [
                 "channel2_statusline_http_200_latency_ms": httpStats,
-                "channel2_statusline_registry_update_latency_ms": regStats,
+                "channel2_statusline_flush_lag_ms": Self.summarize([flushLagMS]),
+                "channel2_statusline_registry_publishes": ["value": updates.count],
             ],
         ]
         try Self.writeResult(payload, to: Self.resultPath(scenario: "channel2_statusline_burst"))
 
-        #expect(updates.count >= Int(Double(totalEvents) * 0.95))
+        #expect(ingestedDelta >= Int(Double(totalEvents) * 0.95))
+        #expect(!updates.isEmpty)
+        #expect(updates.count <= totalEvents / 4)
     }
 }
 

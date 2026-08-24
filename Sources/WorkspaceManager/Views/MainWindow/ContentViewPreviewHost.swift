@@ -21,6 +21,7 @@ private struct ContentViewPreviewHost: View {
     @StateObject private var tileTreeStore = TileTreeStore()
     @StateObject private var workspaceProviderSetupCoordinator = WorkspaceProviderSetupCoordinator()
     @StateObject private var smokeDriver = SmokeScenarioDriver(environment: [:])
+    private let workspaceStatusAggregator = WorkspaceStatusAggregator()
 
     var body: some View {
         ContentView(
@@ -29,7 +30,8 @@ private struct ContentViewPreviewHost: View {
             appCommandState: appCommandState,
             tileTreeStore: tileTreeStore,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-            smokeDriver: smokeDriver
+            smokeDriver: smokeDriver,
+            workspaceStatusAggregator: workspaceStatusAggregator
         )
     }
 }

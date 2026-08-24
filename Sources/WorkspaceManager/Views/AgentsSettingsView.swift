@@ -415,6 +415,10 @@ private struct ClaudeHookRevertSheet: View {
 /// when sidebar binding stabilizes (PR #3+).
 private struct AgentStatusFieldsIndicator: View {
     @ObservedObject var registry: AgentSessionRegistry
+    /// `registry.statuses` reads are unobserved and `objectWillChange` fires
+    /// only on register/deregister, so per-event refresh rides the registry's
+    /// coalesced change signal instead.
+    @State private var statusesVersion = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -434,10 +438,14 @@ private struct AgentStatusFieldsIndicator: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color(nsColor: .textBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 6))
+        .onReceive(registry.statusesDidChange) { _ in
+            statusesVersion &+= 1
+        }
     }
 
     private var focusedStatus: AgentSessionStatus? {
-        registry.statuses.values
+        _ = statusesVersion
+        return registry.statuses.values
             .sorted { $0.lastEventAt > $1.lastEventAt }
             .first
     }

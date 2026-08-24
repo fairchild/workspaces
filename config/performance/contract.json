@@ -59,7 +59,7 @@
     {
       "id": "channel1_hook_ingest_burst",
       "build_kind": "debug",
-      "description": "In-process burst of 1000 PreToolUse hook events at parallelism=8 against AgentHookListener; measures end-to-end HTTP and registry-update latency."
+      "description": "In-process burst of 1000 PreToolUse hook events at parallelism=8 against AgentHookListener; measures end-to-end HTTP latency, coalesced flush lag, and registry publish count."
     },
     {
       "id": "channel1_sidebar_churn",
@@ -74,7 +74,7 @@
     {
       "id": "channel2_statusline_burst",
       "build_kind": "debug",
-      "description": "In-process burst of 1000 status-line POSTs at parallelism=8 against AgentHookListener /statusline; measures end-to-end HTTP and registry-update latency."
+      "description": "In-process burst of 1000 status-line POSTs at parallelism=8 against AgentHookListener /statusline; measures end-to-end HTTP latency, coalesced flush lag, and registry publish count."
     },
     {
       "id": "main_window_agent_activity_burst",
@@ -262,16 +262,27 @@
       }
     },
     {
-      "name": "channel1_ingest_registry_update_latency_ms",
+      "name": "channel1_ingest_flush_lag_ms",
       "unit": "ms",
       "supported_scenarios": [
         "channel1_hook_ingest_burst"
       ],
       "reference_baselines": {
         "channel1_hook_ingest_burst": {
-          "median_ms": 8,
-          "p95_ms": 40,
-          "p99_ms": 80
+          "median_ms": 400,
+          "p95_ms": 800
+        }
+      }
+    },
+    {
+      "name": "channel1_ingest_registry_publishes",
+      "unit": "entries",
+      "supported_scenarios": [
+        "channel1_hook_ingest_burst"
+      ],
+      "reference_baselines": {
+        "channel1_hook_ingest_burst": {
+          "max_entries": 250
         }
       }
     },
@@ -290,16 +301,27 @@
       }
     },
     {
-      "name": "channel2_statusline_registry_update_latency_ms",
+      "name": "channel2_statusline_flush_lag_ms",
       "unit": "ms",
       "supported_scenarios": [
         "channel2_statusline_burst"
       ],
       "reference_baselines": {
         "channel2_statusline_burst": {
-          "median_ms": 8,
-          "p95_ms": 40,
-          "p99_ms": 80
+          "median_ms": 400,
+          "p95_ms": 800
+        }
+      }
+    },
+    {
+      "name": "channel2_statusline_registry_publishes",
+      "unit": "entries",
+      "supported_scenarios": [
+        "channel2_statusline_burst"
+      ],
+      "reference_baselines": {
+        "channel2_statusline_burst": {
+          "max_entries": 250
         }
       }
     },

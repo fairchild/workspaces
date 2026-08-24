@@ -26,9 +26,15 @@ public final class AgentNotificationPoster {
 
     public init(registry: AgentSessionRegistry) {
         self.registry = registry
-        self.subscription = registry.$statuses.sink { [weak self] statuses in
-            self?.handle(statuses: statuses)
+        // The registry's change signal fires on every render-relevant status
+        // change, which includes every run-state transition — the only thing
+        // `handle` reacts to. Seed the baseline immediately: the signal, unlike
+        // the old `@Published` stream, has no initial emit.
+        self.subscription = registry.statusesDidChange.sink { [weak self] in
+            guard let self, let registry = self.registry else { return }
+            self.handle(statuses: registry.statuses)
         }
+        handle(statuses: registry.statuses)
     }
 
     public func stop() {

@@ -37,7 +37,6 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
-        "PostToolBatch",
         "PostToolUseFailure",
         "PermissionRequest",
         "Notification",
@@ -45,6 +44,15 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         "StopFailure",
         "TaskCreated",
         "TaskCompleted",
+    ]
+
+    /// Events WorkSpaces used to subscribe to but no longer does. The installer
+    /// scrubs its own forwarder from these on each pass; third-party handlers
+    /// under the same event are left untouched. `PostToolBatch` duplicates
+    /// `PostToolUse` (both settle the session on "thinking") and was 16% of
+    /// bus traffic (#1347).
+    private static let retiredHookEventNames: [String] = [
+        "PostToolBatch"
     ]
 
     private let homeDirectory: URL
@@ -264,6 +272,30 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 hooks[name] = groups
             }
 
+            var scrubbedRetiredEvents: [String] = []
+            for name in Self.retiredHookEventNames {
+                guard let raw = hooks[name] else { continue }
+                let result = scrubRetiredEventPreservingShape(raw) { handler in
+                    isWorkspacesLegacyHTTPUnixHook(handler)
+                        || isWorkspacesTitleEmitHook(handler)
+                        || isCanonicalWorkspacesCommandHook(handler, contribution: eventForwarder)
+                        || isUnescapedWorkspacesCommandHook(handler, contribution: eventForwarder)
+                        || isLegacyWorkspacesEventForwarderHook(handler, contribution: eventForwarder)
+                }
+                guard result.removedCount > 0 else { continue }
+                scrubbedRetiredEvents.append(name)
+                if let remaining = result.value {
+                    hooks[name] = remaining
+                } else {
+                    hooks.removeValue(forKey: name)
+                }
+            }
+
+            if !scrubbedRetiredEvents.isEmpty {
+                lines.append(
+                    "unsubscribe WorkSpaces from retired events \(scrubbedRetiredEvents.joined(separator: ", "))"
+                )
+            }
             if !scrubbedLegacyEvents.isEmpty {
                 lines.append(
                     "scrub legacy WorkSpaces http+unix hooks from \(scrubbedLegacyEvents.count) events"
@@ -387,6 +419,52 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         groups.reduce(0) { count, group in
             count + claudeHookHandlers(in: group).filter(predicate).count
         }
+    }
+
+    /// Shape-preserving scrub for retired events. Unlike the subscribed-event
+    /// path — which normalizes group shape because it rewrites the event
+    /// anyway — a retired event is one WorkSpaces no longer owns, so every
+    /// entry the user (or another tool) put there survives verbatim: strings,
+    /// unknown shapes, extra group keys, non-array `hooks` values. Only
+    /// recognized WorkSpaces handlers are removed, whether bare or nested in a
+    /// group's `hooks` array; a group is dropped only when it held nothing but
+    /// WorkSpaces handlers and no other keys. Returns nil when nothing remains.
+    private func scrubRetiredEventPreservingShape(
+        _ raw: Any,
+        isWorkspacesHandler: ([String: Any]) -> Bool
+    ) -> (value: Any?, removedCount: Int) {
+        guard let entries = raw as? [Any] else { return (raw, 0) }
+        var removed = 0
+        var kept: [Any] = []
+        for entry in entries {
+            guard let dict = entry as? [String: Any] else {
+                kept.append(entry)
+                continue
+            }
+            if let nested = dict["hooks"] as? [Any] {
+                let keptHandlers = nested.filter { item in
+                    guard let handler = item as? [String: Any], isWorkspacesHandler(handler)
+                    else { return true }
+                    removed += 1
+                    return false
+                }
+                if keptHandlers.count == nested.count {
+                    kept.append(entry)
+                } else if keptHandlers.isEmpty, dict.count == 1 {
+                    continue
+                } else {
+                    var group = dict
+                    group["hooks"] = keptHandlers
+                    kept.append(group)
+                }
+            } else if isWorkspacesHandler(dict) {
+                removed += 1
+            } else {
+                kept.append(entry)
+            }
+        }
+        guard removed > 0 else { return (raw, 0) }
+        return (kept.isEmpty ? nil : kept, removed)
     }
 
     private func scrubHandlers(

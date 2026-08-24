@@ -5,13 +5,16 @@
 //  Live runtime diagnostics for the Detail Pane.
 //
 
+import Combine
 import Foundation
 import SwiftUI
 import WorkspaceManagerCore
 
 struct DiagnosticsTabView: View {
     let workspaceDirectories: [URL]
-    let agentStatuses: [AgentSessionStatus]
+    /// Optional so previews/tests can render without a live registry; the pane
+    /// then shows no agent rows.
+    let agentSessionRegistry: AgentSessionRegistry?
 
     @StateObject private var viewModel = RuntimeDiagnosticsViewModel()
     @State private var selectedRange: RuntimeDiagnosticsRange = .fifteenMinutes
@@ -41,7 +44,7 @@ struct DiagnosticsTabView: View {
         .onAppear {
             viewModel.start(
                 workspaceDirectories: workspaceDirectories,
-                agentStatuses: agentStatuses,
+                agentStatuses: currentAgentStatuses,
                 selectedRange: selectedRange
             )
         }
@@ -51,24 +54,33 @@ struct DiagnosticsTabView: View {
         .onChange(of: selectedRange) { _, range in
             viewModel.updateContext(
                 workspaceDirectories: workspaceDirectories,
-                agentStatuses: agentStatuses,
+                agentStatuses: currentAgentStatuses,
                 selectedRange: range
             )
         }
         .onChange(of: workspaceDirectories) { _, directories in
             viewModel.updateContext(
                 workspaceDirectories: directories,
-                agentStatuses: agentStatuses,
+                agentStatuses: currentAgentStatuses,
                 selectedRange: selectedRange
             )
         }
-        .onChange(of: agentStatuses) { _, statuses in
+        .onReceive(statusesDidChange) { _ in
             viewModel.updateContext(
                 workspaceDirectories: workspaceDirectories,
-                agentStatuses: statuses,
+                agentStatuses: currentAgentStatuses,
                 selectedRange: selectedRange
             )
         }
+    }
+
+    private var currentAgentStatuses: [AgentSessionStatus] {
+        agentSessionRegistry.map { Array($0.statuses.values) } ?? []
+    }
+
+    private var statusesDidChange: AnyPublisher<Void, Never> {
+        agentSessionRegistry?.statusesDidChange.eraseToAnyPublisher()
+            ?? Empty<Void, Never>().eraseToAnyPublisher()
     }
 
     private var diagnosticsHeader: some View {
@@ -280,7 +292,7 @@ struct DiagnosticsTabView: View {
                 accessibilityID: "inspector.diagnostics.agent-process-table"
             )
 
-            AgentSessionStatusList(statuses: agentStatuses)
+            AgentSessionStatusList(statuses: currentAgentStatuses)
                 .accessibilityIdentifier("inspector.diagnostics.agent-sessions")
         }
     }

@@ -308,4 +308,12 @@ public protocol AgentSessionRegistryProtocol: AnyObject {
     func register(hostSessionID: UUID, cwd: String, kind: AgentKind)
     func apply(events: [AgentEvent], for hostSessionID: UUID, origin: AgentEventOrigin)
     func deregister(hostSessionID: UUID)
+    /// Single-session lookup so per-event callers avoid materializing `statuses`.
+    func status(for hostSessionID: UUID) -> AgentSessionStatus?
+}
+
+extension AgentSessionRegistryProtocol {
+    public func status(for hostSessionID: UUID) -> AgentSessionStatus? {
+        statuses[hostSessionID]
+    }
 }

@@ -26,7 +26,11 @@ struct WorkspaceManagerApp: App {
     @StateObject private var softwareUpdateController: SoftwareUpdateController
     @StateObject private var agentSessionRegistry: AgentSessionRegistry
     @StateObject private var lastCommandStatusRegistry: LastCommandStatusRegistry
-    @StateObject private var workspaceStatusAggregator = WorkspaceStatusAggregator()
+    // Deliberately not a @StateObject: an App-level @StateObject subscription
+    // re-evaluates the Scene body (and so the whole window tree) on every
+    // publish. The aggregator publishes per status-aggregation window; views
+    // that render its state subscribe where they render it (#1347).
+    private let workspaceStatusAggregator = WorkspaceStatusAggregator()
     @StateObject private var workspaceJournal: WorkspaceJournal
     @StateObject private var claudeIntegrationLifecycle: ClaudeIntegrationLifecycle
     private let appRuntimeDependencies: AppRuntimeDependencies
@@ -110,7 +114,8 @@ struct WorkspaceManagerApp: App {
         WindowGroup {
             MainWindowRootView(
                 appRuntimeDependencies: appRuntimeDependencies,
-                appCommandState: appCommandState
+                appCommandState: appCommandState,
+                workspaceStatusAggregator: workspaceStatusAggregator
             )
             .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
             .environment(
@@ -388,6 +393,7 @@ private struct SessionHistoryMenuItem: View {
 
 private struct MainWindowRootView: View {
     private let appRuntimeDependencies: AppRuntimeDependencies
+    private let workspaceStatusAggregator: WorkspaceStatusAggregator
     @ObservedObject private var appCommandState: AppCommandState
     @State private var deepLinkState = WorkspaceDeepLinkState()
     // Bound to the resolved store explicitly: the restored surface is the state an
@@ -401,10 +407,12 @@ private struct MainWindowRootView: View {
 
     init(
         appRuntimeDependencies: AppRuntimeDependencies,
-        appCommandState: AppCommandState
+        appCommandState: AppCommandState,
+        workspaceStatusAggregator: WorkspaceStatusAggregator
     ) {
         self.appRuntimeDependencies = appRuntimeDependencies
         self._appCommandState = ObservedObject(wrappedValue: appCommandState)
+        self.workspaceStatusAggregator = workspaceStatusAggregator
     }
 
     var body: some View {
@@ -414,7 +422,8 @@ private struct MainWindowRootView: View {
             appCommandState: appCommandState,
             tileTreeStore: tileTreeStore,
             workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
-            smokeDriver: smokeDriver
+            smokeDriver: smokeDriver,
+            workspaceStatusAggregator: workspaceStatusAggregator
         )
         .onOpenURL { url in
             if deepLinkState.enqueue(url: url) {
