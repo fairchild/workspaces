@@ -276,6 +276,39 @@ private final class FakeAutomationController: AutomationControlling {
         )
     }
 
+    var noteCalls: [AutomationWorkspaceNoteRequest] = []
+    static let noteUnknownID = "00000000-0000-0000-0000-0000000000E1"
+
+    /// Mirrors the operator-scope projection: only an operator handle carries
+    /// workspace.note; a tile handle ("live") is capability_denied and any other handle
+    /// is stale. The stored note is the normalized one, which is what the wire reports.
+    func automationSetWorkspaceNote(
+        for handle: String,
+        request: AutomationWorkspaceNoteRequest
+    ) async throws -> AutomationWorkspaceNoteResult {
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(
+                .capabilityDenied, "The automation handle does not include workspace.note.")
+        }
+        guard UUID(uuidString: request.workspaceID) != nil else {
+            throw AutomationServiceError(.invalidRequest, "workspaceID must be a UUID.")
+        }
+        if request.workspaceID == Self.noteUnknownID {
+            throw AutomationServiceError(
+                .invalidRequest, "No workspace with id \(request.workspaceID) is tracked by the app.")
+        }
+        noteCalls.append(request)
+        return AutomationWorkspaceNoteResult(
+            workspaceID: request.workspaceID,
+            workspaceName: "feature-auth",
+            note: WorkspaceNote.normalized(request.note),
+            changed: true
+        )
+    }
+
     var windowSnapshotCalls: [String] = []
     var surfaceReadCalls: [AutomationSurfaceReadRequest] = []
 
@@ -1009,7 +1042,7 @@ struct AutomationAPITests {
         #expect(
             entry.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .uiRead,
+                .workspaceArchive, .workspaceNote, .uiRead,
             ])
         // Operator mutation capabilities are reviewed gesture verbs; an operator handle still never
         // carries tile mutation or input.write.
@@ -1114,7 +1147,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .uiRead,
+                .workspaceArchive, .workspaceNote, .uiRead,
             ])
         #expect(controller.windowCalls == ["operator"])
 
@@ -1197,7 +1230,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .uiRead,
+                .workspaceArchive, .workspaceNote, .uiRead,
             ])
         #expect(controller.workspaceCalls == ["operator"])
 
@@ -1543,6 +1576,73 @@ struct AutomationAPITests {
         #expect(json.contains("\"confirmation\""))
         #expect(json.contains("\"action\":\"workspace.create\""))
         #expect(json.contains("\"providerID\":\"lume\""))
+    }
+
+    @Test("POST /v1/workspace/note stores the normalized note and enforces the capability")
+    @MainActor
+    func routerWorkspaceNote() async throws {
+        let controller = FakeAutomationController()
+        let validID = FakeAutomationController.inventoryWorkspaceID
+
+        func post(_ handle: String?, body: Data, method: String = "POST") async -> AutomationHTTPResult {
+            var headers: [String: String] = [:]
+            if let handle { headers[AutomationAPI.handleHeader] = handle }
+            return await AutomationHTTPRouter.route(
+                HTTPRequest(method: method, path: "/v1/workspace/note", headers: headers, body: body),
+                controller: controller,
+                enabled: true
+            )
+        }
+
+        let noteBody = Data("{\"workspaceID\":\"\(validID)\",\"note\":\"  rebasing\\nonto main  \"}".utf8)
+        let ok = await post("operator", body: noteBody)
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceNoteResult>.self, from: ok.body)
+        #expect(ok.status == 200)
+        // The wire reports the stored form, so a caller learns what the sidebar will show.
+        #expect(okEnvelope.result?.note == "rebasing onto main")
+        #expect(okEnvelope.result?.changed == true)
+        #expect(okEnvelope.result?.system.capabilities.contains(.workspaceNote) == true)
+
+        // An absent note clears, which is why there is no separate clear verb.
+        let cleared = await post("operator", body: Data("{\"workspaceID\":\"\(validID)\"}".utf8))
+        let clearedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationWorkspaceNoteResult>.self, from: cleared.body)
+        #expect(cleared.status == 200)
+        #expect(clearedEnvelope.result?.note == nil)
+
+        // An explicit null clears too.
+        let nulled = await post("operator", body: Data("{\"workspaceID\":\"\(validID)\",\"note\":null}".utf8))
+        #expect(nulled.status == 200)
+
+        let wrongType = await post(
+            "operator", body: Data("{\"workspaceID\":\"\(validID)\",\"note\":42}".utf8))
+        let wrongTypeEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: wrongType.body)
+        #expect(wrongType.status == 400)
+        #expect(wrongTypeEnvelope.error?.code == .invalidRequest)
+
+        // A tile handle carries no workspace.note, so the sidebar's line is not writable
+        // from inside a tile.
+        let tile = await post("live", body: Data("{\"workspaceID\":\"\(validID)\",\"note\":\"x\"}".utf8))
+        let tileEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: tile.body)
+        #expect(tile.status == 403)
+        #expect(tileEnvelope.error?.code == .capabilityDenied)
+
+        let unknown = await post(
+            "operator",
+            body: Data("{\"workspaceID\":\"\(FakeAutomationController.noteUnknownID)\",\"note\":\"x\"}".utf8))
+        let unknownEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: unknown.body)
+        #expect(unknown.status == 400)
+        #expect(unknownEnvelope.error?.code == .invalidRequest)
+
+        let wrongMethod = await post("operator", body: Data(), method: "GET")
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: wrongMethod.body)
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
     }
 
     @Test("POST /v1/workspace/archive projects the gesture outcome and enforces the capability")
@@ -1931,7 +2031,7 @@ struct AutomationAPITests {
         #expect(
             loaded?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .uiRead,
+                .workspaceArchive, .workspaceNote, .uiRead,
             ])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -1964,7 +2064,7 @@ struct AutomationAPITests {
         #expect(
             registry.resolve(mintedCredential.handle)?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .uiRead,
+                .workspaceArchive, .workspaceNote, .uiRead,
             ]
         )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)

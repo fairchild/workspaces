@@ -121,6 +121,9 @@ struct SidebarView: View {
     // Delete confirmation state
     @State private var workspaceToDelete: Workspace?
     @State private var showingDeleteConfirmation = false
+    @State private var workspaceToAnnotate: Workspace?
+    @State private var noteDraft = ""
+    @State private var showingNoteEditor = false
 
     @State private var didAttemptDefaultRepoImport = false
     @State private var expansionController = SidebarExpansionStateController()
@@ -315,6 +318,21 @@ struct SidebarView: View {
             }
         } message: { workspace in
             Text("Are you sure you want to delete '\(workspace.name)'?")
+        }
+        .alert(
+            "Workspace Note",
+            isPresented: $showingNoteEditor,
+            presenting: workspaceToAnnotate
+        ) { workspace in
+            TextField("One line about where this stands", text: $noteDraft)
+            Button("Save") {
+                setNote(noteDraft, on: workspace)
+            }
+            Button("Cancel", role: .cancel) {
+                workspaceToAnnotate = nil
+            }
+        } message: { workspace in
+            Text("Shown under '\(workspace.name)' in the sidebar. Leave empty to clear it.")
         }
         .task {
             syncAppCommands()
@@ -839,9 +857,18 @@ struct SidebarView: View {
                 Button(workspace.isPinned ? "Unpin" : "Pin") {
                     togglePin(workspace)
                 }
-
-                Divider()
             }
+
+            Button(workspace.note == nil ? "Add Note…" : "Edit Note…") {
+                editNote(workspace)
+            }
+            if workspace.note != nil {
+                Button("Clear Note") {
+                    setNote(nil, on: workspace)
+                }
+            }
+
+            Divider()
 
             if workspace.backend == .local {
                 localWorkspaceActions(workspace)
@@ -1292,6 +1319,24 @@ struct SidebarView: View {
             presentSidebarError("Failed to create \(providerName) workspace: \(error.localizedDescription)")
             return nil
         }
+    }
+
+    @MainActor
+    private func editNote(_ workspace: Workspace) {
+        workspaceToAnnotate = workspace
+        noteDraft = workspace.note ?? ""
+        showingNoteEditor = true
+    }
+
+    /// The one place a note is written. The automation verb enters this same setter, so
+    /// a note set over the socket and a note typed into the sidebar are the same write —
+    /// including the normalization, which is what keeps the row to one line.
+    @MainActor
+    private func setNote(_ rawValue: String?, on workspace: Workspace) {
+        workspace.note = WorkspaceNote.normalized(rawValue)
+        try? modelContext.save()
+        workspaceToAnnotate = nil
+        noteDraft = ""
     }
 
     @MainActor

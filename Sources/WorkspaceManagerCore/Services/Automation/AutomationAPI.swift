@@ -25,7 +25,7 @@ public enum AutomationAPI {
     /// Operator handles still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
         AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
-        .workspaceCreate, .surfaceRead, .workspaceArchive, .uiRead,
+        .workspaceCreate, .surfaceRead, .workspaceArchive, .workspaceNote, .uiRead,
     ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
@@ -103,6 +103,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case workspaceCreate = "workspace.create"
     case surfaceRead = "surface.read"
     case workspaceArchive = "workspace.archive"
+    case workspaceNote = "workspace.note"
     case uiRead = "ui.read"
 }
 
@@ -1047,6 +1048,44 @@ public struct AutomationOperatorCredential: Codable, Sendable, Equatable {
     }
 }
 
+/// `workspace.note`: set or clear a workspace's **Note**. An absent or empty `note`
+/// clears it, so "stop showing this" needs no second verb.
+public struct AutomationWorkspaceNoteRequest: Codable, Sendable, Equatable {
+    public let workspaceID: String
+    public let note: String?
+
+    public init(workspaceID: String, note: String?) {
+        self.workspaceID = workspaceID
+        self.note = note
+    }
+}
+
+/// The note the app actually stored, which is the normalized form rather than the text
+/// sent — a caller that pasted a paragraph learns what the sidebar will show.
+public struct AutomationWorkspaceNoteResult: Codable, Sendable, Equatable {
+    public let workspaceID: String
+    public let workspaceName: String
+    public let note: String?
+    public let changed: Bool
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        workspaceID: String,
+        workspaceName: String,
+        note: String?,
+        changed: Bool,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.workspaceID = workspaceID
+        self.workspaceName = workspaceName
+        self.note = note
+        self.changed = changed
+        self.system = system
+    }
+}
+
 public struct AutomationResponseEnvelope<Result: Codable & Sendable>: Codable, Sendable, Equatable
 where Result: Equatable {
     public let v: Int
@@ -1158,6 +1197,10 @@ public protocol AutomationControlling: AnyObject, Sendable {
         for handle: String,
         request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult
+    func automationSetWorkspaceNote(
+        for handle: String,
+        request: AutomationWorkspaceNoteRequest
+    ) async throws -> AutomationWorkspaceNoteResult
     func automationWindowSnapshot(
         for handle: String,
         windowID: String

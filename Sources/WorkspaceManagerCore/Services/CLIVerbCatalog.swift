@@ -88,6 +88,7 @@ public enum CLIVerbCatalog {
           workspaces automation workspace select <workspace-id> [--json]
           workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
           workspaces automation workspace archive <workspace-id> [--teardown] [--json]
+          workspaces automation workspace note <workspace-id> --text "text" | --clear [--json]
           workspaces automation wait --for <condition> [--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]
           workspaces automation focus [--json]
 

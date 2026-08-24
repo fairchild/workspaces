@@ -410,6 +410,9 @@ struct WorkspaceRow: View {
         if let statusMessage {
             description += ", \(statusMessage)"
         }
+        if let note = workspace.note {
+            description += ", note: \(note)"
+        }
         return description
     }
 
@@ -488,12 +491,23 @@ struct WorkspaceRow: View {
                 }
             }
 
+            // The transient action message wins the line while it is showing: it is about
+            // this moment, and the note is about the work stream. A note rendered a shade
+            // quieter is what keeps a line written hours ago from reading as live status.
             if let statusMessage {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, 24)
                     .lineLimit(1)
+            } else if let note = workspace.note {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, 24)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(note)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

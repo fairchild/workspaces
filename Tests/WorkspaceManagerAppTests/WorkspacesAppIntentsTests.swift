@@ -110,6 +110,13 @@ private final class FakeWorkspacesAppIntentController: AutomationControlling {
         throw AutomationServiceError(.unsupported, "Not used by App Intents.")
     }
 
+    func automationSetWorkspaceNote(
+        for handle: String,
+        request: AutomationWorkspaceNoteRequest
+    ) async throws -> AutomationWorkspaceNoteResult {
+        throw AutomationServiceError(.unsupported, "Not used by App Intents.")
+    }
+
     func automationWindowSnapshot(
         for handle: String,
         windowID: String
