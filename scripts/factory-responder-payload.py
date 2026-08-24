@@ -9,6 +9,9 @@ GitHub content, model output, and the final post body cross steps through files.
 The model never receives a GitHub token, target selector, or write capability.
 Owner comments carrying an agent dispatch slug are left to mention triage
 (scripts/agent-triage-request.py) so one owner mention gets one bot response.
+Agent sessions post under the owner's login, so comments carrying a contributor
+sync marker or a backlog worklog header are treated as agent-authored and get
+no reply; the responder converses with the human owner only.
 """
 
 from __future__ import annotations
@@ -29,10 +32,24 @@ SHARED_SCRIPTS_DIR = Path(__file__).resolve().parents[1] / ".agents" / "scripts"
 if str(SHARED_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_SCRIPTS_DIR))
 
-from mention_detection import find_agent_mentions  # noqa: E402
+from mention_detection import find_agent_mentions, strip_code_sections  # noqa: E402
 
 
 RESPONSE_MARKER = "<!-- factory-responder -->"
+# Same shape as factory-janitor.py's CLAIM_MARKER_RE; only the issue number is
+# read, to bind a marker to the conversation it claims.
+CONTRIBUTOR_MARKER_RE = re.compile(
+    r"<!-- contributor:issue=(?P<issue>\d+);status=[a-z_]+;"
+    r"agent=[a-z0-9-]+;branch=[^>\n]+ -->"
+)
+# backlog/AGENTS.md § Worklog: `- <ISO-8601 ts> <verb> [args] | <trail>`. Each
+# verb's own grammar is required — `advanced` takes `to=<state>`, `rescued`
+# takes `claimer=`, the rest open their trail with `|` immediately — so a human
+# sentence that merely opens with a timestamp and a verb word draws a reply.
+WORKLOG_HEADER_RE = re.compile(
+    r"- \d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?"
+    r" (?:advanced to=[a-z_]+|rescued claimer=\S+|(?:progress|cancelled|failed|retried) \|)"
+)
 COMMENT_FRAGMENT_RE = re.compile(r"^issuecomment-(?P<comment_id>\d+)$")
 TRAILING_MARKER_RE = re.compile(
     r"<!-- factory-responder(?: comment-id:(?P<comment_id>\d+))? -->\s*$"
@@ -169,6 +186,48 @@ def trailing_marker_comment_id(body: str) -> int | None:
 
 def has_trailing_marker(body: str) -> bool:
     return trailing_marker_comment_id(body) is not None
+
+
+def _unquoted_visible_lines(body: str) -> list[str]:
+    """Non-empty lines that render outside blockquotes and code on GitHub.
+
+    Blockquotes extend through lazy continuation — after a `>` line, non-blank
+    lines stay quoted until a blank line. Four-space or tab indents are code.
+    Both rules only ever hide text, so a borderline body errs toward a reply,
+    never toward silence.
+    """
+    visible: list[str] = []
+    in_quote = False
+    for line in strip_code_sections(body).splitlines():
+        if not line.strip():
+            in_quote = False
+            continue
+        if in_quote or line.lstrip().startswith(">"):
+            in_quote = True
+            continue
+        if line.startswith(("    ", "\t")):
+            continue
+        visible.append(line)
+    return visible
+
+
+def agent_authored_body(body: str, issue_number: int) -> bool:
+    """True when the body carries a machine marker only agent sessions write.
+
+    Sessions comment under the owner's login, so author checks cannot separate
+    them from the human owner; a sync claim marker naming this conversation and
+    the backlog worklog header are the structural tells. A conforming worklog
+    header is protocol traffic regardless of who typed it (backlog/AGENTS.md
+    permits `human:fairchild` claimers); questions for the responder belong in
+    a comment of their own. Quoted, fenced, and indented text is ignored so a
+    human discussing an agent comment still gets a reply.
+    """
+    visible = _unquoted_visible_lines(body)
+    for line in visible:
+        match = CONTRIBUTOR_MARKER_RE.search(line)
+        if match is not None and int(match.group("issue")) == issue_number:
+            return True
+    return bool(visible) and WORKLOG_HEADER_RE.match(visible[0]) is not None
 
 
 def comment_gate(context: CommentContext, repo_owner: str) -> dict[str, bool]:
@@ -413,6 +472,15 @@ def prepare(output_path: Path, prompt_file: Path) -> int:
         append_output(output_path, "matched", False)
         append_output(output_path, "already_replied", False)
         print("owner comment has its own trailing responder marker; no response")
+        return 0
+
+    if agent_authored_body(context.body, context.issue_number):
+        append_output(output_path, "matched", False)
+        append_output(output_path, "already_replied", False)
+        print(
+            "owner comment carries an agent claim marker or worklog header; "
+            "agent-authored, no response"
+        )
         return 0
 
     dispatch_mentions = find_agent_mentions(context.body)
