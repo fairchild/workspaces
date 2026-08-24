@@ -169,15 +169,17 @@ enum LaunchWindowProbe {
             let isClosed = closed
             heartbeatSeq += 1
             let seq = heartbeatSeq
-            let timerToCancel = (isClosed || seq >= maxHeartbeats) ? heartbeatTimer : nil
+            let isFinalBeat = isClosed || seq >= maxHeartbeats
+            let timerToCancel = isFinalBeat ? heartbeatTimer : nil
             if timerToCancel != nil { heartbeatTimer = nil }
             lock.unlock()
 
-            if let timerToCancel {
-                timerToCancel.cancel()
-                return
-            }
-            guard let originSnapshot else { return }
+            // `cancel()` from a non-main `close()` can still let one already-dequeued
+            // handler run, so the window's end is decided by `closed` — not by whether
+            // this handler was the one holding the timer. Nothing is emitted past the
+            // `close` line either way.
+            timerToCancel?.cancel()
+            guard !isFinalBeat, let originSnapshot else { return }
             emit(
                 phase: "main_heartbeat",
                 fields: [
