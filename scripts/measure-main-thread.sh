@@ -59,13 +59,12 @@ now_seconds() {
     fi
 }
 
-# Prints "STIME UTIME" for the main thread. `ps -M` emits a header, then the
-# process row, then one row per thread; the first thread row is the main thread.
+# Prints "STIME UTIME" for the main thread. `ps -M` emits a header, then one
+# row per thread; the first thread row is the main thread and carries the full
+# USER/PID/TT/%CPU/STAT/PRI/STIME/UTIME/COMMAND columns.
 sample_main_thread() {
     ps -M "$1" | awk '
-        NR == 2 { proc_stime = $7; proc_utime = $8 }
-        NR == 3 && NF >= 6 { print $5, $6; found = 1; exit }
-        END { if (!found) print proc_stime, proc_utime }
+        NR == 2 { print $7, $8; exit }
     '
 }
 
