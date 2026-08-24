@@ -440,9 +440,170 @@ struct LocalStateStoreTests {
         let rows = try await current.fetchPreviousRunSessions(limit: 100)
         #expect(rows.map(\.hostSessionID) == [prevID])
 
-        // The old broad query still sees BOTH stale runs — the bug being fixed.
+        // Startup hygiene (#1347 D4): opening the current run ends active rows
+        // from runs older than the prior one, so the broad active listing no
+        // longer accumulates every never-cleanly-closed run.
         let broad = try await current.fetchContinuitySessions(activeOnly: true, limit: 100)
-        #expect(Set(broad.map(\.hostSessionID)) == [staleID, prevID])
+        #expect(broad.map(\.hostSessionID) == [prevID])
+    }
+
+    @Test("Startup ends stale active rows from runs older than the prior run")
+    func startupEndsStaleOlderRunSessions() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let ancientID = UUID()
+        let priorID = UUID()
+        let run1 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try await run1.recordTerminalSession(
+            HostTerminalSession(
+                id: ancientID, key: .repoPath("/code/ancient"),
+                directory: URL(fileURLWithPath: "/code/ancient")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let run2 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        try await run2.recordTerminalSession(
+            HostTerminalSession(
+                id: priorID, key: .repoPath("/code/prior"),
+                directory: URL(fileURLWithPath: "/code/prior")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+
+        // Stage 1: the ancient row is deactivated but left un-ended so a
+        // late-landing rehydration upsert can still revive it (#1239 guard).
+        var state = try sessionSweepState(db: db)
+        #expect(state[ancientID.uuidString]?.isActive == 0)
+        #expect(state[ancientID.uuidString]?.endedAt == nil)
+        #expect(state[priorID.uuidString]?.isActive == 1)
+        #expect(state[priorID.uuidString]?.endedAt == nil)
+
+        // Stage 2: a later launch finds the row still stranded and ends it,
+        // making it eligible for retention deletion.
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_300_000))
+        state = try sessionSweepState(db: db)
+        #expect(state[ancientID.uuidString]?.endedAt != nil)
+    }
+
+    @Test("A deactivated stale row is revived by a rehydration upsert")
+    func sweptRowRevivedByRehydration() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let strandedID = UUID()
+        let run1 = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try await run1.recordTerminalSession(
+            HostTerminalSession(
+                id: strandedID, key: .repoPath("/code/stranded"),
+                directory: URL(fileURLWithPath: "/code/stranded")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+
+        // Third run deactivates the run-1 row, then its manifest rehydration
+        // upserts the same id — the row must move to the current run, active.
+        let current = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+        try await current.recordTerminalSession(
+            HostTerminalSession(
+                id: strandedID, key: .repoPath("/code/stranded"),
+                directory: URL(fileURLWithPath: "/code/stranded")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let state = try sessionSweepState(db: db)
+        #expect(state[strandedID.uuidString]?.isActive == 1)
+        #expect(state[strandedID.uuidString]?.endedAt == nil)
+        let active = try await current.fetchContinuitySessions(activeOnly: true, limit: 100)
+        #expect(active.map(\.hostSessionID) == [strandedID])
+    }
+
+    @Test("A store stamped with an older run start cannot deactivate newer runs")
+    func olderStoreCannotSweepNewerRuns() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let liveID = UUID()
+        let primary = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+        try await primary.recordTerminalSession(
+            HostTerminalSession(
+                id: liveID, key: .repoPath("/code/live"),
+                directory: URL(fileURLWithPath: "/code/live")),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        // The fixture continuity seeder opens a second store stamped in the
+        // past; it must not touch rows of runs newer than itself.
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+
+        let state = try sessionSweepState(db: db)
+        #expect(state[liveID.uuidString]?.isActive == 1)
+        #expect(state[liveID.uuidString]?.endedAt == nil)
+    }
+
+    @Test("Legacy rows with no run id are swept across two launches")
+    func legacyNullRunRowsSwept() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let seed = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        _ = seed
+
+        let legacyID = UUID()
+        let dbQueue = try DatabaseQueue(path: db.path)
+        try await dbQueue.write { db in
+            try db.execute(
+                sql: """
+                    INSERT INTO terminal_sessions (
+                        host_session_id, session_key, directory_path, terminal_mode,
+                        target_kind, custom_command_present, is_active,
+                        created_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, 'repo', 0, 1, ?, ?)
+                    """,
+                arguments: [
+                    legacyID.uuidString, "repoPath(/code/legacy)", "/code/legacy",
+                    "tmux_per_session", "2026-07-01T00:00:00Z", "2026-07-01T00:00:00Z",
+                ])
+        }
+
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        var state = try sessionSweepState(db: db)
+        #expect(state[legacyID.uuidString]?.isActive == 0)
+        #expect(state[legacyID.uuidString]?.endedAt == nil)
+
+        _ = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+        state = try sessionSweepState(db: db)
+        #expect(state[legacyID.uuidString]?.endedAt != nil)
+    }
+
+    private func sessionSweepState(
+        db: URL
+    ) throws -> [String: (isActive: Int, endedAt: String?)] {
+        let dbQueue = try DatabaseQueue(path: db.path)
+        return try dbQueue.read { db in
+            let rows = try Row.fetchAll(
+                db, sql: "SELECT host_session_id, is_active, ended_at FROM terminal_sessions")
+            return Dictionary(
+                uniqueKeysWithValues: rows.map {
+                    (
+                        $0["host_session_id"] as String,
+                        ($0["is_active"] as Int, $0["ended_at"] as String?)
+                    )
+                })
+        }
     }
 
     @Test("fetchPreviousRunSessions excludes ended prior-run rows and current-run rows")

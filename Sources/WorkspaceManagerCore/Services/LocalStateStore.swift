@@ -274,6 +274,84 @@ public actor LocalStateStore {
         dbPool = try DatabasePool(path: databaseURL.path, configuration: configuration)
         try Self.migrator.migrate(dbPool)
         try Self.writeMetadata(in: dbPool)
+        try Self.endStaleSessionsFromOlderRuns(
+            in: dbPool,
+            currentRunID: self.runID,
+            currentRunStartedAt: self.runStartedAt
+        )
+    }
+
+    /// Startup hygiene (#1347 D4): rows still flagged active from runs *older
+    /// than the most-recent prior run* (or from before run tracking existed)
+    /// can never be offered again — cold-start restore reads only that single
+    /// prior run, and continuity rehydration upserts move live ids to the
+    /// current run — yet they polluted every `is_active = 1` listing and
+    /// blocked agent-event retention (135 "active" rows vs 13 live tiles
+    /// measured on 2026-08-23).
+    ///
+    /// Two stages, because ending a row is terminal for its id (#1239's
+    /// ended-wins upsert guard) while the continuity manifest can still hold a
+    /// stranded id whose upsert never landed in the intervening run:
+    ///
+    /// 1. This launch only *deactivates* stale rows (`is_active = 0`, no
+    ///    `ended_at`) — a manifest rehydration that lands later this launch
+    ///    still revives the row into the current run.
+    /// 2. A row a *previous* launch deactivated and nothing revived since is
+    ///    ended terminally, which is what makes it eligible for retention
+    ///    deletion. (A session would have to hit the crash-before-upsert edge
+    ///    in two consecutive runs to be ended while its tile is still open;
+    ///    even then the tile keeps working and heals on close-and-reopen.)
+    ///
+    /// The current run's rows and the single restorable prior run's rows are
+    /// never touched, and a store stamped with an older run start (the fixture
+    /// continuity seeder opens one deliberately) cannot deactivate rows of
+    /// runs newer than itself.
+    private static func endStaleSessionsFromOlderRuns(
+        in dbPool: DatabasePool,
+        currentRunID: String,
+        currentRunStartedAt: String
+    ) throws {
+        let now = isoString(Date())
+        let stalePredicate = """
+            (
+                run_id IS NULL
+                OR (
+                    run_id != ?
+                    AND run_started_at < ?
+                    AND run_id IS NOT (
+                        SELECT run_id
+                        FROM terminal_sessions
+                        WHERE run_started_at IS NOT NULL AND run_started_at < ?
+                        ORDER BY run_started_at DESC
+                        LIMIT 1
+                    )
+                )
+            )
+            """
+        try dbPool.write { db in
+            // Stage 2 first: rows a previous launch deactivated. Running it
+            // before stage 1 keeps this launch's own deactivations revivable.
+            try db.execute(
+                sql: """
+                    UPDATE terminal_sessions
+                    SET ended_at = ?
+                    WHERE is_active = 0
+                      AND ended_at IS NULL
+                      AND \(stalePredicate)
+                    """,
+                arguments: [now, currentRunID, currentRunStartedAt, currentRunStartedAt]
+            )
+            try db.execute(
+                sql: """
+                    UPDATE terminal_sessions
+                    SET is_active = 0
+                    WHERE is_active = 1
+                      AND ended_at IS NULL
+                      AND \(stalePredicate)
+                    """,
+                arguments: [currentRunID, currentRunStartedAt, currentRunStartedAt]
+            )
+        }
     }
 
     /// Upserts a session's continuity row. Ended is terminal for a
