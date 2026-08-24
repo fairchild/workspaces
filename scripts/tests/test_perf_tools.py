@@ -13,6 +13,7 @@ fixtures instead of launching the app or requiring a performance runner.
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -24,8 +25,41 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
+import importlib.util as _importlib_util
+
 from perf_history import LEGACY_PROTOCOL_EPOCH, history_row_from_summary, render_dashboard
 from perf_schema import evaluate_budgets, load_contract, measured_duration_samples
+
+
+def _load_hyphenated_module(name: str, path: Path):
+    """`perf-compare.py` is not importable by name; load it by path."""
+    spec = _importlib_util.spec_from_file_location(name, path)
+    module = _importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+perf_compare = _load_hyphenated_module("perf_compare", REPO_ROOT / "scripts" / "perf-compare.py")
+
+
+def expected_budgets(scenario: str, metric: str = "launch_to_first_prompt") -> tuple[int, int]:
+    """The budgets the contract implies for `scenario`, computed independently.
+
+    References are refreshed whenever a capture protocol changes (#1251), so pinning
+    the numbers here would make every legitimate refresh look like a tool regression.
+    The formula is what these tests are for, so it is spelled out literally rather
+    than imported from the code under test.
+    """
+    contract = load_contract()
+    entry = next(item for item in contract["metrics"] if item["name"] == metric)
+    reference = entry["reference_baselines"][scenario]
+    gate = contract["budget_formula"]["gate"]
+    diagnostic = contract["budget_formula"]["diagnostic"]
+    return (
+        math.ceil(reference["median_ms"] * gate["multiplier"]),
+        math.ceil(reference["p95_ms"] * diagnostic["multiplier"]),
+    )
+
 
 SUMMARIZE_PERF_LOG = (
     REPO_ROOT
@@ -63,8 +97,9 @@ class PerfContractTests(unittest.TestCase):
                 }
             },
         )
-        self.assertEqual(result["launch_to_first_prompt"]["gate_budget_ms"], 740)
-        self.assertEqual(result["launch_to_first_prompt"]["diagnostic_threshold_ms"], 947)
+        gate_budget, diagnostic_threshold = expected_budgets("debug_no_activate")
+        self.assertEqual(result["launch_to_first_prompt"]["gate_budget_ms"], gate_budget)
+        self.assertEqual(result["launch_to_first_prompt"]["diagnostic_threshold_ms"], diagnostic_threshold)
         self.assertEqual(result["launch_to_first_prompt"]["status"], "pass")
 
     def test_release_policy_uses_installed_signoff(self) -> None:
@@ -194,7 +229,10 @@ class PerfSummarizerTests(unittest.TestCase):
             self.assertEqual(payload["scenario"], "debug_no_activate")
             self.assertEqual(payload["environment"]["build_kind"], "debug")
             self.assertIn("launch_to_first_prompt", payload["metrics"])
-            self.assertEqual(payload["budget_results"]["launch_to_first_prompt"]["gate_budget_ms"], 740)
+            self.assertEqual(
+                payload["budget_results"]["launch_to_first_prompt"]["gate_budget_ms"],
+                expected_budgets("debug_no_activate")[0],
+            )
 
     def test_installed_clean_log_summary_is_canonical(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -403,6 +441,57 @@ def rows_summary(row: dict) -> dict:
         "metadata": {"protocol_epoch": row["protocol_epoch"]},
         "budget_results": {},
     }
+
+
+class PerfCompareGuardTests(unittest.TestCase):
+    """A delta only means an app change within one scenario and one protocol (#1251)."""
+
+    @staticmethod
+    def summary(scenario: str, epoch: str | None, median_ms: float = 800.0) -> dict:
+        metadata: dict = {"build_kind": "debug"}
+        if epoch is not None:
+            metadata["protocol_epoch"] = epoch
+        return {
+            "scenario": scenario,
+            "metrics": {"launch_to_first_prompt": {"median": median_ms}},
+            "metadata": metadata,
+        }
+
+    def test_matching_scenario_and_epoch_compare_cleanly(self) -> None:
+        payload = perf_compare.compare(
+            self.summary("debug_no_activate", "deterministic-delivery-v1", 892.0),
+            self.summary("debug_no_activate", "deterministic-delivery-v1", 850.0),
+        )
+
+        self.assertEqual(payload["incomparable"], [])
+
+    def test_crossing_the_artifact_fix_boundary_is_flagged(self) -> None:
+        """v1 rows mix the inline-tick artifact with honest samples; v2 rows do not."""
+        payload = perf_compare.compare(
+            self.summary("debug_no_activate", "isolated-preferences-v1", 830.0),
+            self.summary("debug_no_activate", "deterministic-delivery-v1", 892.0),
+        )
+
+        self.assertEqual(len(payload["incomparable"]), 1)
+        self.assertIn("protocol epoch differs", payload["incomparable"][0])
+
+    def test_a_summary_without_an_epoch_is_legacy_not_a_silent_match(self) -> None:
+        payload = perf_compare.compare(
+            self.summary("debug_no_activate", None),
+            self.summary("debug_no_activate", "deterministic-delivery-v1"),
+        )
+
+        self.assertEqual(payload["protocol_epoch_before"], LEGACY_PROTOCOL_EPOCH)
+        self.assertTrue(payload["incomparable"])
+
+    def test_different_scenarios_are_flagged(self) -> None:
+        payload = perf_compare.compare(
+            self.summary("debug_no_activate", "deterministic-delivery-v1"),
+            self.summary("debug_activate", "deterministic-delivery-v1"),
+        )
+
+        self.assertEqual(len(payload["incomparable"]), 1)
+        self.assertIn("scenario differs", payload["incomparable"][0])
 
 
 if __name__ == "__main__":

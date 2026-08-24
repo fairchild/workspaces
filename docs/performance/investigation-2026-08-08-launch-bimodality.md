@@ -115,7 +115,48 @@ to `surface_create_succeeded`, and when its read loop is first scheduled. Distin
 child is forked late" from "the child is forked promptly and its output is delivered late"
 is the fork in the road, and neither is observable from the logs the app emits today.
 
-## Reference consequences
+## Where the step comes from (2026-08-23)
+
+The fork-vs-deliver question above is answered: neither. `LaunchWindowProbe`
+(diagnostics-gated, `WORKSPACES_TERMINAL_DIAGNOSTICS=1`) timestamps the child spawn from
+the process table, every libghostty wakeup, the wakeup→tick MainActor hop each delivery
+rides, and a 25 ms main-queue heartbeat. A 10-run `debug_no_activate` capture says, per
+sample:
+
+- **The child is forked promptly and read promptly.** The shell appears in the process
+  table ~10 ms after `surface_create_succeeded`, and wakeups arrive steadily from then on
+  (max gap between consecutive wakeups ~35 ms). Nothing on the libghostty side is late.
+- **The entire step is the wakeup→tick hop.** `launch_to_first_prompt` ≈ ~600 ms fixed
+  (surface create ~490 + first OSC ~110) plus the MainActor scheduling latency of the tick
+  that delivers the first title action: hop 0 ms in the one fast sample, 170–413 ms in the
+  nine slow ones, correlation by inspection exact.
+- **The main thread services nothing until bring-up drains.** The heartbeat timer, armed at
+  launch begin with a 25 ms period, fires for the first time at 767–1004 ms — immediately
+  followed by every queued tick and the title delivery, all within ~2.5 ms. The launch
+  window is wall-to-wall main-thread work; GCD and Swift-Concurrency jobs alike wait it out.
+- **The fast mode was an artifact, not a fast launch.** In the fast sample the delivering
+  wakeup fired *on the main thread* (libghostty invoked the callback from inside a call the
+  app made mid-bring-up), took `runOnMainAsync`'s inline branch, and closed the metric at
+  618 ms — while that same sample's queued ticks show the main thread stayed busy until
+  1041 ms. The metric closed; the app was not yet usable.
+
+A `sample(1)` profile of the launch window attributes the bring-up itself: SwiftUI's
+initial window construction (`showInitialWindows` → `NSWindow` init → Metal device
+enumeration ~116 ms → toolbar bridge + text engine first-use ~150 ms) plus AppKit menu
+setup soft-linking WritingToolsUI (~134 ms) — framework first-window cost in an unoptimized
+debug binary, not work any June–August arc added. The bisect's earlier finding stands
+unchanged (#684 added ~140 ms of the same class, removed by #1276); the rest of the
+592→~1500 gap is this bring-up cost growing with binary size, framework versions, and
+machine load, measured honestly only when the delivery lottery loses.
+
+**Fix shipped with this finding:** the wakeup callback now always enqueues its tick
+(`GhosttyThreadingBridge.enqueueOnMain`) instead of running it inline when it happens to
+land on the main thread. Upstream Ghostty.app dispatches its wakeup tick async for the same
+reason — an inline `ghostty_app_tick` from inside another libghostty call re-enters the
+core mid-call. This removes the re-entrancy hazard and the artifact: every sample now
+closes at main-drain time, one mode, honestly.
+
+## Reference consequences (2026-08-08, superseded)
 
 - `debug_no_activate` `launch_to_first_prompt` keeps **592 / 631**. The fast mode reproduces
   it on this build, so the reference is achievable and the failing median is a live defect,
@@ -130,3 +171,28 @@ is the fork in the road, and neither is observable from the logs the app emits t
 
 Rows in `metrics-history.csv` from before 2026-08-08 came from a lane whose `UserDefaults`
 domain was not isolated. Compare across that boundary with care.
+
+## Reference consequences (2026-08-23, current)
+
+The 2026-08-08 decision to keep 592/631 rested on "the fast mode reproduces it, so the
+reference is achievable." The probe shows the fast mode closed the metric while the main
+thread was still mid-bring-up — the reference was reproducible only by the artifact, and
+with the artifact removed no honest sample can reach it on this build. Per the refresh
+protocol, both debug lanes' `launch_to_first_prompt` references are re-derived from 10-run
+captures on the fixed build (Mac16,13, load 1m ~4, every sample
+`prologue`/`fresh_seed`/`isolated=true`):
+
+| lane | samples (ms) | new reference (median / p95) |
+|---|---|---|
+| `debug_no_activate` | 771–1404, median 892.28 | **892 / 1404** |
+| `debug_activate` | 976–1686, median 1181.22 | **1181 / 1686** |
+
+The lanes diverge again deliberately. The 08-08 unification ("one behaviour, one
+reference") described two artifact-mixed distributions that happened to align; with the
+delivery lottery removed, activation's extra main-thread bring-up (~290 ms at median) is
+honestly visible, and blessing it under a shared reference would hide an activation-lane
+regression behind no-activate headroom. Debug lanes remain branch-delta and trend lanes,
+not release signoff; the release path (`installed_clean_shell`, 288 ms measured against a
+640 ms reference on 2026-08-07) was never affected. Rows in `metrics-history.csv`
+predating the artifact fix mix delivery-lottery modes; compare across 2026-08-23 with the
+same care as the 08-08 isolation boundary.

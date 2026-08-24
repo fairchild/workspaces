@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from perf_history import LEGACY_PROTOCOL_EPOCH
 from perf_schema import load_contract
 
 
@@ -58,15 +59,48 @@ def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     return {
         "scenario_before": before.get("scenario"),
         "scenario_after": after.get("scenario"),
+        "protocol_epoch_before": protocol_epoch(before),
+        "protocol_epoch_after": protocol_epoch(after),
+        "incomparable": incomparability_reasons(before, after),
         "comparisons": comparisons,
         "contract_version": load_contract().get("version"),
     }
 
 
+def protocol_epoch(summary: dict[str, Any]) -> str:
+    return summary.get("metadata", {}).get("protocol_epoch") or LEGACY_PROTOCOL_EPOCH
+
+
+def incomparability_reasons(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """Why these two summaries do not describe the same measurement, if they don't.
+
+    A delta is only an app-side delta within one scenario and one measurement protocol.
+    Across either boundary the number is real but means something else — the epoch that
+    ended when the wakeup tick stopped running inline (#1251) moved when the launch
+    metric closes, so a v1-to-v2 delta reports that change as a regression.
+    """
+    reasons = []
+    if before.get("scenario") != after.get("scenario"):
+        reasons.append(
+            f"scenario differs: {before.get('scenario')} -> {after.get('scenario')}"
+        )
+    if protocol_epoch(before) != protocol_epoch(after):
+        reasons.append(
+            f"protocol epoch differs: {protocol_epoch(before)} -> {protocol_epoch(after)}"
+        )
+    return reasons
+
+
 def print_text(payload: dict[str, Any]) -> None:
     print("Workspaces perf comparison")
-    print(f"  before: {payload['scenario_before']}")
-    print(f"  after:  {payload['scenario_after']}")
+    print(f"  before: {payload['scenario_before']} ({payload['protocol_epoch_before']})")
+    print(f"  after:  {payload['scenario_after']} ({payload['protocol_epoch_after']})")
+    if payload["incomparable"]:
+        print()
+        print("  WARNING: these summaries are not directly comparable —")
+        for reason in payload["incomparable"]:
+            print(f"    - {reason}")
+        print("  The deltas below are real numbers describing different measurements.")
     print()
 
     for metric_name, metric_payload in payload["comparisons"].items():

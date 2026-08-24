@@ -195,7 +195,9 @@ final class GhosttyAppManager: NSObject {
 
     nonisolated static func wakeup(_ userdata: UnsafeMutableRawPointer?) {
         let userdataAddress = GhosttyCallbackUserdata.address(from: userdata)
-        GhosttyThreadingBridge.runOnMainAsync {
+        let probeToken = LaunchWindowProbe.noteWakeup()
+        GhosttyThreadingBridge.enqueueOnMain {
+            LaunchWindowProbe.noteTickStart(token: probeToken)
             guard let manager = GhosttyCallbackUserdata.manager(from: userdataAddress) else { return }
             manager.tick()
         }

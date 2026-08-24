@@ -32,4 +32,35 @@ struct GhosttyThreadingBridgeTests {
         }.value
         #expect(ranOnMain)
     }
+
+    @MainActor
+    private final class Flag {
+        var value = false
+    }
+
+    @Test("enqueueOnMain defers the operation even when called on the main thread")
+    @MainActor
+    func enqueueOnMainDefersOnMain() async {
+        let ran = Flag()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            GhosttyThreadingBridge.enqueueOnMain {
+                ran.value = true
+                continuation.resume()
+            }
+            #expect(!ran.value, "the wakeup tick must never run inline — see #1251")
+        }
+        #expect(ran.value)
+    }
+
+    @Test("enqueueOnMain executes its operation on the main thread from a background caller")
+    func enqueueOnMainExecutesOnMainThreadFromBackground() async {
+        let ranOnMain = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            Task.detached {
+                GhosttyThreadingBridge.enqueueOnMain {
+                    continuation.resume(returning: Thread.isMainThread)
+                }
+            }
+        }
+        #expect(ranOnMain)
+    }
 }

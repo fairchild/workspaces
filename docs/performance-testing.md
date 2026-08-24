@@ -126,15 +126,22 @@ intentionally skips foreground focus and can reuse a prompt-ready terminal
 before selection focus timing can complete. Use `debug_activate` for
 repo/workspace switch focus timing.
 
-The `debug_no_activate` `launch_to_first_prompt` reference was refreshed on
-2026-06-08 from a 10-run raw SwiftPM debug capture on Mac16,13 / macOS 26.4.1
-after the script began enforcing clean-shell diagnostics and pinned Ghostty
-resources:
+The debug `launch_to_first_prompt` references were re-derived on 2026-08-23 from
+10-run captures per lane on Mac16,13, after the wakeup tick stopped running
+inline (#1251). The June reference of `591.72ms` was reachable only when a
+launch closed the metric early through an inline delivery, so it is retired
+rather than carried forward — `config/performance/contract.json` is
+authoritative and its note records the capture conditions:
 
-- `launch_to_first_prompt`: median `591.72ms`, p95 `630.14ms`
-- `repo_hydration`: median `1.32ms`, p95 `19.53ms`
-- `repo_click_to_focus`: missing by scenario contract
+- `debug_no_activate` `launch_to_first_prompt`: median `892ms`, p95 `1404ms`
+- `debug_activate` `launch_to_first_prompt`: median `1181ms`, p95 `1686ms`
+- `repo_hydration`: median `20ms`, p95 `30ms` (measured ~1.5–2ms)
+- `repo_click_to_focus`: `debug_activate` only — median `220ms`, p95 `300ms`
 - `workspace_click_to_focus`: missing by scenario contract
+
+Rows recorded before 2026-08-23 carry an older `protocol_epoch`; the dashboard
+and `perf-compare.py` refuse to read a delta across that boundary as an app
+change, and neither should you.
 
 To persist results and generate a visual trend dashboard:
 

@@ -570,8 +570,12 @@ summary = canonical_summary(
             "terminal_diagnostics": terminal_diagnostics,
             "disable_state_restoration": disable_state_restoration,
             # Names the protocol this row was measured under, so the dashboard never
-            # reports the switch to an isolated preferences domain as an app-side delta.
-            "protocol_epoch": "isolated-preferences-v1",
+            # reports a measurement-boundary change as an app-side delta. Bumped from
+            # `isolated-preferences-v1` when the wakeup tick stopped running inline
+            # (#1251): before that, a launch whose first title happened to arrive on a
+            # main-thread wakeup closed the metric early, so a v1 row is a mix of that
+            # artifact and honest samples. v2 rows close at main-drain, always.
+            "protocol_epoch": "deterministic-delivery-v1",
             "preferences_mode": preferences_mode,
             "preferences_suite": preferences_suite,
             "preferences_suite_owner": preferences_suite_owner,
