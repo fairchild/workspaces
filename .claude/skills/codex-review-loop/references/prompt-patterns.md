@@ -4,9 +4,15 @@ Directed prompts produce bugs; "review this" produces checklists. Pick the patte
 
 ## Mechanics
 
-- `codex exec -c model="gpt-5.6-sol" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>"`
+- `codex exec -c model="gpt-5.6-sol" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>" < /dev/null`
   — tell the prompt which diff to read (`git diff main...HEAD`, `git show HEAD`); plain `exec`
   doesn't infer it. (`codex exec review --base main` exists but cannot combine with a custom prompt.)
+- **`< /dev/null` is load-bearing.** When stdin is not a TTY, `codex exec` appends whatever
+  arrives there to the prompt — so from a background task, a hook, or CI it prints
+  `Reading additional input from stdin...` and blocks forever on a pipe nobody closes, before
+  the review starts. Observed cost: a 40-minute silent stall that looked like a long xhigh run
+  (#1251). A stalled run writes a ~39-byte log and no findings; a live one passes 75 KB within
+  three minutes, so size is the cheap liveness check when you are unsure which you have.
 - 8–12 min typical at xhigh; set Bash timeout ≥ 600s. On timeout the session survives:
   ```bash
   codex exec resume --last "Output your final verdict now — findings ranked, merge-ready or not."
