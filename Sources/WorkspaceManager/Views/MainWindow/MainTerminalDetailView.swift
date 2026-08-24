@@ -94,7 +94,7 @@ struct MainTerminalDetailView: View {
         }
 
         for directory in candidateDirectories {
-            let path = directory.standardizedFileURL.resolvingSymlinksInPath().path
+            let path = HostTerminalSessionKey.normalizedPath(directory.path)
             if seen.insert(path).inserted {
                 directories.append(URL(fileURLWithPath: path, isDirectory: true))
             }
@@ -127,7 +127,7 @@ struct MainTerminalDetailView: View {
     }
 
     private func normalizedPath(_ url: URL) -> String {
-        url.standardizedFileURL.resolvingSymlinksInPath().path
+        HostTerminalSessionKey.normalizedPath(url.path)
     }
 
     @ViewBuilder

@@ -221,6 +221,31 @@ struct AgentSessionRegistryTests {
         #expect(registry.statuses[id]?.cwd == "/tmp/new")
     }
 
+    @Test("stale hook-expiration generation cannot clear a successor registration")
+    func staleExpirationGenerationNoOps() async {
+        let registry = AgentSessionRegistry()
+        let id = UUID()
+        registry.register(hostSessionID: id, cwd: "/tmp/aba", kind: .claudeCode)
+        registry.apply(events: [.userPrompt(prompt: nil)], for: id, origin: .hook)
+        #expect(registry.statuses[id]?.hookActive == true)
+
+        // Deregister and re-register the same UUID — the ABA shape a watchdog
+        // task can outlive.
+        registry.deregister(hostSessionID: id)
+        registry.register(hostSessionID: id, cwd: "/tmp/aba", kind: .claudeCode)
+        registry.apply(events: [.userPrompt(prompt: nil)], for: id, origin: .hook)
+        #expect(registry.statuses[id]?.hookActive == true)
+
+        // The first registration's watchdog carried generation 1; firing it
+        // now must not touch the successor.
+        registry.expireHookActivity(for: id, generation: 1)
+        #expect(registry.statuses[id]?.hookActive == true)
+
+        // The live generation (2) still expires normally.
+        registry.expireHookActivity(for: id, generation: 2)
+        #expect(registry.statuses[id]?.hookActive == false)
+    }
+
     @Test("deregister removes a session entry")
     func deregisterRemoves() async {
         let registry = AgentSessionRegistry()

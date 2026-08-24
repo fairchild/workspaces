@@ -174,6 +174,9 @@ struct SidebarView: View {
     }
 
     @State private var repoSortController = SidebarRepoSortController()
+    @State private var repoSortCache = SidebarRepoSortCache()
+    /// Memoized symlink-resolving path normalization for row rendering (#1347).
+    @State private var pathNormalizationCache = PathNormalizationCache()
 
     private var workspaceProviderSetupActionRunner: WorkspaceProviderSetupActionRunner {
         WorkspaceProviderSetupActionRunner(coordinator: workspaceProviderSetupCoordinator)
@@ -226,10 +229,11 @@ struct SidebarView: View {
     }
 
     private var sortedRepos: [Repo] {
-        repoSortController.sortedRepos(
+        repoSortCache.sortedRepos(
             repos,
             mode: repoSortMode,
-            lastAccessedSnapshot: repoLastAccessedSnapshotByID
+            lastAccessedSnapshot: repoLastAccessedSnapshotByID,
+            controller: repoSortController
         )
     }
 
@@ -1692,7 +1696,7 @@ struct SidebarView: View {
     }
 
     private func normalizePath(_ url: URL) -> String {
-        url.standardizedFileURL.resolvingSymlinksInPath().path
+        pathNormalizationCache.normalize(url.path)
     }
 
     private func paneCount(for key: HostTerminalSessionKey) -> Int {

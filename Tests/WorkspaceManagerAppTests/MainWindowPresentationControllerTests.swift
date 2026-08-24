@@ -98,12 +98,15 @@ struct MainWindowPresentationControllerTests {
             directory: URL(fileURLWithPath: "/tmp/alpha/worktrees/feature")
         )
 
+        let repoIndex = Dictionary(
+            uniqueKeysWithValues: [repoA, repoB].map { (normalizePath($0.localPath), $0) }
+        )
         let selectedRepo = controller.selectedRepoForInspector(
             selectedWorkspace: nil,
             selectedWebSource: nil,
             activeRepoPath: repoB.localPath,
             activeHostSession: session,
-            repos: [repoA, repoB],
+            repoByNormalizedPath: repoIndex,
             normalizePath: normalizePath
         )
         #expect(selectedRepo?.id == repoB.id)
@@ -118,7 +121,7 @@ struct MainWindowPresentationControllerTests {
             selectedWebSource: webSource,
             activeRepoPath: repoB.localPath,
             activeHostSession: session,
-            repos: [repoA, repoB],
+            repoByNormalizedPath: repoIndex,
             normalizePath: normalizePath
         )
         #expect(hiddenWhileBrowsingWeb == nil)

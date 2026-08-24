@@ -57,10 +57,16 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         var lastHookRunStateApplied: AgentRunState?
         var lastHookEventAt: Date?
         var hookExpirationTask: Task<Void, Never>?
+        /// Which scheduled expiration may still fire for this registration.
+        /// Guards the deregister→re-register (same UUID) ABA race: a watchdog
+        /// that outlived its registration carries a stale generation and
+        /// no-ops instead of clearing the new registration's hookActive.
+        var hookExpirationGeneration: UInt64 = 0
     }
 
     private var models: [UUID: AgentSessionStatusModel] = [:]
     private var bookkeeping: [UUID: Bookkeeping] = [:]
+    private var nextHookExpirationGeneration: UInt64 = 0
     private let clock: @Sendable () -> Date
     private let localStateStore: LocalStateStore?
 
@@ -207,8 +213,11 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         status.lastEventAt = now
         if case .hook = origin {
             book.hookExpirationTask?.cancel()
+            nextHookExpirationGeneration += 1
+            book.hookExpirationGeneration = nextHookExpirationGeneration
             book.hookExpirationTask = scheduleHookExpiration(
                 for: hostSessionID,
+                generation: nextHookExpirationGeneration,
                 timeout: Self.hookActivityTimeout
             )
         }
@@ -263,15 +272,23 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         bookkeeping[hostSessionID]?.hookExpirationTask = nil
     }
 
+    /// Test seam: the watchdog body, generation-checked so a task that
+    /// outlived its registration cannot touch a successor with the same UUID.
+    func expireHookActivity(for hostSessionID: UUID, generation: UInt64) {
+        guard bookkeeping[hostSessionID]?.hookExpirationGeneration == generation else { return }
+        clearHookActive(for: hostSessionID)
+    }
+
     private func scheduleHookExpiration(
         for hostSessionID: UUID,
+        generation: UInt64,
         timeout: TimeInterval
     ) -> Task<Void, Never> {
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
-                self?.clearHookActive(for: hostSessionID)
+                self?.expireHookActivity(for: hostSessionID, generation: generation)
             }
         }
     }

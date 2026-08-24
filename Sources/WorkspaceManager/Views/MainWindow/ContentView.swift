@@ -120,12 +120,19 @@ struct ContentView: View {
     @State private var webDetailTileID = TileID()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
     private let buildIdentity = AppBuildIdentity.current
-    private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
+    // Static: the default working directory is process-constant, and an
+    // instance-property initializer would re-resolve symlinks every time the
+    // parent constructs a new ContentView value (#1347 B1).
+    private static let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
+    private var resolvedDefaultHostDirectory: URL { Self.resolvedDefaultHostDirectory }
     private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
     @State private var mainSelectionCoordinator = MainSelectionCoordinator()
+    /// Memoized symlink-resolving path normalization; class in @State so the
+    /// cache survives body evaluations without registering observation (#1347).
+    @State private var pathNormalizationCache = PathNormalizationCache()
     @State private var statusAggregationCoalescer = WorkspaceStatusAggregationCoalescer()
     private let navigationStateController = MainWindowNavigationStateController()
     private let surfaceResolutionController = MainWindowSurfaceResolutionController()
@@ -336,7 +343,7 @@ struct ContentView: View {
             selectedWebSource: currentSelectedWebSource,
             activeRepoPath: sessionPresentation.activeRepoPath,
             activeHostSession: activeHostSession,
-            repos: repos,
+            repoByNormalizedPath: pathNormalizationCache.repoIndex(repos: repos),
             normalizePath: normalizePath
         )
     }
@@ -941,11 +948,9 @@ struct ContentView: View {
             }
             .onReceive(agentSessionRegistry.statusesDidChange) { _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
-                refreshSessionSwitcherSnapshotIfPresented()
             }
             .onChange(of: tileTreeStore.sessions) { _, _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
-                refreshSessionSwitcherSnapshotIfPresented()
                 terminalContinuityController.persistSnapshot()
             }
             .onChange(of: tileTreeStore.activeSessionID) { _, _ in
@@ -1150,6 +1155,7 @@ struct ContentView: View {
     }
 
     var body: some View {
+        let _ = PerformanceSignposts.noteMainWindowBodyEvaluation()
         splitViewWithFocusAndAlerts
             .task {
                 syncAppCommands()
@@ -2506,7 +2512,7 @@ struct ContentView: View {
     }
 
     private func normalizePath(_ rawPath: String) -> String {
-        MainWindowPathResolution.normalize(rawPath)
+        pathNormalizationCache.normalize(rawPath)
     }
 
     /// Cold-start restore (experimental, opt-in): compute what could be restored
@@ -2680,6 +2686,10 @@ struct ContentView: View {
             normalizePath: { url in normalizePath(url.path) }
         )
         workspaceStatusAggregator.update(workspaces: inputs.workspaces, repos: inputs.repos)
+        // After the update, not alongside its scheduling: an open switcher
+        // snapshots bubbled repo statuses, so rebuilding it before the
+        // coalesced aggregation lands would pin the stale values.
+        refreshSessionSwitcherSnapshotIfPresented()
     }
 
     @MainActor

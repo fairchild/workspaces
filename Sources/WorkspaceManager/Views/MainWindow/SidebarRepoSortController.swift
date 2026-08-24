@@ -91,3 +91,55 @@ struct SidebarRepoSortController {
         return lhs.id.uuidString < rhs.id.uuidString
     }
 }
+
+/// Memoizes the sidebar's repo ordering. Sorting uses localized ICU
+/// comparisons, which must not run on every sidebar body evaluation — under
+/// agent-event load the sidebar re-renders once per coalescing window, while
+/// its ordering inputs change only when repos are added, renamed, re-accessed,
+/// or the mode flips (#1347 B2). Held in the view's `@State` so the instance
+/// survives body evaluations without registering observation. Localized
+/// collation is captured at sort time: a live system-locale change reorders
+/// on the next input change or relaunch, not instantly.
+@MainActor
+final class SidebarRepoSortCache {
+    private struct Fingerprint: Equatable {
+        let mode: SidebarRepoSortMode
+        let repoIDs: [UUID]
+        /// Object identity: a SwiftData replacement instance with identical
+        /// id/name/path must still invalidate so the cached order never holds
+        /// a superseded model object.
+        let identities: [ObjectIdentifier]
+        let names: [String]
+        let paths: [String]
+        let snapshot: [UUID: Date]
+    }
+
+    private var fingerprint: Fingerprint?
+    private var cachedOrder: [Repo] = []
+
+    func sortedRepos(
+        _ repos: [Repo],
+        mode: SidebarRepoSortMode,
+        lastAccessedSnapshot: [UUID: Date],
+        controller: SidebarRepoSortController
+    ) -> [Repo] {
+        let next = Fingerprint(
+            mode: mode,
+            repoIDs: repos.map(\.id),
+            identities: repos.map(ObjectIdentifier.init),
+            names: repos.map(\.name),
+            paths: repos.map(\.localPath),
+            snapshot: mode == .lastAccessed ? lastAccessedSnapshot : [:]
+        )
+        if next == fingerprint { return cachedOrder }
+
+        let sorted = controller.sortedRepos(
+            repos,
+            mode: mode,
+            lastAccessedSnapshot: lastAccessedSnapshot
+        )
+        fingerprint = next
+        cachedOrder = sorted
+        return sorted
+    }
+}

@@ -41,22 +41,21 @@ struct MainWindowPresentationController {
         return sessions.first(where: { $0.id == activeSessionID }) ?? sessions.last
     }
 
+    /// Takes a prebuilt normalized-path index (see `PathNormalizationCache`)
+    /// rather than repos + a normalizer: this runs several times per
+    /// `ContentView.body` evaluation, and rebuilding the index there put
+    /// per-repo symlink resolution on the render path (#1347 B1).
     func selectedRepoForInspector(
         selectedWorkspace: Workspace?,
         selectedWebSource: WebSource?,
         activeRepoPath: String?,
         activeHostSession: HostTerminalSession?,
-        repos: [Repo],
+        repoByNormalizedPath: [String: Repo],
         normalizePath: (String) -> String
     ) -> Repo? {
         guard selectedWorkspace == nil, selectedWebSource == nil else {
             return nil
         }
-
-        let repoByNormalizedPath = repoIndex(
-            repos: repos,
-            normalizePath: normalizePath
-        )
 
         if let activeRepoPath {
             let normalizedActiveRepoPath = normalizePath(activeRepoPath)
@@ -180,20 +179,4 @@ struct MainWindowPresentationController {
         return .none
     }
 
-    private func repoIndex(
-        repos: [Repo],
-        normalizePath: (String) -> String
-    ) -> [String: Repo] {
-        var index: [String: Repo] = [:]
-        index.reserveCapacity(repos.count)
-
-        for repo in repos {
-            let normalizedPath = normalizePath(repo.localPath)
-            if index[normalizedPath] == nil {
-                index[normalizedPath] = repo
-            }
-        }
-
-        return index
-    }
 }

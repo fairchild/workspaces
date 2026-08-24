@@ -32,19 +32,44 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
         case .defaultHome:
             return .defaultHome
         case .repoPath(let path):
-            return .repoPath(Self.normalizePath(path))
+            return .repoPath(Self.normalizedPath(path))
         case .hostPath(let path):
-            return .hostPath(Self.normalizePath(path))
+            return .hostPath(Self.normalizedPath(path))
         case .backendSession:
             return self
         }
     }
 
-    private static func normalizePath(_ path: String) -> String {
-        URL(fileURLWithPath: path)
+    private static let normalizationCacheLock = NSLock()
+    nonisolated(unsafe) private static var normalizationCache: [String: String] = [:]
+
+    /// Key normalization runs per sidebar row per render and per coordinator
+    /// sweep; symlink resolution is an `lstat` per path component, so the
+    /// resolved form is memoized (#1347 B1). Stale only if the filesystem
+    /// changes under an already-seen raw path. Resolution happens outside the
+    /// lock so a slow disk never serializes unrelated lookups. Public so
+    /// render paths that compare directory paths share the one process-wide
+    /// memo instead of resolving per body evaluation.
+    public static func normalizedPath(_ path: String) -> String {
+        normalizationCacheLock.lock()
+        if let cached = normalizationCache[path] {
+            normalizationCacheLock.unlock()
+            return cached
+        }
+        normalizationCacheLock.unlock()
+
+        let normalized = URL(fileURLWithPath: path)
             .standardizedFileURL
             .resolvingSymlinksInPath()
             .path
+
+        normalizationCacheLock.lock()
+        if normalizationCache.count >= 4096 {
+            normalizationCache.removeAll(keepingCapacity: true)
+        }
+        normalizationCache[path] = normalized
+        normalizationCacheLock.unlock()
+        return normalized
     }
 }
 
