@@ -54,6 +54,24 @@ enum PerformanceSignposts {
         nonisolated(unsafe) private static var workspaceClickMetricObserver: WorkspaceClickMetricObserver?
     #endif
 
+    nonisolated(unsafe) private static var mainWindowBodyEvaluations: UInt64 = 0
+
+    /// Counts `ContentView.body` evaluations (#1347 B4). An event signpost per
+    /// evaluation for Instruments, plus a periodic log line so the count is
+    /// greppable during replay runs: zero growth per agent event is the
+    /// acceptance criterion the A-series established.
+    static func noteMainWindowBodyEvaluation() {
+        lock.lock()
+        mainWindowBodyEvaluations += 1
+        let count = mainWindowBodyEvaluations
+        lock.unlock()
+
+        signposter.emitEvent("MainWindowBodyEvaluation")
+        if count == 1 || count.isMultiple(of: 50) {
+            log.info("[Perf] event=main_window_body_evaluations count=\(count, privacy: .public)")
+        }
+    }
+
     static func beginLaunchToFirstPromptIfNeeded() {
         lock.lock()
         defer { lock.unlock() }

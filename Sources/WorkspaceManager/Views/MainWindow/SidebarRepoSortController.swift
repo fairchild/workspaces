@@ -91,3 +91,48 @@ struct SidebarRepoSortController {
         return lhs.id.uuidString < rhs.id.uuidString
     }
 }
+
+/// Memoizes the sidebar's repo ordering. Sorting uses localized ICU
+/// comparisons, which must not run on every sidebar body evaluation — under
+/// agent-event load the sidebar re-renders once per coalescing window, while
+/// its ordering inputs change only when repos are added, renamed, re-accessed,
+/// or the mode flips (#1347 B2). Held in the view's `@State` so the instance
+/// survives body evaluations without registering observation.
+@MainActor
+final class SidebarRepoSortCache {
+    private struct Fingerprint: Equatable {
+        let mode: SidebarRepoSortMode
+        let repoIDs: [UUID]
+        let names: [String]
+        let paths: [String]
+        let snapshot: [UUID: Date]
+    }
+
+    private var fingerprint: Fingerprint?
+    private var cachedOrder: [Repo] = []
+
+    func sortedRepos(
+        _ repos: [Repo],
+        mode: SidebarRepoSortMode,
+        lastAccessedSnapshot: [UUID: Date],
+        controller: SidebarRepoSortController
+    ) -> [Repo] {
+        let next = Fingerprint(
+            mode: mode,
+            repoIDs: repos.map(\.id),
+            names: repos.map(\.name),
+            paths: repos.map(\.localPath),
+            snapshot: mode == .lastAccessed ? lastAccessedSnapshot : [:]
+        )
+        if next == fingerprint { return cachedOrder }
+
+        let sorted = controller.sortedRepos(
+            repos,
+            mode: mode,
+            lastAccessedSnapshot: lastAccessedSnapshot
+        )
+        fingerprint = next
+        cachedOrder = sorted
+        return sorted
+    }
+}
