@@ -12,8 +12,16 @@ import WorkspaceManagerCore
 /// New paths always miss into a fresh resolution.
 @MainActor
 final class PathNormalizationCache {
+    private struct RepoIndexFingerprint: Equatable {
+        let paths: [String]
+        /// Object identity, not just stored paths: SwiftData can replace a
+        /// repo instance at the same path, and duplicate-path repos can swap
+        /// order — both must rebuild the first-wins index.
+        let identities: [ObjectIdentifier]
+    }
+
     private var normalizedByRawPath: [String: String] = [:]
-    private var repoIndexFingerprint: [String]?
+    private var repoIndexFingerprint: RepoIndexFingerprint?
     private var repoIndexCache: [String: Repo] = [:]
 
     /// Entry bound before the whole cache resets; render paths touch a handful
@@ -34,7 +42,10 @@ final class PathNormalizationCache {
     /// path) changes. First repo wins on a normalized-path collision, matching
     /// the uncached index this replaces.
     func repoIndex(repos: [Repo]) -> [String: Repo] {
-        let fingerprint = repos.map(\.localPath)
+        let fingerprint = RepoIndexFingerprint(
+            paths: repos.map(\.localPath),
+            identities: repos.map(ObjectIdentifier.init)
+        )
         if fingerprint == repoIndexFingerprint { return repoIndexCache }
 
         var index: [String: Repo] = [:]

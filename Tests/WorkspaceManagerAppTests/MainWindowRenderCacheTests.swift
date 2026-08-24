@@ -55,6 +55,45 @@ struct MainWindowRenderCacheTests {
         #expect(shrunk[MainWindowPathResolution.normalize("/tmp/rc-alpha")] == nil)
     }
 
+    @Test("Repo index rebuilds when duplicate-path repos swap order")
+    func repoIndexDuplicatePathReorder() {
+        let cache = PathNormalizationCache()
+        let first = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/dup-shared"))
+        let second = Repo(name: "beta", localPath: URL(fileURLWithPath: "/tmp/dup-shared"))
+        let key = MainWindowPathResolution.normalize("/tmp/dup-shared")
+
+        #expect(cache.repoIndex(repos: [first, second])[key]?.id == first.id)
+        // Same path fingerprint, different first-wins winner: must rebuild.
+        #expect(cache.repoIndex(repos: [second, first])[key]?.id == second.id)
+    }
+
+    @Test("Repo index rebuilds when an instance is replaced at the same path")
+    func repoIndexInstanceReplacement() {
+        let cache = PathNormalizationCache()
+        let original = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/repl-shared"))
+        let key = MainWindowPathResolution.normalize("/tmp/repl-shared")
+        #expect(cache.repoIndex(repos: [original])[key] === original)
+
+        let replacement = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/repl-shared"))
+        #expect(cache.repoIndex(repos: [replacement])[key] === replacement)
+    }
+
+    @Test("Sort cache rebuilds when an instance is replaced with identical fields")
+    func sortCacheInstanceReplacement() {
+        let cache = SidebarRepoSortCache()
+        let controller = SidebarRepoSortController()
+        let original = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/sr-a"))
+
+        let initial = cache.sortedRepos(
+            [original], mode: .alphabetical, lastAccessedSnapshot: [:], controller: controller)
+        #expect(initial.first === original)
+
+        let replacement = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/sr-a"))
+        let replaced = cache.sortedRepos(
+            [replacement], mode: .alphabetical, lastAccessedSnapshot: [:], controller: controller)
+        #expect(replaced.first === replacement)
+    }
+
     @Test("Sidebar sort cache tracks renames and mode flips")
     func sortCacheTracksInputs() {
         let cache = SidebarRepoSortCache()

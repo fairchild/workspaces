@@ -256,8 +256,9 @@ struct MainWindowLifecycleControllerTests {
                 "applyDiagnosticsFixture",
                 "applySessionSwitcherFixture",
                 "pruneRepoSessions",
+                // The aggregator refresh rebuilds an open switcher itself;
+                // the explicit step doubled the snapshot projection (#1347).
                 "refreshWorkspaceStatusAggregator",
-                "refreshSessionSwitcher",
             ]
         )
     }

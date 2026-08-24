@@ -110,8 +110,10 @@ struct MainWindowLifecycleController {
         actions.applyDiagnosticsFixtureIfNeeded()
         actions.applySessionSwitcherFixtureIfNeeded()
         actions.pruneRepoSessions()
+        // The aggregator refresh rebuilds an open switcher itself once the
+        // update lands; a second explicit rebuild here doubled the snapshot
+        // projection.
         actions.refreshWorkspaceStatusAggregator()
-        actions.refreshSessionSwitcherSnapshotIfPresented()
     }
 
     /// Teardown drops the window-scoped overrides so a lingering accessory app cannot keep

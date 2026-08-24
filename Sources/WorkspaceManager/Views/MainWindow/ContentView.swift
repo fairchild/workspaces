@@ -120,9 +120,13 @@ struct ContentView: View {
     @State private var webDetailTileID = TileID()
     @StateObject private var terminalFocusCoordinator = TerminalFocusCoordinator()
     private let buildIdentity = AppBuildIdentity.current
-    private let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
+    // Static: the default working directory is process-constant, and an
+    // instance-property initializer would re-resolve symlinks every time the
+    // parent constructs a new ContentView value (#1347 B1).
+    private static let resolvedDefaultHostDirectory = HostTerminalDefaults.defaultWorkingDirectory()
         .standardizedFileURL
         .resolvingSymlinksInPath()
+    private var resolvedDefaultHostDirectory: URL { Self.resolvedDefaultHostDirectory }
     private let bootstrapController = MainWindowBootstrapController()
     private let inspectorStateController = InspectorStateController()
     @State private var mainSelectionCoordinator = MainSelectionCoordinator()
