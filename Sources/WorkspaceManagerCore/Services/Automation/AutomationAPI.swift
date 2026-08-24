@@ -159,13 +159,21 @@ public struct AutomationServerDescriptor: Codable, Sendable, Equatable {
     public let experiments: [String]
     public let protocolVersion: Int
 
+    /// What this launch's operator provisioning settled on. Optional because the
+    /// field is additive: an older app answers health without it, and a caller must
+    /// read that absence as "this build does not report it" rather than as "no
+    /// credential". Listing the operator experiment among `experiments` says the
+    /// toggle is on right now; only this says whether a credential exists to use.
+    public let operatorCredential: AutomationOperatorProvisioning.Outcome?
+
     public init(
         pid: Int32,
         launchedAt: String,
         appVersion: String,
         build: String,
         experiments: [String],
-        protocolVersion: Int = AutomationAPI.version
+        protocolVersion: Int = AutomationAPI.version,
+        operatorCredential: AutomationOperatorProvisioning.Outcome? = nil
     ) {
         self.pid = pid
         self.launchedAt = launchedAt
@@ -173,11 +181,13 @@ public struct AutomationServerDescriptor: Codable, Sendable, Equatable {
         self.build = build
         self.experiments = experiments
         self.protocolVersion = protocolVersion
+        self.operatorCredential = operatorCredential
     }
 
     public static func current(
         launchedAt: Date,
         experiments: [String],
+        operatorCredential: AutomationOperatorProvisioning.Outcome? = nil,
         bundle: Bundle = .main,
         processInfo: ProcessInfo = .processInfo
     ) -> AutomationServerDescriptor {
@@ -191,7 +201,8 @@ public struct AutomationServerDescriptor: Codable, Sendable, Equatable {
             appVersion: appVersion,
             build: Self.buildConfiguration,
             experiments: experiments.sorted(),
-            protocolVersion: AutomationAPI.version
+            protocolVersion: AutomationAPI.version,
+            operatorCredential: operatorCredential
         )
     }
 

@@ -24,15 +24,25 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private(set) var controller: AutomationController?
     @Published private(set) var socketPath: String?
     private var teardownObserver: Any?
+    private var experimentObserver: Any?
     private var didStart = false
     private var startTask: Task<String, Error>?
     private var operatorCredentialURL: URL?
+    /// What the last provisioning pass settled on, reported over `/v1/health`. Read
+    /// off the MainActor by the health closure, hence the lock-free copy in
+    /// `operatorCredentialOutcomeSnapshot`.
+    private var operatorCredentialOutcome: AutomationOperatorProvisioning.Outcome?
     private var appIntentOperatorHandle: String?
     private let appIntentOperatorHostSessionID = UUID()
 
     /// The app scope id operator handles carry — matched to the value `TileTreeStore` stamps on tile
     /// handles so audit and context read consistently across both handle classes.
     private static let appScopeID = "workspaces.local"
+
+    /// Stands in for `Bundle.main.bundleIdentifier` when the app runs unbundled (a
+    /// `swift run` launch). Both the socket and the credential live under it, so the
+    /// fallback has to be the same string everywhere it is reached for.
+    private static let defaultBundleIdentifier = "com.cloudcompute.workspaces"
 
     private init() {}
 
@@ -108,6 +118,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 uiState: uiState
             )
             tileTreeStore.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
+            // Every configure pass, not only the one that started the listener: the
+            // later passes are the ones that can observe a toggle flipped since launch.
+            refreshOperatorCredential(
+                socketPath: socketPath,
+                bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
+            )
         } catch {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             handleRegistry.removeAll()
@@ -196,7 +212,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             uiState: uiState
         )
 
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
+        let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
         let auditLogger = AutomationAuditLogger(
             auditURL: AutomationAuditLogger.defaultAuditURL(bundleIdentifier: bundleID)
         )
@@ -208,7 +224,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             makeHealthServer: { launchedAt in
                 AutomationServerDescriptor.current(
                     launchedAt: launchedAt,
-                    experiments: Self.activeAutomationExperimentKeys()
+                    experiments: Self.activeAutomationExperimentKeys(),
+                    operatorCredential: Self.operatorCredentialOutcomeSnapshot.value
                 )
             }
         )
@@ -234,20 +251,19 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         self.startTask = nil
         log.info("[AutomationIntegration] listener started at \(listener.socketPath, privacy: .public)")
 
-        // Mint the per-launch operator credential exactly once, on first start. Opted-in launches
-        // register an operator handle and write the credential next to the socket; every other
-        // launch clears any stale credential so a non-opted-in app never leaves one behind.
-        let credentialURL = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
-        operatorCredentialURL = credentialURL
-        let credential = AutomationOperatorProvisioner.provision(
-            optedIn: isOperatorEnabled,
-            registry: handleRegistry,
-            socketPath: startedSocketPath,
-            appScopeID: Self.appScopeID,
-            credentialURL: credentialURL
-        )
-        if credential != nil {
-            log.info("[AutomationIntegration] operator credential minted at \(credentialURL.path, privacy: .public)")
+        refreshOperatorCredential(socketPath: startedSocketPath, bundleID: bundleID)
+
+        // A toggle flipped in Settings mid-run is the case a configure pass cannot see,
+        // because no window reconfigures on it. The comparison is in-memory, so the
+        // common case — a defaults write that changes nothing here — costs nothing.
+        experimentObserver = NotificationCenter.default.addObserver(
+            forName: UserDefaults.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.refreshOperatorCredentialIfOptInChanged()
+            }
         }
 
         teardownObserver = NotificationCenter.default.addObserver(
@@ -259,7 +275,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             // before the process exits, and "dies with the launch" should hold on a clean quit.
             // (A crash can't clean up, which is why a stale credential also fails closed against the
             // fresh registry — see AutomationOperatorCredentialStore.)
-            let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
+            let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
             AutomationOperatorCredentialStore.remove(
                 at: AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
             )
@@ -422,12 +438,101 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             NotificationCenter.default.removeObserver(teardownObserver)
             self.teardownObserver = nil
         }
+        if let experimentObserver {
+            NotificationCenter.default.removeObserver(experimentObserver)
+            self.experimentObserver = nil
+        }
+    }
+
+    /// Brings the operator credential in line with the launch's current opt-in state.
+    ///
+    /// Run on every configure pass, not only on the first listener start. The mint used
+    /// to happen once, at the instant a launch bound its socket, while the experiment
+    /// behind it stays a live-readable toggle — so a launch that started before the
+    /// toggle went on stayed credential-less for its whole life while `automation health`
+    /// went on reporting the experiment as active. Refreshing decouples the two: the
+    /// credential follows the flag.
+    ///
+    /// A pass that finds a usable credential reuses it, so a caller holding a handle is
+    /// not invalidated by a routine reconfigure.
+    /// Re-provisions only when the launch's opt-in state and the credential's presence
+    /// disagree, so the defaults-change firehose does not turn into a file-write loop.
+    private func refreshOperatorCredentialIfOptInChanged() {
+        guard let socketPath else { return }
+        let credentialAvailable = operatorCredentialOutcome?.isCredentialAvailable ?? false
+        guard isOperatorEnabled != credentialAvailable else { return }
+        refreshOperatorCredential(
+            socketPath: socketPath,
+            bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
+        )
+    }
+
+    private func refreshOperatorCredential(socketPath: String, bundleID: String) {
+        let credentialURL = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
+        operatorCredentialURL = credentialURL
+        let result = AutomationOperatorProvisioning.refresh(
+            optedIn: isOperatorEnabled,
+            registry: handleRegistry,
+            socketPath: socketPath,
+            appScopeID: Self.appScopeID,
+            credentialURL: credentialURL
+        )
+        noteOperatorCredentialOutcome(result.outcome, credentialURL: credentialURL)
+    }
+
+    /// One place decides how loud each outcome is. `mintFailed` logs at error level
+    /// specifically because it is the state that used to be silent: an opted-in launch
+    /// with no credential produced no persisted log line at all, so the next occurrence
+    /// was undiagnosable after the fact.
+    private func noteOperatorCredentialOutcome(
+        _ outcome: AutomationOperatorProvisioning.Outcome,
+        credentialURL: URL
+    ) {
+        operatorCredentialOutcome = outcome
+        Self.operatorCredentialOutcomeSnapshot.value = outcome
+        switch outcome {
+        case .minted:
+            log.info("[AutomationIntegration] operator credential minted at \(credentialURL.path, privacy: .public)")
+        case .reused, .notOptedIn:
+            break
+        case .mintFailed:
+            log.error(
+                """
+                [AutomationIntegration] operator scope is enabled but no credential could be written to \
+                \(credentialURL.path, privacy: .public); operator-scope verbs will fail closed
+                """
+            )
+        }
+    }
+
+    /// The health closure runs off the MainActor, so the outcome it reports lives in a
+    /// lock-guarded box rather than in the actor-isolated property beside it.
+    private static let operatorCredentialOutcomeSnapshot = OperatorCredentialOutcomeBox()
+
+    final class OperatorCredentialOutcomeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: AutomationOperatorProvisioning.Outcome?
+
+        var value: AutomationOperatorProvisioning.Outcome? {
+            get {
+                lock.lock()
+                defer { lock.unlock() }
+                return storage
+            }
+            set {
+                lock.lock()
+                storage = newValue
+                lock.unlock()
+            }
+        }
     }
 
     private func clearOperatorCredential() {
-        let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
+        let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
         let url = operatorCredentialURL ?? AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
         AutomationOperatorCredentialStore.remove(at: url)
         operatorCredentialURL = nil
+        operatorCredentialOutcome = nil
+        Self.operatorCredentialOutcomeSnapshot.value = nil
     }
 }

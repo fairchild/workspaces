@@ -1409,12 +1409,21 @@ private final class CLIApp {
         return "automation request failed: \(error.response.code.rawValue)\(retrySuffix): \(error.response.message)"
     }
 
+    /// The failure path costs one health probe, because the credential's absence has
+    /// several causes and they need opposite actions — and the one a caller is most
+    /// likely to hit (experiment on, credential never minted) is the one a message
+    /// naming the experiment answers wrongly.
     private func loadOperatorCredential() throws -> AutomationOperatorCredential {
         let url = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: Self.appBundleIdentifier)
         guard let credential = AutomationOperatorCredentialStore.load(from: url) else {
             throw CLIError(
-                "Operator credential not found at \(url.path). Launch WorkSpaces with the Automation "
-                    + "Operator experiment enabled (or WORKSPACES_AUTOMATION_OPERATOR=1) and try again."
+                CLIOperatorScopeDiagnosis.message(
+                    credentialPath: url.path,
+                    observation: CLIOperatorScopeDiagnosis.Observation(
+                        appIsRunning: appIsRunning(),
+                        server: (try? performAutomationHealthRequest())?.server
+                    )
+                )
             )
         }
         return credential
@@ -1466,8 +1475,12 @@ private final class CLIApp {
             return result.status.uppercased()
         }
         let experiments = server.experiments.isEmpty ? "-" : server.experiments.joined(separator: ",")
+        // An older app answers without the field; "unreported" says the build cannot
+        // tell us rather than implying no credential exists.
+        let operatorCredential = server.operatorCredential?.rawValue ?? "unreported"
         return "\(result.status.uppercased()) pid=\(server.pid) launchedAt=\(server.launchedAt) "
-            + "protocol=\(server.protocolVersion) experiments=\(experiments)"
+            + "protocol=\(server.protocolVersion) experiments=\(experiments) "
+            + "operatorCredential=\(operatorCredential)"
     }
 
     private static func bundledCLIPath() -> String {
