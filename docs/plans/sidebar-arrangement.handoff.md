@@ -1,5 +1,11 @@
 # Sidebar arrangement: Recent mode, pinning, manual pin order
 
+> **Status: shipped in v0.25.0 (2026-08-23).** Slice 1 #1335, slice 2 #1339, slice 3 #1340;
+> the coexisting launcher that produced the evidence is #1333. Deferred, with reasons
+> on the PRs: drag reorder in Pinned (`.onMove`) pending a VM-desktop verification
+> lane; repo-root pinning; a per-repo colour/monogram glyph. Kept as the record of the
+> decisions below.
+
 Handoff brief for a Fable session. Fable holds the arc and verifies; the
 implementation is delegated per slice. Michael asked for this after reviewing
 the design below (2026-08-22).
