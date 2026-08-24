@@ -93,11 +93,19 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         didStart = true
 
         let bundleID = Bundle.main.bundleIdentifier ?? "com.cloudcompute.workspaces"
+        // A coexisting dev instance shares the installed app's bundle-ID-keyed
+        // socket path and loses the flock, leaving its listener dormant. The env
+        // override gives such an instance its own socket; tiles inherit the
+        // resolved path, so forwarders follow automatically. Same-path misuse
+        // stays safe: the flock holder wins, the late binder goes dormant.
+        let envSocketOverride = ProcessInfo.processInfo
+            .environment["WORKSPACES_HOOKS_SOCKET_OVERRIDE"]
+            .flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
         let listener = AgentHookListener(
             bundleIdentifier: bundleID,
             registry: registry,
             commandStatusRegistry: commandStatusRegistry,
-            socketURLOverride: socketURLOverride
+            socketURLOverride: socketURLOverride ?? envSocketOverride
         )
         self.listener = listener
         self.socketPath = listener.socketPath
