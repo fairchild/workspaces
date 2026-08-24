@@ -201,7 +201,6 @@ struct ClaudeSettingsInstallerTests {
             "UserPromptSubmit",
             "PreToolUse",
             "PostToolUse",
-            "PostToolBatch",
             "PostToolUseFailure",
             "PermissionRequest",
             "Notification",
@@ -407,5 +406,69 @@ struct ClaudeSettingsInstallerTests {
         #expect(await installer.isInstalled() == false)
         try await installer.install()
         #expect(await installer.isInstalled() == true)
+    }
+
+    @Test("Install unsubscribes WorkSpaces from retired PostToolBatch, keeps third-party handlers")
+    func retiredPostToolBatchScrub() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        let existing: [String: Any] = [
+            "hooks": [
+                "PostToolBatch": [
+                    [
+                        "hooks": [
+                            ["type": "command", "command": eventForwarder, "async": true],
+                            ["type": "command", "command": "/usr/local/bin/third-party-hook"],
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: settingsURL)
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let updated = try readJSON(settingsURL)
+        let handlers = hookGroups(named: "PostToolBatch", in: updated)
+            .flatMap { hookHandlers(in: $0) }
+        #expect(handlers.contains { ($0["command"] as? String) == eventForwarder } == false)
+        #expect(handlers.contains { ($0["command"] as? String) == "/usr/local/bin/third-party-hook" })
+        #expect(await installer.isInstalled())
+    }
+
+    @Test("Install removes the PostToolBatch key when only WorkSpaces subscribed")
+    func retiredPostToolBatchKeyRemoved() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+
+        let existing: [String: Any] = [
+            "hooks": [
+                "PostToolBatch": [
+                    ["hooks": [["type": "command", "command": eventForwarder, "async": true]]]
+                ]
+            ]
+        ]
+        try JSONSerialization.data(withJSONObject: existing, options: [.prettyPrinted])
+            .write(to: settingsURL)
+
+        let installer = installer(home: home)
+        try await installer.install()
+
+        let updated = try readJSON(settingsURL)
+        let hooks = updated["hooks"] as? [String: Any] ?? [:]
+        #expect(hooks["PostToolBatch"] == nil)
+        #expect(hooks["PostToolUse"] != nil)
+        #expect(await installer.isInstalled())
     }
 }

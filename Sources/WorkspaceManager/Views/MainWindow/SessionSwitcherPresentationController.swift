@@ -55,7 +55,7 @@ struct SessionSwitcherPresentationController {
                     paneCountBySessionKey: context.paneCountBySessionKey,
                     activeSessionKey: context.activeSessionKey,
                     sessions: context.sessions,
-                    agentStatusBySessionID: context.agentStatusBySessionID
+                    agentStatus: { context.agentStatusBySessionID[$0] }
                 )
                 return (workspace.id, activity)
             }
@@ -77,7 +77,7 @@ struct SessionSwitcherPresentationController {
                     paneCountBySessionKey: context.paneCountBySessionKey,
                     activeSessionKey: context.activeSessionKey,
                     sessions: context.sessions,
-                    agentStatusBySessionID: context.agentStatusBySessionID
+                    agentStatus: { context.agentStatusBySessionID[$0] }
                 )
                 let bubbled =
                     context.bubbledRepoStatuses[repo.id]

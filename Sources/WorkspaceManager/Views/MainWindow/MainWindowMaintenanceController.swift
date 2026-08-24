@@ -216,7 +216,7 @@ struct MainWindowMaintenanceController {
                 let status = presentation.freshestAgentStatus(
                     for: key,
                     sessions: sessions,
-                    agentStatusBySessionID: agentStatusBySessionID
+                    agentStatus: { agentStatusBySessionID[$0] }
                 )
                 return WorkspaceStatusAggregator.WorkspaceInput(
                     workspaceID: workspace.id,
@@ -231,7 +231,7 @@ struct MainWindowMaintenanceController {
             let status = presentation.freshestAgentStatus(
                 for: key,
                 sessions: sessions,
-                agentStatusBySessionID: agentStatusBySessionID
+                agentStatus: { agentStatusBySessionID[$0] }
             )
             return WorkspaceStatusAggregator.RepoInput(
                 repoID: repo.id,

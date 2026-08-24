@@ -4,17 +4,46 @@
 //
 //  Live registry of agent session statuses keyed by host session ID. Consumes
 //  AgentEvent values from hook, status-line, and terminal attention inputs,
-//  then produces a normalized AgentRunState for the UI.
+//  then produces a normalized AgentRunState for the UI. Publication is scoped:
+//  each session owns an @Observable render model that updates only when
+//  render-relevant state changes, so one event invalidates one row, not the
+//  whole window (#1347).
 //
 
 import Combine
 import Foundation
+import Observation
 
-/// Adapter-agnostic state container. The UI binds to ``statuses`` and reads the
-/// current ``AgentRunState`` for any session it owns.
+/// Per-session observable render state. Views register Observation-tracked
+/// dependencies by reading ``status`` inside `body`; the registry writes it
+/// only when render-relevant fields change (`lastEventAt` and `hookActive`
+/// ticks stay in the registry's unobserved truth store).
+@MainActor
+@Observable
+public final class AgentSessionStatusModel {
+    public internal(set) var status: AgentSessionStatus
+
+    init(status: AgentSessionStatus) {
+        self.status = status
+    }
+}
+
+/// Adapter-agnostic state container. Function-context callers read ``statuses``
+/// / ``status(for:)`` (always-fresh truth, never observed); SwiftUI bodies read
+/// ``observedStatus(for:)`` so invalidation scopes to the sessions they render.
 @MainActor
 public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryProtocol {
-    @Published public private(set) var statuses: [UUID: AgentSessionStatus] = [:]
+    /// Unobserved truth, including per-event bookkeeping fields (`lastEventAt`,
+    /// `hookActive`). Reads register no SwiftUI dependency; `objectWillChange`
+    /// fires only on register/deregister, never per event.
+    public private(set) var statuses: [UUID: AgentSessionStatus] = [:]
+
+    /// Fires once per applied change that is render-relevant (and on
+    /// register/deregister). Event-driven consumers (aggregator refresh,
+    /// presented-snapshot rebuilds) subscribe via `onReceive` instead of
+    /// observing `statuses`, which keeps `ContentView.body` off the per-event
+    /// path.
+    public let statusesDidChange = PassthroughSubject<Void, Never>()
 
     /// Window inside which a hook event suppresses an OSC event with the same effective state.
     static let oscDedupWindow: TimeInterval = 0.750
@@ -30,6 +59,7 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         var hookExpirationTask: Task<Void, Never>?
     }
 
+    private var models: [UUID: AgentSessionStatusModel] = [:]
     private var bookkeeping: [UUID: Bookkeeping] = [:]
     private let clock: @Sendable () -> Date
     private let localStateStore: LocalStateStore?
@@ -47,7 +77,7 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
     public func register(hostSessionID: UUID, cwd: String, kind: AgentKind) {
         if statuses[hostSessionID] != nil { return }
         let now = clock()
-        statuses[hostSessionID] = AgentSessionStatus(
+        let status = AgentSessionStatus(
             hostSessionID: hostSessionID,
             kind: kind,
             cwd: Self.normalizePath(cwd),
@@ -56,13 +86,36 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
             hookActive: false,
             createdAt: now
         )
+        objectWillChange.send()
+        statuses[hostSessionID] = status
+        models[hostSessionID] = AgentSessionStatusModel(status: status)
         bookkeeping[hostSessionID] = Bookkeeping()
+        statusesDidChange.send()
     }
 
     public func deregister(hostSessionID: UUID) {
+        guard statuses[hostSessionID] != nil else { return }
         bookkeeping[hostSessionID]?.hookExpirationTask?.cancel()
         bookkeeping.removeValue(forKey: hostSessionID)
+        objectWillChange.send()
         statuses.removeValue(forKey: hostSessionID)
+        models.removeValue(forKey: hostSessionID)
+        statusesDidChange.send()
+    }
+
+    /// Always-fresh truth for one session; registers no SwiftUI dependency.
+    public func status(for hostSessionID: UUID) -> AgentSessionStatus? {
+        statuses[hostSessionID]
+    }
+
+    /// Truth for one session, read in a way that registers an Observation
+    /// dependency on that session's render-relevant state. SwiftUI bodies use
+    /// this so a session's change invalidates exactly the views that rendered
+    /// it; the returned value still carries live `lastEventAt`/`hookActive`.
+    public func observedStatus(for hostSessionID: UUID) -> AgentSessionStatus? {
+        guard let model = models[hostSessionID] else { return nil }
+        _ = model.status
+        return statuses[hostSessionID]
     }
 
     public func apply(events: [AgentEvent], for hostSessionID: UUID, origin: AgentEventOrigin) {
@@ -148,6 +201,14 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         statuses[hostSessionID] = status
         bookkeeping[hostSessionID] = book
 
+        // Gate publication: a batch that only moved `lastEventAt`/`hookActive`
+        // (an unchanged status-line tick, toolEnd while already thinking) must
+        // not invalidate any view.
+        if let model = models[hostSessionID], !Self.isRenderEquivalent(model.status, status) {
+            model.status = status
+            statusesDidChange.send()
+        }
+
         if let localStateStore {
             let persistedEvents = events
             let persistedStatus = status
@@ -164,6 +225,14 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
     }
 
     // MARK: - Internal
+
+    /// True when the two statuses differ only in non-render bookkeeping fields.
+    static func isRenderEquivalent(_ lhs: AgentSessionStatus, _ rhs: AgentSessionStatus) -> Bool {
+        var normalizedLHS = lhs
+        normalizedLHS.lastEventAt = rhs.lastEventAt
+        normalizedLHS.hookActive = rhs.hookActive
+        return normalizedLHS == rhs
+    }
 
     /// Test seam: directly clear `hookActive` flag (simulates the 60s watchdog firing).
     func clearHookActive(for hostSessionID: UUID) {

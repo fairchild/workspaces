@@ -140,7 +140,7 @@ struct RightPaneView: View {
     let directoryURL: URL?
     let onFileSelected: (CodePreviewSelection) -> Void
     let diagnosticWorkspaceDirectories: [URL]
-    let agentStatuses: [AgentSessionStatus]
+    let agentSessionRegistry: AgentSessionRegistry?
     private let workspaceID: UUID?
     private let timelineHostSessionID: UUID?
     private let showTimeline: Bool
@@ -177,7 +177,7 @@ struct RightPaneView: View {
         workspace: Workspace,
         state: RightPaneSessionState,
         diagnosticWorkspaceDirectories: [URL] = [],
-        agentStatuses: [AgentSessionStatus] = [],
+        agentSessionRegistry: AgentSessionRegistry? = nil,
         timelineHostSessionID: UUID? = nil,
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
@@ -186,7 +186,7 @@ struct RightPaneView: View {
         self.state = state
         self.onFileSelected = onFileSelected
         self.diagnosticWorkspaceDirectories = diagnosticWorkspaceDirectories
-        self.agentStatuses = agentStatuses
+        self.agentSessionRegistry = agentSessionRegistry
         self.workspaceID = workspace.id
         self.timelineHostSessionID = timelineHostSessionID
         self.showTimeline = true
@@ -198,7 +198,7 @@ struct RightPaneView: View {
         repo: Repo,
         state: RightPaneSessionState,
         diagnosticWorkspaceDirectories: [URL] = [],
-        agentStatuses: [AgentSessionStatus] = [],
+        agentSessionRegistry: AgentSessionRegistry? = nil,
         onFileSelected: @escaping (CodePreviewSelection) -> Void = { _ in }
     ) {
         self.targetID = "repo-\(repo.id.uuidString)"
@@ -206,7 +206,7 @@ struct RightPaneView: View {
         self.state = state
         self.onFileSelected = onFileSelected
         self.diagnosticWorkspaceDirectories = diagnosticWorkspaceDirectories
-        self.agentStatuses = agentStatuses
+        self.agentSessionRegistry = agentSessionRegistry
         self.workspaceID = nil
         self.timelineHostSessionID = nil
         self.showTimeline = false
@@ -286,7 +286,7 @@ struct RightPaneView: View {
                 case .diagnostics:
                     DiagnosticsTabView(
                         workspaceDirectories: diagnosticWorkspaceDirectories,
-                        agentStatuses: agentStatuses
+                        agentSessionRegistry: agentSessionRegistry
                     )
                 }
             }
@@ -585,11 +585,7 @@ struct RightPaneView: View {
 
     private var latestTimelineAgentEventAt: Date? {
         guard let timelineHostSessionID else { return nil }
-        return
-            agentStatuses
-            .filter { $0.hostSessionID == timelineHostSessionID }
-            .map(\.lastEventAt)
-            .max()
+        return agentSessionRegistry?.observedStatus(for: timelineHostSessionID)?.lastEventAt
     }
 
     private var timelineRefreshKey: TimelineRefreshKey {

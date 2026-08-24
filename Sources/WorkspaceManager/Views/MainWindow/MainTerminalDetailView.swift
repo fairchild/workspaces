@@ -24,7 +24,7 @@ struct MainTerminalDetailView: View {
     let resolveTileID: (HostTerminalSession) -> TileID
     let hostSurfaceStore: SurfaceStore
     let tabTitleOverrides: [UUID: String]
-    let agentStatuses: [AgentSessionStatus]
+    let agentSessionRegistry: AgentSessionRegistry
     let terminalContextMenuProvider: (HostTerminalSession) -> NSMenu?
     let onSetSplitRatio: (SplitID, CGFloat) -> Void
     var onSelectTerminalTab: ((UUID) -> Void)?
@@ -58,7 +58,7 @@ struct MainTerminalDetailView: View {
                         workspace: selectedWorkspace,
                         state: state,
                         diagnosticWorkspaceDirectories: diagnosticWorkspaceDirectories,
-                        agentStatuses: agentStatuses,
+                        agentSessionRegistry: agentSessionRegistry,
                         timelineHostSessionID: timelineHostSessionID(for: selectedWorkspace),
                         onFileSelected: onFileSelected
                     )
@@ -69,7 +69,7 @@ struct MainTerminalDetailView: View {
                         repo: selectedRepo,
                         state: state,
                         diagnosticWorkspaceDirectories: diagnosticWorkspaceDirectories,
-                        agentStatuses: agentStatuses,
+                        agentSessionRegistry: agentSessionRegistry,
                         onFileSelected: onFileSelected
                     )
                     .rightPaneWidth(for: state)

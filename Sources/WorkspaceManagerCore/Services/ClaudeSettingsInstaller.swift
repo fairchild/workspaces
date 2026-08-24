@@ -37,7 +37,6 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         "UserPromptSubmit",
         "PreToolUse",
         "PostToolUse",
-        "PostToolBatch",
         "PostToolUseFailure",
         "PermissionRequest",
         "Notification",
@@ -45,6 +44,15 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         "StopFailure",
         "TaskCreated",
         "TaskCompleted",
+    ]
+
+    /// Events WorkSpaces used to subscribe to but no longer does. The installer
+    /// scrubs its own forwarder from these on each pass; third-party handlers
+    /// under the same event are left untouched. `PostToolBatch` duplicates
+    /// `PostToolUse` (both settle the session on "thinking") and was 16% of
+    /// bus traffic (#1347).
+    private static let retiredHookEventNames: [String] = [
+        "PostToolBatch"
     ]
 
     private let homeDirectory: URL
@@ -264,6 +272,31 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
                 hooks[name] = groups
             }
 
+            var scrubbedRetiredEvents: [String] = []
+            for name in Self.retiredHookEventNames {
+                guard hooks[name] != nil else { continue }
+                let groups = normalizedClaudeHookGroups(from: hooks[name])
+                let result = scrubHandlers(in: groups) { handler in
+                    isWorkspacesLegacyHTTPUnixHook(handler)
+                        || isWorkspacesTitleEmitHook(handler)
+                        || isCanonicalWorkspacesCommandHook(handler, contribution: eventForwarder)
+                        || isUnescapedWorkspacesCommandHook(handler, contribution: eventForwarder)
+                        || isLegacyWorkspacesEventForwarderHook(handler, contribution: eventForwarder)
+                }
+                guard result.removedCount > 0 else { continue }
+                scrubbedRetiredEvents.append(name)
+                if result.groups.isEmpty {
+                    hooks.removeValue(forKey: name)
+                } else {
+                    hooks[name] = result.groups
+                }
+            }
+
+            if !scrubbedRetiredEvents.isEmpty {
+                lines.append(
+                    "unsubscribe WorkSpaces from retired events \(scrubbedRetiredEvents.joined(separator: ", "))"
+                )
+            }
             if !scrubbedLegacyEvents.isEmpty {
                 lines.append(
                     "scrub legacy WorkSpaces http+unix hooks from \(scrubbedLegacyEvents.count) events"

@@ -92,7 +92,10 @@ struct AgentHookListenerTests {
             statuses = underlying.statuses
         }
 
+        var appliedBatches: [(events: [AgentEvent], origin: AgentEventOrigin)] = []
+
         func apply(events: [AgentEvent], for hostSessionID: UUID, origin: AgentEventOrigin) {
+            appliedBatches.append((events, origin))
             underlying.apply(events: events, for: hostSessionID, origin: origin)
             statuses = underlying.statuses
         }
@@ -761,6 +764,174 @@ struct AgentHookListenerTests {
         try await Task.sleep(nanoseconds: 400_000_000)
         let runAfter = await registry.statuses[registeredID]?.run
         #expect(runAfter == runBefore)
+
+        await listener.stop()
+    }
+
+    // MARK: - Coalesced ingest (#1347)
+
+    private func hookBody(_ name: String, cwd: String, extra: [String: Any] = [:]) throws -> Data {
+        var body: [String: Any] = [
+            "hook_event_name": name,
+            "session_id": "coalesce-session",
+            "cwd": cwd,
+        ]
+        for (k, v) in extra { body[k] = v }
+        return try JSONSerialization.data(withJSONObject: body)
+    }
+
+    @Test("Events within one window flush as a single batch with one apply")
+    func coalescedBurstFlushesOnce() async throws {
+        let cwd = "/tmp/hook-co-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let registeredID = registry.registeredID
+        // Interval far beyond the test's lifetime: the flush below is explicit,
+        // so the assertion is deterministic on any runner.
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            coalescingInterval: 600,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        for (name, extra) in [
+            ("PreToolUse", ["tool_name": "Read"]),
+            ("PostToolUse", ["tool_name": "Read"]),
+            ("PreToolUse", ["tool_name": "Edit"]),
+            ("PostToolUse", ["tool_name": "Edit"]),
+        ] {
+            let status = await Self.curlPost(
+                socket: socket, path: "/event",
+                body: try hookBody(name, cwd: cwd, extra: extra),
+                hostSessionID: registeredID)
+            #expect(status == 0)
+        }
+
+        let buffered = await waitUntil(timeout: 5.0) {
+            await listener.pendingEventCount() == 4
+        }
+        #expect(buffered)
+        // Nothing may reach the registry before the window flushes.
+        let batchesBeforeFlush = await registry.appliedBatches.count
+        #expect(batchesBeforeFlush == 0)
+
+        await listener.flushPendingEvents()
+
+        let batches = await registry.appliedBatches
+        #expect(batches.count == 1)
+        #expect(batches.first?.events.count == 4)
+        #expect(batches.first?.origin == .hook)
+        let stats = await listener.currentStatistics()
+        #expect(stats.flushCount == 1)
+        #expect(stats.ingestedEvents == 4)
+        #expect(await registry.statuses[registeredID]?.run == .thinking)
+
+        await listener.stop()
+    }
+
+    @Test("Interleaved hook and statusline events flush as ordered origin groups")
+    func coalescedOriginGroupsPreserveOrder() async throws {
+        let cwd = "/tmp/hook-og-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let registeredID = registry.registeredID
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            coalescingInterval: 600,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        var status = await Self.curlPost(
+            socket: socket, path: "/event",
+            body: try hookBody("PreToolUse", cwd: cwd, extra: ["tool_name": "Read"]),
+            hostSessionID: registeredID)
+        #expect(status == 0)
+
+        let statusLine: [String: Any] = [
+            "session_id": "coalesce-session",
+            "workspace": ["current_dir": cwd],
+            "cost": ["total_cost_usd": 0.5],
+        ]
+        status = await Self.curlPost(
+            socket: socket, path: "/statusline",
+            body: try JSONSerialization.data(withJSONObject: statusLine),
+            hostSessionID: registeredID)
+        #expect(status == 0)
+
+        status = await Self.curlPost(
+            socket: socket, path: "/event",
+            body: try hookBody("PostToolUse", cwd: cwd, extra: ["tool_name": "Read"]),
+            hostSessionID: registeredID)
+        #expect(status == 0)
+
+        let buffered = await waitUntil(timeout: 5.0) {
+            await listener.pendingEventCount() == 3
+        }
+        #expect(buffered)
+
+        await listener.flushPendingEvents()
+
+        let batches = await registry.appliedBatches
+        #expect(batches.map { $0.origin } == [.hook, .statusLine, .hook])
+        #expect(batches.map { $0.events.count } == [1, 1, 1])
+        let stats = await listener.currentStatistics()
+        #expect(stats.flushCount == 1)
+        #expect(stats.ingestedEvents == 2)
+        #expect(stats.statusLineUpdates == 1)
+
+        await listener.stop()
+    }
+
+    @Test("Unregistered-session events drop as a unit at flush time")
+    func coalescedUnregisteredDropsAtFlush() async throws {
+        let cwd = "/tmp/hook-ud-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            coalescingInterval: 600,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let status = await Self.curlPost(
+            socket: socket, path: "/event",
+            body: try hookBody("PreToolUse", cwd: cwd, extra: ["tool_name": "Read"]),
+            hostSessionID: UUID())
+        #expect(status == 0)
+
+        let buffered = await waitUntil(timeout: 5.0) {
+            await listener.pendingEventCount() == 1
+        }
+        #expect(buffered)
+
+        await listener.flushPendingEvents()
+
+        let batches = await registry.appliedBatches
+        #expect(batches.isEmpty)
+        let stats = await listener.currentStatistics()
+        #expect(stats.flushCount == 1)
+        #expect(stats.ingestedEvents == 0)
 
         await listener.stop()
     }

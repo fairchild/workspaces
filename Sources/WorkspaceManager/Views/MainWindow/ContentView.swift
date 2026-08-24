@@ -625,7 +625,7 @@ struct ContentView: View {
             resolveTileID: { tileTreeStore.renderTileID(forSession: $0) },
             hostSurfaceStore: tileTreeStore.surfaceStore,
             tabTitleOverrides: tileTreeStore.tabTitleOverridesBySessionID,
-            agentStatuses: Array(agentSessionRegistry.statuses.values),
+            agentSessionRegistry: agentSessionRegistry,
             terminalContextMenuProvider: terminalContextMenu(for:),
             onSetSplitRatio: { splitID, ratio in
                 guard let activeSessionID = tileTreeStore.activeSessionID else { return }
@@ -717,7 +717,7 @@ struct ContentView: View {
                 paneCountBySessionKey: paneCountBySessionKeyForSidebar,
                 activeSessionKey: activeSessionKeyForSidebar,
                 hostSessions: tileTreeStore.sessions,
-                agentStatusBySessionID: agentSessionRegistry.statuses,
+                agentStatus: { agentSessionRegistry.observedStatus(for: $0) },
                 titleForSession: { session in
                     tileTreeStore.tabTitleOverride(for: session.id)
                         ?? tileTreeStore.surfaceStore.displayTitle(for: session)
@@ -935,7 +935,7 @@ struct ContentView: View {
                     _ = await seedLandingWorkspaceEnvironmentStateIfNeeded()
                 }
             }
-            .onChange(of: agentSessionRegistry.statuses) { _, _ in
+            .onReceive(agentSessionRegistry.statusesDidChange) { _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
                 refreshSessionSwitcherSnapshotIfPresented()
             }

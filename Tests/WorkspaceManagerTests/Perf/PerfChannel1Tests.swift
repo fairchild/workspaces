@@ -176,15 +176,13 @@ struct PerfChannel1Tests {
         let parallelism = 8
         let socketPath = socket.path
 
-        // Subscribe to lastEventAt mutations on the registry to time end-to-end.
-        // We index by event sequence: the registry's lastEventAt is monotone
-        // bumped each ingest, so we record `Date()` at every observed change and
-        // pair them with sends in send-order.
+        // Coalesced ingest (#1347): the registry publishes at most once per
+        // flush window, so publish count is the coalescing ratio, and delivery
+        // is confirmed via listener statistics rather than per-event publishes.
         let updateTimestamps = LockedArray<Date>()
         let cancellable = await MainActor.run {
-            registry.$statuses
-                .dropFirst()  // skip initial register()
-                .sink { _ in
+            registry.statusesDidChange
+                .sink {
                     updateTimestamps.append(Date())
                 }
         }
@@ -214,8 +212,13 @@ struct PerfChannel1Tests {
         ]
         let bindData = try JSONSerialization.data(withJSONObject: bindBody)
         _ = Self.rawPost(socket: socketPath, path: "/event", body: bindData, hostSessionID: hostID)
-        try await Task.sleep(nanoseconds: 100_000_000)
-        // Reset update timestamps after bind.
+        // Wait for the bind to drain through the coalescing window, then zero
+        // the publish log so only burst-driven publishes are counted.
+        let bindDeadline = Date().addingTimeInterval(2.0)
+        while await listener.currentStatistics().ingestedEvents < 1, Date() < bindDeadline {
+            try await Task.sleep(nanoseconds: 25_000_000)
+        }
+        let statsAfterBind = await listener.currentStatistics()
         updateTimestamps.reset()
 
         let started = Date()
@@ -237,39 +240,44 @@ struct PerfChannel1Tests {
         }
         let httpDoneAt = Date()
 
-        // Wait up to 5s for all 1000 mutations to land.
-        let deadline = Date().addingTimeInterval(5.0)
-        while updateTimestamps.count < totalEvents && Date() < deadline {
+        // Wait up to 10s for every event to drain through coalesced flushes.
+        let deadline = Date().addingTimeInterval(10.0)
+        var ingestedDelta = 0
+        while Date() < deadline {
+            let stats = await listener.currentStatistics()
+            ingestedDelta = stats.ingestedEvents - statsAfterBind.ingestedEvents
+            if ingestedDelta >= totalEvents { break }
             try await Task.sleep(nanoseconds: 25_000_000)
         }
         let updates = updateTimestamps.snapshot()
-        let sends = sendTimestamps.snapshot().sorted()
-        let ackEnd = httpDoneAt
+        _ = sendTimestamps.snapshot()
 
-        // Pair sends to updates in order. Fewer updates than sends is a finding.
-        let pairCount = min(sends.count, updates.count)
-        let registryLatencies: [Double] = (0..<pairCount).map { i in
-            updates[i].timeIntervalSince(sends[i]) * 1000
-        }
+        // Drain lag: time from the last HTTP ack until the final coalesced
+        // publish landed on the main actor.
+        let flushLagMS = max(
+            0, (updates.last.map { $0.timeIntervalSince(httpDoneAt) } ?? 0) * 1000)
 
         let httpStats = Self.summarize(httpLatencies.snapshot())
-        let regStats = Self.summarize(registryLatencies)
 
         let payload: [String: Any] = [
             "scenario": "channel1_ingest_burst",
             "events_sent": totalEvents,
             "parallelism": parallelism,
-            "events_observed": updates.count,
-            "wall_clock_ms": ackEnd.timeIntervalSince(started) * 1000,
+            "events_observed": ingestedDelta,
+            "wall_clock_ms": httpDoneAt.timeIntervalSince(started) * 1000,
             "metrics": [
                 "channel1_ingest_http_200_latency_ms": httpStats,
-                "channel1_ingest_registry_update_latency_ms": regStats,
+                "channel1_ingest_flush_lag_ms": Self.summarize([flushLagMS]),
+                "channel1_ingest_registry_publishes": ["value": updates.count],
             ],
         ]
         try Self.writeResult(payload, to: Self.resultPath(scenario: "channel1_ingest_burst"))
 
-        // Sanity assertion: we received >= 95% of events.
-        #expect(updates.count >= Int(Double(totalEvents) * 0.95))
+        // Sanity: >= 95% of events ingested, and the burst coalesced — far
+        // fewer publishes than events.
+        #expect(ingestedDelta >= Int(Double(totalEvents) * 0.95))
+        #expect(!updates.isEmpty)
+        #expect(updates.count <= totalEvents / 4)
     }
 
     // MARK: - Scenario C: long session register/deregister symmetry

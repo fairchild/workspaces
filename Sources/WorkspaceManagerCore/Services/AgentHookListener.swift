@@ -15,6 +15,11 @@
 //  immediately and process the payload off the read path. Hook handlers must be
 //  fast (<10ms) per the spec.
 //
+//  Ingest is coalesced (#1347): decoded events accumulate per host session and
+//  flush to the main actor at most once per coalescing interval — one
+//  main-actor hop and one `apply(events:)` per session per window, instead of
+//  one per event.
+//
 
 import Darwin
 import Foundation
@@ -37,7 +42,15 @@ public actor AgentHookListener {
         public var ingestedEvents: Int = 0
         public var statusLineUpdates: Int = 0
         public var commandMarkerUpdates: Int = 0
+        /// Coalesced main-actor flushes performed; with N events in one window
+        /// this advances once while `ingestedEvents` advances N times.
+        public var flushCount: Int = 0
     }
+
+    /// Default accumulation window before pending events flush to the main
+    /// actor. Bounded so attention states (awaiting input, permission
+    /// prompts) surface with imperceptible delay.
+    public static let defaultCoalescingInterval: TimeInterval = 0.15
 
     private let socketURL: URL
     private let lockURL: URL
@@ -49,11 +62,15 @@ public actor AgentHookListener {
     private var statistics = Statistics()
     private var commandMarkerRequestQueue: [HTTPRequest] = []
     private var isDrainingCommandMarkerRequests = false
+    private let coalescingInterval: TimeInterval
+    private var pendingEvents: [UUID: [(event: AgentEvent, origin: AgentEventOrigin)]] = [:]
+    private var pendingFlushTask: Task<Void, Never>?
 
     public init(
         bundleIdentifier: String,
         registry: any AgentSessionRegistryProtocol,
         commandStatusRegistry: LastCommandStatusRegistry? = nil,
+        coalescingInterval: TimeInterval = AgentHookListener.defaultCoalescingInterval,
         socketURLOverride: URL? = nil,
         logger: @escaping @Sendable (String) -> Void = { message in
             let logger = Logger(subsystem: "com.cloudcompute.workspaces", category: "AgentHookListener")
@@ -71,6 +88,7 @@ public actor AgentHookListener {
     ) {
         self.registry = registry
         self.commandStatusRegistry = commandStatusRegistry
+        self.coalescingInterval = coalescingInterval
         self.logger = logger
         if let override = socketURLOverride {
             self.socketURL = override
@@ -138,6 +156,7 @@ public actor AgentHookListener {
         let hadListener = listener != nil
         listener?.cancel()
         listener = nil
+        await flushPendingEvents()
         if hadListener {
             try? FileManager.default.removeItem(at: socketURL)
             logger("listener stopped; socket file removed at \(socketURL.path)")
@@ -267,10 +286,6 @@ public actor AgentHookListener {
             logger("dropping hook event without valid host session header")
             return
         }
-        guard await isRegisteredHostSession(hostSessionID) else {
-            logger("dropping hook event for unregistered host session \(hostSessionID.uuidString)")
-            return
-        }
 
         let event: AgentEvent?
         do {
@@ -282,17 +297,11 @@ public actor AgentHookListener {
         }
         guard let event else { return }
 
-        await MainActor.run { [registry, event] in
-            registry.apply(events: [event], for: hostSessionID, origin: .hook)
-        }
-        statistics.ingestedEvents += 1
+        enqueue(event, origin: .hook, for: hostSessionID)
     }
 
     private func processStatusLine(request: HTTPRequest) async {
         guard let hostSessionID = Self.hostSessionID(from: request.headers) else {
-            return
-        }
-        guard await isRegisteredHostSession(hostSessionID) else {
             return
         }
 
@@ -302,10 +311,74 @@ public actor AgentHookListener {
             return
         }
 
-        await MainActor.run { [registry] in
-            registry.apply(events: [.statusFields(fields)], for: hostSessionID, origin: .statusLine)
+        enqueue(.statusFields(fields), origin: .statusLine, for: hostSessionID)
+    }
+
+    // MARK: - Coalesced ingest
+
+    private func enqueue(_ event: AgentEvent, origin: AgentEventOrigin, for hostSessionID: UUID) {
+        pendingEvents[hostSessionID, default: []].append((event, origin))
+        guard pendingFlushTask == nil else { return }
+        pendingFlushTask = Task { [weak self, coalescingInterval] in
+            if coalescingInterval > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(coalescingInterval * 1_000_000_000))
+            }
+            guard !Task.isCancelled else { return }
+            await self?.flushPendingEvents()
         }
-        statistics.statusLineUpdates += 1
+    }
+
+    /// Test seam: number of decoded events currently buffered awaiting flush.
+    func pendingEventCount() -> Int {
+        pendingEvents.values.reduce(0) { $0 + $1.count }
+    }
+
+    /// Drain accumulated events: one main-actor hop for the whole window, one
+    /// `apply(events:)` per contiguous same-origin run per session. Registration
+    /// is checked at flush time so an unregistered session's burst drops as a
+    /// unit.
+    func flushPendingEvents() async {
+        pendingFlushTask?.cancel()
+        pendingFlushTask = nil
+        let batches = pendingEvents
+        pendingEvents = [:]
+        guard !batches.isEmpty else { return }
+
+        let outcome = await MainActor.run {
+            [registry] () -> (hookEvents: Int, statusLineEvents: Int, droppedSessions: [UUID]) in
+            var hookEvents = 0
+            var statusLineEvents = 0
+            var droppedSessions: [UUID] = []
+            for (hostSessionID, entries) in batches {
+                guard registry.status(for: hostSessionID) != nil else {
+                    droppedSessions.append(hostSessionID)
+                    continue
+                }
+                var index = entries.startIndex
+                while index < entries.endIndex {
+                    let origin = entries[index].origin
+                    var events: [AgentEvent] = []
+                    while index < entries.endIndex, entries[index].origin == origin {
+                        events.append(entries[index].event)
+                        index += 1
+                    }
+                    registry.apply(events: events, for: hostSessionID, origin: origin)
+                    if origin == .statusLine {
+                        statusLineEvents += events.count
+                    } else {
+                        hookEvents += events.count
+                    }
+                }
+            }
+            return (hookEvents, statusLineEvents, droppedSessions)
+        }
+
+        statistics.flushCount += 1
+        statistics.ingestedEvents += outcome.hookEvents
+        statistics.statusLineUpdates += outcome.statusLineEvents
+        for hostSessionID in outcome.droppedSessions {
+            logger("dropping events for unregistered host session \(hostSessionID.uuidString)")
+        }
     }
 
     private func processCommandMarkers(request: HTTPRequest) async {
@@ -332,7 +405,7 @@ public actor AgentHookListener {
         }
 
         let ingested = await MainActor.run { [registry, commandStatusRegistry, markers] in
-            guard registry.statuses[hostSessionID] != nil else { return false }
+            guard registry.status(for: hostSessionID) != nil else { return false }
             commandStatusRegistry.ingest(markers: markers, for: hostSessionID)
             return true
         }
@@ -341,12 +414,6 @@ public actor AgentHookListener {
             return
         }
         statistics.commandMarkerUpdates += 1
-    }
-
-    private func isRegisteredHostSession(_ hostSessionID: UUID) async -> Bool {
-        await MainActor.run { [registry] in
-            registry.statuses[hostSessionID] != nil
-        }
     }
 
     private static func hostSessionID(from headers: [String: String]) -> UUID? {

@@ -256,7 +256,8 @@ class PerfChannelBaselineTests(unittest.TestCase):
             statuses,
             {
                 "channel1_ingest_http_200_latency_ms": "missing",
-                "channel1_ingest_registry_update_latency_ms": "missing",
+                "channel1_ingest_flush_lag_ms": "missing",
+                "channel1_ingest_registry_publishes": "missing",
             },
         )
         with self.assertRaises(SystemExit):
