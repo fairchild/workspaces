@@ -69,6 +69,10 @@ public enum AutomationOperatorProvisioning {
             return Result(credential: existing, outcome: .reused)
         }
 
+        // Read before provisioning clears the file: opting out has to revoke the handle a
+        // caller may already be holding, and after the write the handle's name is gone.
+        let outgoing = optedIn ? nil : AutomationOperatorCredentialStore.load(from: credentialURL)
+
         let minted = AutomationOperatorProvisioner.provision(
             optedIn: optedIn,
             registry: registry,
@@ -80,6 +84,17 @@ public enum AutomationOperatorProvisioning {
         if let minted {
             return Result(credential: minted, outcome: .minted)
         }
+        if let outgoing {
+            revoke(handle: outgoing.handle, in: registry)
+        }
         return Result(credential: nil, outcome: optedIn ? .mintFailed : .notOptedIn)
+    }
+
+    /// Removing the file alone is not revocation: a process that read the credential a
+    /// moment ago keeps calling with a handle the registry still honors. Turning the
+    /// experiment off has to close that door, which is the whole point of turning it off.
+    private static func revoke(handle: String, in registry: AutomationHandleRegistry) {
+        guard let entry = registry.resolve(handle), entry.isOperator else { return }
+        registry.remove(hostSessionID: entry.hostSessionID)
     }
 }
