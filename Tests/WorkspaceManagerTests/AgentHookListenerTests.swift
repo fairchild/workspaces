@@ -896,6 +896,42 @@ struct AgentHookListenerTests {
         await listener.stop()
     }
 
+    @Test("stop() drains buffered events before returning and rejects later ones")
+    func stopDrainsBufferAndRejectsLateEvents() async throws {
+        let cwd = "/tmp/hook-sd-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let registeredID = registry.registeredID
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            coalescingInterval: 600,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let status = await Self.curlPost(
+            socket: socket, path: "/event",
+            body: try hookBody("UserPromptSubmit", cwd: cwd),
+            hostSessionID: registeredID)
+        #expect(status == 0)
+        let buffered = await waitUntil(timeout: 5.0) {
+            await listener.pendingEventCount() == 1
+        }
+        #expect(buffered)
+
+        // The 600s window has not fired; stop() must cut it short and drain.
+        await listener.stop()
+        #expect(await registry.statuses[registeredID]?.run == .thinking)
+        #expect(await listener.pendingEventCount() == 0)
+        let statsAfterStop = await listener.currentStatistics()
+        #expect(statsAfterStop.ingestedEvents == 1)
+    }
+
     @Test("Unregistered-session events drop as a unit at flush time")
     func coalescedUnregisteredDropsAtFlush() async throws {
         let cwd = "/tmp/hook-ud-\(UUID().uuidString.prefix(6))"

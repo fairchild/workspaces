@@ -149,6 +149,33 @@ struct AgentSessionRegistryPublicationTests {
         #expect(registry.status(for: id)?.hookActive == false)
     }
 
+    @Test("repeated identical attention events still publish, refreshing render lastEventAt")
+    func repeatedAttentionEventsPublish() async {
+        let clock = TestClock(start: Date(timeIntervalSince1970: 1_000_000))
+        let registry = makeRegistry(clock: clock)
+        let id = UUID()
+        registry.register(hostSessionID: id, cwd: "/tmp/attn", kind: .claudeCode)
+
+        var signals = 0
+        let cancellable = registry.statusesDidChange.sink { signals += 1 }
+        defer { cancellable.cancel() }
+
+        registry.apply(
+            events: [.awaitingInput(reason: .permissionPrompt, title: nil, message: nil)],
+            for: id, origin: .hook)
+        #expect(signals == 1)
+        let firstRenderTimestamp = registry.renderStatuses[id]?.lastEventAt
+
+        // Identical repeat: run state unchanged, but acknowledged attention UI
+        // compares event timestamps, so the fresh lastEventAt must publish.
+        clock.advance(by: 45)
+        registry.apply(
+            events: [.awaitingInput(reason: .permissionPrompt, title: nil, message: nil)],
+            for: id, origin: .hook)
+        #expect(signals == 2)
+        #expect(registry.renderStatuses[id]?.lastEventAt != firstRenderTimestamp)
+    }
+
     @Test("observedStatus carries live truth bookkeeping fields")
     func observedStatusCarriesTruth() async {
         let clock = TestClock(start: Date(timeIntervalSince1970: 1_000_000))

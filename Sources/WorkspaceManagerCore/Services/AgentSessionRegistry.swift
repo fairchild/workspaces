@@ -132,6 +132,7 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         guard var status = statuses[hostSessionID] else { return }
         var book = bookkeeping[hostSessionID] ?? Bookkeeping()
         let now = clock()
+        var containsAttentionEvent = false
 
         for event in events {
             let mappedRun = Self.runState(for: event)
@@ -170,15 +171,19 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
                     category: .toolFailure,
                     message: error ?? "tool '\(name)' failed"
                 )
+                containsAttentionEvent = true
 
             case .awaitingInput(let reason, _, _):
                 status.run = .awaitingInput(reason: reason)
+                containsAttentionEvent = true
 
             case .stopped(let error):
                 status.run = error == nil ? .complete : .errored(category: .unknown, message: error)
+                containsAttentionEvent = containsAttentionEvent || error != nil
 
             case .errored(let category, let message):
                 status.run = .errored(category: category, message: message)
+                containsAttentionEvent = true
 
             case .statusFields(let fields):
                 // Intentionally do not touch status.run.
@@ -212,8 +217,14 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
 
         // Gate publication: a batch that only moved `lastEventAt`/`hookActive`
         // (an unchanged status-line tick, toolEnd while already thinking) must
-        // not invalidate any view.
-        if let model = models[hostSessionID], !Self.isRenderEquivalent(model.status, status) {
+        // not invalidate any view. Attention events are the exception: a
+        // repeated identical prompt must re-arm acknowledged attention UI,
+        // whose acknowledgment model compares event timestamps — so the fresh
+        // `lastEventAt` has to reach the render snapshot even when nothing
+        // else changed.
+        if let model = models[hostSessionID],
+            containsAttentionEvent || !Self.isRenderEquivalent(model.status, status)
+        {
             model.status = status
             statusesDidChange.send()
         }

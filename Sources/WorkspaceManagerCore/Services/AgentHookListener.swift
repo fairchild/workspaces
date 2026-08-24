@@ -64,7 +64,8 @@ public actor AgentHookListener {
     private var isDrainingCommandMarkerRequests = false
     private let coalescingInterval: TimeInterval
     private var pendingEvents: [UUID: [(event: AgentEvent, origin: AgentEventOrigin)]] = [:]
-    private var pendingFlushTask: Task<Void, Never>?
+    private var drainTask: Task<Void, Never>?
+    private var isStopped = false
 
     public init(
         bundleIdentifier: String,
@@ -153,6 +154,11 @@ public actor AgentHookListener {
     }
 
     public func stop() async {
+        // Drain boundary: no new events are accepted past this line, the
+        // coalescing sleep is cut short, and the active drain (if any) is
+        // awaited — so no buffered batch can reach the registry after stop()
+        // returns.
+        isStopped = true
         let hadListener = listener != nil
         listener?.cancel()
         listener = nil
@@ -317,14 +323,19 @@ public actor AgentHookListener {
     // MARK: - Coalesced ingest
 
     private func enqueue(_ event: AgentEvent, origin: AgentEventOrigin, for hostSessionID: UUID) {
+        guard !isStopped else {
+            logger("dropping event received after listener stop for \(hostSessionID.uuidString)")
+            return
+        }
         pendingEvents[hostSessionID, default: []].append((event, origin))
-        guard pendingFlushTask == nil else { return }
-        pendingFlushTask = Task { [weak self, coalescingInterval] in
+        guard drainTask == nil else { return }
+        drainTask = Task { [weak self, coalescingInterval] in
             if coalescingInterval > 0 {
+                // A cancelled sleep means stop() or a test wants the buffer
+                // drained now, not skipped — fall through either way.
                 try? await Task.sleep(nanoseconds: UInt64(coalescingInterval * 1_000_000_000))
             }
-            guard !Task.isCancelled else { return }
-            await self?.flushPendingEvents()
+            await self?.drainPendingEvents()
         }
     }
 
@@ -333,52 +344,68 @@ public actor AgentHookListener {
         pendingEvents.values.reduce(0) { $0 + $1.count }
     }
 
-    /// Drain accumulated events: one main-actor hop for the whole window, one
-    /// `apply(events:)` per contiguous same-origin run per session. Registration
-    /// is checked at flush time so an unregistered session's burst drops as a
-    /// unit.
+    /// Cut the coalescing window short and wait until the buffer is fully
+    /// drained. Used by `stop()` and tests; safe to call at any point in the
+    /// drain lifecycle.
     func flushPendingEvents() async {
-        pendingFlushTask?.cancel()
-        pendingFlushTask = nil
-        let batches = pendingEvents
-        pendingEvents = [:]
-        guard !batches.isEmpty else { return }
+        if let task = drainTask {
+            task.cancel()
+            await task.value
+        } else if !pendingEvents.isEmpty {
+            await drainPendingEvents()
+        }
+    }
 
-        let outcome = await MainActor.run {
-            [registry] () -> (hookEvents: Int, statusLineEvents: Int, droppedSessions: [UUID]) in
-            var hookEvents = 0
-            var statusLineEvents = 0
-            var droppedSessions: [UUID] = []
-            for (hostSessionID, entries) in batches {
-                guard registry.status(for: hostSessionID) != nil else {
-                    droppedSessions.append(hostSessionID)
-                    continue
-                }
-                var index = entries.startIndex
-                while index < entries.endIndex {
-                    let origin = entries[index].origin
-                    var events: [AgentEvent] = []
-                    while index < entries.endIndex, entries[index].origin == origin {
-                        events.append(entries[index].event)
-                        index += 1
+    /// The single drainer: loops until the buffer is empty — events enqueued
+    /// while a batch is on the main actor are picked up by the next
+    /// iteration, so batches never interleave and delivery order per session
+    /// is the arrival order. One main-actor hop per iteration, one
+    /// `apply(events:)` per contiguous same-origin run per session.
+    /// Registration is checked at flush time so an unregistered session's
+    /// burst drops as a unit. Only the task stored in `drainTask` runs this,
+    /// which is what makes the drainer single.
+    private func drainPendingEvents() async {
+        while !pendingEvents.isEmpty {
+            let batches = pendingEvents
+            pendingEvents = [:]
+
+            let outcome = await MainActor.run {
+                [registry] () -> (hookEvents: Int, statusLineEvents: Int, droppedSessions: [UUID]) in
+                var hookEvents = 0
+                var statusLineEvents = 0
+                var droppedSessions: [UUID] = []
+                for (hostSessionID, entries) in batches {
+                    guard registry.status(for: hostSessionID) != nil else {
+                        droppedSessions.append(hostSessionID)
+                        continue
                     }
-                    registry.apply(events: events, for: hostSessionID, origin: origin)
-                    if origin == .statusLine {
-                        statusLineEvents += events.count
-                    } else {
-                        hookEvents += events.count
+                    var index = entries.startIndex
+                    while index < entries.endIndex {
+                        let origin = entries[index].origin
+                        var events: [AgentEvent] = []
+                        while index < entries.endIndex, entries[index].origin == origin {
+                            events.append(entries[index].event)
+                            index += 1
+                        }
+                        registry.apply(events: events, for: hostSessionID, origin: origin)
+                        if origin == .statusLine {
+                            statusLineEvents += events.count
+                        } else {
+                            hookEvents += events.count
+                        }
                     }
                 }
+                return (hookEvents, statusLineEvents, droppedSessions)
             }
-            return (hookEvents, statusLineEvents, droppedSessions)
-        }
 
-        statistics.flushCount += 1
-        statistics.ingestedEvents += outcome.hookEvents
-        statistics.statusLineUpdates += outcome.statusLineEvents
-        for hostSessionID in outcome.droppedSessions {
-            logger("dropping events for unregistered host session \(hostSessionID.uuidString)")
+            statistics.flushCount += 1
+            statistics.ingestedEvents += outcome.hookEvents
+            statistics.statusLineUpdates += outcome.statusLineEvents
+            for hostSessionID in outcome.droppedSessions {
+                logger("dropping events for unregistered host session \(hostSessionID.uuidString)")
+            }
         }
+        drainTask = nil
     }
 
     private func processCommandMarkers(request: HTTPRequest) async {
