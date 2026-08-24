@@ -354,15 +354,75 @@ class FactoryCommentResponderTests(unittest.TestCase):
                 False,
             ),
             (
+                "human prose before the trail pipe",
+                "- 2026-08-24T10:00Z failed to launch | can you investigate?",
+                False,
+            ),
+            (
+                "verb word without its grammar before a pipe",
+                "- 2026-08-24T10:00Z advanced warning | is this expected?",
+                False,
+            ),
+            (
                 "worklog line below human prose",
                 "Pasting the session's last update for context:\n\n"
                 "- 2026-08-24T03:48:50Z progress | replay harness",
                 False,
             ),
+            (
+                "human indenting a marker as code",
+                "The marker currently emitted is:\n\n"
+                f"    {claim_marker}\n\nShould we version it?",
+                False,
+            ),
+            (
+                "lazy blockquote continuation carrying a marker",
+                f"> The agent wrote:\nClaim marker: {claim_marker}\n\nWhy did it fail?",
+                False,
+            ),
+            (
+                "worklog cancelled row",
+                "- 2026-08-24T10:00:00Z cancelled | superseded by #1360",
+                True,
+            ),
+            (
+                "worklog failed row",
+                "- 2026-08-24T10:00:00Z failed | evidence lane unavailable",
+                True,
+            ),
+            (
+                "worklog retried row",
+                "- 2026-08-24T10:00:00Z retried | claim expired",
+                True,
+            ),
+            (
+                "worklog rescued row",
+                "- 2026-08-24T10:00:00Z rescued claimer=claude-code:sess branch=claude/x",
+                True,
+            ),
+            (
+                "worklog done row with PR trail",
+                "- 2026-08-24T10:00:00Z advanced to=done | PR=https://github.com/x/y/pull/1",
+                True,
+            ),
+            (
+                "human-typed conforming worklog is protocol traffic",
+                "- 2026-08-24T10:00:00Z progress | I reproduced the loop manually.",
+                True,
+            ),
         ]
         for name, body, expected in cases:
             with self.subTest(name):
-                self.assertEqual(payload.agent_authored_body(body), expected)
+                self.assertEqual(payload.agent_authored_body(body, 1347), expected)
+
+    def test_contributor_marker_binds_to_the_current_issue(self) -> None:
+        cross_issue = (
+            "This stale marker came from #1347:\n"
+            "<!-- contributor:issue=1347;status=claimed;agent=claude-code;"
+            "branch=claude/example -->\n\nWhy did it affect #1357?"
+        )
+        self.assertFalse(payload.agent_authored_body(cross_issue, 1357))
+        self.assertTrue(payload.agent_authored_body(cross_issue, 1347))
 
     def test_agent_authored_comment_stands_down_without_touching_target(self) -> None:
         result, outputs, prompt_exists, github_get = self.run_prepare_with_body(
