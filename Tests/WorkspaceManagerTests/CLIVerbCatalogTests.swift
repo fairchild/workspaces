@@ -132,6 +132,9 @@ struct CLIVerbCatalogTests {
               workspaces ws list
               workspaces ws path <workspace>
               workspaces ws race <repo> <prompt...> [--n 3] [--cmd "claude"] [--name <slug>] [--no-launch]
+              workspaces ws launch <workspace> [--cmd "command"] [--name <label>] [--json]
+              workspaces ws read <handle|workspace> [--lines N] [--json]
+              workspaces ws send <handle|workspace> --text "text" [--enter] [--json]
               workspaces open <workspace> [--cmd "command"]
               workspaces run <workspace> -- <command...>
               workspaces run <workspace> --cmd "command"
@@ -173,6 +176,16 @@ struct CLIVerbCatalogTests {
               read rather than as a whole-call budget. A probe that misses falls
               back to the CLI-local plane, and says which way it missed on an
               interactive terminal (or under WORKSPACES_CLI_VERBOSE=1).
+
+            Detached sessions:
+              'ws launch' returns a handle instead of attaching. The handle is a tmux
+              session on the app's own '-L workspaces' socket, named the way the app
+              names that workspace's terminal — so opening the workspace in the app
+              (tmux-per-session mode) attaches to the agent already running there
+              rather than starting a second one. '--name <label>' makes a sibling
+              session instead. 'ws read' and 'ws send' take either a handle or a
+              workspace selector. Set WORKSPACES_TMUX_SOCKET_LABEL to work against a
+              server other than the app's.
 
             Launch behavior:
               - no args: open the WorkSpaces app

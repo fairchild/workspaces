@@ -63,4 +63,25 @@ struct TmuxSessionNamingTests {
             #expect(!name.contains(" "))
         }
     }
+
+    @Test("A labelled sibling is distinct from the primary and reproducible from its label")
+    func labeledNameIsDistinctAndReproducible() {
+        let labeled = TmuxSessionNaming.labeledName(for: directory, label: "review")
+
+        #expect(labeled != TmuxSessionNaming.defaultName(for: directory))
+        #expect(labeled.hasPrefix(TmuxSessionNaming.defaultName(for: directory)))
+        // Reproducible from the label alone is the point: a caller who launched with
+        // `--name review` can re-derive the handle without having kept it.
+        #expect(labeled == TmuxSessionNaming.labeledName(for: directory, label: "review"))
+        #expect(labeled != TmuxSessionNaming.labeledName(for: directory, label: "ship"))
+    }
+
+    @Test("A label carrying tmux target syntax is sanitized like every other component")
+    func labeledNameSanitizesLabel() {
+        let labeled = TmuxSessionNaming.labeledName(for: directory, label: "Two Words:v1.2")
+
+        #expect(!labeled.contains(":"))
+        #expect(!labeled.contains("."))
+        #expect(!labeled.contains(" "))
+    }
 }

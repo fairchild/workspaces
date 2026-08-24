@@ -191,7 +191,7 @@ private final class CLIApp {
 
     private func runWorkspace(arguments: [String], state: inout CLIState) async throws -> Int32 {
         guard let subcommand = arguments.first else {
-            throw CLIError("Missing ws subcommand. Expected: new, list, path, race")
+            throw CLIError("Missing ws subcommand. Expected: new, list, path, race, launch, read, send")
         }
 
         switch subcommand {
@@ -258,9 +258,251 @@ private final class CLIApp {
         case "race":
             return try await runWorkspaceRace(arguments: Array(arguments.dropFirst()), state: &state)
 
+        case "launch":
+            return try await runWorkspaceLaunch(arguments: Array(arguments.dropFirst()), state: &state)
+
+        case "read":
+            return try await runWorkspaceRead(arguments: Array(arguments.dropFirst()), state: &state)
+
+        case "send":
+            return try await runWorkspaceSend(arguments: Array(arguments.dropFirst()), state: &state)
+
         default:
-            throw CLIError("Unknown ws subcommand '\(subcommand)'. Expected: new, list, path, race")
+            throw CLIError(
+                "Unknown ws subcommand '\(subcommand)'. Expected: new, list, path, race, launch, read, send"
+            )
         }
+    }
+
+    /// The tmux plane's control seam, on the socket this launch resolves to. One
+    /// construction point so every verb agrees on which server it is talking to.
+    private func tmuxControl() -> TmuxSessionControl {
+        TmuxSessionControl(
+            socketLabel: TmuxSessionControl.socketLabel(from: ProcessInfo.processInfo.environment)
+        )
+    }
+
+    /// `workspaces ws launch <workspace> [--cmd "<command>"] [--name <label>] [--json]` — the
+    /// detached counterpart to `open`. It returns a handle instead of attaching, so a caller
+    /// that started an agent can go on to do something else and come back through `ws read`.
+    ///
+    /// The handle is a tmux session on the app's own `-L workspaces` socket, named the way the
+    /// app names the workspace's terminal. That naming is the registration: when the app opens
+    /// that workspace's terminal in tmux-per-session mode it runs `new-session -A` against the
+    /// same name, so it attaches to the agent already running there rather than starting a
+    /// second one. `--name` opts out, for a second concurrent agent in one workspace.
+    private func runWorkspaceLaunch(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        let usage = "workspaces ws launch <workspace> [--cmd \"<command>\"] [--name <label>] [--json]"
+
+        var workspaceToken: String?
+        var commandOverride: String?
+        var label: String?
+        var json = false
+
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--cmd":
+                index += 1
+                guard index < arguments.count else { throw CLIError("Missing value for --cmd") }
+                commandOverride = arguments[index]
+            case "--name":
+                index += 1
+                guard index < arguments.count else { throw CLIError("Missing value for --name") }
+                label = arguments[index]
+            case "--json":
+                json = true
+            default:
+                guard workspaceToken == nil else { throw CLIError("Usage: \(usage)") }
+                workspaceToken = arguments[index]
+            }
+            index += 1
+        }
+
+        guard let workspaceToken else {
+            throw CLIError("Usage: \(usage)")
+        }
+        if let label, label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw CLIError("--name cannot be empty.")
+        }
+
+        var workspace = try resolveWorkspace(token: workspaceToken, state: &state)
+        let workspaceURL = URL(fileURLWithPath: workspace.path)
+        let config = loadWorkspaceLocalConfig(at: workspaceURL)
+        let command = commandOverride ?? workspace.defaultCommand ?? config.defaultCommand
+
+        if workspace.defaultCommand == nil, let defaultCommand = config.defaultCommand {
+            workspace.defaultCommand = defaultCommand
+            updateWorkspace(workspace, state: &state)
+        }
+
+        let handle =
+            label.map { TmuxSessionNaming.labeledName(for: workspaceURL, label: $0) }
+            ?? TmuxSessionNaming.defaultName(for: workspaceURL)
+
+        let control = tmuxControl()
+        do {
+            try await control.launch(handle: handle, directory: workspaceURL, command: command)
+        } catch let error as TmuxSessionControl.ControlError {
+            throw CLIError(error.localizedDescription)
+        }
+
+        markWorkspaceAccess(workspaceID: workspace.id, command: command, state: &state)
+        try stateStore.save(state)
+
+        let result = WorkspaceLaunchResult(
+            handle: handle,
+            workspace: workspaceDisplayName(workspace),
+            workspaceID: workspace.id,
+            path: workspace.path,
+            command: command,
+            socketLabel: control.socketLabel,
+            canonicalForWorkspace: label == nil
+        )
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        print("Handle: \(handle)")
+        print("Workspace: \(result.workspace)")
+        print("Command: \(command ?? "(login shell)")")
+        if result.canonicalForWorkspace {
+            print("This is the workspace's own session name — the app attaches to it in tmux-per-session mode.")
+        }
+        print("Read: workspaces ws read \(handle)")
+        return 0
+    }
+
+    /// `workspaces ws read <handle|workspace> [--lines N] [--json]` — the scrollback of a
+    /// detached session, oldest line first. The selector takes either spelling because a
+    /// caller who launched into a workspace's own session already knows the workspace and
+    /// should not have to re-derive the handle from it.
+    private func runWorkspaceRead(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        let usage = "workspaces ws read <handle|workspace> [--lines N] [--json]"
+
+        var token: String?
+        var lines = TmuxSessionControl.defaultCaptureLines
+        var json = false
+
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--lines":
+                index += 1
+                guard index < arguments.count, let parsed = Int(arguments[index]), parsed > 0 else {
+                    throw CLIError("Missing or invalid value for --lines")
+                }
+                lines = parsed
+            case "--json":
+                json = true
+            default:
+                guard token == nil else { throw CLIError("Usage: \(usage)") }
+                token = arguments[index]
+            }
+            index += 1
+        }
+
+        guard let token else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let control = tmuxControl()
+        let handle = await resolveSessionHandle(token: token, control: control, state: &state)
+        let text: String
+        do {
+            text = try await control.read(handle: handle, lines: lines)
+        } catch let error as TmuxSessionControl.ControlError {
+            throw CLIError(error.localizedDescription)
+        }
+
+        if json {
+            let result = WorkspaceReadResult(
+                handle: handle,
+                socketLabel: control.socketLabel,
+                lines: lines,
+                text: text
+            )
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+        print(text, terminator: text.hasSuffix("\n") ? "" : "\n")
+        return 0
+    }
+
+    /// `workspaces ws send <handle|workspace> --text "<text>" [--enter] [--json]` — types into a
+    /// detached session. The tile-scoped `automation input write` needs a running app and a
+    /// handle injected into a tile's environment; this needs neither, which is what makes it
+    /// usable from a script that just launched the session.
+    private func runWorkspaceSend(arguments: [String], state: inout CLIState) async throws -> Int32 {
+        let usage = "workspaces ws send <handle|workspace> --text \"<text>\" [--enter] [--json]"
+
+        var token: String?
+        var text: String?
+        var submit = false
+        var json = false
+
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--text":
+                index += 1
+                guard index < arguments.count else { throw CLIError("Missing value for --text") }
+                text = arguments[index]
+            case "--enter":
+                submit = true
+            case "--json":
+                json = true
+            default:
+                guard token == nil else { throw CLIError("Usage: \(usage)") }
+                token = arguments[index]
+            }
+            index += 1
+        }
+
+        guard let token, let text else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let control = tmuxControl()
+        let handle = await resolveSessionHandle(token: token, control: control, state: &state)
+        let bytes: Int
+        do {
+            bytes = try await control.send(handle: handle, text: text, submit: submit)
+        } catch let error as TmuxSessionControl.ControlError {
+            throw CLIError(error.localizedDescription)
+        }
+
+        let result = WorkspaceSendResult(
+            handle: handle,
+            socketLabel: control.socketLabel,
+            bytes: bytes,
+            submitted: submit
+        )
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+        print("Sent \(bytes) byte(s) to \(handle)\(submit ? " and submitted" : "")")
+        return 0
+    }
+
+    /// A live session named by the token wins over every other reading of it: what the caller
+    /// typed exists, so no resolution can improve on it. Only when nothing by that name is
+    /// running does the token get read as a workspace selector. A token that is neither reaches
+    /// the verb unchanged, so the failure names what the caller actually typed.
+    private func resolveSessionHandle(
+        token: String,
+        control: TmuxSessionControl,
+        state: inout CLIState
+    ) async -> String {
+        if await control.isLive(handle: token) {
+            return token
+        }
+        guard let workspace = try? resolveWorkspace(token: token, state: &state) else {
+            return token
+        }
+        return TmuxSessionNaming.defaultName(for: URL(fileURLWithPath: workspace.path))
     }
 
     /// Fans one prompt across N fresh worktree workspaces and launches a detached headless
