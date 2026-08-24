@@ -299,6 +299,100 @@ class FactoryCommentResponderTests(unittest.TestCase):
                 self.assertEqual(outputs["matched"], str(expect_reply).lower())
                 self.assertEqual(prompt_exists, expect_reply)
 
+    def test_agent_authored_body_detects_machine_markers_only(self) -> None:
+        claim_marker = (
+            "<!-- contributor:issue=1347;status=claimed;agent=claude-code;"
+            "branch=claude/issue-1347-completion-23397d -->"
+        )
+        cases = [
+            (
+                "bare sync marker comment",
+                f"Claim marker for sync (branch is the claim identity):\n\n{claim_marker}",
+                True,
+            ),
+            (
+                "claim prose with inline marker",
+                f"Claiming this issue for execution on `codex/april-branch`.\n\n{claim_marker}",
+                True,
+            ),
+            (
+                "worklog progress header",
+                "- 2026-08-24T03:48:50Z progress | Design decisions for the A+C1 slice\n\n"
+                "**C1 / PreToolUse — keep it.** Verified in code.",
+                True,
+            ),
+            (
+                "worklog claim transition",
+                "- 2026-08-24T03:44:00Z advanced to=claimed "
+                "claimer=claude-code:session_01AB branch=claude/issue-1357",
+                True,
+            ),
+            ("plain human comment", "Please also update the state label.", False),
+            (
+                "human quoting a sync marker",
+                f"> {claim_marker}\n\nWhy did this claim fail?",
+                False,
+            ),
+            (
+                "human fencing a sync marker",
+                f"The claim format is:\n```\n{claim_marker}\n```\nShould we change it?",
+                False,
+            ),
+            (
+                "human quoting a worklog line",
+                "> - 2026-08-24T03:48:50Z progress | replay harness\n\nIs this done?",
+                False,
+            ),
+            (
+                "human bullet with a bare date",
+                "- 2026-08-24 pairing notes\n- follow up on the replay harness",
+                False,
+            ),
+            (
+                "human bullet with timestamp and verb word but no worklog grammar",
+                "- 2026-08-24T10:00 progress on the sidebar was good",
+                False,
+            ),
+            (
+                "worklog line below human prose",
+                "Pasting the session's last update for context:\n\n"
+                "- 2026-08-24T03:48:50Z progress | replay harness",
+                False,
+            ),
+        ]
+        for name, body, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(payload.agent_authored_body(body), expected)
+
+    def test_agent_authored_comment_stands_down_without_touching_target(self) -> None:
+        result, outputs, prompt_exists, github_get = self.run_prepare_with_body(
+            "Claim marker for sync:\n\n"
+            "<!-- contributor:issue=1089;status=claimed;agent=claude-code;"
+            "branch=claude/issue-1089-fix -->"
+        )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(outputs["matched"], "false")
+        self.assertEqual(outputs["already_replied"], "false")
+        self.assertFalse(prompt_exists)
+        github_get.assert_not_called()
+
+    def test_worklog_comment_stands_down_but_quoting_human_gets_reply(self) -> None:
+        agent_result, agent_outputs, agent_prompt, _ = self.run_prepare_with_body(
+            "- 2026-08-24T03:48:50Z progress | coalescing landed, evidence next"
+        )
+        human_result, human_outputs, human_prompt, _ = self.run_prepare_with_body(
+            "> - 2026-08-24T03:48:50Z progress | coalescing landed\n\n"
+            "Does the evidence capture cover the replay harness?"
+        )
+
+        self.assertEqual(agent_result, 0)
+        self.assertEqual(agent_outputs["matched"], "false")
+        self.assertFalse(agent_prompt)
+        self.assertEqual(human_result, 0)
+        self.assertEqual(human_outputs["matched"], "true")
+        self.assertTrue(human_prompt)
+
     def test_prepare_hardwires_comment_and_target_ids_and_detects_duplicate(
         self,
     ) -> None:

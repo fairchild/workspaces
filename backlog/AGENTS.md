@@ -66,6 +66,8 @@ Two existing systems write the `claimed` / `review` / `mergeable` labels:
 
 These two systems and the `backlog` skill use **different claim comment formats**. Sync reads an HTML-comment marker embedded in the contributor's comment (`<!-- contributor:issue=N;status=...;agent=...;branch=... -->`); the skill posts a worklog line (`- <ts> advanced to=claimed claimer=... branch=...`). Sync ignores comments without its marker and treats the issue as unclaimed, so a skill-written `claimed` label on a sync-managed issue gets reverted to `ready` on the next sync pass.
 
+Either machine format is also what keeps the factory comment responder out of agent threads: sessions comment under the owner's login, and the responder (`scripts/factory-responder-payload.py`) stands down on comments carrying a sync marker or opening with a worklog header, since author checks can't tell a session from the human owner. Put the marker in the claim comment itself rather than a separate follow-up — free-prose comments with the marker elsewhere read as human and draw a reply.
+
 This carves a clean operational split:
 
 - **`agent` + `task` issues — do not use the skill.** Peter Planner creates them, owner approval routes through `sync-execution-state.py`, April/Plat claim via the contributor runtime which writes sync's marker. `backlog take`/`advance`/`rescue` on these issues fights sync and loses. Operate them through the agent automation paths.
