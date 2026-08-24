@@ -36,6 +36,15 @@ public enum TmuxSessionNaming {
         return "\(defaultName(for: directory))-p\(suffix)"
     }
 
+    /// Name for a caller-labelled sibling session: the directory-derived name plus
+    /// the sanitized label. A second headless agent in one workspace needs a handle
+    /// of its own, and one the caller chose is one they can find again — unlike the
+    /// pane-session suffix, which only launch knows.
+    public static func labeledName(for directory: URL, label: String) -> String {
+        let sanitized = sanitizeSessionComponent(label)
+        return "\(defaultName(for: directory))-\(sanitized)"
+    }
+
     private static func sanitizeSessionComponent(_ value: String) -> String {
         let transformed = value.lowercased().map { character -> Character in
             if character.isASCII, character.isLetter || character.isNumber {

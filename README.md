@@ -64,12 +64,23 @@ swift run workspaces repo add ~/code/my-repo
 swift run workspaces ws new my-repo feature-auth
 swift run workspaces open my-repo/feature-auth --cmd "claude"
 swift run workspaces ws race my-repo "add a health endpoint" --n 3 --cmd "claude"
+swift run workspaces ws launch my-repo/feature-auth --cmd "claude" --json
+swift run workspaces ws read my-repo/feature-auth --lines 50
+swift run workspaces ws send my-repo/feature-auth --text "run the tests" --enter
 ```
 
 `ws race` fans one prompt across N fresh worktree workspaces (`race-<slug>-1..N`)
 and runs the agent headlessly in each (`<cmd> -p '<prompt>'`, output in the
 workspace's `.race-agent.log`). Use `workspaces open <repo>/<name>` to attach to
 any of them interactively.
+
+`ws launch` is the detached counterpart to `open`: it returns a handle instead of
+attaching, so a script can start an agent and come back to it. The handle is a
+tmux session on the app's own `-L workspaces` socket, named the way the app names
+that workspace's terminal — opening the workspace in the app (tmux-per-session
+mode) attaches to the agent already running there rather than starting a second
+one. `--name <label>` launches a sibling session instead. `ws read` and `ws send`
+take either a handle or a workspace selector.
 
 ## Configuration
 
