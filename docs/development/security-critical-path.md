@@ -33,7 +33,8 @@ not a broad public security stance.
   approval to read any of them — the gate covers what a job can read, not only
   when it runs. The certificate is imported into a temporary keychain the job
   creates and destroys, so no signing material persists on the runner.
-- `xcode-cloud-logs.yml` reads an Admin-scoped App Store Connect key, so it holds
+- `xcode-cloud-logs.yml` reads the App Store Connect key — a Team key at App
+  Manager role, the least role the Xcode Cloud API accepts (#1352) — and holds
   its own copies on the `xcode-cloud-logs` environment. That one gates on a
   deployment branch policy (`main` and `ci/xcode-cloud-logs`) instead of
   approval: log fetching should not need a human, but the key should not be

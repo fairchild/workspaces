@@ -287,9 +287,9 @@ the workflow never installed (#1298), and a red `main`.
 The rehearsal was routine through v0.23.0 — dispatched 2026-06-26, 06-28, 06-30,
 and 07-07, green every time — and was skipped ahead of v0.24.0. It also covers
 more ground now than it did then: #1293 moved signing and notarization from the
-self-hosted `signing-host` runner to a hosted `macos-15` image, and as of
-2026-08-13 every hosted attempt has failed before reaching the notarization
-step, so notarization has not yet run green on the current runner.
+self-hosted `signing-host` runner to a hosted `macos-15` image, and the hosted
+lane has since run green end to end — a manual `main` dispatch on 2026-08-22
+(run #78) and the v0.25.0 release on 2026-08-23 (run #80).
 
 A rehearsal is worth its approval click after a change to `release.yml`,
 signing, notarization, or the runner image — the surfaces only this workflow
