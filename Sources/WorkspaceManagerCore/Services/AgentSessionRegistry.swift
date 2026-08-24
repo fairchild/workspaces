@@ -118,6 +118,15 @@ public final class AgentSessionRegistry: ObservableObject, AgentSessionRegistryP
         return statuses[hostSessionID]
     }
 
+    /// Render-state snapshot for aggregation surfaces: each session's value as
+    /// of its last render-relevant change (`lastEventAt`/`hookActive` stale by
+    /// design). Feeding aggregators these instead of ``statuses`` keeps their
+    /// own equality gates closed through no-op ticks, so a quiet bus publishes
+    /// nothing anywhere downstream.
+    public var renderStatuses: [UUID: AgentSessionStatus] {
+        models.mapValues(\.status)
+    }
+
     public func apply(events: [AgentEvent], for hostSessionID: UUID, origin: AgentEventOrigin) {
         guard !events.isEmpty else { return }
         guard var status = statuses[hostSessionID] else { return }

@@ -65,6 +65,11 @@ struct ContentView: View {
     @ObservedObject var workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     /// Seam to the debug-only smoke harness; inert in release builds.
     let smokeDriver: SmokeScenarioDriver
+    /// Unobserved on purpose: ContentView.body renders nothing from the
+    /// aggregator — attention UI subscribes where it renders (sidebar rows,
+    /// toolbar pill) — so aggregator publishes must not re-evaluate the whole
+    /// window (#1347).
+    let workspaceStatusAggregator: WorkspaceStatusAggregator
     @Query(sort: \Repo.addedAt, order: .reverse) private var repos: [Repo]
     @Query(sort: \WebSource.addedAt, order: .reverse) private var webSources: [WebSource]
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -82,7 +87,6 @@ struct ContentView: View {
     @Environment(\.workspaceService) private var workspaceService
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     @EnvironmentObject private var agentSessionRegistry: AgentSessionRegistry
-    @EnvironmentObject private var workspaceStatusAggregator: WorkspaceStatusAggregator
     @ObservedObject private var notificationCoordinator = NotificationCoordinator.shared
 
     @State private var viewState = MainWindowViewState()
@@ -2669,7 +2673,9 @@ struct ContentView: View {
         let inputs = maintenanceController.aggregatorInputs(
             repos: repos,
             sessions: tileTreeStore.sessions,
-            agentStatusBySessionID: agentSessionRegistry.statuses,
+            // Render snapshots, not truth: the aggregator's own change gates
+            // stay closed when only lastEventAt bookkeeping moved (#1347).
+            agentStatusBySessionID: agentSessionRegistry.renderStatuses,
             registry: workspaceProviderRegistry,
             normalizePath: { url in normalizePath(url.path) }
         )
