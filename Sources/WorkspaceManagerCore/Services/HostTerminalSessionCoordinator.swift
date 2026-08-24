@@ -40,11 +40,34 @@ public enum HostTerminalSessionKey: Hashable, Sendable, CustomDebugStringConvert
         }
     }
 
+    private static let normalizationCacheLock = NSLock()
+    nonisolated(unsafe) private static var normalizationCache: [String: String] = [:]
+
+    /// Key normalization runs per sidebar row per render and per coordinator
+    /// sweep; symlink resolution is an `lstat` per path component, so the
+    /// resolved form is memoized (#1347 B1). Stale only if the filesystem
+    /// changes under an already-seen raw path. Resolution happens outside the
+    /// lock so a slow disk never serializes unrelated lookups.
     private static func normalizePath(_ path: String) -> String {
-        URL(fileURLWithPath: path)
+        normalizationCacheLock.lock()
+        if let cached = normalizationCache[path] {
+            normalizationCacheLock.unlock()
+            return cached
+        }
+        normalizationCacheLock.unlock()
+
+        let normalized = URL(fileURLWithPath: path)
             .standardizedFileURL
             .resolvingSymlinksInPath()
             .path
+
+        normalizationCacheLock.lock()
+        if normalizationCache.count >= 4096 {
+            normalizationCache.removeAll(keepingCapacity: true)
+        }
+        normalizationCache[path] = normalized
+        normalizationCacheLock.unlock()
+        return normalized
     }
 }
 
