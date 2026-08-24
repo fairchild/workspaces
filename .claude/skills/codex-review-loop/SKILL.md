@@ -28,8 +28,11 @@ docs-only diffs.
 2. **Codex, directed.**
 
    ```bash
-   codex exec -c model="gpt-5.6-sol" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>"
+   codex exec -c model="gpt-5.6-sol" -c model_reasoning_effort="xhigh" --skip-git-repo-check "<prompt>" < /dev/null
    ```
+
+   Keep the `< /dev/null`: without a TTY on stdin, `codex exec` waits for more prompt text and
+   hangs before reviewing anything — silently, for as long as you let it.
 
    Give it the diff command, named failure modes, and one falsifiable completeness question —
    directed prompts produce bugs; "review this" produces checklists. Templates and
