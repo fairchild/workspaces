@@ -114,23 +114,31 @@ enum LaunchWindowProbe {
 
     /// Called on the main thread when the tick a wakeup scheduled actually starts.
     /// `hop_ms` is the MainActor scheduling latency that wakeup's delivery waited.
+    ///
+    /// Ticks queued before the window closed are still reported after it, marked
+    /// `after_close=true`: the first tick to run delivers the title that closes the
+    /// interval, so its queued siblings land afterwards, and their hops are what show
+    /// how long the main thread had actually been blocked. Dropping them would discard
+    /// the measurement — the marker keeps the trace unambiguous instead.
     static func noteTickStart(token: WakeupToken?) {
         guard enabled, let token else { return }
 
         lock.lock()
         let originSnapshot = origin
+        let isClosed = closed
         lock.unlock()
         guard let originSnapshot else { return }
 
         let now = clock.now
-        emit(
-            phase: "tick",
-            fields: [
-                "seq": "\(token.seq)",
-                "hop_ms": formattedMilliseconds(from: token.at, to: now),
-                "t_ms": formattedMilliseconds(from: originSnapshot, to: now),
-            ]
-        )
+        var fields = [
+            "seq": "\(token.seq)",
+            "hop_ms": formattedMilliseconds(from: token.at, to: now),
+            "t_ms": formattedMilliseconds(from: originSnapshot, to: now),
+        ]
+        if isClosed {
+            fields["after_close"] = "true"
+        }
+        emit(phase: "tick", fields: fields)
     }
 
     /// Called when the runtime action callback receives a title/pwd action, before any
@@ -215,8 +223,18 @@ enum LaunchWindowProbe {
                     started.duration(to: clock.now) < maxPollerLifetime
                 else { return }
 
-                for pid in currentChildPids() where !knownPids.contains(pid) {
+                // Enumeration and name lookup run outside the lock, so the window can close
+                // mid-iteration. Unlike a queued tick — whose late arrival is itself the
+                // measurement — a spawn seen after the first prompt says nothing about the
+                // launch, so it is dropped rather than reported past the close line.
+                let discovered = currentChildPids().filter { !knownPids.contains($0) }
+                for pid in discovered {
                     knownPids.insert(pid)
+                    lock.lock()
+                    let stillOpen = !closed
+                    lock.unlock()
+                    guard stillOpen else { return }
+
                     emit(
                         phase: firstIteration ? "child_present" : "child_spawn",
                         fields: [
