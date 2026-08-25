@@ -96,8 +96,22 @@ Notes:
   under — but it means `--preferences clean` says nothing about the store, and the
   per-sample hydration cost is what makes the difference visible.
 - **History rows carry a `protocol_epoch`.** Rows from before the isolated protocol
-  are `legacy-unisolated`; dashboard deltas only compare within one epoch, so a
-  protocol change is never rendered as an app-side regression.
+  are `legacy-unisolated`; the isolated lane recorded `isolated-preferences-v1`;
+  rows from 2026-08-23 on are `deterministic-delivery-v1`. Dashboard deltas only
+  compare within one scenario and epoch, and `perf-compare.py` warns when a
+  comparison spans either boundary, so a protocol change is never rendered as an
+  app-side regression.
+- **Why the second boundary exists — this metric could stop early.** Until #1251,
+  libghostty occasionally raised the shell signal that closes the interval *inline
+  on the main thread*, from inside a call the app made during first-window bring-up.
+  Those samples closed while the main thread was still hundreds of milliseconds from
+  servicing anything, and they read as the fast mode of a bimodal distribution rather
+  than as a defect — which is why the retired 592 ms reference looked achievable for
+  three investigation passes. The wakeup tick now always enqueues, so every sample
+  closes at main-drain. Treat a suspiciously fast launch sample as a measurement
+  question first: `WORKSPACES_TERMINAL_DIAGNOSTICS=1` arms `LaunchWindowProbe`, whose
+  main-queue heartbeat says independently whether the app was actually servicing work
+  when the metric stopped.
 
 ### `repo_hydration`
 
