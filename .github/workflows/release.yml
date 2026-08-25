@@ -123,7 +123,7 @@ jobs:
           # Upstream prunes release assets from old versions, and this step
           # fails on a cache miss rather than at pin time, so an unrefreshed pin
           # here surfaces as a 404 mid-release (#1297).
-          version: 2026.8.6
+          version: 2026.8.12
           install: true
           cache: true
 
