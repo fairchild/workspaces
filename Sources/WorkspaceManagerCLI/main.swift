@@ -1224,9 +1224,11 @@ private final class CLIApp {
             return try runWorkspaceCreate(arguments: Array(arguments.dropFirst()))
         case "archive":
             return try runWorkspaceArchive(arguments: Array(arguments.dropFirst()))
+        case "note":
+            return try runWorkspaceNote(arguments: Array(arguments.dropFirst()))
         default:
             throw CLIError(
-                "Usage: workspaces automation workspace list [--json] | automation workspace select <id> [--json] | automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | automation workspace archive <id> [--teardown] [--json]"
+                "Usage: workspaces automation workspace list [--json] | automation workspace select <id> [--json] | automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | automation workspace archive <id> [--teardown] [--json] | automation workspace note <id> --text \"<text>\" | --clear [--json]"
             )
         }
     }
@@ -1475,6 +1477,71 @@ private final class CLIApp {
             }
         case .confirmationRequired:
             print("Confirmation required: \(result.message ?? "the app needs confirmation to proceed.")")
+        }
+        return 0
+    }
+
+    /// `workspaces automation workspace note <id> --text "<text>" | --clear [--json]` — sets the
+    /// short line the sidebar shows under a workspace, which is what an agent updates at a
+    /// checkpoint. An operator mutation: it enters the app's own note setter (the same one the
+    /// row's "Edit Note…" item writes through), so a note set from a script and one typed into
+    /// the sidebar are the same write, normalization included. The result reports the *stored*
+    /// note, so a caller learns what the row will actually show.
+    private func runWorkspaceNote(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces automation workspace note <id> --text \"<text>\" | --clear [--json]"
+        var json = false
+        var clear = false
+        var text: String?
+        var workspaceID: String?
+
+        var index = 0
+        while index < arguments.count {
+            switch arguments[index] {
+            case "--json":
+                json = true
+            case "--clear":
+                clear = true
+            case "--text":
+                index += 1
+                guard index < arguments.count else { throw CLIError("Missing value for --text") }
+                text = arguments[index]
+            default:
+                guard workspaceID == nil else { throw CLIError("Usage: \(usage)") }
+                workspaceID = arguments[index]
+            }
+            index += 1
+        }
+
+        guard let workspaceID, !workspaceID.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+        // Refusing both is the point: --clear alongside --text would leave the caller
+        // guessing which one the app honored.
+        guard !(clear && text != nil) else {
+            throw CLIError("Pass either --text or --clear, not both.")
+        }
+        guard clear || text != nil else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let credential = try loadOperatorCredential()
+        let request = AutomationWorkspaceNoteRequest(workspaceID: workspaceID, note: clear ? nil : text)
+        let result = try operatorRequest(
+            AutomationWorkspaceNoteResult.self,
+            credential: credential,
+            method: "POST",
+            path: "/v1/workspace/note",
+            body: try JSONEncoder().encode(request)
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+        if let note = result.note {
+            print("\(result.workspaceName): \(note)")
+        } else {
+            print("\(result.workspaceName): note cleared")
         }
         return 0
     }

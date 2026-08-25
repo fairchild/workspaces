@@ -279,6 +279,11 @@ private final class UIStateFakeController: AutomationControlling {
     ) async throws -> AutomationWorkspaceArchiveResult {
         throw AutomationServiceError(.unsupported, "not under test")
     }
+    func automationSetWorkspaceNote(
+        for handle: String, request: AutomationWorkspaceNoteRequest
+    ) async throws -> AutomationWorkspaceNoteResult {
+        throw AutomationServiceError(.unsupported, "not under test")
+    }
     func automationWindowSnapshot(
         for handle: String, windowID: String
     ) async throws -> AutomationWindowSnapshotResult {
@@ -347,6 +352,11 @@ private final class UIStateDefaultedController: AutomationControlling {
     func automationArchiveWorkspace(
         for handle: String, request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult {
+        throw AutomationServiceError(.unsupported, "not under test")
+    }
+    func automationSetWorkspaceNote(
+        for handle: String, request: AutomationWorkspaceNoteRequest
+    ) async throws -> AutomationWorkspaceNoteResult {
         throw AutomationServiceError(.unsupported, "not under test")
     }
     func automationWindowSnapshot(

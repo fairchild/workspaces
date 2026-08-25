@@ -30,6 +30,10 @@ private final class UnroutedAutomationController: AutomationControlling {
         for handle: String,
         request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult { throw unrouted }
+    func automationSetWorkspaceNote(
+        for handle: String,
+        request: AutomationWorkspaceNoteRequest
+    ) async throws -> AutomationWorkspaceNoteResult { throw unrouted }
     func automationWindowSnapshot(
         for handle: String,
         windowID: String

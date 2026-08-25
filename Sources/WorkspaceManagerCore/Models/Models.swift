@@ -297,6 +297,13 @@ public final class Workspace {
     /// `nil` for an unpinned workspace.
     public var pinOrder: Int?
 
+    /// The workspace's **Note**: one short line about where this work stream stands,
+    /// written by whoever is driving it. Distinct from `status` (a lifecycle state the
+    /// app owns) and from the sidebar's transient action message — a note outlives the
+    /// action that wrote it, which is what makes it worth persisting.
+    /// `nil` when unset; normalize through `WorkspaceNote` before assigning.
+    public var note: String?
+
     /// Workspace-level default agent command (e.g. `claude --resume`). Most
     /// specific tier — overrides both the repo and global defaults.
     public var defaultAgentCommand: String?
@@ -434,6 +441,7 @@ public final class Workspace {
         gitBranch: String? = nil,
         archivedAt: Date? = nil,
         pinOrder: Int? = nil,
+        note: String? = nil,
         defaultAgentCommand: String? = nil,
         backendIdentifier: String = "local",
         remoteId: String? = nil,
@@ -451,6 +459,7 @@ public final class Workspace {
         self.gitBranch = gitBranch
         self.archivedAt = archivedAt
         self.pinOrder = pinOrder
+        self.note = WorkspaceNote.normalized(note)
         self.defaultAgentCommand = defaultAgentCommand
         self.backendIdentifier = backendIdentifier
         self.remoteId = remoteId

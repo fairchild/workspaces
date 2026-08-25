@@ -107,6 +107,10 @@ enum AutomationHTTPRouter {
             let archive = try decodeWorkspaceArchive(from: request.body)
             return try await controller.automationArchiveWorkspace(for: handle, request: archive)
 
+        case ("POST", "/v1/workspace/note"):
+            let note = try decodeWorkspaceNote(from: request.body)
+            return try await controller.automationSetWorkspaceNote(for: handle, request: note)
+
         case ("POST", "/v1/tile/focus"):
             let direction = try decodeDirection(
                 AutomationTileFocusDirection.self,
@@ -165,6 +169,8 @@ enum AutomationHTTPRouter {
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/surface/read.")
         case (_, "/v1/workspace/archive"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/archive.")
+        case (_, "/v1/workspace/note"):
+            throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/workspace/note.")
         case (_, "/v1/tile/focus"):
             throw AutomationServiceError(.methodNotAllowed, "Use POST /v1/tile/focus.")
         case (_, "/v1/tile/split"):
@@ -310,6 +316,23 @@ enum AutomationHTTPRouter {
             teardownTerminals = number.boolValue
         }
         return AutomationWorkspaceArchiveRequest(workspaceID: workspaceID, teardownTerminals: teardownTerminals)
+    }
+
+    /// A `note` key that is present but not a string is a caller error, while an absent
+    /// key and an explicit null both mean "clear it" — the shape a caller reaches for
+    /// when they want the line gone.
+    private static func decodeWorkspaceNote(from body: Data) throws -> AutomationWorkspaceNoteRequest {
+        let workspaceID = try decodeWorkspaceID(from: body)
+        let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        var note: String?
+        if let raw = object["note"], !(raw is NSNull) {
+            guard let text = raw as? String else {
+                throw AutomationServiceError(
+                    .invalidRequest, "Request 'note' must be a string or null.")
+            }
+            note = text
+        }
+        return AutomationWorkspaceNoteRequest(workspaceID: workspaceID, note: note)
     }
 
     private static func decodeWorkspaceCreate(from body: Data) throws -> AutomationWorkspaceCreateRequest {
@@ -512,6 +535,7 @@ extension AutomationWorkspacesResult: CodableSendableEquatable {}
 extension AutomationWorkspaceSelectResult: CodableSendableEquatable {}
 extension AutomationWorkspaceCreateResult: CodableSendableEquatable {}
 extension AutomationWorkspaceArchiveResult: CodableSendableEquatable {}
+extension AutomationWorkspaceNoteResult: CodableSendableEquatable {}
 extension AutomationWindowSnapshotResult: CodableSendableEquatable {}
 extension AutomationSurfaceReadResult: CodableSendableEquatable {}
 extension AutomationWebSurfacesResult: CodableSendableEquatable {}

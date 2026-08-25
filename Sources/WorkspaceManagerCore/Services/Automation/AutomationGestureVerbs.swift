@@ -66,6 +66,16 @@ public enum AutomationWorkspaceArchiveOutcome: Sendable, Equatable {
     case closeBlockedByConfirmation(String)
 }
 
+public enum AutomationWorkspaceNoteOutcome: Sendable, Equatable {
+    /// The note gesture ran through the real sidebar path; the payload is what the app
+    /// stored after normalization, plus whether that differed from what was there.
+    case completed(note: String?, changed: Bool, workspaceName: String)
+    /// The verb cannot run in the current context, most often because no live window is bound.
+    case unsupported(String)
+    /// The workspace id resolves to nothing the app tracks. Mapped to `invalid_request` at the wire.
+    case notFound
+}
+
 @MainActor
 public final class AutomationGestureVerbs {
     /// The minimum a verb needs to target and describe a workspace, projected out of the live
@@ -115,6 +125,9 @@ public final class AutomationGestureVerbs {
     /// and report what the UI did.
     private let performArchive:
         (@MainActor (WorkspaceTarget, AutomationWorkspaceArchiveCommand) async -> AutomationWorkspaceArchiveOutcome)?
+    /// Drive the real sidebar note gesture — the same setter the row's "Edit Note…" item
+    /// writes through, normalization included — and report what the app stored.
+    private let performNote: (@MainActor (WorkspaceTarget, String?) -> AutomationWorkspaceNoteOutcome)?
 
     public init(
         resolveWorkspace: @escaping @MainActor (UUID) -> WorkspaceTarget?,
@@ -125,13 +138,15 @@ public final class AutomationGestureVerbs {
         )? = nil,
         performArchive: (
             @MainActor (WorkspaceTarget, AutomationWorkspaceArchiveCommand) async -> AutomationWorkspaceArchiveOutcome
-        )? = nil
+        )? = nil,
+        performNote: (@MainActor (WorkspaceTarget, String?) -> AutomationWorkspaceNoteOutcome)? = nil
     ) {
         self.resolveWorkspace = resolveWorkspace
         self.performSelection = performSelection
         self.resolveRepo = resolveRepo
         self.performCreation = performCreation
         self.performArchive = performArchive
+        self.performNote = performNote
     }
 
     /// `workspace.select`: enter the same selection path a sidebar click takes. Resolves the id, then
@@ -175,5 +190,20 @@ public final class AutomationGestureVerbs {
             return .notFound
         }
         return await performArchive(target, command)
+    }
+
+    /// `workspace.note`: enter the same setter the row's "Edit Note…" item writes through.
+    /// A note is a data write, which is exactly why it routes through a gesture the user
+    /// also has — a verb with no equivalent click is the thing this layer exists to
+    /// prevent. A missing note closure means the live window did not install that path,
+    /// so the verb fails closed.
+    public func setWorkspaceNote(_ workspaceID: UUID, note: String?) -> AutomationWorkspaceNoteOutcome {
+        guard let performNote else {
+            return .unsupported("No WorkSpaces sidebar is attached; workspace.note requires a live window.")
+        }
+        guard let target = resolveWorkspace(workspaceID) else {
+            return .notFound
+        }
+        return performNote(target, note)
     }
 }

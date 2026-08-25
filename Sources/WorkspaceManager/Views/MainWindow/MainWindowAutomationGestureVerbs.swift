@@ -34,7 +34,8 @@ struct MainWindowAutomationGestureVerbs {
             performSelection: { target in performSelection(target) },
             resolveRepo: { repoID in resolveRepoTarget(repoID) },
             performCreation: { _, command in await performCreation(command) },
-            performArchive: { target, command in await performArchive(target, command) }
+            performArchive: { target, command in await performArchive(target, command) },
+            performNote: { target, note in performNote(target, note: note) }
         )
     }
 
@@ -49,6 +50,22 @@ struct MainWindowAutomationGestureVerbs {
             name: workspace.name,
             isArchived: workspace.status == .archived
         )
+    }
+
+    /// Enters the same setter the row's "Edit Note…" item writes through — normalization
+    /// included, so a note set over the socket renders exactly as a typed one.
+    private func performNote(
+        _ target: AutomationGestureVerbs.WorkspaceTarget,
+        note: String?
+    ) -> AutomationWorkspaceNoteOutcome {
+        guard let workspace = workspace(with: target.workspaceID) else {
+            return .notFound
+        }
+        let normalized = WorkspaceNote.normalized(note)
+        let changed = workspace.note != normalized
+        workspace.note = normalized
+        try? dependencies.modelContext.save()
+        return .completed(note: normalized, changed: changed, workspaceName: workspace.name)
     }
 
     private func resolveRepoTarget(_ repoID: UUID) -> AutomationGestureVerbs.RepoTarget? {

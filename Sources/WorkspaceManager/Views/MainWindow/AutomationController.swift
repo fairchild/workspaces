@@ -227,6 +227,39 @@ final class AutomationController: AutomationControlling {
         }
     }
 
+    /// `workspace.note` — an operator mutation, gated on its own capability so a caller
+    /// granted read cannot write the line the sidebar shows.
+    func automationSetWorkspaceNote(
+        for handle: String,
+        request: AutomationWorkspaceNoteRequest
+    ) async throws -> AutomationWorkspaceNoteResult {
+        let entry = try resolveOperator(handle, requiring: .workspaceNote)
+        guard let uuid = UUID(uuidString: request.workspaceID) else {
+            throw AutomationServiceError(.invalidRequest, "workspaceID must be a UUID.")
+        }
+        guard let gestureVerbs else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; workspace.note requires a live window."
+            )
+        }
+        switch gestureVerbs.setWorkspaceNote(uuid, note: request.note) {
+        case .completed(let note, let changed, let workspaceName):
+            return AutomationWorkspaceNoteResult(
+                workspaceID: request.workspaceID,
+                workspaceName: workspaceName,
+                note: note,
+                changed: changed,
+                system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+            )
+        case .unsupported(let message):
+            throw AutomationServiceError(.unsupported, message)
+        case .notFound:
+            throw AutomationServiceError(
+                .invalidRequest, "No workspace with id \(request.workspaceID) is tracked by the app.")
+        }
+    }
+
     func automationCreateWorkspace(
         for handle: String,
         request: AutomationWorkspaceCreateRequest
