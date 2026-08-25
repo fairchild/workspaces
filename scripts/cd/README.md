@@ -23,7 +23,7 @@ After: every push to `main` produces a preview deployment, gets validated agains
 
 **Rolling failure issues, not per-failure issues.** One issue per validator (`CD: playwright failures on main`, `CD: lighthouse failures on main`), identified by hidden HTML markers. New failures append a comment; the issue auto-reopens if closed. Production validation uses one open `cd-failure:prod` issue for the prod surface, and the next green prod validation comments on and closes open auto-opened prod failure issues. Avoids issue-tracker flooding during a regression burst.
 
-**Configuration as code.** The Vercel Git auto-deploy guard lives in each project's `vercel.json` (`git.deploymentEnabled = false`) — `web/vercel.json` for `spaces-web`, `web-next/vercel.json` for `web-next` — not in dashboard settings. Vercel stays connected for metadata, while GitHub Actions owns PR previews and production promotion.
+**Actions-owned Vercel deployments.** The Git provider is disconnected from both Vercel projects, so GitHub Actions exclusively owns PR previews and production promotion. Each project's `vercel.json` also keeps `git.deploymentEnabled = false` — `web/vercel.json` for `spaces-web`, `web-next/vercel.json` for `web-next` — as defense in depth if a project is ever reconnected. The project-level disconnect is required because Vercel resolves the configured Root Directory before it can read a nested `vercel.json`; a branch without `web/` or `web-next/` would otherwise fail before reaching the guard.
 
 **Targeted PR previews (spaces-web).** `.github/workflows/web-preview.yml` deploys Vercel previews only for PRs that touch `web/**`. Non-web PRs do not create Vercel deployments or preview comments.
 
@@ -80,7 +80,7 @@ After: every push to `main` produces a preview deployment, gets validated agains
 | `scripts/cd/bootstrap-preview.py` | Interactive setup wizard for first-time configuration. Prompts for tokens, writes secrets to GitHub + Cloudflare, generates `web/vercel.json`. |
 | `scripts/cd/config.toml` | Declarative manifest. Workers, preview health URLs, secret names, GitHub Actions secrets. **Add a worker = one TOML block.** |
 | `scripts/cd/.env.bootstrap.example` | Template for the gitignored `.env.bootstrap` where the operator's tokens live locally. |
-| `web/vercel.json` | Generated. Contains `git.deploymentEnabled = false` — disables Vercel's automatic Git deployments so Actions owns PR previews and production promotion. |
+| `web/vercel.json` | Generated defense-in-depth guard. Contains `git.deploymentEnabled = false`; the project-level Git disconnect is the primary auto-deploy control. |
 | `web/playwright.config.ts` | Honors `PLAYWRIGHT_BASE_URL` to target deployed URLs; `deployment-smoke` is the remote-safe preview/prod project. |
 | `web/lighthouserc.json` | Perf budgets: LCP ≤2500ms, CLS ≤0.1, TBT ≤200ms, perf score ≥0.9. Desktop preset, 3 runs, median assertions. URL passed at invocation via `--collect.url`. |
 | `web/scripts/{playwright,lhci}-findings.mjs` | Render validator JSON output into markdown tables for the failure-issue body. |
@@ -145,6 +145,6 @@ What still requires you (no API exists for these):
 - **Why monolithic `cd.yml` not split workflows.** Promote needs `needs:` semantics across web + workers. Splitting loses the "all validators must pass before any promote" atomicity.
 - **Why `deployment-smoke` Playwright project only.** `full` and parts of `fast` need seeded DB state; deployed preview/prod validation must use only tests that are meaningful against the real serverless app.
 - **Why separate R2 bucket for evidence-store preview.** Preview test writes would otherwise pollute the prod keyspace and share the prod auth token's blast radius. 7-day lifecycle on `evidence-screenshots-preview` keeps storage cost ~$0.
-- **Why `vercel.json` over dashboard branch flip.** Code-controlled, survives project recreation, visible in diffs. Vercel's deprecated `github.enabled` is the legacy form; `git.deploymentEnabled` is current.
+- **Why disconnect Git and keep `vercel.json`.** Disconnecting the provider prevents Vercel from creating a deployment before it discovers that a branch lacks the configured Root Directory. The checked-in `git.deploymentEnabled = false` guard is still useful defense in depth if a project is reconnected; Vercel's deprecated `github.enabled` is the legacy form.
 - **Why Actions-owned PR previews.** Vercel's ignored-build path still creates canceled deployments; the path-filtered workflow avoids deployments entirely for non-web PRs.
 - **Why pinned tool versions (`vercel@51`, `wrangler@4`, `@lhci/cli@0.14.x`).** CLI behavior changes silently break CD. Renovate/Dependabot surfaces upgrades through PR.

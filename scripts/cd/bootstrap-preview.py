@@ -415,13 +415,14 @@ def step_vercel(
     if ids:
         ok(f"orgId={mask(ids[0])}  projectId={mask(ids[1])}")
 
-    # Disable Vercel's git auto-deployments in code (no dashboard step).
+    # Keep a code-level guard in case the project-level Git provider is reconnected.
     print()
     info(bold("Disable Vercel Git auto-deployments (via vercel.json)"))
     teach(
-        "Sets `git.deploymentEnabled = false` in web/vercel.json so Vercel's Git "
-        "integration stays connected for metadata without auto-deploying pushes or PRs. "
-        "GitHub Actions owns PR previews and production promotion."
+        "Sets `git.deploymentEnabled = false` in web/vercel.json as defense in depth. "
+        "Keep the Vercel project's Git provider disconnected: Vercel resolves the Root "
+        "Directory before reading this nested file, so branches without web/ otherwise "
+        "fail before the guard runs. GitHub Actions owns deployment."
     )
     ensure_vercel_json_disables_git_auto_deploys(runner, prompt, project_dir)
 
