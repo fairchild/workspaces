@@ -17,7 +17,29 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
+
+
+def _load_pr_readiness():
+    """The merge gate's own evaluator, loaded by path.
+
+    `scripts/pr-readiness.py` is not an importable module name, and copying
+    its rules here would create a second opinion about what "ready" means --
+    the one thing a re-review gate must not have.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parent / "pr-readiness.py"
+    spec = importlib.util.spec_from_file_location("pr_readiness_for_review", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    sys.modules["pr_readiness_for_review"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+pr_readiness = _load_pr_readiness()
 
 
 AUTHOR_REVIEWERS = {
@@ -172,6 +194,63 @@ def counterpart_reviewer(author: str, files: list[dict[str, Any]]) -> str | None
     if author in APPLICATION_DEFAULT_AUTHORS:
         return "plat" if mostly_platform_files(files) else "april"
     return None
+
+
+def latest_review_by(
+    reviews: list[dict[str, Any]],
+    *,
+    reviewer: str,
+    head_sha: str,
+) -> dict[str, Any] | None:
+    """The reviewer's most recent submitted verdict on this exact head.
+
+    `COMMENTED` reviews are skipped: on GitHub they never replace a reviewer's
+    standing verdict, so they must not replace it here either.
+    """
+    expected_login = REVIEWER_BOTS[reviewer].casefold()
+    mine = [
+        review
+        for review in reviews
+        if str((review.get("user") or {}).get("login") or "").casefold() == expected_login
+        and str(review.get("commit_id") or "") == head_sha
+        and str(review.get("state") or "").upper() != "COMMENTED"
+    ]
+    if not mine:
+        return None
+    return max(mine, key=lambda review: str(review.get("submitted_at") or ""))
+
+
+def stale_review_refreshable(
+    pull_request: dict[str, Any],
+    files: list[dict[str, Any]],
+    reviews: list[dict[str, Any]],
+    *,
+    reviewer: str,
+    head_sha: str,
+) -> bool:
+    """Whether a standing CHANGES_REQUESTED deserves a fresh look at this head.
+
+    A review can object to the PR body -- a missing Mergeability block, an
+    evidence line still `[pending-ci]`, a `blocked:` label -- and the fix for
+    that moves no commit. `dismiss_stale_reviews_on_push` only fires on push
+    and the reviewer never re-runs, so the objection stays blocking after it
+    has been satisfied (#1102, then #1377).
+
+    The test is the readiness gate itself, run here against live PR state,
+    rather than "someone edited the body": an edit is not evidence that the
+    objection was addressed, and could as easily have added a blocker. Sharing
+    scripts/pr-readiness.py with the check that actually gates the merge is
+    what keeps this from becoming a second, drifting opinion about what ready
+    means.
+
+    Fail-closed on both halves: the reviewer's latest verdict on this exact
+    head must still be CHANGES_REQUESTED, and readiness must now pass.
+    """
+    standing = latest_review_by(reviews, reviewer=reviewer, head_sha=head_sha)
+    if standing is None or str(standing.get("state") or "").upper() != "CHANGES_REQUESTED":
+        return False
+    paths = [str(item.get("filename") or "") for item in files]
+    return pr_readiness.evaluate(pull_request, paths).ok
 
 
 def reviewed_head(
@@ -335,6 +414,7 @@ def evaluate_review(
     reviews: list[dict[str, Any]],
     *,
     force: bool,
+    stale_refresh: bool = False,
 ) -> ReviewDecision:
     if str(pull_request.get("state") or "").casefold() != "open":
         return ReviewDecision("skip", "pull request is not open")
@@ -352,7 +432,11 @@ def evaluate_review(
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
     if not head_sha:
         return ReviewDecision("skip", "pull request has no head SHA")
-    if not force and reviewed_head(reviews, reviewer=reviewer, head_sha=head_sha):
+    if (
+        not force
+        and not stale_refresh
+        and reviewed_head(reviews, reviewer=reviewer, head_sha=head_sha)
+    ):
         return ReviewDecision("skip", f"{reviewer} already reviewed head {head_sha}")
     return ReviewDecision("review", f"route {author} to {reviewer}", reviewer)
 
@@ -372,6 +456,16 @@ def parse_args() -> argparse.Namespace:
     target.add_argument("--pr", type=int)
     target.add_argument("--authorize", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument(
+        "--refresh-stale-review",
+        action="store_true",
+        help=(
+            "Consider re-reviewing a head this reviewer already reviewed, when "
+            "their standing verdict is CHANGES_REQUESTED and the readiness gate "
+            "now passes. Requested by the Evidence Verify lane; re-derived here "
+            "from live PR state."
+        ),
+    )
     parser.add_argument("--expected-head", default="")
     parser.add_argument("--expected-reviewer", choices=sorted(REVIEWER_BOTS))
     return parser.parse_args()
@@ -409,8 +503,28 @@ def main() -> int:
     pull_request = client.pull_request(args.pr)
     files = client.pull_request_files(args.pr)
     reviews = client.pull_request_reviews(args.pr)
-    decision = evaluate_review(pull_request, files, reviews, force=args.force)
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
+    stale_refresh = False
+    if args.refresh_stale_review and head_sha:
+        author = author_label(pull_request)
+        reviewer = counterpart_reviewer(author, files) if author else None
+        if reviewer is not None:
+            stale_refresh = stale_review_refreshable(
+                pull_request,
+                files,
+                reviews,
+                reviewer=reviewer,
+                head_sha=head_sha,
+            )
+            if not stale_refresh:
+                print(
+                    f"Factory review stale-refresh for #{args.pr}: declined "
+                    "(no standing changes-requested verdict on this head, or the "
+                    "readiness gate still fails)"
+                )
+    decision = evaluate_review(
+        pull_request, files, reviews, force=args.force, stale_refresh=stale_refresh
+    )
     if args.expected_head and args.expected_head != head_sha:
         decision = ReviewDecision("skip", "pull request head changed after admission")
     if (

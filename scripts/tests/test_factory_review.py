@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "factory-review.py"
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "factory-review.yml"
 EXECUTOR_PATH = REPO_ROOT / ".github" / "workflows" / "factory-review-execute.yml"
+READINESS_PATH = REPO_ROOT / "scripts" / "pr-readiness.py"
 
 
 def load_module(name: str, path: Path):
@@ -327,6 +328,185 @@ class FactoryReviewTests(unittest.TestCase):
             factory_review.evaluate_review(draft, files, [], force=False).action,
             "skip",
         )
+
+    READY_BODY = (
+        "## Summary\n\nA change.\n\n"
+        "## Evidence Status\n- [complete] CI green -- proof\n\n"
+        "## Validation\n- 12 passed\n\n"
+        "## Mergeability\n"
+        "- Surface: infra — the factory review lane\n"
+        "- User-facing behavior changed: No\n"
+        "- Non-happy paths considered: covered by tests\n"
+        "- Residual risk or follow-up: None\n"
+    )
+
+    def ready_pull_request(self, *, body: str | None = None, labels=("author:april",)):
+        return {
+            "state": "open",
+            "labels": [{"name": name} for name in labels],
+            "user": {"login": "april-clearwater[bot]"},
+            "head": {"sha": "headsha"},
+            "body": self.READY_BODY if body is None else body,
+        }
+
+    def stale_reviews(
+        self,
+        *,
+        state: str = "CHANGES_REQUESTED",
+        head: str = "headsha",
+        submitted_at: str = "2026-08-27T02:00:00Z",
+    ) -> list[dict[str, object]]:
+        return [
+            {
+                "user": {"login": "workspace-agents[bot]"},
+                "commit_id": head,
+                "state": state,
+                "submitted_at": submitted_at,
+            }
+        ]
+
+    def refreshable(self, pull_request, reviews, files=()) -> bool:
+        return factory_review.stale_review_refreshable(
+            pull_request,
+            [{"filename": name} for name in files],
+            reviews,
+            reviewer="plat",
+            head_sha="headsha",
+        )
+
+    def test_a_standing_rejection_refreshes_once_readiness_passes(self) -> None:
+        # #1102, then #1377: the objection was to the PR body, the fix moves no
+        # commit, so dismiss_stale_reviews_on_push never fires and the reviewer
+        # never re-runs.
+        self.assertTrue(self.refreshable(self.ready_pull_request(), self.stale_reviews()))
+
+    def test_a_body_that_still_fails_readiness_does_not_refresh(self) -> None:
+        # The whole point of sharing pr-readiness.py: an edit is not evidence
+        # the objection was addressed, and could as easily have added a blocker.
+        cases = {
+            "no Mergeability": self.READY_BODY.replace("## Mergeability", "## Notes"),
+            "evidence still blocked": self.READY_BODY.replace(
+                "- [complete] CI green -- proof", "- [blocked] CI green -- waiting"
+            ),
+            "evidence still pending": self.READY_BODY.replace(
+                "- [complete] CI green -- proof", "- [pending-ci] CI green -- waiting"
+            ),
+            "blank Mergeability field": self.READY_BODY.replace(
+                "- Residual risk or follow-up: None", "- Residual risk or follow-up: TBD"
+            ),
+            "merge-stop instruction": self.READY_BODY + "\nDo not merge until Friday.\n",
+        }
+        for name, body in cases.items():
+            with self.subTest(case=name):
+                self.assertFalse(
+                    self.refreshable(self.ready_pull_request(body=body), self.stale_reviews())
+                )
+        # A blocking label the body cannot show is caught for the same reason.
+        self.assertFalse(
+            self.refreshable(
+                self.ready_pull_request(labels=("author:april", "blocked:secrets")),
+                self.stale_reviews(),
+            )
+        )
+
+    def test_no_standing_rejection_means_nothing_to_refresh(self) -> None:
+        ready = self.ready_pull_request()
+        # Approved on this head.
+        self.assertFalse(self.refreshable(ready, self.stale_reviews(state="APPROVED")))
+        # Rejected, but on an older head -- a push already superseded it.
+        self.assertFalse(self.refreshable(ready, self.stale_reviews(head="older")))
+        # Dismissed, pending, or absent entirely.
+        self.assertFalse(self.refreshable(ready, self.stale_reviews(state="DISMISSED")))
+        self.assertFalse(self.refreshable(ready, self.stale_reviews(state="PENDING")))
+        self.assertFalse(self.refreshable(ready, []))
+        # A review with no commit id cannot be matched to this head.
+        self.assertFalse(self.refreshable(ready, self.stale_reviews(head="")))
+
+    def test_a_later_approval_supersedes_the_rejection_on_the_same_head(self) -> None:
+        reviews = self.stale_reviews() + self.stale_reviews(
+            state="APPROVED", submitted_at="2026-08-27T02:30:00Z"
+        )
+        self.assertFalse(self.refreshable(self.ready_pull_request(), reviews))
+
+    def test_a_comment_only_review_does_not_displace_the_standing_verdict(self) -> None:
+        reviews = self.stale_reviews() + self.stale_reviews(
+            state="COMMENTED", submitted_at="2026-08-27T02:30:00Z"
+        )
+        self.assertTrue(self.refreshable(self.ready_pull_request(), reviews))
+
+    def test_the_refresh_gate_is_the_merge_gate_not_a_second_opinion(self) -> None:
+        # If these ever diverge, a PR could be re-reviewed into an approval it
+        # cannot merge on, or stay parked while it is provably ready.
+        self.assertIs(
+            factory_review.pr_readiness.evaluate,
+            sys.modules["pr_readiness_for_review"].evaluate,
+        )
+        readiness = READINESS_PATH.read_text(encoding="utf-8")
+        self.assertIn("def evaluate(", readiness)
+
+    def test_refresh_only_bypasses_the_already_reviewed_skip(self) -> None:
+        pull_request = self.ready_pull_request()
+        reviews = self.stale_reviews()
+        self.assertEqual(
+            factory_review.evaluate_review(pull_request, [], reviews, force=False).action,
+            "skip",
+        )
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request, [], reviews, force=False, stale_refresh=True
+            ).action,
+            "review",
+        )
+        # Every other skip still holds -- refresh is not a bypass.
+        for name, mutation in (
+            ("closed", {"state": "closed"}),
+            ("draft", {"draft": True}),
+            ("no author label", {"labels": []}),
+            ("two author labels", {"labels": [{"name": "author:april"}, {"name": "author:plat"}]}),
+        ):
+            with self.subTest(case=name):
+                self.assertEqual(
+                    factory_review.evaluate_review(
+                        {**pull_request, **mutation}, [], reviews,
+                        force=False, stale_refresh=True,
+                    ).action,
+                    "skip",
+                )
+
+    def test_the_review_signal_workflow_is_unchanged_by_this_lane(self) -> None:
+        # The re-review request comes from the trusted Evidence Verify lane, not
+        # from a global `pull_request: edited` subscription: a job skipped by
+        # `if:` still reports success, so subscribing would start a trusted
+        # executor run -- and a failed artifact download -- on every body edit
+        # in the repository, poisoning the runaway cap.
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("types: [opened, ready_for_review, synchronize]", workflow)
+        self.assertNotIn("edited", workflow)
+
+    def test_only_the_owner_or_the_factory_may_dispatch_a_review(self) -> None:
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn('if [ "$RUN_ACTOR" = "$REPOSITORY_OWNER" ]; then', executor)
+        self.assertIn('elif [ "$RUN_ACTOR" = "github-actions[bot]" ]; then', executor)
+        self.assertIn("Only the repository owner or the factory may re-request review.", executor)
+        # The owner's dispatch forces; the factory's only requests.
+        owner_branch = executor.split('if [ "$RUN_ACTOR" = "$REPOSITORY_OWNER" ]; then', 1)[1]
+        self.assertTrue(
+            owner_branch.lstrip().startswith("FORCE_REVIEW=true"),
+            "owner dispatch must still force an unconditional review",
+        )
+        factory_branch = executor.split('elif [ "$RUN_ACTOR" = "github-actions[bot]" ]; then', 1)[1]
+        self.assertTrue(factory_branch.lstrip().startswith("REFRESH_STALE=true"))
+        # Re-derived in admission and again in each reviewer's preflight.
+        self.assertEqual(executor.count("ARGS+=(--refresh-stale-review)"), 3)
+
+    def test_only_owner_dispatch_bypasses_the_kill_switches(self) -> None:
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        gate = executor.split("runs-on:", 1)[0]
+        self.assertIn(
+            "github.event.workflow_run.actor.login == github.repository_owner", gate
+        )
+        self.assertIn("vars.AGENT_AUTOMATIONS_ENABLED == 'true'", gate)
+        self.assertIn("vars.FACTORY_REVIEW_ENABLED == 'true'", gate)
 
     def test_workflow_uses_isolated_apps_kill_switches_and_no_review_trigger(self) -> None:
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")

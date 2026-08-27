@@ -260,6 +260,67 @@ class BlockedLabelClearTests(unittest.TestCase):
             self.assertFalse(verify.blocked_label_applied_by_factory(321, {}))
 
 
+class StandingRejectionTests(unittest.TestCase):
+    @staticmethod
+    def review(login: str, state: str, submitted_at: str, commit: str = HEAD):
+        return {
+            "user": {"login": login},
+            "state": state,
+            "commit_id": commit,
+            "submitted_at": submitted_at,
+        }
+
+    def check(self, reviews) -> bool:
+        with mock.patch.object(verify, "_gh_json", return_value=reviews):
+            return verify.standing_rejection(321, HEAD, {})
+
+    def test_a_reviewer_apps_standing_rejection_on_this_head_counts(self) -> None:
+        for bot in sorted(verify.REVIEWER_BOTS):
+            with self.subTest(bot=bot):
+                self.assertTrue(
+                    self.check([self.review(bot, "CHANGES_REQUESTED", "2026-08-27T01:00:00Z")])
+                )
+
+    def test_a_later_verdict_from_the_same_reviewer_wins(self) -> None:
+        bot = "workspace-agents[bot]"
+        self.assertFalse(
+            self.check(
+                [
+                    self.review(bot, "CHANGES_REQUESTED", "2026-08-27T01:00:00Z"),
+                    self.review(bot, "APPROVED", "2026-08-27T02:00:00Z"),
+                ]
+            )
+        )
+        # ...but a comment-only review never displaces a verdict.
+        self.assertTrue(
+            self.check(
+                [
+                    self.review(bot, "CHANGES_REQUESTED", "2026-08-27T01:00:00Z"),
+                    self.review(bot, "COMMENTED", "2026-08-27T02:00:00Z"),
+                ]
+            )
+        )
+
+    def test_other_authors_older_heads_and_failed_lookups_do_not_count(self) -> None:
+        self.assertFalse(
+            self.check([self.review("fairchild", "CHANGES_REQUESTED", "2026-08-27T01:00:00Z")])
+        )
+        self.assertFalse(
+            self.check(
+                [
+                    self.review(
+                        "workspace-agents[bot]",
+                        "CHANGES_REQUESTED",
+                        "2026-08-27T01:00:00Z",
+                        commit=OTHER_HEAD,
+                    )
+                ]
+            )
+        )
+        self.assertFalse(self.check([]))
+        self.assertFalse(self.check(None))
+
+
 class ProcessPrTests(unittest.TestCase):
     maxDiff = None
 
@@ -304,6 +365,118 @@ class ProcessPrTests(unittest.TestCase):
             ["pr", "edit", "321", "--remove-label", "blocked:evidence"],
             gh_calls,
         )
+
+    def run_process_pr(self, entries, *, labels, rejection: bool):
+        """process_pr over one PR, reporting the gh commands it issued."""
+        body = body_with_entries(entries)
+        pr = pr_payload(body, labels=labels)
+        gh_calls: list[list[str]] = []
+
+        def fake_gh_json(args, env):
+            if any(arg.endswith("/reviews") for arg in args):
+                if not rejection:
+                    return []
+                return [
+                    {
+                        "user": {"login": "workspace-agents[bot]"},
+                        "state": "CHANGES_REQUESTED",
+                        "commit_id": HEAD,
+                        "submitted_at": "2026-08-27T01:00:00Z",
+                    }
+                ]
+            if any("pulls/321" in arg for arg in args):
+                return pr
+            return None
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
+            mock.patch.object(verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True),
+        ):
+            verify.process_pr(321, {})
+        return gh_calls
+
+    def dispatched(self, gh_calls) -> bool:
+        return any(
+            call[:2] == ["workflow", "run"] and verify.REVIEW_WORKFLOW in call
+            for call in gh_calls
+        )
+
+    def test_completing_the_contract_asks_for_a_fresh_review(self) -> None:
+        # #1379: this lane writes the PR body with GITHUB_TOKEN, and GitHub
+        # suppresses `pull_request: edited` runs caused by that token — so the
+        # completion that satisfies the reviewer's objection generates no event
+        # at all. Dispatching is the only way the news travels.
+        calls = self.run_process_pr([ci_entry()], labels=["blocked:evidence"], rejection=True)
+        self.assertTrue(self.dispatched(calls))
+        self.assertIn(["pr", "edit", "321", "--remove-label", "blocked:evidence"], calls)
+
+    def test_no_standing_rejection_means_no_review_is_requested(self) -> None:
+        calls = self.run_process_pr([ci_entry()], labels=["blocked:evidence"], rejection=False)
+        self.assertFalse(self.dispatched(calls))
+
+    def test_an_already_complete_contract_asks_for_nothing(self) -> None:
+        # Only the transition asks. Otherwise every check suite on a finished
+        # PR would spend a slot of the review budget.
+        complete = dict(ci_entry(), status="complete", verified_head_sha=HEAD)
+        calls = self.run_process_pr([complete], labels=[], rejection=True)
+        self.assertFalse(self.dispatched(calls))
+
+    def test_a_remaining_blocking_label_holds_the_request_back(self) -> None:
+        # A human-applied blocked:evidence is left alone, and the readiness
+        # gate would refuse the PR anyway, so asking spends budget for nothing.
+        body = body_with_entries([ci_entry()])
+        pr = pr_payload(body, labels=["blocked:evidence"])
+        gh_calls: list[list[str]] = []
+
+        def fake_gh_json(args, env):
+            if any(arg.endswith("/reviews") for arg in args):
+                return [
+                    {
+                        "user": {"login": "workspace-agents[bot]"},
+                        "state": "CHANGES_REQUESTED",
+                        "commit_id": HEAD,
+                        "submitted_at": "2026-08-27T01:00:00Z",
+                    }
+                ]
+            if any("pulls/321" in arg for arg in args):
+                return pr
+            return None
+
+        with (
+            mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
+            mock.patch.object(
+                verify,
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
+            ),
+            mock.patch.object(verify, "_write_pr_body", return_value=True),
+            mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=False),
+            mock.patch.object(verify, "_gh", side_effect=lambda args, env: gh_calls.append(args) or True),
+        ):
+            verify.process_pr(321, {})
+        self.assertFalse(self.dispatched(gh_calls))
+        self.assertNotIn(["pr", "edit", "321", "--remove-label", "blocked:evidence"], gh_calls)
 
     def test_head_movement_between_read_and_write_skips_the_write(self) -> None:
         body = body_with_entries([ci_entry()])
@@ -426,7 +599,12 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
 
         with (
             mock.patch.object(
-                verify, "_gh_json", side_effect=[pr_initial, pr_drifted, pr_drifted]
+                verify,
+                "_gh_json",
+                # A fourth call now: after the write completes the contract,
+                # process_pr asks whether a rejection is standing before
+                # requesting a fresh review.
+                side_effect=[pr_initial, pr_drifted, pr_drifted, []],
             ) as gh_json,
             mock.patch.object(
                 verify,
@@ -446,7 +624,7 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
         ):
             verify.process_pr(321, {})
 
-        self.assertEqual(gh_json.call_count, 3)
+        self.assertEqual(gh_json.call_count, 4)
         self.assertIn("clarify rollout plan", written["body"])
         self.assertIn(f"- [complete] {CI_ITEM}", written["body"])
         self.assertIn(

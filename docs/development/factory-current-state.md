@@ -8,9 +8,9 @@ What is actually wired and running today, verified against the workflow YAML and
 |---|---|---|---|---|
 | Implement | `factory-implement.yml` | issue labeled `ready` (owner-applied, or a factory rollback restoring an owner-applied one — see below); or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_IMPLEMENT_ENABLED`, both branches — capped by `FACTORY_IMPLEMENT_DAILY_CAP` | **Live** |
 | Review (signal) | `factory-review.yml` | PR opened / `ready_for_review` / synchronize; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_ENABLED` on the PR-event path only — **`workflow_dispatch` bypasses both switches** (the `if:` uses boolean OR, not AND) | **Live** — untrusted, writes a context artifact only |
-| Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same switches, same bypass — if the upstream Review run's triggering event was `workflow_dispatch`, this job runs regardless of either switch; otherwise gated, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code |
+| Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same switches, same bypass — if the upstream Review run's triggering event was `workflow_dispatch`, this job runs regardless of either switch; otherwise gated, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code Manual dispatch has two actors: the owner's forces an unconditional re-review and bypasses the switches; the Actions identity's is the Evidence Verify lane's request, honours the switches, and only ever asks — `factory-review.py` re-derives from live PR state, using the merge gate's own `pr-readiness.py`, whether a standing rejection is refreshable. |
 | Monitor | `factory-monitor.yml` | daily cron (13:30 UTC); or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_MONITOR_ENABLED` on the cron path only — **`workflow_dispatch` bypasses both switches** (same OR-not-AND pattern) | **Live** — telemetry, Digest, reconciliation janitor |
-| Evidence Verify | `factory-evidence-verify.yml` | `check_suite` completed; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_EVIDENCE_VERIFY_ENABLED`, both branches (dispatch does not bypass here) | **Live** — `FACTORY_EVIDENCE_VERIFY_ENABLED` was set `true` 2026-08-04 (#1149); the lane shipped green with #1136/#1137 but sat 100% skipped for two weeks because nobody had run `gh variable set` yet. `config/github/repo-variables.json` now guards against a repeat: any workflow referencing an unset `vars.FACTORY_*_ENABLED` fails `scripts/tests/test_factory_workflows.py` in CI. |
+| Evidence Verify | `factory-evidence-verify.yml` | `check_suite` completed; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_EVIDENCE_VERIFY_ENABLED`, both branches (dispatch does not bypass here) | **Live** — `FACTORY_EVIDENCE_VERIFY_ENABLED` was set `true` 2026-08-04 (#1149); the lane shipped green with #1136/#1137 but sat 100% skipped for two weeks because nobody had run `gh variable set` yet. `config/github/repo-variables.json` now guards against a repeat: any workflow referencing an unset `vars.FACTORY_*_ENABLED` fails `scripts/tests/test_factory_workflows.py` in CI. Since #1379 it also asks the Review lane to look again when it completes the last blocking evidence entry: this lane writes the PR body with `GITHUB_TOKEN`, and GitHub suppresses `pull_request: edited` runs caused by that token, so the completion that satisfies a reviewer's objection generates no event at all. |
 | Review Response | `factory-review-response.yml` | `pull_request_review` submitted as `changes_requested` on a same-repository head; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_RESPONSE_ENABLED`, both branches (dispatch does not bypass here) | **Proposed** (PR #1383, #1378) — merged code, switch off. Set `FACTORY_REVIEW_RESPONSE_ENABLED=true` to arm it. Answers a blocking review with one gesture-named owner escalation; deterministic, no model. |
 | Owner Comment Responder | `factory-comment-responder.yml` | `issue_comment` created by the owner; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_RESPONDER_ENABLED`, both branches (dispatch does not bypass here) | **Live** |
 | Mention Triage → Executor | `agent-mention.yml` → `agent-executor.yml` | `@april-clearwater` / `@plat` / `@peter` / `@claude` mentions on issues/PRs/reviews | `AGENT_AUTOMATIONS_ENABLED`; execution additionally requires the `safe-to-run-agent` label, server-verified | **Live** — this is a distinct lane from the "Triage" pipeline Stage below; naming collision, not the same code path |
@@ -20,6 +20,29 @@ What is actually wired and running today, verified against the workflow YAML and
 | Carl Community | — | — | — | **Deleted this PR.** Daily cron that only 429s or no-ops; never posted once; not a v2-plan persona. |
 | Codespaces Claude Worker | — | — | — | **Deleted this PR.** Manual break-glass dispatch; zero runs since it shipped. |
 | App Review Smoke | — | — | — | **Deleted this PR.** Manual dispatch; dormant since 2026-05-26. |
+
+### Clearing a stale rejection
+
+A counterpart review can object to the PR *body* — a missing `## Mergeability`
+block, an evidence line still `[pending-ci]`, a `blocked:` label. Fixing that
+moves no commit, so GitHub's `dismiss_stale_reviews_on_push` never fires and the
+Review lane (opened / ready_for_review / synchronize) never re-runs. The
+rejection stays blocking after it has been satisfied — hit live on #1102 and
+again on #1377.
+
+Two paths clear it, and neither dismisses the review: the reviewer supersedes
+their own verdict, which keeps the review lane the thing that decides.
+
+- **Automatic.** When Evidence Verify completes the last blocking evidence entry
+  and no `blocked:` label remains, it dispatches Factory Review for that PR. The
+  request is only a request — `factory-review.py --refresh-stale-review`
+  re-derives, from live PR state and using the merge gate's own
+  `scripts/pr-readiness.py`, whether the standing rejection is refreshable. It
+  refuses unless the reviewer's latest verdict on this exact head is still
+  `CHANGES_REQUESTED` *and* readiness now passes.
+- **By hand.** For a body fix the factory did not make — the owner filling in
+  Mergeability, attesting evidence, removing a label — run Factory Review by
+  hand for the PR number. The owner's dispatch forces the review outright.
 
 `AGENT_AUTOMATIONS_ENABLED` is the global master switch, but it is not an unconditional kill for every lane: Implement, Evidence Verify, and the Owner Comment Responder `&&` it into every trigger path including `workflow_dispatch`, so it always gates them. Review (signal), Review (execute), and Monitor instead OR a bare `workflow_dispatch` check ahead of the switches — an owner-triggered manual dispatch runs those three regardless of `AGENT_AUTOMATIONS_ENABLED` or their own per-stage switch. Milestone Legibility and Evidence Reminder have no Factory switch at all. Treat "turn off `AGENT_AUTOMATIONS_ENABLED`" as "stops label/cron/comment-driven runs," not "nothing can run" — a manual dispatch on Review or Monitor still can.
 
