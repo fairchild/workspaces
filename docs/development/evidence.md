@@ -195,6 +195,39 @@ For web screenshots without auth, start the dev server with:
 DEV_BYPASS_AUTH=1 pnpm dev
 ```
 
+## Writing a factory issue's `## Requested Evidence`
+
+Each bullet is classified into a kind, and the kind decides who completes it.
+Writing an item the classifier recognises is the difference between the factory
+finishing the PR and the PR waiting on you.
+
+| Write it like this | Kind | Who completes it |
+|---|---|---|
+| ``` `swift test --filter FooTests` passes ``` | `test` | the macOS evidence lane runs it |
+| `Screenshots of the new sidebar` | `screenshot` | the macOS evidence lane captures it |
+| ``` CI: `Lint, Test, Build` green on the PR head ``` | `ci` | `factory-evidence-verify.yml` polls that check |
+| ``` The `check-links` check passes on the PR head ``` | `ci` | same |
+| `Diff: the README links the overview page` | `diff` | the counterpart review, bound to the review URL and head SHA |
+| `The new column appears in the PR diff` | `diff` | same |
+| `Someone with taste confirms the copy reads well` | `other` | **you**, by hand |
+| `... (owner-attested)` | `other` | **you**, by hand — the directive is honoured over any other shape |
+
+Two rules worth knowing:
+
+- **A CI item must name the check in backticks, immediately before `green`, or
+  before a CI noun and then a pass word.** ``` `check-links` check passes ``` works;
+  "`pnpm check` passes locally" does not, because `pnpm check` is a command, not
+  a check name. The classifier fails closed rather than guessing, since an item
+  naming a check that does not exist never completes.
+- **`(owner-attested)` — or any "owner/maintainer confirms/approves/decides"
+  phrasing — keeps the item yours** even when the rest of it looks mechanical.
+  If you want the factory to close it, drop the parenthetical and write the
+  diff or CI form instead.
+
+The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
+`scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what
+does and does not classify.
+
 ## How it's enforced
 
 Three layers, from gentlest to strongest:

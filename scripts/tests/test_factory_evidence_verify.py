@@ -36,6 +36,10 @@ def load_module(name: str, path: Path):
 
 
 verify = load_module("factory_evidence_verify", SCRIPT_PATH)
+# check_runs_for lives in the contributor runtime's evidence module; the
+# verifier re-exports it by import, so patching run_optional must target the
+# module that actually calls it.
+verify_evidence = sys.modules["evidence"]
 
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
@@ -96,11 +100,66 @@ def pr_payload(
     }
 
 
+class CheckRunsForTests(unittest.TestCase):
+    """The empty list and None mean different things and the callers act on
+    the difference, so the boundary that produces them is pinned here."""
+
+    def resolve(self, raw: str):
+        with mock.patch.object(verify_evidence, "run_optional", return_value=raw):
+            return verify_evidence.check_runs_for("Web CI", HEAD, {})
+
+    def test_an_answered_empty_result_is_a_list_not_a_failure(self) -> None:
+        self.assertEqual(self.resolve('{"total_count": 0, "check_runs": []}'), [])
+
+    def test_a_failed_or_malformed_lookup_is_none(self) -> None:
+        for raw in ("", "not json", "[]", '{"message": "Not Found"}'):
+            with self.subTest(raw=raw):
+                self.assertIsNone(self.resolve(raw))
+
+    def test_unfinished_runs_come_back_but_yield_no_completed_run(self) -> None:
+        runs = self.resolve(
+            '{"check_runs": [{"status": "in_progress", "name": "Web CI"}]}'
+        )
+        self.assertEqual(len(runs or []), 1)
+        self.assertIsNone(verify.latest_completed_run(runs))
+
+
 class CheckRunResolutionTests(unittest.TestCase):
     def test_missing_run_stays_pending(self) -> None:
         update = verify.entry_update_for_check_run("Web CI", HEAD, None)
         self.assertEqual(update["status"], "pending-ci")
         self.assertIn("no completed run of `Web CI`", str(update["detail"]))
+
+    def test_an_unknown_check_name_says_so_instead_of_reading_as_waiting(self) -> None:
+        # An entry naming a check that does not exist never completes. Saying
+        # "waiting for checks" there leaves the PR looking like CI is slow.
+        update = verify.entry_update_for_check_run(
+            "Wbe CI", HEAD, None, check_known=False
+        )
+        self.assertEqual(update["status"], "pending-ci")
+        self.assertIn("no run of `Wbe CI` exists on head", str(update["detail"]))
+        self.assertIn("may not match a check on this repository", str(update["detail"]))
+        # Stated as an observation, not a verdict: a later check suite can
+        # still create the run, so this lane must not accuse a valid name.
+        self.assertIn("may not have been created", str(update["detail"]))
+
+    def test_a_failed_lookup_is_not_reported_as_an_unknown_check(self) -> None:
+        # check_runs_for returns None when the query itself did not resolve,
+        # which says nothing about whether the check exists.
+        self.assertIsNone(verify.latest_completed_run(None))
+        update = verify.entry_update_for_check_run("Web CI", HEAD, None, check_known=True)
+        self.assertIn("no completed run of `Web CI`", str(update["detail"]))
+
+    def test_latest_completed_run_picks_the_newest_finished_run(self) -> None:
+        runs = [
+            {"status": "completed", "completed_at": "2026-08-27T01:00:00Z", "id": 1},
+            {"status": "in_progress", "id": 2},
+            {"status": "completed", "completed_at": "2026-08-27T02:00:00Z", "id": 3},
+        ]
+        picked = verify.latest_completed_run(runs)
+        assert picked is not None
+        self.assertEqual(picked["id"], 3)
+        self.assertIsNone(verify.latest_completed_run([{"status": "queued"}]))
 
     def test_green_run_completes_with_sha_binding_and_link(self) -> None:
         update = verify.entry_update_for_check_run(
@@ -223,8 +282,15 @@ class ProcessPrTests(unittest.TestCase):
             mock.patch.object(verify, "_gh_json", side_effect=fake_gh_json),
             mock.patch.object(
                 verify,
-                "latest_completed_check_run",
-                return_value={"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
             ),
             mock.patch.object(verify, "_write_pr_body", side_effect=fake_write),
             mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
@@ -252,8 +318,15 @@ class ProcessPrTests(unittest.TestCase):
             mock.patch.object(verify, "_gh_json", side_effect=lambda args, env: next(responses)),
             mock.patch.object(
                 verify,
-                "latest_completed_check_run",
-                return_value={"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
             ),
             mock.patch.object(verify, "_write_pr_body") as write,
             mock.patch.object(verify, "_gh") as gh,
@@ -268,7 +341,7 @@ class ProcessPrTests(unittest.TestCase):
             with self.subTest(body=body):
                 with (
                     mock.patch.object(verify, "_gh_json", return_value=pr_payload(body)),
-                    mock.patch.object(verify, "latest_completed_check_run") as lookup,
+                    mock.patch.object(verify, "check_runs_for") as lookup,
                     mock.patch.object(verify, "_write_pr_body") as write,
                 ):
                     verify.process_pr(321, {})
@@ -357,8 +430,15 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
             ) as gh_json,
             mock.patch.object(
                 verify,
-                "latest_completed_check_run",
-                return_value={"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
             ),
             mock.patch.object(verify, "_write_pr_body", side_effect=fake_write),
             mock.patch.object(verify, "blocked_label_applied_by_factory", return_value=True),
@@ -387,8 +467,15 @@ class BodyChangeRaceGuardTests(unittest.TestCase):
             mock.patch.object(verify, "_gh_json", side_effect=gh_responses) as gh_json,
             mock.patch.object(
                 verify,
-                "latest_completed_check_run",
-                return_value={"conclusion": "success", "html_url": "https://example.invalid/run/1"},
+                "check_runs_for",
+                return_value=[
+                    {
+                        "status": "completed",
+                        "conclusion": "success",
+                        "completed_at": "2026-08-27T00:00:00Z",
+                        "html_url": "https://example.invalid/run/1",
+                    }
+                ],
             ),
             mock.patch.object(verify, "_write_pr_body") as write,
             mock.patch.object(verify, "_gh") as gh,

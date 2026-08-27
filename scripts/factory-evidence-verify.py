@@ -31,7 +31,7 @@ from evidence import (  # noqa: E402
     _ci_check_name,
     _evidence_item_kind,
     _extract_evidence_metadata,
-    latest_completed_check_run,
+    check_runs_for,
     update_evidence_entries,
 )
 from execution import APP_BOT_GIT_IDENTITIES  # noqa: E402
@@ -139,13 +139,37 @@ def ci_entries_needing_verification(
     return needed
 
 
+def latest_completed_run(runs: list[dict[str, object]] | None) -> dict[str, object] | None:
+    completed = [run for run in runs or [] if str(run.get("status", "")) == "completed"]
+    if not completed:
+        return None
+    return max(completed, key=lambda run: str(run.get("completed_at", "")))
+
+
 def entry_update_for_check_run(
     check_name: str,
     head_sha: str,
     run: dict[str, object] | None,
+    *,
+    check_known: bool = True,
 ) -> dict[str, object]:
     short = head_sha[:12]
     base: dict[str, object] = {"kind": "ci", "check_name": check_name}
+    if run is None and not check_known:
+        # Worth distinguishing from "not finished yet": an entry naming a
+        # check that does not exist never completes, and without saying so the
+        # PR sits there looking like CI is merely slow. Stated as an
+        # observation rather than a verdict, because this lane fires per check
+        # suite and a later suite can still create the run.
+        return {
+            **base,
+            "status": "pending-ci",
+            "detail": (
+                f"no run of `{check_name}` exists on head {short} yet — it may not "
+                "have been created, or the name in the evidence item may not match "
+                "a check on this repository"
+            ),
+        }
     if run is None:
         return {
             **base,
@@ -328,8 +352,16 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
     if needed:
         updates: dict[int, dict[str, object]] = {}
         for index, check_name in needed:
-            run = latest_completed_check_run(check_name, head_sha, env)
-            updates[index] = entry_update_for_check_run(check_name, head_sha, run)
+            runs = check_runs_for(check_name, head_sha, env)
+            updates[index] = entry_update_for_check_run(
+                check_name,
+                head_sha,
+                latest_completed_run(runs),
+                # None means the lookup itself failed, which says nothing about
+                # whether the check exists -- only an answered query that came
+                # back empty does.
+                check_known=runs is None or bool(runs),
+            )
         updated_body = _apply_ci_updates(pr_number, head_sha, body, updates, env)
         if updated_body is None:
             return
