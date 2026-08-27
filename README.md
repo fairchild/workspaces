@@ -137,6 +137,10 @@ The bootstrap path validates and trusts only the reviewed root/web mise configs,
 then installs locked tool versions. Keep secrets and broad trust settings out of
 mise config; see [mise security](./docs/development/mise-security.md).
 
+For a product-level overview of WorkSpaces, see:
+
+- [docs/product_overview.md](./docs/product_overview.md)
+
 For contribution guidelines and project structure, see:
 
 - [CONTRIBUTING.md](./CONTRIBUTING.md)
