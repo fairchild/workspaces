@@ -67,11 +67,99 @@ class EvidenceKindClassificationTests(unittest.TestCase):
         self.assertIsNone(run_contributor._ci_check_name(item))
         self.assertEqual(run_contributor._evidence_item_kind(item), "other")
 
+    def test_the_dogfood_item_that_parked_a_pr_on_the_owner_classifies(self) -> None:
+        # #1382, proven live on #1377: a two-line docs change whose only
+        # evidence was the diff itself drew blocked:evidence and waited on the
+        # owner. Written without an owner directive, it now classifies.
+        item = (
+            "README documentation list shows the `docs/product_overview.md` "
+            "link in the PR diff"
+        )
+        self.assertEqual(run_contributor._evidence_item_kind(item), "diff")
+
+    def test_an_explicit_owner_directive_outranks_every_mechanical_kind(self) -> None:
+        # #1377's item verbatim. Reading it as diff-verifiable would silently
+        # reassign authority the author took the trouble to name; if the
+        # contract is wrong, the fix is to correct the issue text.
+        self.assertEqual(
+            run_contributor._evidence_item_kind(
+                "README documentation list shows the `docs/product_overview.md` "
+                "link in the PR diff (owner-attested)"
+            ),
+            "other",
+        )
+        for item in (
+            "Owner confirms the migration preserves every invariant; the new "
+            "column appears in the PR diff",
+            "In the PR diff, the new column is visible, and the owner confirms "
+            "the migration is safe",
+            "In the diff the prose shows good product judgment and is owner-attested",
+            "The owner approves the rollout, and the manifest appears in the PR diff",
+            "CI: `Web CI` is green, but the maintainer decides whether to ship",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
+    def test_named_check_classifies_when_a_ci_noun_binds_the_name(self) -> None:
+        for item, check in (
+            ("The `check-links` check passes on the PR head", "check-links"),
+            ("`Web CI / test` job successful on this PR", "Web CI / test"),
+            ("`Lint, Test, Build` workflow passed on the head commit", "Lint, Test, Build"),
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "ci")
+                self.assertEqual(run_contributor._ci_check_name(item), check)
+
+    def test_the_green_form_is_unchanged_from_before_the_widening(self) -> None:
+        # Bounding the gap to make room for the pass verdicts would have
+        # regressed these; the green matcher is left exactly as it was.
+        for item, check in (
+            ("CI: `Web CI` must finish on the exact PR head and stay green", "Web CI"),
+            ("CI: `Web CI` (required branch protection) is green", "Web CI"),
+            ("Check `foo.ts` passes while `Web CI` is green", "Web CI"),
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._ci_check_name(item), check)
+
+    def test_ordinary_backticked_tokens_never_become_check_names(self) -> None:
+        # The reason the pass verdicts need a CI noun binding them: their
+        # words are ordinary English, and a `ci` entry naming a check that
+        # does not exist never completes -- strictly worse than `other`.
+        for item in (
+            "`ci/check.py` passes its unit tests",
+            "CI: `src/foo.ts` passes TypeScript compilation",
+            "`pnpm check` passes locally",
+            "CI evidence: `pnpm check` passes on the PR head",
+            "The CI regression in `isValidRepoFullName` passes its new cases",
+            "The workflow proves `EvidenceStatus` passes decoding",
+            "CI on `workspace/1382-evidence-kinds` passes before merge",
+            "The CI job for `PR #1377` passed after the docs fix",
+            "The CI example in `README.md` passed editorial review",
+            "Check that `foo.ts` compiles and the build passes",
+            "Check that `foo.ts` passes the build",
+        ):
+            with self.subTest(item=item):
+                self.assertIsNone(run_contributor._ci_check_name(item))
+                self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
+    def test_a_diff_mentioned_after_the_real_claim_is_not_a_diff_item(self) -> None:
+        for item in (
+            "The owner must be present for the irreversible sign-off described in the diff",
+            "Someone with taste confirms the copy reads well",
+            "All tests pass",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
     def test_diff_items_classify_by_prefix_and_phrasing(self) -> None:
         for item in (
             "Diff: dot-only segments rejected while valid names still pass",
             DIFF_ITEM,
             "Behavior is verifiable by reading the PR diff",
+            "The PR diff contains the new fixture",
+            "The new rows are readable from the diff alone",
+            "The added guard is visible in the diff",
+            "The new column appears in the PR diff",
         ):
             with self.subTest(item=item):
                 self.assertEqual(run_contributor._evidence_item_kind(item), "diff")
@@ -264,6 +352,85 @@ class MacOSLaneCoexistenceTests(unittest.TestCase):
 
         self.assertIn(f"- [pending-ci] {CI_ITEM} -- waiting for checks", reconciled)
         self.assertIn("- [complete] swift build", reconciled)
+
+
+class ClassifierBlastRadiusTests(unittest.TestCase):
+    """A kind is not a label — it decides which lane completes the item.
+
+    Classification tests alone cannot catch a reclassification that lands the
+    wrong downstream behavior, so each corpus item is walked all the way to
+    the state it produces on a fresh PR: whether `blocked:evidence` is applied,
+    which bucket the entry is seeded into, and whether the macOS lane is
+    summoned.
+    """
+
+    CASES = (
+        # (item, kind, initial bucket, blocked:evidence at open, macOS lane)
+        (
+            "README documentation list shows the `docs/product_overview.md` "
+            "link in the PR diff",
+            "diff",
+            "pending_ci",
+            False,
+            False,
+        ),
+        (
+            "README documentation list shows the `docs/product_overview.md` "
+            "link in the PR diff (owner-attested)",
+            "other",
+            "blocked",
+            True,
+            False,
+        ),
+        ("The `check-links` check passes on the PR head", "ci", "pending_ci", False, False),
+        ("CI: `Web CI` green on the PR head", "ci", "pending_ci", False, False),
+        ("`pnpm check` passes locally", "other", "blocked", True, False),
+        ("The CI job for `PR #1377` passed after the docs fix", "other", "blocked", True, False),
+        ("Someone with taste confirms the copy reads well", "other", "blocked", True, False),
+        ("`swift test --filter Foo` passes", "test", "pending_ci", False, True),
+        ("Screenshots of the new sidebar", "screenshot", "pending_ci", False, True),
+    )
+
+    def test_each_kind_lands_the_state_its_lane_expects(self) -> None:
+        for item, kind, bucket, blocked_label, macos in self.CASES:
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), kind)
+                self.assertEqual(
+                    run_contributor._has_unautomatable_evidence([item]),
+                    blocked_label,
+                    "blocked:evidence at PR open follows from the kind",
+                )
+                self.assertEqual(
+                    run_contributor._needs_macos_evidence([item]),
+                    macos,
+                    "summoning the macOS evidence lane follows from the kind",
+                )
+                complete, blocked, pending_ci = (
+                    run_contributor.synthesize_initial_execution_evidence([item])
+                )
+                buckets = {"complete": complete, "blocked": blocked, "pending_ci": pending_ci}
+                self.assertEqual(
+                    [name for name, rows in buckets.items() if rows],
+                    [bucket],
+                    "exactly one initial bucket, and the one the lane reads",
+                )
+
+    def test_a_ci_item_seeds_the_check_name_the_verifier_will_poll(self) -> None:
+        _, _, pending_ci = run_contributor.synthesize_initial_execution_evidence(
+            ["The `check-links` check passes on the PR head"]
+        )
+        self.assertIn("`check-links`", pending_ci[0])
+
+    def test_the_macos_lane_never_resolves_an_event_completed_kind(self) -> None:
+        # ci and diff complete through the verifier and the review lane; the
+        # macOS lane must leave them alone or it would mark a false name
+        # blocked before the verifier ever looks.
+        self.assertEqual(
+            run_contributor.EVENT_COMPLETED_KINDS & run_contributor.MACOS_EVIDENCE_KINDS,
+            frozenset(),
+        )
+        self.assertIn("ci", run_contributor.EVENT_COMPLETED_KINDS)
+        self.assertIn("diff", run_contributor.EVENT_COMPLETED_KINDS)
 
 
 if __name__ == "__main__":

@@ -36,18 +36,63 @@ VISUAL_EVIDENCE_RE = re.compile(
     r"(?:ui|interface|screen|window) captures?|before/after (?:images?|screenshots?))\b",
     re.IGNORECASE,
 )
-# A `ci` item names one check in backticks immediately before "green"
-# (no intervening backticks), alongside a CI keyword — e.g.
-# "CI: `Lint, Test, Build` green on the PR head". Name-after-green phrasing
-# ("job green ... (`someFunction` cases)") deliberately does not classify:
-# extracting a wrong check name is worse than staying `other`.
-CI_EVIDENCE_NAME_RE = re.compile(r"(?i)`(?P<check>[^`]+)`[^`]*\bgreen\b")
+# A `ci` item names one check in backticks and asserts it is green. Two
+# shapes are accepted, both requiring a CI keyword somewhere in the item:
+#
+#   `Lint, Test, Build` green on the PR head      -- name, then "green"
+#   `check-links` check passes on the PR head     -- name, then a CI noun,
+#                                                    then a pass verdict
+#
+# The second shape exists because "green" is not how most people write it,
+# but its verdict words are ordinary English ("passes", "succeeded") and would
+# match almost any backticked token without the noun binding them. Compare
+# "`pnpm check` passes locally" or "the CI regression in `isValidRepoFullName`
+# passes its new cases": neither names a check, and a `ci` entry naming a check
+# that does not exist never completes -- strictly worse than the `other` it
+# replaced. Name-after-verdict phrasing ("job green ... (`someFunction`
+# cases)") does not classify for the same reason.
+CI_EVIDENCE_NOUN = r"check|job|workflow|suite|lane|run"
+CI_EVIDENCE_PASS = r"pass(?:es|ing|ed)?|succeed(?:s|ing|ed)?|success(?:ful)?"
+CI_EVIDENCE_NAME_RES = (
+    re.compile(r"(?i)`(?P<check>[^`]+)`[^`]*\bgreen\b"),
+    re.compile(
+        rf"(?i)`(?P<check>[^`]+)`\s+(?:{CI_EVIDENCE_NOUN})\b[^`]{{0,24}}?"
+        rf"\b(?:{CI_EVIDENCE_PASS})\b"
+    ),
+)
 CI_EVIDENCE_KEYWORD_RE = re.compile(r"(?i)\b(?:ci|check|workflow|job)\b")
+# An explicit owner directive outranks every mechanical kind. Reading "shows X
+# in the PR diff (owner-attested)" as diff-verifiable would be silently
+# reassigning authority the author took the trouble to name; if the contract
+# is wrong, the fix is to correct the issue text. Nothing classified `other`
+# today changes because of this -- it only stops future widening from
+# overriding an author who said who should sign.
+OWNER_ATTESTED_RE = re.compile(
+    r"(?i)owner[- ]attest\w*"
+    r"|\b(?:owner|maintainer)\b[^\n]{0,24}?"
+    r"\b(?:attest\w*|confirm\w*|verif\w*|approv\w*|sign[- ]?off|signs? off"
+    r"|judg\w*|decid\w*|agree\w*)\b"
+)
+# A `diff` item asserts something a reader confirms by reading the diff.
+# Completion is the counterpart review itself, bound to the review URL and
+# head SHA, so a reviewer always closes it -- which makes this the safer
+# direction to widen. The #1377 dogfood run parked a two-line docs change on
+# the owner because "shows the link in the PR diff" matched none of the
+# original phrasings, though the diff was the entire proof.
+#
+# The verbs bind tightly to "in the diff" rather than floating: "the owner
+# must be present for the sign-off described in the diff" is not a diff
+# assertion, and neither is a sentence that mentions the diff only after its
+# real claim. A multi-clause item whose diff phrase is a subclause can still
+# classify -- the same is true of the phrasings that predate this -- but the
+# reviewer completing it reads the item text, so the assertion is not
+# unexamined.
 DIFF_EVIDENCE_RE = re.compile(
     r"(?i)^diff:"
-    r"|readable from the (?:pr )?diff"
+    r"|(?:readable|visible|apparent|evident|confirmable) (?:from|in) the (?:pr )?diff"
     r"|verifiable by reading the (?:pr )?diff"
-    r"|the pr diff (?:shows|proves|demonstrates)"
+    r"|the (?:pr )?diff (?:shows|proves|demonstrates|contains|includes)"
+    r"|\b(?:shows?|contains?|includes?|appears?)\b[^\n]{0,60}?\bin the (?:pr )?diff\b"
 )
 # Kinds the self-hosted macOS evidence lane can gather; `ci` and `diff`
 # complete through the verifier workflow and review lane instead (#1120).
@@ -625,10 +670,15 @@ def _ci_check_name(item: str) -> str | None:
     text = item.strip()
     if not CI_EVIDENCE_KEYWORD_RE.search(text):
         return None
-    match = CI_EVIDENCE_NAME_RE.search(text)
-    if match is None:
-        return None
-    return match.group("check").strip() or None
+    for pattern in CI_EVIDENCE_NAME_RES:
+        match = pattern.search(text)
+        if match is not None and match.group("check").strip():
+            return match.group("check").strip()
+    return None
+
+
+def _is_owner_attested(item: str) -> bool:
+    return OWNER_ATTESTED_RE.search(_normalize_evidence_item(item)) is not None
 
 
 def _is_diff_evidence(item: str) -> bool:
@@ -643,6 +693,8 @@ def _evidence_item_kind(item: str) -> str:
         return "build"
     if VISUAL_EVIDENCE_RE.search(normalized):
         return "screenshot"
+    if _is_owner_attested(item):
+        return "other"
     if _ci_check_name(item) is not None:
         return "ci"
     if _is_diff_evidence(item):
@@ -1021,15 +1073,18 @@ def update_evidence_entries(body: str, updates: dict[int, dict[str, object]]) ->
     return _render_structured_entries(body, updated_entries)
 
 
-def latest_completed_check_run(
+def check_runs_for(
     check_name: str,
     head_sha: str,
     env: dict[str, str],
-) -> dict[str, object] | None:
-    """Most recently completed run of a named check on a commit, or None.
+) -> list[dict[str, object]] | None:
+    """Every run of a named check on a commit, or None if the query failed.
 
-    Queries live check-run state so callers never trust conclusions recorded
-    in a PR body. Requires GH_REPO or a repo-resolving checkout for `gh api`.
+    The empty list and None mean different things, and callers act on the
+    difference: an empty list says GitHub knows of no check by that name on
+    this head — usually a wrong name in the evidence item, which would
+    otherwise wait forever — while None says the lookup itself did not
+    resolve. Requires GH_REPO or a repo-resolving checkout for `gh api`.
     """
     raw = run_optional(
         [
@@ -1051,10 +1106,22 @@ def latest_completed_check_run(
     runs = payload.get("check_runs") if isinstance(payload, dict) else None
     if not isinstance(runs, list):
         return None
+    return [run for run in runs if isinstance(run, dict)]
+
+
+def latest_completed_check_run(
+    check_name: str,
+    head_sha: str,
+    env: dict[str, str],
+) -> dict[str, object] | None:
+    """Most recently completed run of a named check on a commit, or None.
+
+    Queries live check-run state so callers never trust conclusions recorded
+    in a PR body.
+    """
+    runs = check_runs_for(check_name, head_sha, env)
     completed = [
-        run
-        for run in runs
-        if isinstance(run, dict) and str(run.get("status", "")) == "completed"
+        run for run in runs or [] if str(run.get("status", "")) == "completed"
     ]
     if not completed:
         return None
