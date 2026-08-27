@@ -30,6 +30,13 @@ private final class UnroutedAutomationController: AutomationControlling {
         for handle: String,
         request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult { throw unrouted }
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult {
+        throw AutomationServiceError(.staleHandle, "stale")
+    }
+
     func automationSetWorkspaceNote(
         for handle: String,
         request: AutomationWorkspaceNoteRequest

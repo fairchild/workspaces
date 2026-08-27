@@ -110,6 +110,13 @@ private final class FakeWorkspacesAppIntentController: AutomationControlling {
         throw AutomationServiceError(.unsupported, "Not used by App Intents.")
     }
 
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult {
+        throw AutomationServiceError(.staleHandle, "stale")
+    }
+
     func automationSetWorkspaceNote(
         for handle: String,
         request: AutomationWorkspaceNoteRequest

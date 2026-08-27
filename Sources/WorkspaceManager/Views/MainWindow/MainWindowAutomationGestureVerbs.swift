@@ -35,7 +35,36 @@ struct MainWindowAutomationGestureVerbs {
             resolveRepo: { repoID in resolveRepoTarget(repoID) },
             performCreation: { _, command in await performCreation(command) },
             performArchive: { target, command in await performArchive(target, command) },
-            performNote: { target, note in performNote(target, note: note) }
+            performNote: { target, note in performNote(target, note: note) },
+            performRepoTerminal: { target in performRepoTerminal(target) }
+        )
+    }
+
+    /// Enters the same path a sidebar repo row's terminal takes, then reads back the surface the
+    /// gesture actually attached — the observable proof, not an assumption that it worked.
+    private func performRepoTerminal(
+        _ target: AutomationGestureVerbs.RepoTarget
+    ) -> AutomationRepoTerminalEffect {
+        guard let repo = dependencies.repos().first(where: { $0.id == target.repoID }) else {
+            return AutomationRepoTerminalEffect(
+                attachedSurfaceID: nil,
+                attachedTerminal: false,
+                directoryPath: target.path
+            )
+        }
+
+        dependencies.selectRepoTerminal(repo)
+
+        let repoDirectory = MainWindowPathResolution.normalize(repo.localURL.path)
+        let attachedSurfaceID = dependencies.tileTreeStore.activeSessionID
+        let attachedSession = dependencies.tileTreeStore.sessions.first { $0.id == attachedSurfaceID }
+        // The gesture is only "attached" when the active session is the one this repo's scope
+        // owns; a selection that landed elsewhere reports no surface rather than the wrong one.
+        let attached = attachedSession?.key == .repoPath(repoDirectory)
+        return AutomationRepoTerminalEffect(
+            attachedSurfaceID: attached ? attachedSurfaceID : nil,
+            attachedTerminal: attached,
+            directoryPath: attachedSession.map(\.directoryPath) ?? repoDirectory
         )
     }
 

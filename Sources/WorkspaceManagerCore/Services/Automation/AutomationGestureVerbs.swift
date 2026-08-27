@@ -66,6 +66,18 @@ public enum AutomationWorkspaceArchiveOutcome: Sendable, Equatable {
     case closeBlockedByConfirmation(String)
 }
 
+/// The outcome of `repo.terminal` — opening a repo's own terminal, the surface a sidebar repo row
+/// opens. Same shape as its siblings so the contract has one definition.
+public enum AutomationRepoTerminalOutcome: Sendable, Equatable {
+    /// The gesture ran through the real repo-terminal path; `effect` reports what the UI did and
+    /// `repoName` is the display name the app resolved, so the caller never re-reads to label it.
+    case completed(effect: AutomationRepoTerminalEffect, repoName: String)
+    /// The verb cannot run in the current context, most often because no live window is bound.
+    case unsupported(String)
+    /// The repo id resolves to nothing the app tracks. Mapped to `invalid_request` at the wire.
+    case notFound
+}
+
 public enum AutomationWorkspaceNoteOutcome: Sendable, Equatable {
     /// The note gesture ran through the real sidebar path; the payload is what the app
     /// stored after normalization, plus whether that differed from what was there.
@@ -128,6 +140,9 @@ public final class AutomationGestureVerbs {
     /// Drive the real sidebar note gesture — the same setter the row's "Edit Note…" item
     /// writes through, normalization included — and report what the app stored.
     private let performNote: (@MainActor (WorkspaceTarget, String?) -> AutomationWorkspaceNoteOutcome)?
+    /// Drive the real repo-terminal gesture — the same path a sidebar repo row's terminal takes —
+    /// and report the surface it attached.
+    private let performRepoTerminal: (@MainActor (RepoTarget) -> AutomationRepoTerminalEffect)?
 
     public init(
         resolveWorkspace: @escaping @MainActor (UUID) -> WorkspaceTarget?,
@@ -139,7 +154,8 @@ public final class AutomationGestureVerbs {
         performArchive: (
             @MainActor (WorkspaceTarget, AutomationWorkspaceArchiveCommand) async -> AutomationWorkspaceArchiveOutcome
         )? = nil,
-        performNote: (@MainActor (WorkspaceTarget, String?) -> AutomationWorkspaceNoteOutcome)? = nil
+        performNote: (@MainActor (WorkspaceTarget, String?) -> AutomationWorkspaceNoteOutcome)? = nil,
+        performRepoTerminal: (@MainActor (RepoTarget) -> AutomationRepoTerminalEffect)? = nil
     ) {
         self.resolveWorkspace = resolveWorkspace
         self.performSelection = performSelection
@@ -147,6 +163,21 @@ public final class AutomationGestureVerbs {
         self.performCreation = performCreation
         self.performArchive = performArchive
         self.performNote = performNote
+        self.performRepoTerminal = performRepoTerminal
+    }
+
+    /// `repo.terminal`: enter the same path a sidebar repo row's terminal takes. The repo-scoped
+    /// terminal was reachable by click but by no verb, so an agent that wanted a shell in a repo
+    /// had to create a workspace it did not want (#1375). Resolves the id, then drives only the
+    /// supplied gesture closure; a missing closure means no live window installed the path.
+    public func openRepoTerminal(_ repoID: UUID) -> AutomationRepoTerminalOutcome {
+        guard let resolveRepo, let performRepoTerminal else {
+            return .unsupported("No WorkSpaces window is attached; repo.terminal requires a live window.")
+        }
+        guard let target = resolveRepo(repoID) else {
+            return .notFound
+        }
+        return .completed(effect: performRepoTerminal(target), repoName: target.name)
     }
 
     /// `workspace.select`: enter the same selection path a sidebar click takes. Resolves the id, then

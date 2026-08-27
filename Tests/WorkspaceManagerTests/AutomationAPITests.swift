@@ -282,6 +282,30 @@ private final class FakeAutomationController: AutomationControlling {
     /// Mirrors the operator-scope projection: only an operator handle carries
     /// workspace.note; a tile handle ("live") is capability_denied and any other handle
     /// is stale. The stored note is the normalized one, which is what the wire reports.
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult {
+        guard handle == "operator" else {
+            guard handle == "live" else {
+                throw AutomationServiceError(.staleHandle, "stale")
+            }
+            throw AutomationServiceError(
+                .capabilityDenied, "The automation handle does not include repo.terminal.")
+        }
+        guard let repoID = UUID(uuidString: request.repoID) else {
+            throw AutomationServiceError(.invalidRequest, "repoID must be a UUID.")
+        }
+        return AutomationRepoTerminalResult(
+            outcome: .completed,
+            repoID: repoID,
+            repoName: "repo",
+            attachedSurfaceID: UUID(),
+            attachedTerminal: true,
+            directoryPath: "/tmp/repo"
+        )
+    }
+
     func automationSetWorkspaceNote(
         for handle: String,
         request: AutomationWorkspaceNoteRequest
@@ -1042,7 +1066,7 @@ struct AutomationAPITests {
         #expect(
             entry.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ])
         // Operator mutation capabilities are reviewed gesture verbs; an operator handle still never
         // carries tile mutation or input.write.
@@ -1147,7 +1171,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ])
         #expect(controller.windowCalls == ["operator"])
 
@@ -1230,7 +1254,7 @@ struct AutomationAPITests {
         #expect(
             okEnvelope.result?.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ])
         #expect(controller.workspaceCalls == ["operator"])
 
@@ -2031,7 +2055,7 @@ struct AutomationAPITests {
         #expect(
             loaded?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ])
 
         let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
@@ -2064,7 +2088,7 @@ struct AutomationAPITests {
         #expect(
             registry.resolve(mintedCredential.handle)?.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ]
         )
         #expect(registry.resolve(mintedCredential.handle)?.isOperator == true)

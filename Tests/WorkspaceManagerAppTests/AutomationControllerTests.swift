@@ -546,7 +546,7 @@ struct AutomationControllerTests {
         #expect(
             result.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
@@ -641,7 +641,7 @@ struct AutomationControllerTests {
         #expect(
             result.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ])
         #expect(controller.automationHandleIsOperator(operatorEntry.handle))
     }
@@ -716,7 +716,7 @@ struct AutomationControllerTests {
         #expect(
             result.system.capabilities == [
                 .windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect, .workspaceCreate, .surfaceRead,
-                .workspaceArchive, .workspaceNote, .uiRead,
+                .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
             ])
         #expect(requestedWindowIDs == ["42"])
     }

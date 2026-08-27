@@ -160,6 +160,7 @@ struct CLIVerbCatalogTests {
               workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
               workspaces automation workspace archive <workspace-id> [--teardown] [--json]
               workspaces automation workspace note <workspace-id> --text "text" | --clear [--json]
+              workspaces automation repo terminal <repo-id> [--json]
               workspaces automation wait --for <condition> [--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]
               workspaces automation focus [--json]
 

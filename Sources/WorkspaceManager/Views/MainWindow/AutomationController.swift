@@ -277,6 +277,43 @@ final class AutomationController: AutomationControlling {
         }
     }
 
+    /// `repo.terminal`: open a repo's own terminal, the surface a sidebar repo row opens. It was
+    /// reachable by click but by no verb, so an agent that wanted a shell scoped to a repo had to
+    /// create a workspace it did not want (#1375).
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult {
+        let entry = try resolveOperator(handle, requiring: .repoTerminal)
+        let repoIDText = request.repoID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let repoID = UUID(uuidString: repoIDText) else {
+            throw AutomationServiceError(.invalidRequest, "repoID must be a UUID.")
+        }
+        guard let gestureVerbs else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; repo.terminal requires a live window."
+            )
+        }
+        switch gestureVerbs.openRepoTerminal(repoID) {
+        case .completed(let effect, let repoName):
+            return AutomationRepoTerminalResult(
+                outcome: .completed,
+                repoID: repoID,
+                repoName: repoName,
+                attachedSurfaceID: effect.attachedSurfaceID,
+                attachedTerminal: effect.attachedTerminal,
+                directoryPath: effect.directoryPath,
+                system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+            )
+        case .unsupported(let message):
+            throw AutomationServiceError(.unsupported, message)
+        case .notFound:
+            throw AutomationServiceError(
+                .invalidRequest, "No repo with id \(repoIDText) is tracked by the app.")
+        }
+    }
+
     func automationCreateWorkspace(
         for handle: String,
         request: AutomationWorkspaceCreateRequest
