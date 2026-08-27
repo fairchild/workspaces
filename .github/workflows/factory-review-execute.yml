@@ -16,15 +16,21 @@ permissions:
 
 jobs:
   admit:
+    # Owner `workflow_dispatch` still bypasses the kill switches (long-standing,
+    # documented in docs/development/factory-current-state.md). The Evidence
+    # Verify lane's re-review request does not: it is automation, so it runs
+    # only while automation is switched on.
     if: >-
       github.event.workflow_run.conclusion == 'success' &&
-      (github.event.workflow_run.event == 'workflow_dispatch' ||
+      ((github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.actor.login == github.repository_owner) ||
       (vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
       vars.FACTORY_REVIEW_ENABLED == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       force_review: ${{ steps.context.outputs.force_review }}
+      refresh_stale: ${{ steps.context.outputs.refresh_stale }}
       matched: ${{ steps.admit.outputs.matched }}
       pr_number: ${{ steps.admit.outputs.pr_number }}
       reviewer: ${{ steps.admit.outputs.reviewer }}
@@ -54,16 +60,28 @@ jobs:
           set -euo pipefail
           PR_NUMBER="$(jq -er '.pr_number | select(type == "number")' context/factory-review-context.json)"
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          # Two dispatch actors, with different authority. The owner asks for
+          # an unconditional re-review. The Actions identity is the Evidence
+          # Verify lane asking the review lane to look again after it cleared
+          # the last blocking evidence entry (#1379) -- that request is only
+          # ever a request: --refresh-stale-review lets factory-review.py
+          # re-derive, from live PR state, whether a standing rejection is
+          # actually refreshable. Any other dispatcher is refused.
           FORCE_REVIEW=false
+          REFRESH_STALE=false
           if [ "$RUN_EVENT" = "workflow_dispatch" ]; then
-            if [ "$RUN_ACTOR" != "$REPOSITORY_OWNER" ]; then
-              echo "Only the repository owner may manually re-request Factory review." >&2
+            if [ "$RUN_ACTOR" = "$REPOSITORY_OWNER" ]; then
+              FORCE_REVIEW=true
+            elif [ "$RUN_ACTOR" = "github-actions[bot]" ]; then
+              REFRESH_STALE=true
+            else
+              echo "Only the repository owner or the factory may re-request review." >&2
               exit 1
             fi
-            FORCE_REVIEW=true
           fi
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
           echo "force_review=$FORCE_REVIEW" >> "$GITHUB_OUTPUT"
+          echo "refresh_stale=$REFRESH_STALE" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - name: Enforce review daily cap and runaway guard
         working-directory: source
@@ -79,11 +97,15 @@ jobs:
           FORCE_REVIEW: ${{ steps.context.outputs.force_review }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
+          REFRESH_STALE: ${{ steps.context.outputs.refresh_stale }}
         run: |
           set -euo pipefail
           ARGS=(--pr "$PR_NUMBER")
           if [ "$FORCE_REVIEW" = "true" ]; then
             ARGS+=(--force)
+          fi
+          if [ "$REFRESH_STALE" = "true" ]; then
+            ARGS+=(--refresh-stale-review)
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
 
@@ -124,12 +146,16 @@ jobs:
         env:
           FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REFRESH_STALE: ${{ needs.admit.outputs.refresh_stale }}
         run: |
           ARGS=(--pr "${{ needs.admit.outputs.pr_number }}")
           ARGS+=(--expected-head "${{ needs.admit.outputs.head_sha }}")
           ARGS+=(--expected-reviewer april)
           if [ "$FORCE_REVIEW" = "true" ]; then
             ARGS+=(--force)
+          fi
+          if [ "$REFRESH_STALE" = "true" ]; then
+            ARGS+=(--refresh-stale-review)
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
       - name: Checkout admitted pull request head
@@ -213,12 +239,16 @@ jobs:
         env:
           FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REFRESH_STALE: ${{ needs.admit.outputs.refresh_stale }}
         run: |
           ARGS=(--pr "${{ needs.admit.outputs.pr_number }}")
           ARGS+=(--expected-head "${{ needs.admit.outputs.head_sha }}")
           ARGS+=(--expected-reviewer plat)
           if [ "$FORCE_REVIEW" = "true" ]; then
             ARGS+=(--force)
+          fi
+          if [ "$REFRESH_STALE" = "true" ]; then
+            ARGS+=(--refresh-stale-review)
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
       - name: Checkout admitted pull request head

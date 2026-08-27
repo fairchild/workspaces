@@ -17,6 +17,7 @@ on:
         type: string
 
 permissions:
+  actions: write # dispatch Factory Review when a completed contract supersedes a rejection
   checks: read # read named check conclusions on the PR head
   contents: read
   issues: write # PR labels ride the issues API

@@ -38,6 +38,11 @@ from execution import APP_BOT_GIT_IDENTITIES  # noqa: E402
 
 FACTORY_PR_MARKER = "<!-- contributor:issue="
 BLOCKED_EVIDENCE_LABEL = "blocked:evidence"
+REVIEW_WORKFLOW = "factory-review.yml"
+CHANGES_REQUESTED = "CHANGES_REQUESTED"
+# Reviewer identities whose standing rejection a completed evidence contract
+# can supersede. Kept in step with factory-review.py's REVIEWER_BOTS.
+REVIEWER_BOTS = frozenset({"april-clearwater[bot]", "workspace-agents[bot]"})
 GH_TIMEOUT = 60
 VALID_STATUSES = {"complete", "blocked", "pending-ci"}
 MAX_WRITE_ATTEMPTS = 3
@@ -333,6 +338,62 @@ def _apply_ci_updates(
     return None
 
 
+def standing_rejection(pr_number: int, head_sha: str, env: dict[str, str]) -> bool:
+    """Whether a reviewer App's latest verdict on this head requests changes.
+
+    Checked before asking for a re-review so a completed contract on a PR
+    nobody has rejected does not spend a slot of the review budget.
+    """
+    reviews = _gh_json(
+        ["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}/reviews", "--paginate"],
+        env,
+    )
+    if not isinstance(reviews, list):
+        return False
+    latest: dict[str, dict[str, object]] = {}
+    for review in reviews:
+        if not isinstance(review, dict):
+            continue
+        user = review.get("user")
+        login = str(user.get("login", "")) if isinstance(user, dict) else ""
+        if login not in REVIEWER_BOTS:
+            continue
+        if str(review.get("commit_id", "")) != head_sha:
+            continue
+        state = str(review.get("state", "")).upper()
+        if state == "COMMENTED":
+            continue
+        current = latest.get(login)
+        if current is None or str(review.get("submitted_at", "")) >= str(
+            current.get("submitted_at", "")
+        ):
+            latest[login] = review
+    return any(
+        str(review.get("state", "")).upper() == CHANGES_REQUESTED
+        for review in latest.values()
+    )
+
+
+def request_fresh_review(pr_number: int, env: dict[str, str]) -> None:
+    """Ask the review lane to look again now that the contract is complete.
+
+    The lane this runs in writes the PR body with GITHUB_TOKEN, and GitHub
+    suppresses `pull_request: edited` runs caused by that token -- so the
+    completion that satisfies a reviewer's objection generates no event at
+    all, and the rejection stays blocking with nothing to clear it (#1379).
+    Dispatching is the only way the news travels. It is a request, not a
+    grant: factory-review.py re-derives from live PR state whether the
+    standing rejection is actually refreshable.
+    """
+    if _gh(
+        ["workflow", "run", REVIEW_WORKFLOW, "-f", f"pr_number={pr_number}"],
+        env,
+    ):
+        log(f"PR #{pr_number}: requested a fresh counterpart review")
+    else:
+        log(f"PR #{pr_number}: could not request a fresh counterpart review")
+
+
 def process_pr(pr_number: int, env: dict[str, str]) -> None:
     pr = _gh_json(["api", f"repos/{{owner}}/{{repo}}/pulls/{pr_number}"], env)
     if not isinstance(pr, dict) or pr.get("state") != "open":
@@ -348,6 +409,7 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
     if entries is None:
         return
 
+    was_complete = should_clear_blocked_label(entries, head_sha)
     needed = ci_entries_needing_verification(entries, head_sha)
     if needed:
         updates: dict[int, dict[str, object]] = {}
@@ -367,20 +429,35 @@ def process_pr(pr_number: int, env: dict[str, str]) -> None:
             return
         body = updated_body
 
+    now_complete = should_clear_blocked_label(evidence_entries(body), head_sha)
     label_names = {
         str(label.get("name", ""))
         for label in pr.get("labels", [])
         if isinstance(label, dict)
     }
-    if BLOCKED_EVIDENCE_LABEL not in label_names:
+    if BLOCKED_EVIDENCE_LABEL in label_names and now_complete:
+        if blocked_label_applied_by_factory(pr_number, env):
+            if _gh(
+                ["pr", "edit", str(pr_number), "--remove-label", BLOCKED_EVIDENCE_LABEL],
+                env,
+            ):
+                log(f"PR #{pr_number}: cleared machine-applied {BLOCKED_EVIDENCE_LABEL}")
+                label_names.discard(BLOCKED_EVIDENCE_LABEL)
+        else:
+            log(
+                f"PR #{pr_number}: {BLOCKED_EVIDENCE_LABEL} was not machine-applied; "
+                "leaving for the owner"
+            )
+
+    # Only on the transition, and only once the PR would actually pass: a
+    # re-review of a PR still carrying a blocking label would be refused
+    # downstream anyway, and asking for it would spend budget for nothing.
+    if was_complete or not now_complete:
         return
-    if not should_clear_blocked_label(evidence_entries(body), head_sha):
+    if any(name.startswith("blocked:") for name in label_names):
         return
-    if not blocked_label_applied_by_factory(pr_number, env):
-        log(f"PR #{pr_number}: {BLOCKED_EVIDENCE_LABEL} was not machine-applied; leaving for the owner")
-        return
-    if _gh(["pr", "edit", str(pr_number), "--remove-label", BLOCKED_EVIDENCE_LABEL], env):
-        log(f"PR #{pr_number}: cleared machine-applied {BLOCKED_EVIDENCE_LABEL}")
+    if standing_rejection(pr_number, head_sha, env):
+        request_fresh_review(pr_number, env)
 
 
 def main(argv: list[str]) -> int:
