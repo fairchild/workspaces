@@ -35,6 +35,10 @@ final class AutomationController: AutomationControlling {
     /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
     /// condition: a mutation verb cannot run without a live window, and never falls back.
     private var gestureVerbs: AutomationGestureVerbs?
+    /// Which window installed the window-bound layer above. Held so a teardown can be checked
+    /// against it: windows are not exclusive and their lifecycles overlap, so "some window went
+    /// away" is not the same question as "the window offering these verbs went away" (#1375).
+    private var windowBoundOwner: UUID?
 
     init(
         handleRegistry: AutomationHandleRegistry,
@@ -52,6 +56,7 @@ final class AutomationController: AutomationControlling {
             store.surfaceStore.terminalPlainText(for: surfaceID)
         },
         gestureVerbs: AutomationGestureVerbs? = nil,
+        windowBoundOwner: UUID? = nil,
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         },
@@ -77,6 +82,7 @@ final class AutomationController: AutomationControlling {
         self.workspaceInventory = workspaceInventory
         self.surfaceTextReader = surfaceTextReader
         self.gestureVerbs = gestureVerbs
+        self.windowBoundOwner = windowBoundOwner
         self.isInputWriteEnabled = isInputWriteEnabled
         self.uiState = uiState
         self.promptReadinessReader = promptReadinessReader
@@ -97,16 +103,18 @@ final class AutomationController: AutomationControlling {
         workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil,
         surfaceTextReader: (@MainActor (TileTreeStore, UUID) -> String?)? = nil,
         gestureVerbs: AutomationGestureVerbs? = nil,
+        windowBoundOwner: UUID? = nil,
         uiState: (@MainActor () -> AutomationUIStateCapture)? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
-        // Window-bound like `gestureVerbs`, and cleared the same way: an update that
-        // installs no reader means no window is offering one, so `nil` here clears a
-        // previous window's closure instead of leaving it callable. The remaining
-        // members below are app-scoped and keep their last value when omitted.
+        // Window-bound like `gestureVerbs`, and installed the same way: the window offering
+        // them becomes the owner, so a later teardown can tell whether it is the one that
+        // installed these. The remaining members below are app-scoped and keep their last
+        // value when omitted.
         self.gestureVerbs = gestureVerbs
+        self.windowBoundOwner = windowBoundOwner
         self.uiState = uiState
         if let webSurfaces {
             self.webSurfaces = webSurfaces
@@ -133,12 +141,21 @@ final class AutomationController: AutomationControlling {
     /// closure would keep `workspace.select` "working" against a window that no longer exists. Clearing
     /// it here is what makes a post-teardown select correctly return `unsupported` (no live window)
     /// rather than driving a stale gesture. A window reappearing reinstalls it via `configure`.
-    func detachGestureVerbs() {
+    ///
+    /// `owner` is what keeps that from cutting a *live* window off. Window lifecycles overlap: a
+    /// second window installs its own layer while the first is still up, and a replaced window's
+    /// `onDisappear` lands after its successor's `configure`. Clearing unconditionally left the app
+    /// with no verbs while a window was open and focused — every mutation verb answering
+    /// `unsupported` until the app was restarted (#1375). A teardown from a window that no longer
+    /// owns the layer is now a no-op.
+    func detachGestureVerbs(owner: UUID) {
+        guard windowBoundOwner == owner else { return }
         gestureVerbs = nil
         // The ui-state read is window-bound the same way: with no window there is no
         // rendered chrome to report, so a post-teardown read fails `unsupported` rather
         // than describing a window that no longer exists.
         uiState = nil
+        windowBoundOwner = nil
     }
 
     func automationContext(for handle: String) throws -> AutomationContextResult {

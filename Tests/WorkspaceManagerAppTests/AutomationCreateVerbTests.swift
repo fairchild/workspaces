@@ -16,6 +16,10 @@ import Testing
 @MainActor
 @Suite("AutomationController workspace.create")
 struct AutomationCreateVerbTests {
+    /// One window installs the layer these suites drive; a teardown names it, so an
+    /// overlapping window's teardown cannot clear it (#1375).
+    private static let windowOwner = UUID()
+
     private func expectFailure(
         _ code: AutomationErrorCode,
         _ body: () async throws -> some Any
@@ -40,7 +44,8 @@ struct AutomationCreateVerbTests {
             tileTreeStore: TileTreeStore(),
             focusTerminal: { _ in },
             requestCloseTerminal: { _ in },
-            gestureVerbs: gestureVerbs
+            gestureVerbs: gestureVerbs,
+            windowBoundOwner: Self.windowOwner
         )
         return (controller, registry, entry.handle)
     }
@@ -210,7 +215,7 @@ struct AutomationCreateVerbTests {
         )
         let (controller, _, handle) = operatorController(gestureVerbs: verbs)
 
-        controller.detachGestureVerbs()
+        controller.detachGestureVerbs(owner: Self.windowOwner)
 
         await expectFailure(.unsupported) {
             try await controller.automationCreateWorkspace(

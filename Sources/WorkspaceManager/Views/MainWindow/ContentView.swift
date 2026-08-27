@@ -109,6 +109,9 @@ struct ContentView: View {
     /// Outlives the view value so the reattach pass, which suspends on probes, can tell that
     /// the window it was building for went away.
     @State private var launchWorkLifetime = MainWindowLaunchWorkLifetime()
+    /// This window's identity for the automation layer it installs. Windows overlap, so a
+    /// teardown has to name which window is going away or it cuts a live one off (#1375).
+    @State private var automationWindowToken = UUID()
     @AppStorage(TerminalRestoreBannerStorage.handledRunIDKey)
     private var restoreHandledRunID = ""
     @State private var isShowingFeedbackSheet = false
@@ -931,7 +934,9 @@ struct ContentView: View {
             // The window that installed the gesture-verb layer is gone; drop it so an operator
             // mutation verb fails closed (unsupported) instead of driving a stale selection
             // gesture while the app lingers as an accessory. Reappearing reinstalls it via onAppear.
-            detachAutomationGestureVerbs: AutomationIntegrationLifecycle.shared.detachGestureVerbs
+            detachAutomationGestureVerbs: {
+                AutomationIntegrationLifecycle.shared.detachGestureVerbs(owner: automationWindowToken)
+            }
         )
     }
 
@@ -1836,6 +1841,7 @@ struct ContentView: View {
                 )
             },
             gestureVerbs: automationGestureVerbs.makeVerbs(),
+            windowBoundOwner: automationWindowToken,
             uiState: {
                 AutomationUIStateEnumerator.capture(
                     repos: repos,
