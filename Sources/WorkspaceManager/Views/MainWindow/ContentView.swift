@@ -103,6 +103,9 @@ struct ContentView: View {
     @State private var didPrewarmPerfTerminalSurfaces = false
     @State private var workspaceOrphanState = WorkspaceOrphanReconciliationState()
     @State private var restoreState = MainWindowRestoreState()
+    /// Sessions the reattach pass has already realized, so a second pass (the one that
+    /// follows an accepted restore) probes and rejoins only what is new (#1374).
+    @State private var reattachedOpenSurfaceSessionIDs: Set<UUID> = []
     @AppStorage(TerminalRestoreBannerStorage.handledRunIDKey)
     private var restoreHandledRunID = ""
     @State private var isShowingFeedbackSheet = false
@@ -887,7 +890,8 @@ struct ContentView: View {
             syncOpenInEditorShortcutRouting: syncOpenInEditorShortcutRouting,
             refreshWorkspaceStatusAggregator: refreshWorkspaceStatusAggregator,
             noteHostLumeSmokeLaunchReady: smokeDriver.noteHostLumeLaunchReady,
-            noteDesktopUISmokeLaunchReady: smokeDriver.noteDesktopUILaunchReady
+            noteDesktopUISmokeLaunchReady: smokeDriver.noteDesktopUILaunchReady,
+            reattachPreviouslyOpenSurfaces: { await reattachPreviouslyOpenSurfaces(trigger: "launch") }
         )
     }
 
@@ -2665,6 +2669,88 @@ struct ContentView: View {
             _ = tileTreeStore.activateExistingSession(sessionID: target.id)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
+        await reattachPreviouslyOpenSurfaces(trigger: "restore")
+    }
+
+    /// Rejoin the terminals of the scopes that were open at quit (#1374).
+    ///
+    /// Launch reinstates the previous run's *session records* — from the continuity manifest,
+    /// or from an accepted restore plan — but a record holds no shell: its surface is realized
+    /// on first render, so only the scope the window happens to land on rejoins its tmux
+    /// session. Every other workspace stayed dark until it was clicked, which is what made a
+    /// relaunch look like it had lost them.
+    ///
+    /// Realizing a surface is what attaches: `tmux new-session -A` on the scope's deterministic
+    /// name joins the session that survived. The pass therefore only touches scopes whose tmux
+    /// session is provably alive, is capped, and runs one scope per main-actor turn so the
+    /// window stays responsive while it works through them.
+    @MainActor
+    private func reattachPreviouslyOpenSurfaces(trigger: String) async {
+        guard MainWindowOpenSurfaceReattachPolicy.isEnabled(environment: ProcessInfo.processInfo.environment)
+        else { return }
+
+        // The active session is the one the window itself realizes on first render.
+        var alreadyRealizedSessionIDs = reattachedOpenSurfaceSessionIDs
+        if let activeSessionID = tileTreeStore.activeSessionID {
+            alreadyRealizedSessionIDs.insert(activeSessionID)
+        }
+
+        let controller = MainWindowOpenSurfaceReattachController()
+        let candidates = controller.candidates(
+            sessions: tileTreeStore.sessions,
+            activeSessionIDByScopeKey: tileTreeStore.activeSessionIDByScopeKey,
+            excludedSessionIDs: alreadyRealizedSessionIDs,
+            excludedScopeKeys: terminalContinuityController.archivedWorkspaceScopeKeys,
+            terminalMode: terminalMultiplexingMode
+        )
+        guard !candidates.isEmpty else { return }
+
+        let liveTmuxSessionNames = await liveTmuxSessionNames(among: candidates)
+        let sessionIDs = controller.reattachableSessionIDs(
+            candidates: candidates,
+            liveTmuxSessionNames: liveTmuxSessionNames
+        )
+        guard !sessionIDs.isEmpty else {
+            restoreLog.info(
+                "[Reattach] trigger=\(trigger, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=0 (no surviving tmux session)"
+            )
+            return
+        }
+
+        // Mark before realizing: a surface that fails to come up should not be retried on
+        // every later pass, and the record stays selectable either way.
+        reattachedOpenSurfaceSessionIDs.formUnion(sessionIDs)
+
+        var rejoinedCount = 0
+        for sessionID in sessionIDs {
+            guard let session = tileTreeStore.sessions.first(where: { $0.id == sessionID }) else { continue }
+            tileTreeStore.terminalSurfaceView(for: session)
+            rejoinedCount += 1
+            await Task.yield()
+        }
+
+        restoreLog.info(
+            "[Reattach] trigger=\(trigger, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=\(rejoinedCount, privacy: .public)"
+        )
+    }
+
+    /// Which of the candidates' tmux sessions are still running, probed concurrently so the
+    /// pass costs one round trip rather than one per scope.
+    private func liveTmuxSessionNames(
+        among candidates: [MainWindowOpenSurfaceReattachController.Candidate]
+    ) async -> Set<String> {
+        let probe = TmuxSessionProbe()
+        let names = Set(candidates.map(\.tmuxSessionName))
+        return await withTaskGroup(of: (String, Bool).self) { group in
+            for name in names {
+                group.addTask { (name, await probe.isSessionAlive(name)) }
+            }
+            var live: Set<String> = []
+            for await (name, isAlive) in group where isAlive {
+                live.insert(name)
+            }
+            return live
+        }
     }
 
     /// Coalesces the high-frequency agent-event refresh path: bursts of status or

@@ -75,7 +75,8 @@ struct MainWindowLifecycleControllerTests {
             syncOpenInEditorShortcutRouting: recorder.step("syncOpenInEditorShortcutRouting"),
             refreshWorkspaceStatusAggregator: recorder.step("refreshWorkspaceStatusAggregator"),
             noteHostLumeSmokeLaunchReady: recorder.asyncStep("noteHostLumeSmokeLaunchReady"),
-            noteDesktopUISmokeLaunchReady: recorder.asyncStep("noteDesktopUISmokeLaunchReady")
+            noteDesktopUISmokeLaunchReady: recorder.asyncStep("noteDesktopUISmokeLaunchReady"),
+            reattachPreviouslyOpenSurfaces: recorder.asyncStep("reattachPreviouslyOpenSurfaces")
         )
     }
 
@@ -191,6 +192,7 @@ struct MainWindowLifecycleControllerTests {
                 "refreshWorkspaceStatusAggregator",
                 "noteHostLumeSmokeLaunchReady",
                 "noteDesktopUISmokeLaunchReady",
+                "reattachPreviouslyOpenSurfaces",
             ]
         )
     }
@@ -236,7 +238,22 @@ struct MainWindowLifecycleControllerTests {
 
         await controller.runLaunchSequence(launchActions(recorder))
 
-        #expect(recorder.steps.suffix(2) == ["noteHostLumeSmokeLaunchReady", "noteDesktopUISmokeLaunchReady"])
+        #expect(
+            recorder.ordered("refreshWorkspaceStatusAggregator", before: "noteHostLumeSmokeLaunchReady")
+        )
+        #expect(recorder.ordered("noteHostLumeSmokeLaunchReady", before: "noteDesktopUISmokeLaunchReady"))
+    }
+
+    /// Rejoining the previous run's scopes starts a shell each, so it runs after every step that
+    /// builds the window — the smoke ready signals included — rather than delaying any of them
+    /// (#1374).
+    @Test("Launch rejoins the previous run's scopes last")
+    func launchReattachesOpenSurfacesLast() async {
+        let recorder = Recorder()
+
+        await controller.runLaunchSequence(launchActions(recorder))
+
+        #expect(recorder.steps.last == "reattachPreviouslyOpenSurfaces")
     }
 
     // MARK: - Model change

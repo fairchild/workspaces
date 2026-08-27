@@ -36,6 +36,7 @@ struct MainWindowLifecycleController {
         let refreshWorkspaceStatusAggregator: () -> Void
         let noteHostLumeSmokeLaunchReady: () async -> Void
         let noteDesktopUISmokeLaunchReady: () async -> Void
+        let reattachPreviouslyOpenSurfaces: () async -> Void
     }
 
     /// Steps the window runs whenever the set of repos, workspaces, or web sources changes.
@@ -82,8 +83,12 @@ struct MainWindowLifecycleController {
     /// Launch order is load-bearing. Automation integration installs the verb layer before
     /// anything can drive it; the initial host session must exist before a restore plan is
     /// computed against it; and the fixtures need the surface lifecycle resolved before they
-    /// select into it. The smoke lanes are told the window is ready last, once every earlier
-    /// step has run, because that signal is what their harnesses wait on.
+    /// select into it. The smoke lanes are told the window is ready last among the steps that
+    /// build the window, because that signal is what their harnesses wait on.
+    ///
+    /// Rejoining the previous run's other scopes runs after that signal, alone at the end: it
+    /// starts a shell per scope, and every step above — including `launch_to_first_prompt`,
+    /// which closes on the first shell's prompt — is finished by the time it does.
     func runLaunchSequence(_ actions: LaunchActions) async {
         await actions.configureAutomationIntegration()
         actions.ensureInitialHostSession(.sequence)
@@ -97,6 +102,7 @@ struct MainWindowLifecycleController {
         actions.refreshWorkspaceStatusAggregator()
         await actions.noteHostLumeSmokeLaunchReady()
         await actions.noteDesktopUISmokeLaunchReady()
+        await actions.reattachPreviouslyOpenSurfaces()
     }
 
     /// Model-change order is load-bearing too: the selection caches are rebuilt first so every
