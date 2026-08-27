@@ -190,8 +190,17 @@ jobs:
 
           uv run --script "$GITHUB_WORKSPACE/source/scripts/factory-janitor.py" "${ARGS[@]}"
 
+      # Owner-only on manual dispatch: Monitor's own job gate lets any
+      # write-capable collaborator run it by hand, and this step is the one
+      # that spends FACTORY_IMPLEMENT_DAILY_CAP. Admission is unaffected
+      # either way -- the sweep never applies `ready` -- but retry timing and
+      # the day's budget should not be someone else's to drive.
       - name: Sweep standing ready queue
-        if: vars.AGENT_AUTOMATIONS_ENABLED == 'true' && vars.FACTORY_IMPLEMENT_ENABLED == 'true'
+        if: >-
+          vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+          vars.FACTORY_IMPLEMENT_ENABLED == 'true' &&
+          (github.event_name != 'workflow_dispatch' ||
+          github.actor == github.repository_owner)
         shell: bash
         env:
           DRY_RUN: ${{ inputs.dry_run || false }}

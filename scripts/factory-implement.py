@@ -36,6 +36,7 @@ CONTRIBUTOR_SCRIPTS = (
 if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CONTRIBUTOR_SCRIPTS))
 
+from evidence import extract_requested_evidence  # noqa: E402
 from patch_policy import (  # noqa: E402
     issue_body_path_candidates,
     issue_scope_digest,
@@ -60,13 +61,21 @@ APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
 # re-evaluates standing admitted state; it never applies `ready` itself.
 FACTORY_SWEEP_ACTOR = "github-actions[bot]"
 
+# The App identity the claim and rollback steps mutate labels with. A `ready`
+# event attributed to it is factory bookkeeping -- the claim's removal, or
+# rollback's restore after a failed run -- rather than a release or a
+# revocation. Identity alone is not treated as proof of either: see
+# owner_release_event, which requires the surrounding events to have the shape
+# a real claim-then-rollback leaves behind.
+FACTORY_LABEL_ACTORS = frozenset({"april-clearwater[bot]"})
+
 # Negative admission outcomes split on whether a retry can ever succeed.
 # Terminal declines strip `ready` so the release cannot refire a run the
 # factory will always refuse; transient deferrals keep `ready` because the
 # blocking condition (WIP capacity, daily budget) clears on its own and the
 # Owner's release stays valid. Admission only ever removes `ready` — applying
 # it remains Owner-only, matching the janitor's release-gate invariant.
-TERMINAL_DECLINES = frozenset({"privileged"})
+TERMINAL_DECLINES = frozenset({"privileged", "no_evidence_contract"})
 TRANSIENT_DEFERRALS = frozenset({"wip", "budget"})
 
 # Admission comments speak as the pipeline stage, not as a contributor
@@ -76,6 +85,22 @@ PRIVILEGED_COMMENT = (
     "and requires the orchestrator lane. Removing `ready`; the factory cannot "
     "take this issue."
 )
+NO_EVIDENCE_CONTRACT_COMMENT = (
+    "Factory admission: declined — this issue has no `## Requested Evidence` "
+    "section with at least one item, and the contributor runtime refuses to "
+    "execute without one. Removing `ready`; add the section and re-release.\n\n"
+    "Each bullet states one thing that must be true for the change to be "
+    "believed, for example:\n\n"
+    "```markdown\n"
+    "## Requested Evidence\n"
+    "- `swift test --filter WorkspaceStoreTests` passes\n"
+    "- CI: `Lint, Test, Build` green on the PR head\n"
+    "```"
+)
+TERMINAL_DECLINE_COMMENTS = {
+    "privileged": PRIVILEGED_COMMENT,
+    "no_evidence_contract": NO_EVIDENCE_CONTRACT_COMMENT,
+}
 WIP_COMMENT = (
     f"Factory admission: deferred — the {FACTORY_WIP_CAP}-issue factory WIP "
     "cap is full; leaving this issue ready."
@@ -394,6 +419,16 @@ def evaluate_claim(
         )
     if privileged_scope(issue):
         return ClaimDecision("privileged", "issue indicates privileged-path scope")
+    if not extract_requested_evidence(str(issue.get("body") or "")):
+        # The contributor runtime refuses to execute without an explicit
+        # contract (FACTORY_REQUIRE_EXPLICIT_EVIDENCE, set on every factory
+        # run). Catching it here instead costs one API read; catching it there
+        # costs a claim, a branch name, an isolated scratch, and a model
+        # invocation, and leaves the issue `claimed` until rollback.
+        return ClaimDecision(
+            "no_evidence_contract",
+            "issue has no Requested Evidence contract",
+        )
     if daily_run_count > daily_cap:
         return ClaimDecision(
             "budget",
@@ -551,11 +586,74 @@ def latest_ready_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def latest_ready_actor(events: list[dict[str, Any]]) -> str | None:
-    event = latest_ready_event(events)
-    if event is None:
+def ready_label_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every `ready` add and removal, oldest first.
+
+    Sorted by `created_at` rather than trusting the timeline's order: the
+    REST timeline reads chronologically today but GitHub documents no sort
+    guarantee, and offset pagination is not a snapshot. This sequence decides
+    admission, so its order comes from the timestamps.
+    """
+    relevant = [
+        event
+        for event in events
+        if str(event.get("event", "")).casefold() in {"labeled", "unlabeled"}
+        and str((event.get("label") or {}).get("name", "")).casefold() == "ready"
+    ]
+    return sorted(
+        relevant,
+        key=lambda event: (str(event.get("created_at") or ""), int(event.get("id") or 0)),
+    )
+
+
+def owner_release_event(
+    events: list[dict[str, Any]],
+    repository_owner: str,
+) -> dict[str, Any] | None:
+    """The owner `ready` release this issue's current admission rests on.
+
+    Walks `ready` adds and removals newest-first and accepts only the exact
+    shape a real factory retry leaves behind: an owner release, the claim's
+    own factory-attributed removal, and rollback's factory-attributed restore.
+    Anything else terminates the walk and returns None.
+
+    Both halves of that shape matter. Skipping the restore is what stops a
+    failed run from locking the issue's front door -- before this, the newest
+    `ready` event on a retried issue was bot-attributed, so every later firing,
+    including the documented owner `workflow_dispatch` recovery, was refused
+    until a human cycled the label. Requiring the removal underneath it is what
+    keeps identity from standing in for provenance: the factory's App token is
+    held by several lanes, and a `ready` applied by one of them on an issue
+    that was never claimed is not a restore of anything.
+
+    A removal by anyone else is a revocation and ends the lineage, so an owner
+    who withdraws `ready` mid-claim cannot have that release replayed by the
+    retry that follows.
+
+    Returning the owner's own event, not the restore, keeps the
+    content-staleness boundary honest: `ready` comes back minutes to hours
+    later, and the content the owner reviewed is the content as of their
+    release.
+    """
+    owner = repository_owner.casefold()
+    factory = {actor.casefold() for actor in FACTORY_LABEL_ACTORS}
+    # Set after stepping over a factory restore: the only thing that may sit
+    # underneath one is the claim removal it is undoing.
+    awaiting_claim_removal = False
+    for event in reversed(ready_label_events(events)):
+        action = str(event.get("event", "")).casefold()
+        actor = str((event.get("actor") or {}).get("login") or "").casefold()
+        factory_actor = actor in factory
+        if action == "labeled" and actor == owner:
+            return None if awaiting_claim_removal else event
+        if action == "labeled" and factory_actor:
+            awaiting_claim_removal = True
+            continue
+        if action == "unlabeled" and factory_actor:
+            awaiting_claim_removal = False
+            continue
         return None
-    return str((event.get("actor") or {}).get("login") or "") or None
+    return None
 
 
 def latest_non_owner_editor(
@@ -599,14 +697,15 @@ def verify_release_actor(
             f"Factory implementation trigger actor {trigger_actor!r} is not "
             "repository owner or the factory sweep"
         )
-    ready_actor = latest_ready_actor(events)
-    if ready_actor is None:
+    if latest_ready_event(events) is None:
         raise FactoryImplementError("issue timeline has no ready label event")
-    if ready_actor.casefold() != owner.casefold():
+    release = owner_release_event(events, owner)
+    if release is None:
+        blocking = str((latest_ready_event(events).get("actor") or {}).get("login") or "")
         raise FactoryImplementError(
-            f"most recent ready label actor {ready_actor!r} is not repository owner"
+            f"most recent ready label actor {blocking!r} is not repository owner"
         )
-    return ready_actor
+    return str((release.get("actor") or {}).get("login") or "")
 
 
 def write_output(name: str, value: str) -> None:
@@ -685,11 +784,11 @@ def claim(
     # this) must not ride the earlier owner approval — REST's issue timeline
     # has no event for body/title edits, so userContentEdits is the only way
     # to see who touched the content and when.
-    ready_event = latest_ready_event(events)
+    ready_event = owner_release_event(events, repository_owner)
     if ready_event is None:
-        # Unreachable: verify_release_actor above already raised unless a
-        # ready-labeled event exists in these same `events`.
-        raise FactoryImplementError("issue timeline has no ready label event")
+        # Unreachable: verify_release_actor above already raised unless an
+        # owner release exists in these same `events`.
+        raise FactoryImplementError("issue timeline has no owner ready release")
     hostile_editor = latest_non_owner_editor(
         client.user_content_edits_since(
             issue_number,
@@ -725,7 +824,7 @@ def claim(
     write_output("issue_scope_digest", issue_scope_digest(issue))
     write_output("verified_actor", verified_actor)
     if decision.action in TERMINAL_DECLINES:
-        comment_once(client, issue_number, PRIVILEGED_COMMENT)
+        comment_once(client, issue_number, TERMINAL_DECLINE_COMMENTS[decision.action])
         client.update_issue(issue_number, decline_payload(issue))
         return
     if decision.action == "stale_scope":

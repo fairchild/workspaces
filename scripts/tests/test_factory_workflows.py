@@ -101,11 +101,16 @@ lifecycle_health = load_module(
 
 
 class FactoryImplementTests(unittest.TestCase):
+    # The default body carries a Requested Evidence contract because admission
+    # now requires one (#1380): without it every claim path would decline
+    # before reaching the condition under test.
+    EVIDENCE_CONTRACT = "\n\n## Requested Evidence\n- `swift test` passes\n"
+
     def issue(
         self,
         *,
         title: str = "Implement a feature",
-        body: str = "Change Sources/Feature.swift",
+        body: str = "Change Sources/Feature.swift" + EVIDENCE_CONTRACT,
         labels: tuple[str, ...] = ("agent", "task", "ready"),
     ):
         return {
@@ -197,6 +202,49 @@ class FactoryImplementTests(unittest.TestCase):
         )
         self.assertEqual(over_budget.action, "budget")
 
+    def test_missing_evidence_contract_is_declined_at_admission(self) -> None:
+        # Before #1380 this issue was admitted, claimed, and burned a full
+        # implement run before the contributor runtime refused it.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(body="Change Sources/Feature.swift"), 0
+            ).action,
+            "no_evidence_contract",
+        )
+        # A section that exists but says "none" is not a contract either.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(
+                    body="Change Sources/Feature.swift\n\n## Requested Evidence\n- None\n"
+                ),
+                0,
+            ).action,
+            "no_evidence_contract",
+        )
+        # The contributor runtime's own fallback sentence is not a contract
+        # either -- admission and the runtime read the same function, so the
+        # two cannot drift into disagreeing about what counts.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(
+                    body="Change Sources/Feature.swift\n\n## Requested Evidence\n"
+                    "- Follow the repo evidence bar for the touched surfaces.\n"
+                ),
+                0,
+            ).action,
+            "no_evidence_contract",
+        )
+        self.assertEqual(factory_implement.evaluate_claim(self.issue(), 0).action, "claim")
+        # Privileged scope is still decided first: an issue that is both
+        # privileged and contract-less reports the scope problem, which is the
+        # one the owner has to act on.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(body="Change `.github/workflows/ci.yml`"), 0
+            ).action,
+            "privileged",
+        )
+
     def test_release_actor_must_own_trigger_and_latest_ready_event(self) -> None:
         events = [
             {
@@ -227,6 +275,134 @@ class FactoryImplementTests(unittest.TestCase):
             "most recent ready label actor",
         ):
             factory_implement.verify_release_actor(events, "fairchild", "fairchild")
+
+    @staticmethod
+    def ready_event(action: str, actor: str, created_at: str) -> dict[str, object]:
+        return {
+            "event": action,
+            "label": {"name": "ready"},
+            "actor": {"login": actor},
+            "created_at": created_at,
+        }
+
+    def release_timeline(self, *steps: tuple[str, str]) -> list[dict[str, object]]:
+        return [
+            self.ready_event(action, actor, f"2026-08-27T0{index}:00:00Z")
+            for index, (action, actor) in enumerate(steps, start=1)
+        ]
+
+    APRIL = "april-clearwater[bot]"
+
+    def test_a_failed_run_restoring_ready_stays_admissible(self) -> None:
+        # #1380: rollback re-applies `ready` as April after a failed run, so
+        # the newest ready event on a retried issue is bot-attributed. Reading
+        # only that event refused every later firing -- label events AND the
+        # documented owner workflow_dispatch recovery -- until a human cycled
+        # the label by hand.
+        restored = self.release_timeline(
+            ("labeled", "fairchild"),
+            ("unlabeled", self.APRIL),
+            ("labeled", self.APRIL),
+        )
+        for trigger in ("fairchild", "github-actions[bot]"):
+            with self.subTest(trigger=trigger):
+                self.assertEqual(
+                    factory_implement.verify_release_actor(restored, trigger, "fairchild"),
+                    "fairchild",
+                )
+        # Two failed runs in a row stay transparent.
+        twice = restored + self.release_timeline(
+            ("unlabeled", self.APRIL), ("labeled", self.APRIL)
+        )[:2]
+        self.assertIsNotNone(factory_implement.owner_release_event(twice, "fairchild"))
+        # The boundary is the owner's release, not the restore: the content the
+        # owner reviewed is the content as of their release.
+        self.assertEqual(
+            factory_implement.owner_release_event(restored, "fairchild"),
+            restored[0],
+        )
+
+    def test_an_owner_revocation_ends_the_lineage(self) -> None:
+        # Owner withdraws `ready` after the claim reads the issue; the run
+        # fails and rollback restores it. That restore must not replay a
+        # release the owner took back.
+        revoked = self.release_timeline(
+            ("labeled", "fairchild"),
+            ("unlabeled", "fairchild"),
+            ("labeled", self.APRIL),
+        )
+        self.assertIsNone(factory_implement.owner_release_event(revoked, "fairchild"))
+        with self.assertRaisesRegex(
+            factory_implement.FactoryImplementError, "most recent ready label actor"
+        ):
+            factory_implement.verify_release_actor(revoked, "fairchild", "fairchild")
+
+    def test_a_factory_ready_is_only_a_restore_when_it_undoes_a_claim(self) -> None:
+        # Identity is not provenance: the App token is held by several lanes,
+        # so a factory-applied `ready` on an issue that was never claimed is
+        # not a restore of anything.
+        unpaired = self.release_timeline(
+            ("labeled", "fairchild"), ("labeled", self.APRIL)
+        )
+        self.assertIsNone(factory_implement.owner_release_event(unpaired, "fairchild"))
+        # ...and a restore with no owner release underneath it at all.
+        orphan = self.release_timeline(
+            ("unlabeled", self.APRIL), ("labeled", self.APRIL)
+        )
+        self.assertIsNone(factory_implement.owner_release_event(orphan, "fairchild"))
+
+    def test_only_the_factory_app_identity_is_transparent(self) -> None:
+        # Pinned deliberately. github-actions[bot] is shared by every workflow
+        # in the repo, so widening this set would make any of them able to
+        # revive an issue. The janitor's stale-claim restore posts under that
+        # identity and is a known, documented gap (see the follow-up issue) --
+        # not something to close by loosening this.
+        self.assertEqual(
+            factory_implement.FACTORY_LABEL_ACTORS, frozenset({self.APRIL})
+        )
+        for impostor in (
+            "github-actions[bot]",
+            "workspace-agents[bot]",
+            "dependabot[bot]",
+            "collaborator",
+        ):
+            with self.subTest(actor=impostor):
+                self.assertIsNone(
+                    factory_implement.owner_release_event(
+                        self.release_timeline(
+                            ("labeled", "fairchild"),
+                            ("unlabeled", self.APRIL),
+                            ("labeled", impostor),
+                        ),
+                        "fairchild",
+                    )
+                )
+
+    def test_the_walk_orders_by_timestamp_not_by_list_position(self) -> None:
+        # The timeline reads chronologically today, but GitHub documents no
+        # sort guarantee and offset pagination is not a snapshot.
+        shuffled = list(
+            reversed(
+                self.release_timeline(
+                    ("labeled", "fairchild"),
+                    ("unlabeled", self.APRIL),
+                    ("labeled", self.APRIL),
+                )
+            )
+        )
+        release = factory_implement.owner_release_event(shuffled, "fairchild")
+        assert release is not None
+        self.assertEqual(release["created_at"], "2026-08-27T01:00:00Z")
+
+    def test_a_collaborator_relabel_still_ends_the_walk(self) -> None:
+        self.assertIsNone(
+            factory_implement.owner_release_event(
+                self.release_timeline(
+                    ("labeled", "fairchild"), ("labeled", "collaborator")
+                ),
+                "fairchild",
+            )
+        )
 
     def test_non_owner_editor_is_flagged_owner_edits_are_not(self) -> None:
         # No edits at all.
@@ -449,7 +625,12 @@ class FactoryImplementTests(unittest.TestCase):
     def test_negative_outcomes_partition_terminal_and_transient(self) -> None:
         self.assertEqual(
             factory_implement.TERMINAL_DECLINES | factory_implement.TRANSIENT_DEFERRALS,
-            {"privileged", "wip", "budget"},
+            {"privileged", "no_evidence_contract", "wip", "budget"},
+        )
+        self.assertEqual(
+            set(factory_implement.TERMINAL_DECLINE_COMMENTS),
+            set(factory_implement.TERMINAL_DECLINES),
+            "every terminal decline needs a comment explaining what to fix",
         )
         self.assertEqual(
             factory_implement.TERMINAL_DECLINES & factory_implement.TRANSIENT_DEFERRALS,
@@ -510,6 +691,32 @@ class FactoryImplementTests(unittest.TestCase):
         client.comment.assert_called_once_with(
             42, factory_implement.PRIVILEGED_COMMENT
         )
+        client.update_issue.assert_called_once_with(
+            42, {"labels": ["agent", "quality", "task"]}
+        )
+        client.add_assignees.assert_not_called()
+        self.assertIn("matched=false", outputs)
+        self.assertNotIn("matched=true", outputs)
+
+    def test_missing_evidence_contract_decline_is_terminal_and_withdraws_ready(
+        self,
+    ) -> None:
+        client = self.claim_client(
+            self.issue(
+                body="Change Sources/Feature.swift",
+                labels=("agent", "task", "ready", "quality"),
+            )
+        )
+        actions_client = mock.Mock()
+        actions_client.workflow_runs_on.return_value = []
+
+        outputs = self.run_claim(client, actions_client)
+
+        client.comment.assert_called_once_with(
+            42, factory_implement.NO_EVIDENCE_CONTRACT_COMMENT
+        )
+        comment_body = client.comment.call_args.args[1]
+        self.assertIn("## Requested Evidence", comment_body)
         client.update_issue.assert_called_once_with(
             42, {"labels": ["agent", "quality", "task"]}
         )
@@ -848,10 +1055,14 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("actions: write", monitor)
         self.assertNotIn("actions: read", monitor)
         self.assertIn("scripts/factory-sweep.py", monitor)
-        self.assertIn(
-            "vars.AGENT_AUTOMATIONS_ENABLED == 'true' && vars.FACTORY_IMPLEMENT_ENABLED == 'true'",
-            monitor,
-        )
+        sweep_gate = monitor.split("- name: Sweep standing ready queue", 1)[1].split(
+            "shell: bash", 1
+        )[0]
+        self.assertIn("vars.AGENT_AUTOMATIONS_ENABLED == 'true'", sweep_gate)
+        self.assertIn("vars.FACTORY_IMPLEMENT_ENABLED == 'true'", sweep_gate)
+        # Manual Monitor runs are open to any write-capable collaborator, and
+        # this step is the one that spends FACTORY_IMPLEMENT_DAILY_CAP.
+        self.assertIn("github.actor == github.repository_owner", sweep_gate)
         # Pinned regression guard: the level-triggered sweep this issue adds
         # is a properly re-authenticated design (owner-only admission is
         # re-verified independently in verify_release_actor), not a revival
