@@ -56,6 +56,25 @@ enum MainWindowOpenSurfaceReattachPolicy {
     }
 }
 
+/// Whether the window the rejoin pass is working for is still there.
+///
+/// The pass awaits subprocess probes and a perf-interval wait, and the launch task that runs it
+/// is unstructured — closing the window neither cancels nor completes it. A reference type in
+/// `@State` outlives the view value, so the pass can re-check after each suspension and stop
+/// instead of realizing surfaces into a store that is being torn down.
+@MainActor
+final class MainWindowLaunchWorkLifetime {
+    private(set) var isWindowTornDown = false
+
+    func noteWindowAppeared() {
+        isWindowTornDown = false
+    }
+
+    func noteWindowTornDown() {
+        isWindowTornDown = true
+    }
+}
+
 /// The reattach decision, split into the part that reads state (`candidates`) and the part
 /// that consumes a tmux liveness answer (`reattachableSessionIDs`). The split is what keeps
 /// the whole decision synchronous and testable: probing tmux is the only async step, and it
@@ -82,11 +101,10 @@ struct MainWindowOpenSurfaceReattachController {
     /// one launch into dozens of process starts.
     static let maximumSurfaces = 12
 
-    /// The scopes this launch should rejoin, in `sessions` order — which is the order the
-    /// previous run opened them, since that is the order the manifest records and restore
-    /// replays. Past `limit` the tail is dropped, so a long-lived set of scopes keeps its
-    /// oldest members rather than churning on whichever was touched last; the dropped ones
-    /// open on demand.
+    /// The scopes this launch should rejoin, in `sessions` order, with the tail past `limit`
+    /// dropped. That order is whatever put the records there — the manifest replays the order
+    /// the previous run opened them, an accepted restore plan replays newest-first — so the
+    /// cap is a bound, not a ranking. Dropped scopes open on demand.
     ///
     /// Only `.tmuxPerSession` produces candidates: in Ghostty-managed mode a surface's shell
     /// died with the previous process, so realizing its record would start a fresh shell

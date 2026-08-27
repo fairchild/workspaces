@@ -102,6 +102,7 @@ struct MainWindowLifecycleControllerTests {
         MainWindowLifecycleController.TeardownActions(
             clearOpenInEditorShortcutOverride: recorder.step("clearShortcutOverride"),
             cancelStatusAggregation: recorder.step("cancelStatusAggregation"),
+            noteWindowTornDown: recorder.step("noteWindowTornDown"),
             detachAutomationGestureVerbs: recorder.step("detachGestureVerbs")
         )
     }
@@ -324,8 +325,20 @@ struct MainWindowLifecycleControllerTests {
 
         #expect(
             recorder.steps == [
-                "clearShortcutOverride", "cancelStatusAggregation", "detachGestureVerbs",
+                "clearShortcutOverride", "cancelStatusAggregation", "noteWindowTornDown",
+                "detachGestureVerbs",
             ]
         )
+    }
+
+    /// Launch work runs in an unstructured task that a closing window neither cancels nor
+    /// completes, so teardown has to mark the window down for it (#1374).
+    @Test("Teardown marks the window down for suspended launch work")
+    func teardownMarksWindowDown() {
+        let recorder = Recorder()
+
+        controller.runTeardown(teardownActions(recorder))
+
+        #expect(recorder.index(of: "noteWindowTornDown") != nil)
     }
 }

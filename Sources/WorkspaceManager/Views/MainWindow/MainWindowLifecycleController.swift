@@ -56,6 +56,7 @@ struct MainWindowLifecycleController {
     struct TeardownActions {
         let clearOpenInEditorShortcutOverride: () -> Void
         let cancelStatusAggregation: () -> Void
+        let noteWindowTornDown: () -> Void
         let detachAutomationGestureVerbs: () -> Void
     }
 
@@ -123,10 +124,13 @@ struct MainWindowLifecycleController {
     }
 
     /// Teardown drops the window-scoped overrides so a lingering accessory app cannot keep
-    /// routing shortcuts or driving gesture verbs through a window that is gone.
+    /// routing shortcuts or driving gesture verbs through a window that is gone. It also marks
+    /// the window down for launch work still suspended on a probe: the launch task is
+    /// unstructured, so nothing else tells it to stop.
     func runTeardown(_ actions: TeardownActions) {
         actions.clearOpenInEditorShortcutOverride()
         actions.cancelStatusAggregation()
+        actions.noteWindowTornDown()
         actions.detachAutomationGestureVerbs()
     }
 }

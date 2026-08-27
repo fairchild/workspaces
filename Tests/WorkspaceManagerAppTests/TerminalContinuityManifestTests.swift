@@ -32,6 +32,61 @@ struct TerminalContinuityManifestTests {
         #expect(decoded.tmuxSessionName.hasPrefix("wm-subdir-"))
     }
 
+    /// A restore that reattached to a probed name carries an override. Dropping it on the way
+    /// through the manifest would retarget the surface at its directory derivation, which on a
+    /// shared tmux socket can be a different live session (#1374).
+    @Test("A session's chosen tmux name survives the manifest")
+    func manifestKeepsTmuxSessionNameOverride() throws {
+        let directory = try temporaryDirectory()
+        let session = HostTerminalSession(
+            key: .hostPath(directory.path),
+            directory: directory,
+            tmuxSessionNameOverride: "wm-alpha-probed"
+        )
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: directory,
+            launchURL: directory,
+            terminalMode: .tmuxPerSession,
+            sessions: [session],
+            activeSessionID: session.id
+        )
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: manifest.rawValue))
+        let restored = try #require(decoded.hostSessionSnapshot()?.sessions.first)
+
+        #expect(restored.tmuxSessionNameOverride == "wm-alpha-probed")
+        #expect(restored.effectiveTmuxSessionName == "wm-alpha-probed")
+    }
+
+    /// Manifests written before the override was persisted decode without it, and their
+    /// sessions fall back to the directory derivation they were already using.
+    @Test("A manifest without the tmux name field still decodes")
+    func manifestWithoutOverrideFieldDecodes() throws {
+        let directory = try temporaryDirectory()
+        let session = HostTerminalSession(key: .hostPath(directory.path), directory: directory)
+        let manifest = TerminalContinuityManifest(
+            targetKind: .workspace,
+            targetID: UUID(),
+            rootURL: directory,
+            launchURL: directory,
+            terminalMode: .tmuxPerSession,
+            sessions: [session],
+            activeSessionID: session.id
+        )
+        let withoutField = manifest.rawValue.replacingOccurrences(
+            of: "\"tmuxSessionNameOverride\"",
+            with: "\"unusedLegacyField\""
+        )
+
+        let decoded = try #require(TerminalContinuityManifest.decode(from: withoutField))
+        let restored = try #require(decoded.hostSessionSnapshot()?.sessions.first)
+
+        #expect(restored.tmuxSessionNameOverride == nil)
+        #expect(restored.effectiveTmuxSessionName == session.effectiveTmuxSessionName)
+    }
+
     @Test("Launch directory restores only for matching target")
     func launchDirectoryRequiresMatchingTarget() throws {
         let root = try temporaryDirectory()

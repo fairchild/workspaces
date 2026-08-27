@@ -297,6 +297,25 @@ struct MainWindowOpenSurfaceReattachControllerTests {
     }
 }
 
+@MainActor
+@Suite("MainWindowLaunchWorkLifetime")
+struct MainWindowLaunchWorkLifetimeTests {
+    /// The launch task is unstructured, so a closing window neither cancels nor completes the
+    /// rejoin pass; the flag is the only thing that tells it to stop (#1374).
+    @Test("Teardown marks the window down, reappearing clears it")
+    func lifetimeTracksTeardownAndReappearance() {
+        let lifetime = MainWindowLaunchWorkLifetime()
+
+        #expect(!lifetime.isWindowTornDown)
+
+        lifetime.noteWindowTornDown()
+        #expect(lifetime.isWindowTornDown)
+
+        lifetime.noteWindowAppeared()
+        #expect(!lifetime.isWindowTornDown)
+    }
+}
+
 /// The launch-pass claim is process-wide state, so its suite runs alone and hands the claim
 /// back after each case.
 @MainActor
