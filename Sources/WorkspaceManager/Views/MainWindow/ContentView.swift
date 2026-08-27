@@ -103,6 +103,12 @@ struct ContentView: View {
     @State private var didPrewarmPerfTerminalSurfaces = false
     @State private var workspaceOrphanState = WorkspaceOrphanReconciliationState()
     @State private var restoreState = MainWindowRestoreState()
+    /// Sessions the reattach pass has already realized, so a second pass (the one that
+    /// follows an accepted restore) probes and rejoins only what is new (#1374).
+    @State private var reattachedOpenSurfaceSessionIDs: Set<UUID> = []
+    /// Outlives the view value so the reattach pass, which suspends on probes, can tell that
+    /// the window it was building for went away.
+    @State private var launchWorkLifetime = MainWindowLaunchWorkLifetime()
     @AppStorage(TerminalRestoreBannerStorage.handledRunIDKey)
     private var restoreHandledRunID = ""
     @State private var isShowingFeedbackSheet = false
@@ -887,7 +893,8 @@ struct ContentView: View {
             syncOpenInEditorShortcutRouting: syncOpenInEditorShortcutRouting,
             refreshWorkspaceStatusAggregator: refreshWorkspaceStatusAggregator,
             noteHostLumeSmokeLaunchReady: smokeDriver.noteHostLumeLaunchReady,
-            noteDesktopUISmokeLaunchReady: smokeDriver.noteDesktopUILaunchReady
+            noteDesktopUISmokeLaunchReady: smokeDriver.noteDesktopUILaunchReady,
+            reattachPreviouslyOpenSurfaces: { await reattachPreviouslyOpenSurfaces(trigger: .launch) }
         )
     }
 
@@ -920,6 +927,7 @@ struct ContentView: View {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
             },
             cancelStatusAggregation: statusAggregationCoalescer.cancel,
+            noteWindowTornDown: launchWorkLifetime.noteWindowTornDown,
             // The window that installed the gesture-verb layer is gone; drop it so an operator
             // mutation verb fails closed (unsupported) instead of driving a stale selection
             // gesture while the app lingers as an accessory. Reappearing reinstalls it via onAppear.
@@ -930,6 +938,7 @@ struct ContentView: View {
     private var splitViewWithLifecycleHandlers: some View {
         splitViewWithToolbar
             .onAppear {
+                launchWorkLifetime.noteWindowAppeared()
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
@@ -2665,6 +2674,118 @@ struct ContentView: View {
             _ = tileTreeStore.activateExistingSession(sessionID: target.id)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
+        await reattachPreviouslyOpenSurfaces(trigger: .restore)
+    }
+
+    /// Rejoin the terminals of the scopes that were open at quit (#1374).
+    ///
+    /// Launch reinstates the previous run's *session records* — from the continuity manifest,
+    /// or from an accepted restore plan — but a record holds no shell: its surface is realized
+    /// on first render, so only the scope the window happens to land on rejoins its tmux
+    /// session. Every other workspace stayed dark until it was clicked, which is what made a
+    /// relaunch look like it had lost them.
+    ///
+    /// Realizing a surface is what attaches: `tmux new-session -A` on the scope's recorded name
+    /// joins the session that survived. The pass therefore only touches scopes whose tmux
+    /// session is provably alive, is capped, and yields between scopes so the window stays
+    /// responsive while it works through them.
+    ///
+    /// It waits for `launch_to_first_prompt` to close before starting a shell of its own: a
+    /// place in the launch order is not the same as that interval being finished, and the
+    /// metric closes on the first shell's prompt, not on any step here.
+    @MainActor
+    private func reattachPreviouslyOpenSurfaces(
+        trigger: MainWindowOpenSurfaceReattachController.Trigger
+    ) async {
+        guard MainWindowOpenSurfaceReattachPolicy.isEnabled(environment: ProcessInfo.processInfo.environment)
+        else { return }
+
+        // The active session is the one the window itself realizes on first render.
+        var alreadyRealizedSessionIDs = reattachedOpenSurfaceSessionIDs
+        if let activeSessionID = tileTreeStore.activeSessionID {
+            alreadyRealizedSessionIDs.insert(activeSessionID)
+        }
+
+        let controller = MainWindowOpenSurfaceReattachController()
+        let candidates = controller.candidates(
+            sessions: tileTreeStore.sessions,
+            activeSessionIDByScopeKey: tileTreeStore.activeSessionIDByScopeKey,
+            excludedSessionIDs: alreadyRealizedSessionIDs,
+            excludedScopeKeys: terminalContinuityController.archivedWorkspaceScopeKeys,
+            terminalMode: terminalMultiplexingMode
+        )
+        guard !candidates.isEmpty else { return }
+
+        let liveTmuxSessionNames = await liveTmuxSessionNames(among: candidates)
+        guard !launchWorkLifetime.isWindowTornDown else { return }
+        let sessionIDs = controller.reattachableSessionIDs(
+            candidates: candidates,
+            liveTmuxSessionNames: liveTmuxSessionNames
+        )
+        guard !sessionIDs.isEmpty else {
+            restoreLog.info(
+                "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=0 (no surviving tmux session)"
+            )
+            return
+        }
+
+        if trigger == .launch {
+            await waitForLaunchToFirstPromptToClose()
+        }
+        guard !launchWorkLifetime.isWindowTornDown else { return }
+
+        // Claimed here rather than on entry: a window closed during the awaits above must not
+        // spend the process's one launch pass, or reopening it would land back on #1374.
+        if trigger == .launch, !MainWindowOpenSurfaceReattachPolicy.claimLaunchPass() { return }
+
+        // Mark before realizing: a surface that fails to come up should not be retried on
+        // every later pass, and the record stays selectable either way.
+        reattachedOpenSurfaceSessionIDs.formUnion(sessionIDs)
+
+        var rejoinedCount = 0
+        for sessionID in sessionIDs {
+            guard !launchWorkLifetime.isWindowTornDown else { break }
+            guard let session = tileTreeStore.sessions.first(where: { $0.id == sessionID }) else { continue }
+            tileTreeStore.terminalSurfaceView(for: session)
+            rejoinedCount += 1
+            await Task.yield()
+        }
+
+        restoreLog.info(
+            "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=\(rejoinedCount, privacy: .public)"
+        )
+    }
+
+    /// Resume once `launch_to_first_prompt` has closed, or once the wait has outlived any
+    /// plausible cold launch. The cap is the fallback for a launch that never reports a prompt
+    /// — a window that realizes no terminal surface at all — where waiting on the metric would
+    /// mean waiting forever. A restore the user accepts does not wait: by then the interval is
+    /// either long closed or never closing, and the click should not pay for either.
+    private func waitForLaunchToFirstPromptToClose() async {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+        while !PerformanceSignposts.didCompleteLaunchToFirstPrompt, ContinuousClock.now < deadline {
+            guard !launchWorkLifetime.isWindowTornDown else { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    /// Which of the candidates' tmux sessions are still running, probed concurrently so the
+    /// pass costs one round trip rather than one per scope.
+    private func liveTmuxSessionNames(
+        among candidates: [MainWindowOpenSurfaceReattachController.Candidate]
+    ) async -> Set<String> {
+        let probe = TmuxSessionProbe()
+        let names = Set(candidates.map(\.tmuxSessionName))
+        return await withTaskGroup(of: (String, Bool).self) { group in
+            for name in names {
+                group.addTask { (name, await probe.isSessionAlive(name)) }
+            }
+            var live: Set<String> = []
+            for await (name, isAlive) in group where isAlive {
+                live.insert(name)
+            }
+            return live
+        }
     }
 
     /// Coalesces the high-frequency agent-event refresh path: bursts of status or

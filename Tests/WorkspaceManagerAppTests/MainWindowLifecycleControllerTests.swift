@@ -75,7 +75,8 @@ struct MainWindowLifecycleControllerTests {
             syncOpenInEditorShortcutRouting: recorder.step("syncOpenInEditorShortcutRouting"),
             refreshWorkspaceStatusAggregator: recorder.step("refreshWorkspaceStatusAggregator"),
             noteHostLumeSmokeLaunchReady: recorder.asyncStep("noteHostLumeSmokeLaunchReady"),
-            noteDesktopUISmokeLaunchReady: recorder.asyncStep("noteDesktopUISmokeLaunchReady")
+            noteDesktopUISmokeLaunchReady: recorder.asyncStep("noteDesktopUISmokeLaunchReady"),
+            reattachPreviouslyOpenSurfaces: recorder.asyncStep("reattachPreviouslyOpenSurfaces")
         )
     }
 
@@ -101,6 +102,7 @@ struct MainWindowLifecycleControllerTests {
         MainWindowLifecycleController.TeardownActions(
             clearOpenInEditorShortcutOverride: recorder.step("clearShortcutOverride"),
             cancelStatusAggregation: recorder.step("cancelStatusAggregation"),
+            noteWindowTornDown: recorder.step("noteWindowTornDown"),
             detachAutomationGestureVerbs: recorder.step("detachGestureVerbs")
         )
     }
@@ -191,6 +193,7 @@ struct MainWindowLifecycleControllerTests {
                 "refreshWorkspaceStatusAggregator",
                 "noteHostLumeSmokeLaunchReady",
                 "noteDesktopUISmokeLaunchReady",
+                "reattachPreviouslyOpenSurfaces",
             ]
         )
     }
@@ -236,7 +239,22 @@ struct MainWindowLifecycleControllerTests {
 
         await controller.runLaunchSequence(launchActions(recorder))
 
-        #expect(recorder.steps.suffix(2) == ["noteHostLumeSmokeLaunchReady", "noteDesktopUISmokeLaunchReady"])
+        #expect(
+            recorder.ordered("refreshWorkspaceStatusAggregator", before: "noteHostLumeSmokeLaunchReady")
+        )
+        #expect(recorder.ordered("noteHostLumeSmokeLaunchReady", before: "noteDesktopUISmokeLaunchReady"))
+    }
+
+    /// Rejoining the previous run's scopes starts a shell each, so it runs after every step that
+    /// builds the window — the smoke ready signals included — rather than delaying any of them
+    /// (#1374).
+    @Test("Launch rejoins the previous run's scopes last")
+    func launchReattachesOpenSurfacesLast() async {
+        let recorder = Recorder()
+
+        await controller.runLaunchSequence(launchActions(recorder))
+
+        #expect(recorder.steps.last == "reattachPreviouslyOpenSurfaces")
     }
 
     // MARK: - Model change
@@ -307,8 +325,20 @@ struct MainWindowLifecycleControllerTests {
 
         #expect(
             recorder.steps == [
-                "clearShortcutOverride", "cancelStatusAggregation", "detachGestureVerbs",
+                "clearShortcutOverride", "cancelStatusAggregation", "noteWindowTornDown",
+                "detachGestureVerbs",
             ]
         )
+    }
+
+    /// Launch work runs in an unstructured task that a closing window neither cancels nor
+    /// completes, so teardown has to mark the window down for it (#1374).
+    @Test("Teardown marks the window down for suspended launch work")
+    func teardownMarksWindowDown() {
+        let recorder = Recorder()
+
+        controller.runTeardown(teardownActions(recorder))
+
+        #expect(recorder.index(of: "noteWindowTornDown") != nil)
     }
 }

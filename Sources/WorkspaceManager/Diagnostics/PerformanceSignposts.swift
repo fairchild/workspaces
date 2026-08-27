@@ -72,6 +72,15 @@ enum PerformanceSignposts {
         }
     }
 
+    /// Whether `launch_to_first_prompt` has closed — the first shell reached a prompt, or the
+    /// launch produced no shell to wait on. Work that would contend with that interval reads
+    /// this rather than assuming a place in the launch order settles it (#1374).
+    static var didCompleteLaunchToFirstPrompt: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return launchCompleted
+    }
+
     static func beginLaunchToFirstPromptIfNeeded() {
         lock.lock()
         defer { lock.unlock() }

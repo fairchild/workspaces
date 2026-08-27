@@ -18,12 +18,18 @@ struct TerminalContinuityManifest: Codable, Equatable {
         let key: HostTerminalSessionKey
         let directoryPath: String
         let customCommand: String?
+        /// The chosen tmux session name when the surface targets one other than its directory
+        /// derivation — a restore that reattached to a probed name. Persisted because the
+        /// restored record would otherwise silently retarget the derived name, which on a
+        /// shared socket can belong to a different live session (#1374).
+        let tmuxSessionNameOverride: String?
 
         init(session: HostTerminalSession) {
             self.id = session.id
             self.key = session.key
             self.directoryPath = session.directoryPath
             self.customCommand = session.customCommand
+            self.tmuxSessionNameOverride = session.tmuxSessionNameOverride
         }
 
         func restoredSession(fileManager: FileManager = .default) -> HostTerminalSession? {
@@ -38,7 +44,8 @@ struct TerminalContinuityManifest: Codable, Equatable {
                 id: id,
                 key: key,
                 directory: URL(fileURLWithPath: directoryPath, isDirectory: true),
-                customCommand: customCommand
+                customCommand: customCommand,
+                tmuxSessionNameOverride: tmuxSessionNameOverride
             )
         }
 
