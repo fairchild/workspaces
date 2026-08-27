@@ -61,16 +61,13 @@ APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
 # re-evaluates standing admitted state; it never applies `ready` itself.
 FACTORY_SWEEP_ACTOR = "github-actions[bot]"
 
-# Identities whose `ready` label event is a factory restore rather than a fresh
-# release. rollback() re-applies `ready` with April's App token after a failed
-# run, which used to make the newest ready event bot-attributed and so poisoned
-# every later admission -- label events and owner workflow_dispatch alike --
-# until a human cycled the label by hand. A restore is transparent instead: it
-# inherits the lineage of the owner release it is restoring (see
-# owner_release_event). Only the factory's own App credentials can produce such
-# an event, and a restore only ever follows a claim, which only ever follows an
-# owner release, so the chain cannot manufacture admission that did not exist.
-FACTORY_RESTORE_ACTORS = frozenset({"april-clearwater[bot]"})
+# The App identity the claim and rollback steps mutate labels with. A `ready`
+# event attributed to it is factory bookkeeping -- the claim's removal, or
+# rollback's restore after a failed run -- rather than a release or a
+# revocation. Identity alone is not treated as proof of either: see
+# owner_release_event, which requires the surrounding events to have the shape
+# a real claim-then-rollback leaves behind.
+FACTORY_LABEL_ACTORS = frozenset({"april-clearwater[bot]"})
 
 # Negative admission outcomes split on whether a retry can ever succeed.
 # Terminal declines strip `ready` so the release cannot refire a run the
@@ -589,34 +586,71 @@ def latest_ready_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
+def ready_label_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Every `ready` add and removal, oldest first.
+
+    Sorted by `created_at` rather than trusting the timeline's order: the
+    REST timeline reads chronologically today but GitHub documents no sort
+    guarantee, and offset pagination is not a snapshot. This sequence decides
+    admission, so its order comes from the timestamps.
+    """
+    relevant = [
+        event
+        for event in events
+        if str(event.get("event", "")).casefold() in {"labeled", "unlabeled"}
+        and str((event.get("label") or {}).get("name", "")).casefold() == "ready"
+    ]
+    return sorted(
+        relevant,
+        key=lambda event: (str(event.get("created_at") or ""), int(event.get("id") or 0)),
+    )
+
+
 def owner_release_event(
     events: list[dict[str, Any]],
     repository_owner: str,
 ) -> dict[str, Any] | None:
-    """The owner `ready` event this issue's current admission rests on.
+    """The owner `ready` release this issue's current admission rests on.
 
-    Walks `ready` label events newest-first. A factory restore (rollback
-    re-applying `ready` after a failed run) is transparent and the walk
-    continues through it to the owner release underneath. Any other actor
-    stops the walk and returns None, so a collaborator relabeling an old issue
-    still cannot admit it.
+    Walks `ready` adds and removals newest-first and accepts only the exact
+    shape a real factory retry leaves behind: an owner release, the claim's
+    own factory-attributed removal, and rollback's factory-attributed restore.
+    Anything else terminates the walk and returns None.
 
-    Returning the owner's own event, not the restore, is what keeps the
-    content-staleness boundary honest: `ready` is re-applied minutes to hours
-    after the release, and the content the owner actually reviewed is the
-    content as of their release, not as of the retry.
+    Both halves of that shape matter. Skipping the restore is what stops a
+    failed run from locking the issue's front door -- before this, the newest
+    `ready` event on a retried issue was bot-attributed, so every later firing,
+    including the documented owner `workflow_dispatch` recovery, was refused
+    until a human cycled the label. Requiring the removal underneath it is what
+    keeps identity from standing in for provenance: the factory's App token is
+    held by several lanes, and a `ready` applied by one of them on an issue
+    that was never claimed is not a restore of anything.
+
+    A removal by anyone else is a revocation and ends the lineage, so an owner
+    who withdraws `ready` mid-claim cannot have that release replayed by the
+    retry that follows.
+
+    Returning the owner's own event, not the restore, keeps the
+    content-staleness boundary honest: `ready` comes back minutes to hours
+    later, and the content the owner reviewed is the content as of their
+    release.
     """
     owner = repository_owner.casefold()
-    restore_actors = {actor.casefold() for actor in FACTORY_RESTORE_ACTORS}
-    for event in reversed(events):
-        if str(event.get("event", "")).casefold() != "labeled":
-            continue
-        if str((event.get("label") or {}).get("name", "")).casefold() != "ready":
-            continue
+    factory = {actor.casefold() for actor in FACTORY_LABEL_ACTORS}
+    # Set after stepping over a factory restore: the only thing that may sit
+    # underneath one is the claim removal it is undoing.
+    awaiting_claim_removal = False
+    for event in reversed(ready_label_events(events)):
+        action = str(event.get("event", "")).casefold()
         actor = str((event.get("actor") or {}).get("login") or "").casefold()
-        if actor == owner:
-            return event
-        if actor in restore_actors:
+        factory_actor = actor in factory
+        if action == "labeled" and actor == owner:
+            return None if awaiting_claim_removal else event
+        if action == "labeled" and factory_actor:
+            awaiting_claim_removal = True
+            continue
+        if action == "unlabeled" and factory_actor:
+            awaiting_claim_removal = False
             continue
         return None
     return None

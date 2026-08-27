@@ -124,7 +124,12 @@ class EligibleIssueNumbersTests(unittest.TestCase):
         # forever the issues it was built for.
         restored = [
             ready_event("fairchild"),
-            {"event": "unlabeled", "label": {"name": "ready"}},
+            {
+                "event": "unlabeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "april-clearwater[bot]"},
+                "created_at": "2026-07-15T01:00:00Z",
+            },
             {
                 "event": "labeled",
                 "label": {"name": "ready"},
@@ -152,6 +157,12 @@ class EligibleIssueNumbersTests(unittest.TestCase):
         # still an edit the owner never reviewed.
         restored = [
             ready_event("fairchild"),
+            {
+                "event": "unlabeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "april-clearwater[bot]"},
+                "created_at": "2026-07-15T01:00:00Z",
+            },
             {
                 "event": "labeled",
                 "label": {"name": "ready"},

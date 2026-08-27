@@ -28,18 +28,29 @@ What is actually wired and running today, verified against the workflow YAML and
 timeline shows an owner-applied `ready`. Two details are easy to get wrong and
 both cost live runs (#1380):
 
-- **A failed run's restore is transparent.** `rollback` re-applies `ready` with
-  April's App token, so the newest `ready` event on a retried issue is
-  bot-attributed. Admission walks back through factory restores to the owner
-  release underneath, and stops at any other actor. Only the factory's own App
-  credentials can produce a restore event, and a restore only ever follows a
-  claim, which only ever follows an owner release — so the walk cannot invent
-  admission that never existed. Before this, a single failed run locked the
-  issue's front door until a human cycled the label by hand, and the documented
-  `workflow_dispatch` recovery path failed on the same poisoned timeline.
+- **`rollback`'s restore is transparent — but only in the shape a real retry
+  leaves behind.** `rollback` re-applies `ready` with April's App token, so the
+  newest `ready` event on a retried issue is bot-attributed. Admission walks
+  `ready` adds and removals newest-first and accepts exactly one sequence:
+  owner release → the claim's own factory-attributed removal → rollback's
+  factory-attributed restore. A factory `ready` with no claim removal under it
+  is not a restore of anything and ends the walk, because the App token is held
+  by several lanes and identity alone is not provenance. A removal by anyone
+  else is a revocation and also ends the walk, so an owner who withdraws `ready`
+  mid-claim cannot have that release replayed by the retry that follows. Before
+  this, a single failed run locked the issue's front door until a human cycled
+  the label by hand, and the documented `workflow_dispatch` recovery path failed
+  on the same poisoned timeline.
 - **The content-staleness boundary is the owner's release, not the restore.**
   What the owner reviewed is the issue as it stood when they released it, so a
   non-owner edit landing between the release and a retry still defers.
+- **The janitor's stale-claim restore is still opaque.** When a rollback job is
+  cancelled or never recognises the claim, the janitor flips `claimed` back to
+  `ready` 24 hours later under `github-actions[bot]` — an identity shared by
+  every workflow in the repo, so admission stops there and the issue still
+  needs a human label cycle. Closing that needs one verifiable restore
+  mechanism shared by rollback and the janitor, not a wider actor list;
+  tracked in #1386.
 
 Admission also requires a `## Requested Evidence` section with at least one
 real item, read with the same `extract_requested_evidence` the contributor
