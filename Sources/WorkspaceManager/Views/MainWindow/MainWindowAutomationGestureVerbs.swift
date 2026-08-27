@@ -55,12 +55,15 @@ struct MainWindowAutomationGestureVerbs {
 
         dependencies.selectRepoTerminal(repo)
 
+        // Built through the key's own normalizer, the way the selection path builds it, so the
+        // comparison cannot fail on two spellings of the same directory.
+        let repoScopeKey = HostTerminalSessionKey.repoPath(repo.localURL.path).normalized()
         let repoDirectory = MainWindowPathResolution.normalize(repo.localURL.path)
         let attachedSurfaceID = dependencies.tileTreeStore.activeSessionID
         let attachedSession = dependencies.tileTreeStore.sessions.first { $0.id == attachedSurfaceID }
         // The gesture is only "attached" when the active session is the one this repo's scope
         // owns; a selection that landed elsewhere reports no surface rather than the wrong one.
-        let attached = attachedSession?.key == .repoPath(repoDirectory)
+        let attached = attachedSession?.key == repoScopeKey
         return AutomationRepoTerminalEffect(
             attachedSurfaceID: attached ? attachedSurfaceID : nil,
             attachedTerminal: attached,
