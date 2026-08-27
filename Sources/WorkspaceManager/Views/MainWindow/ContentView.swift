@@ -891,7 +891,7 @@ struct ContentView: View {
             refreshWorkspaceStatusAggregator: refreshWorkspaceStatusAggregator,
             noteHostLumeSmokeLaunchReady: smokeDriver.noteHostLumeLaunchReady,
             noteDesktopUISmokeLaunchReady: smokeDriver.noteDesktopUILaunchReady,
-            reattachPreviouslyOpenSurfaces: { await reattachPreviouslyOpenSurfaces(trigger: "launch") }
+            reattachPreviouslyOpenSurfaces: { await reattachPreviouslyOpenSurfaces(trigger: .launch) }
         )
     }
 
@@ -2669,7 +2669,7 @@ struct ContentView: View {
             _ = tileTreeStore.activateExistingSession(sessionID: target.id)
         }
         restoreLog.info("[Restore] executed \(plan.surfaces.count, privacy: .public) surface(s)")
-        await reattachPreviouslyOpenSurfaces(trigger: "restore")
+        await reattachPreviouslyOpenSurfaces(trigger: .restore)
     }
 
     /// Rejoin the terminals of the scopes that were open at quit (#1374).
@@ -2685,9 +2685,12 @@ struct ContentView: View {
     /// session is provably alive, is capped, and runs one scope per main-actor turn so the
     /// window stays responsive while it works through them.
     @MainActor
-    private func reattachPreviouslyOpenSurfaces(trigger: String) async {
+    private func reattachPreviouslyOpenSurfaces(
+        trigger: MainWindowOpenSurfaceReattachController.Trigger
+    ) async {
         guard MainWindowOpenSurfaceReattachPolicy.isEnabled(environment: ProcessInfo.processInfo.environment)
         else { return }
+        if trigger == .launch, !MainWindowOpenSurfaceReattachPolicy.claimLaunchPass() { return }
 
         // The active session is the one the window itself realizes on first render.
         var alreadyRealizedSessionIDs = reattachedOpenSurfaceSessionIDs
@@ -2712,7 +2715,7 @@ struct ContentView: View {
         )
         guard !sessionIDs.isEmpty else {
             restoreLog.info(
-                "[Reattach] trigger=\(trigger, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=0 (no surviving tmux session)"
+                "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=0 (no surviving tmux session)"
             )
             return
         }
@@ -2730,7 +2733,7 @@ struct ContentView: View {
         }
 
         restoreLog.info(
-            "[Reattach] trigger=\(trigger, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=\(rejoinedCount, privacy: .public)"
+            "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=\(rejoinedCount, privacy: .public)"
         )
     }
 

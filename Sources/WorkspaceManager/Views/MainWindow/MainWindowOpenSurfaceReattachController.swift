@@ -21,6 +21,27 @@ import WorkspaceManagerCore
 enum MainWindowOpenSurfaceReattachPolicy {
     static let disableEnvironmentKey = "WORKSPACES_DISABLE_OPEN_SURFACE_REATTACH"
 
+    /// Whether this launch's rejoin pass is still unclaimed, claiming it if so.
+    ///
+    /// Every window restores the same continuity manifest into its own store, so the pass is
+    /// scoped to the process rather than the window: without this, a second window would start
+    /// a second shell per scope and attach a second client to every surviving tmux session.
+    /// A restore the user accepts is a separate, explicit act and is not gated here.
+    @MainActor
+    static func claimLaunchPass() -> Bool {
+        guard !didClaimLaunchPass else { return false }
+        didClaimLaunchPass = true
+        return true
+    }
+
+    @MainActor
+    static func releaseLaunchPassForTesting() {
+        didClaimLaunchPass = false
+    }
+
+    @MainActor
+    private static var didClaimLaunchPass = false
+
     static func isEnabled(environment: [String: String]) -> Bool {
         guard environment["CI"] == nil else { return false }
         switch environment[disableEnvironmentKey]?
@@ -40,6 +61,14 @@ enum MainWindowOpenSurfaceReattachPolicy {
 /// the whole decision synchronous and testable: probing tmux is the only async step, and it
 /// happens between the two calls.
 struct MainWindowOpenSurfaceReattachController {
+    /// What put the session records in front of the pass. `launch` is the window coming up on
+    /// the continuity manifest and runs once per process; `restore` is the user accepting a
+    /// restore plan, which is an explicit act in one window and always runs.
+    enum Trigger: String, Sendable {
+        case launch
+        case restore
+    }
+
     /// A restored session whose scope is worth rejoining, paired with the tmux session name
     /// its surface would attach to.
     struct Candidate: Equatable, Sendable {
@@ -49,12 +78,15 @@ struct MainWindowOpenSurfaceReattachController {
     }
 
     /// Upper bound on the surfaces one launch realizes. Each realization starts a shell and
-    /// attaches a tmux client, so what comes back is the most recent scopes rather than an
-    /// unbounded history of everything ever opened.
+    /// attaches a tmux client, so a window that accumulated scopes over a long run cannot turn
+    /// one launch into dozens of process starts.
     static let maximumSurfaces = 12
 
-    /// The scopes this launch should rejoin, in `sessions` order (newest scope last, as the
-    /// coordinator holds them), capped at `limit`.
+    /// The scopes this launch should rejoin, in `sessions` order — which is the order the
+    /// previous run opened them, since that is the order the manifest records and restore
+    /// replays. Past `limit` the tail is dropped, so a long-lived set of scopes keeps its
+    /// oldest members rather than churning on whichever was touched last; the dropped ones
+    /// open on demand.
     ///
     /// Only `.tmuxPerSession` produces candidates: in Ghostty-managed mode a surface's shell
     /// died with the previous process, so realizing its record would start a fresh shell

@@ -296,3 +296,22 @@ struct MainWindowOpenSurfaceReattachControllerTests {
         )
     }
 }
+
+/// The launch-pass claim is process-wide state, so its suite runs alone and hands the claim
+/// back after each case.
+@MainActor
+@Suite("MainWindowOpenSurfaceReattachLaunchPass", .serialized)
+struct MainWindowOpenSurfaceReattachLaunchPassTests {
+    /// Every window restores the same manifest into its own store, so a second window claiming
+    /// the pass would start a second shell per scope and attach a second client to every
+    /// surviving tmux session.
+    @Test("Only the first window claims the launch pass")
+    func onlyFirstWindowClaimsLaunchPass() {
+        MainWindowOpenSurfaceReattachPolicy.releaseLaunchPassForTesting()
+        defer { MainWindowOpenSurfaceReattachPolicy.releaseLaunchPassForTesting() }
+
+        #expect(MainWindowOpenSurfaceReattachPolicy.claimLaunchPass())
+        #expect(!MainWindowOpenSurfaceReattachPolicy.claimLaunchPass())
+        #expect(!MainWindowOpenSurfaceReattachPolicy.claimLaunchPass())
+    }
+}
