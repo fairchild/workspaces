@@ -36,6 +36,7 @@ CONTRIBUTOR_SCRIPTS = (
 if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CONTRIBUTOR_SCRIPTS))
 
+from evidence import extract_requested_evidence  # noqa: E402
 from patch_policy import (  # noqa: E402
     issue_body_path_candidates,
     issue_scope_digest,
@@ -60,13 +61,24 @@ APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
 # re-evaluates standing admitted state; it never applies `ready` itself.
 FACTORY_SWEEP_ACTOR = "github-actions[bot]"
 
+# Identities whose `ready` label event is a factory restore rather than a fresh
+# release. rollback() re-applies `ready` with April's App token after a failed
+# run, which used to make the newest ready event bot-attributed and so poisoned
+# every later admission -- label events and owner workflow_dispatch alike --
+# until a human cycled the label by hand. A restore is transparent instead: it
+# inherits the lineage of the owner release it is restoring (see
+# owner_release_event). Only the factory's own App credentials can produce such
+# an event, and a restore only ever follows a claim, which only ever follows an
+# owner release, so the chain cannot manufacture admission that did not exist.
+FACTORY_RESTORE_ACTORS = frozenset({"april-clearwater[bot]"})
+
 # Negative admission outcomes split on whether a retry can ever succeed.
 # Terminal declines strip `ready` so the release cannot refire a run the
 # factory will always refuse; transient deferrals keep `ready` because the
 # blocking condition (WIP capacity, daily budget) clears on its own and the
 # Owner's release stays valid. Admission only ever removes `ready` — applying
 # it remains Owner-only, matching the janitor's release-gate invariant.
-TERMINAL_DECLINES = frozenset({"privileged"})
+TERMINAL_DECLINES = frozenset({"privileged", "no_evidence_contract"})
 TRANSIENT_DEFERRALS = frozenset({"wip", "budget"})
 
 # Admission comments speak as the pipeline stage, not as a contributor
@@ -76,6 +88,22 @@ PRIVILEGED_COMMENT = (
     "and requires the orchestrator lane. Removing `ready`; the factory cannot "
     "take this issue."
 )
+NO_EVIDENCE_CONTRACT_COMMENT = (
+    "Factory admission: declined — this issue has no `## Requested Evidence` "
+    "section with at least one item, and the contributor runtime refuses to "
+    "execute without one. Removing `ready`; add the section and re-release.\n\n"
+    "Each bullet states one thing that must be true for the change to be "
+    "believed, for example:\n\n"
+    "```markdown\n"
+    "## Requested Evidence\n"
+    "- `swift test --filter WorkspaceStoreTests` passes\n"
+    "- CI: `Lint, Test, Build` green on the PR head\n"
+    "```"
+)
+TERMINAL_DECLINE_COMMENTS = {
+    "privileged": PRIVILEGED_COMMENT,
+    "no_evidence_contract": NO_EVIDENCE_CONTRACT_COMMENT,
+}
 WIP_COMMENT = (
     f"Factory admission: deferred — the {FACTORY_WIP_CAP}-issue factory WIP "
     "cap is full; leaving this issue ready."
@@ -394,6 +422,16 @@ def evaluate_claim(
         )
     if privileged_scope(issue):
         return ClaimDecision("privileged", "issue indicates privileged-path scope")
+    if not extract_requested_evidence(str(issue.get("body") or "")):
+        # The contributor runtime refuses to execute without an explicit
+        # contract (FACTORY_REQUIRE_EXPLICIT_EVIDENCE, set on every factory
+        # run). Catching it here instead costs one API read; catching it there
+        # costs a claim, a branch name, an isolated scratch, and a model
+        # invocation, and leaves the issue `claimed` until rollback.
+        return ClaimDecision(
+            "no_evidence_contract",
+            "issue has no Requested Evidence contract",
+        )
     if daily_run_count > daily_cap:
         return ClaimDecision(
             "budget",
@@ -551,11 +589,37 @@ def latest_ready_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:
     return None
 
 
-def latest_ready_actor(events: list[dict[str, Any]]) -> str | None:
-    event = latest_ready_event(events)
-    if event is None:
+def owner_release_event(
+    events: list[dict[str, Any]],
+    repository_owner: str,
+) -> dict[str, Any] | None:
+    """The owner `ready` event this issue's current admission rests on.
+
+    Walks `ready` label events newest-first. A factory restore (rollback
+    re-applying `ready` after a failed run) is transparent and the walk
+    continues through it to the owner release underneath. Any other actor
+    stops the walk and returns None, so a collaborator relabeling an old issue
+    still cannot admit it.
+
+    Returning the owner's own event, not the restore, is what keeps the
+    content-staleness boundary honest: `ready` is re-applied minutes to hours
+    after the release, and the content the owner actually reviewed is the
+    content as of their release, not as of the retry.
+    """
+    owner = repository_owner.casefold()
+    restore_actors = {actor.casefold() for actor in FACTORY_RESTORE_ACTORS}
+    for event in reversed(events):
+        if str(event.get("event", "")).casefold() != "labeled":
+            continue
+        if str((event.get("label") or {}).get("name", "")).casefold() != "ready":
+            continue
+        actor = str((event.get("actor") or {}).get("login") or "").casefold()
+        if actor == owner:
+            return event
+        if actor in restore_actors:
+            continue
         return None
-    return str((event.get("actor") or {}).get("login") or "") or None
+    return None
 
 
 def latest_non_owner_editor(
@@ -599,14 +663,15 @@ def verify_release_actor(
             f"Factory implementation trigger actor {trigger_actor!r} is not "
             "repository owner or the factory sweep"
         )
-    ready_actor = latest_ready_actor(events)
-    if ready_actor is None:
+    if latest_ready_event(events) is None:
         raise FactoryImplementError("issue timeline has no ready label event")
-    if ready_actor.casefold() != owner.casefold():
+    release = owner_release_event(events, owner)
+    if release is None:
+        blocking = str((latest_ready_event(events).get("actor") or {}).get("login") or "")
         raise FactoryImplementError(
-            f"most recent ready label actor {ready_actor!r} is not repository owner"
+            f"most recent ready label actor {blocking!r} is not repository owner"
         )
-    return ready_actor
+    return str((release.get("actor") or {}).get("login") or "")
 
 
 def write_output(name: str, value: str) -> None:
@@ -685,11 +750,11 @@ def claim(
     # this) must not ride the earlier owner approval — REST's issue timeline
     # has no event for body/title edits, so userContentEdits is the only way
     # to see who touched the content and when.
-    ready_event = latest_ready_event(events)
+    ready_event = owner_release_event(events, repository_owner)
     if ready_event is None:
-        # Unreachable: verify_release_actor above already raised unless a
-        # ready-labeled event exists in these same `events`.
-        raise FactoryImplementError("issue timeline has no ready label event")
+        # Unreachable: verify_release_actor above already raised unless an
+        # owner release exists in these same `events`.
+        raise FactoryImplementError("issue timeline has no owner ready release")
     hostile_editor = latest_non_owner_editor(
         client.user_content_edits_since(
             issue_number,
@@ -725,7 +790,7 @@ def claim(
     write_output("issue_scope_digest", issue_scope_digest(issue))
     write_output("verified_actor", verified_actor)
     if decision.action in TERMINAL_DECLINES:
-        comment_once(client, issue_number, PRIVILEGED_COMMENT)
+        comment_once(client, issue_number, TERMINAL_DECLINE_COMMENTS[decision.action])
         client.update_issue(issue_number, decline_payload(issue))
         return
     if decision.action == "stale_scope":

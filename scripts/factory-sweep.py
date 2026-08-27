@@ -142,11 +142,11 @@ def eligible_issue_numbers(
     for issue in issues:
         number = int(issue["number"])
         events = client.timeline(number)
-        ready_event = factory_implement.latest_ready_event(events)
+        # The owner release underneath any factory restore -- a failed run
+        # re-applies `ready` as April, and reading only the newest event would
+        # make the sweep skip forever exactly the issues it exists to retry.
+        ready_event = factory_implement.owner_release_event(events, repository_owner)
         if ready_event is None:
-            continue
-        ready_actor = str((ready_event.get("actor") or {}).get("login") or "")
-        if not ready_actor or ready_actor.casefold() != repository_owner.casefold():
             continue
         if client.has_open_linked_pull(number, events=events):
             continue

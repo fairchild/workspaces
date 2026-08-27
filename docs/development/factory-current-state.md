@@ -6,7 +6,7 @@ What is actually wired and running today, verified against the workflow YAML and
 
 | Lane | Workflow | Trigger | Guard | Status |
 |---|---|---|---|---|
-| Implement | `factory-implement.yml` | issue labeled `ready` (owner-applied only); or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_IMPLEMENT_ENABLED`, both branches — capped by `FACTORY_IMPLEMENT_DAILY_CAP` | **Live** |
+| Implement | `factory-implement.yml` | issue labeled `ready` (owner-applied, or a factory rollback restoring an owner-applied one — see below); or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_IMPLEMENT_ENABLED`, both branches — capped by `FACTORY_IMPLEMENT_DAILY_CAP` | **Live** |
 | Review (signal) | `factory-review.yml` | PR opened / `ready_for_review` / synchronize; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_ENABLED` on the PR-event path only — **`workflow_dispatch` bypasses both switches** (the `if:` uses boolean OR, not AND) | **Live** — untrusted, writes a context artifact only |
 | Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same switches, same bypass — if the upstream Review run's triggering event was `workflow_dispatch`, this job runs regardless of either switch; otherwise gated, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code |
 | Monitor | `factory-monitor.yml` | daily cron (13:30 UTC); or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_MONITOR_ENABLED` on the cron path only — **`workflow_dispatch` bypasses both switches** (same OR-not-AND pattern) | **Live** — telemetry, Digest, reconciliation janitor |
@@ -21,6 +21,31 @@ What is actually wired and running today, verified against the workflow YAML and
 | App Review Smoke | — | — | — | **Deleted this PR.** Manual dispatch; dormant since 2026-05-26. |
 
 `AGENT_AUTOMATIONS_ENABLED` is the global master switch, but it is not an unconditional kill for every lane: Implement, Evidence Verify, and the Owner Comment Responder `&&` it into every trigger path including `workflow_dispatch`, so it always gates them. Review (signal), Review (execute), and Monitor instead OR a bare `workflow_dispatch` check ahead of the switches — an owner-triggered manual dispatch runs those three regardless of `AGENT_AUTOMATIONS_ENABLED` or their own per-stage switch. Milestone Legibility and Evidence Reminder have no Factory switch at all. Treat "turn off `AGENT_AUTOMATIONS_ENABLED`" as "stops label/cron/comment-driven runs," not "nothing can run" — a manual dispatch on Review or Monitor still can.
+
+## Admission: what the owner's release actually is
+
+`factory-implement.py`'s claim step admits an issue only when the issue's own
+timeline shows an owner-applied `ready`. Two details are easy to get wrong and
+both cost live runs (#1380):
+
+- **A failed run's restore is transparent.** `rollback` re-applies `ready` with
+  April's App token, so the newest `ready` event on a retried issue is
+  bot-attributed. Admission walks back through factory restores to the owner
+  release underneath, and stops at any other actor. Only the factory's own App
+  credentials can produce a restore event, and a restore only ever follows a
+  claim, which only ever follows an owner release — so the walk cannot invent
+  admission that never existed. Before this, a single failed run locked the
+  issue's front door until a human cycled the label by hand, and the documented
+  `workflow_dispatch` recovery path failed on the same poisoned timeline.
+- **The content-staleness boundary is the owner's release, not the restore.**
+  What the owner reviewed is the issue as it stood when they released it, so a
+  non-owner edit landing between the release and a retry still defers.
+
+Admission also requires a `## Requested Evidence` section with at least one
+real item, read with the same `extract_requested_evidence` the contributor
+runtime uses. Without it the runtime refuses to execute anyway
+(`FACTORY_REQUIRE_EXPLICIT_EVIDENCE`), so catching it at the gate turns a
+wasted claim-plus-model run into one API read and an explanatory comment.
 
 ## Peter planner: parked
 

@@ -101,11 +101,16 @@ lifecycle_health = load_module(
 
 
 class FactoryImplementTests(unittest.TestCase):
+    # The default body carries a Requested Evidence contract because admission
+    # now requires one (#1380): without it every claim path would decline
+    # before reaching the condition under test.
+    EVIDENCE_CONTRACT = "\n\n## Requested Evidence\n- `swift test` passes\n"
+
     def issue(
         self,
         *,
         title: str = "Implement a feature",
-        body: str = "Change Sources/Feature.swift",
+        body: str = "Change Sources/Feature.swift" + EVIDENCE_CONTRACT,
         labels: tuple[str, ...] = ("agent", "task", "ready"),
     ):
         return {
@@ -197,6 +202,49 @@ class FactoryImplementTests(unittest.TestCase):
         )
         self.assertEqual(over_budget.action, "budget")
 
+    def test_missing_evidence_contract_is_declined_at_admission(self) -> None:
+        # Before #1380 this issue was admitted, claimed, and burned a full
+        # implement run before the contributor runtime refused it.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(body="Change Sources/Feature.swift"), 0
+            ).action,
+            "no_evidence_contract",
+        )
+        # A section that exists but says "none" is not a contract either.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(
+                    body="Change Sources/Feature.swift\n\n## Requested Evidence\n- None\n"
+                ),
+                0,
+            ).action,
+            "no_evidence_contract",
+        )
+        # The contributor runtime's own fallback sentence is not a contract
+        # either -- admission and the runtime read the same function, so the
+        # two cannot drift into disagreeing about what counts.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(
+                    body="Change Sources/Feature.swift\n\n## Requested Evidence\n"
+                    "- Follow the repo evidence bar for the touched surfaces.\n"
+                ),
+                0,
+            ).action,
+            "no_evidence_contract",
+        )
+        self.assertEqual(factory_implement.evaluate_claim(self.issue(), 0).action, "claim")
+        # Privileged scope is still decided first: an issue that is both
+        # privileged and contract-less reports the scope problem, which is the
+        # one the owner has to act on.
+        self.assertEqual(
+            factory_implement.evaluate_claim(
+                self.issue(body="Change `.github/workflows/ci.yml`"), 0
+            ).action,
+            "privileged",
+        )
+
     def test_release_actor_must_own_trigger_and_latest_ready_event(self) -> None:
         events = [
             {
@@ -227,6 +275,102 @@ class FactoryImplementTests(unittest.TestCase):
             "most recent ready label actor",
         ):
             factory_implement.verify_release_actor(events, "fairchild", "fairchild")
+
+    def test_a_factory_restore_inherits_the_owner_release_it_restored(self) -> None:
+        # #1380: rollback re-applies `ready` as april-clearwater[bot] after a
+        # failed run. Reading only the newest ready event made every later
+        # firing -- label events AND owner workflow_dispatch -- reject the
+        # issue until a human cycled the label by hand.
+        owner_release = {
+            "event": "labeled",
+            "label": {"name": "ready"},
+            "actor": {"login": "fairchild"},
+            "created_at": "2026-08-27T01:00:00Z",
+        }
+        restore = {
+            "event": "labeled",
+            "label": {"name": "ready"},
+            "actor": {"login": "april-clearwater[bot]"},
+            "created_at": "2026-08-27T01:30:00Z",
+        }
+        events = [owner_release, {"event": "unlabeled", "label": {"name": "ready"}}, restore]
+
+        self.assertEqual(
+            factory_implement.verify_release_actor(events, "fairchild", "fairchild"),
+            "fairchild",
+        )
+        self.assertEqual(
+            factory_implement.verify_release_actor(
+                events, "github-actions[bot]", "fairchild"
+            ),
+            "fairchild",
+        )
+        # Two consecutive restores (two failed runs) stay transparent.
+        self.assertEqual(
+            factory_implement.verify_release_actor(
+                [*events, dict(restore, created_at="2026-08-27T02:00:00Z")],
+                "fairchild",
+                "fairchild",
+            ),
+            "fairchild",
+        )
+        # The staleness boundary is the OWNER's release, not the restore: the
+        # content the owner reviewed is the content as of their release.
+        self.assertEqual(
+            factory_implement.owner_release_event(events, "fairchild"),
+            owner_release,
+        )
+
+    def test_a_restore_cannot_manufacture_admission_that_never_existed(self) -> None:
+        restore_only = [
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "april-clearwater[bot]"},
+                "created_at": "2026-08-27T01:30:00Z",
+            }
+        ]
+        self.assertIsNone(
+            factory_implement.owner_release_event(restore_only, "fairchild")
+        )
+        with self.assertRaisesRegex(
+            factory_implement.FactoryImplementError, "most recent ready label actor"
+        ):
+            factory_implement.verify_release_actor(restore_only, "fairchild", "fairchild")
+
+        # A collaborator relabeling on top of a real owner release still stops
+        # the walk -- restores are transparent, arbitrary actors are not.
+        collaborator_on_top = [
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "fairchild"},
+                "created_at": "2026-08-27T01:00:00Z",
+            },
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "collaborator"},
+                "created_at": "2026-08-27T03:00:00Z",
+            },
+        ]
+        self.assertIsNone(
+            factory_implement.owner_release_event(collaborator_on_top, "fairchild")
+        )
+        # ...including when a restore sits between the two.
+        with_restore_between = [
+            collaborator_on_top[0],
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "april-clearwater[bot]"},
+                "created_at": "2026-08-27T02:00:00Z",
+            },
+            collaborator_on_top[1],
+        ]
+        self.assertIsNone(
+            factory_implement.owner_release_event(with_restore_between, "fairchild")
+        )
 
     def test_non_owner_editor_is_flagged_owner_edits_are_not(self) -> None:
         # No edits at all.
@@ -449,7 +593,12 @@ class FactoryImplementTests(unittest.TestCase):
     def test_negative_outcomes_partition_terminal_and_transient(self) -> None:
         self.assertEqual(
             factory_implement.TERMINAL_DECLINES | factory_implement.TRANSIENT_DEFERRALS,
-            {"privileged", "wip", "budget"},
+            {"privileged", "no_evidence_contract", "wip", "budget"},
+        )
+        self.assertEqual(
+            set(factory_implement.TERMINAL_DECLINE_COMMENTS),
+            set(factory_implement.TERMINAL_DECLINES),
+            "every terminal decline needs a comment explaining what to fix",
         )
         self.assertEqual(
             factory_implement.TERMINAL_DECLINES & factory_implement.TRANSIENT_DEFERRALS,

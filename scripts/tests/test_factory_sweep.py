@@ -117,6 +117,67 @@ class EligibleIssueNumbersTests(unittest.TestCase):
             [501],
         )
 
+    def test_a_failed_run_restoring_ready_stays_sweepable(self) -> None:
+        # #1380: the sweep exists to retry issues whose implement run failed --
+        # and a failed run is exactly what leaves the newest `ready` event
+        # attributed to April. Reading only that event made the sweep skip
+        # forever the issues it was built for.
+        restored = [
+            ready_event("fairchild"),
+            {"event": "unlabeled", "label": {"name": "ready"}},
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "april-clearwater[bot]"},
+                "created_at": "2026-07-15T02:00:00Z",
+            },
+        ]
+        client = self.client_with_no_edits()
+        timelines = {
+            501: restored,
+            502: [ready_event("collaborator")],
+        }
+        client.timeline = lambda number: timelines[number]  # type: ignore[method-assign]
+        client.has_open_linked_pull = lambda number, events=None: False  # type: ignore[method-assign]
+
+        self.assertEqual(
+            factory_sweep.eligible_issue_numbers(
+                client, "fairchild", candidates=[{"number": 501}, {"number": 502}]
+            ),
+            [501],
+        )
+
+    def test_staleness_boundary_is_the_owner_release_not_the_restore(self) -> None:
+        # An edit landing between the owner's release and the bot's restore is
+        # still an edit the owner never reviewed.
+        restored = [
+            ready_event("fairchild"),
+            {
+                "event": "labeled",
+                "label": {"name": "ready"},
+                "actor": {"login": "april-clearwater[bot]"},
+                "created_at": "2026-07-15T02:00:00Z",
+            },
+        ]
+        seen: list[str] = []
+
+        def edits(number: int, since: str) -> list[dict[str, object]]:
+            seen.append(since)
+            return [{"editor": {"login": "contributor"}, "editedAt": "2026-07-15T01:00:00Z"}]
+
+        client = factory_sweep.GitHubClient("fairchild/workspaces", "token")
+        client.timeline = lambda number: restored  # type: ignore[method-assign]
+        client.has_open_linked_pull = lambda number, events=None: False  # type: ignore[method-assign]
+        client.user_content_edits_since = edits  # type: ignore[method-assign]
+
+        self.assertEqual(
+            factory_sweep.eligible_issue_numbers(
+                client, "fairchild", candidates=[{"number": 501}]
+            ),
+            [],
+        )
+        self.assertEqual(seen, ["2026-07-15T00:00:00Z"])
+
     def test_filters_out_issues_edited_by_a_non_owner_after_release(self) -> None:
         client = factory_sweep.GitHubClient("fairchild/workspaces", "token")
         client.timeline = lambda number: [ready_event("fairchild")]  # type: ignore[method-assign]
