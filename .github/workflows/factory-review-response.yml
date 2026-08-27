@@ -1,0 +1,78 @@
+# Answers a CHANGES_REQUESTED review on a factory-authored pull request.
+# Owner involvement is soft breakage (#1378): this lane converts a silently
+# parked PR into either "the factory clears this" or an explicit, gesture-named
+# owner escalation. Trusted lane -- runs main's scripts only, never checks out
+# or executes pull-request code, and reaches no model.
+
+name: Factory Review Response
+run-name: "Factory Review Response #${{ github.event.pull_request.number || inputs.pr_number }}"
+
+on:
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Factory pull request whose standing review needs a response"
+        required: true
+        type: number
+
+permissions:
+  contents: read
+  issues: write # PR conversation comments ride the issues API
+  pull-requests: read
+
+concurrency:
+  group: factory-review-response-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    # Same admission shape as the implement lane: kill switches gate every
+    # entry path, manual dispatch is owner-only, and same-repository heads
+    # only -- a fork head must never reach a lane holding App credentials.
+    if: >-
+      (github.event_name == 'workflow_dispatch' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_REVIEW_RESPONSE_ENABLED == 'true') ||
+      (github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'changes_requested' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_REVIEW_RESPONSE_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted scripts
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Generate April app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          permission-issues: write
+          permission-pull-requests: read
+      - name: Respond to the blocking review
+        id: respond
+        env:
+          AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
+          FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          FACTORY_REVIEW_RESPONSE_ENABLED: ${{ vars.FACTORY_REVIEW_RESPONSE_ENABLED }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          REVIEW_ID: ${{ github.event.review.id }}
+        run: |
+          set -euo pipefail
+          ARGS=(--pr "$PR_NUMBER")
+          if [ -n "${REVIEW_ID:-}" ]; then
+            ARGS+=(--review-id "$REVIEW_ID")
+          fi
+          uv run --script scripts/factory-review-response.py "${ARGS[@]}"
