@@ -923,7 +923,7 @@ private final class CLIApp {
     /// the app's automation socket. The seven gesture/read/wait verbs also keep their historical
     /// top-level spellings as aliases (canonicalized in `run` before dispatch).
     private func runAutomation(arguments: [String]) throws -> Int32 {
-        let expected = "health, context, surface, tile, input, window, workspace, wait, focus"
+        let expected = "health, context, surface, tile, input, window, workspace, repo, wait, focus"
         guard let subcommand = arguments.first else {
             throw CLIError("Missing automation subcommand. Expected: \(expected)")
         }

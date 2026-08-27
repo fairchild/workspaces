@@ -193,6 +193,102 @@ struct AutomationSelectVerbTests {
         }
     }
 
+    /// The case a single slot could not express: two windows are open, the newer one closes, and
+    /// the older is still on screen. Clearing on its teardown left the app answering `unsupported`
+    /// to a window the user was looking at (#1375).
+    @Test("closing the newer window leaves the older live window driveable")
+    func closingNewerWindowLeavesOlderWindowDriveable() async throws {
+        let olderWindow = UUID()
+        let newerWindow = UUID()
+        let id = UUID()
+        var droveThrough: [String] = []
+        let registry = AutomationHandleRegistry(makeHandle: { UUID().uuidString })
+        let entry = registry.registerOperator(appScopeID: "workspaces.local")
+        let store = TileTreeStore()
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            gestureVerbs: selectVerbs(id: id, label: "older", into: { droveThrough.append($0) }),
+            windowBoundOwner: olderWindow
+        )
+        controller.update(
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            gestureVerbs: selectVerbs(id: id, label: "newer", into: { droveThrough.append($0) }),
+            windowBoundOwner: newerWindow
+        )
+
+        controller.detachGestureVerbs(owner: newerWindow)
+
+        let result = try await controller.automationSelectWorkspace(
+            for: entry.handle, workspaceID: id.uuidString)
+        #expect(result.outcome == .completed)
+        // The surviving window is the one that drives, not the closed one.
+        #expect(droveThrough == ["older"])
+
+        // And when it too closes, nothing is left to drive.
+        controller.detachGestureVerbs(owner: olderWindow)
+        await expectFailure(.unsupported) {
+            try await controller.automationSelectWorkspace(for: entry.handle, workspaceID: id.uuidString)
+        }
+    }
+
+    /// A `configure` that suspended on the listener can land after its window is gone. The install
+    /// is allowed — nothing cancels it — but a dead window's layer must never be the one a verb
+    /// runs through (#1375).
+    @Test("a configure landing after its window closed does not resurrect it")
+    func lateConfigureFromAClosedWindowIsNotDriveable() async {
+        let departedWindow = UUID()
+        let id = UUID()
+        var drove = false
+        let registry = AutomationHandleRegistry(makeHandle: { UUID().uuidString })
+        let entry = registry.registerOperator(appScopeID: "workspaces.local")
+        let store = TileTreeStore()
+        let controller = AutomationController(
+            handleRegistry: registry,
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in }
+        )
+
+        // The window has already torn down by the time its configure completes.
+        controller.update(
+            tileTreeStore: store,
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in },
+            gestureVerbs: selectVerbs(id: id, label: "departed", into: { _ in drove = true }),
+            windowBoundOwner: departedWindow,
+            isWindowLive: { false }
+        )
+
+        await expectFailure(.unsupported) {
+            try await controller.automationSelectWorkspace(for: entry.handle, workspaceID: id.uuidString)
+        }
+        #expect(!drove)
+    }
+
+    private func selectVerbs(
+        id: UUID,
+        label: String,
+        into record: @escaping @MainActor (String) -> Void
+    ) -> AutomationGestureVerbs {
+        AutomationGestureVerbs(
+            resolveWorkspace: { [id] in
+                $0 == id
+                    ? AutomationGestureVerbs.WorkspaceTarget(workspaceID: id, name: "ws", isArchived: false)
+                    : nil
+            },
+            performSelection: { _ in
+                record(label)
+                return AutomationWorkspaceSelectEffect(
+                    selectedWorkspaceID: id, attachedSurfaceID: UUID(), attachedTerminal: true)
+            }
+        )
+    }
+
     @Test("detaching the gesture layer (window gone) makes select unsupported, not a stale drive")
     func detachedGestureLayerIsUnsupported() async throws {
         var drove = false

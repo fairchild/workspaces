@@ -1602,6 +1602,62 @@ struct AutomationAPITests {
         #expect(json.contains("\"providerID\":\"lume\""))
     }
 
+    @Test("POST /v1/repo/terminal routes, reports the attach, and enforces the capability")
+    @MainActor
+    func routerRepoTerminal() async throws {
+        let controller = FakeAutomationController()
+
+        func post(_ handle: String?, body: Data, method: String = "POST") async -> AutomationHTTPResult {
+            var headers: [String: String] = [:]
+            if let handle { headers[AutomationAPI.handleHeader] = handle }
+            return await AutomationHTTPRouter.route(
+                HTTPRequest(method: method, path: "/v1/repo/terminal", headers: headers, body: body),
+                controller: controller,
+                enabled: true
+            )
+        }
+
+        let repoID = UUID()
+        let ok = await post("operator", body: Data("{\"repoID\":\"\(repoID.uuidString)\"}".utf8))
+        let okEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationRepoTerminalResult>.self, from: ok.body)
+        #expect(ok.status == 200)
+        #expect(okEnvelope.result?.repoID == repoID)
+        #expect(okEnvelope.result?.attachedTerminal == true)
+        #expect(okEnvelope.result?.system.capabilities.contains(.repoTerminal) == true)
+
+        // Broken JSON and a missing field are different caller mistakes and report differently.
+        let malformed = await post("operator", body: Data("{broken".utf8))
+        let malformedEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: malformed.body)
+        #expect(malformedEnvelope.error?.code == .malformedJSON)
+
+        let missing = await post("operator", body: Data("{}".utf8))
+        let missingEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: missing.body)
+        #expect(missing.status == 400)
+        #expect(missingEnvelope.error?.code == .invalidRequest)
+
+        let empty = await post("operator", body: Data())
+        let emptyEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: empty.body)
+        #expect(empty.status == 400)
+        #expect(emptyEnvelope.error?.code == .invalidRequest)
+
+        // A tile handle carries no repo.terminal: opening a repo terminal is operator-only.
+        let tile = await post("live", body: Data("{\"repoID\":\"\(repoID.uuidString)\"}".utf8))
+        let tileEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: tile.body)
+        #expect(tile.status == 403)
+        #expect(tileEnvelope.error?.code == .capabilityDenied)
+
+        let wrongMethod = await post("operator", body: Data(), method: "GET")
+        let wrongMethodEnvelope = try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationEmptyResult>.self, from: wrongMethod.body)
+        #expect(wrongMethod.status == 405)
+        #expect(wrongMethodEnvelope.error?.code == .methodNotAllowed)
+    }
+
     @Test("POST /v1/workspace/note stores the normalized note and enforces the capability")
     @MainActor
     func routerWorkspaceNote() async throws {

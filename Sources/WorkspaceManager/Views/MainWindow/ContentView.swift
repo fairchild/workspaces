@@ -112,6 +112,9 @@ struct ContentView: View {
     /// This window's identity for the automation layer it installs. Windows overlap, so a
     /// teardown has to name which window is going away or it cuts a live one off (#1375).
     @State private var automationWindowToken = UUID()
+    /// Outlives the view value so a `configure` that suspended on the listener cannot reinstall
+    /// this window's closures after it is gone; the controller reads it before running a verb.
+    @State private var automationWindowLifetime = MainWindowWindowLifetime()
     @AppStorage(TerminalRestoreBannerStorage.handledRunIDKey)
     private var restoreHandledRunID = ""
     @State private var isShowingFeedbackSheet = false
@@ -935,6 +938,7 @@ struct ContentView: View {
             // mutation verb fails closed (unsupported) instead of driving a stale selection
             // gesture while the app lingers as an accessory. Reappearing reinstalls it via onAppear.
             detachAutomationGestureVerbs: {
+                automationWindowLifetime.noteWindowTornDown()
                 AutomationIntegrationLifecycle.shared.detachGestureVerbs(owner: automationWindowToken)
             }
         )
@@ -944,6 +948,7 @@ struct ContentView: View {
         splitViewWithToolbar
             .onAppear {
                 launchWorkLifetime.noteWindowAppeared()
+                automationWindowLifetime.noteWindowAppeared()
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
@@ -1842,6 +1847,7 @@ struct ContentView: View {
             },
             gestureVerbs: automationGestureVerbs.makeVerbs(),
             windowBoundOwner: automationWindowToken,
+            isWindowLive: { [automationWindowLifetime] in !automationWindowLifetime.isTornDown },
             uiState: {
                 AutomationUIStateEnumerator.capture(
                     repos: repos,

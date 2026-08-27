@@ -324,17 +324,31 @@ enum AutomationHTTPRouter {
         return AutomationWorkspaceArchiveRequest(workspaceID: workspaceID, teardownTerminals: teardownTerminals)
     }
 
-    /// A `note` key that is present but not a string is a caller error, while an absent
-    /// key and an explicit null both mean "clear it" — the shape a caller reaches for
-    /// when they want the line gone.
+    /// Decodes `POST /v1/repo/terminal`. Broken JSON reports `malformed_json` rather than being
+    /// swallowed into "no repoID": the two are different caller mistakes, and every sibling
+    /// decoder here already distinguishes them.
     private static func decodeRepoTerminal(from body: Data) throws -> AutomationRepoTerminalRequest {
-        let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+        guard !body.isEmpty else {
+            throw AutomationServiceError(.invalidRequest, "Request body must include a repoID.")
+        }
+        let parsed: Any
+        do {
+            parsed = try JSONSerialization.jsonObject(with: body)
+        } catch {
+            throw AutomationServiceError(.malformedJSON, "Request body is not valid JSON.")
+        }
+        guard let object = parsed as? [String: Any] else {
+            throw AutomationServiceError(.invalidRequest, "Request body must be a JSON object.")
+        }
         guard let repoID = object["repoID"] as? String, !repoID.isEmpty else {
             throw AutomationServiceError(.invalidRequest, "Request body must include a 'repoID' string.")
         }
         return AutomationRepoTerminalRequest(repoID: repoID)
     }
 
+    /// A `note` key that is present but not a string is a caller error, while an absent
+    /// key and an explicit null both mean "clear it" — the shape a caller reaches for
+    /// when they want the line gone.
     private static func decodeWorkspaceNote(from body: Data) throws -> AutomationWorkspaceNoteRequest {
         let workspaceID = try decodeWorkspaceID(from: body)
         let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
