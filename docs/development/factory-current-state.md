@@ -41,7 +41,7 @@ Live values as of 2026-08-04 (`gh variable list --repo fairchild/workspaces`):
 | `FACTORY_MONITOR_ENABLED` | `true` | Monitor lane |
 | `FACTORY_RESPONDER_ENABLED` | `true` | Owner Comment Responder lane |
 | `FACTORY_EVIDENCE_VERIFY_ENABLED` | `true` | Evidence Verify lane |
-| `FACTORY_REVIEW_RESPONSE_ENABLED` | _unset_ | Review Response lane — unset reads as off; `gh variable set FACTORY_REVIEW_RESPONSE_ENABLED --body true` arms it |
+| `FACTORY_REVIEW_RESPONSE_ENABLED` | `false` | Review Response lane — registered so the drift gate passes, but off; `gh variable set FACTORY_REVIEW_RESPONSE_ENABLED --body true` arms it |
 
 `APPLE_ID`, `APPLE_TEAM_ID`, and `PREFERRED_RUNNER` also show up in `gh variable list` but are release/runner configuration, not Factory switches.
 
