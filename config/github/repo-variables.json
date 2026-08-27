@@ -3,5 +3,6 @@
   "FACTORY_IMPLEMENT_ENABLED": "Gates .github/workflows/factory-implement.yml and the standing-queue sweep step in factory-monitor.yml.",
   "FACTORY_MONITOR_ENABLED": "Gates .github/workflows/factory-monitor.yml.",
   "FACTORY_RESPONDER_ENABLED": "Gates .github/workflows/factory-comment-responder.yml.",
-  "FACTORY_REVIEW_ENABLED": "Gates .github/workflows/factory-review.yml and factory-review-execute.yml."
+  "FACTORY_REVIEW_ENABLED": "Gates .github/workflows/factory-review.yml and factory-review-execute.yml.",
+  "FACTORY_REVIEW_RESPONSE_ENABLED": "Gates .github/workflows/factory-review-response.yml (the CHANGES_REQUESTED response turn)."
 }
