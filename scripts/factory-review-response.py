@@ -370,9 +370,10 @@ def evaluate_response(
                 key="revision-required",
                 owner_required=True,
                 detail=(
-                    "**A change to the diff was requested.** Nothing in this PR's "
-                    "machine-readable state (evidence entries, blocking labels) "
-                    "accounts for the review, so the requested change is to the code "
+                    "**A change to the diff was requested.** Nothing the owner can "
+                    "act on in this PR's machine-readable state (evidence entries, "
+                    "blocking labels) accounts for the review, so the requested "
+                    "change is to the code "
                     f"or prose itself. The factory has no contributor revision loop "
                     f"yet ({REVISION_LOOP_ISSUE}): push the revision, or re-release "
                     "the linked issue with the review's feedback folded into it."
