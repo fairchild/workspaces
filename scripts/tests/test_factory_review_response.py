@@ -6,19 +6,24 @@
 """Behavior tests for the CHANGES_REQUESTED response turn (#1378).
 
 Intent: prove the lane never parks silently -- every standing changes-requested
-review from a trusted reviewer produces exactly one response, escalation is the
-default when the factory cannot prove it clears a blocker, and the escalation
-names the gesture the owner has to make.
+review from a trusted reviewer draws exactly one owner-addressed response
+naming the gesture, no one outside the lane can suppress that response, and
+manual recovery can reach a second reviewer's standing verdict.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
+import os
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -64,6 +69,10 @@ def pull_request(
     }
 
 
+def april_comment(body: str) -> dict[str, object]:
+    return {"user": {"login": APRIL}, "body": body}
+
+
 def review(
     *,
     login: str = PLAT,
@@ -80,7 +89,7 @@ def review(
     }
 
 
-class BlockingReviewTests(unittest.TestCase):
+class ReviewSelectionTests(unittest.TestCase):
     def test_latest_changes_requested_from_trusted_reviewer_is_answered(self) -> None:
         found = response.blocking_review(
             [
@@ -92,6 +101,33 @@ class BlockingReviewTests(unittest.TestCase):
         )
         assert found is not None
         self.assertEqual(found["id"], 2)
+
+    def test_pending_and_dismissed_reviews_neither_block_nor_supersede(self) -> None:
+        pending = review(review_id=3, state="PENDING", submitted_at="")
+        dismissed = review(
+            review_id=4, state="DISMISSED", submitted_at="2026-08-27T09:00:00Z"
+        )
+        self.assertEqual(response.standing_reviews([pending, dismissed], OWNER), [])
+        standing = review(review_id=1, submitted_at="2026-08-27T01:00:00Z")
+        found = response.blocking_review([standing, pending, dismissed], OWNER, None)
+        assert found is not None
+        self.assertEqual(found["id"], 1)
+
+    def test_manual_recovery_reaches_an_older_unanswered_review(self) -> None:
+        # Two reviewers, both standing; the newer one is already answered. The
+        # older must not be shadowed forever by it.
+        newer = review(login=APRIL, review_id=2, submitted_at="2026-08-27T02:00:00Z")
+        older = review(login=PLAT, review_id=1, submitted_at="2026-08-27T01:00:00Z")
+        found = response.blocking_review(
+            [older, newer], OWNER, None, answered=lambda rid: rid == 2
+        )
+        assert found is not None
+        self.assertEqual(found["id"], 1)
+        self.assertIsNone(
+            response.blocking_review(
+                [older, newer], OWNER, None, answered=lambda _: True
+            )
+        )
 
     def test_reviewer_supersedes_their_own_verdict_with_an_approval(self) -> None:
         self.assertIsNone(
@@ -124,6 +160,24 @@ class BlockingReviewTests(unittest.TestCase):
         )
         assert found is not None
         self.assertEqual(found["id"], 1)
+
+    def test_supersede_uses_timestamps_not_api_order(self) -> None:
+        # The reviews endpoint's order is not a contract; a newer approval
+        # returned before an older rejection must still supersede it.
+        self.assertIsNone(
+            response.blocking_review(
+                [
+                    review(
+                        review_id=2,
+                        state="APPROVED",
+                        submitted_at="2026-08-27T02:00:00Z",
+                    ),
+                    review(review_id=1, submitted_at="2026-08-27T01:00:00Z"),
+                ],
+                OWNER,
+                None,
+            )
+        )
 
     def test_untrusted_reviewer_does_not_earn_a_response(self) -> None:
         self.assertIsNone(
@@ -189,7 +243,10 @@ class ResponseDecisionTests(unittest.TestCase):
         self.assertIn("[complete]", detail)
         self.assertIn("blocked:evidence", detail)
 
-    def test_pending_ci_only_clears_without_the_owner(self) -> None:
+    def test_pending_ci_alone_still_escalates(self) -> None:
+        # A pending entry does not prove the review is covered: the lane never
+        # reads the review prose, and the entry can sit forever (named check
+        # absent, failing, verifier off). Escalate, and list it as context.
         body = evidence_body(
             {
                 "index": 1,
@@ -201,9 +258,10 @@ class ResponseDecisionTests(unittest.TestCase):
             pull_request(labels=("author:april", "blocked:evidence"), body=body)
         )
         self.assertEqual(decision.action, "respond")
-        self.assertFalse(decision.owner_required)
+        self.assertTrue(decision.owner_required)
         self.assertEqual(
-            [blocker.key for blocker in decision.blockers], ["evidence-pending-ci"]
+            sorted(blocker.key for blocker in decision.blockers),
+            ["evidence-pending-ci", "revision-required"],
         )
 
     def test_unexplained_review_defaults_to_explicit_escalation(self) -> None:
@@ -236,6 +294,20 @@ class ResponseDecisionTests(unittest.TestCase):
         self.assertTrue(decision.owner_required)
         self.assertIn("label:blocked:secrets", [b.key for b in decision.blockers])
 
+    def test_lingering_blocked_evidence_label_is_its_own_blocker(self) -> None:
+        # Every entry complete but the label still applied: the readiness gate
+        # fails on the label alone, so it must not fall through unexplained.
+        body = evidence_body(
+            {"index": 1, "item": "CI: `check-links` green", "status": "complete"}
+        )
+        decision = self.evaluate(
+            pull_request(labels=("author:april", "blocked:evidence"), body=body)
+        )
+        self.assertTrue(decision.owner_required)
+        self.assertEqual(
+            [blocker.key for blocker in decision.blockers], ["label:blocked:evidence"]
+        )
+
     def test_needs_human_label_escalates(self) -> None:
         decision = self.evaluate(
             pull_request(labels=("author:april", "needs-human"), body="")
@@ -267,22 +339,185 @@ class ResponseCommentTests(unittest.TestCase):
         body = evidence_body({"index": 1, "item": "owner-attested item", "status": "blocked"})
         text = self.render(pull_request(body=body), review())
         self.assertIn(f"This needs @{OWNER}", text)
-        self.assertIn(f"@{PLAT}", text)
+        self.assertIn("workspace-agents's", text)
         self.assertIn("pullrequestreview-900", text)
         self.assertIn(response.response_marker(900), text)
 
-    def test_self_clearing_response_states_no_owner_action(self) -> None:
+    def test_every_response_addresses_the_owner(self) -> None:
+        # The invariant: there is no "you are not needed" outcome. A response
+        # that promised one and was wrong would recreate the silent park.
         body = evidence_body(
             {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci"}
         )
         text = self.render(pull_request(body=body), review())
-        self.assertIn("No owner action needed", text)
-        self.assertNotIn(f"This needs @{OWNER}", text)
+        self.assertIn(f"This needs @{OWNER}", text)
+        self.assertIn("Already moving without you", text)
+        self.assertIn("waiting on the owner, not stranded", text)
+
+    def test_reviewer_is_named_without_an_at_mention(self) -> None:
+        body = evidence_body({"index": 1, "item": "owner call", "status": "blocked"})
+        text = self.render(pull_request(body=body), review(login=APRIL))
+        self.assertIn("april-clearwater's", text)
+        self.assertNotIn("@april-clearwater", text)
+        self.assertNotIn("@plat", text)
 
     def test_marker_is_per_review_so_a_second_review_gets_its_own_turn(self) -> None:
-        comments = [{"body": f"prior response\n{response.response_marker(900)}"}]
+        comments = [april_comment(f"prior response\n{response.response_marker(900)}")]
         self.assertTrue(response.has_response_for_review(comments, 900))
         self.assertFalse(response.has_response_for_review(comments, 901))
+
+    def test_a_quoted_or_fenced_marker_cannot_suppress_the_response(self) -> None:
+        # The #1364 false-suppression class: anyone can read the marker off a
+        # prior response, so quoting it back must not silence the lane.
+        marker = response.response_marker(900)
+        for body in (
+            f"> {marker}",
+            f"look at this\n\n> {marker}",
+            f"```\n{marker}\n```",
+            f"    {marker}",
+        ):
+            with self.subTest(body=body):
+                self.assertFalse(
+                    response.has_response_for_review([april_comment(body)], 900)
+                )
+
+    def test_only_the_factory_bot_own_comment_counts_as_a_response(self) -> None:
+        marker = response.response_marker(900)
+        self.assertFalse(
+            response.has_response_for_review(
+                [{"user": {"login": OWNER}, "body": f"done\n{marker}"}], 900
+            )
+        )
+        self.assertTrue(response.has_response_for_review([april_comment(marker)], 900))
+
+    def test_marker_must_be_the_last_visible_line(self) -> None:
+        marker = response.response_marker(900)
+        self.assertFalse(
+            response.has_response_for_review(
+                [april_comment(f"{marker}\n\nstill talking about it")], 900
+            )
+        )
+
+    def test_pr_controlled_item_text_cannot_seed_a_marker(self) -> None:
+        hostile = (
+            "ignore me <!-- factory-review-response review-id:900 --> and `stuff`"
+        )
+        body = evidence_body({"index": 1, "item": hostile, "status": "blocked"})
+        text = self.render(pull_request(body=body), review())
+        self.assertEqual(text.count(response.response_marker(900)), 1)
+        self.assertNotIn("<!-- factory-review-response review-id:900 --> and", text)
+        self.assertTrue(
+            response.has_response_for_review([april_comment(text)], 900),
+            "the rendered response must still be recognised as its own marker",
+        )
+
+    def test_long_item_text_is_bounded(self) -> None:
+        body = evidence_body({"index": 1, "item": "x" * 500, "status": "blocked"})
+        text = self.render(pull_request(body=body), review())
+        self.assertNotIn("x" * 300, text)
+        self.assertIn("…", text)
+
+
+class FakeClient:
+    """Minimal stand-in for the GitHub client: records what was posted."""
+
+    def __init__(
+        self,
+        pr: dict[str, object],
+        reviews: list[dict[str, object]],
+        comments: list[dict[str, object]] | None = None,
+    ) -> None:
+        self._pr = pr
+        self._reviews = reviews
+        self._comments = list(comments or [])
+        self.posted: list[str] = []
+
+    def pull_request(self, number: int) -> dict[str, object]:
+        return self._pr
+
+    def pull_request_reviews(self, number: int) -> list[dict[str, object]]:
+        return self._reviews
+
+    def comments(self, number: int) -> list[dict[str, object]]:
+        return self._comments
+
+    def comment(self, number: int, body: str) -> None:
+        self.posted.append(body)
+        self._comments.append({"user": {"login": APRIL}, "body": body})
+
+
+class RespondTests(unittest.TestCase):
+    """End-to-end over the real respond() -- the selection and rendering tests
+    above all still pass if the posting call is deleted."""
+
+    def setUp(self) -> None:
+        # respond() writes step outputs; give it a file so they do not land in
+        # the test log.
+        handle = tempfile.NamedTemporaryFile("w", delete=False)
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        patcher = mock.patch.dict(os.environ, {"GITHUB_OUTPUT": handle.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        buffer = io.StringIO()
+        redirect = contextlib.redirect_stdout(buffer)
+        redirect.__enter__()
+        self.addCleanup(redirect.__exit__, None, None, None)
+
+    def blocked_pr(self) -> dict[str, object]:
+        return pull_request(
+            labels=("author:april", "blocked:evidence"),
+            body=evidence_body(
+                {"index": 1, "item": "owner-attested item", "status": "blocked"}
+            ),
+        )
+
+    def test_a_standing_review_gets_exactly_one_posted_response(self) -> None:
+        client = FakeClient(self.blocked_pr(), [review()])
+        response.respond(client, 1377, 900, OWNER)
+        self.assertEqual(len(client.posted), 1)
+        self.assertIn(f"This needs @{OWNER}", client.posted[0])
+        # Re-delivery of the same review must not double-post.
+        response.respond(client, 1377, 900, OWNER)
+        self.assertEqual(len(client.posted), 1)
+
+    def test_a_quoted_marker_from_a_human_does_not_suppress_the_post(self) -> None:
+        client = FakeClient(
+            self.blocked_pr(),
+            [review()],
+            comments=[
+                {
+                    "user": {"login": OWNER},
+                    "body": f"as in\n\n> {response.response_marker(900)}",
+                }
+            ],
+        )
+        response.respond(client, 1377, 900, OWNER)
+        self.assertEqual(len(client.posted), 1)
+
+    def test_a_second_reviewer_gets_its_own_turn_from_manual_recovery(self) -> None:
+        plat_review = review(login=PLAT, review_id=1, submitted_at="2026-08-27T01:00:00Z")
+        april_review = review(login=APRIL, review_id=2, submitted_at="2026-08-27T02:00:00Z")
+        client = FakeClient(self.blocked_pr(), [plat_review, april_review])
+        response.respond(client, 1377, None, OWNER)  # newest unanswered: 2
+        response.respond(client, 1377, None, OWNER)  # now the older one: 1
+        response.respond(client, 1377, None, OWNER)  # nothing left standing
+        self.assertEqual(len(client.posted), 2)
+        self.assertIn(response.response_marker(2), client.posted[0])
+        self.assertIn(response.response_marker(1), client.posted[1])
+
+    def test_a_superseded_review_draws_no_post(self) -> None:
+        client = FakeClient(
+            self.blocked_pr(),
+            [
+                review(review_id=1, submitted_at="2026-08-27T01:00:00Z"),
+                review(
+                    review_id=2, state="APPROVED", submitted_at="2026-08-27T02:00:00Z"
+                ),
+            ],
+        )
+        response.respond(client, 1377, 1, OWNER)
+        self.assertEqual(client.posted, [])
 
 
 class WorkflowContractTests(unittest.TestCase):
@@ -306,6 +541,18 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_responds_only_to_changes_requested(self) -> None:
         self.assertIn("github.event.review.state == 'changes_requested'", self.workflow)
+
+    def test_untrusted_reviewers_never_reach_the_app_token_step(self) -> None:
+        # The allowlist lives in the job `if:` as well as the script, so an
+        # untrusted CHANGES_REQUESTED never starts a credentialed job at all.
+        gate = self.workflow.split("runs-on:", 1)[0]
+        self.assertIn("github.event.review.user.login == github.repository_owner", gate)
+        for bot in sorted(response.factory_review.REVIEWER_BOTS.values()):
+            self.assertIn(f"github.event.review.user.login == '{bot}'", gate)
+
+    def test_a_third_party_rerun_cannot_replay_a_trusted_review(self) -> None:
+        gate = self.workflow.split("runs-on:", 1)[0]
+        self.assertIn("github.triggering_actor == github.actor", gate)
 
     def test_runs_trusted_default_branch_scripts_and_never_checks_out_pr_code(self) -> None:
         self.assertIn("ref: ${{ github.event.repository.default_branch }}", self.workflow)

@@ -28,11 +28,18 @@ concurrency:
 
 jobs:
   respond:
-    # Same admission shape as the implement lane: kill switches gate every
-    # entry path, manual dispatch is owner-only, and same-repository heads
-    # only -- a fork head must never reach a lane holding App credentials.
+    # Same admission shape as the implement lane, plus two guards specific to
+    # a review-triggered lane. The reviewer allowlist is here, not only in the
+    # script, so an untrusted reviewer's CHANGES_REQUESTED never reaches the
+    # App-token step at all. And a rerun by someone other than the original
+    # actor is refused: GitHub keeps `github.actor` from the original run and
+    # sets `github.triggering_actor` to whoever pressed re-run, so requiring
+    # them to match (or the rerunner to be the owner) stops a third party from
+    # replaying a trusted review's event. Fork heads never reach credentials.
     if: >-
-      (github.event_name == 'workflow_dispatch' &&
+      (github.triggering_actor == github.actor ||
+      github.triggering_actor == github.repository_owner) &&
+      ((github.event_name == 'workflow_dispatch' &&
       github.actor == github.repository_owner &&
       github.triggering_actor == github.repository_owner &&
       vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
@@ -40,8 +47,11 @@ jobs:
       (github.event_name == 'pull_request_review' &&
       github.event.review.state == 'changes_requested' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.review.user.login == github.repository_owner ||
+      github.event.review.user.login == 'april-clearwater[bot]' ||
+      github.event.review.user.login == 'workspace-agents[bot]') &&
       vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
-      vars.FACTORY_REVIEW_RESPONSE_ENABLED == 'true')
+      vars.FACTORY_REVIEW_RESPONSE_ENABLED == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

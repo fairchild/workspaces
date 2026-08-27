@@ -9,10 +9,12 @@ Owner involvement is soft breakage (#1378): before this lane, a
 CHANGES_REQUESTED review on a factory-authored PR simply stopped the loop and
 the owner became the default advancing party, indistinguishable from a
 stranded PR. This lane reads the blocking review, inventories what actually
-blocks the PR, and posts exactly one response per review -- either "the
-factory clears these itself" or "this needs @owner because X", naming the
-gesture. Escalation is the default: a blocker the factory cannot prove it
-will clear is always escalated explicitly, never parked in silence.
+blocks the PR, and posts exactly one response per review naming what the
+owner has to do. Every response is an escalation: the lane cannot read the
+review's prose, so it can never prove an objection is fully covered by
+something that clears on its own, and claiming otherwise would recreate the
+silent park it exists to remove. Blockers it does expect to clear are still
+listed, as context under the ask.
 
 Deterministic by construction -- no model, no tools, no untrusted text
 reaching an executor. It only reads PR state the factory already writes
@@ -25,6 +27,7 @@ import argparse
 import importlib.util
 import os
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -60,10 +63,24 @@ factory_implement = _load_sibling(
 factory_review = _load_sibling(
     "factory_review_for_review_response", "factory-review.py"
 )
+# Quote/code handling is the #1364 lesson: a marker inside a blockquote, a
+# fence, or an indented block is text a human wrote *about* the factory, not a
+# marker the factory wrote. Reuse that reader instead of a substring search.
+factory_responder = _load_sibling(
+    "factory_responder_for_review_response", "factory-responder-payload.py"
+)
 
 APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
+RESPONDER_BOT = "april-clearwater[bot]"
 RESPONSE_MARKER_PREFIX = "<!-- factory-review-response review-id:"
+# Evidence item text is PR-controlled. It is quoted back so the escalation
+# names the line the owner has to edit, so it is neutralized first: HTML
+# comment delimiters would let PR text seed a marker inside April's own
+# comment, and an unbounded item would let it dominate the response.
+ITEM_QUOTE_LIMIT = 160
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
+# States that neither block nor replace a reviewer's standing verdict.
+NON_SUPERSEDING_REVIEW_STATES = frozenset({"COMMENTED", "PENDING", "DISMISSED"})
 BLOCKED_EVIDENCE_LABEL = "blocked:evidence"
 NEEDS_HUMAN_LABEL = "needs-human"
 # The contributor revision loop (#1125) is the missing capability behind every
@@ -140,40 +157,67 @@ def trusted_reviewers(repository_owner: str) -> set[str]:
     }
 
 
-def blocking_review(
+def standing_reviews(
     reviews: list[dict[str, Any]],
     repository_owner: str,
-    review_id: int | None,
-) -> dict[str, Any] | None:
-    """The trusted CHANGES_REQUESTED review this lane should answer.
+) -> list[dict[str, Any]]:
+    """Trusted CHANGES_REQUESTED verdicts that still stand, oldest first.
 
     A reviewer's later review supersedes their earlier one, so only each
-    trusted reviewer's most recent review counts -- answering a verdict the
-    reviewer has already replaced would re-park a PR that moved on.
+    trusted reviewer's most recent submitted, non-`COMMENTED` review counts --
+    answering a verdict the reviewer already replaced would re-park a PR that
+    moved on. `PENDING` reviews have not been submitted (GitHub leaves their
+    `submitted_at` null) and `DISMISSED` ones no longer block, so neither can
+    stand or supersede.
     """
     trusted = trusted_reviewers(repository_owner)
     latest_by_reviewer: dict[str, dict[str, Any]] = {}
-    for review in reviews:
+    # Sorted by submitted_at rather than read in list order: which verdict is
+    # "latest" decides whether it still stands, so it comes from the
+    # timestamps, not from pagination.
+    for review in sorted(reviews, key=lambda item: str(item.get("submitted_at") or "")):
         login = str((review.get("user") or {}).get("login") or "").casefold()
         if login not in trusted:
             continue
-        if str(review.get("state") or "").upper() == "COMMENTED":
-            # A comment-only review never changes a reviewer's standing
-            # verdict on GitHub, so it must not displace one here either.
+        state = str(review.get("state") or "").upper()
+        if state in NON_SUPERSEDING_REVIEW_STATES:
             continue
         latest_by_reviewer[login] = review
-    blocking = [
+    return [
         review
         for review in latest_by_reviewer.values()
         if str(review.get("state") or "").upper() == CHANGES_REQUESTED
     ]
+
+
+def blocking_review(
+    reviews: list[dict[str, Any]],
+    repository_owner: str,
+    review_id: int | None,
+    *,
+    answered: Callable[[int], bool] = lambda _: False,
+) -> dict[str, Any] | None:
+    """The review this run should answer.
+
+    With an explicit id (the webhook path), only that review qualifies, and
+    only while it still stands. Without one (manual recovery), the newest
+    review that has no response yet -- not simply the newest -- so a second
+    reviewer's standing verdict cannot be permanently shadowed by an
+    already-answered newer one.
+    """
+    standing = sorted(
+        standing_reviews(reviews, repository_owner),
+        key=lambda item: str(item.get("submitted_at") or ""),
+    )
     if review_id is not None:
         return next(
-            (review for review in blocking if int(review.get("id") or 0) == review_id),
+            (review for review in standing if int(review.get("id") or 0) == review_id),
             None,
         )
-    blocking.sort(key=lambda review: str(review.get("submitted_at") or ""))
-    return blocking[-1] if blocking else None
+    unanswered = [
+        review for review in standing if not answered(int(review.get("id") or 0))
+    ]
+    return unanswered[-1] if unanswered else None
 
 
 def evidence_entries(body: str) -> list[dict[str, Any]]:
@@ -186,9 +230,25 @@ def evidence_entries(body: str) -> list[dict[str, Any]]:
     return [entry for entry in entries if isinstance(entry, dict)]
 
 
+def _quotable(text: str) -> str:
+    """PR-controlled text, safe to place inside April's own comment.
+
+    HTML comment delimiters come out first: leaving them in would let a PR
+    body seed a response marker inside the very comment the marker is meant
+    to identify. Backticks and newlines go too, so a quoted item cannot break
+    out of the line it sits on, and the result is bounded.
+    """
+    flattened = " ".join(
+        text.replace("<!--", "").replace("-->", "").replace("`", "").split()
+    )
+    if len(flattened) <= ITEM_QUOTE_LIMIT:
+        return flattened
+    return flattened[: ITEM_QUOTE_LIMIT - 1].rstrip() + "…"
+
+
 def _entry_label(entry: dict[str, Any]) -> str:
     index = entry.get("index")
-    item = str(entry.get("item") or "").strip()
+    item = _quotable(str(entry.get("item") or ""))
     return f"item {index} (\"{item}\")" if item else f"item {index}"
 
 
@@ -234,7 +294,7 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
     return blockers
 
 
-def label_blockers(labels: set[str], entries: list[dict[str, Any]]) -> list[Blocker]:
+def label_blockers(labels: set[str], *, evidence_accounted: bool) -> list[Blocker]:
     blockers: list[Blocker] = []
     if NEEDS_HUMAN_LABEL in labels:
         blockers.append(
@@ -249,9 +309,11 @@ def label_blockers(labels: set[str], entries: list[dict[str, Any]]) -> list[Bloc
             )
         )
     for label in sorted(label for label in labels if label.startswith("blocked:")):
-        if label == BLOCKED_EVIDENCE_LABEL and entries:
+        if label == BLOCKED_EVIDENCE_LABEL and evidence_accounted:
             # Already accounted for entry-by-entry above, where the gesture can
-            # name the specific evidence lines rather than the label alone.
+            # name the specific evidence lines rather than the label alone. A
+            # label left behind with nothing pending or blocked to explain it is
+            # its own blocker -- the readiness gate fails on the label alone.
             continue
         blockers.append(
             Blocker(
@@ -291,16 +353,18 @@ def evaluate_response(
 
     labels = factory_implement.label_names(pull_request)
     entries = evidence_entries(str(pull_request.get("body") or ""))
-    blockers = evidence_blockers(entries) + label_blockers(labels, entries)
-    if not blockers:
-        # Nothing in the machine-readable state explains the objection --
-        # almost always a change to the diff itself. Defaulting to escalation
-        # here is the whole point: an unexplained objection must surface as an
-        # explicit owner ask, not as silence. A review that objects to *both*
-        # a self-clearing blocker and the diff still reads as self-clearing on
-        # this turn; it converges on the next one, because once the blocker
-        # clears and the counterpart re-reviews, the standing objection has
-        # nothing left to explain it and lands here.
+    evidence = evidence_blockers(entries)
+    blockers = evidence + label_blockers(labels, evidence_accounted=bool(evidence))
+    if not any(blocker.owner_required for blocker in blockers):
+        # Nothing owner-required explains the objection, so the requested
+        # change is to the diff itself. A self-clearing blocker is not proof
+        # the review is covered: the lane never reads the review's prose, and
+        # a `pending-ci` entry can also sit forever (the named check may not
+        # exist, may fail, or the verifier may be off or already past its last
+        # check_suite event). Escalating anyway is the fail-safe direction --
+        # a needless ask costs the owner a glance; a false "you are not
+        # needed" costs a parked PR, which is the failure this lane exists to
+        # remove.
         blockers.append(
             Blocker(
                 key="revision-required",
@@ -322,9 +386,38 @@ def response_marker(review_id: int) -> str:
     return f"{RESPONSE_MARKER_PREFIX}{review_id} -->"
 
 
+def is_response_comment(comment: dict[str, Any], review_id: int) -> bool:
+    """True only for a response this lane actually posted for `review_id`.
+
+    Author-bound and position-bound. A substring search over every comment
+    body would let anyone silence the lane by quoting the marker back --
+    exactly the false-suppression class #1364 closed for the owner-comment
+    responder, whose quote/code reader is reused here. The marker must be the
+    last line that renders outside blockquotes, fences, and indented blocks.
+    """
+    author = str((comment.get("user") or {}).get("login") or "")
+    if author.casefold() != RESPONDER_BOT.casefold():
+        return False
+    visible = factory_responder._unquoted_visible_lines(str(comment.get("body") or ""))
+    return bool(visible) and visible[-1].strip() == response_marker(review_id)
+
+
 def has_response_for_review(comments: list[dict[str, Any]], review_id: int) -> bool:
-    marker = response_marker(review_id)
-    return any(marker in str(comment.get("body") or "") for comment in comments)
+    return any(is_response_comment(comment, review_id) for comment in comments)
+
+
+def reviewer_name(review: dict[str, Any]) -> str:
+    """The reviewer as plain text, never as an `@` mention.
+
+    Mention triage watches comment bodies for agent slugs. It already excludes
+    bot senders, so April mentioning a reviewer bot would not dispatch
+    anything today -- but writing the slug at all leaves a trigger surface for
+    a future gate to widen onto, and the reviewer gains nothing from the ping.
+    """
+    login = str((review.get("user") or {}).get("login") or "").strip()
+    if not login:
+        return "the reviewer"
+    return login.removesuffix("[bot]")
 
 
 def response_comment(
@@ -333,40 +426,25 @@ def response_comment(
     *,
     repository_owner: str,
 ) -> str:
-    reviewer = str((review.get("user") or {}).get("login") or "a reviewer")
     review_url = str(review.get("html_url") or "").strip()
     reference = f"[requested changes]({review_url})" if review_url else "requested changes"
     owner_lines = [b.detail for b in decision.blockers if b.owner_required]
-    factory_lines = [b.detail for b in decision.blockers if not b.owner_required]
+    self_clearing = [b.detail for b in decision.blockers if not b.owner_required]
 
     lines = [APRIL_ATTRIBUTION.rstrip("\n"), ""]
-    lines.append(f"Read @{reviewer}'s {reference}.")
-    lines.append("")
-    if owner_lines:
-        lines.append(f"**This needs @{repository_owner}** — the factory cannot clear it:")
-        lines.append("")
-        lines += [f"- {line}" for line in owner_lines]
-        if factory_lines:
-            lines += ["", "Clearing on its own, no action needed:", ""]
-            lines += [f"- {line}" for line in factory_lines]
-        lines += [
-            "",
-            "Once those gestures land, ask for a fresh counterpart review "
-            "(`Factory Review` → run for this PR number) and the loop picks it back up.",
-        ]
-    else:
-        lines.append(
-            "**No owner action needed** — every blocking item here clears without you:"
-        )
-        lines.append("")
-        lines += [f"- {line}" for line in factory_lines]
-        lines += [
-            "",
-            "The factory will ask for a fresh counterpart review once they land. If your "
-            "review asked for more than that, say so on this PR — the next standing "
-            f"review with nothing left to explain it escalates to @{repository_owner}.",
-        ]
-    lines += ["", response_marker(int(review["id"]))]
+    lines.append(f"Read {reviewer_name(review)}'s {reference}.")
+    lines += ["", f"**This needs @{repository_owner}** — the factory cannot clear it:", ""]
+    lines += [f"- {line}" for line in owner_lines]
+    if self_clearing:
+        lines += ["", "Already moving without you, for context:", ""]
+        lines += [f"- {line}" for line in self_clearing]
+    lines += [
+        "",
+        "Once that lands, ask for a fresh counterpart review (`Factory Review` → run "
+        "for this PR number) and the loop picks it back up. This PR is waiting on the "
+        "owner, not stranded.",
+    ]
+    lines += ["", response_marker(int(review.get("id") or 0))]
     return "\n".join(lines) + "\n"
 
 
@@ -382,10 +460,19 @@ def respond(
 ) -> None:
     pull_request = client.pull_request(pr_number)
     reviews = client.pull_request_reviews(pr_number)
-    review = blocking_review(reviews, repository_owner, review_id)
-    already_responded = review is not None and has_response_for_review(
-        client.comments(pr_number), int(review.get("id") or 0)
+    comments = client.comments(pr_number)
+    answered = {
+        int(review.get("id") or 0)
+        for review in standing_reviews(reviews, repository_owner)
+        if has_response_for_review(comments, int(review.get("id") or 0))
+    }
+    review = blocking_review(
+        reviews,
+        repository_owner,
+        review_id,
+        answered=lambda candidate: candidate in answered,
     )
+    already_responded = review is not None and int(review.get("id") or 0) in answered
     decision = evaluate_response(
         pull_request,
         review,
