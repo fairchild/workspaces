@@ -352,7 +352,8 @@ class ResponseCommentTests(unittest.TestCase):
         text = self.render(pull_request(body=body), review())
         self.assertIn(f"This needs @{OWNER}", text)
         self.assertIn("Already moving without you", text)
-        self.assertIn("waiting on the owner, not stranded", text)
+        self.assertIn("waiting on the owner rather than stranded", text)
+        self.assertIn(response.OWNER_ACTION_LABEL, text)
 
     def test_reviewer_is_named_without_an_at_mention(self) -> None:
         body = evidence_body({"index": 1, "item": "owner call", "status": "blocked"})
@@ -426,11 +427,17 @@ class FakeClient:
         pr: dict[str, object],
         reviews: list[dict[str, object]],
         comments: list[dict[str, object]] | None = None,
+        timeline: list[dict[str, object]] | None = None,
     ) -> None:
         self._pr = pr
         self._reviews = reviews
         self._comments = list(comments or [])
+        self._timeline = list(timeline or [])
         self.posted: list[str] = []
+        self.ensured: list[str] = []
+        self.label_failure = False
+        self.added: list[str] = []
+        self.removed: list[str] = []
 
     def pull_request(self, number: int) -> dict[str, object]:
         return self._pr
@@ -444,6 +451,23 @@ class FakeClient:
     def comment(self, number: int, body: str) -> None:
         self.posted.append(body)
         self._comments.append({"user": {"login": APRIL}, "body": body})
+
+    def ensure_label(self, name: str, color: str, description: str) -> bool:
+        self.ensured.append(name)
+        return not self.label_failure
+
+    def add_label(self, number: int, name: str) -> None:
+        self.added.append(name)
+        self._pr["labels"] = [*self._pr["labels"], {"name": name}]
+
+    def remove_label(self, number: int, name: str) -> None:
+        self.removed.append(name)
+        self._pr["labels"] = [
+            label for label in self._pr["labels"] if label.get("name") != name
+        ]
+
+    def timeline(self, number: int) -> list[dict[str, object]]:
+        return self._timeline
 
 
 class RespondTests(unittest.TestCase):
@@ -506,6 +530,163 @@ class RespondTests(unittest.TestCase):
         self.assertIn(response.response_marker(2), client.posted[0])
         self.assertIn(response.response_marker(1), client.posted[1])
 
+    def labeled_event(self, actor: str, at: str = "2026-08-27T01:00:00Z"):
+        return {
+            "event": "labeled",
+            "label": {"name": response.OWNER_ACTION_LABEL},
+            "actor": {"login": actor},
+            "created_at": at,
+        }
+
+    def test_escalating_marks_the_pr_as_waiting_on_the_owner(self) -> None:
+        # #1381: a PR waiting on the owner used to look exactly like a stranded
+        # one. The label is what makes the two distinguishable at a glance and
+        # queryable in the digest.
+        client = FakeClient(self.blocked_pr(), [review()])
+        response.respond(client, 1377, 900, OWNER)
+        self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
+        self.assertEqual(client.ensured, [response.OWNER_ACTION_LABEL])
+        self.assertIn(response.OWNER_ACTION_LABEL, client.posted[0])
+
+    def test_the_label_is_applied_once_not_on_every_review(self) -> None:
+        pr = self.blocked_pr()
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        client = FakeClient(pr, [review()])
+        response.respond(client, 1377, 900, OWNER)
+        self.assertEqual(client.added, [])
+        self.assertEqual(client.ensured, [])
+
+    def test_an_approval_withdraws_the_factory_own_label(self) -> None:
+        pr = self.blocked_pr()
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        client = FakeClient(
+            pr,
+            [review(state="APPROVED")],
+            timeline=[self.labeled_event(APRIL)],
+        )
+        response.respond(client, 1377, None, OWNER)
+        self.assertEqual(client.removed, [response.OWNER_ACTION_LABEL])
+        self.assertEqual(client.posted, [])
+
+    def test_a_hand_applied_label_is_left_alone(self) -> None:
+        # A person applying it is making a statement, not leaving machine
+        # state, and the factory has no business withdrawing it.
+        pr = self.blocked_pr()
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        client = FakeClient(
+            pr,
+            [review(state="APPROVED")],
+            timeline=[self.labeled_event(OWNER)],
+        )
+        response.respond(client, 1377, None, OWNER)
+        self.assertEqual(client.removed, [])
+
+    def test_a_relabel_by_the_factory_after_a_hand_application_counts(self) -> None:
+        pr = self.blocked_pr()
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        client = FakeClient(
+            pr,
+            [review(state="APPROVED")],
+            timeline=[
+                self.labeled_event(OWNER, "2026-08-27T01:00:00Z"),
+                self.labeled_event(PLAT, "2026-08-27T02:00:00Z"),
+            ],
+        )
+        response.respond(client, 1377, None, OWNER)
+        self.assertEqual(client.removed, [response.OWNER_ACTION_LABEL])
+
+    def test_a_still_standing_rejection_keeps_the_label(self) -> None:
+        pr = self.blocked_pr()
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        client = FakeClient(
+            pr,
+            [
+                review(login=PLAT, review_id=1, submitted_at="2026-08-27T01:00:00Z"),
+                review(login=APRIL, review_id=2, state="APPROVED", submitted_at="2026-08-27T02:00:00Z"),
+            ],
+            timeline=[self.labeled_event(APRIL)],
+        )
+        response.respond(client, 1377, None, OWNER)
+        self.assertEqual(client.removed, [])
+
+    def test_an_approval_does_not_clear_while_another_reviewer_blocks(self) -> None:
+        # The webhook passes the approving review's id, and blocking_review
+        # filters to that review -- so reading "nothing to answer" as "nobody
+        # is blocking" clears the marker the moment ONE reviewer approves.
+        pr = self.blocked_pr()
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        client = FakeClient(
+            pr,
+            [
+                review(login=PLAT, review_id=1, submitted_at="2026-08-27T01:00:00Z"),
+                review(
+                    login=APRIL,
+                    review_id=2,
+                    state="APPROVED",
+                    submitted_at="2026-08-27T02:00:00Z",
+                ),
+            ],
+            timeline=[self.labeled_event(APRIL)],
+        )
+        response.respond(client, 1377, 2, OWNER)  # the approving review's id
+        self.assertEqual(client.removed, [])
+
+    def test_an_already_answered_rejection_still_gets_its_marker(self) -> None:
+        # Level-triggered: repairs a failed application, a hand-removed label,
+        # and any escalation that predates the marker.
+        pr = self.blocked_pr()
+        client = FakeClient(
+            pr,
+            [review()],
+            comments=[
+                {
+                    "user": {"login": APRIL},
+                    "body": f"prior\n{response.response_marker(900)}",
+                }
+            ],
+        )
+        response.respond(client, 1377, 900, OWNER)
+        self.assertEqual(client.posted, [])
+        self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
+
+    def test_incomplete_review_data_never_clears_the_marker(self) -> None:
+        # Absence of a standing rejection only means something if every
+        # trusted reviewer's record could be read.
+        pr = self.blocked_pr()
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        for name, broken in (
+            ("no login", {"id": 5, "state": "APPROVED", "user": {}, "submitted_at": "x"}),
+            (
+                "unknown state",
+                {"id": 5, "state": "ESCALATED", "user": {"login": PLAT}, "submitted_at": "x"},
+            ),
+            (
+                "no timestamp",
+                {"id": 5, "state": "APPROVED", "user": {"login": PLAT}, "submitted_at": ""},
+            ),
+            ("not a dict", "APPROVED"),
+        ):
+            with self.subTest(case=name):
+                client = FakeClient(pr, [broken], timeline=[self.labeled_event(APRIL)])
+                response.respond(client, 1377, None, OWNER)
+                self.assertEqual(client.removed, [])
+
+    def test_a_label_that_cannot_be_applied_is_not_claimed_in_the_comment(self) -> None:
+        client = FakeClient(self.blocked_pr(), [review()])
+        client.label_failure = True
+        response.respond(client, 1377, 900, OWNER)
+        self.assertEqual(len(client.posted), 1)
+        self.assertIn("could not be applied", client.posted[0])
+        self.assertNotIn("stays on this PR", client.posted[0])
+
+    def test_a_closed_pull_request_is_left_untouched(self) -> None:
+        pr = pull_request(state="closed")
+        pr["labels"] = [*pr["labels"], {"name": response.OWNER_ACTION_LABEL}]
+        client = FakeClient(pr, [], timeline=[self.labeled_event(APRIL)])
+        response.respond(client, 1377, None, OWNER)
+        self.assertEqual(client.removed, [])
+        self.assertEqual(client.posted, [])
+
     def test_a_superseded_review_draws_no_post(self) -> None:
         client = FakeClient(
             self.blocked_pr(),
@@ -539,8 +720,26 @@ class WorkflowContractTests(unittest.TestCase):
             self.workflow,
         )
 
-    def test_responds_only_to_changes_requested(self) -> None:
+    def test_only_a_marked_pull_request_earns_a_cleanup_run(self) -> None:
+        # An ordinary approval on an unmarked PR must skip before a runner
+        # starts or an App token is minted.
+        gate = self.workflow.split("runs-on:", 1)[0]
+        self.assertIn(
+            "contains(github.event.pull_request.labels.*.name, 'owner-action')", gate
+        )
+        self.assertIn(f"'{response.OWNER_ACTION_LABEL}'", gate)
+
+    def test_a_dismissal_also_withdraws_the_marker(self) -> None:
+        self.assertIn("types: [submitted, dismissed]", self.workflow)
+        self.assertIn("github.event.review.state == 'dismissed'", self.workflow)
+
+    def test_responds_to_changes_requested_and_to_approval(self) -> None:
+        # Approval is the event that withdraws the marker: the reviewer has
+        # stopped blocking, so the factory's claim about the owner has stopped
+        # being true and should not linger.
         self.assertIn("github.event.review.state == 'changes_requested'", self.workflow)
+        self.assertIn("github.event.review.state == 'approved'", self.workflow)
+        self.assertNotIn("'commented'", self.workflow)
 
     def test_untrusted_reviewers_never_reach_the_app_token_step(self) -> None:
         # The allowlist lives in the job `if:` as well as the script, so an

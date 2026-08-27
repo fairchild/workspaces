@@ -83,10 +83,29 @@ CHANGES_REQUESTED = "CHANGES_REQUESTED"
 NON_SUPERSEDING_REVIEW_STATES = frozenset({"COMMENTED", "PENDING", "DISMISSED"})
 BLOCKED_EVIDENCE_LABEL = "blocked:evidence"
 NEEDS_HUMAN_LABEL = "needs-human"
+# Machine-managed, and the counterpart to `needs-human`: the factory applies
+# this when it determines the owner is the blocking party and removes it when
+# that stops being true. `needs-human` stays what a person applies to say the
+# same thing; the factory never touches that one. A PR waiting on the owner
+# used to look exactly like a stranded one -- red, unmoving, CHANGES_REQUESTED
+# -- so the state is now written down where a glance and a query can both see
+# it (#1381).
+OWNER_ACTION_LABEL = "owner-action"
+OWNER_ACTION_COLOR = "d93f0b"
+OWNER_ACTION_DESCRIPTION = (
+    "The factory determined the owner is the blocking party; see its comment "
+    "for the gesture"
+)
 # The contributor revision loop (#1125) is the missing capability behind every
 # "the diff itself must change" escalation. Naming it keeps the escalation
 # honest about what the factory cannot yet do, rather than implying judgment.
 REVISION_LOOP_ISSUE = "#1125"
+
+
+def warn(message: str) -> None:
+    """A visible failure notice, not a line buried in a green run's log."""
+    print(f"::warning::Factory review response: {message}")
+    print(f"Factory review response: {message}", file=sys.stderr)
 
 
 class FactoryReviewResponseError(RuntimeError):
@@ -118,6 +137,50 @@ class ResponseDecision:
 
 
 class GitHubClient(factory_implement.GitHubClient):
+    def label_exists(self, name: str) -> bool | None:
+        """True/False, or None when the answer could not be established.
+
+        A 404 is a real answer; anything else is the lookup failing, and
+        treating that as "missing" would turn a transient error into a
+        pointless create attempt.
+        """
+        try:
+            self.request("GET", f"/repos/{self.repository}/labels/{name}")
+            return True
+        except factory_implement.FactoryImplementError as error:
+            return False if " 404: " in str(error) else None
+
+    def ensure_label(self, name: str, color: str, description: str) -> bool:
+        exists = self.label_exists(name)
+        if exists is True:
+            return True
+        if exists is None:
+            return False
+        try:
+            self.request(
+                "POST",
+                f"/repos/{self.repository}/labels",
+                {"name": name, "color": color, "description": description},
+            )
+            return True
+        except factory_implement.FactoryImplementError as error:
+            # Losing a create race is success; the label is there either way.
+            # Re-reading rather than assuming keeps a real failure a failure.
+            if self.label_exists(name) is True:
+                return True
+            warn(f"could not create the `{name}` label: {error}")
+            return False
+
+    def add_label(self, number: int, name: str) -> None:
+        self.request(
+            "POST", f"/repos/{self.repository}/issues/{number}/labels", {"labels": [name]}
+        )
+
+    def remove_label(self, number: int, name: str) -> None:
+        self.request(
+            "DELETE", f"/repos/{self.repository}/issues/{number}/labels/{name}"
+        )
+
     def pull_request(self, number: int) -> dict[str, Any]:
         return dict(self.request("GET", f"/repos/{self.repository}/pulls/{number}"))
 
@@ -175,7 +238,8 @@ def standing_reviews(
     # Sorted by submitted_at rather than read in list order: which verdict is
     # "latest" decides whether it still stands, so it comes from the
     # timestamps, not from pagination.
-    for review in sorted(reviews, key=lambda item: str(item.get("submitted_at") or "")):
+    records = [review for review in reviews if isinstance(review, dict)]
+    for review in sorted(records, key=lambda item: str(item.get("submitted_at") or "")):
         login = str((review.get("user") or {}).get("login") or "").casefold()
         if login not in trusted:
             continue
@@ -218,6 +282,43 @@ def blocking_review(
         review for review in standing if not answered(int(review.get("id") or 0))
     ]
     return unanswered[-1] if unanswered else None
+
+
+RECOGNIZED_REVIEW_STATES = frozenset(
+    {CHANGES_REQUESTED, "APPROVED", "COMMENTED", "PENDING", "DISMISSED"}
+)
+
+
+def reviews_are_conclusive(
+    reviews: list[dict[str, Any]],
+    repository_owner: str,
+) -> bool:
+    """Whether the review list is complete enough to prove nobody is blocking.
+
+    Absence of a standing rejection is only meaningful if every trusted
+    reviewer's record could actually be read. A review with no login, no
+    timestamp, or a state this code does not recognise might be the blocking
+    one, so an incomplete list means "cannot prove unblocked" rather than
+    "unblocked" -- the difference between leaving a marker up one cycle too
+    long and telling the owner they are free when they are not.
+    """
+    trusted = trusted_reviewers(repository_owner)
+    for review in reviews:
+        if not isinstance(review, dict):
+            return False
+        login = str((review.get("user") or {}).get("login") or "")
+        if not login:
+            return False
+        if login.casefold() not in trusted:
+            continue
+        if str(review.get("state") or "").upper() not in RECOGNIZED_REVIEW_STATES:
+            return False
+        if not str(review.get("submitted_at") or ""):
+            # PENDING reviews legitimately have none; anything else is a
+            # record this code cannot order, so it cannot be superseded.
+            if str(review.get("state") or "").upper() != "PENDING":
+                return False
+    return True
 
 
 def evidence_entries(body: str) -> list[dict[str, Any]]:
@@ -426,6 +527,7 @@ def response_comment(
     review: dict[str, Any],
     *,
     repository_owner: str,
+    labelled: bool = True,
 ) -> str:
     review_url = str(review.get("html_url") or "").strip()
     reference = f"[requested changes]({review_url})" if review_url else "requested changes"
@@ -439,14 +541,106 @@ def response_comment(
     if self_clearing:
         lines += ["", "Already moving without you, for context:", ""]
         lines += [f"- {line}" for line in self_clearing]
-    lines += [
-        "",
+    closing = (
         "Once that lands, ask for a fresh counterpart review (`Factory Review` → run "
-        "for this PR number) and the loop picks it back up. This PR is waiting on the "
-        "owner, not stranded.",
-    ]
+        "for this PR number) and the loop picks it back up."
+    )
+    if labelled:
+        closing += (
+            f" `{OWNER_ACTION_LABEL}` stays on this PR until a reviewer stops blocking "
+            "it, so it reads as waiting on the owner rather than stranded — here and "
+            "in the Factory Digest."
+        )
+    else:
+        closing += (
+            f" The `{OWNER_ACTION_LABEL}` label could not be applied, so this PR will "
+            "not show up as waiting on you until it is — the workflow run says why."
+        )
+    lines += ["", closing]
     lines += ["", response_marker(int(review.get("id") or 0))]
     return "\n".join(lines) + "\n"
+
+
+def label_applied_by_factory(
+    events: list[dict[str, Any]],
+    label: str,
+    factory_logins: set[str],
+) -> bool:
+    """Whether the most recent application of `label` was the factory's own.
+
+    The factory removes only what it applied. A person applying `owner-action`
+    by hand is making a statement, not leaving machine state, and the factory
+    has no business withdrawing it.
+    """
+    applications = [
+        event
+        for event in events
+        if str(event.get("event", "")).casefold() == "labeled"
+        and str((event.get("label") or {}).get("name", "")) == label
+    ]
+    if not applications:
+        return False
+    # Ordered by timestamp rather than list position: GitHub's timeline reads
+    # chronologically today but documents no sort contract, and getting this
+    # backwards would remove a label a person applied.
+    latest = max(
+        applications,
+        key=lambda event: (str(event.get("created_at") or ""), int(event.get("id") or 0)),
+    )
+    actor = latest.get("actor") or {}
+    login = str(actor.get("login", "")) if isinstance(actor, dict) else ""
+    return bool(login) and login.casefold() in factory_logins
+
+
+def factory_label_logins() -> set[str]:
+    """Identities whose label application counts as the factory's own."""
+    return {bot.casefold() for bot in factory_review.REVIEWER_BOTS.values()} | {
+        RESPONDER_BOT.casefold()
+    }
+
+
+def apply_owner_action(client: GitHubClient, pr_number: int, labels: set[str]) -> bool:
+    """Ensure the marker is on the PR. True when it is, by whatever route.
+
+    Level-triggered on purpose: called whenever a standing rejection has a
+    factory response, not only when a new comment is posted, so a transient
+    failure or a label someone removed by hand is repaired on the next event
+    rather than leaving the PR silently unmarked.
+    """
+    if OWNER_ACTION_LABEL in labels:
+        return True
+    if not client.ensure_label(
+        OWNER_ACTION_LABEL, OWNER_ACTION_COLOR, OWNER_ACTION_DESCRIPTION
+    ):
+        return False
+    try:
+        client.add_label(pr_number, OWNER_ACTION_LABEL)
+    except factory_implement.FactoryImplementError as error:
+        warn(f"could not apply `{OWNER_ACTION_LABEL}` to #{pr_number}: {error}")
+        return False
+    print(f"Factory review response applied {OWNER_ACTION_LABEL} to #{pr_number}")
+    return True
+
+
+def clear_owner_action(client: GitHubClient, pr_number: int, labels: set[str]) -> bool:
+    """Withdraw the factory's own owner-action label. True if it removed one."""
+    if OWNER_ACTION_LABEL not in labels:
+        return False
+    if not label_applied_by_factory(
+        client.timeline(pr_number), OWNER_ACTION_LABEL, factory_label_logins()
+    ):
+        print(
+            f"Factory review response: {OWNER_ACTION_LABEL} on #{pr_number} was not "
+            "machine-applied; leaving it"
+        )
+        return False
+    try:
+        client.remove_label(pr_number, OWNER_ACTION_LABEL)
+    except factory_implement.FactoryImplementError as error:
+        warn(f"could not clear `{OWNER_ACTION_LABEL}` on #{pr_number}: {error}")
+        return False
+    print(f"Factory review response cleared {OWNER_ACTION_LABEL} from #{pr_number}")
+    return True
 
 
 def write_output(name: str, value: str) -> None:
@@ -462,10 +656,11 @@ def respond(
     pull_request = client.pull_request(pr_number)
     reviews = client.pull_request_reviews(pr_number)
     comments = client.comments(pr_number)
+    standing = standing_reviews(reviews, repository_owner)
     answered = {
-        int(review.get("id") or 0)
-        for review in standing_reviews(reviews, repository_owner)
-        if has_response_for_review(comments, int(review.get("id") or 0))
+        int(item.get("id") or 0)
+        for item in standing
+        if has_response_for_review(comments, int(item.get("id") or 0))
     }
     review = blocking_review(
         reviews,
@@ -481,9 +676,39 @@ def respond(
         already_responded=already_responded,
     )
     print(f"Factory review response for #{pr_number}: {decision.action} ({decision.reason})")
+    labels = factory_implement.label_names(pull_request)
+    open_pr = str(pull_request.get("state") or "").casefold() == "open"
+    cleared = False
+    labelled = OWNER_ACTION_LABEL in labels
+    if open_pr:
+        # The marker tracks whether ANY trusted reviewer is blocking, not
+        # whether this run had something to answer. Reading it off `review`
+        # would clear the marker the moment one reviewer approved while
+        # another's rejection still stood -- and on the webhook path `review`
+        # is filtered to the triggering review, so an approval always looks
+        # like "nothing blocking".
+        if not standing:
+            if reviews_are_conclusive(reviews, repository_owner):
+                cleared = clear_owner_action(client, pr_number, labels)
+                labelled = labelled and not cleared
+            elif labelled:
+                print(
+                    f"Factory review response: review data for #{pr_number} is "
+                    f"incomplete; leaving {OWNER_ACTION_LABEL} in place"
+                )
+        elif answered == {int(item.get("id") or 0) for item in standing}:
+            # Every standing rejection already has its response, so the marker
+            # belongs on the PR whether or not this run posts anything. This
+            # is what repairs a failed application or a hand-removed label.
+            labelled = apply_owner_action(client, pr_number, labels)
+    if decision.action == "respond" and decision.owner_required:
+        assert review is not None
+        labelled = apply_owner_action(client, pr_number, labels)
     write_output("pr_number", str(pr_number))
     write_output("responded", "true" if decision.action == "respond" else "false")
     write_output("owner_required", "true" if decision.owner_required else "false")
+    write_output("owner_action_applied", "true" if labelled else "false")
+    write_output("owner_action_cleared", "true" if cleared else "false")
     write_output(
         "blockers",
         ",".join(blocker.key for blocker in decision.blockers),
@@ -493,7 +718,9 @@ def respond(
     assert review is not None
     client.comment(
         pr_number,
-        response_comment(decision, review, repository_owner=repository_owner),
+        response_comment(
+            decision, review, repository_owner=repository_owner, labelled=labelled
+        ),
     )
     print(
         f"Factory review response posted on #{pr_number} for review "
