@@ -28,6 +28,10 @@ struct AutomationUIStateControllerTests {
 
     /// Two repos with three workspaces between them, deliberately inserted out of name
     /// order so the projection's sorting contract is observable rather than incidental.
+    /// One window installs the layer these suites drive; a teardown names it, so an
+    /// overlapping window's teardown cannot clear it (#1375).
+    private static let windowOwner = UUID()
+
     private func makeGraph() throws -> Graph {
         let schema = Schema([Repo.self, Workspace.self, WebSource.self])
         let container = try ModelContainer(
@@ -72,6 +76,7 @@ struct AutomationUIStateControllerTests {
             tileTreeStore: store,
             focusTerminal: { _ in },
             requestCloseTerminal: { _ in },
+            windowBoundOwner: Self.windowOwner,
             uiState: uiState
         )
         return (controller, entry.handle, store)
@@ -208,7 +213,7 @@ struct AutomationUIStateControllerTests {
             uiState: { .init(state: Self.emptySnapshot, volatile: Self.emptyVolatile) })
         _ = try controller.automationUIState(for: handle)
 
-        controller.detachGestureVerbs()
+        controller.detachGestureVerbs(owner: Self.windowOwner)
 
         expectFailure(.unsupported) { try controller.automationUIState(for: handle) }
     }

@@ -25,7 +25,7 @@ public enum AutomationAPI {
     /// Operator handles still never carry tile mutation or `input.write`.
     public static let operatorCapabilities = [
         AutomationCapability.windowRead, .windowSnapshot, .workspaceRead, .workspaceSelect,
-        .workspaceCreate, .surfaceRead, .workspaceArchive, .workspaceNote, .uiRead,
+        .workspaceCreate, .surfaceRead, .workspaceArchive, .workspaceNote, .repoTerminal, .uiRead,
     ]
 
     public static let inputWriteMaxUTF8Bytes = 32_768
@@ -104,6 +104,7 @@ public enum AutomationCapability: String, Codable, Sendable, CaseIterable, Equat
     case surfaceRead = "surface.read"
     case workspaceArchive = "workspace.archive"
     case workspaceNote = "workspace.note"
+    case repoTerminal = "repo.terminal"
     case uiRead = "ui.read"
 }
 
@@ -544,6 +545,65 @@ public struct AutomationWorkspaceDescriptor: Codable, Sendable, Equatable {
         self.isArchived = isArchived
         self.backend = backend
         self.isSelected = isSelected
+    }
+}
+
+/// Request for `POST /v1/repo/terminal` (`repo.terminal`, operator scope): open the repo's own
+/// terminal, the surface a sidebar repo row opens. `repoID` is a `workspace.read` repo id.
+public struct AutomationRepoTerminalRequest: Codable, Sendable, Equatable {
+    public let repoID: String
+
+    public init(repoID: String) {
+        self.repoID = repoID
+    }
+}
+
+/// What driving the real repo-terminal gesture produced. `attachedTerminal` is the observable
+/// proof the surface came up, mirroring `workspace.select`: a completed gesture that attached
+/// nothing reports `false` and no surface rather than implying a terminal that is not there.
+public struct AutomationRepoTerminalEffect: Codable, Sendable, Equatable {
+    public let attachedSurfaceID: UUID?
+    public let attachedTerminal: Bool
+    /// Where the surface launched — the repo root, or the directory continuity restored for it.
+    public let directoryPath: String
+
+    public init(attachedSurfaceID: UUID?, attachedTerminal: Bool, directoryPath: String) {
+        self.attachedSurfaceID = attachedSurfaceID
+        self.attachedTerminal = attachedTerminal
+        self.directoryPath = directoryPath
+    }
+}
+
+/// Response for `POST /v1/repo/terminal` (`repo.terminal`, operator scope). `outcome` is
+/// `completed` when the gesture ran; the not-found and no-live-window cases fail closed with the
+/// stable error codes instead of riding this envelope.
+public struct AutomationRepoTerminalResult: Codable, Sendable, Equatable {
+    public let outcome: AutomationGestureOutcomeKind
+    public let repoID: UUID
+    public let repoName: String
+    public let attachedSurfaceID: UUID?
+    public let attachedTerminal: Bool
+    public let directoryPath: String
+    public let system: AutomationSystemDescriptor
+
+    public init(
+        outcome: AutomationGestureOutcomeKind,
+        repoID: UUID,
+        repoName: String,
+        attachedSurfaceID: UUID? = nil,
+        attachedTerminal: Bool = false,
+        directoryPath: String,
+        system: AutomationSystemDescriptor = AutomationSystemDescriptor(
+            capabilities: AutomationAPI.operatorCapabilities
+        )
+    ) {
+        self.outcome = outcome
+        self.repoID = repoID
+        self.repoName = repoName
+        self.attachedSurfaceID = attachedSurfaceID
+        self.attachedTerminal = attachedTerminal
+        self.directoryPath = directoryPath
+        self.system = system
     }
 }
 
@@ -1208,6 +1268,11 @@ public protocol AutomationControlling: AnyObject, Sendable {
         for handle: String,
         request: AutomationWorkspaceArchiveRequest
     ) async throws -> AutomationWorkspaceArchiveResult
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult
+
     func automationSetWorkspaceNote(
         for handle: String,
         request: AutomationWorkspaceNoteRequest

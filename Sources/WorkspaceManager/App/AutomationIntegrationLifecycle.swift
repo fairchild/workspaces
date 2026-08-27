@@ -66,6 +66,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             AutomationWorkspaceInventory()
         },
         gestureVerbs: AutomationGestureVerbs? = nil,
+        windowBoundOwner: UUID? = nil,
+        isWindowLive: @escaping @MainActor () -> Bool = { true },
         uiState: (@MainActor () -> AutomationUIStateCapture)? = nil
     ) async {
         let webSurfaces = Self.makeWebSurfaces(
@@ -93,6 +95,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             windowSnapshot: windowSnapshot,
             workspaceInventory: workspaceInventory,
             gestureVerbs: gestureVerbs,
+            windowBoundOwner: windowBoundOwner,
+            isWindowLive: isWindowLive,
             uiState: uiState
         )
 
@@ -111,6 +115,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 webSurfaceRecords: webSurfaceRecords,
                 workspaceInventory: workspaceInventory,
                 gestureVerbs: gestureVerbs,
+                windowBoundOwner: windowBoundOwner,
+                isWindowLive: isWindowLive,
                 webSurfaces: webSurfaces,
                 webSnapshot: webSnapshot,
                 windows: windows,
@@ -140,6 +146,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             AutomationWorkspaceInventory()
         },
         gestureVerbs: AutomationGestureVerbs? = nil,
+        windowBoundOwner: UUID? = nil,
+        isWindowLive: @escaping @MainActor () -> Bool = { true },
         webSurfaces: (@MainActor () -> [AutomationWebSurfaceDescriptor])? = nil,
         webSnapshot: (@MainActor (UUID) async -> WebSnapshotOutcome)? = nil,
         windows: (@MainActor () -> [AutomationWindowDescriptor])? = nil,
@@ -175,6 +183,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 windowSnapshot: windowSnapshot,
                 workspaceInventory: workspaceInventory,
                 gestureVerbs: gestureVerbs,
+                windowBoundOwner: windowBoundOwner,
+                isWindowLive: isWindowLive,
                 uiState: uiState
             )
             return socketPath
@@ -191,6 +201,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 windowSnapshot: windowSnapshot,
                 workspaceInventory: workspaceInventory,
                 gestureVerbs: gestureVerbs,
+                windowBoundOwner: windowBoundOwner,
+                isWindowLive: isWindowLive,
                 uiState: uiState
             )
             guard let socketPath else {
@@ -209,6 +221,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             windowSnapshot: windowSnapshot,
             workspaceInventory: workspaceInventory,
             gestureVerbs: gestureVerbs,
+            windowBoundOwner: windowBoundOwner,
+            isWindowLive: isWindowLive,
             uiState: uiState
         )
 
@@ -295,6 +309,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         windowSnapshot: @escaping @MainActor (String) async -> WindowSnapshotOutcome,
         workspaceInventory: @escaping @MainActor () -> AutomationWorkspaceInventory,
         gestureVerbs: AutomationGestureVerbs?,
+        windowBoundOwner: UUID?,
+        isWindowLive: @escaping @MainActor () -> Bool,
         // No default, like `gestureVerbs`: both are window-bound and an omitted argument
         // clears the previous window's closure, which should be a deliberate choice.
         uiState: (@MainActor () -> AutomationUIStateCapture)?
@@ -310,6 +326,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
                 windowSnapshot: windowSnapshot,
                 workspaceInventory: workspaceInventory,
                 gestureVerbs: gestureVerbs,
+                windowBoundOwner: windowBoundOwner,
+                isWindowLive: isWindowLive,
                 uiState: uiState
             )
             return controller
@@ -326,6 +344,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             windowSnapshot: windowSnapshot,
             workspaceInventory: workspaceInventory,
             gestureVerbs: gestureVerbs,
+            windowBoundOwner: windowBoundOwner,
+            isWindowLive: isWindowLive,
             uiState: uiState
         )
         self.controller = controller
@@ -378,8 +398,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     /// fails closed (`unsupported`) rather than driving a stale gesture while the app lingers as an
     /// accessory. The listener and operator credential stay up — only the window-bound gesture layer
     /// drops; a reappearing window reinstalls it via `configure`.
-    func detachGestureVerbs() {
-        controller?.detachGestureVerbs()
+    func detachGestureVerbs(owner: UUID) {
+        controller?.detachGestureVerbs(owner: owner)
     }
 
     func appIntentControllerAndHandle() throws -> (controller: AutomationController, handle: String) {

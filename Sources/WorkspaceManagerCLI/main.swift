@@ -923,7 +923,7 @@ private final class CLIApp {
     /// the app's automation socket. The seven gesture/read/wait verbs also keep their historical
     /// top-level spellings as aliases (canonicalized in `run` before dispatch).
     private func runAutomation(arguments: [String]) throws -> Int32 {
-        let expected = "health, context, surface, tile, input, window, workspace, wait, focus"
+        let expected = "health, context, surface, tile, input, window, workspace, repo, wait, focus"
         guard let subcommand = arguments.first else {
             throw CLIError("Missing automation subcommand. Expected: \(expected)")
         }
@@ -962,6 +962,8 @@ private final class CLIApp {
             return try runWindow(arguments: tail)
         case "workspace":
             return try runWorkspaceOperator(arguments: tail)
+        case "repo":
+            return try runRepoOperator(arguments: tail)
         case "wait":
             return try runWait(arguments: tail)
         case "focus":
@@ -1231,6 +1233,55 @@ private final class CLIApp {
                 "Usage: workspaces automation workspace list [--json] | automation workspace select <id> [--json] | automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json] | automation workspace archive <id> [--teardown] [--json] | automation workspace note <id> --text \"<text>\" | --clear [--json]"
             )
         }
+    }
+
+    /// `workspaces automation repo terminal <repo-id> [--json]` — opens the repo's own terminal
+    /// through the running app's real sidebar path. Distinct from the CLI-local `workspaces repo`
+    /// registry: this one drives the app. The repo-scoped terminal was reachable by click but by
+    /// no verb, so an agent wanting a shell in a repo had to create a workspace it did not want.
+    private func runRepoOperator(arguments: [String]) throws -> Int32 {
+        let usage = "workspaces automation repo terminal <repo-id> [--json]"
+        guard arguments.first == "terminal" else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        var json = false
+        var repoID: String?
+        for argument in arguments.dropFirst() {
+            switch argument {
+            case "--json":
+                json = true
+            default:
+                guard repoID == nil else { throw CLIError("Usage: \(usage)") }
+                repoID = argument
+            }
+        }
+        guard let repoID, !repoID.isEmpty else {
+            throw CLIError("Usage: \(usage)")
+        }
+
+        let credential = try loadOperatorCredential()
+        let body = try JSONEncoder().encode(AutomationRepoTerminalRequest(repoID: repoID))
+        let result = try operatorRequest(
+            AutomationRepoTerminalResult.self,
+            credential: credential,
+            method: "POST",
+            path: "/v1/repo/terminal",
+            body: body
+        )
+
+        if json {
+            print(try AutomationCLIResultPrinter.resultJSON(result))
+            return 0
+        }
+
+        if result.attachedTerminal {
+            let surface = result.attachedSurfaceID?.uuidString ?? "-"
+            print("Opened \(result.repoName) terminal at \(result.directoryPath) (surface \(surface)).")
+        } else {
+            print("Opened \(result.repoName) — no terminal attached.")
+        }
+        return 0
     }
 
     private func runWorkspaceList(arguments: [String]) throws -> Int32 {

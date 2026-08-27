@@ -17,9 +17,11 @@ public enum CLIVerbCatalog {
     ]
 
     /// Grouped subcommands of `workspaces automation ...` — every verb that talks to the
-    /// app's automation socket.
+    /// app's automation socket. `repo` appears here and in `localVerbs`: `workspaces repo`
+    /// stays the CLI-local registry, and only the explicit `workspaces automation repo` form
+    /// reaches the app, so neither spelling shadows the other.
     public static let automationVerbs: Set<String> = [
-        "health", "context", "surface", "tile", "input", "window", "workspace", "wait", "focus",
+        "health", "context", "surface", "tile", "input", "window", "workspace", "repo", "wait", "focus",
     ]
 
     /// Top-level spellings kept as compatibility aliases for the grouped automation verbs
@@ -92,6 +94,7 @@ public enum CLIVerbCatalog {
           workspaces automation workspace create <repo-id> <name> [--provider <id>] [--guest-os <linux|macos>] [--json]
           workspaces automation workspace archive <workspace-id> [--teardown] [--json]
           workspaces automation workspace note <workspace-id> --text "text" | --clear [--json]
+          workspaces automation repo terminal <repo-id> [--json]
           workspaces automation wait --for <condition> [--surface-id <id>] [--workspace-id <id>] [--pattern <regex>] [--timeout-ms <n>] [--json]
           workspaces automation focus [--json]
 

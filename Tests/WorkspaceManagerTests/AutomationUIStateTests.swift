@@ -279,6 +279,13 @@ private final class UIStateFakeController: AutomationControlling {
     ) async throws -> AutomationWorkspaceArchiveResult {
         throw AutomationServiceError(.unsupported, "not under test")
     }
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult {
+        throw AutomationServiceError(.staleHandle, "stale")
+    }
+
     func automationSetWorkspaceNote(
         for handle: String, request: AutomationWorkspaceNoteRequest
     ) async throws -> AutomationWorkspaceNoteResult {
@@ -354,6 +361,13 @@ private final class UIStateDefaultedController: AutomationControlling {
     ) async throws -> AutomationWorkspaceArchiveResult {
         throw AutomationServiceError(.unsupported, "not under test")
     }
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult {
+        throw AutomationServiceError(.staleHandle, "stale")
+    }
+
     func automationSetWorkspaceNote(
         for handle: String, request: AutomationWorkspaceNoteRequest
     ) async throws -> AutomationWorkspaceNoteResult {

@@ -14,10 +14,6 @@ final class AutomationController: AutomationControlling {
     private var windowSnapshot: @MainActor (String) async -> WindowSnapshotOutcome
     private var workspaceInventory: @MainActor () -> AutomationWorkspaceInventory
     private var surfaceTextReader: @MainActor (TileTreeStore, UUID) -> String?
-    /// The structural UI-state read (`ui.read`). `nil` when no window has installed it,
-    /// which is the `unsupported` condition — like the gesture layer, the read never
-    /// fabricates chrome state without a live window behind it.
-    private var uiState: (@MainActor () -> AutomationUIStateCapture)?
     /// Per-surface prompt-readiness read for the `prompt_ready` wait condition. `nil` from the
     /// reader means the surface has no realized terminal view yet — reported as pending, never
     /// as "not ready", so absence of the signal is not mistaken for a negative signal.
@@ -31,10 +27,79 @@ final class AutomationController: AutomationControlling {
     /// ticks are a couple of lookups, content ticks are a terminal read plus a regex run.
     private let waitPollIntervalMS: Int
     private let waitContentPollIntervalMS: Int
-    /// The gesture-verb layer — the single place workspace mutation verbs enter
-    /// the real UI path. `nil` when no window is attached, which is exactly the `unsupported`
-    /// condition: a mutation verb cannot run without a live window, and never falls back.
-    private var gestureVerbs: AutomationGestureVerbs?
+    /// The window-bound layers, oldest first — one per window that has installed automation.
+    ///
+    /// A single slot could not answer the question the verbs actually ask: not "did some window
+    /// go away" but "is there still a live window offering this". With one slot, closing the
+    /// newest of two windows cleared automation for the one still on screen, and a teardown that
+    /// landed after a replacement window's configure cleared the replacement (#1375). Keeping a
+    /// layer per window makes both cases fall out: a teardown removes exactly its own entry, and
+    /// what the verbs use is the newest entry that still has a window behind it.
+    private var windowLayers: [WindowBoundLayer] = []
+
+    /// One window's automation layer, held with that window's own liveness. `isWindowLive` is the
+    /// guard against a suspended `configure` landing after its window is gone: the layer may be
+    /// reinstalled, but a dead window's layer is never the one a verb runs through.
+    private struct WindowBoundLayer {
+        let owner: UUID
+        let isWindowLive: @MainActor () -> Bool
+        let gestureVerbs: AutomationGestureVerbs?
+        let uiState: (@MainActor () -> AutomationUIStateCapture)?
+    }
+
+    /// The gesture-verb layer — the single place workspace mutation verbs enter the real UI path.
+    /// `nil` when no live window offers one, which is exactly the `unsupported` condition: a
+    /// mutation verb cannot run without a live window, and never falls back.
+    private var gestureVerbs: AutomationGestureVerbs? {
+        newestLiveLayer(where: { $0.gestureVerbs != nil })?.gestureVerbs
+    }
+
+    /// The ui-state reader is window-bound the same way: with no live window there is no rendered
+    /// chrome to report, so the read fails `unsupported` rather than describing a window that is
+    /// no longer there.
+    private var uiState: (@MainActor () -> AutomationUIStateCapture)? {
+        newestLiveLayer(where: { $0.uiState != nil })?.uiState
+    }
+
+    /// The newest layer that both satisfies `predicate` and still has a live window. Dead layers
+    /// are dropped on the way through, so a closed window's closures are not retained past the
+    /// first read that notices.
+    private func newestLiveLayer(
+        where predicate: (WindowBoundLayer) -> Bool
+    ) -> WindowBoundLayer? {
+        windowLayers.removeAll { !$0.isWindowLive() }
+        return windowLayers.last(where: predicate)
+    }
+
+    /// Installs (or replaces) one window's layer. A caller with no window identity replaces the
+    /// whole set, preserving the pre-identity behavior for anything that does not participate.
+    private func installWindowLayer(
+        owner: UUID?,
+        isWindowLive: @escaping @MainActor () -> Bool,
+        gestureVerbs: AutomationGestureVerbs?,
+        uiState: (@MainActor () -> AutomationUIStateCapture)?
+    ) {
+        guard let owner else {
+            windowLayers = [
+                WindowBoundLayer(
+                    owner: UUID(),
+                    isWindowLive: { true },
+                    gestureVerbs: gestureVerbs,
+                    uiState: uiState
+                )
+            ]
+            return
+        }
+        windowLayers.removeAll { $0.owner == owner }
+        windowLayers.append(
+            WindowBoundLayer(
+                owner: owner,
+                isWindowLive: isWindowLive,
+                gestureVerbs: gestureVerbs,
+                uiState: uiState
+            )
+        )
+    }
 
     init(
         handleRegistry: AutomationHandleRegistry,
@@ -52,6 +117,8 @@ final class AutomationController: AutomationControlling {
             store.surfaceStore.terminalPlainText(for: surfaceID)
         },
         gestureVerbs: AutomationGestureVerbs? = nil,
+        windowBoundOwner: UUID? = nil,
+        isWindowLive: @escaping @MainActor () -> Bool = { true },
         isInputWriteEnabled: @escaping @MainActor () -> Bool = {
             ExperimentalFeatures.isEnabled(.automationInputWrite)
         },
@@ -76,14 +143,18 @@ final class AutomationController: AutomationControlling {
         self.windowSnapshot = windowSnapshot
         self.workspaceInventory = workspaceInventory
         self.surfaceTextReader = surfaceTextReader
-        self.gestureVerbs = gestureVerbs
         self.isInputWriteEnabled = isInputWriteEnabled
-        self.uiState = uiState
         self.promptReadinessReader = promptReadinessReader
         self.focusStateProvider = focusStateProvider
         self.waitTimeSource = waitTimeSource
         self.waitPollIntervalMS = waitPollIntervalMS
         self.waitContentPollIntervalMS = waitContentPollIntervalMS
+        installWindowLayer(
+            owner: windowBoundOwner,
+            isWindowLive: isWindowLive,
+            gestureVerbs: gestureVerbs,
+            uiState: uiState
+        )
     }
 
     func update(
@@ -97,17 +168,22 @@ final class AutomationController: AutomationControlling {
         workspaceInventory: (@MainActor () -> AutomationWorkspaceInventory)? = nil,
         surfaceTextReader: (@MainActor (TileTreeStore, UUID) -> String?)? = nil,
         gestureVerbs: AutomationGestureVerbs? = nil,
+        windowBoundOwner: UUID? = nil,
+        isWindowLive: @escaping @MainActor () -> Bool = { true },
         uiState: (@MainActor () -> AutomationUIStateCapture)? = nil
     ) {
         self.tileTreeStore = tileTreeStore
         self.focusTerminal = focusTerminal
         self.requestCloseTerminal = requestCloseTerminal
-        // Window-bound like `gestureVerbs`, and cleared the same way: an update that
-        // installs no reader means no window is offering one, so `nil` here clears a
-        // previous window's closure instead of leaving it callable. The remaining
-        // members below are app-scoped and keep their last value when omitted.
-        self.gestureVerbs = gestureVerbs
-        self.uiState = uiState
+        // Window-bound, unlike the app-scoped members below (which keep their last value when
+        // omitted): this installs the calling window's own layer, leaving every other window's
+        // alone. Which layer a verb runs through is decided at read time, by liveness.
+        installWindowLayer(
+            owner: windowBoundOwner,
+            isWindowLive: isWindowLive,
+            gestureVerbs: gestureVerbs,
+            uiState: uiState
+        )
         if let webSurfaces {
             self.webSurfaces = webSurfaces
         }
@@ -128,17 +204,16 @@ final class AutomationController: AutomationControlling {
         }
     }
 
-    /// Drops the gesture-verb layer when the window that installed it goes away. The app stays alive
-    /// as an accessory after its last window closes, so without this an escaped `performSelection`
-    /// closure would keep `workspace.select` "working" against a window that no longer exists. Clearing
-    /// it here is what makes a post-teardown select correctly return `unsupported` (no live window)
-    /// rather than driving a stale gesture. A window reappearing reinstalls it via `configure`.
-    func detachGestureVerbs() {
-        gestureVerbs = nil
-        // The ui-state read is window-bound the same way: with no window there is no
-        // rendered chrome to report, so a post-teardown read fails `unsupported` rather
-        // than describing a window that no longer exists.
-        uiState = nil
+    /// Drops one window's automation layer when that window goes away. The app stays alive as an
+    /// accessory after its last window closes, so without this an escaped `performSelection`
+    /// closure would keep `workspace.select` "working" against a window that no longer exists;
+    /// removing the layer is what makes a post-teardown verb correctly report `unsupported`.
+    ///
+    /// It removes only `owner`'s entry. Windows overlap, and clearing the shared slot on any
+    /// teardown cut off windows that were still on screen — every mutation verb answering
+    /// `unsupported` while a window was open and focused, until the app was restarted (#1375).
+    func detachGestureVerbs(owner: UUID) {
+        windowLayers.removeAll { $0.owner == owner }
     }
 
     func automationContext(for handle: String) throws -> AutomationContextResult {
@@ -257,6 +332,43 @@ final class AutomationController: AutomationControlling {
         case .notFound:
             throw AutomationServiceError(
                 .invalidRequest, "No workspace with id \(request.workspaceID) is tracked by the app.")
+        }
+    }
+
+    /// `repo.terminal`: open a repo's own terminal, the surface a sidebar repo row opens. It was
+    /// reachable by click but by no verb, so an agent that wanted a shell scoped to a repo had to
+    /// create a workspace it did not want (#1375).
+    func automationOpenRepoTerminal(
+        for handle: String,
+        request: AutomationRepoTerminalRequest
+    ) async throws -> AutomationRepoTerminalResult {
+        let entry = try resolveOperator(handle, requiring: .repoTerminal)
+        let repoIDText = request.repoID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let repoID = UUID(uuidString: repoIDText) else {
+            throw AutomationServiceError(.invalidRequest, "repoID must be a UUID.")
+        }
+        guard let gestureVerbs else {
+            throw AutomationServiceError(
+                .unsupported,
+                "No WorkSpaces window is attached; repo.terminal requires a live window."
+            )
+        }
+        switch gestureVerbs.openRepoTerminal(repoID) {
+        case .completed(let effect, let repoName):
+            return AutomationRepoTerminalResult(
+                outcome: .completed,
+                repoID: repoID,
+                repoName: repoName,
+                attachedSurfaceID: effect.attachedSurfaceID,
+                attachedTerminal: effect.attachedTerminal,
+                directoryPath: effect.directoryPath,
+                system: AutomationSystemDescriptor(capabilities: entry.capabilities)
+            )
+        case .unsupported(let message):
+            throw AutomationServiceError(.unsupported, message)
+        case .notFound:
+            throw AutomationServiceError(
+                .invalidRequest, "No repo with id \(repoIDText) is tracked by the app.")
         }
     }
 
