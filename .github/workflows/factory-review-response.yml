@@ -19,10 +19,11 @@ on:
         required: true
         type: number
 
+# GITHUB_TOKEN is unused here — the checkout carries no credentials and the
+# script runs on the App token minted below — so this block is the floor, not
+# the scope that matters. See the token step for the permissions in force.
 permissions:
   contents: read
-  issues: write # PR conversation comments ride the issues API
-  pull-requests: read
 
 concurrency:
   group: factory-review-response-${{ github.event.pull_request.number || inputs.pr_number }}
@@ -77,8 +78,13 @@ jobs:
         with:
           app-id: ${{ secrets.APRIL_APP_ID }}
           private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          # `pull-requests: write`, not `read`, even though the endpoints are
+          # /issues/{n}/labels and /issues/{n}/comments: for a GitHub App the
+          # permission follows the target, and a pull request is not an issue.
+          # `issues: write` covers the repository-level label create, which is
+          # genuinely an Issues endpoint.
           permission-issues: write
-          permission-pull-requests: read
+          permission-pull-requests: write
       - name: Respond to the blocking review
         id: respond
         env:

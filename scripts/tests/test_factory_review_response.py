@@ -762,10 +762,42 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("group: factory-review-response-", self.workflow)
         self.assertIn("cancel-in-progress: false", self.workflow)
 
-    def test_token_scope_is_comment_only(self) -> None:
+    def test_the_token_can_write_to_a_pull_request(self) -> None:
+        """Labelling and commenting on a PR needs `pull_requests: write`.
+
+        The endpoints are `/issues/{n}/labels` and `/issues/{n}/comments`, so
+        `issues: write` looks like the matching scope — but for a GitHub App
+        the permission follows the *target*, and a pull request is not an
+        issue. Narrowing the token to `pull-requests: read` produced a 403 on
+        every agent PR (#1412). `issues: write` is still required for the
+        repository-level label create, which is genuinely an Issues endpoint.
+        """
         self.assertIn("permission-issues: write", self.workflow)
-        self.assertIn("permission-pull-requests: read", self.workflow)
+        self.assertIn("permission-pull-requests: write", self.workflow)
+        self.assertNotIn("permission-pull-requests: read", self.workflow)
         self.assertNotIn("permission-contents: write", self.workflow)
+
+    def test_no_factory_lane_writes_to_a_pull_request_read_only(self) -> None:
+        """The same trap, across every lane that mints a narrowed App token.
+
+        A lane that posts to a PR while holding `pull-requests: read` fails
+        closed at runtime, not at lint — so it reds every agent PR until
+        someone reads a log. Checked here instead.
+        """
+        workflows = sorted(WORKFLOW_PATH.parent.glob("factory-*.yml"))
+        self.assertTrue(workflows)
+        offenders = []
+        for path in workflows:
+            text = path.read_text(encoding="utf-8")
+            if "permission-pull-requests: read" not in text:
+                continue
+            writes_to_pr = any(
+                marker in text
+                for marker in ("/issues/", "pr edit", "--add-label", "issues/{n}")
+            ) or "factory-review-response.py" in text
+            if writes_to_pr:
+                offenders.append(path.name)
+        self.assertEqual(offenders, [], f"narrowed to pull-requests: read but writes to a PR: {offenders}")
 
     def test_actions_are_sha_pinned(self) -> None:
         refs = re.findall(r"uses:\s+(?!\./)(\S+)@(\S+)", self.workflow)
