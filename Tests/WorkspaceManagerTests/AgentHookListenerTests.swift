@@ -968,6 +968,112 @@ struct AgentHookListenerTests {
         let stats = await listener.currentStatistics()
         #expect(stats.flushCount == 1)
         #expect(stats.ingestedEvents == 0)
+        // The drop is counted, not silent (#1397).
+        #expect(stats.droppedUnregisteredEvents == 1)
+        #expect(stats.droppedUnregisteredSessions == 1)
+
+        await listener.stop()
+    }
+
+    /// #1397: a session that survived an app restart keeps posting under the host
+    /// session id its pane still exports, which this run's registry does not hold.
+    /// Those updates cannot be applied, but they must be countable — one session,
+    /// every one of its events — so Diagnostics can say the bus went quiet on
+    /// purpose rather than showing an agent frozen at its last known state.
+    @Test("Every dropped update from an unknown host session is counted, per session")
+    func unregisteredDropsAreCountedPerSessionAndEvent() async throws {
+        let cwd = "/tmp/hook-uc-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            coalescingInterval: 600,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        // Two sessions this run never registered — the shape of two panes that
+        // outlived a restart — and one that it did.
+        let survivorA = UUID()
+        let survivorB = UUID()
+        let registeredID = registry.registeredID
+        for (hostSessionID, tool) in [
+            (survivorA, "Read"), (survivorA, "Bash"), (survivorB, "Read"), (registeredID, "Read"),
+        ] {
+            let status = await Self.curlPost(
+                socket: socket, path: "/event",
+                body: try hookBody("PreToolUse", cwd: cwd, extra: ["tool_name": tool]),
+                hostSessionID: hostSessionID)
+            #expect(status == 0)
+        }
+
+        let buffered = await waitUntil(timeout: 5.0) {
+            await listener.pendingEventCount() == 4
+        }
+        #expect(buffered)
+
+        await listener.flushPendingEvents()
+
+        let stats = await listener.currentStatistics()
+        #expect(stats.ingestedEvents == 1)
+        #expect(stats.droppedUnregisteredEvents == 3)
+        #expect(stats.droppedUnregisteredSessions == 2)
+
+        await listener.stop()
+    }
+
+    /// The other half of the #1397 fix: once a session is registered under the id its
+    /// pane exports — which is what adopting a surviving session's recorded identity
+    /// achieves — its updates are applied and the dropped counter stops moving.
+    @Test("Registering the posting identity stops the drops")
+    func registeringPostingIdentityStopsDrops() async throws {
+        let cwd = "/tmp/hook-ur-\(UUID().uuidString.prefix(6))"
+        try? FileManager.default.createDirectory(atPath: cwd, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(atPath: cwd) }
+
+        let socket = Self.makeTempSocketURL()
+        let registry = await TestRegistry(cwd: cwd)
+        let listener = AgentHookListener(
+            bundleIdentifier: "com.test.workspaces",
+            registry: registry,
+            coalescingInterval: 600,
+            socketURLOverride: socket
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(nanoseconds: 250_000_000)
+
+        let survivingID = UUID()
+        var status = await Self.curlPost(
+            socket: socket, path: "/event",
+            body: try hookBody("PreToolUse", cwd: cwd, extra: ["tool_name": "Read"]),
+            hostSessionID: survivingID)
+        #expect(status == 0)
+        _ = await waitUntil(timeout: 5.0) { await listener.pendingEventCount() == 1 }
+        await listener.flushPendingEvents()
+        #expect(await listener.currentStatistics().droppedUnregisteredEvents == 1)
+
+        await registry.register(hostSessionID: survivingID, cwd: cwd, kind: .claudeCode)
+
+        status = await Self.curlPost(
+            socket: socket, path: "/event",
+            body: try hookBody("PreToolUse", cwd: cwd, extra: ["tool_name": "Bash"]),
+            hostSessionID: survivingID)
+        #expect(status == 0)
+        _ = await waitUntil(timeout: 5.0) { await listener.pendingEventCount() == 1 }
+        await listener.flushPendingEvents()
+
+        let stats = await listener.currentStatistics()
+        #expect(stats.ingestedEvents == 1)
+        #expect(stats.droppedUnregisteredEvents == 1)
+        let applied = await registry.appliedBatches
+        #expect(applied.count == 1)
 
         await listener.stop()
     }

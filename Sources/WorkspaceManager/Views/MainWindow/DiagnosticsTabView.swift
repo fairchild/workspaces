@@ -34,6 +34,7 @@ struct DiagnosticsTabView: View {
                 liveProcessesSection
                 resourceHistorySection
                 agentProcessesSection
+                agentIngestSection
                 traceDiagnosticsSection
                 latestFailuresSection
             }
@@ -295,6 +296,56 @@ struct DiagnosticsTabView: View {
             AgentSessionStatusList(statuses: currentAgentStatuses)
                 .accessibilityIdentifier("inspector.diagnostics.agent-sessions")
         }
+    }
+
+    /// Hook-bus health. The dropped counter is the point: an agent whose host session
+    /// this run does not know posts into a void, and before this the only trace was an
+    /// app-log line nobody reads (#1397).
+    private var agentIngestSection: some View {
+        DiagnosticsPanel(title: "Agent Hook Ingest", accessibilityID: "inspector.diagnostics.agent-ingest") {
+            DiagnosticsConceptNote(
+                icon: "antenna.radiowaves.left.and.right",
+                tint: .purple,
+                title: "Hook bus",
+                text: "Agent updates posted by terminal sessions to this app's local hook socket, since launch.",
+                helpText:
+                    "Dropped counts updates whose host session no live tile owns — usually an agent that outlived an app restart and still posts under its previous identity. It should stay at zero."
+            )
+
+            MetricsGrid {
+                DiagnosticsMetricCard(label: "Ingested", value: hookIngestText(\.ingestedEvents))
+                DiagnosticsMetricCard(label: "Status Lines", value: hookIngestText(\.statusLineUpdates))
+                DiagnosticsMetricCard(
+                    label: "Dropped",
+                    value: hookIngestText(\.droppedUnregisteredEvents),
+                    prominence: (viewModel.hookIngest?.droppedUnregisteredEvents ?? 0) > 0 ? .critical : .normal
+                )
+                DiagnosticsMetricCard(
+                    label: "Dropped Sessions",
+                    value: hookIngestText(\.droppedUnregisteredSessions),
+                    prominence: (viewModel.hookIngest?.droppedUnregisteredSessions ?? 0) > 0 ? .warning : .normal
+                )
+                DiagnosticsMetricCard(
+                    label: "Decode Failures",
+                    value: hookIngestText(\.decodeFailures),
+                    prominence: (viewModel.hookIngest?.decodeFailures ?? 0) > 0 ? .warning : .normal
+                )
+            }
+
+            if let hookIngest = viewModel.hookIngest, hookIngest.droppedUnregisteredSessions > 0 {
+                DiagnosticsInlineError(
+                    message:
+                        "Dropped \(hookIngest.droppedUnregisteredEvents) update(s) from \(hookIngest.droppedUnregisteredSessions) unknown host session(s). Reopen those terminals to resume status tracking."
+                )
+            }
+        }
+    }
+
+    /// A counter's value, or an em dash when no listener is running — an absent bus
+    /// reads as unknown rather than as a confident zero.
+    private func hookIngestText(_ keyPath: KeyPath<AgentHookListener.Statistics, Int>) -> String {
+        guard let hookIngest = viewModel.hookIngest else { return "—" }
+        return "\(hookIngest[keyPath: keyPath])"
     }
 
     private var traceDiagnosticsSection: some View {

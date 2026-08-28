@@ -45,6 +45,12 @@ public actor AgentHookListener {
         /// Coalesced main-actor flushes performed; with N events in one window
         /// this advances once while `ingestedEvents` advances N times.
         public var flushCount: Int = 0
+        /// Payloads discarded because no live tile owns their host session.
+        /// Above zero means an agent is posting under an identity this run does
+        /// not know, and its status is frozen wherever the UI shows it (#1397).
+        public var droppedUnregisteredEvents: Int = 0
+        /// Distinct host sessions that have had at least one payload dropped.
+        public var droppedUnregisteredSessions: Int = 0
     }
 
     /// Default accumulation window before pending events flush to the main
@@ -66,6 +72,9 @@ public actor AgentHookListener {
     private var pendingEvents: [UUID: [(event: AgentEvent, origin: AgentEventOrigin)]] = [:]
     private var drainTask: Task<Void, Never>?
     private var isStopped = false
+    /// Host sessions already reported as unregistered, so the fault fires once
+    /// per session rather than once per flush.
+    private var reportedUnregisteredSessions: Set<UUID> = []
 
     public init(
         bundleIdentifier: String,
@@ -362,21 +371,22 @@ public actor AgentHookListener {
     /// is the arrival order. One main-actor hop per iteration, one
     /// `apply(events:)` per contiguous same-origin run per session.
     /// Registration is checked at flush time so an unregistered session's
-    /// burst drops as a unit. Only the task stored in `drainTask` runs this,
-    /// which is what makes the drainer single.
+    /// burst drops as a unit — counted into `Statistics`, so the drop is
+    /// visible rather than silent. Only the task stored in `drainTask` runs
+    /// this, which is what makes the drainer single.
     private func drainPendingEvents() async {
         while !pendingEvents.isEmpty {
             let batches = pendingEvents
             pendingEvents = [:]
 
             let outcome = await MainActor.run {
-                [registry] () -> (hookEvents: Int, statusLineEvents: Int, droppedSessions: [UUID]) in
+                [registry] () -> (hookEvents: Int, statusLineEvents: Int, droppedEventsBySession: [UUID: Int]) in
                 var hookEvents = 0
                 var statusLineEvents = 0
-                var droppedSessions: [UUID] = []
+                var droppedEventsBySession: [UUID: Int] = [:]
                 for (hostSessionID, entries) in batches {
                     guard registry.status(for: hostSessionID) != nil else {
-                        droppedSessions.append(hostSessionID)
+                        droppedEventsBySession[hostSessionID, default: 0] += entries.count
                         continue
                     }
                     var index = entries.startIndex
@@ -395,17 +405,38 @@ public actor AgentHookListener {
                         }
                     }
                 }
-                return (hookEvents, statusLineEvents, droppedSessions)
+                return (hookEvents, statusLineEvents, droppedEventsBySession)
             }
 
             statistics.flushCount += 1
             statistics.ingestedEvents += outcome.hookEvents
             statistics.statusLineUpdates += outcome.statusLineEvents
-            for hostSessionID in outcome.droppedSessions {
-                logger("dropping events for unregistered host session \(hostSessionID.uuidString)")
+            for (hostSessionID, droppedEvents) in outcome.droppedEventsBySession {
+                noteUnregisteredDrop(hostSessionID: hostSessionID, droppedEvents: droppedEvents)
             }
         }
         drainTask = nil
+    }
+
+    /// Counts payloads dropped for a host session no live tile owns, and reports
+    /// the first such drop per session at fault level.
+    ///
+    /// One report per session is the whole diagnosis: an agent posting under an
+    /// identity this run does not know keeps posting, so the hundredth line says
+    /// nothing the first did not. Every later drop advances the counter
+    /// Diagnostics reads instead.
+    private func noteUnregisteredDrop(hostSessionID: UUID, droppedEvents: Int) {
+        statistics.droppedUnregisteredEvents += droppedEvents
+        guard reportedUnregisteredSessions.insert(hostSessionID).inserted else { return }
+        statistics.droppedUnregisteredSessions += 1
+        log.fault(
+            """
+            [AgentHookListener] no live tile owns host session \(hostSessionID.uuidString, privacy: .public); \
+            dropping its agent updates. A terminal that outlived an app restart still exports the previous \
+            run's WORKSPACES_HOST_SESSION_ID (#1397).
+            """
+        )
+        logger("dropping events for unregistered host session \(hostSessionID.uuidString)")
     }
 
     private func processCommandMarkers(request: HTTPRequest) async {
@@ -437,7 +468,7 @@ public actor AgentHookListener {
             return true
         }
         guard ingested else {
-            logger("dropping command markers for unregistered host session \(hostSessionID.uuidString)")
+            noteUnregisteredDrop(hostSessionID: hostSessionID, droppedEvents: 1)
             return
         }
         statistics.commandMarkerUpdates += 1
