@@ -208,6 +208,32 @@ milestone.
   meaning anything. This is one notification path, not two bug fixes, and it is
   not yet ticketed as such.
 
+## 10. Two operational notes from executing this
+
+**A triage sweep looks like a factory storm.** Every label edit on an `agent`-labelled
+issue fires a `factory-implement` run. Dispositioning seven `needs-triage` issues
+produced roughly fifteen runs that all skipped within seconds. They skip before
+claiming, so they do not appear to consume the daily budget — but anyone reading
+run history as a health signal will see a burst and reasonably suspect a runaway.
+If this misleads someone a second time it is worth a workflow-trigger filter;
+until then it is worth knowing rather than fixing.
+
+**Releases are capped at 6 implementation runs per day, and the cap is shared.**
+#1366 and #1368 cleared the evidence-contract gate and were then deferred with
+*"10 implementation runs have started today, above the configured daily cap of 6"* —
+four slots had already gone to #1398–#1401, released by another actor minutes
+earlier. So the eleven remaining contracts are a two-day drain at minimum, not one
+batch, and the queue competes with every other lane for the same budget.
+
+**A provenance gap the cap made visible.** Those four releases are attributed to
+`fairchild`, and so are this session's. That is the *token* identity, not a person:
+any agent session holding the owner's credentials satisfies `owner_release_event`'s
+"the most recent `ready` label actor is the repository owner" check. The admission
+model's core guarantee is that a human reviewed the content before release, and it
+currently cannot distinguish the owner from an agent acting as him. Not a defect
+found in the code — a limit of what the timeline can prove. Worth deciding whether
+it matters before the factory's authority widens.
+
 ## Provenance
 
 Sweep run 2026-08-27 against `origin/main` at `7af1e271`; figures in § 1 and § 6
