@@ -477,6 +477,32 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     /// not invalidated by a routine reconfigure.
     /// Re-provisions only when the launch's opt-in state and the credential's presence
     /// disagree, so the defaults-change firehose does not turn into a file-write loop.
+    /// Re-mint the operator credential when the app believes it published one but the file is
+    /// not there.
+    ///
+    /// The app cannot observe its removal. Another copy sharing the bundle-id path can delete it
+    /// (#1391), and the in-memory outcome still reports it available — so
+    /// `refreshOperatorCredentialIfOptInChanged` sees nothing changed, the operator plane stays
+    /// down, and every `workspaces automation` verb fails until a window lifecycle event happens
+    /// to run a fresh configure pass. Checking on activation is the cheap recovery: a `stat` at
+    /// the moment the user is most likely about to use the app.
+    func refreshOperatorCredentialIfMissing() {
+        let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
+        let url = operatorCredentialURL ?? AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
+        guard
+            AutomationOperatorProvisioning.shouldRepublish(
+                optedIn: isOperatorEnabled,
+                hasSocket: socketPath != nil,
+                credentialExists: FileManager.default.fileExists(atPath: url.path)
+            ),
+            let socketPath
+        else { return }
+        log.info(
+            "[AutomationIntegration] operator credential missing at \(url.path, privacy: .public); re-minting"
+        )
+        refreshOperatorCredential(socketPath: socketPath, bundleID: bundleID)
+    }
+
     private func refreshOperatorCredentialIfOptInChanged() {
         guard let socketPath else { return }
         let credentialAvailable = operatorCredentialOutcome?.isCredentialAvailable ?? false

@@ -66,13 +66,8 @@ public actor AutomationAuditLogger {
     }
 
     public nonisolated static func defaultAuditURL(bundleIdentifier: String) -> URL {
-        let appSupport =
-            FileManager.default.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first ?? FileManager.default.temporaryDirectory
-        let dir = appSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
-        return dir.appendingPathComponent("automation-audit.jsonl", isDirectory: false)
+        AutomationSupportDirectory.fileURL(
+            named: "automation-audit.jsonl", bundleIdentifier: bundleIdentifier)
     }
 
     public func record(
