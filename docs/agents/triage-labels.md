@@ -58,13 +58,33 @@ Use `agent` + `needs-human` when the work remains agent-owned but needs a decisi
 
 Use `human` when the work itself should be done by a person.
 
+`owner-action` is the machine-written counterpart. A person applies
+`needs-human` to say the lane needs a human; the factory applies `owner-action`
+when it has determined, from the PR's own state, that the owner is the blocking
+party — and it withdraws it once no reviewer is blocking any more. The two are
+kept apart on purpose: the factory never touches `needs-human`, and it removes
+only an `owner-action` it applied itself, so a hand-applied one stands. Treat
+that as a courtesy rather than a guarantee: label events carry no conditional
+write, so a label applied by hand between the factory's provenance read and its
+delete would still be removed. If you want to say "a human is needed", say it
+with `needs-human`, which the factory never touches at all. See
+`scripts/factory-review-response.py`.
+
+The marker is applied when the factory escalates and withdrawn when a trusted
+approval or dismissal leaves no reviewer blocking. Both are events, so it is
+only as current as the lane's last run: turning `FACTORY_REVIEW_RESPONSE_ENABLED`
+off between an escalation and its resolution leaves the marker up, and switching
+back on does not replay what was missed. A marker on a closed or merged PR is
+also left where it is — the Digest lists open, non-draft PRs only.
+
 ## Gate Labels
 
 Gate labels are not ownership or topic labels. They authorize or block a specific automation path.
 
 | Label | Meaning |
 | --- | --- |
-| `needs-human` | The current lane needs human intervention before continuing. May be used with either `agent` or `human`. |
+| `needs-human` | The current lane needs human intervention before continuing. May be used with either `agent` or `human`. Applied by people; the factory never applies or removes it. |
+| `owner-action` | The factory determined the owner is the blocking party and said so in a comment naming the gesture. Machine-managed: applied by the review-response lane, withdrawn by it once no reviewer is blocking. Surfaced as "Waiting on you" in the Factory Digest. |
 | `safe-to-run-agent` | Maintainer approval for the GitHub Actions mention executor to run against a public issue or PR request. The executor consumes and clears this gate through its own workflow. |
 | `privileged-agent-patch` | Break-glass approval for an agent patch to touch privileged repo-control, auth/token/sandbox, release/signing, or infra-secret paths. |
 

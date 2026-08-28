@@ -1,15 +1,17 @@
-# Answers a CHANGES_REQUESTED review on a factory-authored pull request.
+# Answers a CHANGES_REQUESTED review on a factory-authored pull request, and
+# withdraws the owner-action marker once no reviewer is blocking any more.
 # Owner involvement is soft breakage (#1378): this lane converts a silently
-# parked PR into either "the factory clears this" or an explicit, gesture-named
-# owner escalation. Trusted lane -- runs main's scripts only, never checks out
-# or executes pull-request code, and reaches no model.
+# parked PR into an explicit, gesture-named owner escalation, and labels it so
+# waiting-on-the-owner stops looking like stranded (#1381). Trusted lane --
+# runs main's scripts only, never checks out or executes pull-request code,
+# and reaches no model.
 
 name: Factory Review Response
 run-name: "Factory Review Response #${{ github.event.pull_request.number || inputs.pr_number }}"
 
 on:
   pull_request_review:
-    types: [submitted]
+    types: [submitted, dismissed]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -28,6 +30,10 @@ concurrency:
 
 jobs:
   respond:
+    # An approval or a dismissal only earns a run when there is a marker to
+    # withdraw, so the common case -- an ordinary approval on an unmarked PR --
+    # skips before a runner starts or a token is minted.
+    #
     # Same admission shape as the implement lane, plus two guards specific to
     # a review-triggered lane. The reviewer allowlist is here, not only in the
     # script, so an untrusted reviewer's CHANGES_REQUESTED never reaches the
@@ -45,7 +51,10 @@ jobs:
       vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
       vars.FACTORY_REVIEW_RESPONSE_ENABLED == 'true') ||
       (github.event_name == 'pull_request_review' &&
-      github.event.review.state == 'changes_requested' &&
+      (github.event.review.state == 'changes_requested' ||
+      ((github.event.review.state == 'approved' ||
+      github.event.review.state == 'dismissed') &&
+      contains(github.event.pull_request.labels.*.name, 'owner-action'))) &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.review.user.login == github.repository_owner ||
       github.event.review.user.login == 'april-clearwater[bot]' ||

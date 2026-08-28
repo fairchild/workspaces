@@ -41,6 +41,10 @@ FACTORY_SWEEP_ACTOR = "github-actions[bot]"
 # to claimed/review means the sweep never got it out — surface that as a fault
 # rather than only a passive list entry (#1148).
 QUEUE_STALE_HOURS = 24
+# Applied and cleared by scripts/factory-review-response.py (#1381). Read here
+# so the owner's daily surface answers "what is waiting on me" without opening
+# each PR.
+OWNER_ACTION_LABEL = "owner-action"
 
 
 class FactoryDigestError(RuntimeError):
@@ -374,6 +378,7 @@ query FactoryDigestPulls($owner: String!, $name: String!, $after: String) {
       pageInfo { hasNextPage endCursor }
       nodes {
         number title url state isDraft createdAt updatedAt
+        labels(first: 50) { nodes { name } }
         closingIssuesReferences(first: 50) { nodes { number } }
       }
     }
@@ -389,6 +394,7 @@ query FactoryDigestPulls($owner: String!, $name: String!, $after: String) {
             pulls.append(
                 {
                     **node,
+                    "labels": list((node.get("labels") or {}).get("nodes") or []),
                     "closingIssuesReferences": list(node["closingIssuesReferences"]["nodes"]),
                 }
             )
@@ -572,6 +578,11 @@ def render_digest(
     for pull in pulls:
         if str(pull.get("state", "")).upper() != "OPEN" or pull.get("isDraft"):
             continue
+        if OWNER_ACTION_LABEL in label_names(pull):
+            # Listed under "Waiting on you" instead. A PR cannot both need the
+            # owner's gesture and be ready for their merge, and printing it
+            # twice would make the first section mean less.
+            continue
         linked_issues = [
             issues_by_number.get(int(reference["number"]))
             for reference in pull.get("closingIssuesReferences", []) or []
@@ -588,6 +599,37 @@ def render_digest(
         merge_lines.append((not mergeable, parse_datetime(updated_at), line))
 
     sections: list[str] = []
+
+    # First, because it is the only section naming work that has stopped
+    # moving until the reader acts. A PR the factory has escalated is not
+    # stranded and not in flight; without a place to say so it reads as
+    # either (#1381).
+    owner_action_lines: list[tuple[datetime, str]] = []
+    for pull in pulls:
+        if str(pull.get("state", "")).upper() != "OPEN" or pull.get("isDraft"):
+            continue
+        if OWNER_ACTION_LABEL not in label_names(pull):
+            continue
+        updated_at = str(pull["updatedAt"])
+        owner_action_lines.append(
+            (
+                parse_datetime(updated_at),
+                # PR activity, not time-since-labelled: a comment or a check
+                # resets `updatedAt`, and the digest has no cheap way to read
+                # when the label went on. Named for what it measures.
+                f"- no activity {age_days(updated_at, current_time)}d "
+                f"{render_item_reference(pull)}",
+            )
+        )
+    if owner_action_lines:
+        lines = [line for _, line in sorted(owner_action_lines)]
+        sections.append(
+            "## Waiting on you\n\n"
+            + "\n".join(lines)
+            + f"\n\nThe factory applies `{OWNER_ACTION_LABEL}` alongside a comment "
+            "naming the gesture, and withdraws it once a reviewer stops blocking."
+        )
+
     if merge_lines:
         lines = [line for _, _, line in sorted(merge_lines, key=lambda item: (item[0], item[1]))]
         sections.append("## Needs your merge\n\n" + "\n".join(lines))

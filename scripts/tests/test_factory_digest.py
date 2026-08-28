@@ -1154,5 +1154,93 @@ class FactoryDigestTests(unittest.TestCase):
         self.assertEqual(publish.call_args.args[3], "actions-token")
 
 
+class OwnerActionDigestTests(unittest.TestCase):
+    """#1381: a PR waiting on the owner reads as stranded unless something
+    says otherwise. The digest is the owner's daily surface, so it is where
+    "what is waiting on me" has to be answerable without opening each PR."""
+
+    SUMMARY = {"generated_at": "2026-07-12T13:30:00Z", "totals": {}, "breaches": []}
+
+    @staticmethod
+    def pull(number: int, *, labels=(), draft: bool = False, state: str = "OPEN"):
+        return {
+            "number": number,
+            "title": f"Pull {number}",
+            "url": f"https://example.test/pull/{number}",
+            "state": state,
+            "isDraft": draft,
+            "createdAt": "2026-07-08T13:30:00Z",
+            "updatedAt": "2026-07-10T13:30:00Z",
+            "labels": [{"name": name} for name in labels],
+            "closingIssuesReferences": [],
+        }
+
+    def render(self, pulls) -> str:
+        return factory_digest.render_digest([], pulls, self.SUMMARY)
+
+    def test_escalated_pulls_are_listed_oldest_first_with_their_wait(self) -> None:
+        older = self.pull(30, labels=["author:april", "owner-action"])
+        older["updatedAt"] = "2026-07-08T13:30:00Z"
+        newer = self.pull(31, labels=["owner-action"])
+        markdown = self.render([newer, older])
+
+        self.assertIn("## Waiting on you", markdown)
+        section = markdown.split("## Waiting on you", 1)[1]
+        self.assertLess(section.index("/pull/30"), section.index("/pull/31"))
+        self.assertIn("- no activity 4d [#30](https://example.test/pull/30)", markdown)
+        self.assertIn("naming the gesture", markdown)
+
+    def test_a_waiting_pull_is_not_also_listed_as_needing_a_merge(self) -> None:
+        # A PR cannot both need the owner's gesture and be ready for their
+        # merge; printing it twice would make the first section mean less.
+        markdown = self.render(
+            [self.pull(30, labels=["owner-action"]), self.pull(31)]
+        )
+        merge_section = markdown.split("## Needs your merge", 1)[1]
+        self.assertNotIn("/pull/30", merge_section)
+        self.assertIn("/pull/31", merge_section)
+
+    def test_the_wait_metric_says_what_it_measures(self) -> None:
+        # `updatedAt` moves on any comment or check, so it is PR activity, not
+        # time-since-labelled. The line must not claim otherwise.
+        markdown = self.render([self.pull(30, labels=["owner-action"])])
+        self.assertIn("no activity", markdown)
+        self.assertNotIn("waiting 2d", markdown)
+
+    def test_the_section_leads_the_digest(self) -> None:
+        # It is the only section naming work that has stopped moving until the
+        # reader acts, so it goes above "Needs your merge".
+        markdown = self.render(
+            [self.pull(30, labels=["owner-action"]), self.pull(31)]
+        )
+        self.assertLess(
+            markdown.index("## Waiting on you"), markdown.index("## Needs your merge")
+        )
+
+    def test_unlabeled_draft_and_closed_pulls_are_not_listed(self) -> None:
+        markdown = self.render(
+            [
+                self.pull(31),
+                self.pull(32, labels=["owner-action"], draft=True),
+                self.pull(33, labels=["owner-action"], state="CLOSED"),
+            ]
+        )
+        self.assertNotIn("## Waiting on you", markdown)
+
+    def test_the_live_pull_query_asks_for_and_normalizes_labels(self) -> None:
+        # The section reads labels off each pull; without this the live path
+        # would render an empty section forever while the tests stayed green.
+        text = SCRIPT_PATH.read_text(encoding="utf-8")
+        pull_query = text.split("pullRequests(first: 100", 1)[1].split('"""', 1)[0]
+        self.assertIn("labels(first: 50)", pull_query)
+        self.assertIn('"labels": list((node.get("labels") or {}).get("nodes") or [])', text)
+        self.assertEqual(factory_digest.OWNER_ACTION_LABEL, "owner-action")
+
+    def test_a_pull_with_no_labels_key_does_not_break_the_render(self) -> None:
+        bare = self.pull(31)
+        bare.pop("labels")
+        self.assertNotIn("## Waiting on you", self.render([bare]))
+
+
 if __name__ == "__main__":
     unittest.main()
