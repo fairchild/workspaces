@@ -260,18 +260,24 @@ final class TileTreeStore: ObservableObject {
     /// owned scope first and then launches one surface per continuity row, so sibling
     /// rows sharing a key (a primary and its recorded split panes) each get their own
     /// session carrying their own recorded tmux target and initial command (#1232).
+    ///
+    /// `adoptedHostSessionID` carries a reattach surface's recorded identity through
+    /// to the session it creates, so the registry the hook listener consults is keyed
+    /// by the id the surviving pane already exports (#1397).
     @discardableResult
     func createRestoredSession(
         key: HostTerminalSessionKey,
         directory: URL,
         initialCommand: String? = nil,
-        tmuxSessionNameOverride: String? = nil
+        tmuxSessionNameOverride: String? = nil,
+        adoptedHostSessionID: UUID? = nil
     ) -> HostTerminalSession {
         let session = coordinator.createSession(
             key: key,
             directory: directory,
             initialCommand: initialCommand,
-            tmuxSessionNameOverride: tmuxSessionNameOverride
+            tmuxSessionNameOverride: tmuxSessionNameOverride,
+            adoptedID: adoptedHostSessionID
         )
         publishSnapshot()
         return session

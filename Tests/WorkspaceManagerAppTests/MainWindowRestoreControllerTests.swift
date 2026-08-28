@@ -418,4 +418,20 @@ struct MainWindowRestoreControllerTests {
 
         #expect(controller.ownedSessionKeys(in: target) == [shared, other])
     }
+
+    // MARK: - Host-session identity
+
+    /// The #1397 acceptance at the decision layer: rejoining a surviving tmux session
+    /// keeps the identity its processes already export, while a surface that starts a
+    /// new shell does not claim the old id.
+    @Test("Only a reattach surface adopts its recorded host session id")
+    func onlyReattachAdoptsRecordedHostSessionID() {
+        let reattach = surface(action: .reattachTmux(sessionName: "wm-alpha"))
+        let resume = surface(action: .resumeClaude(agentSessionID: "a"))
+        let fresh = surface(action: .freshShell)
+
+        #expect(controller.adoptedHostSessionID(for: reattach) == reattach.hostSessionID)
+        #expect(controller.adoptedHostSessionID(for: resume) == nil)
+        #expect(controller.adoptedHostSessionID(for: fresh) == nil)
+    }
 }

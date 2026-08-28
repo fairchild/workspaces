@@ -377,4 +377,41 @@ struct HostTerminalSessionCoordinatorTests {
         #expect(reused.session.id == created.session.id)
         #expect(reused.session.initialCommand == "claude --resume sess-1")
     }
+
+    /// #1397: a surface rejoining a surviving tmux session keeps the identity the
+    /// processes in that session still export, instead of being renamed underneath
+    /// them.
+    @Test("A created session can adopt a recorded host session id")
+    func createSessionAdoptsRecordedIdentity() {
+        var coordinator = HostTerminalSessionCoordinator()
+        let directory = URL(fileURLWithPath: "/code/repo")
+        let recorded = UUID()
+
+        let session = coordinator.createSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            adoptedID: recorded
+        )
+
+        #expect(session.id == recorded)
+        #expect(coordinator.sessions.map(\.id) == [recorded])
+    }
+
+    /// Two live tiles cannot share one identity — their agent status would merge —
+    /// so an id that is already in use is not adoptable.
+    @Test("Adopting an id already in use falls back to a fresh one")
+    func createSessionRefusesToDuplicateALiveIdentity() {
+        var coordinator = HostTerminalSessionCoordinator()
+        let directory = URL(fileURLWithPath: "/code/repo")
+        let first = coordinator.createSession(key: .repoPath(directory.path), directory: directory)
+
+        let second = coordinator.createSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            adoptedID: first.id
+        )
+
+        #expect(second.id != first.id)
+        #expect(coordinator.sessions.count == 2)
+    }
 }

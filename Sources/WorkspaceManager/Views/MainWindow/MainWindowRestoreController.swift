@@ -183,4 +183,22 @@ struct MainWindowRestoreController {
         guard case .reattachTmux(let sessionName) = action else { return nil }
         return sessionName
     }
+
+    /// The host-session identity a restored surface takes on, or `nil` to mint a fresh one.
+    ///
+    /// Reattaching joins processes that outlived the app, and those processes still export the
+    /// `WORKSPACES_HOST_SESSION_ID` the surface carried in the previous run. A fresh identity
+    /// there is a rename nobody inside the pane hears about: every hook post keeps arriving
+    /// under the recorded id, the listener finds no registration for it and drops the event, so
+    /// status ingestion goes dead for exactly the sessions continuity exists to preserve
+    /// (#1397). Adopting the recorded id makes identity survive with the pty, and keeps the
+    /// session on one `terminal_sessions` row across the restart instead of stranding the old
+    /// one beside a new duplicate.
+    ///
+    /// A resume or fresh surface starts a shell that inherits this run's environment, so its
+    /// identity is genuinely new and the recorded id is not its to claim.
+    func adoptedHostSessionID(for surface: RestoreSurfacePlan) -> UUID? {
+        guard case .reattachTmux = surface.action else { return nil }
+        return surface.hostSessionID
+    }
 }

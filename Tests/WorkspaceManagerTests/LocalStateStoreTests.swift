@@ -525,6 +525,60 @@ struct LocalStateStoreTests {
         #expect(active.map(\.hostSessionID) == [strandedID])
     }
 
+    /// The #1397 acceptance in the store: a session whose tmux pane outlived the app
+    /// and comes back under its recorded id occupies the one row it always had, moved
+    /// to the current run. Minting a fresh id for the same pane is what leaves the old
+    /// row stranded beside a duplicate — the state the bug report measured.
+    @Test("A reattached session adopting its recorded id keeps one continuity row")
+    func adoptedIdentityKeepsOneContinuityRow() async throws {
+        let fixture = try TemporaryDirectory()
+        defer { fixture.cleanup() }
+        let db = fixture.url.appendingPathComponent("state.sqlite")
+
+        let survivorID = UUID()
+        let directory = URL(fileURLWithPath: "/code/survivor")
+        func survivor(id: UUID) -> HostTerminalSession {
+            HostTerminalSession(
+                id: id,
+                key: .repoPath(directory.path),
+                directory: directory,
+                tmuxSessionNameOverride: "wm-survivor"
+            )
+        }
+
+        let firstRun = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        try await firstRun.recordTerminalSession(
+            survivor(id: survivorID),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        // The relaunch reattaches to the surviving pane under its recorded identity.
+        let reattachRun = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_100_000))
+        try await reattachRun.recordTerminalSession(
+            survivor(id: survivorID),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let adopted = try await reattachRun.summary()
+        #expect(adopted.tableCounts["terminal_sessions"] == 1)
+        let adoptedActive = try await reattachRun.fetchContinuitySessions(activeOnly: true, limit: 100)
+        #expect(adoptedActive.map(\.hostSessionID) == [survivorID])
+        #expect(adoptedActive.first?.tmuxSessionName == "wm-survivor")
+
+        // What minting instead produces: the pane keeps posting under `survivorID`
+        // while a second row claims its tmux name.
+        let mintingRun = try LocalStateStore(
+            databaseURL: db, runID: UUID(), runStartedAt: Date(timeIntervalSince1970: 1_700_200_000))
+        try await mintingRun.recordTerminalSession(
+            survivor(id: UUID()),
+            terminalMode: "tmux_per_session", isActive: true, hooksSocketPath: nil)
+
+        let minted = try await mintingRun.summary()
+        #expect(minted.tableCounts["terminal_sessions"] == 2)
+        let mintedActive = try await mintingRun.fetchContinuitySessions(activeOnly: true, limit: 100)
+        #expect(mintedActive.filter { $0.tmuxSessionName == "wm-survivor" }.count == 2)
+    }
+
     @Test("A store stamped with an older run start cannot deactivate newer runs")
     func olderStoreCannotSweepNewerRuns() async throws {
         let fixture = try TemporaryDirectory()
