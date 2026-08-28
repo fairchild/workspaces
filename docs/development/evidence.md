@@ -117,6 +117,35 @@ Reach for a fallback only when the lane above cannot apply, in this order:
    Unlocked
    background/occluded windows capture fine with the lane above.
 
+Two properties of the app decide between the app lane (1) and the render lane (2)
+before machine availability does, and a third decides whether a lane-2 run proved
+anything.
+
+**Scroll position.** The snapshot captures what the window is showing, and the
+automation API has no scroll verb, so content below the fold in a scrolling surface
+cannot be staged. `WORKSPACES_UI_FIXTURE_OPEN_DIAGNOSTICS=1` opens the Diagnostics
+tab (grammar in [ui-fixture-mode.md](ui-fixture-mode.md)) but reaches only the
+surface, not a panel further down it — the tab's later panels are out of frame
+either way. A view's place in its scroll order is therefore a lane decision, and
+the render lane is the answer for anything past the first screenful.
+
+**Bundle-id-keyed scope.** The automation socket and the per-launch operator
+credential share one directory keyed by bundle id
+(`AutomationListener.defaultSocketURL`, with
+`AutomationOperatorCredentialStore.defaultURL` beside it), and the socket is
+flock-guarded — so a second instance of the same bundle id goes dormant and never
+mints the credential the snapshot needs. "An idle machine" means precisely that no
+other instance of that bundle id is running: a debug build cannot take operator
+scope next to an installed WorkSpaces, and quitting the installed app is what
+unblocks the lane.
+
+**Filtering the render lane.** Swift Testing's `--filter` matches the *type* name,
+not the suite's display name. A display-name filter is not an error — it exits 0
+with `Test run with 0 tests in 0 suites passed` and writes no PNG — so a script
+that trusts the exit code reports success for a run that never happened. Filter by
+type name (`--filter AgentHookIngestPanelRenderTests`) and assert the output files
+exist afterwards.
+
 ### Web UI evidence
 
 The app lane is macOS-app only. Web dashboard evidence still uses
