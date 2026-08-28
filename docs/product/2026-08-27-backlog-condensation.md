@@ -1,17 +1,18 @@
 # Backlog condensation — decision record
 
-> **As of 2026-08-28.** Approved in full; **not yet executed.**
+> **As of 2026-08-28.** Approved and **executed**, except the re-release queue.
 >
-> Michael approved three decisions on 2026-08-27: refill the milestone layer,
-> take a batch of 7 merges and 13 closures, and defer the factory-autonomy call
-> to a metric. None of it has run — `gh` cannot open a network socket on this
-> machine, and every tracker write needs it.
+> Milestones `[D4]`, `[A3]`, `[F2]` are open and populated; `[F1]` is closed. All
+> 7 merges and all 13 closures are done, each with its reason recorded on the
+> issue. The `ready` queue is **not** drained — executing it uncovered a
+> different binding constraint than the one this record originally named. See
+> § 7.
 >
-> **Staleness test, in order:** if `[D4]`, `[A3]` and `[F2]` are open milestones
-> on GitHub, this record is history and the tracker is the truth. If they are
-> not, nothing here has been executed and the backlog still looks the way § 1
-> describes it. Either way, re-read § 1's numbers against `gh issue list` before
-> planning from them — the tracker lags this file the moment anything ships.
+> **Staleness test, in order:** if `[D4]`, `[A3]` and `[F2]` are still the open
+> milestones, this record is current. If a `[D5]` or `[A4]` exists, a lane has
+> moved on and § 3 is history. Re-read § 1's counts against `gh issue list`
+> before planning from them — the tracker leads this file the moment anything
+> ships.
 
 Produced by the product-triage persona (Mara Fielding) from the 2026-08-27
 check-in sweep. The reasoning behind each call, with per-issue evidence, is in
@@ -37,13 +38,24 @@ no successor opened. The result, measured 2026-08-28:
 This is not drift. The roadmap points at exactly the right surface; the surface
 is empty.
 
-**The `ready` queue was never a backlog.** `ready` is the factory's admission
-token, not a priority signal. The 19 issues carrying it were released to a loop
-that had never completed end to end until 2026-08-27 (#1110 S1, third attempt).
-Two verified causes for the stall: the loop did not work, and
-`verify_release_actor` refused bot-restored `ready`, which 5 of the 19 carried.
-#1387 fixed three of those lineage shapes retroactively; **#1271 and #1366 still
-will not admit** and need a manual label cycle.
+**The `ready` queue was never a backlog — and the reason it stalled is not what
+this record first said.** `ready` is the factory's admission token, not a
+priority signal. The 19 issues carrying it were released to a loop that had never
+completed end to end until 2026-08-27 (#1110 S1, third attempt). Two causes were
+verified up front: the loop did not work, and `verify_release_actor` refused
+bot-restored `ready`, which 5 of the 19 carried.
+
+Both were real, and neither is the binding constraint. Executing the re-release
+on 2026-08-28 found it: **13 of the 13 re-release candidates have no
+`## Requested Evidence` section**, and the admission gate declines without one —
+correctly, per #1380's third finding, rather than burning an implement run. #1366
+and #1368 were declined within seconds of release, cleanly, with an explanatory
+comment.
+
+So the queue could never have drained regardless of the loop or the lineage.
+Adding a contract to #1368 and re-releasing it admitted immediately, which
+confirms the diagnosis and gives the recipe. This is the good kind of blocked:
+the gate is doing exactly its job, and the work is authoring 11 more contracts.
 
 ---
 
@@ -134,19 +146,30 @@ breaks) and #721 (live TestFlight intent behind it).
 | Remaining `idea`, filtered from working views | 9 |
 | **Working backlog, in six themes** | **57** |
 
-## 7. `ready` queue dispositions
+## 7. `ready` queue — dispositions and what executing them found
 
-8 re-release · 5 merge into 2 · 5 park (drop `ready`) · 1 verify.
+**Executed:** 4 parked (`ready` dropped), #958 verified and kept, admission
+lineage repaired on #1366 and #1368 by cycling `ready` as the owner.
 
-| Issues | Disposition | Note |
+**Not executed:** the remaining re-releases. Executing the first two exposed the
+constraint in § 1 — every candidate lacks a `## Requested Evidence` section and
+is declined at admission. Eleven contracts still need authoring, and each is real
+per-issue judgment about what would make the change believable, not a template.
+
+| Issues | Disposition | State |
 |---|---|---|
-| #845, #976, #530, #882, #1305, #1309, #517(+#518), #1343 | Re-release | #976 first — a green gate that did not run is worse than a red one. #882 will park on evidence unless #1088 lands first |
-| #1033, #1321 | Merge into the flake sweep | |
-| #938, #999, #1044, #1046 | Park — drop `ready` | Human-lane, or presupposing frozen W-lane breadth |
-| #958 | Verify first | Check overlap against #1392's `automation repo terminal` |
-| #1271, #1366 | **Owner label cycle required** | Admission lineage cannot be repaired by the factory |
+| #1368 | Contract authored, re-released | **Admitted — implementing** |
+| #1366 | Contract authored, re-released | **Admitted** |
+| #845, #976, #530, #882, #1305, #1309, #517, #1343, #1033, #958 | Re-release, blocked on a contract | Contract needed first. #976 first when they go — a green gate that did not run is worse than a red one. #882 will park on evidence unless #1088 lands first |
+| #938, #999, #1044, #1046 | Parked — `ready` dropped | Done |
+| #1271 | Held | Bot-applied `ready` with no owner release anywhere in its lineage; needs both a cycle and a contract |
+| #518, #1321 | Closed by merge | Done |
 
----
+**A note on sequencing that cost nothing to learn but would have cost something
+to guess at:** releasing several at once during a live release cut would have put
+factory-authored PRs into `main` while v0.26.0 was being tagged. The WIP cap
+would have limited the damage, but the right order is release-cut first, queue
+second.
 
 ## 8. The metric, and what it decides
 
@@ -169,19 +192,21 @@ milestone.
 
 ## 9. Open owner actions
 
-- Cycle `ready` on **#1271** and **#1366** by hand.
+- **#1271** — bot-applied `ready` with no owner release in its lineage. Needs a
+  label cycle *and* an evidence contract before it can admit.
 - **#547** — the roadmap names it as a gate ("notifications should catch up
   reliably before they get more entrypoints"). It has no milestone and has not
   moved since May. Promote it, or take the sentence out of the roadmap.
 - **#1110** — the merge-authority contract still reads *pending owner decision*
   after S1 and S2 both passed.
-- **`gh` cannot dial.** Little Snitch is running; a freshly compiled Go binary
-  reaches `api.github.com:443` fine, and `curl` and a raw socket both succeed, so
-  Go networking is healthy and something denies `gh` specifically. Stable 2.96.0
-  and `HEAD-d76da60` fail identically, so whatever the rule matches on is broader
-  than a build hash. Gesture: open Little Snitch, delete or allow the `gh` rules.
-
----
+- **The monitoring gap, newly visible.** Two independent scheduled checks went
+  red and stayed red without anyone noticing: #1385 (repo settings drift, failing
+  every run since ~2026-08-22 including scheduled `main` runs) and #1404 (the
+  production web-next agentic turn producing nothing for four days, while
+  recording no error events). A check nobody reads is indistinguishable from a
+  check that does not exist, and the cost lands on every other gate — red stops
+  meaning anything. This is one notification path, not two bug fixes, and it is
+  not yet ticketed as such.
 
 ## Provenance
 
