@@ -71,6 +71,9 @@ class ResolvePersonaTests(unittest.TestCase):
             (memory_root / "april" / "personality.md").write_text(
                 "April memory", encoding="utf-8"
             )
+            (memory_root / "april" / "method.md").write_text(
+                "Unlisted top-level memory", encoding="utf-8"
+            )
             (memory_root / "april" / "core").mkdir()
             (memory_root / "april" / "core" / "pattern.md").write_text(
                 "Team core", encoding="utf-8"
@@ -88,6 +91,9 @@ class ResolvePersonaTests(unittest.TestCase):
         self.assertIn("human.md", paths)
         self.assertIn("personality.md", paths)
         self.assertIn("pattern.md", paths)
+        # Regression (2026-08-28): a top-level file outside PERSONA_INLINE_FILES
+        # was written successfully and silently never loaded.
+        self.assertIn("method.md", paths)
 
     def test_uses_active_team_core_when_persona_memory_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

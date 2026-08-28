@@ -190,6 +190,15 @@ def append_teammate_memory(
         if path.exists():
             required.append(MemoryFile(label_prefix, path))
 
+    # Any other top-level .md is persona memory too: a write that succeeded
+    # must not be silently unread (it cost method.md on 2026-08-28 — the file
+    # loaded only after being discovered missing by grepping resolver output).
+    # Known names above keep their stable ordering; the rest follow sorted.
+    known = set(PERSONA_INLINE_FILES)
+    for path in sorted(directory.glob("*.md")):
+        if path.name not in known:
+            required.append(MemoryFile(label_prefix, path))
+
     core_dir = directory / "core"
     if core_dir.is_dir():
         for path in sorted(core_dir.glob("*.md")):
