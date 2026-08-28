@@ -1,5 +1,50 @@
 # Changelog
 
+## [0.26.0] - 2026-08-28
+
+WorkSpaces now reopens the workspaces you had open when you quit, so a restart
+puts you back where you were instead of at an empty window. Each workspace can
+carry a Note, set from the sidebar or over automation, for the context that does
+not belong in a commit message. The automation plane gains detached launch,
+read, and send verbs on the tmux plane, live-window detection, and a
+repo.terminal verb, so an external agent can drive a workspace the way a person
+does. Launch and sidebar work is measurably cheaper this release: path
+normalization, the repo index, and the sidebar sort are memoized, hook ingest is
+coalesced per session, and the memory metric now reports an honest number. The
+rest is agent-factory reliability — reviews that answer instead of stalling,
+runs that fail without locking the issue behind them.
+
+### Added
+- fail the metadata PR, not the signed run, when release gates would block (#1344)
+- honest memory metric and stale-session hygiene (#1347 D-slice) (#1355)
+- detached launch, read, and send verbs on the tmux plane (#1348)
+- responder stands down on agent-authored owner comments (#1364)
+- a Workspace Note, settable from the sidebar and over automation (#1350)
+- answer a changes-requested review instead of parking on the owner (#1383)
+- mark a pull request that is waiting on the owner (#1394)
+
+### Fixed
+- provision the operator credential on every configure pass (#1349)
+- a failed run must not lock the issue's front door (#1387)
+- reattach the workspaces that were open at quit (#1374) (#1384)
+- let mechanically checkable evidence be checked mechanically (#1389)
+- a satisfied objection should not keep blocking (#1393)
+- live-window detection, and a repo.terminal verb (#1375) (#1392)
+- record require_extra_approval_for_unattributed_changes in the ruleset manifest (#1396)
+
+### Other
+- mark the sidebar arrangement brief shipped in v0.25.0 (#1345)
+- coalesce hook ingest and scope status publication per session (#1347 slice 1) (#1353)
+- memoize path normalization, repo index, and sidebar sort (#1347 B-slice) (#1354)
+- record the folio repository-split decision
+- codex exec needs stdin closed or it stalls before reviewing (#1251) (#1365)
+- resolve the #1251 residual — delivery scheduling, not fork or read latency (#1363)
+- record Vercel Git disconnect boundary (#1263)
+- record what #1251 cost four passes to learn (#1371)
+- bump sandbox mise pin to v2026.8.12 (weekly refresh) (#1372)
+- link product_overview.md from README documentation list (#1377)
+- a clean rebase across a rename can leave tests mocking nothing (#1395)
+
 ## [0.25.0] - 2026-08-22
 
 The sidebar gains a **Recent** arrangement: a flat, date-bucketed list (Today /
