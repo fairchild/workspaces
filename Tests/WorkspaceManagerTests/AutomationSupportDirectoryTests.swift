@@ -36,8 +36,24 @@ struct AutomationSupportDirectoryTests {
 
         #expect(isolated.path != real.path)
         #expect(!isolated.path.contains("Application Support"))
-        // The bundle-id component is kept, so an isolated tree still reads as this app's.
-        #expect(isolated.lastPathComponent == bundleID)
+        // Under the per-user temporary directory, never /tmp: that is mode 01777, and another
+        // local account could pre-create the predictable path and own what is written inside it.
+        #expect(isolated.path.hasPrefix(FileManager.default.temporaryDirectory.path))
+        #expect(isolated.lastPathComponent.hasPrefix("ws-auto-"))
+    }
+
+    /// The bundle identifier rides in the digest rather than a path component — one short
+    /// component keeps the socket inside `sun_path` — so it still has to separate two apps
+    /// sharing a root.
+    @Test("Different bundle identifiers under one root do not collide")
+    func differentBundleIdentifiersAreDistinct() {
+        let environment = [SyntheticRunRoot.environmentKey: "/tmp/shared-root"]
+
+        let first = AutomationSupportDirectory.url(bundleIdentifier: bundleID, environment: environment)
+        let second = AutomationSupportDirectory.url(
+            bundleIdentifier: "com.cloudcompute.workspaces.helper", environment: environment)
+
+        #expect(first.path != second.path)
     }
 
     /// Two different synthetic roots must not share one automation plane, or isolating a run
@@ -123,42 +139,109 @@ struct AutomationSupportDirectoryTests {
     }
 }
 
-/// The republish decision (#1391): the app has to answer it from disk, because its own record of
-/// what it published is exactly what goes stale when another copy deletes the file.
+/// The consumers, not just the helper (#1391). Asserting the helper alone would pass with any
+/// one of the three reverted to its own Application Support lookup, which is the shape of the
+/// original bug.
+@Suite("Automation paths follow the support directory")
+struct AutomationPathConsumerTests {
+    private let bundleID = "com.cloudcompute.workspaces"
+
+    @Test("Socket, audit log, and credential all resolve into the automation directory")
+    func everyConsumerUsesTheSharedDirectory() {
+        let directory = AutomationSupportDirectory.url(bundleIdentifier: bundleID, environment: [:])
+
+        let socket = AutomationListener.defaultSocketURL(bundleIdentifier: bundleID)
+        let audit = AutomationAuditLogger.defaultAuditURL(bundleIdentifier: bundleID)
+        let credential = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
+
+        #expect(socket.deletingLastPathComponent().path == directory.path)
+        #expect(audit.deletingLastPathComponent().path == directory.path)
+        #expect(credential.deletingLastPathComponent().path == directory.path)
+        #expect(socket.lastPathComponent == "automation.sock")
+        #expect(audit.lastPathComponent == "automation-audit.jsonl")
+    }
+
+    /// The isolated socket has to be bindable, not merely short in the abstract: nesting inside
+    /// a deep synthetic root produced a credential naming a socket that never bound.
+    @Test("A listener binds on the isolated socket under a deep synthetic root")
+    func listenerBindsUnderADeepSyntheticRoot() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("synthetic-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent(String(repeating: "nested-directory/", count: 8), isDirectory: true)
+        let environment = [SyntheticRunRoot.environmentKey: root.path]
+
+        let socketURL = AutomationSupportDirectory.fileURL(
+            named: "automation.sock", bundleIdentifier: bundleID, environment: environment)
+        #expect(socketURL.path.utf8.count < AutomationSupportDirectory.maximumSocketPathLength)
+
+        try FileManager.default.createDirectory(
+            at: socketURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        defer { try? FileManager.default.removeItem(at: socketURL.deletingLastPathComponent()) }
+
+        // The bind itself is the assertion: a path over the limit fails here, not in a length check.
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        #expect(fd >= 0)
+        defer { close(fd) }
+
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketURL.path.utf8)
+        #expect(pathBytes.count < MemoryLayout.size(ofValue: address.sun_path))
+        withUnsafeMutablePointer(to: &address.sun_path) { sunPath in
+            sunPath.withMemoryRebound(to: CChar.self, capacity: pathBytes.count + 1) { destination in
+                for (index, byte) in pathBytes.enumerated() { destination[index] = CChar(bitPattern: byte) }
+                destination[pathBytes.count] = 0
+            }
+        }
+        let bindResult = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { addressPointer in
+                bind(fd, addressPointer, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        #expect(bindResult == 0)
+        unlink(socketURL.path)
+    }
+}
+
+/// Opting out has to close every operator door (#1391). A repair pass can mint a second handle
+/// while an earlier one is still registered, and the credential file names only the newest.
 @MainActor
-@Suite("AutomationOperatorProvisioning republish")
-struct AutomationOperatorRepublishTests {
-    @Test("A missing credential on an opted-in launch is republished")
-    func missingCredentialIsRepublished() {
-        #expect(
-            AutomationOperatorProvisioning.shouldRepublish(
-                optedIn: true, hasSocket: true, credentialExists: false))
+@Suite("Operator opt-out revocation")
+struct AutomationOperatorRevocationTests {
+    @Test("Opting out revokes operator handles the credential no longer names")
+    func optOutRevokesEveryOperatorHandle() {
+        let registry = AutomationHandleRegistry(makeHandle: { UUID().uuidString })
+        let stranded = registry.registerOperator(appScopeID: "workspaces.local")
+        let current = registry.registerOperator(appScopeID: "workspaces.local")
+
+        #expect(registry.resolve(stranded.handle)?.isOperator == true)
+        #expect(registry.resolve(current.handle)?.isOperator == true)
+
+        let revoked = registry.removeAllOperators()
+
+        #expect(revoked == 2)
+        #expect(registry.resolve(stranded.handle) == nil)
+        #expect(registry.resolve(current.handle) == nil)
     }
 
-    /// The case that kept the plane down: the launch believes it published one, so nothing else
-    /// prompts a re-mint. Presence on disk is the only thing that settles it.
-    @Test("A credential still on disk is left alone")
-    func presentCredentialIsLeftAlone() {
-        #expect(
-            !AutomationOperatorProvisioning.shouldRepublish(
-                optedIn: true, hasSocket: true, credentialExists: true))
-    }
+    /// Revocation is scoped to operator entries: a tile handle is a different grant and an
+    /// operator opt-out must not take a terminal's own handle with it.
+    @Test("Revoking operators leaves tile handles alone")
+    func tileHandlesSurviveOperatorRevocation() {
+        let registry = AutomationHandleRegistry(makeHandle: { UUID().uuidString })
+        _ = registry.registerOperator(appScopeID: "workspaces.local")
+        let tile = registry.upsert(
+            hostSessionID: UUID(),
+            tileID: nil,
+            surfaceKind: .terminal,
+            windowScopeID: "window",
+            appScopeID: "workspaces.local"
+        )
 
-    /// Fail closed: not opting in means no credential, so its absence is the intended state and
-    /// republishing would defeat the opt-in.
-    @Test("An opted-out launch never republishes")
-    func optedOutNeverRepublishes() {
-        #expect(
-            !AutomationOperatorProvisioning.shouldRepublish(
-                optedIn: false, hasSocket: true, credentialExists: false))
-    }
-
-    /// A credential names the socket a caller should connect to, so there is nothing coherent to
-    /// publish before the listener is up.
-    @Test("A launch with no listener never republishes")
-    func noSocketNeverRepublishes() {
-        #expect(
-            !AutomationOperatorProvisioning.shouldRepublish(
-                optedIn: true, hasSocket: false, credentialExists: false))
+        #expect(registry.removeAllOperators() == 1)
+        #expect(registry.resolve(tile.handle)?.isOperator == false)
     }
 }

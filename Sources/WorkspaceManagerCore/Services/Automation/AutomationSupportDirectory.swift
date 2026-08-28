@@ -13,10 +13,11 @@ import Foundation
 ///
 /// Keyed on bundle id alone, this was one shared directory for every copy of the app: an
 /// unbundled debug build has no `Bundle.main.bundleIdentifier` and falls back to the release
-/// identifier, so a second instance bound the running app's socket, appended to its audit log,
-/// and — because a launch with the Automation API disabled fails closed by removing it — deleted
-/// the credential the daily driver had minted. The running app cannot see that happen: its
-/// in-memory record still says the credential is published.
+/// identifier, so a second instance contended for the running app's socket (the sibling lock
+/// turns that into a refused start), appended to its audit log, and — because a launch with the
+/// Automation API disabled fails closed by removing it — deleted the credential the daily driver
+/// had minted. That last one is the damaging case, because the running app cannot see it happen:
+/// its in-memory record still says the credential is published.
 ///
 /// `WORKSPACES_SYNTHETIC_ROOT` already means "this run must not touch the owner's real
 /// filesystem roots" — `WorkspaceOrphanReconciler` and `LaunchPreferences` both honour it — and
@@ -33,11 +34,18 @@ public enum AutomationSupportDirectory {
     /// The automation directory for `bundleIdentifier`, or an isolated one when a synthetic root
     /// is active.
     ///
-    /// An isolated run gets a short, deterministic directory *derived from* the synthetic root
-    /// rather than one inside it — the socket has to stay addressable, and a synthetic root is
-    /// usually a deep scratch path. The digest is stable across processes, so the app and the
-    /// `workspaces` CLI launched into the same root agree on where to look, exactly as
-    /// `LaunchPreferences` does for its scratch suite.
+    /// An isolated run gets a short directory *derived from* the synthetic root rather than one
+    /// inside it: the socket has to stay addressable, and a synthetic root is usually a deep
+    /// scratch path. It sits under the per-user temporary directory — never `/tmp`, which is
+    /// mode `01777` and would let another local account pre-create the predictable path and own
+    /// the socket and credential inside it. The per-user directory is the same trust boundary
+    /// the real Application Support path has.
+    ///
+    /// The digest covers the bundle identifier as well as the root, so one short component
+    /// carries both and the socket path stays inside `sun_path`. It is FNV-1a rather than
+    /// `Hasher`, which is seeded per process: the app and the `workspaces` CLI launched into the
+    /// same root have to agree on where to look, exactly as `LaunchPreferences` does for its
+    /// scratch suite.
     public nonisolated static func url(
         bundleIdentifier: String,
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -51,9 +59,9 @@ public enum AutomationSupportDirectory {
             return appSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
         }
 
-        return URL(fileURLWithPath: "/tmp", isDirectory: true)
-            .appendingPathComponent("ws-auto-\(digest(of: syntheticRoot.path))", isDirectory: true)
-            .appendingPathComponent(bundleIdentifier, isDirectory: true)
+        let token = digest(of: syntheticRoot.path + "\u{0}" + bundleIdentifier)
+        return FileManager.default.temporaryDirectory
+            .appendingPathComponent("ws-auto-\(token)", isDirectory: true)
     }
 
     /// Path of a named file in that directory.
@@ -66,15 +74,14 @@ public enum AutomationSupportDirectory {
             .appendingPathComponent(fileName, isDirectory: false)
     }
 
-    /// FNV-1a (64-bit), truncated. `Hasher` is seeded per process and so cannot name a directory
-    /// two processes must both find; this is stable across processes and releases, and short
-    /// enough to keep the socket path inside `sun_path`.
+    /// FNV-1a (64-bit), truncated. Stable across processes and releases, and short enough to
+    /// keep the socket path inside `sun_path`.
     private nonisolated static func digest(of value: String) -> String {
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         for byte in value.utf8 {
             hash ^= UInt64(byte)
             hash = hash &* 0x0000_0100_0000_01b3
         }
-        return String(format: "%016llx", hash).prefix(8).description
+        return String(String(format: "%016llx", hash).prefix(8))
     }
 }

@@ -54,22 +54,6 @@ public enum AutomationOperatorProvisioning {
     /// registry — the same fail-closed test a stale credential from a crashed launch
     /// already fails.
     @discardableResult
-    /// Whether a running launch should re-publish its operator credential.
-    ///
-    /// Deliberately answered from what is on disk, not from the launch's own record of what it
-    /// published. Those two can disagree: another copy of the app sharing the bundle-id path can
-    /// delete the credential, and the launch that minted it goes on reporting `minted` (#1391).
-    /// Trusting the in-memory outcome is what left the operator plane down with no way back
-    /// short of a window lifecycle event.
-    public static func shouldRepublish(
-        optedIn: Bool,
-        hasSocket: Bool,
-        credentialExists: Bool
-    ) -> Bool {
-        guard optedIn, hasSocket else { return false }
-        return !credentialExists
-    }
-
     public static func refresh(
         optedIn: Bool,
         registry: AutomationHandleRegistry,
@@ -102,6 +86,11 @@ public enum AutomationOperatorProvisioning {
         }
         if let outgoing {
             revoke(handle: outgoing.handle, in: registry)
+        }
+        if !optedIn {
+            // The credential names one handle, but a repair pass can have minted others while
+            // an earlier one stayed registered. Opting out has to close all of them (#1391).
+            registry.removeAllOperators()
         }
         return Result(credential: nil, outcome: optedIn ? .mintFailed : .notOptedIn)
     }

@@ -682,10 +682,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidBecomeActive(_ notification: Notification) {
         log.info("[AppDelegate] applicationDidBecomeActive")
-        // The operator credential can be removed underneath a running app by another copy
-        // sharing its bundle-id path, and nothing tells the app it happened (#1391). Activation
-        // is the cheap moment to notice: a `stat`, at the point the user is coming back to it.
-        AutomationIntegrationLifecycle.shared.refreshOperatorCredentialIfMissing()
+        // The operator credential can be removed — or left stale — underneath a running app, and
+        // nothing tells the app it happened (#1391). Activation is the moment to re-check: when
+        // everything is already healthy the reuse path is a load and a comparison.
+        AutomationIntegrationLifecycle.shared.refreshOperatorCredentialOnActivation()
         installHelpMenuItems()
         applyApplicationIconIfAvailable()
         GhosttyAppManager.shared.setFocus(true)
