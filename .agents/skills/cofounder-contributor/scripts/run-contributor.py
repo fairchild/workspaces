@@ -215,9 +215,12 @@ from execution import (  # noqa: E402, F401
     _changed_surface_files,
     _complete_diff_evidence_after_approval,
     _edit_pr_body,
+    _finish_revision_without_diff,
     _latest_approving_review,
     _live_ci_evidence_gate_error,
     _mergeability_surface,
+    _post_pr_comment,
+    _post_revision_reply,
     _pr_body_and_head,
     _pr_evidence_entries,
     _preserve_unparseable_output,
@@ -230,10 +233,15 @@ from execution import (  # noqa: E402, F401
     claim_marker,
     compose_claim_comment,
     compose_pr_body,
+    compose_revision_comment,
+    compose_revision_escalation_comment,
     ensure_claim_label,
     ensure_issue_claimed,
     ensure_label_exists,
+    fetch_review,
     pr_marker,
+    review_response_marker,
+    revision_marker,
     route_action,
     route_execution_action,
     seed_mergeability_section,
@@ -1121,18 +1129,33 @@ def validate_selection_choice(
     return choice
 
 
+# The two trusted directed forms a factory workflow builds. Both are
+# workflow-authored, never user text: a mention sends the run to a review, a
+# requested-changes notice sends it to a revision of April's own PR.
+DIRECTED_MENTION_RE = re.compile(
+    r"^@(?P<author>[^\s]+) mentioned you in (?P<target_type>PR|issue) #(?P<number>\d+)",
+    re.MULTILINE,
+)
+DIRECTED_REVISION_RE = re.compile(
+    r"^@(?P<author>[^\s]+) requested changes on your PR #(?P<number>\d+)",
+    re.MULTILINE,
+)
+DIRECTED_SELECTION_KINDS = {
+    "PR": "review_pr",
+    "issue": "execute_ready_issue",
+    "revise_pr": "advance_pr",
+}
+
+
 def parse_directed_message(message: str) -> dict[str, object] | None:
-    match = re.search(
-        r"^@(?P<author>[^\s]+) mentioned you in (?P<target_type>PR|issue) #(?P<number>\d+)",
-        message,
-        re.MULTILINE,
-    )
-    if not match:
+    mention = DIRECTED_MENTION_RE.search(message)
+    match = mention or DIRECTED_REVISION_RE.search(message)
+    if match is None:
         return None
     body_match = re.search(r"\n---\n(?P<body>.*?)\n---\n", message, re.DOTALL)
     return {
         "author": match.group("author"),
-        "target_type": match.group("target_type"),
+        "target_type": mention.group("target_type") if mention is not None else "revise_pr",
         "number": int(match.group("number")),
         "body": body_match.group("body").strip() if body_match else message.strip(),
     }
@@ -1576,22 +1599,42 @@ def main() -> int:
         if directed is None:
             print("error: directed message did not match the expected workflow format", file=sys.stderr)
             return 1
+        target_type = str(directed["target_type"])
+        selection_kind = DIRECTED_SELECTION_KINDS[target_type]
         choice = SelectionChoice(
-            selection_kind="review_pr" if str(directed["target_type"]) == "PR" else "execute_ready_issue",
+            selection_kind=selection_kind,
             number=int(directed["number"]),
-            reason="trusted actor directed run",
+            reason=(
+                "trusted actor directed revision"
+                if selection_kind == "advance_pr"
+                else "trusted actor directed run"
+            ),
         )
         selection_item = {
             "number": int(directed["number"]),
-            "target_type": str(directed["target_type"]),
+            "target_type": target_type,
             "directed_author": str(directed["author"]),
         }
+        owner_login, repo_name = repo_owner_name(env)
         repo_context = {
-            "owner": repo_owner_name(env)[0],
-            "name": repo_owner_name(env)[1],
+            "owner": owner_login,
+            "name": repo_name,
             "recent_commit_summary": recent_commit_summary(env),
             "backlog_state": gather_backlog_state(),
         }
+        if selection_kind == "advance_pr":
+            # The revision turn edits the PR's own head: the branch and the
+            # linked issue come from live PR state, never from the message.
+            pull_request = fetch_detailed_pull_request(
+                owner_login, repo_name, int(directed["number"]), env
+            )
+            if pull_request is None:
+                print(f"error: pull request #{directed['number']} not found", file=sys.stderr)
+                return 1
+            selection_item["pr_branch"] = str(pull_request.get("headRefName", ""))
+            linked_issue, _ = extract_pr_issue_reference(str(pull_request.get("body", "")))
+            if linked_issue is not None:
+                selection_item["issue_number"] = linked_issue
     else:
         selection_index, lookup, repo_context = build_selection_index(
             env,
@@ -1609,7 +1652,9 @@ def main() -> int:
                 engagement_candidates=list(repo_context["engagement_candidates"]),
             )
             selection_item = lookup[choice.selection_kind][choice.number]
-            prepare_workspace_for_selection(choice.selection_kind, selection_item, env)
+        # A no-op for every selection kind that carries no branch, so the
+        # directed review and issue paths reach it unchanged.
+        prepare_workspace_for_selection(choice.selection_kind, selection_item, env)
 
         task_envelope, payloads = build_action_phase_inputs(
             choice,

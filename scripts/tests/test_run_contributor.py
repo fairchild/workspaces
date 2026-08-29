@@ -1785,5 +1785,455 @@ class RouteActionCallDisciplineTests(unittest.TestCase):
         self.assertEqual(route_action.call_count, 1)
 
 
+class DirectedRevisionRoutingTests(unittest.TestCase):
+    """#1125: a trusted workflow can direct April at her own PR to answer a
+    blocking review. The pre-existing mention form must keep meaning `review
+    this PR`, or the review lane starts pushing commits."""
+
+    def test_requested_changes_form_routes_to_advance_pr(self) -> None:
+        directed = run_contributor.parse_directed_message(
+            "@fairchild requested changes on your PR #77\n---\nreview body\n---\n"
+        )
+
+        self.assertIsNotNone(directed)
+        self.assertEqual(directed["number"], 77)
+        self.assertEqual(directed["author"], "fairchild")
+        self.assertEqual(directed["body"], "review body")
+        self.assertEqual(
+            run_contributor.DIRECTED_SELECTION_KINDS[str(directed["target_type"])],
+            "advance_pr",
+        )
+
+    def test_mention_forms_keep_their_selection_kinds(self) -> None:
+        for message, expected in (
+            ("@fairchild mentioned you in PR #77", "review_pr"),
+            ("@fairchild mentioned you in issue #42", "execute_ready_issue"),
+        ):
+            with self.subTest(message=message):
+                directed = run_contributor.parse_directed_message(message)
+                self.assertIsNotNone(directed)
+                self.assertEqual(
+                    run_contributor.DIRECTED_SELECTION_KINDS[str(directed["target_type"])],
+                    expected,
+                )
+
+    def test_unrecognized_directed_message_is_still_rejected(self) -> None:
+        self.assertIsNone(
+            run_contributor.parse_directed_message("@fairchild please fix PR #77")
+        )
+
+    def test_pr_branch_checkout_falls_back_to_the_remote_branch(self) -> None:
+        # The revise lane fetches origin/<pr_branch> and hands the runner a
+        # default-branch checkout, so the local branch usually does not exist.
+        attempted: list[list[str]] = []
+
+        def fail_local_checkout(command, *, default, **_kwargs):
+            attempted.append(command)
+            return default
+
+        with (
+            mock.patch.object(run_contributor, "current_branch", return_value="main"),
+            mock.patch.object(run_contributor, "run_optional", side_effect=fail_local_checkout),
+            mock.patch.object(run_contributor, "run_checked") as run_checked,
+        ):
+            run_contributor.prepare_workspace_for_selection(
+                "advance_pr", {"pr_branch": "codex/april-clearwater-issue-42-fix-it"}, {}
+            )
+
+        self.assertEqual(
+            attempted[0], ["git", "checkout", "codex/april-clearwater-issue-42-fix-it"]
+        )
+        self.assertEqual(
+            run_checked.call_args.args[0],
+            [
+                "git",
+                "checkout",
+                "-b",
+                "codex/april-clearwater-issue-42-fix-it",
+                "origin/codex/april-clearwater-issue-42-fix-it",
+            ],
+        )
+
+    def _run_directed_main(
+        self, message: str, pull_request: dict[str, object], action: dict[str, object]
+    ):
+        """Drive main()'s directed path with every network and model seam stubbed."""
+        env = {
+            "CLAUDE_CODE_OAUTH_TOKEN": "token",
+            "GH_TOKEN": "token",
+            "HOME": tempfile.gettempdir(),
+            "PATH": "/usr/bin:/bin",
+        }
+        with tempfile.TemporaryDirectory() as scratch, tempfile.NamedTemporaryFile(
+            "w", suffix=".md", delete=False
+        ) as prompt_file:
+            prompt_file.write("# April Clearwater\nsystem prompt\n")
+            prompt_file.flush()
+            workspace = run_contributor.ScratchPatchArtifact(
+                temp_root=Path(scratch),
+                baseline_dir=Path(scratch) / "baseline",
+                scratch_dir=Path(scratch) / "scratch",
+                changed_files=[],
+                patch_text="",
+            )
+            with (
+                mock.patch.object(sys, "argv", [
+                    "run-contributor.py", "--prompt-file", prompt_file.name,
+                    "--mode", "cli", "--message", message,
+                ]),
+                mock.patch.dict(os.environ, env, clear=True),
+                mock.patch.object(run_contributor, "detect_bot_login", return_value="april-clearwater[bot]"),
+                mock.patch.object(run_contributor, "repo_owner_name", return_value=("fairchild", "workspaces")),
+                mock.patch.object(run_contributor, "recent_commit_summary", return_value={}),
+                mock.patch.object(run_contributor, "gather_backlog_state", return_value=""),
+                mock.patch.object(run_contributor, "fetch_detailed_pull_request", return_value=pull_request),
+                mock.patch.object(run_contributor, "fetch_detailed_issue", return_value=None),
+                mock.patch.object(run_contributor, "fetch_pr_diff", return_value=""),
+                mock.patch.object(run_contributor, "prepare_workspace_for_selection") as prepare,
+                mock.patch.object(run_contributor, "create_scratch_workspace", return_value=workspace) as create_scratch,
+                mock.patch.object(run_contributor, "ensure_claude_project_trust"),
+                mock.patch.object(run_contributor, "build_scratch_patch_artifact", return_value=workspace),
+                mock.patch.object(run_contributor, "shutil"),
+                mock.patch.object(
+                    run_contributor,
+                    "run_action_phase",
+                    return_value=("raw", 0, json.dumps(action), ""),
+                ) as run_action_phase,
+                mock.patch.object(run_contributor, "route_action", return_value=0) as route_action,
+            ):
+                exit_code = run_contributor.main()
+        return exit_code, prepare, create_scratch, run_action_phase, route_action
+
+    def test_directed_revision_checks_out_the_pr_branch_before_the_turn(self) -> None:
+        pull_request = {
+            "number": 77,
+            "author": {"login": "april-clearwater[bot]"},
+            "authorAssociation": "NONE",
+            "body": "Closes #42",
+            "headRefName": "codex/april-clearwater-issue-42-fix-it",
+            "reviews": {"nodes": [{"author": {"login": "workspace-agents[bot]"}, "body": "blocking", "state": "CHANGES_REQUESTED", "submittedAt": "2026-08-27T00:00:00Z"}]},
+            "comments": {"nodes": [{"author": {"login": "fairchild"}, "body": "also worth noting", "createdAt": "2026-08-27T00:05:00Z"}]},
+        }
+
+        exit_code, prepare, create_scratch, run_action_phase, route_action = self._run_directed_main(
+            "@fairchild requested changes on your PR #77",
+            pull_request,
+            {"action": "advance_pr", "pr_number": 77},
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(route_action.call_count, 1)
+        selection_kind, selection_item, _ = prepare.call_args.args
+        self.assertEqual(selection_kind, "advance_pr")
+        self.assertEqual(selection_item["pr_branch"], "codex/april-clearwater-issue-42-fix-it")
+        self.assertEqual(selection_item["issue_number"], 42)
+        # The revision turn edits files, so it runs in the isolated scratch
+        # with the write tools exposed.
+        self.assertEqual(create_scratch.call_count, 1)
+        self.assertEqual(
+            run_action_phase.call_args.kwargs["tools"], run_contributor.EXECUTION_TOOLS
+        )
+
+    def test_directed_revision_payloads_carry_the_review_and_comment_feedback(self) -> None:
+        pull_request = {
+            "number": 77,
+            "author": {"login": "april-clearwater[bot]"},
+            "authorAssociation": "NONE",
+            "body": "PR body text",
+            "headRefName": "codex/april-clearwater-issue-42-fix-it",
+            "reviews": {"nodes": [
+                {"author": {"login": "workspace-agents[bot]"}, "body": "blocking finding", "state": "CHANGES_REQUESTED", "submittedAt": "2026-08-27T00:00:00Z"},
+                {"author": {"login": "fairchild"}, "body": "worth noting", "state": "COMMENTED", "submittedAt": "2026-08-27T00:01:00Z"},
+            ]},
+            "comments": {"nodes": [
+                {"author": {"login": "fairchild"}, "body": "one more thing", "createdAt": "2026-08-27T00:05:00Z"}
+            ]},
+        }
+
+        with mock.patch.object(run_contributor, "fetch_detailed_pull_request", return_value=pull_request):
+            _, payloads = run_contributor.build_action_phase_inputs(
+                run_contributor.SelectionChoice(selection_kind="advance_pr", number=77),
+                {"number": 77, "pr_branch": "codex/april-clearwater-issue-42-fix-it"},
+                {
+                    "owner": "fairchild",
+                    "name": "workspaces",
+                    "recent_commit_summary": {},
+                    "backlog_state": "",
+                },
+                {"GITHUB_REPOSITORY": "fairchild/workspaces"},
+                message="@fairchild requested changes on your PR #77",
+            )
+
+        bodies = {payload.source_type: payload.body for payload in payloads}
+        # April answers the blocking review AND the non-blocking feedback, so
+        # both have to reach her as untrusted payloads alongside the PR body.
+        self.assertEqual(bodies["pull_request"], "PR body text")
+        review_bodies = [p.body for p in payloads if p.source_type == "pull_request_review"]
+        self.assertEqual(review_bodies, ["blocking finding", "worth noting"])
+        self.assertIn("one more thing", bodies["pull_request_comment"])
+
+    def test_directed_mention_run_stays_a_read_only_review(self) -> None:
+        pull_request = {
+            "number": 77,
+            "author": {"login": "fairchild"},
+            "authorAssociation": "OWNER",
+            "body": "",
+            "headRefName": "feature-branch",
+            "reviews": {"nodes": []},
+            "comments": {"nodes": []},
+        }
+
+        exit_code, prepare, create_scratch, run_action_phase, route_action = self._run_directed_main(
+            "@fairchild mentioned you in PR #77",
+            pull_request,
+            {"action": "review_pr", "pr_number": 77},
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(prepare.call_args.args[0], "review_pr")
+        # No branch checkout, no scratch, no write tools on a review run.
+        self.assertEqual(create_scratch.call_count, 0)
+        self.assertEqual(
+            run_action_phase.call_args.kwargs["tools"], run_contributor.READ_ONLY_MODEL_TOOLS
+        )
+
+
+class RevisionTurnTests(unittest.TestCase):
+    """#1125: FACTORY_REVISION_REVIEW_ID turns an advance into a revision turn
+    — it may end without a commit, and it always ends with a marked comment or
+    a non-zero exit. With the variable unset every path here is today's."""
+
+    maxDiff = None
+
+    PERSONA = "April Clearwater, Application Lead"
+    BRANCH = "codex/april-clearwater-issue-42-fix-it"
+    REVIEW_ID = "9001"
+    LIVE_HEAD = "0123456789abcdef0123456789abcdef01234567"
+    MODEL_BODY = (
+        "## Summary\n- Rewrote the sheet's status mapping\n\n"
+        "## Validation\n- `swift test --filter SheetTests`\n\n"
+        "## Risks\n- None beyond the sheet\n"
+    )
+
+    def _data(self, body: str | None = None) -> dict[str, object]:
+        return {
+            "action": "advance_pr",
+            "persona": self.PERSONA,
+            "issue_number": 42,
+            "pr_number": 77,
+            "pr_title": "Fix environment status colors",
+            "commit_message": "Address review feedback",
+            "body": self.MODEL_BODY if body is None else body,
+        }
+
+    def _state(self) -> dict[str, object]:
+        return {
+            "issue": {"number": 42, "title": "Fix it", "body": ""},
+            "approved": True,
+            "approval_reason": "ready label present",
+            "blockers": [],
+            "requested_evidence": [],
+            "latest_claim": None,
+            "stale_claim": False,
+            "own_pr": {"number": 77, "headRefName": self.BRANCH, "agent": "april-clearwater"},
+            "other_pr": None,
+        }
+
+    def _rendered_pr_body(self, data: dict[str, object]) -> str:
+        execution = sys.modules["execution"]
+        summary, _ = execution.build_execution_summary_body(data, requested_evidence=[])
+        seeded = execution.seed_mergeability_section(summary, changed_files=[])
+        return execution.compose_pr_body(42, self.PERSONA, seeded)
+
+    def _route(
+        self,
+        *,
+        dirty: bool,
+        live_body: str,
+        data: dict[str, object] | None = None,
+        revision: bool = True,
+        head_current: bool = True,
+        comment_posts: bool = True,
+    ):
+        execution = sys.modules["execution"]
+        data = data or self._data()
+        env = {"GH_TOKEN": "token", "GITHUB_REPOSITORY": "fairchild/workspaces"}
+        if revision:
+            env["FACTORY_REVISION_REVIEW_ID"] = self.REVIEW_ID
+            env["FACTORY_EXPECTED_PR_HEAD_SHA"] = self.LIVE_HEAD
+        commands: list[list[str]] = []
+        comments: list[str] = []
+
+        def fake_run_checked(command, **_kwargs):
+            commands.append(command)
+            if command[:2] == ["git", "rev-parse"]:
+                return mock.Mock(stdout=f"{self.LIVE_HEAD}\n")
+            return mock.Mock(stdout="")
+
+        def fake_run_optional(command, *, default, **_kwargs):
+            if command[:3] == ["gh", "pr", "comment"]:
+                comments.append(command[command.index("--body") + 1])
+                return "https://github.com/fairchild/workspaces/pull/77#issuecomment-1" if comment_posts else default
+            if command[:2] == ["gh", "api"]:
+                return json.dumps(
+                    {
+                        "id": int(self.REVIEW_ID),
+                        "user": {"login": "workspace-agents[bot]"},
+                        "html_url": "https://github.com/fairchild/workspaces/pull/77#pullrequestreview-9001",
+                    }
+                )
+            return default
+
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as handle:
+            output_path = handle.name
+        try:
+            with (
+                mock.patch.dict(os.environ, {"GITHUB_OUTPUT": output_path}),
+                mock.patch.object(execution, "detect_bot_login", return_value="april-clearwater[bot]"),
+                mock.patch.object(execution, "find_issue_execution_state", return_value=self._state()),
+                mock.patch.object(execution, "current_branch", return_value=self.BRANCH),
+                mock.patch.object(execution, "working_tree_dirty", return_value=dirty),
+                mock.patch.object(execution, "_changed_surface_files", return_value=[]),
+                mock.patch.object(execution, "_pr_body_and_head", return_value=(live_body, self.LIVE_HEAD)),
+                mock.patch.object(execution, "_factory_expected_pr_head_is_current", return_value=head_current),
+                mock.patch.object(execution, "ensure_label_exists"),
+                mock.patch.object(execution, "run_checked", side_effect=fake_run_checked),
+                mock.patch.object(execution, "run_optional", side_effect=fake_run_optional),
+            ):
+                exit_code = execution.route_execution_action(data, env, require_existing_pr=True)
+            outputs = dict(
+                line.split("=", 1)
+                for line in Path(output_path).read_text(encoding="utf-8").splitlines()
+                if "=" in line
+            )
+        finally:
+            os.unlink(output_path)
+        return exit_code, commands, comments, outputs
+
+    def test_body_only_revision_edits_the_pr_without_committing(self) -> None:
+        exit_code, commands, comments, outputs = self._route(dirty=False, live_body="stale body")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "body-only")
+        self.assertEqual(outputs["revision_comment_posted"], "true")
+        self.assertEqual(outputs["pr_head_sha"], self.LIVE_HEAD)
+        edits = [c for c in commands if c[:3] == ["gh", "pr", "edit"]]
+        self.assertEqual(len(edits), 1)
+        self.assertEqual(edits[0][edits[0].index("--title") + 1], "Fix environment status colors")
+        self.assertIn("Rewrote the sheet's status mapping", edits[0][edits[0].index("--body") + 1])
+        self.assertFalse(any(c[:2] == ["git", "commit"] for c in commands))
+        self.assertFalse(any(c[:2] == ["git", "push"] for c in commands))
+        self.assertEqual(len(comments), 1)
+
+    def test_identical_body_escalates_to_the_owner(self) -> None:
+        data = self._data(
+            "## Summary\n- The review asks to change the linked issue's scope, "
+            "which I cannot decide.\n"
+        )
+        exit_code, commands, comments, outputs = self._route(
+            dirty=False, live_body=self._rendered_pr_body(data), data=data
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "needs-owner")
+        self.assertEqual(outputs["revision_comment_posted"], "true")
+        self.assertFalse(any(c[:3] == ["gh", "pr", "edit"] for c in commands))
+        self.assertFalse(any(c[:2] == ["git", "commit"] for c in commands))
+        escalation = comments[0]
+        self.assertIn("**This needs @fairchild**", escalation)
+        self.assertIn("change the linked issue's scope", escalation)
+        # The escalation marker is the review-response lane's, so a deferred
+        # review still ends in exactly one owner-facing marker.
+        self.assertEqual(
+            [line for line in escalation.splitlines() if line.strip()][-1],
+            f"<!-- factory-review-response review-id:{self.REVIEW_ID} -->",
+        )
+        # Labels belong to the lane's resolve step, not to this turn.
+        self.assertFalse(any("--add-label" in c for c in commands))
+
+    def test_failed_owner_escalation_fails_the_run(self) -> None:
+        data = self._data("## Summary\n- Needs a scope call.\n")
+        exit_code, _, _, outputs = self._route(
+            dirty=False,
+            live_body=self._rendered_pr_body(data),
+            data=data,
+            comment_posts=False,
+        )
+
+        # Nothing else in the lane knows the owner is needed, so a lost
+        # escalation must fail the job rather than park the PR silently.
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(outputs, {})
+
+    def test_pushed_revision_replies_with_the_revision_marker(self) -> None:
+        exit_code, commands, comments, outputs = self._route(dirty=True, live_body="stale body")
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "pushed")
+        self.assertEqual(outputs["revision_comment_posted"], "true")
+        self.assertTrue(any(c[:2] == ["git", "commit"] for c in commands))
+        self.assertTrue(any(c[:2] == ["git", "push"] for c in commands))
+        reply = comments[0]
+        self.assertTrue(reply.startswith(f"*{self.PERSONA}*"))
+        self.assertIn(
+            "Answering [workspace-agents's requested changes]"
+            "(https://github.com/fairchild/workspaces/pull/77#pullrequestreview-9001).",
+            reply,
+        )
+        for section in ("## Summary", "## Validation", "## Risks"):
+            self.assertIn(section, reply)
+        self.assertEqual(
+            [line for line in reply.splitlines() if line.strip()][-1],
+            f"<!-- factory-revision review-id:{self.REVIEW_ID} -->",
+        )
+
+    def test_lost_reply_comment_is_reported_not_fatal(self) -> None:
+        exit_code, _, _, outputs = self._route(
+            dirty=True, live_body="stale body", comment_posts=False
+        )
+
+        # The push already landed; the lane repairs the missing marker.
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "pushed")
+        self.assertEqual(outputs["revision_comment_posted"], "false")
+
+    def test_moved_head_aborts_before_commit(self) -> None:
+        with io.StringIO() as stderr, contextlib.redirect_stderr(stderr):
+            exit_code, commands, comments, outputs = self._route(
+                dirty=True, live_body="stale body", head_current=False
+            )
+            error_text = stderr.getvalue()
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("head moved during the revision turn", error_text)
+        self.assertFalse(any(c[:2] == ["git", "commit"] for c in commands))
+        self.assertFalse(any(c[:2] == ["git", "push"] for c in commands))
+        self.assertEqual(comments, [])
+        self.assertEqual(outputs, {})
+
+    def test_advance_without_revision_mode_is_unchanged(self) -> None:
+        pushed_code, commands, comments, outputs = self._route(
+            dirty=True, live_body="stale body", revision=False
+        )
+
+        self.assertEqual(pushed_code, 0)
+        self.assertEqual(comments, [])
+        self.assertNotIn("revision_outcome", outputs)
+        self.assertNotIn("revision_comment_posted", outputs)
+        self.assertTrue(any(c[:2] == ["git", "push"] for c in commands))
+
+        with io.StringIO() as stderr, contextlib.redirect_stderr(stderr):
+            empty_code, commands, comments, outputs = self._route(
+                dirty=False, live_body="stale body", revision=False
+            )
+            error_text = stderr.getvalue()
+
+        # Outside revision mode an empty scratch is still a failed run.
+        self.assertEqual(empty_code, 1)
+        self.assertIn("no file changes were made", error_text)
+        self.assertEqual(comments, [])
+        self.assertEqual(outputs, {})
+
+
 if __name__ == "__main__":
     unittest.main()
