@@ -299,8 +299,8 @@ public final class Workspace {
     /// `deleteFiles: true` on a timer the user does not directly act on, and a directory this
     /// app did not create may be someone's primary clone, hold uncommitted work outside git's
     /// view, or simply be a worktree another tool still expects to find. Archiving an adopted
-    /// workspace is still allowed — it only ever moves the sidebar row — the purge is the one
-    /// path this flag closes.
+    /// workspace by hand still runs the same teardown and directory move as any other — the
+    /// purge is the one *automatic* path this flag closes, not archiving itself.
     public var isAdopted: Bool = false
 
     /// Position in the sidebar's Pinned section, renumbered 0…n on every pin change.

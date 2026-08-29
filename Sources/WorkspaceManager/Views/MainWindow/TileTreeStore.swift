@@ -1000,15 +1000,21 @@ final class TileTreeStore: ObservableObject {
         return splitSessions
     }
 
-    /// The tmux session a torn-down session must reclaim, or `nil` when nothing may die:
-    /// no override, or an override equal to the directory derivation (a restored primary —
-    /// any future launch in that directory `-A`-reattaches it, same as a fresh primary),
-    /// or non-tmux mode. A pane-scoped override (`-p` suffix) is unreachable by directory
-    /// derivation, and teardown ends its continuity row, so an unkilled session would be
-    /// stranded with no reclaim path (#1232).
+    /// The tmux session a torn-down session must reclaim, or `nil` when nothing may die: no
+    /// override, an override that is not shaped like the app's own split-pane naming, or
+    /// non-tmux mode. A pane-scoped override is unreachable by directory derivation, and
+    /// teardown ends its continuity row, so an unkilled one would be stranded with no reclaim
+    /// path (#1232).
+    ///
+    /// The shape check — not "differs from the directory derivation" — is what this guards.
+    /// That broader test also matched a restored primary override (a live session a *previous*
+    /// run created, safe: any future launch in that directory `-A`-reattaches it) and, once
+    /// adoption could bind an arbitrary live session by directory match (#1390), an externally
+    /// owned session with no relationship to this app at all. Closing that tab would otherwise
+    /// `kill-session` someone else's live shell.
     func paneScopedTmuxSessionNameToKill(for session: HostTerminalSession) -> String? {
         guard let sessionName = session.tmuxSessionNameOverride,
-            sessionName != TmuxSessionNaming.defaultName(for: session.directoryURL),
+            TmuxSessionNaming.isPaneScopedName(sessionName, for: session.directoryURL),
             resolveTerminalMultiplexingMode() == .tmuxPerSession
         else {
             return nil

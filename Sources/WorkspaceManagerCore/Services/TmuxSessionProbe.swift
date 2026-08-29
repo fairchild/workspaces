@@ -101,8 +101,10 @@ public struct TmuxSessionProbe: Sendable {
         return firstCommand
     }
 
-    /// The name of the one live session whose first pane's current working directory is
-    /// `directoryPath`, or `nil` when zero or more than one session matches.
+    /// The name of the one live session with a pane whose current working directory is
+    /// `directoryPath`, or `nil` when zero or more than one session matches. Every pane of
+    /// every session is scanned, not just each session's first — a match anywhere in a session
+    /// is enough to name it.
     ///
     /// Adopting a worktree the app did not create (#1390) needs this because such a session was
     /// never named by the app's own deterministic derivation (`wm-<dir>-<hash>`) — it could be

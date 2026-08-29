@@ -154,6 +154,17 @@ struct WorkspaceOrphanReconciliationController {
             throw WorkspaceOrphanReconciliationError.unsupportedCleanupItem
         }
 
+        // Reuse a record already adopted for this path instead of creating a second one.
+        // `isAdopting` only guards one item against a second click in the same window, not two
+        // windows racing on the same rendered orphan, or a rescan that republishes an orphan
+        // whose adopt just landed before the confirming refresh runs (#1390).
+        let normalizedTargetPath = MainWindowPathResolution.normalize(path)
+        if let existing = repos.flatMap(\.workspaces).first(
+            where: { MainWindowPathResolution.normalize($0.path) == normalizedTargetPath })
+        {
+            return existing
+        }
+
         let workspace = Workspace(
             name: item.resourceName,
             path: URL(fileURLWithPath: path, isDirectory: true),

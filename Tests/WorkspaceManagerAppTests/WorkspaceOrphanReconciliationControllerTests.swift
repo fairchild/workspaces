@@ -230,6 +230,34 @@ struct WorkspaceOrphanReconciliationControllerTests {
         #expect(persisted.first?.isAdopted == true)
     }
 
+    /// The concrete race codex named: two windows render the same orphan, or a rescan
+    /// republishes it before the confirming refresh lands, and a second adopt call reaches the
+    /// controller for a path that already has a record. `isAdopting` only guards one item
+    /// against a second click in the same window's own state, not this (#1390).
+    @Test("Adopting a path that is already a workspace reuses the existing record")
+    func adoptGitWorktreeIsIdempotentByPath() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        context.insert(repo)
+        try context.save()
+
+        let item = makeItem(
+            id: "git",
+            kind: .gitWorktreeWithoutRecord,
+            repoID: repo.id,
+            resourceName: "issue-1390",
+            path: "/tmp/alpha/workspaces/issue-1390"
+        )
+
+        let first = try controller.adoptGitWorktree(item, in: [repo], modelContext: context)
+        let second = try controller.adoptGitWorktree(item, in: [repo], modelContext: context)
+
+        #expect(first.id == second.id)
+        let verificationContext = ModelContext(container)
+        #expect(try verificationContext.fetch(FetchDescriptor<Workspace>()).count == 1)
+    }
+
     @Test("Adopting a record awaiting cleanup, an unknown repo, or a path-less item is rejected")
     func adoptGitWorktreeRejectsWhatItCannotAdopt() throws {
         let context = ModelContext(try makeContainer())
