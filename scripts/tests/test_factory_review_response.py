@@ -59,11 +59,13 @@ def pull_request(
     draft: bool = False,
     labels: tuple[str, ...] = ("author:april",),
     body: str = "",
+    author: str = APRIL,
 ) -> dict[str, object]:
     return {
         "number": 1377,
         "state": state,
         "draft": draft,
+        "user": {"login": author},
         "labels": [{"name": name} for name in labels],
         "body": body,
     }
@@ -273,7 +275,12 @@ class ResponseDecisionTests(unittest.TestCase):
         self.assertEqual(
             [blocker.key for blocker in decision.blockers], ["revision-required"]
         )
-        self.assertIn("#1125", decision.blockers[0].detail)
+        detail = decision.blockers[0].detail
+        self.assertIn("#1125", detail)
+        # The loop exists now, so the escalation names the switch that is off,
+        # not a capability the factory lacks.
+        self.assertIn(response.REVISION_LANE_SWITCH, detail)
+        self.assertNotIn("no contributor revision loop", detail)
 
     def test_owner_blocker_alongside_a_self_clearing_one_still_escalates(self) -> None:
         body = evidence_body(
@@ -326,6 +333,130 @@ class ResponseDecisionTests(unittest.TestCase):
         self.assertEqual(
             self.evaluate(pull_request(), already_responded=True).action, "skip"
         )
+
+
+class RevisionDeferralTests(unittest.TestCase):
+    """What changes once the revision lane is armed (#1125).
+
+    Deferring means posting nothing, so every case here is really a claim
+    about who answers next: the revision lane, or the owner. There is no case
+    where the answer is nobody.
+    """
+
+    def evaluate(self, pr: dict[str, object], **kwargs):
+        return response.evaluate_response(
+            pr,
+            kwargs.pop("blocking", review()),
+            repository_owner=OWNER,
+            already_responded=kwargs.pop("already_responded", False),
+            revise_enabled=kwargs.pop("revise_enabled", True),
+            revision_in_flight=kwargs.pop("revision_in_flight", False),
+            revision_attempts=kwargs.pop("revision_attempts", 0),
+        )
+
+    def test_an_armed_lane_takes_the_turn_and_nothing_is_posted(self) -> None:
+        decision = self.evaluate(pull_request(body="## Summary\n\nplain\n"))
+        self.assertEqual(decision.action, "defer")
+        self.assertFalse(decision.owner_required)
+
+    def test_a_self_clearing_blocker_still_defers_and_stays_visible(self) -> None:
+        body = evidence_body(
+            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci"}
+        )
+        decision = self.evaluate(
+            pull_request(labels=("author:april", "blocked:evidence"), body=body)
+        )
+        self.assertEqual(decision.action, "defer")
+        self.assertEqual(
+            [blocker.key for blocker in decision.blockers], ["evidence-pending-ci"]
+        )
+
+    def test_an_owner_required_blocker_escalates_even_with_the_lane_armed(self) -> None:
+        # No revision clears an owner attestation, so the ask still goes out.
+        body = evidence_body(
+            {"index": 1, "item": "owner-attested item", "status": "blocked"}
+        )
+        decision = self.evaluate(
+            pull_request(labels=("author:april", "blocked:evidence"), body=body)
+        )
+        self.assertEqual(decision.action, "respond")
+        self.assertTrue(decision.owner_required)
+
+    def test_a_review_a_revision_already_answered_is_left_alone(self) -> None:
+        decision = self.evaluate(
+            pull_request(body="## Summary\n\nplain\n"), revision_in_flight=True
+        )
+        self.assertEqual(decision.action, "skip")
+        self.assertIn("revision", decision.reason)
+
+    def test_the_attempt_ceiling_hands_the_pr_back_to_the_owner(self) -> None:
+        decision = self.evaluate(
+            pull_request(body="## Summary\n\nplain\n"),
+            revision_attempts=response.REVISION_ATTEMPT_CEILING,
+        )
+        self.assertEqual(decision.action, "respond")
+        self.assertTrue(decision.owner_required)
+        self.assertEqual(
+            [blocker.key for blocker in decision.blockers],
+            ["revision-attempts-exhausted"],
+        )
+        self.assertIn("2 turns", decision.blockers[0].detail)
+
+    def test_a_pull_request_outside_the_lane_scope_escalates(self) -> None:
+        # Deferring to a lane that will decline is how a PR gets stranded: the
+        # revision lane only takes branches the factory itself wrote.
+        decision = self.evaluate(
+            pull_request(author=OWNER, body="## Summary\n\nplain\n")
+        )
+        self.assertEqual(decision.action, "respond")
+        self.assertEqual(
+            [blocker.key for blocker in decision.blockers], ["revision-required"]
+        )
+        self.assertIn(APRIL, decision.blockers[0].detail)
+
+    def test_a_disabled_lane_escalates_exactly_as_before(self) -> None:
+        decision = self.evaluate(
+            pull_request(body="## Summary\n\nplain\n"), revise_enabled=False
+        )
+        self.assertEqual(decision.action, "respond")
+        self.assertEqual(
+            [blocker.key for blocker in decision.blockers], ["revision-required"]
+        )
+
+    def test_revision_markers_are_read_the_same_way_response_markers_are(self) -> None:
+        marker = response.revision_marker(900)
+        self.assertTrue(
+            response.has_revision_for_review([april_comment(f"revised\n{marker}")], 900)
+        )
+        self.assertFalse(
+            response.has_revision_for_review([april_comment(f"revised\n{marker}")], 901)
+        )
+        # Anyone can read a marker off a prior comment; quoting it back must
+        # not fake a revision that never happened (#1364).
+        for body in (f"> {marker}", f"```\n{marker}\n```", f"    {marker}"):
+            with self.subTest(body=body):
+                self.assertFalse(
+                    response.has_revision_for_review([april_comment(body)], 900)
+                )
+        self.assertFalse(
+            response.has_revision_for_review(
+                [{"user": {"login": OWNER}, "body": marker}], 900
+            )
+        )
+        # The two markers are distinct namespaces: one means "answered with a
+        # diff", the other "answered with an ask".
+        self.assertFalse(
+            response.has_response_for_review([april_comment(marker)], 900)
+        )
+
+    def test_attempts_count_distinct_reviews_not_repeated_markers(self) -> None:
+        comments = [
+            april_comment(f"a\n{response.revision_marker(1)}"),
+            april_comment(f"b\n{response.revision_marker(1)}"),
+            april_comment(f"c\n{response.revision_marker(2)}"),
+            april_comment(f"d\n{response.response_marker(3)}"),
+        ]
+        self.assertEqual(response.count_revision_attempts(comments), 2)
 
 
 class ResponseCommentTests(unittest.TestCase):
@@ -686,6 +817,30 @@ class RespondTests(unittest.TestCase):
         response.respond(client, 1377, None, OWNER)
         self.assertEqual(client.removed, [])
         self.assertEqual(client.posted, [])
+
+    def test_deferring_to_the_revision_lane_writes_nothing_to_the_pr(self) -> None:
+        # The revision lane runs off the same event and owns the turn; a
+        # comment or a label here would claim the owner is needed when the
+        # factory is still moving.
+        client = FakeClient(pull_request(body="## Summary\n\nplain\n"), [review()])
+        response.respond(client, 1377, 900, OWNER, revise_enabled=True)
+        self.assertEqual(client.posted, [])
+        self.assertEqual(client.added, [])
+        self.assertEqual(client.ensured, [])
+
+    def test_a_revision_in_flight_never_marks_the_pr_as_waiting_on_the_owner(
+        self,
+    ) -> None:
+        # The level-triggered repair counts ESCALATION markers only: a
+        # revision-answered review is in flight, not waiting on the owner.
+        client = FakeClient(
+            pull_request(body="## Summary\n\nplain\n"),
+            [review()],
+            comments=[april_comment(f"revised\n{response.revision_marker(900)}")],
+        )
+        response.respond(client, 1377, 900, OWNER, revise_enabled=True)
+        self.assertEqual(client.posted, [])
+        self.assertEqual(client.added, [])
 
     def test_a_superseded_review_draws_no_post(self) -> None:
         client = FakeClient(

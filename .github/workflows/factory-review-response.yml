@@ -91,6 +91,7 @@ jobs:
           AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
           FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
           FACTORY_REVIEW_RESPONSE_ENABLED: ${{ vars.FACTORY_REVIEW_RESPONSE_ENABLED }}
+          FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
           REVIEW_ID: ${{ github.event.review.id }}
