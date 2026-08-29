@@ -38,6 +38,15 @@ struct SidebarRepoGlyphTests {
         #expect(hues.count == Self.names.count)
     }
 
+    /// The hash runs over NFC-normalized UTF-8: spellings Swift already treats as equal
+    /// strings must wear the same color.
+    @Test("Canonically equivalent spellings share a hue")
+    func canonicallyEquivalentNamesShareAHue() {
+        #expect(
+            SidebarChrome.RepoGlyph.hue(for: "caf\u{E9}")
+                == SidebarChrome.RepoGlyph.hue(for: "cafe\u{301}"))
+    }
+
     @Test("A one-character difference moves the hue")
     func neighbouringNamesDiverge() {
         #expect(SidebarChrome.RepoGlyph.hue(for: "skills") != SidebarChrome.RepoGlyph.hue(for: "skill"))
