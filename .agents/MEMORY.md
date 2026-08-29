@@ -1,10 +1,15 @@
 # Memory
 
+Durable design principles for this repo, loaded into every persona session by
+`become-persona`. Incident lessons — what a specific failure cost and how to
+avoid repeating it — live in `docs/agents/lessons.md`. Keep them there; this file
+is for rules that outlive the incident that taught them.
+
 ## CI and Runner Isolation
 
-- Never target bare `self-hosted` in this repo. Every self-hosted workflow job should use an explicit purpose-specific runner label.
-- Treat the interactive laptop host as unsuitable for intrusive UI/perf automation by default.
-- Keep release/signing on a dedicated host runner lane and move app-launching validation to an isolated lane such as a Tart-backed VM runner.
+- Every lane needing macOS runs on GitHub-hosted `macos-15` — build/test, the UI smoke lane, agent evidence, and release/signing/notarization alike. Agent and metadata jobs run `ubuntu-latest`.
+- **No self-hosted runner is registered for this repo**, and `.github/actionlint.yaml` allows no self-hosted label, so a `runs-on` naming one fails lint rather than queueing forever. Re-provisioning a lane means adding its label back there first.
+- Treat the interactive laptop host as unsuitable for intrusive UI/perf automation by default. Perf benchmarks are the sanctioned exception: laptop-local and opt-in per run (`docs/decisions/perf-measurement-laptop-optin.md`), never a CI lane.
 
 ## Terminal-First Product Rules
 
