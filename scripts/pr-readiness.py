@@ -76,12 +76,18 @@ FIELD_LABELS: dict[str, tuple[str, ...]] = {
     ),
 }
 
-MERGEABILITY_TEMPLATE = """## Mergeability
-
-- Surface: <desktop / web / agent-runtime / infra / docs — plus what part>
-- User-facing behavior changed: <what changed, or "No">
-- Non-happy paths considered: <error paths / edge cases, or "n/a" with why>
-- Residual risk or follow-up: <what could still break or is deferred, or "None">"""
+# Hint text per Mergeability field, keyed by the canonical label. This is the
+# only place a field's example wording is hardcoded; which fields appear, and
+# in what order, comes from `mergeability_field_labels()` reading the template
+# — so a field added to the template shows up here with a generic fallback
+# hint instead of silently vanishing from the paste-ready block.
+FIELD_HINTS: dict[str, str] = {
+    "Surface": f"<{DEFAULT_SURFACE} — plus what part>",
+    "User-facing behavior changed": '<what changed, or "No">',
+    "Non-happy paths considered": '<error paths / edge cases, or "n/a" with why>',
+    "Release/ops preconditions": '<what must happen before/at release, or "None">',
+    "Residual risk or follow-up": '<what could still break or is deferred, or "None">',
+}
 DOC_EVIDENCE_EXEMPT_SUFFIXES = (".md", ".mdx", ".markdown", ".txt")
 DOC_EVIDENCE_EXEMPT_PREFIXES = ("docs/", "backlog/")
 
@@ -133,6 +139,21 @@ def mergeability_field_labels(path: Path | None = None) -> list[str]:
         match.group("label").strip()
         for match in re.finditer(r"(?m)^[ \t]*[-*][ \t]*(?P<label>[^:\n]+):", section)
     ]
+
+
+def mergeability_paste_block(path: Path | None = None) -> str:
+    """The paste-ready Mergeability block CI and preflight hand out on failure.
+
+    Built by walking the template-derived field list rather than a second
+    hardcoded copy, so a field the template declares can never go missing
+    from the block the gate itself tells people to paste — the bug that let
+    this gate demand an answer its own guidance never asked for.
+    """
+    lines = ["## Mergeability", ""]
+    for label in mergeability_field_labels(path):
+        hint = FIELD_HINTS.get(label, "<fill in>")
+        lines.append(f"- {label}: {hint}")
+    return "\n".join(lines)
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
@@ -301,7 +322,7 @@ def guidance_markdown(result: Result) -> str:
             "bold, and `—` separators are accepted; answers must not be blank/n-a-only):",
             "",
             "```markdown",
-            MERGEABILITY_TEMPLATE,
+            mergeability_paste_block(),
             "```",
         ]
     if any("evidence signal" in failure for failure in result.failures):
