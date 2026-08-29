@@ -283,8 +283,9 @@ struct RepoRow: View {
 /// neither the session nor the note is. Below it the live status line outranks the note on the
 /// one row that has both — what the agent is doing right now beats a line written hours ago,
 /// which is also why the note renders a shade quieter than either. The live line belongs to the
-/// selected row alone, and that is what holds the sidebar to a single running timer however
-/// many sessions are live.
+/// selected workspace alone, which caps the sidebar's running timers at the count of that one
+/// workspace's visible rows: one, or two while a pinned selection also shows inside its
+/// auto-expanded repo — the same doubling its selection highlight already accepts.
 enum WorkspaceRowSecondLine: Equatable {
     case blank
     case statusMessage(String)
@@ -317,9 +318,9 @@ struct WorkspaceRow: View {
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
     var isPinned: Bool = false
-    /// The agent session behind this row, resolved by the sidebar for the selected row alone.
-    /// Non-nil on a selected row is what puts the live status line on the second line and
-    /// mounts the elapsed timer — the one timer the sidebar ever runs.
+    /// The agent session behind this row, resolved by the sidebar for the selected workspace
+    /// alone. Non-nil on a selected row is what puts the live status line on the second line
+    /// and mounts the elapsed timer — at most one per visible row of that workspace.
     var liveStatus: SidebarLiveSessionStatus? = nil
     /// Fixes the clock the status line reads, so a still render shows a known elapsed time and
     /// age and starts no timer. Nil in the app, where the elapsed label runs its own clock and

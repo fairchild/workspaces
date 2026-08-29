@@ -7,9 +7,11 @@ import Foundation
 import WorkspaceManagerCore
 
 /// What the selected workspace row's status line reads: which agent is at work, the run-state
-/// summary the hover card also shows, and when the session started — the fixed point the
-/// elapsed timer counts from. `createdAt` is written once at registration and never moves, so
-/// the row can hold it as a plain value and let its timer leaf own the clock.
+/// summary the hover card also shows, and the fixed point the elapsed timer counts from.
+/// `startedAt` is the session's registration time — written once, never moved — so the row can
+/// hold it as a plain value and let its timer leaf own the clock. For sessions born in this
+/// app run that is the session's lifetime; a reattach after relaunch registers anew, so the
+/// clock restarts with it (a durable start date is a tracked follow-up).
 struct SidebarLiveSessionStatus: Equatable {
     let kind: AgentKind
     let summary: String
