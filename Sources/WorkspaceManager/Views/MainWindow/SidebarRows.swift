@@ -144,7 +144,7 @@ struct RepoRow: View {
         return description
     }
 
-    private var folderIconHelp: String {
+    private var repoGlyphHelp: String {
         guard showsExpansion else { return "Open \(repo.name)" }
         return isExpanded ? "Collapse \(repo.name)" : "Expand \(repo.name)"
     }
@@ -156,10 +156,11 @@ struct RepoRow: View {
 
         HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             Button(action: onToggleExpansion) {
-                repoFolderIcon
+                repoIdentityGlyph
             }
             .buttonStyle(.plain)
-            .help(folderIconHelp)
+            .help(repoGlyphHelp)
+            .accessibilityLabel(repoGlyphHelp)
 
             Button(action: onSelectRepo) {
                 repoLabelContent(repoName: repoName, workspaceCount: workspaceCount)
@@ -194,24 +195,25 @@ struct RepoRow: View {
         .accessibilityLabel(accessibilityDescription)
     }
 
-    private var repoFolderIcon: some View {
-        Image(systemName: isExpanded ? "folder.fill" : "folder")
-            .foregroundStyle(
-                isSelected
-                    ? Color.primary
-                    : sessionActivity.iconColor(inactiveColor: SidebarChrome.Foreground.quietSecondary)
-            )
+    /// The repo's identity, constant across selection and session state: those read from the
+    /// row fill and the activity dot instead.
+    private var repoIdentityGlyph: some View {
+        RoundedRectangle(cornerRadius: SidebarChrome.RepoGlyph.radius, style: .continuous)
+            .fill(SidebarChrome.RepoGlyph.fill(for: repo.name))
+            .frame(width: SidebarChrome.RepoGlyph.side, height: SidebarChrome.RepoGlyph.side)
+            .overlay {
+                Text(SidebarChrome.RepoGlyph.monogram(for: repo.name))
+                    .font(SidebarChrome.RepoGlyph.monogramFont)
+                    .foregroundStyle(SidebarChrome.RepoGlyph.monogramColor)
+            }
             .frame(width: SidebarChrome.Metrics.iconColumn, alignment: .center)
-            .contentTransition(.symbolEffect(.replace))
+            .accessibilityHidden(true)
     }
 
     private func repoLabelContent(repoName: String, workspaceCount: Int) -> some View {
         HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             Text(repoName)
-                .font(
-                    SidebarChrome.TypeStyle.rowTitle(
-                        emphasized: isSelected || sessionActivity.isActive)
-                )
+                .font(SidebarChrome.TypeStyle.repoTitle)
                 .lineLimit(1)
 
             Spacer(minLength: 8)

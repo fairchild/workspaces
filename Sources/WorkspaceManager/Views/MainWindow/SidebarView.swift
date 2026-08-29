@@ -575,39 +575,74 @@ struct SidebarView: View {
         }
     }
 
+    /// The Repositories header owns the add affordance as well as the sort one: it heads the
+    /// list the sources land in, and unlike the toolbar it survives `minimalToolbar`.
     private var repositoriesHeader: some View {
-        sidebarSectionHeader(title: "Repositories", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
+        sidebarSectionHeader(
+            title: "Repositories",
+            showsSortMenu: !repos.isEmpty && !hasPinnedRows,
+            showsAddMenu: true
+        )
     }
 
-    private func sidebarSectionHeader(title: String, showsSortMenu: Bool) -> some View {
+    private func sidebarSectionHeader(
+        title: String,
+        showsSortMenu: Bool,
+        showsAddMenu: Bool = false
+    ) -> some View {
         HStack(spacing: 8) {
             Text(title)
             Spacer(minLength: 8)
             if showsSortMenu {
-                Menu {
-                    ForEach(SidebarRepoSortMode.allCases) { mode in
-                        Button {
-                            updateRepoSortMode(mode)
-                        } label: {
-                            if repoSortMode == mode {
-                                Label(mode.title, systemImage: "checkmark")
-                            } else {
-                                Text(mode.title)
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18, height: 18)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .help("Sort repositories")
+                sortMenu
+            }
+            if showsAddMenu {
+                headerAddMenu
             }
         }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(SidebarRepoSortMode.allCases) { mode in
+                Button {
+                    updateRepoSortMode(mode)
+                } label: {
+                    if repoSortMode == mode {
+                        Label(mode.title, systemImage: "checkmark")
+                    } else {
+                        Text(mode.title)
+                    }
+                }
+            }
+        } label: {
+            headerMenuGlyph("arrow.up.arrow.down")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .help("Sort repositories")
+    }
+
+    private var headerAddMenu: some View {
+        Menu {
+            addSourceMenuItems
+        } label: {
+            headerMenuGlyph("plus")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .help("Add a repository or URL source")
+    }
+
+    private func headerMenuGlyph(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(SidebarChrome.TypeStyle.headerActionGlyph)
+            .foregroundStyle(.secondary)
+            .frame(
+                width: SidebarChrome.Metrics.headerActionSide,
+                height: SidebarChrome.Metrics.headerActionSide
+            )
+            .contentShape(Rectangle())
     }
 
     private var webSection: some View {
@@ -656,15 +691,22 @@ struct SidebarView: View {
         }
     }
 
+    /// One list of add actions behind both surfaces that offer them — the toolbar menu and
+    /// the Repositories header menu — so the two can't drift apart.
+    @ViewBuilder
+    private var addSourceMenuItems: some View {
+        Button("Add Repository") {
+            isAddingRepo = true
+        }
+
+        Button("Add URL Source") {
+            onRequestWebSourceCreation(.global)
+        }
+    }
+
     private var addSourceMenu: some View {
         Menu {
-            Button("Add Repository") {
-                isAddingRepo = true
-            }
-
-            Button("Add URL Source") {
-                onRequestWebSourceCreation(.global)
-            }
+            addSourceMenuItems
         } label: {
             Image(systemName: "plus")
         }
