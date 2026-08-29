@@ -26,6 +26,8 @@ enum SidebarChrome {
         static let hoverActionSide: CGFloat = 22
         /// Diameter of the session-activity dot.
         static let activityDot: CGFloat = 7
+        /// Side of the square menu buttons that sit inline in a section header.
+        static let headerActionSide: CGFloat = 18
         static let rowMinHeight: CGFloat = 34
 
         static let rowHorizontalPadding: CGFloat = 8
@@ -100,8 +102,60 @@ enum SidebarChrome {
             .callout.weight(emphasized ? .semibold : .regular)
         }
 
+        /// A repo name heads a group, so it stays bold whatever the row's state — selection
+        /// reads from the row fill and session activity from the dot.
+        static let repoTitle = Font.callout.weight(.semibold)
+
         /// Monospaced digits keep a count capsule from twitching as its number changes.
         static let countBadge = Font.caption2.weight(.medium).monospacedDigit()
         static let hoverActionGlyph = Font.system(size: 11, weight: .semibold)
+        /// Glyphs of the menus that sit inline in a section header.
+        static let headerActionGlyph = Font.caption.weight(.semibold)
+    }
+
+    /// The identity glyph that heads a repo row: a small rounded square carrying the repo's
+    /// initial over a hue derived from its name, so a repo wears the same color everywhere it
+    /// appears and from one launch to the next.
+    enum RepoGlyph {
+        static let side: CGFloat = 16
+        static let radius: CGFloat = 4
+        static let monogramFont = Font.system(size: 10, weight: .semibold, design: .rounded)
+        static let monogramColor = Color.white
+        /// Hue is the only thing that varies: holding saturation and brightness fixed gives
+        /// every repo's color the same weight. These two are set a step below full — dark
+        /// enough that white holds up over the yellow-green band, bright enough to carry
+        /// against a dark sidebar.
+        static let saturation: Double = 0.52
+        static let brightness: Double = 0.66
+        /// A name with no character to abbreviate gets a neutral glyph rather than a hue that
+        /// would read as an identity it doesn't carry.
+        static let placeholderMonogram = "?"
+        static let placeholderFill = Color.secondary
+
+        /// Hue in `[0, 1)` for a repo name, from FNV-1a over its UTF-8.
+        ///
+        /// Deliberately not `Hasher`: that one is seeded per process, so the sidebar would
+        /// repaint every repo on relaunch. This hash is fixed for all time.
+        static func hue(for name: String) -> Double {
+            var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+            for byte in name.utf8 {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x0000_0100_0000_01b3
+            }
+            return Double(hash % 3600) / 3600
+        }
+
+        /// The single character the glyph shows: the name's first non-blank one, uppercased.
+        static func monogram(for name: String) -> String {
+            guard let first = name.first(where: { !$0.isWhitespace }) else {
+                return placeholderMonogram
+            }
+            return String(first.uppercased().prefix(1))
+        }
+
+        static func fill(for name: String) -> Color {
+            guard name.contains(where: { !$0.isWhitespace }) else { return placeholderFill }
+            return Color(hue: hue(for: name), saturation: saturation, brightness: brightness)
+        }
     }
 }
