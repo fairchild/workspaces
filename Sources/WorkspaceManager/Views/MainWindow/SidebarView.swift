@@ -579,21 +579,17 @@ struct SidebarView: View {
         sidebarSectionHeader(title: "Repositories", isTopmost: !hasPinnedRows)
     }
 
-    /// The topmost header carries the sidebar's inline actions — sort and add — to whichever
-    /// section heads the list: Pinned when it exists, otherwise the arrangement's own first
-    /// header. Add is global, so it reads the same from any of them.
-    ///
-    /// The two part company on an empty sidebar: sort stands down with nothing to sort, while
-    /// add is precisely what that state is waiting for. This menu is also the app's only route
-    /// to Add Repository once `minimalToolbar` hides the toolbar copy, so it stays.
+    /// Which menus show, and where, is `SidebarHeaderActions`' decision — kept pure there so
+    /// the placement rule stays under test without this view's app graph.
     private func sidebarSectionHeader(title: String, isTopmost: Bool) -> some View {
-        HStack(spacing: 8) {
+        let actions = SidebarHeaderActions.forHeader(isTopmost: isTopmost, hasRepos: !repos.isEmpty)
+        return HStack(spacing: 8) {
             Text(title)
             Spacer(minLength: 8)
-            if isTopmost {
-                if !repos.isEmpty {
-                    sortMenu
-                }
+            if actions.showsSort {
+                sortMenu
+            }
+            if actions.showsAdd {
                 headerAddMenu
             }
         }
