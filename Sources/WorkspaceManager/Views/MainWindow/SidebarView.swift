@@ -582,7 +582,11 @@ struct SidebarView: View {
     /// Which menus show, and where, is `SidebarHeaderActions`' decision — kept pure there so
     /// the placement rule stays under test without this view's app graph.
     private func sidebarSectionHeader(title: String, isTopmost: Bool) -> some View {
-        let actions = SidebarHeaderActions.forHeader(isTopmost: isTopmost, hasRepos: !repos.isEmpty)
+        let actions = SidebarHeaderActions.forHeader(
+            isTopmost: isTopmost,
+            hasRepos: !repos.isEmpty,
+            isToolbarMinimal: minimalToolbarEnabled
+        )
         return HStack(spacing: 8) {
             Text(title)
             Spacer(minLength: 8)
