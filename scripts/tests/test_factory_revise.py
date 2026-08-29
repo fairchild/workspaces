@@ -354,14 +354,21 @@ class AdmissionEscalationTests(QuietTest):
         self.assertTrue(outputs["review_id"])
         return decision
 
-    def test_the_attempt_ceiling_escalates(self) -> None:
+    def test_the_attempt_ceiling_declines_without_a_second_writer(self) -> None:
+        # The response lane never defers at the ceiling -- it escalates on its
+        # own path -- and the two lanes race from different concurrency groups,
+        # so a second escalation here would dodge the marker dedupe. One
+        # writer per state.
         comments = [
             revision_comment(800),
             revision_comment(850),
         ]
-        decision = self.assert_escalating_decline(
+        decision, outputs = self.run_admit(
             FakeClient(pull_request(), [review()], comments)
         )
+        self.assertEqual(decision.action, "decline")
+        self.assertFalse(decision.escalate)
+        self.assertEqual(outputs["escalate"], "false")
         self.assertIn("escalates", decision.reason)
 
     def test_the_ceiling_counts_distinct_reviews_not_repeated_markers(self) -> None:
@@ -375,7 +382,7 @@ class AdmissionEscalationTests(QuietTest):
         decision, _ = self.run_admit(client)
         self.assertEqual(decision.action, "revise")
 
-    def test_a_privileged_path_without_the_label_escalates(self) -> None:
+    def test_a_privileged_path_escalates(self) -> None:
         decision = self.assert_escalating_decline(
             FakeClient(
                 pull_request(),
@@ -383,18 +390,23 @@ class AdmissionEscalationTests(QuietTest):
                 files=["Sources/Feature.swift", ".github/workflows/ci.yml"],
             )
         )
-        self.assertIn(revise.PRIVILEGED_PATCH_LABEL, decision.reason)
         self.assertIn(".github/workflows/ci.yml", decision.reason)
 
-    def test_a_privileged_path_with_the_label_is_admitted(self) -> None:
-        decision, _ = self.run_admit(
+    def test_the_privileged_patch_label_earns_no_exemption(self) -> None:
+        # The label sanctions a diff existing; it does not sanction this lane
+        # re-running the branch's own validator and prompt files with a
+        # branch-writing token. Declining unconditionally is what keeps an
+        # admitted branch's `.agents/` and `.github/` content provably main's.
+        decision = self.assert_escalating_decline(
             FakeClient(
-                pull_request(labels=("author:april", revise.PRIVILEGED_PATCH_LABEL)),
+                pull_request(
+                    labels=("author:april", "privileged-agent-patch")
+                ),
                 [review()],
                 files=[".github/workflows/ci.yml"],
             )
         )
-        self.assertEqual(decision.action, "revise")
+        self.assertIn("owner's", decision.reason)
 
     def test_a_missing_evidence_contract_escalates(self) -> None:
         decision = self.assert_escalating_decline(
@@ -518,6 +530,7 @@ class ResolveTests(QuietTest):
         comment_posted: str = "true",
         head_before: str = "aaaa1111",
         reason: str = "",
+        review_id: int | None = 900,
     ) -> dict[str, str]:
         outputs: dict[str, str] = {}
         with mock.patch.object(
@@ -527,7 +540,7 @@ class ResolveTests(QuietTest):
                 client,
                 client,
                 1377,
-                900,
+                review_id,
                 OWNER,
                 head_before=head_before,
                 revise_result=revise_result,
@@ -542,45 +555,84 @@ class ResolveTests(QuietTest):
     def pushed_pr(self) -> dict[str, object]:
         return pull_request(head_sha="bbbb2222")
 
-    def test_a_posted_reply_needs_no_repair(self) -> None:
-        client = FakeClient(self.pushed_pr(), [review()], [revision_comment(900)])
-        outputs = self.resolve(client)
-        self.assertEqual(client.posted, [])
-        self.assertEqual(outputs["revision_marker_repaired"], "false")
-        self.assertEqual(outputs["escalated"], "false")
-
-    def test_a_lost_reply_is_repaired_so_the_marker_exists(self) -> None:
-        # The response lane reads the marker to know a revision answered this
-        # review; leaving it unwritten re-escalates a PR that actually moved.
+    def test_a_validated_push_is_attested(self) -> None:
+        # The marker is resolve's attestation, written only after the live
+        # head confirms the push -- whether or not April's reply landed.
         client = FakeClient(self.pushed_pr(), [review()])
         outputs = self.resolve(client, comment_posted="false")
         self.assertEqual(len(client.posted), 1)
         self.assertTrue(response.has_revision_for_review(client._comments, 900))
-        self.assertEqual(outputs["revision_marker_repaired"], "true")
+        self.assertEqual(outputs["revision_attested"], "true")
+        self.assertEqual(outputs["escalated"], "false")
         self.assertEqual(client.dispatched, [])
 
-    def test_repair_is_idempotent_when_the_marker_is_already_there(self) -> None:
+    def test_attestation_is_idempotent(self) -> None:
         client = FakeClient(self.pushed_pr(), [review()], [revision_comment(900)])
-        outputs = self.resolve(client, comment_posted="false")
+        outputs = self.resolve(client)
         self.assertEqual(client.posted, [])
-        self.assertEqual(outputs["revision_marker_repaired"], "false")
+        self.assertEqual(outputs["revision_attested"], "false")
+        self.assertEqual(outputs["escalated"], "false")
 
-    def test_a_body_only_turn_asks_the_review_lane_to_look_again(self) -> None:
+    def test_the_attestation_carries_no_model_text(self) -> None:
+        client = FakeClient(self.pushed_pr(), [review()])
+        self.resolve(client)
+        attestation = client.posted[0]
+        self.assertIn(response.revision_marker(900), attestation)
+        # Every word is the lane's own; the last visible line is the marker.
+        self.assertEqual(
+            [line for line in attestation.splitlines() if line.strip()][-1],
+            response.revision_marker(900),
+        )
+
+    def _readiness(self, ok: bool) -> mock._patch:
+        verdict = mock.Mock()
+        verdict.ok = ok
+        return mock.patch.object(
+            revise.factory_review.pr_readiness,
+            "evaluate",
+            return_value=verdict,
+        )
+
+    def test_a_ready_body_only_turn_is_attested_and_re_reviewed(self) -> None:
         # No commit moved, so `synchronize` never fires and the standing
         # rejection has nothing to clear it (#1379).
-        client = FakeClient(pull_request(), [review()], [revision_comment(900)])
-        outputs = self.resolve(client, revision_outcome="body-only")
+        client = FakeClient(pull_request(), [review()])
+        with self._readiness(ok=True):
+            outputs = self.resolve(client, revision_outcome="body-only")
         self.assertEqual(
             client.dispatched, [("factory-review.yml", "main", {"pr_number": "1377"})]
         )
+        self.assertTrue(response.has_revision_for_review(client._comments, 900))
         self.assertEqual(outputs["review_dispatched"], "true")
         self.assertEqual(outputs["escalated"], "false")
 
-    def test_a_failed_dispatch_is_reported_not_swallowed(self) -> None:
-        client = FakeClient(pull_request(), [review()], [revision_comment(900)])
+    def test_a_body_only_turn_that_fails_readiness_escalates_unattested(self) -> None:
+        # The dispatch it would send is one the review lane declines exactly
+        # when readiness fails -- attesting there would leave a marked park:
+        # marker up, refresh never comes, response lane skips forever.
+        client = FakeClient(pull_request(), [review()])
+        with self._readiness(ok=False):
+            outputs = self.resolve(client, revision_outcome="body-only")
+        self.assertEqual(client.dispatched, [])
+        self.assertFalse(response.has_revision_for_review(client._comments, 900))
+        self.assertEqual(outputs["escalated"], "true")
+        self.assertIn("readiness gate", client.posted[0])
+
+    def test_a_body_only_turn_whose_review_stopped_standing_is_quiet(self) -> None:
+        client = FakeClient(pull_request(), [review(state="DISMISSED")])
+        with self._readiness(ok=True):
+            outputs = self.resolve(client, revision_outcome="body-only")
+        self.assertEqual(client.posted, [])
+        self.assertEqual(client.dispatched, [])
+        self.assertEqual(outputs["escalated"], "false")
+
+    def test_a_failed_dispatch_escalates(self) -> None:
+        client = FakeClient(pull_request(), [review()])
         client.dispatch_failure = True
-        outputs = self.resolve(client, revision_outcome="body-only")
+        with self._readiness(ok=True):
+            outputs = self.resolve(client, revision_outcome="body-only")
         self.assertEqual(outputs["review_dispatched"], "false")
+        self.assertEqual(outputs["escalated"], "true")
 
     def test_a_push_the_branch_does_not_carry_escalates(self) -> None:
         # Writing the marker anyway would tell the reviewer a revision exists
@@ -591,16 +643,18 @@ class ResolveTests(QuietTest):
         self.assertFalse(response.has_revision_for_review(client._comments, 900))
         self.assertIn("does not carry", client.posted[0])
 
-    def test_needs_owner_applies_the_marker_without_a_second_comment(self) -> None:
-        # The runtime already posted April's own escalation with its marker;
-        # the label is the part only a credentialed lane step can apply.
+    def test_needs_owner_always_gets_the_deterministic_escalation(self) -> None:
+        # April's reasoning comment carries no machinery, so the escalation
+        # marker and the label are always this step's to write.
         client = FakeClient(
             pull_request(),
             [review()],
-            [april_comment(f"this needs you\n\n{response.response_marker(900)}")],
+            [april_comment("this needs you — my reasoning above")],
         )
         outputs = self.resolve(client, revision_outcome="needs-owner")
-        self.assertEqual(client.posted, [])
+        self.assertEqual(len(client.posted), 1)
+        self.assertIn("her comment above", client.posted[0].casefold())
+        self.assertTrue(response.has_response_for_review(client._comments, 900))
         self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
         self.assertEqual(outputs["escalated"], "true")
 
@@ -612,9 +666,27 @@ class ResolveTests(QuietTest):
             client, revision_outcome="needs-owner", comment_posted="false"
         )
         self.assertEqual(len(client.posted), 1)
-        self.assertIn("determined it needs the owner", client.posted[0])
+        self.assertIn("could not be posted", client.posted[0])
         self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
         self.assertEqual(outputs["escalated"], "true")
+
+    def test_a_missing_review_id_resolves_the_standing_review(self) -> None:
+        # An admission crash on the manual-dispatch path names no review; the
+        # standing rejection is the one the dispatch was about.
+        client = FakeClient(pull_request(), [review()])
+        outputs = self.resolve(
+            client, review_id=None, revise_result="failure", revision_outcome=""
+        )
+        self.assertEqual(outputs["escalated"], "true")
+        self.assertTrue(response.has_response_for_review(client._comments, 900))
+
+    def test_a_missing_review_id_with_nothing_standing_is_quiet(self) -> None:
+        client = FakeClient(pull_request(), [review(state="APPROVED")])
+        outputs = self.resolve(
+            client, review_id=None, revise_result="failure", revision_outcome=""
+        )
+        self.assertEqual(client.posted, [])
+        self.assertEqual(outputs["escalated"], "false")
 
     def test_a_failed_turn_escalates_and_names_the_run(self) -> None:
         client = FakeClient(pull_request(), [review()])
@@ -819,11 +891,16 @@ class WorkflowContractTests(unittest.TestCase):
         )
 
     def test_the_response_lane_is_told_whether_this_one_is_armed(self) -> None:
+        # On the event path only. A manual dispatch of the response lane
+        # creates no revise event, so it must read the switch as off and
+        # escalate deterministically rather than defer into silence.
         response_workflow = (
             WORKFLOW_PATH.parent / "factory-review-response.yml"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            f"{response.REVISION_LANE_SWITCH}: ${{{{ vars.{response.REVISION_LANE_SWITCH} }}}}",
+            f"{response.REVISION_LANE_SWITCH}: "
+            "${{ github.event_name == 'pull_request_review' && "
+            f"vars.{response.REVISION_LANE_SWITCH} || 'false' }}}}",
             response_workflow,
         )
 

@@ -240,8 +240,6 @@ from execution import (  # noqa: E402, F401
     ensure_label_exists,
     fetch_review,
     pr_marker,
-    review_response_marker,
-    revision_marker,
     route_action,
     route_execution_action,
     seed_mergeability_section,
@@ -482,6 +480,12 @@ def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
     # symlinks=True keeps repo symlinks as symlinks; following them turns
     # every linked path into a phantom mode-change diff that git apply refuses.
     shutil.copytree(baseline_dir, scratch_dir, symlinks=True)
+    # The model CLI is fetched through npx with the scratch as cwd, so a tree
+    # `.npmrc` could point that resolution at another registry and swap the
+    # pinned binary under CLAUDE_CODE_OAUTH_TOKEN. Removed from both trees so
+    # the patch diff cannot see the removal either.
+    for tree in (baseline_dir, scratch_dir):
+        (tree / ".npmrc").unlink(missing_ok=True)
     return ScratchPatchArtifact(
         temp_root=temp_root,
         baseline_dir=baseline_dir,

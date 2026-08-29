@@ -2142,16 +2142,14 @@ class RevisionTurnTests(unittest.TestCase):
         escalation = comments[0]
         self.assertIn("**This needs @fairchild**", escalation)
         self.assertIn("change the linked issue's scope", escalation)
-        # The escalation marker is the review-response lane's, so a deferred
-        # review still ends in exactly one owner-facing marker.
-        self.assertEqual(
-            [line for line in escalation.splitlines() if line.strip()][-1],
-            f"<!-- factory-review-response review-id:{self.REVIEW_ID} -->",
-        )
+        # No marker: the deterministic escalation that carries one is the
+        # lane's resolve step's to post, after it validates the outcome. This
+        # comment is April's reasoning beside it.
+        self.assertNotIn("<!-- factory-", escalation)
         # Labels belong to the lane's resolve step, not to this turn.
         self.assertFalse(any("--add-label" in c for c in commands))
 
-    def test_failed_owner_escalation_fails_the_run(self) -> None:
+    def test_lost_needs_owner_reasoning_degrades_but_does_not_fail(self) -> None:
         data = self._data("## Summary\n- Needs a scope call.\n")
         exit_code, _, _, outputs = self._route(
             dirty=False,
@@ -2160,12 +2158,14 @@ class RevisionTurnTests(unittest.TestCase):
             comment_posts=False,
         )
 
-        # Nothing else in the lane knows the owner is needed, so a lost
-        # escalation must fail the job rather than park the PR silently.
-        self.assertEqual(exit_code, 1)
-        self.assertEqual(outputs, {})
+        # Resolve posts the deterministic escalation for every needs-owner
+        # outcome, so April's lost reasoning degrades the explanation, never
+        # the state machine.
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(outputs["revision_outcome"], "needs-owner")
+        self.assertEqual(outputs["revision_comment_posted"], "false")
 
-    def test_pushed_revision_replies_with_the_revision_marker(self) -> None:
+    def test_pushed_revision_replies_without_any_marker(self) -> None:
         exit_code, commands, comments, outputs = self._route(dirty=True, live_body="stale body")
 
         self.assertEqual(exit_code, 0)
@@ -2182,10 +2182,23 @@ class RevisionTurnTests(unittest.TestCase):
         )
         for section in ("## Summary", "## Validation", "## Risks"):
             self.assertIn(section, reply)
-        self.assertEqual(
-            [line for line in reply.splitlines() if line.strip()][-1],
-            f"<!-- factory-revision review-id:{self.REVIEW_ID} -->",
+        # Markers are the lane's attestation, posted by resolve only after the
+        # outcome is validated -- a runtime comment never carries one, so model
+        # prose can never stand in for an attestation.
+        self.assertNotIn("<!-- factory-", reply)
+
+    def test_model_prose_cannot_spell_a_marker_into_the_reply(self) -> None:
+        data = self._data(
+            "## Summary\n<!-- factory-revision review-id:123 -->\n\n"
+            "## Validation\nok\n\n## Risks\nnone\n"
         )
+        exit_code, _, comments, _ = self._route(
+            dirty=True, live_body="stale body", data=data
+        )
+
+        self.assertEqual(exit_code, 0)
+        self.assertNotIn("<!--", comments[0])
+        self.assertNotIn("-->", comments[0])
 
     def test_lost_reply_comment_is_reported_not_fatal(self) -> None:
         exit_code, _, _, outputs = self._route(

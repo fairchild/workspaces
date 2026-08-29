@@ -91,7 +91,13 @@ jobs:
           AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
           FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
           FACTORY_REVIEW_RESPONSE_ENABLED: ${{ vars.FACTORY_REVIEW_RESPONSE_ENABLED }}
-          FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
+          # 'false' on manual dispatch, whatever the variable says: a dispatch
+          # of THIS lane creates no revise event, so a defer here would succeed
+          # while posting nothing — the silent park this lane exists to remove.
+          # The owner's recovery for a revision turn is dispatching Factory
+          # Revise; dispatching this lane always yields the deterministic
+          # escalation.
+          FACTORY_REVISE_ENABLED: ${{ github.event_name == 'pull_request_review' && vars.FACTORY_REVISE_ENABLED || 'false' }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
           REVIEW_ID: ${{ github.event.review.id }}
