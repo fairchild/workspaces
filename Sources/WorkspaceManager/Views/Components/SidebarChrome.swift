@@ -40,6 +40,13 @@ enum SidebarChrome {
         /// Gap between a row's glyph and its label.
         static let rowContentSpacing: CGFloat = 8
 
+        /// Insets and inner gap of the pill that heads a repo's archived workspaces. Tighter
+        /// than a row's own padding: the pill is a block inset from the rows, so its content
+        /// starts where the pill does rather than lining up with the column above it.
+        static let disclosurePillHorizontalPadding: CGFloat = 6
+        static let disclosurePillVerticalPadding: CGFloat = 4
+        static let disclosurePillSpacing: CGFloat = 6
+
         static let cardWidth: CGFloat = 260
         static let cardPadding: CGFloat = 14
     }
@@ -60,6 +67,7 @@ enum SidebarChrome {
         static let row: CGFloat = 5
         static let webSourceRow: CGFloat = 6
         static let hoverAction: CGFloat = 7
+        static let disclosurePill: CGFloat = 7
         static let statusBadge: CGFloat = 3
         static let card: CGFloat = 10
     }
@@ -74,6 +82,10 @@ enum SidebarChrome {
         static let workspaceCountBadgeExpanded = Color.secondary.opacity(0.06)
         static let paneCountBadgeActive = Color.secondary.opacity(0.16)
         static let paneCountBadgeIdle = Color.secondary.opacity(0.1)
+
+        /// The archived pill sits a shade under the hover chip: it is chrome that is always
+        /// on screen while a repo holds archived work, not an affordance the pointer summons.
+        static let disclosurePill = Color.secondary.opacity(0.06)
 
         static let statusBadgeProvisioning = Color.blue.opacity(0.2)
         static let statusBadgeStopped = Color.orange.opacity(0.2)
@@ -92,6 +104,8 @@ enum SidebarChrome {
     enum Stroke {
         static let hoverAction = Color.secondary.opacity(0.08)
         static let hoverActionWidth: CGFloat = 1
+        static let disclosurePill = Color.secondary.opacity(0.08)
+        static let disclosurePillWidth: CGFloat = 1
         static let card = Color(nsColor: .separatorColor).opacity(0.55)
         static let cardWidth: CGFloat = 0.5
     }
