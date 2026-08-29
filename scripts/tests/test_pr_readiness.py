@@ -12,10 +12,16 @@ sections in a form GitHub Actions can surface cleanly.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
+import json
+import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -245,6 +251,120 @@ class ReadinessCommentTests(unittest.TestCase):
         comment = pr_readiness.comment_markdown(result)
         self.assertIn("passed", comment)
         self.assertNotIn("```", comment)
+
+
+# Env the CI path writes through; a preflight test must not append to a real
+# step summary or readiness comment when the suite itself runs in Actions.
+CI_ENV_KEYS = ("GITHUB_ACTIONS", "GITHUB_STEP_SUMMARY", "READINESS_COMMENT_PATH")
+
+
+def preflight(body: str, *, files: list[str] | None = None, args: list[str] | None = None):
+    """Run the `--body-file` entry point end to end; return (exit code, stdout)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        body_path = Path(tmp) / "body.md"
+        body_path.write_text(body, encoding="utf-8")
+        files_path = Path(tmp) / "changed-files.json"
+        files_path.write_text(json.dumps(files or []), encoding="utf-8")
+        argv = [
+            "--body-file", str(body_path),
+            "--changed-files", str(files_path),
+            *(args or []),
+        ]
+        local_env = {k: v for k, v in os.environ.items() if k not in CI_ENV_KEYS}
+        stdout = io.StringIO()
+        with mock.patch.dict(os.environ, local_env, clear=True):
+            with contextlib.redirect_stdout(stdout):
+                code = pr_readiness.main(argv)
+    return code, stdout.getvalue()
+
+
+class PreflightBodyFileTests(unittest.TestCase):
+    """`--body-file` is the same gate, one step earlier.
+
+    Authors — agents most of all — reconstructed the body from memory and
+    learned it was wrong from a failed CI run. This entry point moves that
+    verdict to before `gh pr create`, so it has to give the same answer in the
+    same words as the event path.
+    """
+
+    def test_good_body_passes_and_exits_zero(self) -> None:
+        code, output = preflight(GOOD_BODY, files=["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(code, 0)
+        self.assertIn("PR readiness passed.", output)
+
+    def test_missing_mergeability_section_fails_with_the_ci_message(self) -> None:
+        body = GOOD_BODY.replace("## Mergeability", "## Notes")
+        code, output = preflight(body, files=["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(code, 1)
+        self.assertIn("Missing ## Mergeability section from the PR body.", output)
+
+    def test_empty_mergeability_field_fails_and_pastes_the_fix(self) -> None:
+        body = GOOD_BODY.replace(
+            "- Non-happy paths considered: nil userdata and zero address behavior covered",
+            "- Non-happy paths considered:",
+        )
+        code, output = preflight(body, files=["Sources/WorkspaceManager/Foo.swift"])
+        self.assertEqual(code, 1)
+        self.assertIn(
+            "Mergeability field is empty or still default: Non-happy paths considered.",
+            output,
+        )
+        # The paste-ready block CI would post as a comment, printed locally.
+        self.assertIn("```markdown", output)
+        self.assertIn("## Mergeability", output)
+
+    def test_preflight_and_event_path_report_identical_failures(self) -> None:
+        body = GOOD_BODY.replace("## Mergeability", "## Notes")
+        files = ["Sources/WorkspaceManager/Foo.swift"]
+        _, output = preflight(body, files=files)
+        for failure in pr_readiness.evaluate(pr(body), files).failures:
+            self.assertIn(failure, output)
+
+    def test_labels_and_title_reach_the_same_checks(self) -> None:
+        code, output = preflight(
+            GOOD_BODY,
+            files=["Sources/WorkspaceManager/Foo.swift"],
+            args=["--label", "blocked:evidence", "--title", "Do not merge until signed"],
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Blocking label present: blocked:evidence.", output)
+        self.assertIn("PR text contains a merge-stop instruction.", output)
+
+    def test_missing_body_file_is_a_usage_error(self) -> None:
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            code = pr_readiness.main(["--body-file", "/nonexistent/pr-body.md"])
+        self.assertEqual(code, 2)
+        self.assertIn("No such body file", stdout.getvalue())
+
+    def test_unedited_template_does_not_pass(self) -> None:
+        """Copying the template is the start of a body, not the end of one."""
+        code, output = preflight(
+            pr_readiness.template_body(), files=["Sources/WorkspaceManager/Foo.swift"]
+        )
+        self.assertEqual(code, 1)
+        self.assertIn("Mergeability field is empty or still default: Surface.", output)
+
+
+class TemplateContractTests(unittest.TestCase):
+    """The template is the single source of truth producers seed from, so the
+    fields it declares and the fields the gate grades must be the same set."""
+
+    def test_template_declares_exactly_the_graded_fields(self) -> None:
+        self.assertEqual(
+            set(pr_readiness.mergeability_field_labels()),
+            set(pr_readiness.FIELD_LABELS),
+        )
+
+    def test_labels_are_read_in_template_order(self) -> None:
+        labels = pr_readiness.mergeability_field_labels()
+        section = pr_readiness.extract_section(pr_readiness.template_body(), "Mergeability")
+        self.assertEqual(labels, sorted(labels, key=section.index))
+
+    def test_unreadable_template_yields_no_labels_rather_than_raising(self) -> None:
+        self.assertEqual(
+            pr_readiness.mergeability_field_labels(Path("/nonexistent/template.md")), []
+        )
 
 
 if __name__ == "__main__":

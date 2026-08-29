@@ -3,7 +3,13 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Validate PR readiness signals from the GitHub pull_request event."""
+"""Validate PR readiness signals: the body contract every non-draft PR owes.
+
+Two entry points, one `evaluate()`: CI feeds it the GitHub `pull_request`
+event, and `--body-file` feeds it a body an author has not published yet, so
+the same failures and the same wording arrive before `gh pr create` instead of
+one CI round trip later.
+"""
 
 from __future__ import annotations
 
@@ -11,12 +17,14 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPTS_DIR.parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
@@ -24,6 +32,12 @@ from release_policy import RELEASE_PATHS
 
 
 DEFAULT_SURFACE = "desktop / web / agent-runtime / infra / docs"
+
+# The authored PR body skeleton. Producers derive their sections from this
+# file rather than from copied strings, so adding a field to the template
+# reaches every generated body without a second edit.
+PR_TEMPLATE_PATH = REPO_ROOT / ".github" / "pull_request_template.md"
+GIT_TIMEOUT_SECONDS = 20
 
 # Accepted spellings per required Mergeability field, canonical first. The
 # gate's job is to prove the readiness *questions* were answered, not to
@@ -99,6 +113,26 @@ def extract_section(body: str, heading: str) -> str:
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""
+
+
+def template_body(path: Path | None = None) -> str:
+    try:
+        return (path or PR_TEMPLATE_PATH).read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def mergeability_field_labels(path: Path | None = None) -> list[str]:
+    """Field labels the PR template declares under `## Mergeability`, in order.
+
+    Producers that seed a Mergeability block read the contract from here, so
+    the template stays the one place a required field is added or renamed.
+    """
+    section = extract_section(template_body(path), "Mergeability")
+    return [
+        match.group("label").strip()
+        for match in re.finditer(r"(?m)^[ \t]*[-*][ \t]*(?P<label>[^:\n]+):", section)
+    ]
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
@@ -248,17 +282,17 @@ EVIDENCE_HINT = (
 )
 
 
-def comment_markdown(result: Result) -> str:
-    """The sticky PR comment: what failed, and exactly what to paste to fix it.
+def guidance_markdown(result: Result) -> str:
+    """What failed, and exactly what to paste to fix it.
 
     The gate's failures used to surface only in the Actions log, so every
     author rediscovered the expected format by archaeology. This turns a
     failure into a self-correcting loop — agents and humans both see the
-    missing pieces on the PR itself.
+    missing pieces, on the PR itself in CI and on stdout in preflight.
     """
     if result.ok:
-        return f"{COMMENT_MARKER}\n✅ **PR readiness gate passed.**\n"
-    lines = [COMMENT_MARKER, "⚠️ **PR readiness gate failed** — this PR body is missing readiness signals:", ""]
+        return "✅ **PR readiness gate passed.**\n"
+    lines = ["⚠️ **PR readiness gate failed** — this PR body is missing readiness signals:", ""]
     lines += [f"- {failure}" for failure in result.failures]
     if any("Mergeability" in failure for failure in result.failures):
         lines += [
@@ -274,10 +308,16 @@ def comment_markdown(result: Result) -> str:
         lines += ["", f"Evidence is satisfied by {EVIDENCE_HINT}."]
     lines += [
         "",
-        "_Full template: `.github/pull_request_template.md` · gate: `scripts/pr-readiness.py` — "
-        "this comment updates automatically on the next push or body edit._",
+        "_Full template: `.github/pull_request_template.md` — check a body before you push it with "
+        "`uv run --script scripts/pr-readiness.py --body-file <path>`. In CI this comment updates "
+        "automatically on the next push or body edit._",
     ]
     return "\n".join(lines) + "\n"
+
+
+def comment_markdown(result: Result) -> str:
+    """The sticky PR comment: the same guidance, keyed by an upsert marker."""
+    return f"{COMMENT_MARKER}\n{guidance_markdown(result)}"
 
 
 def emit(result: Result) -> None:
@@ -309,20 +349,101 @@ def emit(result: Result) -> None:
         Path(comment_path).write_text(comment_markdown(result), encoding="utf-8")
 
 
+def git_changed_files(base: str) -> list[str]:
+    """Paths this branch would put in the PR: committed against `base`, plus
+    anything still dirty in the working tree."""
+    files: list[str] = []
+
+    def collect(args: list[str]) -> str:
+        try:
+            done = subprocess.run(
+                ["git", *args],
+                capture_output=True,
+                text=True,
+                cwd=REPO_ROOT,
+                timeout=GIT_TIMEOUT_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return done.stdout if done.returncode == 0 else ""
+
+    def add(path: str) -> None:
+        path = path.strip().strip('"')
+        if path and path not in files:
+            files.append(path)
+
+    for line in collect(["status", "--porcelain"]).splitlines():
+        if len(line) > 3:
+            path = line[3:]
+            add(path.split(" -> ", 1)[1] if " -> " in path else path)
+    for ref in (f"origin/{base}", base):
+        committed = collect(["diff", "--name-only", f"{ref}...HEAD"])
+        if committed.strip():
+            for line in committed.splitlines():
+                add(line)
+            break
+    return files
+
+
+def body_file_pr(path: Path, *, title: str, labels: list[str]) -> dict[str, Any]:
+    return {
+        "title": title,
+        "body": path.read_text(encoding="utf-8"),
+        "draft": False,
+        "labels": [{"name": name} for name in labels],
+    }
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", default=os.environ.get("GITHUB_EVENT_PATH"))
     parser.add_argument("--changed-files", help="JSON file containing a list of changed file paths.")
+    parser.add_argument(
+        "--body-file",
+        help=(
+            "Preflight a PR body from a local file, before `gh pr create`. Runs the "
+            "same checks CI runs and reports the same failures. Start from "
+            ".github/pull_request_template.md."
+        ),
+    )
+    parser.add_argument("--title", default="", help="PR title to check alongside --body-file.")
+    parser.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Label the PR will carry; repeatable. Only meaningful with --body-file.",
+    )
+    parser.add_argument(
+        "--base",
+        default="main",
+        help="Base branch --body-file diffs against to infer changed files (default: main).",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    event = load_json(args.event, {})
-    pr = event.get("pull_request") or event
-    files = load_json(args.changed_files, [])
+    if args.body_file:
+        body_path = Path(args.body_file)
+        if not body_path.is_file():
+            print(f"ERROR:No such body file: {body_path}")
+            return 2
+        pr = body_file_pr(body_path, title=args.title, labels=args.label)
+        files = load_json(args.changed_files, None)
+        if files is None:
+            files = git_changed_files(args.base)
+            print(f"Preflight: {body_path} against {len(files)} changed file(s) vs {args.base}.")
+    else:
+        event = load_json(args.event, {})
+        pr = event.get("pull_request") or event
+        files = load_json(args.changed_files, [])
     result = evaluate(pr, files)
     emit(result)
+    if args.body_file and not result.ok:
+        print()
+        print(guidance_markdown(result), end="")
     return 0 if result.ok else 1
 
 
