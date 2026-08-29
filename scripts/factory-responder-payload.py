@@ -586,8 +586,14 @@ def build_post_body(reply: str, comment_id: int) -> str:
     # goes on: the factory's marker readers trust the last visible line of any
     # comment this bot posts, so model prose that can spell a delimiter can
     # forge a marker for another lane (an unterminated fence hides the real
-    # one appended below, leaving the forgery last).
-    reply = reply.replace("<!--", "").replace("-->", "")
+    # one appended below, leaving the forgery last). To a fixpoint, not a
+    # single pass: one deletion can splice a fresh delimiter together
+    # (`<<!--!--` becomes `<!--`).
+    while True:
+        stripped = reply.replace("<!--", "").replace("-->", "")
+        if stripped == reply:
+            break
+        reply = stripped
     reply = cap_utf8(reply, REPLY_BYTE_CAP).rstrip()
     return f"{reply}\n\n{response_marker(comment_id)}\n"
 

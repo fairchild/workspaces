@@ -234,9 +234,15 @@ def _neutralized_model_text(text: str) -> str:
 
     HTML comment delimiters go so no line can form a marker; the reader is
     author- and position-bound, but the author here IS the bot, so the text
-    itself must be unable to spell one.
+    itself must be unable to spell one. To a fixpoint, not a single pass:
+    one deletion can splice a fresh delimiter together (`<<!--!--` becomes
+    `<!--`).
     """
-    return text.replace("<!--", "").replace("-->", "")
+    while True:
+        stripped = text.replace("<!--", "").replace("-->", "")
+        if stripped == text:
+            return text
+        text = stripped
 
 
 def fetch_review(pr_number: int, review_id: str, env: dict[str, str]) -> dict[str, object]:
