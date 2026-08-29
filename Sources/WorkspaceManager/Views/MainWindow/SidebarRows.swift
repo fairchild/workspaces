@@ -684,6 +684,56 @@ struct ArchivedDisclosureRow: View {
     }
 }
 
+/// The row pinned above the sidebar list: a field-shaped button that opens the session
+/// switcher. Deliberately not a `TextField` — the switcher owns the query and the ranking, so
+/// a field here would be a second place to type with nothing behind it. What this carries is
+/// where search lives and the chord that reaches it without the pointer.
+///
+/// Value-shaped: one action, and a hint read from the shortcut catalog rather than spelled out,
+/// so a rebound chord re-renders instead of going stale.
+struct SidebarSearchRow: View {
+    let onActivate: () -> Void
+
+    var body: some View {
+        Button(action: onActivate) {
+            HStack(spacing: SidebarChrome.Metrics.searchFieldSpacing) {
+                Image(systemName: "magnifyingglass")
+                    .font(SidebarChrome.TypeStyle.searchGlyph)
+                    .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+
+                Text("Search")
+                    .font(SidebarChrome.TypeStyle.searchLabel)
+                    .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: SidebarChrome.Metrics.searchFieldSpacing)
+
+                Text(AppChromeShortcut.workspaceSwitcher.keyboardGlyphs)
+                    .font(SidebarChrome.TypeStyle.searchShortcutHint)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, SidebarChrome.Metrics.searchFieldHorizontalPadding)
+            .padding(.vertical, SidebarChrome.Metrics.searchFieldVerticalPadding)
+            .background(
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.searchField, style: .continuous)
+                    .fill(SidebarChrome.Fill.searchField)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.searchField, style: .continuous)
+                    .stroke(
+                        SidebarChrome.Stroke.searchField,
+                        lineWidth: SidebarChrome.Stroke.searchFieldWidth
+                    )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Search sessions")
+        .accessibilityHint("Opens the session switcher. Command-P")
+    }
+}
+
 /// Shows an info card popover after a short hover delay. The show delay avoids
 /// flashing cards while the pointer crosses the list; a dismiss grace period lets
 /// the pointer travel onto the card to read it (the card's own hover cancels the

@@ -47,6 +47,18 @@ enum SidebarChrome {
         static let disclosurePillVerticalPadding: CGFloat = 4
         static let disclosurePillSpacing: CGFloat = 6
 
+        /// Insets and inner gap of the search row's field. Tighter than a row's padding for
+        /// the same reason the pill's are: the field is a block inset from the list, so its
+        /// content starts where the field does.
+        static let searchFieldHorizontalPadding: CGFloat = 8
+        static let searchFieldVerticalPadding: CGFloat = 6
+        static let searchFieldSpacing: CGFloat = 6
+
+        /// Insets of the bars pinned to the list's edges — the search row above, the count
+        /// bar below. One pair for both, so the sidebar's two fixed edges sit symmetrically.
+        static let chromeBarHorizontalPadding: CGFloat = 12
+        static let chromeBarVerticalPadding: CGFloat = 10
+
         /// Gap between the parts of the selected row's live status line, and the tighter gap
         /// inside one part — a glyph and the reading it labels.
         static let statusLineSpacing: CGFloat = 6
@@ -73,6 +85,7 @@ enum SidebarChrome {
         static let webSourceRow: CGFloat = 6
         static let hoverAction: CGFloat = 7
         static let disclosurePill: CGFloat = 7
+        static let searchField: CGFloat = 7
         static let statusBadge: CGFloat = 3
         /// The selected workspace row's card. Wider than a row's own corner because the card
         /// is a surface rather than a highlight, and the corner is most of what says so.
@@ -103,6 +116,10 @@ enum SidebarChrome {
         /// on screen while a repo holds archived work, not an affordance the pointer summons.
         static let disclosurePill = Color.secondary.opacity(0.06)
 
+        /// The search row's field, at the pill's level for the same reason: always on screen,
+        /// never summoned. Held separately so the two can part company if one ever needs to.
+        static let searchField = Color.secondary.opacity(0.06)
+
         static let statusBadgeProvisioning = Color.blue.opacity(0.2)
         static let statusBadgeStopped = Color.orange.opacity(0.2)
         static let statusBadgeArchived = Color.secondary.opacity(0.2)
@@ -122,6 +139,8 @@ enum SidebarChrome {
         static let hoverActionWidth: CGFloat = 1
         static let disclosurePill = Color.secondary.opacity(0.08)
         static let disclosurePillWidth: CGFloat = 1
+        static let searchField = Color.secondary.opacity(0.08)
+        static let searchFieldWidth: CGFloat = 1
         /// The selected row's hairline. A full point rather than the hover card's half: the
         /// card sits among rows of the same tone, and the edge is what separates them.
         static let activeCard = Color(nsColor: .separatorColor).opacity(0.55)
@@ -139,6 +158,16 @@ enum SidebarChrome {
         /// A repo name heads a group, so it stays bold whatever the row's state — selection
         /// reads from the row fill and session activity from the dot.
         static let repoTitle = Font.callout.weight(.semibold)
+
+        /// The search row reads as a field, so its glyph and label take the size a row's own
+        /// label takes; the chord trailing it sits a step smaller, an aside rather than a
+        /// second reading.
+        static let searchGlyph = Font.callout
+        static let searchLabel = Font.callout
+        static let searchShortcutHint = Font.caption2
+
+        /// The bar under the list, stating what the tree holds.
+        static let footerLabel = Font.caption
 
         /// Monospaced digits keep a count capsule from twitching as its number changes.
         static let countBadge = Font.caption2.weight(.medium).monospacedDigit()

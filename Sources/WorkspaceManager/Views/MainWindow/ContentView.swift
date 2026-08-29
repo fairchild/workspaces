@@ -529,6 +529,10 @@ struct ContentView: View {
         UIFixtureFileTreeFailureBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
 
+    private var fixtureSelectedWorkspaceConfiguration: UIFixtureSelectedWorkspaceBootstrapConfiguration? {
+        UIFixtureSelectedWorkspaceBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
+    }
+
     private var fixtureSessionSwitcherBootstrapConfiguration: UIFixtureSessionSwitcherBootstrapConfiguration? {
         UIFixtureSessionSwitcherBootstrapConfiguration.from(environment: ProcessInfo.processInfo.environment)
     }
@@ -767,6 +771,7 @@ struct ContentView: View {
                 onRequestWebSourceCreation: { target in
                     webSourceCreationTarget = target
                 },
+                onRequestSessionSwitcher: presentSessionSwitcher,
                 webNextSessionSlug: { GitHubRepoSlug(remoteURL: $0.remoteURL) },
                 onOpenWebNextSession: openWebNextSession,
                 onWorkspaceCreated: handleWorkspaceCreated,
@@ -914,6 +919,7 @@ struct ContentView: View {
             prewarmPerfTerminalSurfacesIfNeeded: prewarmPerfTerminalSurfacesIfNeeded,
             resolveSurfaceLifecycle: resolveSurfaceLifecycle,
             applyDiagnosticsFixtureIfNeeded: applyDiagnosticsFixtureIfNeeded,
+            applySelectedWorkspaceFixtureIfNeeded: applySelectedWorkspaceFixtureIfNeeded,
             applySessionSwitcherFixtureIfNeeded: applySessionSwitcherFixtureIfNeeded,
             pruneRightPaneState: pruneRightPaneState,
             syncOpenInEditorShortcutRouting: syncOpenInEditorShortcutRouting,
@@ -938,6 +944,7 @@ struct ContentView: View {
             reconcileSelectionAfterModelChange: reconcileSelectionAfterModelChange,
             resolveSurfaceLifecycle: resolveSurfaceLifecycle,
             applyDiagnosticsFixtureIfNeeded: applyDiagnosticsFixtureIfNeeded,
+            applySelectedWorkspaceFixtureIfNeeded: applySelectedWorkspaceFixtureIfNeeded,
             applySessionSwitcherFixtureIfNeeded: applySessionSwitcherFixtureIfNeeded,
             pruneRepoSessions: {
                 tileTreeStore.pruneRepoSessions(validRepoPaths: normalizedRepoPathSnapshot)
@@ -1501,6 +1508,36 @@ struct ContentView: View {
         }
 
         return false
+    }
+
+    /// Selects the workspace `WORKSPACES_UI_FIXTURE_SELECTED` names, through the same call a
+    /// click on its row makes — so the capture shows a window the user could have arrived at,
+    /// terminal attached and hover state live, rather than a highlight painted on. Runs after
+    /// the surface lifecycle so the named row wins over whatever the launch would have
+    /// restored, and retries on model change until the repos it resolves against exist.
+    @MainActor
+    private func applySelectedWorkspaceFixtureIfNeeded() {
+        guard let configuration = fixtureSelectedWorkspaceConfiguration else { return }
+        guard !viewState.didApplyFixtureSelectedWorkspaceBootstrap else { return }
+        guard deepLinkState.pendingRequest == nil else { return }
+        guard !repos.isEmpty else { return }
+
+        guard let workspace = configuration.workspace(in: repos) else {
+            // Not latched: with SwiftData loading repos incrementally, a non-empty `repos`
+            // can still precede the named workspace's arrival. The model-change lifecycle
+            // retries until it lands; a genuinely unknown name just keeps logging in what is
+            // always a curated fixture launch.
+            uiFixtureLog.error(
+                "[UIFixture] Selection bootstrap deferred (workspace=\(configuration.workspaceName, privacy: .public))"
+            )
+            return
+        }
+
+        viewState.didApplyFixtureSelectedWorkspaceBootstrap = true
+        viewState.didResolveInitialSurface = true
+        handleWorkspaceSelection(workspace)
+        uiFixtureLog.info(
+            "[UIFixture] Selection bootstrap applied (workspace=\(workspace.name, privacy: .public))")
     }
 
     @MainActor

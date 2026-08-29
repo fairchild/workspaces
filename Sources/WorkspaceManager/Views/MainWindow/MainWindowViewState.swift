@@ -57,6 +57,7 @@ struct MainWindowViewState {
     var didApplyFixtureWebBootstrap = false
     var didApplyFixtureDiagnosticsBootstrap = false
     var didApplyFixtureFileTreeFailureBootstrap = false
+    var didApplyFixtureSelectedWorkspaceBootstrap = false
     var didApplyFixtureSessionSwitcherBootstrap = false
     var didApplyFixtureTerminalTabBootstrap = false
     var didResolveInitialSurface = false
