@@ -730,7 +730,7 @@ struct SidebarSearchRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Search sessions")
-        .accessibilityHint("Opens the session switcher")
+        .accessibilityHint("Opens the session switcher. Command-P")
     }
 }
 

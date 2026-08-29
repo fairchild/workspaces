@@ -1499,9 +1499,12 @@ struct ContentView: View {
         guard !repos.isEmpty else { return }
 
         guard let workspace = configuration.workspace(in: repos) else {
-            viewState.didApplyFixtureSelectedWorkspaceBootstrap = true
+            // Not latched: with SwiftData loading repos incrementally, a non-empty `repos`
+            // can still precede the named workspace's arrival. The model-change lifecycle
+            // retries until it lands; a genuinely unknown name just keeps logging in what is
+            // always a curated fixture launch.
             uiFixtureLog.error(
-                "[UIFixture] Selection bootstrap skipped (workspace=\(configuration.workspaceName, privacy: .public))"
+                "[UIFixture] Selection bootstrap deferred (workspace=\(configuration.workspaceName, privacy: .public))"
             )
             return
         }
