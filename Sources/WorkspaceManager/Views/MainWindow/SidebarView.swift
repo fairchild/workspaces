@@ -511,12 +511,12 @@ struct SidebarView: View {
                     )
                 }
             } header: {
-                sidebarSectionHeader(title: "Pinned", showsSortMenu: !repos.isEmpty)
+                sidebarSectionHeader(title: "Pinned", isTopmost: true)
             }
         }
     }
 
-    /// The arrangement menu lives on the topmost header: Pinned when it exists, otherwise
+    /// The header inline actions live on the topmost header: Pinned when it exists, otherwise
     /// the first header of the arrangement itself.
     private var hasPinnedRows: Bool {
         !pinnedWorkspaces.isEmpty
@@ -538,8 +538,8 @@ struct SidebarView: View {
         }
     }
 
-    /// Flat, date-bucketed arrangement. Only the first bucket's header carries the sort
-    /// menu; the empty state still renders one so Recent is never a mode you can't leave.
+    /// Flat, date-bucketed arrangement. Only the first bucket's header carries the inline
+    /// actions; the empty state still renders them so Recent is never a mode you can't leave.
     @ViewBuilder
     private var recentSections: some View {
         let buckets = recentBuckets
@@ -550,7 +550,7 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } header: {
-                sidebarSectionHeader(title: "Recent", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
+                sidebarSectionHeader(title: "Recent", isTopmost: !hasPinnedRows)
             }
         } else {
             ForEach(Array(buckets.enumerated()), id: \.element.id) { index, bucket in
@@ -559,7 +559,7 @@ struct SidebarView: View {
                         recentRow(row)
                     }
                 } header: {
-                    sidebarSectionHeader(title: bucket.title, showsSortMenu: index == 0 && !hasPinnedRows)
+                    sidebarSectionHeader(title: bucket.title, isTopmost: index == 0 && !hasPinnedRows)
                 }
             }
         }
@@ -575,28 +575,22 @@ struct SidebarView: View {
         }
     }
 
-    /// The Repositories header owns the add affordance as well as the sort one: it heads the
-    /// list the sources land in, and unlike the toolbar it survives `minimalToolbar`.
     private var repositoriesHeader: some View {
-        sidebarSectionHeader(
-            title: "Repositories",
-            showsSortMenu: !repos.isEmpty && !hasPinnedRows,
-            showsAddMenu: true
-        )
+        sidebarSectionHeader(title: "Repositories", isTopmost: !hasPinnedRows)
     }
 
-    private func sidebarSectionHeader(
-        title: String,
-        showsSortMenu: Bool,
-        showsAddMenu: Bool = false
-    ) -> some View {
+    /// The topmost header carries the sidebar's inline actions — arrangement and add — so the
+    /// two travel together to whichever section heads the list. Add outlives `minimalToolbar`
+    /// there, which hides the toolbar copy of it; sort stands down while there is nothing to
+    /// sort, but adding a repository is exactly what an empty sidebar is waiting for.
+    private func sidebarSectionHeader(title: String, isTopmost: Bool) -> some View {
         HStack(spacing: 8) {
             Text(title)
             Spacer(minLength: 8)
-            if showsSortMenu {
-                sortMenu
-            }
-            if showsAddMenu {
+            if isTopmost {
+                if !repos.isEmpty {
+                    sortMenu
+                }
                 headerAddMenu
             }
         }
