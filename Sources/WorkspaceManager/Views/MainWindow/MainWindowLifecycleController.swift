@@ -30,6 +30,7 @@ struct MainWindowLifecycleController {
         let prewarmPerfTerminalSurfacesIfNeeded: () -> Void
         let resolveSurfaceLifecycle: () -> Void
         let applyDiagnosticsFixtureIfNeeded: () -> Void
+        let applySelectedWorkspaceFixtureIfNeeded: () -> Void
         let applySessionSwitcherFixtureIfNeeded: () -> Void
         let pruneRightPaneState: () -> Void
         let syncOpenInEditorShortcutRouting: () -> Void
@@ -46,6 +47,7 @@ struct MainWindowLifecycleController {
         let reconcileSelectionAfterModelChange: () -> Void
         let resolveSurfaceLifecycle: () -> Void
         let applyDiagnosticsFixtureIfNeeded: () -> Void
+        let applySelectedWorkspaceFixtureIfNeeded: () -> Void
         let applySessionSwitcherFixtureIfNeeded: () -> Void
         let pruneRepoSessions: () -> Void
         let refreshWorkspaceStatusAggregator: () -> Void
@@ -84,8 +86,10 @@ struct MainWindowLifecycleController {
     /// Launch order is load-bearing. Automation integration installs the verb layer before
     /// anything can drive it; the initial host session must exist before a restore plan is
     /// computed against it; and the fixtures need the surface lifecycle resolved before they
-    /// select into it. The smoke lanes are told the window is ready last among the steps that
-    /// build the window, because that signal is what their harnesses wait on.
+    /// select into it. Among the fixtures, the named selection runs after the ones that pick
+    /// their own target, because naming a workspace is the more specific request. The smoke
+    /// lanes are told the window is ready last among the steps that build the window, because
+    /// that signal is what their harnesses wait on.
     ///
     /// Rejoining the previous run's other scopes runs after that signal, alone at the end: it
     /// starts a shell per scope, and every step above — including `launch_to_first_prompt`,
@@ -97,6 +101,7 @@ struct MainWindowLifecycleController {
         actions.prewarmPerfTerminalSurfacesIfNeeded()
         actions.resolveSurfaceLifecycle()
         actions.applyDiagnosticsFixtureIfNeeded()
+        actions.applySelectedWorkspaceFixtureIfNeeded()
         actions.applySessionSwitcherFixtureIfNeeded()
         actions.pruneRightPaneState()
         actions.syncOpenInEditorShortcutRouting()
@@ -115,6 +120,7 @@ struct MainWindowLifecycleController {
         actions.reconcileSelectionAfterModelChange()
         actions.resolveSurfaceLifecycle()
         actions.applyDiagnosticsFixtureIfNeeded()
+        actions.applySelectedWorkspaceFixtureIfNeeded()
         actions.applySessionSwitcherFixtureIfNeeded()
         actions.pruneRepoSessions()
         // The aggregator refresh rebuilds an open switcher itself once the
