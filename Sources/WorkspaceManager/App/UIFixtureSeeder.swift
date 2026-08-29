@@ -20,6 +20,7 @@
         static let agentStatesEnvKey = "WORKSPACES_UI_FIXTURE_AGENT_STATES"
         static let commandStatusesEnvKey = "WORKSPACES_UI_FIXTURE_COMMAND_STATUSES"
         static let pinnedEnvKey = "WORKSPACES_UI_FIXTURE_PINNED"
+        static let archivedEnvKey = "WORKSPACES_UI_FIXTURE_ARCHIVED"
 
         /// Idempotency latch — `seedAgentStatesIfNeeded` may be invoked multiple times
         /// as views re-appear, but the synthetic events should only land once per launch.
@@ -145,31 +146,13 @@
             from environment: [String: String],
             in context: ModelContext
         ) -> Int {
-            guard environment["WORKSPACES_UI_FIXTURE"] == "1",
-                let raw = environment[pinnedEnvKey],
-                !raw.trimmingCharacters(in: .whitespaces).isEmpty
-            else {
-                return 0
-            }
-
-            let names =
-                raw
-                .split(separator: ",", omittingEmptySubsequences: true)
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
+            let names = workspaceNames(from: environment, key: pinnedEnvKey)
             guard !names.isEmpty else { return 0 }
 
             let workspaces = fetchAllWorkspaces(in: context)
             var pinnedCount = 0
             for name in names {
-                guard
-                    let workspace = workspaces.first(where: {
-                        $0.name.caseInsensitiveCompare(name) == .orderedSame
-                    })
-                else {
-                    log.error("[UIFixture] No fixture workspace named '\(name, privacy: .public)' to pin — skipping")
-                    continue
-                }
+                guard let workspace = workspace(named: name, in: workspaces, verb: "pin") else { continue }
                 workspace.pinOrder = pinnedCount
                 pinnedCount += 1
             }
@@ -183,6 +166,83 @@
                     "[UIFixture] Failed to seed pinned workspaces: \(String(describing: error), privacy: .public)")
             }
             return pinnedCount
+        }
+
+        /// Reads `WORKSPACES_UI_FIXTURE_ARCHIVED` — a comma-separated workspace-name list —
+        /// and archives those workspaces, so a capture renders a repo's archived section
+        /// whatever the stored data holds. Writes what `SidebarWorkspaceController.archive`
+        /// writes to the record — the status, the timestamp the purge sweep reads, and the
+        /// unpin that takes the row out of the Pinned shortcut list — but moves no directory:
+        /// fixture paths are synthetic, and the sidebar reads the record, not the disk.
+        /// Runs after the pinned seeder for the same reason archiving unpins in the app.
+        /// Unknown names are logged and skipped. Returns how many were archived.
+        @discardableResult
+        static func seedArchivedWorkspacesIfNeeded(
+            from environment: [String: String],
+            in context: ModelContext,
+            now: Date = Date()
+        ) -> Int {
+            let names = workspaceNames(from: environment, key: archivedEnvKey)
+            guard !names.isEmpty else { return 0 }
+
+            let workspaces = fetchAllWorkspaces(in: context)
+            let pinController = SidebarPinController()
+            var archivedCount = 0
+            for name in names {
+                guard let workspace = workspace(named: name, in: workspaces, verb: "archive") else { continue }
+                workspace.status = .archived
+                workspace.archivedAt = now
+                pinController.unpin(workspace, in: workspaces)
+                archivedCount += 1
+            }
+
+            guard archivedCount > 0 else { return 0 }
+
+            do {
+                try context.save()
+            } catch {
+                log.error(
+                    "[UIFixture] Failed to seed archived workspaces: \(String(describing: error), privacy: .public)")
+            }
+            return archivedCount
+        }
+
+        /// The workspace names a name-list env var carries, or none when fixture mode is off
+        /// or the value is blank. Fixture mode is checked here rather than at each call site:
+        /// these vars name real records and mutate them, so they stay inert against a
+        /// production store even in a debug build.
+        private static func workspaceNames(
+            from environment: [String: String],
+            key: String
+        ) -> [String] {
+            guard environment["WORKSPACES_UI_FIXTURE"] == "1",
+                let raw = environment[key]
+            else {
+                return []
+            }
+            return
+                raw
+                .split(separator: ",", omittingEmptySubsequences: true)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        }
+
+        private static func workspace(
+            named name: String,
+            in workspaces: [Workspace],
+            verb: String
+        ) -> Workspace? {
+            guard
+                let workspace = workspaces.first(where: {
+                    $0.name.caseInsensitiveCompare(name) == .orderedSame
+                })
+            else {
+                log.error(
+                    "[UIFixture] No fixture workspace named '\(name, privacy: .public)' to \(verb, privacy: .public) — skipping"
+                )
+                return nil
+            }
+            return workspace
         }
 
         /// Reads `WORKSPACES_UI_FIXTURE_AGENT_STATES`, resolves workspace names against

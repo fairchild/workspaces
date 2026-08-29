@@ -182,6 +182,70 @@ struct UIFixtureSeederTests {
         #expect(pinned.map(\.name) == ["feature-auth", "skills-v13"])
     }
 
+    @Test("The archived env var archives the named workspaces where the sidebar reads it")
+    func archivedEnvSeedsTheArchivedSection() throws {
+        let f = try freshFixtures()
+        let now = Date(timeIntervalSince1970: 1_755_864_000)
+
+        let archived = UIFixtureSeeder.seedArchivedWorkspacesIfNeeded(
+            from: [
+                "WORKSPACES_UI_FIXTURE": "1",
+                UIFixtureSeeder.archivedEnvKey: "refactor-state,skills-v13",
+            ],
+            in: f.context,
+            now: now
+        )
+
+        #expect(archived == 2)
+        let refactorState = try workspace(named: "refactor-state", in: f.context)
+        #expect(refactorState.status == .archived)
+        #expect(refactorState.archivedAt == now)
+        #expect(try workspace(named: "skills-v13", in: f.context).status == .archived)
+        #expect(try workspace(named: "feature-auth", in: f.context).status == .active)
+    }
+
+    @Test("Archiving a pinned fixture workspace takes it out of the Pinned section")
+    func archivedSeedingUnpins() throws {
+        let f = try freshFixtures()
+        UIFixtureSeeder.seedPinnedWorkspacesIfNeeded(
+            from: [
+                "WORKSPACES_UI_FIXTURE": "1",
+                UIFixtureSeeder.pinnedEnvKey: "feature-auth,skills-v13",
+            ],
+            in: f.context
+        )
+        UIFixtureSeeder.seedArchivedWorkspacesIfNeeded(
+            from: [
+                "WORKSPACES_UI_FIXTURE": "1",
+                UIFixtureSeeder.archivedEnvKey: "skills-v13",
+            ],
+            in: f.context
+        )
+
+        #expect(try workspace(named: "skills-v13", in: f.context).pinOrder == nil)
+
+        let repos = try f.context.fetch(FetchDescriptor<Repo>())
+        let pinned = SidebarPinController().pinnedWorkspaces(in: repos.flatMap(\.workspaces))
+        #expect(pinned.map(\.name) == ["feature-auth"])
+    }
+
+    @Test("Archived seeding needs fixture mode, a value, and a name that resolves")
+    func archivedEnvIsIgnoredOutsideFixtureMode() throws {
+        let f = try freshFixtures()
+        let key = UIFixtureSeeder.archivedEnvKey
+
+        #expect(UIFixtureSeeder.seedArchivedWorkspacesIfNeeded(from: [key: "skills-v13"], in: f.context) == 0)
+        #expect(
+            UIFixtureSeeder.seedArchivedWorkspacesIfNeeded(
+                from: ["WORKSPACES_UI_FIXTURE": "1", key: "  "], in: f.context) == 0
+        )
+        #expect(
+            UIFixtureSeeder.seedArchivedWorkspacesIfNeeded(
+                from: ["WORKSPACES_UI_FIXTURE": "1", key: "no-such-workspace"], in: f.context) == 0
+        )
+        #expect(try workspace(named: "skills-v13", in: f.context).status == .active)
+    }
+
     @Test("Missing env var is a no-op")
     func absentEnvIsNoOp() throws {
         let f = try freshFixtures()

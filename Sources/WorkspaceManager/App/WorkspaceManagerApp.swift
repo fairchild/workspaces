@@ -61,6 +61,12 @@ struct WorkspaceManagerApp: App {
                     from: ProcessInfo.processInfo.environment,
                     in: bootstrap.container.mainContext
                 )
+                // After the pins: archiving unpins, so a scenario that names the same
+                // workspace to both lands where the app itself would leave it.
+                UIFixtureSeeder.seedArchivedWorkspacesIfNeeded(
+                    from: ProcessInfo.processInfo.environment,
+                    in: bootstrap.container.mainContext
+                )
             }
         #endif
 
