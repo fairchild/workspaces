@@ -13,21 +13,21 @@ struct WebSourceRow: View {
     var isSelected: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: SidebarChrome.Metrics.rowContentSpacing) {
             WebSourceFaviconView(source: source)
-                .frame(width: 18, alignment: .center)
+                .frame(width: SidebarChrome.Metrics.iconColumn, alignment: .center)
 
             Text(source.name)
-                .font(.callout.weight(isSelected ? .semibold : .regular))
+                .font(SidebarChrome.TypeStyle.rowTitle(emphasized: isSelected))
                 .lineLimit(1)
 
             Spacer(minLength: 8)
         }
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
+        .padding(.vertical, SidebarChrome.Metrics.rowVerticalPadding)
+        .padding(.horizontal, SidebarChrome.Metrics.rowHorizontalPadding)
         .background(
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: SidebarChrome.Radius.webSourceRow, style: .continuous)
+                .fill(isSelected ? SidebarChrome.Fill.rowSelection : .clear)
         )
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(source.name), web view")
