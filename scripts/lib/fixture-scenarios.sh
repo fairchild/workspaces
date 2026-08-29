@@ -13,8 +13,8 @@
 # fixture_resolve_scenario <name>
 # Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, FIXTURE_SEED_RESTORE_BANNER,
 # FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_FILE_TREE_FAILURE, FIXTURE_SIDEBAR_ARRANGEMENT,
-# FIXTURE_CMD_T_REPO, FIXTURE_TRIGGER_CMD_T, FIXTURE_PINNED, FIXTURE_ARCHIVED, and
-# FIXTURE_SCENARIO_ID for the named scenario.
+# FIXTURE_CMD_T_REPO, FIXTURE_TRIGGER_CMD_T, FIXTURE_PINNED, FIXTURE_ARCHIVED,
+# FIXTURE_SELECTED, and FIXTURE_SCENARIO_ID for the named scenario.
 # "inline:<agent-states>" passes a raw agent-states spec straight through. Returns
 # non-zero (and sets nothing) for an unknown name.
 fixture_resolve_scenario() {
@@ -29,6 +29,7 @@ fixture_resolve_scenario() {
     FIXTURE_TRIGGER_CMD_T=""
     FIXTURE_PINNED=""
     FIXTURE_ARCHIVED=""
+    FIXTURE_SELECTED=""
     FIXTURE_SCENARIO_ID=""
 
     if [[ "$name" == inline:* ]]; then
@@ -97,6 +98,16 @@ fixture_resolve_scenario() {
             FIXTURE_SIDEBAR_ARRANGEMENT="alphabetical"
             FIXTURE_AGENT_STATES="feature-auth:thinking,bugfix-422:awaitingInput,refactor-runtime:errored"
             ;;
+        sidebar-active-card)
+            # The selected workspace as a raised card carrying its live status line.
+            # feature-auth is the one named: phase-1-release already drives it to thinking,
+            # so the card shows a live session rather than an idle row, and its two siblings
+            # stay unselected beside it for the contrast the card is about. Alphabetical
+            # because the card belongs to the repo tree the rest of the arc captures.
+            FIXTURE_SELECTED="feature-auth"
+            FIXTURE_SIDEBAR_ARRANGEMENT="alphabetical"
+            FIXTURE_AGENT_STATES="feature-auth:thinking,bugfix-422:awaitingInput,refactor-runtime:errored"
+            ;;
         file-tree-unavailable)
             FIXTURE_FILE_TREE_FAILURE="unavailable"
             ;;
@@ -123,5 +134,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
 }

@@ -95,6 +95,9 @@ struct SidebarView: View {
     let onRepoTerminalSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
+    /// Opens the session switcher the search row stands for — the same presentation the
+    /// Cmd-P shortcut drives, so the row and the chord are one surface.
+    let onRequestSessionSwitcher: () -> Void
     /// Resolves a repo's GitHub `owner/name` for the "New Web Session" deep link,
     /// or nil when the remote can't be parsed (the entry is then disabled).
     let webNextSessionSlug: (Repo) -> GitHubRepoSlug?
@@ -249,19 +252,9 @@ struct SidebarView: View {
     var body: some View {
         Group {
             if minimalToolbarEnabled {
-                sidebarList
-                    .listStyle(.sidebar)
-                    .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
-                    .safeAreaInset(edge: .bottom) {
-                        footerBar
-                    }
+                listWithChrome
             } else {
-                sidebarList
-                    .listStyle(.sidebar)
-                    .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
-                    .safeAreaInset(edge: .bottom) {
-                        footerBar
-                    }
+                listWithChrome
                     .toolbar {
                         ToolbarItem(placement: .primaryAction) {
                             addSourceMenu
@@ -440,6 +433,21 @@ struct SidebarView: View {
                 return saveModelContext(action: "create desktop-ui-smoke web source")
             }
         )
+    }
+
+    /// The list with the chrome pinned to its edges: the search row above, the count bar
+    /// below. The toolbar flag decides only whether the add menu joins them, so both of its
+    /// branches render this same stack.
+    private var listWithChrome: some View {
+        sidebarList
+            .listStyle(.sidebar)
+            .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
+            .safeAreaInset(edge: .top) {
+                searchBar
+            }
+            .safeAreaInset(edge: .bottom) {
+                footerBar
+            }
     }
 
     private var sidebarList: some View {
@@ -671,20 +679,31 @@ struct SidebarView: View {
         }
     }
 
+    /// Fixed chrome above the list, mirroring the footer below it: an opaque bar so the rows
+    /// scroll under rather than through it, and the rule on the list's side of the bar.
+    private var searchBar: some View {
+        VStack(spacing: 0) {
+            SidebarSearchRow(onActivate: onRequestSessionSwitcher)
+                .padding(.horizontal, SidebarChrome.Metrics.chromeBarHorizontalPadding)
+                .padding(.vertical, SidebarChrome.Metrics.chromeBarVerticalPadding)
+                .background(SidebarChrome.Fill.surface)
+
+            Divider()
+        }
+    }
+
     private var footerBar: some View {
         VStack(spacing: 0) {
             Divider()
 
-            HStack(spacing: 12) {
-                Text(repos.isEmpty ? "Add a repository to get started" : "\(repos.count) repositories")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(SidebarChrome.Fill.surface)
+            Text(repos.isEmpty ? "Add a repository to get started" : "\(repos.count) repositories")
+                .font(SidebarChrome.TypeStyle.footerLabel)
+                .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, SidebarChrome.Metrics.chromeBarHorizontalPadding)
+                .padding(.vertical, SidebarChrome.Metrics.chromeBarVerticalPadding)
+                .background(SidebarChrome.Fill.surface)
         }
     }
 
