@@ -1,6 +1,15 @@
 # Design refresh: sidebar + navigation styling
 
-> **Status: plan under review (draft PR), implementation proceeding in slices.**
+> **Status 2026-08-29: all five slices implemented and open as stacked PRs —
+> #1424 (tokens) ← #1426 (repo identity) ← #1430 (worktree rows) ← #1434
+> (active card + timer) ← #1436 (search row + fixture selection). Awaiting
+> Michael's review; merge order is base-first with the retarget-before-merge
+> dance per stacked-PR convention.** Checkable test: those five PRs exist and
+> each carries evidence URLs + a Review loop section.
+> Follow-ups filed from the arc: #1425 (File-menu add commands), #1427
+> (operator-scope capture lane vs running installed app), #1429
+> (release-screenshot fixture-env forwarding), #1433 (durable session start
+> date for the elapsed label).
 > Dispatched 2026-08-28 at Michael's direction from a reference screenshot
 > (`design-inspiration-sidebar.png`, an Orca sidebar). Inspiration, not cloning:
 > adopt the structure and restraint; keep WorkSpaces' own identity.
