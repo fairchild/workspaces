@@ -101,7 +101,7 @@ enum SidebarChrome {
         }
 
         /// Monospaced digits keep a count capsule from twitching as its number changes.
-        static let countBadge = Font.caption2.monospacedDigit()
+        static let countBadge = Font.caption2.weight(.medium).monospacedDigit()
         static let hoverActionGlyph = Font.system(size: 11, weight: .semibold)
     }
 }

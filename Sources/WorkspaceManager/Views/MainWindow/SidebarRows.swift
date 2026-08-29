@@ -40,7 +40,6 @@ private struct WorkspaceCountBadge: View {
     var body: some View {
         Text("\(count)")
             .font(SidebarChrome.TypeStyle.countBadge)
-            .fontWeight(.medium)
             .foregroundStyle(
                 isCollapsed
                     ? SidebarChrome.Foreground.emphasizedSecondary
@@ -67,7 +66,6 @@ private struct PaneCountBadge: View {
     var body: some View {
         Text("\(count)")
             .font(SidebarChrome.TypeStyle.countBadge)
-            .fontWeight(.medium)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .foregroundStyle(sessionActivity.badgeColor)
