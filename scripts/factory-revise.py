@@ -524,7 +524,23 @@ def admit(
     pull_request = client.pull_request(pr_number)
     reviews = client.pull_request_reviews(pr_number)
     comments = client.comments(pr_number)
-    review = response.blocking_review(reviews, repository_owner, review_id)
+    # Without an explicit id (the dispatch path), prefer the newest standing
+    # review that has no escalation answer yet -- picking simply the newest
+    # would let an already-answered rejection shadow an unanswered one. A
+    # recovery run's whole point is retaking an answered review, so when
+    # nothing is unanswered it falls back to the newest standing one.
+    review = response.blocking_review(
+        reviews,
+        repository_owner,
+        review_id,
+        answered=lambda candidate: response.has_response_for_review(comments, candidate),
+    )
+    if review is None and review_id is None and recovery:
+        standing = sorted(
+            response.standing_reviews(reviews, repository_owner),
+            key=lambda item: str(item.get("submitted_at") or ""),
+        )
+        review = standing[-1] if standing else None
     resolved_review_id = int(review.get("id") or 0) if review is not None else review_id
     response_decision = response.evaluate_response(
         pull_request,
@@ -644,6 +660,29 @@ def preflight(
     return decision.action == "revise"
 
 
+def mark_owner_re_review(
+    client: GitHubClient,
+    pr_number: int,
+    review_id: int,
+    repository_owner: str,
+) -> None:
+    """Label a revision that answered the owner's own rejection.
+
+    A counterpart bot re-reviews automatically; the owner does not. Until they
+    look again their rejection stands, the response lane's in-flight skip
+    holds, and without the marker the PR reads as moving when it is in fact
+    waiting on them (#1381's exact confusion).
+    """
+    review = review_by_id(client.pull_request_reviews(pr_number), review_id)
+    login = str(((review or {}).get("user") or {}).get("login") or "")
+    if login.casefold() != repository_owner.casefold():
+        return
+    pull_request = client.pull_request(pr_number)
+    response.apply_owner_action(
+        client, pr_number, factory_implement.label_names(pull_request)
+    )
+
+
 def resolve(
     client: GitHubClient,
     actions_client: GitHubClient,
@@ -651,7 +690,7 @@ def resolve(
     review_id: int | None,
     repository_owner: str,
     *,
-    head_before: str,
+    head_after: str,
     revise_result: str,
     revision_outcome: str,
     comment_posted: str,
@@ -669,15 +708,24 @@ def resolve(
     """
     if review_id is None:
         # Admission crashed before resolving one (the manual-dispatch path has
-        # no review in its event). The standing rejection is the review the
-        # dispatch was about; none standing means nobody is waiting.
+        # no review in its event). The standing rejection with no escalation
+        # answer yet is the review the dispatch was about -- picking simply
+        # the newest would dedupe against an answered one and leave the
+        # unanswered rejection silent. None unanswered means nobody is
+        # waiting on this step.
+        comments = client.comments(pr_number)
         standing = response.blocking_review(
-            client.pull_request_reviews(pr_number), repository_owner, None
+            client.pull_request_reviews(pr_number),
+            repository_owner,
+            None,
+            answered=lambda candidate: response.has_response_for_review(
+                comments, candidate
+            ),
         )
         if standing is None:
             print(
                 f"Factory revise resolve for #{pr_number}: no standing blocking "
-                "review; nothing to resolve"
+                "review awaits an answer; nothing to resolve"
             )
             write_output("escalated", "false")
             return
@@ -688,15 +736,24 @@ def resolve(
     dispatched = False
     escalated = False
     if succeeded and outcome == "pushed":
+        # The attestation binds to the exact head the turn exported, not to
+        # "the head moved": between the push and this step another actor can
+        # move the branch again (a force-push back, an owner rebase), and a
+        # marker for a revision the branch no longer carries is the one claim
+        # this lane must never make.
         live_head = head_sha(client.pull_request(pr_number))
-        if head_before and live_head == head_before:
-            # The turn reported a push the branch does not carry. Attesting
-            # anyway would tell the reviewer a revision exists to look at,
-            # which is the one claim this lane must never get wrong.
+        if not head_after:
             succeeded = False
-            reason = "the turn reported a push the branch head does not carry"
+            reason = "the turn reported a push but exported no head to verify"
+        elif live_head != head_after:
+            succeeded = False
+            reason = (
+                "the turn reported a push the branch head does not carry "
+                f"(live {live_head[:12]}, pushed {head_after[:12]})"
+            )
         else:
             attested = attest_revision(client, pr_number, review_id)
+            mark_owner_re_review(client, pr_number, review_id, repository_owner)
     elif succeeded and outcome == "body-only":
         # A body-only turn re-enters review through a dispatch the review lane
         # is free to decline -- and it declines exactly when readiness still
@@ -728,6 +785,9 @@ def resolve(
                 )
                 if dispatched:
                     attested = attest_revision(client, pr_number, review_id)
+                    mark_owner_re_review(
+                        client, pr_number, review_id, repository_owner
+                    )
                 else:
                     escalated = force_escalate(
                         client,
@@ -817,7 +877,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Omit when admission crashed before naming one; resolve derives "
         "the standing blocking review.",
     )
-    resolve_parser.add_argument("--head-before", default="")
+    resolve_parser.add_argument(
+        "--head-after",
+        default="",
+        help="The head SHA the turn exported after its push; the attestation "
+        "binds to it exactly.",
+    )
     resolve_parser.add_argument("--revise-result", default="")
     resolve_parser.add_argument("--revision-outcome", default="")
     resolve_parser.add_argument("--comment-posted", default="")
@@ -886,7 +951,7 @@ def main(argv: list[str]) -> int:
             args.pr,
             args.review_id,
             repository_owner,
-            head_before=args.head_before,
+            head_after=args.head_after,
             revise_result=args.revise_result,
             revision_outcome=args.revision_outcome,
             comment_posted=args.comment_posted,

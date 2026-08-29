@@ -582,6 +582,12 @@ def build_post_body(reply: str, comment_id: int) -> str:
     reply = reply.strip()
     if not reply:
         raise PayloadError("model returned an empty reply")
+    # HTML comment delimiters come out of the model's text before the marker
+    # goes on: the factory's marker readers trust the last visible line of any
+    # comment this bot posts, so model prose that can spell a delimiter can
+    # forge a marker for another lane (an unterminated fence hides the real
+    # one appended below, leaving the forgery last).
+    reply = reply.replace("<!--", "").replace("-->", "")
     reply = cap_utf8(reply, REPLY_BYTE_CAP).rstrip()
     return f"{reply}\n\n{response_marker(comment_id)}\n"
 

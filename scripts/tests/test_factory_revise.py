@@ -230,6 +230,7 @@ class QuietTest(unittest.TestCase):
         review_id: int | None = 900,
         daily_cap: int = 4,
         runaway_cap: int = 12,
+        recovery: bool = False,
     ) -> tuple[revise.AdmissionDecision, dict[str, str]]:
         outputs: dict[str, str] = {}
         with mock.patch.object(
@@ -245,6 +246,7 @@ class QuietTest(unittest.TestCase):
                 runaway_cap=runaway_cap,
                 current_run_id="7",
                 current_run_attempt=1,
+                recovery=recovery,
             )
         return decision, outputs
 
@@ -408,6 +410,31 @@ class AdmissionEscalationTests(QuietTest):
         )
         self.assertIn("owner's", decision.reason)
 
+    def test_recovery_retakes_an_escalated_review(self) -> None:
+        # The escalation's own gesture is "clear the cause and re-run Factory
+        # Revise"; a rerun refused by that escalation's marker would make the
+        # instruction a lie. Owner-only by the workflow's dispatch admission.
+        escalated = [april_comment(f"asked\n\n{response.response_marker(900)}")]
+        without, _ = self.run_admit(FakeClient(pull_request(), [review()], escalated))
+        self.assertEqual(without.action, "decline")
+        decision, _ = self.run_admit(
+            FakeClient(pull_request(), [review()], escalated), recovery=True
+        )
+        self.assertEqual(decision.action, "revise")
+
+    def test_recovery_falls_back_to_the_newest_standing_review(self) -> None:
+        # Dispatch path with every standing rejection already answered: the
+        # unanswered-first pick returns nothing, and recovery exists exactly
+        # to retake an answered one.
+        escalated = [april_comment(f"asked\n\n{response.response_marker(900)}")]
+        decision, outputs = self.run_admit(
+            FakeClient(pull_request(), [review()], escalated),
+            review_id=None,
+            recovery=True,
+        )
+        self.assertEqual(decision.action, "revise")
+        self.assertEqual(outputs["review_id"], "900")
+
     def test_a_missing_evidence_contract_escalates(self) -> None:
         decision = self.assert_escalating_decline(
             FakeClient(
@@ -528,7 +555,7 @@ class ResolveTests(QuietTest):
         revise_result: str = "success",
         revision_outcome: str = "pushed",
         comment_posted: str = "true",
-        head_before: str = "aaaa1111",
+        head_after: str = "bbbb2222",
         reason: str = "",
         review_id: int | None = 900,
     ) -> dict[str, str]:
@@ -542,7 +569,7 @@ class ResolveTests(QuietTest):
                 1377,
                 review_id,
                 OWNER,
-                head_before=head_before,
+                head_after=head_after,
                 revise_result=revise_result,
                 revision_outcome=revision_outcome,
                 comment_posted=comment_posted,
@@ -635,13 +662,51 @@ class ResolveTests(QuietTest):
         self.assertEqual(outputs["escalated"], "true")
 
     def test_a_push_the_branch_does_not_carry_escalates(self) -> None:
-        # Writing the marker anyway would tell the reviewer a revision exists
-        # to look at, which is the one claim this lane must never get wrong.
+        # The attestation binds to the exact head the turn exported: a
+        # force-push back to the admitted head, or on past it, both fail the
+        # equality. Writing the marker anyway would tell the reviewer a
+        # revision exists to look at, which is the one claim this lane must
+        # never get wrong.
         client = FakeClient(pull_request(head_sha="aaaa1111"), [review()])
         outputs = self.resolve(client, comment_posted="false")
         self.assertEqual(outputs["escalated"], "true")
         self.assertFalse(response.has_revision_for_review(client._comments, 900))
         self.assertIn("does not carry", client.posted[0])
+
+    def test_a_push_with_no_exported_head_escalates(self) -> None:
+        client = FakeClient(self.pushed_pr(), [review()])
+        outputs = self.resolve(client, head_after="")
+        self.assertEqual(outputs["escalated"], "true")
+        self.assertFalse(response.has_revision_for_review(client._comments, 900))
+        self.assertIn("exported no head", client.posted[0])
+
+    def test_an_attested_owner_rejection_marks_waiting_on_the_owner(self) -> None:
+        # A counterpart bot re-reviews automatically; the owner does not.
+        client = FakeClient(self.pushed_pr(), [review(login=OWNER)])
+        outputs = self.resolve(client)
+        self.assertEqual(outputs["revision_attested"], "true")
+        self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
+
+    def test_an_attested_bot_rejection_adds_no_label(self) -> None:
+        client = FakeClient(self.pushed_pr(), [review()])
+        self.resolve(client)
+        self.assertEqual(client.added, [])
+
+    def test_missing_id_derivation_prefers_the_unanswered_review(self) -> None:
+        # Newest-standing alone would dedupe against the answered rejection
+        # and leave the unanswered one silent.
+        answered = review(review_id=950, login=OWNER, submitted_at="2026-08-28T00:00:00Z")
+        unanswered = review(review_id=900, submitted_at="2026-08-27T00:00:00Z")
+        client = FakeClient(
+            pull_request(),
+            [unanswered, answered],
+            [april_comment(f"asked\n\n{response.response_marker(950)}")],
+        )
+        outputs = self.resolve(
+            client, review_id=None, revise_result="failure", revision_outcome=""
+        )
+        self.assertEqual(outputs["escalated"], "true")
+        self.assertTrue(response.has_response_for_review(client._comments, 900))
 
     def test_needs_owner_always_gets_the_deterministic_escalation(self) -> None:
         # April's reasoning comment carries no machinery, so the escalation
@@ -857,6 +922,29 @@ class WorkflowContractTests(unittest.TestCase):
 
     def test_the_evidence_lane_is_reused_unchanged(self) -> None:
         self.assertIn("uses: ./.github/workflows/_evidence.yml", self.jobs["evidence"])
+
+    def test_evidence_runs_only_for_a_pushed_outcome(self) -> None:
+        # A body-only turn moved no code and a needs-owner turn moved nothing
+        # at all; spending a macOS lane on an unchanged head would rewrite
+        # evidence for a revision that does not exist.
+        self.assertIn(
+            "needs.revise.outputs.revision_outcome == 'pushed'",
+            self.jobs["evidence"],
+        )
+
+    def test_resolve_binds_the_attestation_to_the_exported_head(self) -> None:
+        self.assertIn(
+            "HEAD_AFTER: ${{ needs.revise.outputs.pr_head_sha }}",
+            self.jobs["resolve"],
+        )
+
+    def test_manual_dispatch_is_a_recovery_run(self) -> None:
+        for job in ("admit", "revise"):
+            self.assertIn(
+                "FACTORY_REVISE_RECOVERY: "
+                "${{ github.event_name == 'workflow_dispatch' }}",
+                self.jobs[job],
+            )
         self.assertIn("upload_text_evidence: true", self.jobs["evidence"])
         self.assertIn("needs_screenshot_evidence: false", self.jobs["evidence"])
         self.assertIn("secrets.EVIDENCE_UPLOAD_TOKEN", self.jobs["evidence"])
