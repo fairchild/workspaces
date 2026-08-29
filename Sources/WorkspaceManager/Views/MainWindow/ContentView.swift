@@ -752,6 +752,7 @@ struct ContentView: View {
                 onRequestWebSourceCreation: { target in
                     webSourceCreationTarget = target
                 },
+                onRequestSessionSwitcher: presentSessionSwitcher,
                 webNextSessionSlug: { GitHubRepoSlug(remoteURL: $0.remoteURL) },
                 onOpenWebNextSession: openWebNextSession,
                 onWorkspaceCreated: handleWorkspaceCreated,
