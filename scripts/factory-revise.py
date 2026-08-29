@@ -72,7 +72,6 @@ REVIEW_WORKFLOW = "factory-review.yml"
 # still concludes success, and would otherwise consume a day's budget.
 REVISION_STEP_NAME_BY_JOB = {"revise": "Run April revision turn"}
 DEFAULT_DAILY_REVISE_CAP = 4
-PRIVILEGED_PATCH_LABEL = factory_implement.PRIVILEGED_PATCH_LABEL
 CONTRIBUTOR_BOT = response.RESPONDER_BOT
 REVISE_OUTCOMES = ("pushed", "body-only", "needs-owner")
 
@@ -307,17 +306,13 @@ def evaluate_admission(
     if response_decision.action == "skip":
         return AdmissionDecision("decline", response_decision.reason)
     if response_decision.action == "respond":
-        # The response lane speaks for itself on these -- except the ceiling,
-        # which both lanes reach independently on the same event, so resolve
-        # escalates too and its dedupe drops whichever post is second.
-        exhausted = any(
-            blocker.key == "revision-attempts-exhausted"
-            for blocker in response_decision.blockers
-        )
+        # The response lane speaks for itself on every respond outcome, the
+        # attempt ceiling included: it never deferred that state, and the two
+        # lanes racing marker-dedupe from different concurrency groups would
+        # let both posts through. One writer per state.
         return AdmissionDecision(
             "decline",
             f"the response lane escalates this review ({response_decision.reason})",
-            escalate=exhausted,
         )
     if linked_issue is None:
         return AdmissionDecision(
@@ -334,11 +329,18 @@ def evaluate_admission(
             escalate=True,
         )
     if sensitive_paths:
+        # Unconditional -- the `privileged-agent-patch` label sanctions a diff
+        # existing, not this lane re-running the branch's own validator and
+        # prompt files with a branch-writing token. Declining every
+        # sensitive-path diff is what makes the admitted branch's `.agents/`
+        # and `.github/` content provably main's (or the owner's): an
+        # unprivileged April patch cannot touch them at creation, and a
+        # privileged one never reaches this lane.
         listed = ", ".join(f"`{response._quotable(path)}`" for path in sensitive_paths[:5])
         return AdmissionDecision(
             "decline",
-            f"the diff touches privileged paths ({listed}) without the "
-            f"`{PRIVILEGED_PATCH_LABEL}` label",
+            f"the diff touches privileged paths ({listed}); that revision turn "
+            "is the owner's, whatever labels the PR carries",
             escalate=True,
         )
     if budget_reason is not None:
@@ -355,46 +357,63 @@ def revision_blocked_blocker(reason: str, run_url: str) -> response.Blocker:
             "**April's revision turn did not land.** The revision lane took this "
             f"review and stopped: {reason}. The change to the diff is still unmade. "
             f"Run: {run_url}. Gesture: push the revision, or clear what that reason "
-            "names and re-run `Factory Revise` for this PR."
+            "names and re-run `Factory Revise` for this PR — a manual dispatch is "
+            "a recovery run and may retake an already-escalated review."
         ),
     )
 
 
-def revision_repair_comment(review: dict[str, Any] | None, review_id: int) -> str:
-    """The lane's own record of a turn whose reply the runtime could not post.
+def needs_owner_blocker(comment_posted: bool, run_url: str) -> response.Blocker:
+    """The owner ask when April herself concluded the review is theirs."""
+    where = (
+        "Her reasoning is in her comment above."
+        if comment_posted
+        else f"Her comment could not be posted; the run log carries it: {run_url}."
+    )
+    return response.Blocker(
+        key="revision-needs-owner",
+        owner_required=True,
+        detail=(
+            "**April read the review and determined it needs you.** "
+            f"{where} The revision lane stops here by her own call."
+        ),
+    )
 
-    Deterministic and deliberately thin: the model's words are gone, but the
-    marker is what tells the response lane a revision answered this review,
-    and leaving it unwritten would re-escalate a PR that actually moved.
+
+def revision_attestation_comment(review: dict[str, Any] | None, review_id: int) -> str:
+    """The lane's attestation that a validated revision answered this review.
+
+    Deterministic and deliberately thin -- every word is the lane's own, so no
+    model prose can forge or fence-hide the marker, and it is only ever posted
+    after resolve has verified the outcome it attests to (a push the head
+    carries, or a body fix the readiness gate accepts).
     """
     url = str((review or {}).get("html_url") or "").strip()
     reference = f"[requested changes]({url})" if url else "requested changes"
     lines = [
         response.APRIL_ATTRIBUTION.rstrip("\n"),
         "",
-        f"Revised this PR in answer to {response.reviewer_name(review or {})}'s "
-        f"{reference}.",
-        "",
-        "The turn's own reply could not be posted, so this is the lane's record of "
-        "it; the diff and the PR body are the answer.",
+        f"Revision turn complete for {response.reviewer_name(review or {})}'s "
+        f"{reference} — the diff and the PR body are the answer; April's own "
+        "reply above has the detail when one landed.",
         "",
         response.revision_marker(review_id),
     ]
     return "\n".join(lines) + "\n"
 
 
-def repair_revision_marker(
+def attest_revision(
     client: GitHubClient,
     pr_number: int,
     review_id: int,
 ) -> bool:
-    """Post the marker the turn owes, unless one is already there."""
+    """Post the marker for a validated turn, unless one is already there."""
     comments = client.comments(pr_number)
     if response.has_revision_for_review(comments, review_id):
         return False
     review = review_by_id(client.pull_request_reviews(pr_number), review_id)
-    client.comment(pr_number, revision_repair_comment(review, review_id))
-    print(f"Factory revise repaired the revision marker on #{pr_number} for {review_id}")
+    client.comment(pr_number, revision_attestation_comment(review, review_id))
+    print(f"Factory revise attested the revision on #{pr_number} for review {review_id}")
     return True
 
 
@@ -430,6 +449,7 @@ def force_escalate(
     *,
     reason: str,
     run_url: str,
+    blocker: response.Blocker | None = None,
 ) -> bool:
     """Say what the failed turn could not. True when a comment was posted.
 
@@ -473,7 +493,7 @@ def force_escalate(
     escalation = response.ResponseDecision(
         "respond",
         "the revision turn did not land",
-        decision.blockers + (revision_blocked_blocker(reason, run_url),),
+        decision.blockers + (blocker or revision_blocked_blocker(reason, run_url),),
     )
     labelled = response.apply_owner_action(client, pr_number, labels)
     client.comment(
@@ -499,6 +519,7 @@ def admit(
     runaway_cap: int,
     current_run_id: str,
     current_run_attempt: int,
+    recovery: bool = False,
 ) -> AdmissionDecision:
     pull_request = client.pull_request(pr_number)
     reviews = client.pull_request_reviews(pr_number)
@@ -509,8 +530,12 @@ def admit(
         pull_request,
         review,
         repository_owner=repository_owner,
+        # A recovery dispatch exists to retake a review this lane already
+        # escalated -- the escalation told the owner to clear the cause and
+        # re-run, so the standing response marker must not refuse the rerun.
         already_responded=(
-            review is not None
+            not recovery
+            and review is not None
             and response.has_response_for_review(comments, int(review.get("id") or 0))
         ),
         revise_enabled=True,
@@ -521,18 +546,18 @@ def admit(
         revision_attempts=response.count_revision_attempts(comments),
     )
     linked_issue = factory_review.linked_issue_number(pull_request)
-    labels = factory_implement.label_names(pull_request)
     # The reads below cost an API call each, so they only happen once the
-    # cheap state has already agreed this event is a candidate.
+    # cheap state has already agreed this event is a candidate. The sensitive
+    # check runs regardless of `privileged-agent-patch` -- see
+    # evaluate_admission for why the label earns no exemption here.
     sensitive_paths: list[str] = []
     evidence_contract = False
     budget_reason: str | None = None
     if response_decision.action == "defer":
-        if PRIVILEGED_PATCH_LABEL not in labels:
-            changed = client.pull_request_files(pr_number)
-            sensitive_paths = sensitive_agent_patch_paths(
-                [str(item.get("filename") or "") for item in changed]
-            )
+        changed = client.pull_request_files(pr_number)
+        sensitive_paths = sensitive_agent_patch_paths(
+            [str(item.get("filename") or "") for item in changed]
+        )
         if linked_issue is not None:
             evidence_contract = bool(
                 linked_issue_evidence_contract(client, linked_issue)
@@ -570,6 +595,8 @@ def preflight(
     review_id: int,
     expected_head: str,
     repository_owner: str,
+    *,
+    recovery: bool = False,
 ) -> bool:
     """Re-verify the admitted conditions with the model one step away.
 
@@ -587,7 +614,8 @@ def preflight(
         review,
         repository_owner=repository_owner,
         already_responded=(
-            review is not None
+            not recovery
+            and review is not None
             and response.has_response_for_review(comments, review_id)
         ),
         revise_enabled=True,
@@ -620,7 +648,7 @@ def resolve(
     client: GitHubClient,
     actions_client: GitHubClient,
     pr_number: int,
-    review_id: int,
+    review_id: int | None,
     repository_owner: str,
     *,
     head_before: str,
@@ -631,51 +659,114 @@ def resolve(
     run_url: str,
     default_branch: str,
 ) -> None:
-    """Make the turn's outcome visible, whatever the outcome was."""
+    """Make the turn's outcome visible, whatever the outcome was.
+
+    Every marker this lane writes is written here, after the outcome it
+    attests to is validated against live state -- a push the head actually
+    carries, or a body fix the readiness gate accepts. The runtime's own
+    comments carry no markers at all, so nothing the model wrote can stand in
+    for an attestation.
+    """
+    if review_id is None:
+        # Admission crashed before resolving one (the manual-dispatch path has
+        # no review in its event). The standing rejection is the review the
+        # dispatch was about; none standing means nobody is waiting.
+        standing = response.blocking_review(
+            client.pull_request_reviews(pr_number), repository_owner, None
+        )
+        if standing is None:
+            print(
+                f"Factory revise resolve for #{pr_number}: no standing blocking "
+                "review; nothing to resolve"
+            )
+            write_output("escalated", "false")
+            return
+        review_id = int(standing.get("id") or 0)
     outcome = revision_outcome.strip()
     succeeded = revise_result.strip().casefold() == "success" and outcome in REVISE_OUTCOMES
-    repaired = False
+    attested = False
     dispatched = False
     escalated = False
-    if succeeded and outcome in {"pushed", "body-only"}:
+    if succeeded and outcome == "pushed":
         live_head = head_sha(client.pull_request(pr_number))
-        if outcome == "pushed" and head_before and live_head == head_before:
-            # The turn reported a push the branch does not carry. Writing the
-            # marker anyway would tell the reviewer a revision exists to look
-            # at, which is the one claim this lane must never get wrong.
+        if head_before and live_head == head_before:
+            # The turn reported a push the branch does not carry. Attesting
+            # anyway would tell the reviewer a revision exists to look at,
+            # which is the one claim this lane must never get wrong.
             succeeded = False
             reason = "the turn reported a push the branch head does not carry"
         else:
-            if comment_posted.strip().casefold() != "true":
-                repaired = repair_revision_marker(client, pr_number, review_id)
-            if outcome == "body-only":
+            attested = attest_revision(client, pr_number, review_id)
+    elif succeeded and outcome == "body-only":
+        # A body-only turn re-enters review through a dispatch the review lane
+        # is free to decline -- and it declines exactly when readiness still
+        # fails. Attesting and dispatching in that state would leave a marked
+        # park: the marker says "answered", the refresh never comes, and the
+        # response lane skips forever. So the readiness gate is checked here,
+        # with the review lane's own evaluator, before the marker exists.
+        pull_request = client.pull_request(pr_number)
+        standing = response.blocking_review(
+            client.pull_request_reviews(pr_number), repository_owner, review_id
+        )
+        if standing is None:
+            print(
+                f"Factory revise resolve for #{pr_number}: review {review_id} no "
+                "longer stands; the state resolved itself"
+            )
+        else:
+            paths = [
+                str(item.get("filename") or "")
+                for item in client.pull_request_files(pr_number)
+            ]
+            if factory_review.pr_readiness.evaluate(pull_request, paths).ok:
+                # Dispatch before attesting: the marker attests "answered and
+                # re-entering review", and posting it first would trip the
+                # in-flight guard on the very escalation a failed dispatch
+                # needs to make.
                 dispatched = request_fresh_review(
                     actions_client, pr_number, default_branch
                 )
-    if succeeded and outcome == "needs-owner":
-        if comment_posted.strip().casefold() == "true":
-            # The runtime posted April's own escalation with its marker; the
-            # label is the part only a credentialed lane step can apply.
-            pull_request = client.pull_request(pr_number)
-            response.apply_owner_action(
-                client, pr_number, factory_implement.label_names(pull_request)
-            )
-            escalated = True
-        else:
-            # Her reason is lost, but the verdict is not: the deterministic
-            # escalation says the same thing in the lane's own words, and its
-            # dedupe stands down if her comment landed after all.
-            escalated = force_escalate(
-                client,
-                pr_number,
-                review_id,
-                repository_owner,
-                reason=(
-                    "April read the review and determined it needs the owner, but "
-                    "her own comment could not be posted"
-                ),
-                run_url=run_url,
-            )
+                if dispatched:
+                    attested = attest_revision(client, pr_number, review_id)
+                else:
+                    escalated = force_escalate(
+                        client,
+                        pr_number,
+                        review_id,
+                        repository_owner,
+                        reason=(
+                            "the body revision landed but the fresh-review "
+                            "request could not be dispatched"
+                        ),
+                        run_url=run_url,
+                    )
+            else:
+                escalated = force_escalate(
+                    client,
+                    pr_number,
+                    review_id,
+                    repository_owner,
+                    reason=(
+                        "the turn rewrote the PR body but the readiness gate "
+                        "still fails, so a fresh review would decline to run"
+                    ),
+                    run_url=run_url,
+                )
+    elif succeeded and outcome == "needs-owner":
+        # April's call, the lane's voice: her reasoning comment (when it
+        # landed) carries no machinery, so the deterministic escalation and
+        # the label are always this step's to write.
+        escalated = force_escalate(
+            client,
+            pr_number,
+            review_id,
+            repository_owner,
+            reason="April determined this review needs the owner",
+            run_url=run_url,
+            blocker=needs_owner_blocker(
+                comment_posted.strip().casefold() == "true", run_url
+            ),
+        )
     if not succeeded:
         # A job that concluded success with no outcome is the preflight
         # declining after admission, which is a different thing to say than a
@@ -683,7 +774,7 @@ def resolve(
         if revise_result.strip().casefold() == "success":
             fallback = (
                 "re-validation declined the turn just before the model ran (the "
-                "head moved after admission)"
+                "head moved after admission, or the review stopped standing)"
             )
         else:
             fallback = f"the turn ended `{revise_result.strip() or 'unknown'}`"
@@ -695,7 +786,7 @@ def resolve(
             reason=reason.strip() or fallback,
             run_url=run_url,
         )
-    write_output("revision_marker_repaired", "true" if repaired else "false")
+    write_output("revision_attested", "true" if attested else "false")
     write_output("review_dispatched", "true" if dispatched else "false")
     write_output("escalated", "true" if escalated else "false")
 
@@ -719,7 +810,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
     resolve_parser = subparsers.add_parser("resolve")
     resolve_parser.add_argument("--pr", type=int, required=True)
-    resolve_parser.add_argument("--review-id", type=int, required=True)
+    resolve_parser.add_argument(
+        "--review-id",
+        type=int,
+        default=None,
+        help="Omit when admission crashed before naming one; resolve derives "
+        "the standing blocking review.",
+    )
     resolve_parser.add_argument("--head-before", default="")
     resolve_parser.add_argument("--revise-result", default="")
     resolve_parser.add_argument("--revision-outcome", default="")
@@ -756,6 +853,7 @@ def main(argv: list[str]) -> int:
     repository = require_env("GITHUB_REPOSITORY")
     repository_owner = require_env("FACTORY_REPOSITORY_OWNER")
     client = GitHubClient(repository, require_env("GH_TOKEN"))
+    recovery = os.environ.get("FACTORY_REVISE_RECOVERY", "").casefold() == "true"
     if args.command == "admit":
         daily_cap = parse_daily_cap(os.environ.get("FACTORY_REVISE_DAILY_CAP"))
         admit(
@@ -770,9 +868,17 @@ def main(argv: list[str]) -> int:
             ),
             current_run_id=require_env("GITHUB_RUN_ID"),
             current_run_attempt=int(require_env("GITHUB_RUN_ATTEMPT")),
+            recovery=recovery,
         )
     elif args.command == "preflight":
-        preflight(client, args.pr, args.review_id, args.expected_head, repository_owner)
+        preflight(
+            client,
+            args.pr,
+            args.review_id,
+            args.expected_head,
+            repository_owner,
+            recovery=recovery,
+        )
     elif args.command == "resolve":
         resolve(
             client,

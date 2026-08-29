@@ -68,7 +68,18 @@ speaks:
   PR body changed and no commit did, so the lane dispatches Factory Review
   itself — the #1379 shape, where no event would otherwise exist), or
   `needs-owner` (April read the review and says it genuinely needs the owner;
-  she posts her reason and the lane applies `owner-action`).
+  she posts her reason, and the lane posts the deterministic escalation and
+  applies `owner-action` beside it).
+
+A body-only outcome is validated before it counts: the review lane's refresh
+declines exactly when `scripts/pr-readiness.py` still fails, so resolve runs
+that same evaluator first and escalates instead of attesting when the gate
+fails — otherwise the marker would say "answered" while the refresh never
+comes. A dispatch that cannot be sent escalates the same way. The turn's
+declines are one-writer by design: the attempt ceiling is the Review Response
+lane's to escalate (it never defers that state), so the revise lane declines
+it silently rather than racing the marker dedupe from a second concurrency
+group.
 
 A push does **not** dismiss the standing rejection.
 `dismiss_stale_reviews_on_push` only dismisses *approvals*, so after a revision
@@ -99,7 +110,24 @@ visible line of an `april-clearwater[bot]` comment (the #1364 quote/code
 reader): `<!-- factory-revision review-id:N -->` means answered with a diff,
 `<!-- factory-review-response review-id:N -->` means answered with an ask. Only
 the second one counts toward `owner-action` — a revision-answered review is in
-flight, not waiting on the owner.
+flight, not waiting on the owner. Every marker is the lane's own attestation:
+resolve posts it after validating the outcome it names (a push the live head
+carries; a body fix the readiness gate accepts), and no runtime comment ever
+carries one — model prose is neutralized so it cannot spell a marker, which
+closes both forgery (a fabricated "answered") and fence-hiding (an unclosed
+code fence swallowing a real one).
+
+Manual recovery runs point in one direction each. Dispatching **Factory
+Revise** is a recovery run: it may retake a review this lane already escalated
+(the escalation says to clear the cause and re-run), still inside the kill
+switches, caps, and ceiling. Dispatching **Factory Review Response** never
+defers — the dispatch creates no revise event, so it reads the revise switch
+as off and posts the deterministic escalation. And the revision lane refuses
+every privileged-path diff outright, `privileged-agent-patch` or not: the
+label sanctions a diff existing, not this lane re-running the branch's own
+validator and prompt files with a branch-writing token. That refusal is what
+keeps an admitted branch's `.agents/` and `.github/` content provably main's
+(or the owner's) when the turn executes.
 
 `AGENT_AUTOMATIONS_ENABLED` is the global master switch, but it is not an unconditional kill for every lane: Implement, Evidence Verify, Review Response, Revise, and the Owner Comment Responder `&&` it into every trigger path including `workflow_dispatch`, so it always gates them. Review (signal), Review (execute), and Monitor instead OR a bare `workflow_dispatch` check ahead of the switches — an owner-triggered manual dispatch runs those three regardless of `AGENT_AUTOMATIONS_ENABLED` or their own per-stage switch. Milestone Legibility and Evidence Reminder have no Factory switch at all. Treat "turn off `AGENT_AUTOMATIONS_ENABLED`" as "stops label/cron/comment-driven runs," not "nothing can run" — a manual dispatch on Review or Monitor still can.
 

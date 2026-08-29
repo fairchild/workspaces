@@ -98,6 +98,10 @@ jobs:
           FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
           FACTORY_REVISE_DAILY_CAP: ${{ vars.FACTORY_REVISE_DAILY_CAP || '4' }}
           FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
+          # A manual dispatch is the documented recovery for an escalated
+          # turn, so it may retake a review whose escalation marker would
+          # otherwise refuse the rerun. Owner-only by the job's admission.
+          FACTORY_REVISE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' }}
           FACTORY_REVISE_RUNAWAY_CAP: ${{ vars.FACTORY_REVISE_RUNAWAY_CAP || '' }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
@@ -157,6 +161,7 @@ jobs:
           AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
           FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
           FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
+          FACTORY_REVISE_RECOVERY: ${{ github.event_name == 'workflow_dispatch' }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
           PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
@@ -205,7 +210,8 @@ jobs:
       always() &&
       (needs.admit.outputs.matched == 'true' ||
       needs.admit.outputs.escalate == 'true' ||
-      needs.admit.result == 'failure')
+      needs.admit.result == 'failure' ||
+      needs.admit.result == 'cancelled')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -259,13 +265,15 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          if [ -z "${REVIEW_ID:-}" ]; then
-            echo "Admission resolved no review to answer; nothing to resolve."
-            exit 0
+          # No review id (an admission crash on the manual-dispatch path) is
+          # resolve's problem, not a reason to skip: it derives the standing
+          # blocking review, and stays quiet only when none stands.
+          ARGS=(--pr "$PR_NUMBER")
+          if [ -n "${REVIEW_ID:-}" ]; then
+            ARGS+=(--review-id "$REVIEW_ID")
           fi
           uv run --script scripts/factory-revise.py resolve \
-            --pr "$PR_NUMBER" \
-            --review-id "$REVIEW_ID" \
+            "${ARGS[@]}" \
             --head-before "$HEAD_BEFORE" \
             --revise-result "$REVISE_RESULT" \
             --revision-outcome "$REVISION_OUTCOME" \

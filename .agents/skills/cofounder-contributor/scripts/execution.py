@@ -218,22 +218,25 @@ def compose_pr_body(
     )
 
 
-# Comments the revise lane reads back off the PR. Both markers must be the
-# last visible line of the comment for the #1364 quote-aware reader, and both
-# are keyed by the review id so a marker answers exactly one review:
-# `factory-revision` says a revision turn answered it, `factory-review-response`
-# says the owner is the blocking party.
-REVISION_MARKER_PREFIX = "<!-- factory-revision review-id:"
-REVIEW_RESPONSE_MARKER_PREFIX = "<!-- factory-review-response review-id:"
+# The comments this runtime posts carry NO factory markers. Markers are the
+# lane's attestation that an outcome actually happened, and the lane's resolve
+# job posts them only after validating it against live state -- a marker next
+# to model prose could be forged or fence-hidden (the #1364 reader trusts the
+# last visible line, and an unterminated fence swallows everything after it),
+# and a marker written before validation attests to a push the branch may not
+# carry. Model text is neutralized below for the same reason: no line of it
+# may parse as a marker.
 REVISION_COMMENT_SECTIONS = ("Summary", "Validation", "Risks")
 
 
-def revision_marker(review_id: str) -> str:
-    return f"{REVISION_MARKER_PREFIX}{review_id} -->"
+def _neutralized_model_text(text: str) -> str:
+    """Model prose, unable to impersonate factory machinery in a comment.
 
-
-def review_response_marker(review_id: str) -> str:
-    return f"{REVIEW_RESPONSE_MARKER_PREFIX}{review_id} -->"
+    HTML comment delimiters go so no line can form a marker; the reader is
+    author- and position-bound, but the author here IS the bot, so the text
+    itself must be unable to spell one.
+    """
+    return text.replace("<!--", "").replace("-->", "")
 
 
 def fetch_review(pr_number: int, review_id: str, env: dict[str, str]) -> dict[str, object]:
@@ -276,12 +279,11 @@ def compose_revision_comment(
     body: str,
     *,
     review: dict[str, object],
-    review_id: str,
 ) -> str:
     """April's reply on the PR after a revision turn: what she did, bound to
-    the review that asked for it."""
+    the review that asked for it. Markerless -- the lane attests separately."""
     sections = [
-        f"## {heading}\n{markdown_section(body, heading)}"
+        f"## {heading}\n{_neutralized_model_text(markdown_section(body, heading))}"
         for heading in REVISION_COMMENT_SECTIONS
         if markdown_section(body, heading)
     ]
@@ -292,8 +294,6 @@ def compose_revision_comment(
             f"Answering {_review_reference(review)}.",
             "",
             "\n\n".join(sections) or "This revision turn recorded no summary.",
-            "",
-            revision_marker(review_id),
         ]
     ) + "\n"
 
@@ -303,11 +303,17 @@ def compose_revision_escalation_comment(
     body: str,
     *,
     owner: str,
-    review_id: str,
 ) -> str:
-    """April's explicit hand-back when a revision turn moved nothing: her own
-    reason under the escalation marker the review-response lane already reads."""
-    reason = markdown_section(body, "Summary") or "No reason was recorded; see the workflow run."
+    """April's explanation when a revision turn moved nothing on purpose.
+
+    Markerless: the lane's resolve step posts the deterministic escalation
+    that carries the marker and the `owner-action` label; this comment is the
+    reasoning next to it.
+    """
+    reason = _neutralized_model_text(
+        markdown_section(body, "Summary")
+        or "No reason was recorded; see the workflow run."
+    )
     return "\n".join(
         [
             f"*{persona}*",
@@ -315,8 +321,6 @@ def compose_revision_escalation_comment(
             f"**This needs @{owner}** — this turn changed neither the code nor the PR body:",
             "",
             reason,
-            "",
-            review_response_marker(review_id),
         ]
     ) + "\n"
 
@@ -917,14 +921,13 @@ def _post_revision_reply(
             persona,
             body,
             review=fetch_review(pr_number, review_id, env),
-            review_id=review_id,
         ),
         env,
     )
     if not posted:
         log(
             f"warning: PR #{pr_number} revision reply for review {review_id} was not "
-            "posted; the lane repairs the marker"
+            "posted; the lane's attestation comment still records the turn"
         )
     return posted
 
@@ -977,29 +980,18 @@ def _finish_revision_without_diff(
         owner, _ = repo_owner_name(env)
         posted = _post_pr_comment(
             pr_number,
-            compose_revision_escalation_comment(
-                persona, model_body, owner=owner, review_id=review_id
-            ),
+            compose_revision_escalation_comment(persona, model_body, owner=owner),
             env,
         )
         if not posted:
-            # The comment is the escalation. Failing loudly hands the turn to
-            # the lane's deterministic fallback instead of parking the PR.
-            print(
-                f"error: could not post the owner escalation for review {review_id} "
-                f"on PR #{pr_number}",
-                file=sys.stderr,
-            )
+            # Her reasoning is enrichment now, not the escalation itself: the
+            # lane's resolve step posts the deterministic escalation and the
+            # `owner-action` label for every needs-owner outcome, so a lost
+            # comment degrades the explanation, never the state machine.
             log(
-                json.dumps(
-                    {
-                        "error_class": "revision_escalation",
-                        "detail": "owner escalation comment was not posted",
-                        "pr": pr_number,
-                    }
-                )
+                f"warning: April's needs-owner reasoning for review {review_id} on "
+                f"PR #{pr_number} was not posted; resolve escalates without it"
             )
-            return 1
     _write_github_outputs(
         evidence_needed,
         _needs_screenshot_evidence(requested_evidence),
