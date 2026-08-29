@@ -860,6 +860,7 @@ struct SidebarView: View {
             isExpanded: placement.isNested && isWorkspaceExpanded(workspace),
             showsDisclosure: placement.isNested && !workspace.webSources.isEmpty,
             isPinned: workspace.isPinned,
+            liveStatus: liveSessionStatus(for: workspace),
             tabsProvider: {
                 refreshForegroundProcessNames(for: sessionKey(for: workspace))
                 refreshTranscriptTails(for: sessionKey(for: workspace))
@@ -1788,6 +1789,20 @@ struct SidebarView: View {
             for: key,
             paneCountBySessionKey: paneCountBySessionKey,
             activeSessionKey: activeSessionKey,
+            sessions: hostSessions,
+            agentStatus: agentStatus
+        )
+    }
+
+    /// The live status line for the selected row, and nothing for any other. Resolving it here
+    /// keeps the lookup to one row per render and, because the elapsed timer only mounts where
+    /// this returns a value, keeps the sidebar to one running clock. The lookup reads the same
+    /// `agentStatus` closure `sessionActivity(for:)` already calls on this key, so it registers
+    /// no observation the row did not have.
+    private func liveSessionStatus(for workspace: Workspace) -> SidebarLiveSessionStatus? {
+        guard selectedWorkspace?.id == workspace.id else { return nil }
+        return workspacePresentationController.liveSessionStatus(
+            for: sessionKey(for: workspace),
             sessions: hostSessions,
             agentStatus: agentStatus
         )
