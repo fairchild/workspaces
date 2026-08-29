@@ -115,6 +115,14 @@ struct ContentView: View {
     /// Outlives the view value so a `configure` that suspended on the listener cannot reinstall
     /// this window's closures after it is gone; the controller reads it before running a verb.
     @State private var automationWindowLifetime = MainWindowWindowLifetime()
+    /// Outlives the view value so adoption's tmux probe (#1390), which suspends on a
+    /// subprocess, can tell whether the window it was going to select into is still there.
+    @State private var adoptionWorkLifetime = MainWindowWindowLifetime()
+    /// The most recently requested adoption. Adopting two different orphans in quick
+    /// succession suspends both on their own tmux probe; without this, whichever probe took
+    /// longer would select and focus its workspace last, stealing the result out from under a
+    /// later adopt the user had already moved on to (#1390).
+    @State private var latestAdoptionRequestID: UUID?
     @AppStorage(TerminalRestoreBannerStorage.handledRunIDKey)
     private var restoreHandledRunID = ""
     @State private var isShowingFeedbackSheet = false
@@ -203,6 +211,13 @@ struct ContentView: View {
                 acknowledgeAgentSession: { acknowledgeVisitedAgentSession($0) },
                 activateHostSession: MainWindowHostSessionActivator { key, directory, customCommand in
                     activateHostSession(key: key, directory: directory, customCommand: customCommand)
+                },
+                activateAdoptedHostSession: { key, directory, tmuxSessionName in
+                    tileTreeStore.createRestoredSession(
+                        key: key,
+                        directory: directory,
+                        tmuxSessionNameOverride: tmuxSessionName
+                    )
                 },
                 persistTerminalContinuity: { targetKind, targetID, rootURL, launchURL in
                     terminalContinuityController.persist(
@@ -857,8 +872,13 @@ struct ContentView: View {
                 WorkspaceOrphanReconciliationBanner(
                     items: workspaceOrphanState.visibleItems,
                     cleaningItemIDs: workspaceOrphanState.cleaningItemIDs,
+                    adoptingItemIDs: workspaceOrphanState.adoptingItemIDs,
+                    canAdopt: { workspaceOrphanController.canAdopt($0) },
                     onClean: { item in
                         workspaceOrphanState.pendingCleanup = item
+                    },
+                    onAdopt: { item in
+                        Task { @MainActor in await adoptWorkspaceOrphan(item) }
                     },
                     onDismiss: {
                         workspaceOrphanState.dismissVisibleItems()
@@ -933,7 +953,10 @@ struct ContentView: View {
                 ShortcutRoutingPolicy.shared.setOverride(nil, for: AppChromeShortcut.openInEditor.chord)
             },
             cancelStatusAggregation: statusAggregationCoalescer.cancel,
-            noteWindowTornDown: launchWorkLifetime.noteWindowTornDown,
+            noteWindowTornDown: {
+                launchWorkLifetime.noteWindowTornDown()
+                adoptionWorkLifetime.noteWindowTornDown()
+            },
             // The window that installed the gesture-verb layer is gone; drop it so an operator
             // mutation verb fails closed (unsupported) instead of driving a stale selection
             // gesture while the app lingers as an accessory. Reappearing reinstalls it via onAppear.
@@ -949,6 +972,7 @@ struct ContentView: View {
             .onAppear {
                 launchWorkLifetime.noteWindowAppeared()
                 automationWindowLifetime.noteWindowAppeared()
+                adoptionWorkLifetime.noteWindowAppeared()
                 mainSelectionCoordinator.rebuildCachesIfNeeded(
                     repos: repos, webSources: webSources, normalizePath: normalizePath
                 )
@@ -2027,6 +2051,55 @@ struct ContentView: View {
         } catch {
             presentWorkspaceOperationError(
                 workspaceOrphanController.cleanupFailureMessage(for: item, error: error)
+            )
+        }
+    }
+
+    /// Adds an existing worktree the app did not create as a workspace, without deleting or
+    /// re-creating anything on disk (#1390). No confirmation: unlike cleanup this is additive,
+    /// the same weight as creating a workspace normally.
+    ///
+    /// A live tmux session whose directory matches the worktree — the case an adopted worktree
+    /// created outside the app is likely to already have one running in — is bound at selection
+    /// time so the new workspace's terminal joins it instead of opening a fresh shell. Probed
+    /// only in tmux-per-session mode: in Ghostty-managed mode nothing the app did not launch
+    /// itself has a tmux session behind it to find.
+    private func adoptWorkspaceOrphan(_ item: WorkspaceOrphanItem) async {
+        guard !workspaceOrphanState.isAdopting(item) else { return }
+        workspaceOrphanState.beginAdopting(item)
+        defer {
+            workspaceOrphanState.endAdopting(item)
+        }
+
+        // Claimed before the probe suspends: whichever adopt's tmux lookup finishes last is
+        // the one that gets to select and focus, so a second adopt started after this one
+        // must be able to say so once this one's probe returns (#1390).
+        let requestID = UUID()
+        latestAdoptionRequestID = requestID
+
+        do {
+            let workspace = try workspaceOrphanController.adoptGitWorktree(
+                item,
+                in: repos,
+                modelContext: modelContext
+            )
+            workspaceOrphanState.removeCleanedItem(item)
+
+            var boundTmuxSessionName: String?
+            if terminalMultiplexingMode == .tmuxPerSession, let path = item.path {
+                boundTmuxSessionName = await TmuxSessionProbe().sessionName(withCurrentDirectory: path)
+            }
+
+            guard !adoptionWorkLifetime.isTornDown, latestAdoptionRequestID == requestID else {
+                await refreshWorkspaceOrphans(trigger: "adopt")
+                return
+            }
+            selectionController.selectAdoptedWorkspace(workspace, boundTmuxSessionName: boundTmuxSessionName)
+
+            await refreshWorkspaceOrphans(trigger: "adopt")
+        } catch {
+            presentWorkspaceOperationError(
+                "Could not adopt '\(item.resourceName)': \(error.localizedDescription)"
             )
         }
     }

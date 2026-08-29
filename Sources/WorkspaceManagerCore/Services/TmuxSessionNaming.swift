@@ -36,6 +36,25 @@ public enum TmuxSessionNaming {
         return "\(defaultName(for: directory))-p\(suffix)"
     }
 
+    /// Whether `name` has exactly the shape `splitPaneName(for:paneSessionID:)` produces for
+    /// `directory` — the app's own directory-derived base plus `-p` and 8 lowercase hex digits.
+    ///
+    /// This is what teardown asks before reclaiming a tmux session on close (#1390): a session
+    /// override is otherwise indistinguishable from an arbitrary live session an adoption gesture
+    /// bound to (#1233's split-pane case set `tmuxSessionNameOverride` to any name differing from
+    /// the directory derivation, and teardown killed anything shaped that way). Checking the exact
+    /// shape rather than "differs from the derivation" is what keeps that kill scoped to sessions
+    /// the app generated the name for, however that override reached the session — a stored
+    /// provenance flag could be dropped by a future code path; a shape derived purely from the
+    /// name and the directory cannot be.
+    public static func isPaneScopedName(_ name: String, for directory: URL) -> Bool {
+        let prefix = "\(defaultName(for: directory))-p"
+        guard name.hasPrefix(prefix) else { return false }
+        let suffix = name.dropFirst(prefix.count)
+        guard suffix.count == 8 else { return false }
+        return suffix.allSatisfy { "0123456789abcdef".contains($0) }
+    }
+
     /// Name for a caller-labelled sibling session: the directory-derived name plus
     /// the sanitized label. A second headless agent in one workspace needs a handle
     /// of its own, and one the caller chose is one they can find again — unlike the

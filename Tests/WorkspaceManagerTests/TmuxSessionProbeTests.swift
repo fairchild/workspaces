@@ -98,6 +98,64 @@ struct TmuxSessionProbeTests {
         #expect(await probe.foregroundCommand(forSessionNamed: "wm-repo-abcd1234") == nil)
     }
 
+    @Test("parseSessionName matches a session by its pane's current directory")
+    func parseSessionNameMatchesByDirectory() {
+        let output = "cli-parity\t/tmp/repo-a\nws-1374\t/tmp/repo-b\n"
+        #expect(TmuxSessionProbe.parseSessionName(fromListPanes: output, matchingDirectory: "/tmp/repo-b") == "ws-1374")
+    }
+
+    /// Adoption's whole safety argument (#1390): guessing wrong would bind the workspace to the
+    /// wrong session's live shell, so an ambiguous match answers "no session" rather than
+    /// picking either candidate.
+    @Test("parseSessionName refuses to pick between two sessions sharing a directory")
+    func parseSessionNameRefusesAmbiguousMatch() {
+        let output = "session-a\t/tmp/shared\nsession-b\t/tmp/shared\n"
+        #expect(TmuxSessionProbe.parseSessionName(fromListPanes: output, matchingDirectory: "/tmp/shared") == nil)
+    }
+
+    @Test("parseSessionName matches through a symlinked directory on either side")
+    func parseSessionNameResolvesSymlinks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tmux-probe-\(UUID().uuidString)", isDirectory: true)
+        let real = root.appendingPathComponent("real", isDirectory: true)
+        let link = root.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let output = "issue-1374\t\(link.path)\n"
+        #expect(TmuxSessionProbe.parseSessionName(fromListPanes: output, matchingDirectory: real.path) == "issue-1374")
+    }
+
+    @Test("parseSessionName returns nil for no match or absent output")
+    func parseSessionNameNilForNoMatch() {
+        #expect(TmuxSessionProbe.parseSessionName(fromListPanes: nil, matchingDirectory: "/tmp/x") == nil)
+        #expect(TmuxSessionProbe.parseSessionName(fromListPanes: "", matchingDirectory: "/tmp/x") == nil)
+        #expect(
+            TmuxSessionProbe.parseSessionName(
+                fromListPanes: "other\t/tmp/elsewhere\n", matchingDirectory: "/tmp/x") == nil)
+    }
+
+    @Test("sessionName(withCurrentDirectory:) lists panes across every session")
+    func sessionNameQueriesAllPanes() async throws {
+        let recorder = ArgumentRecorder()
+        let probe = TmuxSessionProbe(
+            runForOutput: { executable, arguments, _ in
+                await recorder.record(executable: executable, arguments: arguments)
+                return "ws-1374\t/tmp/repo\n"
+            },
+            environment: [:]
+        )
+
+        let name = await probe.sessionName(withCurrentDirectory: "/tmp/repo")
+
+        #expect(name == "ws-1374")
+        let call = try #require(await recorder.calls.first)
+        #expect(call.arguments.contains("list-panes"))
+        #expect(call.arguments.contains("-a"))
+        #expect(adjacent(call.arguments, "-L", "workspaces"))
+    }
+
     @Test("killSession invokes kill-session on the workspaces socket with an exact-match target")
     func buildsExactMatchKillSessionCommand() async throws {
         let recorder = ArgumentRecorder()

@@ -33,7 +33,8 @@ struct ArchivedWorkspacePurgeTests {
         name: String,
         status: WorkspaceStatus,
         backendIdentifier: String,
-        archivedAt: Date?
+        archivedAt: Date?,
+        isAdopted: Bool = false
     ) -> Workspace {
         let workspace = Workspace(
             name: name,
@@ -41,6 +42,7 @@ struct ArchivedWorkspacePurgeTests {
             sourceRepo: repo,
             status: status,
             archivedAt: archivedAt,
+            isAdopted: isAdopted,
             backendIdentifier: backendIdentifier
         )
         context.insert(workspace)
@@ -93,6 +95,33 @@ struct ArchivedWorkspacePurgeTests {
         let resultAll = controller.expiredArchivedWorkspaces(all, now: now, delayDays: 30)
         #expect(Set(resultAll.map(\.name)) == ["expired", "boundary"])
         #expect(Set(result.map(\.name)) == ["expired", "boundary"])
+    }
+
+    /// The sweep deletes files with `deleteFiles: true` on a timer the user does not directly
+    /// act on. A directory the app adopted rather than created may be someone's primary clone
+    /// or hold state outside git's view, so it is excluded unconditionally, however long it has
+    /// sat archived (#1390).
+    @Test("An adopted workspace is never purged, however long it has been archived")
+    func adoptedWorkspaceIsNeverPurged() throws {
+        let context = try makeContext()
+        let repo = Repo(name: "api", localPath: URL(fileURLWithPath: "/tmp/api"))
+        context.insert(repo)
+
+        let adopted = makeWorkspace(
+            in: context, repo: repo, name: "adopted",
+            status: .archived, backendIdentifier: "local",
+            archivedAt: now.addingTimeInterval(-4000 * day),
+            isAdopted: true
+        )
+        let created = makeWorkspace(
+            in: context, repo: repo, name: "created",
+            status: .archived, backendIdentifier: "local",
+            archivedAt: now.addingTimeInterval(-40 * day)
+        )
+
+        let result = controller.expiredArchivedWorkspaces([adopted, created], now: now, delayDays: 30)
+
+        #expect(Set(result.map(\.name)) == ["created"])
     }
 
     @Test("Zero or negative delay disables purge")

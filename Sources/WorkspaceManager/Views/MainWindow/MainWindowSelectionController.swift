@@ -40,6 +40,11 @@ struct MainWindowSelectionController {
         let acknowledgeAttention: @MainActor (WorkspaceStatusAggregator.AttentionTarget) -> Void
         let acknowledgeAgentSession: @MainActor (UUID) -> Void
         let activateHostSession: MainWindowHostSessionActivator
+        /// Realizes a session targeting an already-live tmux session by name, for adoption's
+        /// bound-session case (#1390) — the same shape `TileTreeStore.createRestoredSession`
+        /// gives restore's `reattachTmux` surfaces, since a directory-matched live session is
+        /// the same kind of thing to attach to.
+        let activateAdoptedHostSession: @MainActor (HostTerminalSessionKey, URL, String) -> HostTerminalSession
         let persistTerminalContinuity: @MainActor (TerminalContinuityManifest.TargetKind, UUID, URL, URL) -> Void
         let restoredLaunchDirectoryForRepo: @MainActor (Repo) -> URL?
         let restoredLaunchDirectoryForWorkspace: @MainActor (Workspace) -> URL?
@@ -165,6 +170,68 @@ struct MainWindowSelectionController {
             directory: launchDirectory,
             customCommand: nil
         )
+        finishSelectingLocalWorkspace(
+            workspace,
+            session: session,
+            workspaceDirectory: workspaceDirectory,
+            launchDirectory: launchDirectory
+        )
+    }
+
+    /// Adoption's counterpart to `selectWorkspace` (#1390): the workspace's directory was just
+    /// recorded, so there is no continuity row to restore from, but a live tmux session found by
+    /// directory match is exactly what a restored `reattachTmux` surface targets — same launch
+    /// shape, reached from a different origin. `boundTmuxSessionName` is `nil` when no single
+    /// live session matched the worktree, in which case this opens a plain shell like any other
+    /// freshly created workspace.
+    ///
+    /// Adoption only ever creates a local, active workspace, so this skips the archived and
+    /// provider-backed branches `selectWorkspace` carries for a click on existing data — the
+    /// fallback exists only so a future adoption source that produced something else degrades
+    /// to the general path instead of misbehaving.
+    func selectAdoptedWorkspace(_ workspace: Workspace, boundTmuxSessionName: String?) {
+        guard workspace.status == .active, workspace.backend == .local else {
+            selectWorkspace(workspace)
+            return
+        }
+
+        dependencies.focusCoordinator.cancelPendingRepoClickMeasurement(reason: "workspace_adopted")
+        dependencies.focusCoordinator.cancelPendingFocusRequest(reason: "workspace_adopted")
+        dependencies.abandonPendingRemoteConnection("workspace_adopted")
+
+        let workspaceDirectory = workspace.workspaceURL.standardizedFileURL.resolvingSymlinksInPath()
+        let session: HostTerminalSession
+        if let boundTmuxSessionName {
+            session = dependencies.activateAdoptedHostSession(
+                .hostPath(workspaceDirectory.path),
+                workspaceDirectory,
+                boundTmuxSessionName
+            )
+        } else {
+            session = dependencies.activateHostSession(
+                key: .hostPath(workspaceDirectory.path),
+                directory: workspaceDirectory,
+                customCommand: nil
+            )
+        }
+        finishSelectingLocalWorkspace(
+            workspace,
+            session: session,
+            workspaceDirectory: workspaceDirectory,
+            launchDirectory: workspaceDirectory
+        )
+    }
+
+    /// The half of selecting a local workspace that does not depend on how its session was
+    /// obtained: measurement, access bookkeeping, navigation, continuity, and focus. Shared by
+    /// `selectWorkspace` and `selectAdoptedWorkspace` so the two ways a session can be created
+    /// stay behaviorally identical everywhere after that point.
+    private func finishSelectingLocalWorkspace(
+        _ workspace: Workspace,
+        session: HostTerminalSession,
+        workspaceDirectory: URL,
+        launchDirectory: URL
+    ) {
         dependencies.focusCoordinator.beginWorkspaceClickMeasurement(
             sessionID: session.id,
             workspacePath: workspaceDirectory.path

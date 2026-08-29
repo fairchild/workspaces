@@ -51,6 +51,33 @@ struct TmuxSessionNamingTests {
                 == TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: paneID))
     }
 
+    @Test("isPaneScopedName recognizes exactly a real split pane's own name")
+    func isPaneScopedNameRecognizesARealSplitPaneName() {
+        let splitName = TmuxSessionNaming.splitPaneName(for: directory, paneSessionID: UUID())
+        #expect(TmuxSessionNaming.isPaneScopedName(splitName, for: directory))
+    }
+
+    /// The property `TileTreeStore.paneScopedTmuxSessionNameToKill` depends on (#1390): a name
+    /// this app never generated must never read as pane-scoped, however much it differs from
+    /// the directory derivation — that difference alone used to be treated as proof of
+    /// app-created ownership, which an adopted external session disproves.
+    @Test("isPaneScopedName rejects an arbitrary name that merely differs from the derivation")
+    func isPaneScopedNameRejectsArbitraryNames() {
+        #expect(!TmuxSessionNaming.isPaneScopedName("ws-1374", for: directory))
+        #expect(!TmuxSessionNaming.isPaneScopedName(TmuxSessionNaming.defaultName(for: directory), for: directory))
+    }
+
+    @Test("isPaneScopedName rejects the right prefix with a malformed suffix")
+    func isPaneScopedNameRejectsMalformedSuffix() {
+        let base = TmuxSessionNaming.defaultName(for: directory)
+        // Too short, too long, and non-hex characters in the suffix all fail the shape check —
+        // only a name a real split-pane suffix could have produced passes.
+        #expect(!TmuxSessionNaming.isPaneScopedName("\(base)-p1234567", for: directory))
+        #expect(!TmuxSessionNaming.isPaneScopedName("\(base)-p123456789", for: directory))
+        #expect(!TmuxSessionNaming.isPaneScopedName("\(base)-pgggggggg", for: directory))
+        #expect(!TmuxSessionNaming.isPaneScopedName("\(base)-pABCDEF01", for: directory))
+    }
+
     @Test("Names avoid characters tmux treats specially in targets")
     func namesUseSafeCharacters() {
         let odd = URL(fileURLWithPath: "/private/tmp/My Repo.Name")
