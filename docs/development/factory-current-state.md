@@ -11,7 +11,8 @@ What is actually wired and running today, verified against the workflow YAML and
 | Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same switches, same bypass — if the upstream Review run's triggering event was `workflow_dispatch`, this job runs regardless of either switch; otherwise gated, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code Manual dispatch has two actors: the owner's forces an unconditional re-review and bypasses the switches; the Actions identity's is the Evidence Verify lane's request, honours the switches, and only ever asks — `factory-review.py` re-derives from live PR state, using the merge gate's own `pr-readiness.py`, whether a standing rejection is refreshable. |
 | Monitor | `factory-monitor.yml` | daily cron (13:30 UTC); or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_MONITOR_ENABLED` on the cron path only — **`workflow_dispatch` bypasses both switches** (same OR-not-AND pattern) | **Live** — telemetry, Digest, reconciliation janitor |
 | Evidence Verify | `factory-evidence-verify.yml` | `check_suite` completed; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_EVIDENCE_VERIFY_ENABLED`, both branches (dispatch does not bypass here) | **Live** — `FACTORY_EVIDENCE_VERIFY_ENABLED` was set `true` 2026-08-04 (#1149); the lane shipped green with #1136/#1137 but sat 100% skipped for two weeks because nobody had run `gh variable set` yet. `config/github/repo-variables.json` now guards against a repeat: any workflow referencing an unset `vars.FACTORY_*_ENABLED` fails `scripts/tests/test_factory_workflows.py` in CI. Since #1379 it also asks the Review lane to look again when it completes the last blocking evidence entry: this lane writes the PR body with `GITHUB_TOKEN`, and GitHub suppresses `pull_request: edited` runs caused by that token, so the completion that satisfies a reviewer's objection generates no event at all. |
-| Review Response | `factory-review-response.yml` | `pull_request_review` submitted as `changes_requested` (escalate) or `approved` (withdraw the marker) on a same-repository head; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_RESPONSE_ENABLED`, both branches (dispatch does not bypass here) | **Live** — merged (#1383) and armed 2026-08-27. Answers a blocking review with one gesture-named owner escalation; deterministic, no model. Since #1381 the escalation also applies the machine-managed `owner-action` label, withdrawn when a trusted approval leaves no reviewer blocking, so a PR waiting on the owner stops looking like a stranded one — in the PR list and in the Digest's "Waiting on you" section. |
+| Review Response | `factory-review-response.yml` | `pull_request_review` submitted as `changes_requested` (escalate) or `approved` (withdraw the marker) on a same-repository head; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_RESPONSE_ENABLED`, both branches (dispatch does not bypass here) | **Live** — merged (#1383) and armed 2026-08-27. Answers a blocking review with one gesture-named owner escalation; deterministic, no model. Since #1381 the escalation also applies the machine-managed `owner-action` label, withdrawn when a trusted approval leaves no reviewer blocking, so a PR waiting on the owner stops looking like a stranded one — in the PR list and in the Digest's "Waiting on you" section. Since #1125 it *defers* instead of escalating when the Revise lane will take the turn — see "Revision loop" below for exactly when. |
+| Revise | `factory-revise.yml` | `pull_request_review` submitted as `changes_requested` on an April-authored, same-repository head from a trusted reviewer; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVISE_ENABLED`, both branches (dispatch does not bypass here) — capped by `FACTORY_REVISE_DAILY_CAP` | **Merged, ships dark** — runs only once `FACTORY_REVISE_ENABLED` is `true`; until then the Review Response lane keeps escalating exactly as before. Gives April one model turn per blocking review: revise the diff and re-enter review, or escalate explicitly with her reason. |
 | Owner Comment Responder | `factory-comment-responder.yml` | `issue_comment` created by the owner; or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_RESPONDER_ENABLED`, both branches (dispatch does not bypass here) | **Live** |
 | Mention Triage → Executor | `agent-mention.yml` → `agent-executor.yml` | `@april-clearwater` / `@plat` / `@peter` / `@claude` mentions on issues/PRs/reviews | `AGENT_AUTOMATIONS_ENABLED`; execution additionally requires the `safe-to-run-agent` label, server-verified | **Live** — this is a distinct lane from the "Triage" pipeline Stage below; naming collision, not the same code path |
 | Milestone Legibility | `milestone-legibility.yml` | daily cron (13:37 UTC); PR touching the check script; `workflow_dispatch` | none (no Factory switch — always runs) | **Live** |
@@ -44,7 +45,63 @@ their own verdict, which keeps the review lane the thing that decides.
   Mergeability, attesting evidence, removing a label — run Factory Review by
   hand for the PR number. The owner's dispatch forces the review outright.
 
-`AGENT_AUTOMATIONS_ENABLED` is the global master switch, but it is not an unconditional kill for every lane: Implement, Evidence Verify, and the Owner Comment Responder `&&` it into every trigger path including `workflow_dispatch`, so it always gates them. Review (signal), Review (execute), and Monitor instead OR a bare `workflow_dispatch` check ahead of the switches — an owner-triggered manual dispatch runs those three regardless of `AGENT_AUTOMATIONS_ENABLED` or their own per-stage switch. Milestone Legibility and Evidence Reminder have no Factory switch at all. Treat "turn off `AGENT_AUTOMATIONS_ENABLED`" as "stops label/cron/comment-driven runs," not "nothing can run" — a manual dispatch on Review or Monitor still can.
+### Revision loop
+
+A review that objects to the *diff* has no owner gesture behind it, and until
+#1125 the factory answered it the only way it could: an escalation naming the
+owner as the party who had to push the change. The runtime could already do the
+work (`advance_pr` — checkout, scratch workspace, patch policy, deterministic
+commit and body refresh); it was simply unreachable from the event loop.
+`factory-revise.yml` is the reachable path.
+
+On a blocking review, both lanes fire off the same event and exactly one of them
+speaks:
+
+- **Review Response defers** — posts nothing, applies no label — when
+  `FACTORY_REVISE_ENABLED` is on, the PR is April-authored, the review has no
+  revision marker yet, and fewer than `REVISION_ATTEMPT_CEILING` (2) reviews on
+  this PR have already been answered with a revision. Anything else and it
+  escalates as before; a review already answered by a revision is a skip, since
+  the turn is in flight.
+- **Revise takes the turn**, ending in one of three outcomes: `pushed` (the diff
+  moved, and the push re-enters review through `synchronize`), `body-only` (the
+  PR body changed and no commit did, so the lane dispatches Factory Review
+  itself — the #1379 shape, where no event would otherwise exist), or
+  `needs-owner` (April read the review and says it genuinely needs the owner;
+  she posts her reason and the lane applies `owner-action`).
+
+A push does **not** dismiss the standing rejection.
+`dismiss_stale_reviews_on_push` only dismisses *approvals*, so after a revision
+lands the `CHANGES_REQUESTED` verdict is still blocking — what clears it is the
+re-review: `synchronize` fires Factory Review, the reviewer bot looks at the new
+head, and if it approves, it dismisses its own prior blocking review first
+(`_dismiss_own_blocking_reviews` in `execution.py`, "Superseded by subsequent
+approval from the same reviewer"). The reviewer stays the thing that decides,
+same as the stale-rejection paths above. That gap between the push and the
+re-review verdict is why the Review Response lane's in-flight skip matters for
+*both* outcomes and not just `body-only`: for a real interval the PR carries a
+revision marker and a still-standing rejection at the same time, and reading
+that as "nobody is moving" would escalate a PR mid-flight.
+
+The fallback is what makes deferring safe. Every decline in `factory-revise.py`
+downstream of that defer — no evidence contract on the linked issue, privileged
+paths without `privileged-agent-patch`, daily cap or runaway guard, attempts
+exhausted — carries `escalate=true`, and the `resolve` job posts the
+deterministic escalation in the response lane's place. So does a turn that
+fails, is cancelled, is declined by re-validation, or reports a push the branch
+head does not carry. `resolve` runs on `always()` and on admission failing
+outright, and re-derives from live state before speaking: if the reviewer
+approved, the owner pushed the fix, or the escalation is already standing, it
+stays quiet, because in those cases nobody is waiting.
+
+Two markers keep the lanes from talking past each other, both read as the last
+visible line of an `april-clearwater[bot]` comment (the #1364 quote/code
+reader): `<!-- factory-revision review-id:N -->` means answered with a diff,
+`<!-- factory-review-response review-id:N -->` means answered with an ask. Only
+the second one counts toward `owner-action` — a revision-answered review is in
+flight, not waiting on the owner.
+
+`AGENT_AUTOMATIONS_ENABLED` is the global master switch, but it is not an unconditional kill for every lane: Implement, Evidence Verify, Review Response, Revise, and the Owner Comment Responder `&&` it into every trigger path including `workflow_dispatch`, so it always gates them. Review (signal), Review (execute), and Monitor instead OR a bare `workflow_dispatch` check ahead of the switches — an owner-triggered manual dispatch runs those three regardless of `AGENT_AUTOMATIONS_ENABLED` or their own per-stage switch. Milestone Legibility and Evidence Reminder have no Factory switch at all. Treat "turn off `AGENT_AUTOMATIONS_ENABLED`" as "stops label/cron/comment-driven runs," not "nothing can run" — a manual dispatch on Review or Monitor still can.
 
 ## Admission: what the owner's release actually is
 
@@ -101,6 +158,8 @@ Live values as of 2026-08-04 (`gh variable list --repo fairchild/workspaces`):
 | `FACTORY_RESPONDER_ENABLED` | `true` | Owner Comment Responder lane |
 | `FACTORY_EVIDENCE_VERIFY_ENABLED` | `true` | Evidence Verify lane |
 | `FACTORY_REVIEW_RESPONSE_ENABLED` | `true` (set 2026-08-27, after this table's 2026-08-04 snapshot) | Review Response lane |
+| `FACTORY_REVISE_ENABLED` | unset — **the lane ships dark** | Revise lane, and the Review Response lane's defer behaviour. Both read it, so arming it moves who answers a diff objection in one gesture; unset or `false` is byte-for-byte the pre-#1125 escalation |
+| `FACTORY_REVISE_DAILY_CAP` | unset (defaults to `4`) | Revise lane — max posted-or-in-flight revision turns per UTC day; `FACTORY_REVISE_RUNAWAY_CAP` (unset, defaults to 3× the daily cap) is the raw-attempt ceiling that catches a crash loop |
 
 `APPLE_ID`, `APPLE_TEAM_ID`, and `PREFERRED_RUNNER` also show up in `gh variable list` but are release/runner configuration, not Factory switches.
 
@@ -119,7 +178,7 @@ gh variable set FACTORY_IMPLEMENT_ENABLED --body true --repo fairchild/workspace
 gh variable set AGENT_AUTOMATIONS_ENABLED --body false --repo fairchild/workspaces
 ```
 
-A disabled lane's `if:` guard simply evaluates false — the job is skipped, not queued, so flipping the switch back on does not replay missed events. For Implement, Evidence Verify, and the Owner Comment Responder, `workflow_dispatch` still requires both switches to be `true` — there's no bypass. For Review (signal + execute) and Monitor, `workflow_dispatch` bypasses both switches entirely (boolean OR in the `if:`, not AND): an owner with dispatch access can run those three lanes even with `AGENT_AUTOMATIONS_ENABLED` off.
+A disabled lane's `if:` guard simply evaluates false — the job is skipped, not queued, so flipping the switch back on does not replay missed events. For Implement, Evidence Verify, Review Response, Revise, and the Owner Comment Responder, `workflow_dispatch` still requires both switches to be `true` — there's no bypass. For Review (signal + execute) and Monitor, `workflow_dispatch` bypasses both switches entirely (boolean OR in the `if:`, not AND): an owner with dispatch access can run those three lanes even with `AGENT_AUTOMATIONS_ENABLED` off.
 
 ## `factory/ops-data` branch contract
 
