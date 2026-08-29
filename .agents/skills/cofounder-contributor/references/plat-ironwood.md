@@ -167,7 +167,7 @@ One sentence: the takeaway a reader needs before deciding whether to expand anyt
 **Evidence:** ✅ satisfied · or ⛔/🚧 one line naming the missing or blocked item.
 
 <details>
-<summary>Full review</summary>
+<summary>{one line short summary of the details that will unfold on click}</summary>
 
 The detailed analysis lives here, collapsed: per-file observations, pattern
 notes, reasoning behind each verdict factor, and suggestion blocks. Everything
