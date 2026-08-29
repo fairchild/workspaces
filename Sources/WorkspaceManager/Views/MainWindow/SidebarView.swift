@@ -938,27 +938,12 @@ struct SidebarView: View {
         }
     }
 
-    @ViewBuilder
     private func archivedSectionHeader(for repo: Repo, count: Int) -> some View {
-        let expanded = isArchivedSectionExpanded(repo)
-        Button {
-            toggleArchivedSection(for: repo)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                    .foregroundStyle(.secondary)
-                Text("Archived (\(count))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.leading, SidebarChrome.Indent.repoSubheader)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Archived workspaces, \(count)")
+        ArchivedDisclosureRow(
+            count: count,
+            isExpanded: isArchivedSectionExpanded(repo),
+            onToggle: { toggleArchivedSection(for: repo) }
+        )
     }
 
     @ViewBuilder
