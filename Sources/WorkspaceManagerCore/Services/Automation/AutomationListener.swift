@@ -79,13 +79,7 @@ public actor AutomationListener {
     public nonisolated var socketPath: String { socketURL.path }
 
     public nonisolated static func defaultSocketURL(bundleIdentifier: String) -> URL {
-        let appSupport =
-            FileManager.default.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first ?? FileManager.default.temporaryDirectory
-        let dir = appSupport.appendingPathComponent(bundleIdentifier, isDirectory: true)
-        return dir.appendingPathComponent("automation.sock", isDirectory: false)
+        AutomationSupportDirectory.fileURL(named: "automation.sock", bundleIdentifier: bundleIdentifier)
     }
 
     public func currentStatistics() -> Statistics { statistics }

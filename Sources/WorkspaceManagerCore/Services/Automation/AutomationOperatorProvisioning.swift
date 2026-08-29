@@ -87,6 +87,11 @@ public enum AutomationOperatorProvisioning {
         if let outgoing {
             revoke(handle: outgoing.handle, in: registry)
         }
+        if !optedIn {
+            // The credential names one handle, but a repair pass can have minted others while
+            // an earlier one stayed registered. Opting out has to close all of them (#1391).
+            registry.removeAllOperators()
+        }
         return Result(credential: nil, outcome: optedIn ? .mintFailed : .notOptedIn)
     }
 

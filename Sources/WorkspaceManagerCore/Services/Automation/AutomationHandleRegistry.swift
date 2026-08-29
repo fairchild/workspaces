@@ -131,6 +131,21 @@ public final class AutomationHandleRegistry {
         }
     }
 
+    /// Revokes every operator entry, whatever credential named it.
+    ///
+    /// Repair can mint a second operator handle while the first is still registered — the
+    /// credential file names only the newest, so revoking by file left the earlier handle
+    /// authorizing workspace mutations after the user turned operator scope off (#1391).
+    /// Opting out closes every operator door, not the one the last write happened to name.
+    @discardableResult
+    public func removeAllOperators() -> Int {
+        let operatorEntries = entriesByHandle.values.filter(\.isOperator)
+        for entry in operatorEntries {
+            remove(hostSessionID: entry.hostSessionID)
+        }
+        return operatorEntries.count
+    }
+
     public func removeAll() {
         handleByHostSessionID.removeAll()
         entriesByHandle.removeAll()
