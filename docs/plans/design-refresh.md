@@ -1,11 +1,12 @@
 # Design refresh: sidebar + navigation styling
 
-> **Status 2026-08-29: all five slices implemented and open as stacked PRs —
-> #1424 (tokens) ← #1426 (repo identity) ← #1430 (worktree rows) ← #1434
-> (active card + timer) ← #1436 (search row + fixture selection). Awaiting
-> Michael's review; merge order is base-first with the retarget-before-merge
-> dance per stacked-PR convention.** Checkable test: those five PRs exist and
-> each carries evidence URLs + a Review loop section.
+> **Status 2026-08-29 (post-repair): two PRs remain — #1426 (slices 2+3:
+> repo identity + worktree rows, rebased on main, April's duplicate-add-menu
+> fix in) then #1434 (slices 4+5: active card + search row; retarget to main
+> before merging #1426). Merged: #1424 (tokens, on main), #1430 (folded into
+> #1426), #1436 (folded into #1434).** Checkable test: #1426 and #1434 are
+> the only open implementation PRs and both are conflict-free against their
+> bases.
 > Follow-ups filed from the arc: #1425 (File-menu add commands), #1427
 > (operator-scope capture lane vs running installed app), #1429
 > (release-screenshot fixture-env forwarding), #1433 (durable session start
