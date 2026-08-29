@@ -8,12 +8,6 @@
 import SwiftUI
 import WorkspaceManagerCore
 
-private enum SidebarTreeMetrics {
-    static let disclosureWidth: CGFloat = 12
-    static let disclosureHeight: CGFloat = 14
-    static let iconColumnWidth: CGFloat = 18
-}
-
 /// The sidebar's activity type is the Core `SessionActivity` (the single encoding of the
 /// attention ladder, shared with the session-switcher read model — #680). This layer only
 /// adds the SwiftUI styling.
@@ -45,14 +39,21 @@ private struct WorkspaceCountBadge: View {
 
     var body: some View {
         Text("\(count)")
-            .font(.caption2.monospacedDigit())
-            .fontWeight(.medium)
-            .foregroundStyle(Color.secondary.opacity(isCollapsed ? 0.95 : 0.82))
+            .font(SidebarChrome.TypeStyle.countBadge)
+            .foregroundStyle(
+                isCollapsed
+                    ? SidebarChrome.Foreground.emphasizedSecondary
+                    : SidebarChrome.Foreground.quietSecondary
+            )
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
             .background(
                 Capsule()
-                    .fill(Color.secondary.opacity(isCollapsed ? 0.1 : 0.06))
+                    .fill(
+                        isCollapsed
+                            ? SidebarChrome.Fill.workspaceCountBadgeCollapsed
+                            : SidebarChrome.Fill.workspaceCountBadgeExpanded
+                    )
             )
             .accessibilityLabel("\(count) workspace\(count == 1 ? "" : "s")")
     }
@@ -64,14 +65,17 @@ private struct PaneCountBadge: View {
 
     var body: some View {
         Text("\(count)")
-            .font(.caption2.monospacedDigit())
-            .fontWeight(.medium)
+            .font(SidebarChrome.TypeStyle.countBadge)
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
             .foregroundStyle(sessionActivity.badgeColor)
             .background(
                 Capsule()
-                    .fill(Color.secondary.opacity(sessionActivity.isActive ? 0.16 : 0.1))
+                    .fill(
+                        sessionActivity.isActive
+                            ? SidebarChrome.Fill.paneCountBadgeActive
+                            : SidebarChrome.Fill.paneCountBadgeIdle
+                    )
             )
             .accessibilityLabel("\(count) pane\(count == 1 ? "" : "s")")
     }
@@ -91,7 +95,7 @@ private struct SessionActivityIndicator: View {
     private var indicator: some View {
         let circle = Circle()
             .fill(sessionActivity.indicatorColor)
-            .frame(width: 7, height: 7)
+            .frame(width: SidebarChrome.Metrics.activityDot, height: SidebarChrome.Metrics.activityDot)
             .accessibilityHidden(true)
         if let tooltip, !tooltip.isEmpty {
             circle.help(tooltip)
@@ -150,7 +154,7 @@ struct RepoRow: View {
         let workspaceCount = activeWorkspaceCount
         let showsVisibleQuickActions = showsQuickActions && isHovering
 
-        HStack(spacing: 10) {
+        HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             Button(action: onToggleExpansion) {
                 repoFolderIcon
             }
@@ -170,11 +174,11 @@ struct RepoRow: View {
                 }
             }
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, 8)
+        .padding(.vertical, SidebarChrome.Metrics.repoRowVerticalPadding)
+        .padding(.horizontal, SidebarChrome.Metrics.rowHorizontalPadding)
         .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: SidebarChrome.Radius.row)
+                .fill(isSelected ? SidebarChrome.Fill.rowSelection : .clear)
         )
         .sidebarHoverCard(
             onHoverChange: { isHovering = $0 },
@@ -195,16 +199,19 @@ struct RepoRow: View {
             .foregroundStyle(
                 isSelected
                     ? Color.primary
-                    : sessionActivity.iconColor(inactiveColor: Color.secondary.opacity(0.82))
+                    : sessionActivity.iconColor(inactiveColor: SidebarChrome.Foreground.quietSecondary)
             )
-            .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
+            .frame(width: SidebarChrome.Metrics.iconColumn, alignment: .center)
             .contentTransition(.symbolEffect(.replace))
     }
 
     private func repoLabelContent(repoName: String, workspaceCount: Int) -> some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             Text(repoName)
-                .font(.callout.weight(isSelected || sessionActivity.isActive ? .semibold : .regular))
+                .font(
+                    SidebarChrome.TypeStyle.rowTitle(
+                        emphasized: isSelected || sessionActivity.isActive)
+                )
                 .lineLimit(1)
 
             Spacer(minLength: 8)
@@ -231,7 +238,7 @@ struct RepoRow: View {
 
     private var repoActionMenuPlaceholder: some View {
         Color.clear
-            .frame(width: 22, height: 22)
+            .frame(width: SidebarChrome.Metrics.hoverActionSide, height: SidebarChrome.Metrics.hoverActionSide)
             .accessibilityHidden(true)
     }
 
@@ -250,21 +257,21 @@ struct RepoRow: View {
             }
         } label: {
             Image(systemName: "plus")
-                .font(.system(size: 11, weight: .semibold))
+                .font(SidebarChrome.TypeStyle.hoverActionGlyph)
                 .foregroundStyle(.secondary)
-                .frame(width: 22, height: 22)
+                .frame(width: SidebarChrome.Metrics.hoverActionSide, height: SidebarChrome.Metrics.hoverActionSide)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.secondary.opacity(0.08))
+                    RoundedRectangle(cornerRadius: SidebarChrome.Radius.hoverAction, style: .continuous)
+                        .fill(SidebarChrome.Fill.hoverAction)
                 )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: SidebarChrome.Radius.hoverAction, style: .continuous)
+                        .stroke(SidebarChrome.Stroke.hoverAction, lineWidth: SidebarChrome.Stroke.hoverActionWidth)
                 }
         }
         .menuIndicator(.hidden)
         .menuStyle(.borderlessButton)
-        .frame(width: 22, height: 22)
+        .frame(width: SidebarChrome.Metrics.hoverActionSide, height: SidebarChrome.Metrics.hoverActionSide)
     }
 }
 
@@ -328,26 +335,26 @@ struct WorkspaceRow: View {
     private var statusBadgeColor: Color {
         switch workspace.status {
         case .provisioning:
-            return .blue.opacity(0.2)
+            return SidebarChrome.Fill.statusBadgeProvisioning
         case .stopped:
-            return .orange.opacity(0.2)
+            return SidebarChrome.Fill.statusBadgeStopped
         case .archived:
-            return .secondary.opacity(0.2)
+            return SidebarChrome.Fill.statusBadgeArchived
         case .active:
             return .clear
         }
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             if showsDisclosure, let onToggleExpansion {
                 Button(action: onToggleExpansion) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.secondary.opacity(0.8))
                         .frame(
-                            width: SidebarTreeMetrics.disclosureWidth,
-                            height: SidebarTreeMetrics.disclosureHeight
+                            width: SidebarChrome.Metrics.disclosureWidth,
+                            height: SidebarChrome.Metrics.disclosureHeight
                         )
                 }
                 .buttonStyle(.plain)
@@ -370,12 +377,12 @@ struct WorkspaceRow: View {
                 }
             }
         }
-        .padding(.leading, isNested ? 18 : 0)
-        .padding(.vertical, 4)
-        .padding(.horizontal, 8)
+        .padding(.leading, isNested ? SidebarChrome.Indent.nestedRow : 0)
+        .padding(.vertical, SidebarChrome.Metrics.rowVerticalPadding)
+        .padding(.horizontal, SidebarChrome.Metrics.rowHorizontalPadding)
         .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(isSelected ? Color.accentColor.opacity(0.1) : .clear)
+            RoundedRectangle(cornerRadius: SidebarChrome.Radius.row)
+                .fill(isSelected ? SidebarChrome.Fill.rowSelection : .clear)
         )
         .accessibilityLabel(accessibilityDescription)
         .sidebarHoverCard(
@@ -419,16 +426,16 @@ struct WorkspaceRow: View {
     private func pinButton(_ action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: isPinned ? "star.fill" : "star")
-                .font(.system(size: 11, weight: .semibold))
+                .font(SidebarChrome.TypeStyle.hoverActionGlyph)
                 .foregroundStyle(isPinned ? Color.accentColor : Color.secondary)
-                .frame(width: 22, height: 22)
+                .frame(width: SidebarChrome.Metrics.hoverActionSide, height: SidebarChrome.Metrics.hoverActionSide)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.secondary.opacity(0.08))
+                    RoundedRectangle(cornerRadius: SidebarChrome.Radius.hoverAction, style: .continuous)
+                        .fill(SidebarChrome.Fill.hoverAction)
                 )
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Color.secondary.opacity(0.08), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: SidebarChrome.Radius.hoverAction, style: .continuous)
+                        .stroke(SidebarChrome.Stroke.hoverAction, lineWidth: SidebarChrome.Stroke.hoverActionWidth)
                 }
         }
         .buttonStyle(.plain)
@@ -437,21 +444,21 @@ struct WorkspaceRow: View {
 
     private var pinButtonPlaceholder: some View {
         Color.clear
-            .frame(width: 22, height: 22)
+            .frame(width: SidebarChrome.Metrics.hoverActionSide, height: SidebarChrome.Metrics.hoverActionSide)
             .accessibilityHidden(true)
     }
 
     private var rowContent: some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
+            HStack(spacing: SidebarChrome.Metrics.rowContentSpacing) {
                 if isBusy {
                     ProgressView()
                         .controlSize(.small)
-                        .frame(width: SidebarTreeMetrics.iconColumnWidth, height: 16)
+                        .frame(width: SidebarChrome.Metrics.iconColumn, height: 16)
                 } else {
                     Image(systemName: providerIconName)
                         .foregroundStyle(providerIconColor)
-                        .frame(width: SidebarTreeMetrics.iconColumnWidth, alignment: .center)
+                        .frame(width: SidebarChrome.Metrics.iconColumn, alignment: .center)
                 }
 
                 if let repoContext {
@@ -467,7 +474,10 @@ struct WorkspaceRow: View {
                 }
 
                 Text(workspace.name)
-                    .font(.callout.weight(isSelected || sessionActivity.isActive ? .semibold : .regular))
+                    .font(
+                        SidebarChrome.TypeStyle.rowTitle(
+                            emphasized: isSelected || sessionActivity.isActive)
+                    )
                     .lineLimit(1)
                     .layoutPriority(repoContext == nil ? 0 : 1)
 
@@ -478,7 +488,7 @@ struct WorkspaceRow: View {
                         .padding(.horizontal, 4)
                         .padding(.vertical, 1)
                         .background(statusBadgeColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 3))
+                        .clipShape(RoundedRectangle(cornerRadius: SidebarChrome.Radius.statusBadge))
                 }
 
                 Spacer(minLength: 8)
@@ -498,13 +508,13 @@ struct WorkspaceRow: View {
                 Text(statusMessage)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .padding(.leading, 24)
+                    .padding(.leading, SidebarChrome.Indent.rowSecondLine)
                     .lineLimit(1)
             } else if let note = workspace.note {
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
-                    .padding(.leading, 24)
+                    .padding(.leading, SidebarChrome.Indent.rowSecondLine)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(note)

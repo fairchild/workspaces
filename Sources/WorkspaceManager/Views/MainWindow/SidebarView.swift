@@ -251,14 +251,14 @@ struct SidebarView: View {
             if minimalToolbarEnabled {
                 sidebarList
                     .listStyle(.sidebar)
-                    .environment(\.defaultMinListRowHeight, 34)
+                    .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
                     .safeAreaInset(edge: .bottom) {
                         footerBar
                     }
             } else {
                 sidebarList
                     .listStyle(.sidebar)
-                    .environment(\.defaultMinListRowHeight, 34)
+                    .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
                     .safeAreaInset(edge: .bottom) {
                         footerBar
                     }
@@ -652,7 +652,7 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(SidebarChrome.Fill.surface)
         }
     }
 
@@ -801,7 +801,7 @@ struct SidebarView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
-            .padding(.leading, 28)
+            .padding(.leading, SidebarChrome.Indent.repoSubheader)
         }
     }
 
@@ -920,7 +920,7 @@ struct SidebarView: View {
                 Spacer(minLength: 0)
             }
             .contentShape(Rectangle())
-            .padding(.leading, 28)
+            .padding(.leading, SidebarChrome.Indent.repoSubheader)
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Archived workspaces, \(count)")
@@ -932,7 +932,7 @@ struct SidebarView: View {
 
         if !sources.isEmpty {
             ForEach(sources) { source in
-                sidebarWebSourceButton(source, paddingLeading: 18)
+                sidebarWebSourceButton(source, paddingLeading: SidebarChrome.Indent.nestedRow)
             }
         }
     }
@@ -942,7 +942,7 @@ struct SidebarView: View {
         let sources = sortedWorkspaceWebSources(for: workspace)
 
         ForEach(sources) { source in
-            sidebarWebSourceButton(source, paddingLeading: 42)
+            sidebarWebSourceButton(source, paddingLeading: SidebarChrome.Indent.workspaceChildRow)
         }
     }
 

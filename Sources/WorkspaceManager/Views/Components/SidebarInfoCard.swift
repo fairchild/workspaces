@@ -85,15 +85,15 @@ struct SidebarInfoCard: View {
                 }
             }
         }
-        .padding(14)
-        .frame(width: 260, alignment: .leading)
+        .padding(SidebarChrome.Metrics.cardPadding)
+        .frame(width: SidebarChrome.Metrics.cardWidth, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(nsColor: .windowBackgroundColor))
+            RoundedRectangle(cornerRadius: SidebarChrome.Radius.card, style: .continuous)
+                .fill(SidebarChrome.Fill.surface)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color(nsColor: .separatorColor).opacity(0.55), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: SidebarChrome.Radius.card, style: .continuous)
+                .strokeBorder(SidebarChrome.Stroke.card, lineWidth: SidebarChrome.Stroke.cardWidth)
         }
     }
 
