@@ -1023,4 +1023,41 @@ struct TileTreeStoreTests {
         #expect(secondOps.last == .ended(second.id))
         #expect(secondOps.filter { $0 == .ended(second.id) }.count == 1)
     }
+
+    /// The #1397 acceptance at the store: a surface restored onto a tmux session that
+    /// outlived the app is created under the identity that session's processes still
+    /// export, so it lands in the agent registry — the map the hook listener checks
+    /// before accepting an update — under that id, and its continuity row is the
+    /// recorded one rather than a fresh duplicate.
+    @Test("A restored reattach session keeps the recorded host session identity")
+    func restoredReattachSessionKeepsRecordedIdentity() async throws {
+        let sink = ContinuityWriteLog()
+        let store = TileTreeStore()
+        let registry = AgentSessionRegistry()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+        store.continuityRecorder = TerminalContinuityRecorder(sink: sink)
+        store.attach(agentSessionRegistry: registry, localStateStore: nil, hooksSocketPath: nil)
+
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let recorded = UUID()
+        let session = store.createRestoredSession(
+            key: .repoPath(directory.path),
+            directory: directory,
+            tmuxSessionNameOverride: "wm-repo-survivor",
+            adoptedHostSessionID: recorded
+        )
+        await store.continuityRecorder?.waitUntilDrained()
+
+        #expect(session.id == recorded)
+        #expect(registry.statuses[recorded] != nil)
+        #expect(store.sessions.map(\.id) == [recorded])
+
+        let operations = await sink.operations
+        let writtenIDs = Set(
+            operations.compactMap { operation -> UUID? in
+                guard case .record(let id, _) = operation else { return nil }
+                return id
+            })
+        #expect(writtenIDs == [recorded])
+    }
 }

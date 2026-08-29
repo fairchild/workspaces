@@ -344,13 +344,31 @@ public struct HostTerminalSessionCoordinator: Sendable {
     /// `activate`'s key-reuse would collapse sibling pane rows into one session and drop
     /// the later rows' initial commands and recorded tmux targets (#1232).
     @discardableResult
+    /// Creates a session, optionally under an identity that already exists outside
+    /// this run.
+    ///
+    /// `adoptedID` belongs to a surface rejoining a process tree that outlived the
+    /// app: the shells inside a surviving tmux session still export the previous
+    /// run's `WORKSPACES_HOST_SESSION_ID`, so minting a fresh identity leaves the
+    /// tile and its own pane disagreeing about who they are, and every agent
+    /// update the pane posts lands on an id nothing here owns (#1397). An id that
+    /// is already live cannot be adopted — two tiles sharing one identity would
+    /// merge their status — and falls back to a fresh one.
     public mutating func createSession(
         key: HostTerminalSessionKey,
         directory: URL,
         initialCommand: String? = nil,
-        tmuxSessionNameOverride: String? = nil
+        tmuxSessionNameOverride: String? = nil,
+        adoptedID: UUID? = nil
     ) -> HostTerminalSession {
+        let resolvedID: UUID
+        if let adoptedID, !sessions.contains(where: { $0.id == adoptedID }) {
+            resolvedID = adoptedID
+        } else {
+            resolvedID = UUID()
+        }
         let session = HostTerminalSession(
+            id: resolvedID,
             key: key,
             directory: directory,
             initialCommand: initialCommand,

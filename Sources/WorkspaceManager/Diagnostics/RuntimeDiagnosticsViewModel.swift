@@ -38,6 +38,11 @@ final class RuntimeDiagnosticsViewModel: ObservableObject {
     )
     @Published private(set) var localStateSummary: LocalStateStoreSummary?
     @Published private(set) var localStateSummaryError: String?
+    /// Hook-ingest counters read from the live listener, or `nil` when no listener
+    /// is running (previews, tests, a launch where the socket lock went to another
+    /// instance). Carries the dropped-event counters that make a silently
+    /// disconnected agent session visible (#1397).
+    @Published private(set) var hookIngest: AgentHookListener.Statistics?
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastCheckedAt: Date?
 
@@ -123,6 +128,13 @@ final class RuntimeDiagnosticsViewModel: ObservableObject {
 
         let events = await StartupDiagnosticsStore.shared.allEvents()
         summary = RuntimeDiagnosticsSummary.make(events: events, agentStatuses: agentStatuses)
+        // Gated assignment: this runs on every poll and on every render-relevant
+        // agent event, and a counter that did not move must not invalidate the
+        // pane (#1347's publication discipline).
+        let nextHookIngest = await ClaudeIntegrationLifecycle.shared.listener?.currentStatistics()
+        if nextHookIngest != hookIngest {
+            hookIngest = nextHookIngest
+        }
         await refreshLocalStateSummary()
     }
 

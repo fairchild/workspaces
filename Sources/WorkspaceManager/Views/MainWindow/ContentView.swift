@@ -2669,15 +2669,24 @@ struct ContentView: View {
             }
             // One session per continuity row (never key-reuse): sibling rows sharing
             // a key — a primary and its recorded split panes — each launch on their
-            // own recorded tmux target (#1232).
+            // own recorded tmux target (#1232). A reattach surface also takes back the
+            // row's host-session id, because the processes it is rejoining still post
+            // agent updates under it (#1397).
+            let adoptedHostSessionID = restoreController.adoptedHostSessionID(for: surface)
             let session = tileTreeStore.createRestoredSession(
                 key: surface.key,
                 directory: surface.directory,
                 initialCommand: initialCommand,
-                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface.action)
+                tmuxSessionNameOverride: restoreController.tmuxSessionNameOverride(for: surface.action),
+                adoptedHostSessionID: adoptedHostSessionID
             )
+            if let adoptedHostSessionID, session.id != adoptedHostSessionID {
+                restoreLog.notice(
+                    "[Restore] host session \(adoptedHostSessionID.uuidString, privacy: .public) is already live; reattach surface launched under \(session.id.uuidString, privacy: .public) instead"
+                )
+            }
             hostSessionLog.info(
-                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
+                "[HostSession] Created restored session \(session.id.uuidString, privacy: .public) key=\(surface.key.debugDescription, privacy: .public) path=\(session.directoryPath, privacy: .public) adopted=\(adoptedHostSessionID != nil, privacy: .public) (total sessions=\(tileTreeStore.sessions.count, privacy: .public))"
             )
             activatedByHostSessionID[surface.hostSessionID] = session
         }
