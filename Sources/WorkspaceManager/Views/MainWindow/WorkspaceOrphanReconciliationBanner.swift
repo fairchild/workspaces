@@ -12,10 +12,42 @@ import WorkspaceManagerCore
 struct WorkspaceOrphanReconciliationBanner: View {
     let items: [WorkspaceOrphanItem]
     let cleaningItemIDs: Set<String>
+    let adoptingItemIDs: Set<String>
+    /// Whether this item can be adopted rather than only cleaned (#1390) — a decision, not a
+    /// property of the item alone, so the banner does not duplicate the controller's rule for
+    /// which orphan kinds are live enough to adopt.
+    let canAdopt: (WorkspaceOrphanItem) -> Bool
     let onClean: (WorkspaceOrphanItem) -> Void
+    let onAdopt: (WorkspaceOrphanItem) -> Void
     let onDismiss: () -> Void
 
-    @State private var isExpanded = false
+    /// Starting disclosure state. Defaults closed, matching every existing call site; a render
+    /// test forces it open to capture the row-level rendering (the Adopt/Clean buttons) that a
+    /// collapsed banner never shows.
+    var initiallyExpanded = false
+
+    @State private var isExpanded: Bool
+
+    init(
+        items: [WorkspaceOrphanItem],
+        cleaningItemIDs: Set<String>,
+        adoptingItemIDs: Set<String>,
+        canAdopt: @escaping (WorkspaceOrphanItem) -> Bool,
+        onClean: @escaping (WorkspaceOrphanItem) -> Void,
+        onAdopt: @escaping (WorkspaceOrphanItem) -> Void,
+        onDismiss: @escaping () -> Void,
+        initiallyExpanded: Bool = false
+    ) {
+        self.items = items
+        self.cleaningItemIDs = cleaningItemIDs
+        self.adoptingItemIDs = adoptingItemIDs
+        self.canAdopt = canAdopt
+        self.onClean = onClean
+        self.onAdopt = onAdopt
+        self.onDismiss = onDismiss
+        self.initiallyExpanded = initiallyExpanded
+        _isExpanded = State(initialValue: initiallyExpanded)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -110,6 +142,22 @@ struct WorkspaceOrphanReconciliationBanner: View {
 
             Spacer()
 
+            if canAdopt(item) {
+                Button {
+                    onAdopt(item)
+                } label: {
+                    if adoptingItemIDs.contains(item.id) {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label("Adopt", systemImage: "plus.circle")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .disabled(adoptingItemIDs.contains(item.id) || cleaningItemIDs.contains(item.id))
+                .help("Add '\(item.resourceName)' as a workspace instead of removing it")
+            }
+
             Button {
                 onClean(item)
             } label: {
@@ -121,7 +169,7 @@ struct WorkspaceOrphanReconciliationBanner: View {
                 }
             }
             .buttonStyle(.bordered)
-            .disabled(cleaningItemIDs.contains(item.id))
+            .disabled(cleaningItemIDs.contains(item.id) || adoptingItemIDs.contains(item.id))
             .help("Clean \(item.resourceName)")
         }
         .padding(.horizontal, 14)

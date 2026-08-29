@@ -23,23 +23,26 @@ struct WorkspaceOrphanReconciliationControllerTests {
     private func makeItem(
         id: String,
         kind: WorkspaceOrphanKind = .gitWorktreeWithoutRecord,
+        repoID: UUID? = nil,
         workspaceID: UUID? = nil,
         resourceName: String = "leftover",
+        path: String? = nil,
+        gitBranch: String? = nil,
         hasPrunableGitMetadata: Bool = false,
         storagePath: String? = nil
     ) -> WorkspaceOrphanItem {
         WorkspaceOrphanItem(
             id: id,
             kind: kind,
-            repoID: nil,
+            repoID: repoID,
             repoName: nil,
             repoLocalPath: nil,
             workspaceID: workspaceID,
             workspaceName: nil,
             resourceName: resourceName,
-            path: "/tmp/workspaces/\(resourceName)",
+            path: path ?? "/tmp/workspaces/\(resourceName)",
             storagePath: storagePath,
-            gitBranch: nil,
+            gitBranch: gitBranch,
             hasPrunableGitMetadata: hasPrunableGitMetadata
         )
     }
@@ -179,6 +182,81 @@ struct WorkspaceOrphanReconciliationControllerTests {
     func lumeOrphanDeletesVM() {
         let steps = controller.cleanupSteps(for: makeItem(id: "a", kind: .lumeVMWithoutWorkspace))
         #expect(steps == [.deleteLumeVM])
+    }
+
+    // MARK: - Adoption
+
+    @Test("A worktree with no record can be adopted; a record awaiting cleanup cannot")
+    func canAdoptReflectsWhatHasLiveFilesystemState() {
+        #expect(controller.canAdopt(makeItem(id: "git", kind: .gitWorktreeWithoutRecord)))
+        #expect(
+            !controller.canAdopt(
+                makeItem(id: "prunable", kind: .gitWorktreeWithoutRecord, hasPrunableGitMetadata: true)))
+        #expect(!controller.canAdopt(makeItem(id: "record", kind: .workspaceRecordMissingDirectory)))
+        #expect(!controller.canAdopt(makeItem(id: "lume", kind: .lumeVMWithoutWorkspace)))
+    }
+
+    @Test("Adopting persists a workspace record naming the worktree's path and branch, marked adopted")
+    func adoptGitWorktreePersistsTheRecord() throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        context.insert(repo)
+        try context.save()
+
+        let item = makeItem(
+            id: "git",
+            kind: .gitWorktreeWithoutRecord,
+            repoID: repo.id,
+            resourceName: "issue-1390",
+            path: "/tmp/alpha/workspaces/issue-1390",
+            gitBranch: "workspace/issue-1390"
+        )
+
+        let adopted = try controller.adoptGitWorktree(item, in: [repo], modelContext: context)
+
+        #expect(adopted.name == "issue-1390")
+        #expect(adopted.path == "/tmp/alpha/workspaces/issue-1390")
+        #expect(adopted.gitBranch == "workspace/issue-1390")
+        #expect(adopted.sourceRepo?.id == repo.id)
+        #expect(adopted.isAdopted)
+        #expect(adopted.status == .active)
+
+        // A second context over the same container only sees saved state, so this fails if
+        // the insert were left unsaved in the first context.
+        let verificationContext = ModelContext(container)
+        let persisted = try verificationContext.fetch(FetchDescriptor<Workspace>())
+        #expect(persisted.map(\.name) == ["issue-1390"])
+        #expect(persisted.first?.isAdopted == true)
+    }
+
+    @Test("Adopting a record awaiting cleanup, an unknown repo, or a path-less item is rejected")
+    func adoptGitWorktreeRejectsWhatItCannotAdopt() throws {
+        let context = ModelContext(try makeContainer())
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        context.insert(repo)
+
+        #expect(throws: WorkspaceOrphanReconciliationError.unsupportedCleanupItem) {
+            try controller.adoptGitWorktree(
+                makeItem(id: "prunable", repoID: repo.id, hasPrunableGitMetadata: true),
+                in: [repo],
+                modelContext: context
+            )
+        }
+        #expect(throws: WorkspaceOrphanReconciliationError.unsupportedCleanupItem) {
+            try controller.adoptGitWorktree(
+                makeItem(id: "unknown-repo", repoID: UUID()),
+                in: [repo],
+                modelContext: context
+            )
+        }
+        #expect(throws: WorkspaceOrphanReconciliationError.unsupportedCleanupItem) {
+            try controller.adoptGitWorktree(
+                makeItem(id: "record", kind: .workspaceRecordMissingDirectory, repoID: repo.id),
+                in: [repo],
+                modelContext: context
+            )
+        }
     }
 
     // MARK: - Record deletion

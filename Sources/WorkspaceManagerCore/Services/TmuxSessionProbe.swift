@@ -101,6 +101,56 @@ public struct TmuxSessionProbe: Sendable {
         return firstCommand
     }
 
+    /// The name of the one live session whose first pane's current working directory is
+    /// `directoryPath`, or `nil` when zero or more than one session matches.
+    ///
+    /// Adopting a worktree the app did not create (#1390) needs this because such a session was
+    /// never named by the app's own deterministic derivation (`wm-<dir>-<hash>`) — it could be
+    /// anything, e.g. a session a person or another tool started by hand. Matching on the live
+    /// working directory is the only signal that ties an arbitrary session name back to a
+    /// specific worktree. More than one match is deliberately treated as "no answer": guessing
+    /// wrong would bind the workspace to the wrong session's live shell, so ambiguity falls back
+    /// to a fresh one instead of picking either candidate.
+    public func sessionName(withCurrentDirectory directoryPath: String) async -> String? {
+        let output = await runForOutput(
+            "/usr/bin/env",
+            [
+                "tmux", "-L", Self.socketLabel, "list-panes", "-a",
+                "-F", "#{session_name}\t#{pane_current_path}",
+            ],
+            environment
+        )
+        return Self.parseSessionName(fromListPanes: output, matchingDirectory: directoryPath)
+    }
+
+    /// Picks the session name from `tmux list-panes -a -F '#{session_name}\t#{pane_current_path}'`
+    /// output whose pane directory resolves to the same path as `directoryPath`, symlinks
+    /// resolved on both sides so a worktree reached through a symlinked parent still matches.
+    /// Returns `nil` for no match or more than one distinct session matching.
+    static func parseSessionName(
+        fromListPanes output: String?,
+        matchingDirectory directoryPath: String
+    ) -> String? {
+        guard let output else { return nil }
+        let target = normalizedPath(directoryPath)
+        var matchedSessionNames: Set<String> = []
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let fields = rawLine.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+            guard fields.count == 2 else { continue }
+            let sessionName = fields[0].trimmingCharacters(in: .whitespaces)
+            let paneDirectory = fields[1].trimmingCharacters(in: .whitespaces)
+            guard !sessionName.isEmpty, !paneDirectory.isEmpty else { continue }
+            if normalizedPath(paneDirectory) == target {
+                matchedSessionNames.insert(sessionName)
+            }
+        }
+        return matchedSessionNames.count == 1 ? matchedSessionNames.first : nil
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
     /// Kill an exactly-named session (`=` prefix, as in `isSessionAlive`) so a
     /// relaunch that carries an initial command cannot `new-session -A`-attach
     /// to a same-name survivor and silently drop the command. Restore uses this

@@ -42,11 +42,16 @@ struct WorkspaceOrphanReconciliationBannerRenderTests {
         _ state: WorkspaceOrphanReconciliationState,
         to fileName: String
     ) throws {
+        let orphanController = WorkspaceOrphanReconciliationController()
         let banner = WorkspaceOrphanReconciliationBanner(
             items: state.visibleItems,
             cleaningItemIDs: state.cleaningItemIDs,
+            adoptingItemIDs: state.adoptingItemIDs,
+            canAdopt: { orphanController.canAdopt($0) },
             onClean: { _ in },
-            onDismiss: {}
+            onAdopt: { _ in },
+            onDismiss: {},
+            initiallyExpanded: true
         )
         .frame(width: 720)
         .background(Color(nsColor: .windowBackgroundColor))
@@ -97,5 +102,23 @@ struct WorkspaceOrphanReconciliationBannerRenderTests {
 
         #expect(state.visibleItems.map(\.id) == ["lume"])
         try render(state, to: "orphan-banner-after-dismissal.png")
+    }
+
+    /// Adopt is offered beside Clean for a live worktree with no record — the row a person
+    /// created with `workspaces ws new` and the app never saw (#1390) — but not for the other
+    /// two kinds, which have no live filesystem state to adopt.
+    @Test("Adopt is offered only for a worktree that can be adopted as-is")
+    func adoptOfferedOnlyForAdoptableWorktree() throws {
+        var state = WorkspaceOrphanReconciliationState()
+        state.applyScanResult([
+            makeItem(id: "git", kind: .gitWorktreeWithoutRecord, resourceName: "issue-1390"),
+            makeItem(
+                id: "record", kind: .workspaceRecordMissingDirectory, resourceName: "missing-dir"),
+            makeItem(id: "lume", kind: .lumeVMWithoutWorkspace, resourceName: "orphan-vm"),
+        ])
+
+        let orphanController = WorkspaceOrphanReconciliationController()
+        #expect(state.visibleItems.map { orphanController.canAdopt($0) } == [true, false, false])
+        try render(state, to: "orphan-banner-adopt-offered.png")
     }
 }

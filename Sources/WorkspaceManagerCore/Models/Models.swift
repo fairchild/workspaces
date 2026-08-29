@@ -293,6 +293,16 @@ public final class Workspace {
     /// `nil` while active; drives the purge-after-delay sweep.
     public var archivedAt: Date?
 
+    /// True for a workspace whose directory the app adopted rather than created — an existing
+    /// git worktree matched to a `Workspace` record after the fact (#1390). Excluded from the
+    /// archived-workspace purge sweep unconditionally: that sweep deletes files with
+    /// `deleteFiles: true` on a timer the user does not directly act on, and a directory this
+    /// app did not create may be someone's primary clone, hold uncommitted work outside git's
+    /// view, or simply be a worktree another tool still expects to find. Archiving an adopted
+    /// workspace is still allowed — it only ever moves the sidebar row — the purge is the one
+    /// path this flag closes.
+    public var isAdopted: Bool = false
+
     /// Position in the sidebar's Pinned section, renumbered 0…n on every pin change.
     /// `nil` for an unpinned workspace.
     public var pinOrder: Int?
@@ -440,6 +450,7 @@ public final class Workspace {
         status: WorkspaceStatus = .active,
         gitBranch: String? = nil,
         archivedAt: Date? = nil,
+        isAdopted: Bool = false,
         pinOrder: Int? = nil,
         note: String? = nil,
         defaultAgentCommand: String? = nil,
@@ -458,6 +469,7 @@ public final class Workspace {
         self.statusRaw = status.rawValue
         self.gitBranch = gitBranch
         self.archivedAt = archivedAt
+        self.isAdopted = isAdopted
         self.pinOrder = pinOrder
         self.note = WorkspaceNote.normalized(note)
         self.defaultAgentCommand = defaultAgentCommand

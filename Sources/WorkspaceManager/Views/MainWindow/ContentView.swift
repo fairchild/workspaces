@@ -204,6 +204,13 @@ struct ContentView: View {
                 activateHostSession: MainWindowHostSessionActivator { key, directory, customCommand in
                     activateHostSession(key: key, directory: directory, customCommand: customCommand)
                 },
+                activateAdoptedHostSession: { key, directory, tmuxSessionName in
+                    tileTreeStore.createRestoredSession(
+                        key: key,
+                        directory: directory,
+                        tmuxSessionNameOverride: tmuxSessionName
+                    )
+                },
                 persistTerminalContinuity: { targetKind, targetID, rootURL, launchURL in
                     terminalContinuityController.persist(
                         targetKind: targetKind,
@@ -857,8 +864,13 @@ struct ContentView: View {
                 WorkspaceOrphanReconciliationBanner(
                     items: workspaceOrphanState.visibleItems,
                     cleaningItemIDs: workspaceOrphanState.cleaningItemIDs,
+                    adoptingItemIDs: workspaceOrphanState.adoptingItemIDs,
+                    canAdopt: { workspaceOrphanController.canAdopt($0) },
                     onClean: { item in
                         workspaceOrphanState.pendingCleanup = item
+                    },
+                    onAdopt: { item in
+                        Task { @MainActor in await adoptWorkspaceOrphan(item) }
                     },
                     onDismiss: {
                         workspaceOrphanState.dismissVisibleItems()
@@ -2027,6 +2039,44 @@ struct ContentView: View {
         } catch {
             presentWorkspaceOperationError(
                 workspaceOrphanController.cleanupFailureMessage(for: item, error: error)
+            )
+        }
+    }
+
+    /// Adds an existing worktree the app did not create as a workspace, without deleting or
+    /// re-creating anything on disk (#1390). No confirmation: unlike cleanup this is additive,
+    /// the same weight as creating a workspace normally.
+    ///
+    /// A live tmux session whose directory matches the worktree — the case an adopted worktree
+    /// created outside the app is likely to already have one running in — is bound at selection
+    /// time so the new workspace's terminal joins it instead of opening a fresh shell. Probed
+    /// only in tmux-per-session mode: in Ghostty-managed mode nothing the app did not launch
+    /// itself has a tmux session behind it to find.
+    private func adoptWorkspaceOrphan(_ item: WorkspaceOrphanItem) async {
+        guard !workspaceOrphanState.isAdopting(item) else { return }
+        workspaceOrphanState.beginAdopting(item)
+        defer {
+            workspaceOrphanState.endAdopting(item)
+        }
+
+        do {
+            let workspace = try workspaceOrphanController.adoptGitWorktree(
+                item,
+                in: repos,
+                modelContext: modelContext
+            )
+            workspaceOrphanState.removeCleanedItem(item)
+
+            var boundTmuxSessionName: String?
+            if terminalMultiplexingMode == .tmuxPerSession, let path = item.path {
+                boundTmuxSessionName = await TmuxSessionProbe().sessionName(withCurrentDirectory: path)
+            }
+            selectionController.selectAdoptedWorkspace(workspace, boundTmuxSessionName: boundTmuxSessionName)
+
+            await refreshWorkspaceOrphans(trigger: "adopt")
+        } catch {
+            presentWorkspaceOperationError(
+                "Could not adopt '\(item.resourceName)': \(error.localizedDescription)"
             )
         }
     }

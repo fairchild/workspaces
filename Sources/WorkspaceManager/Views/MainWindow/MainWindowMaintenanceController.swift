@@ -66,6 +66,7 @@ struct MainWindowMaintenanceController {
         return workspaces.filter { workspace in
             workspace.backend == .local
                 && workspace.status == .archived
+                && !workspace.isAdopted
                 && (workspace.archivedAt.map { $0 <= cutoff } ?? false)
         }
     }

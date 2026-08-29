@@ -120,6 +120,7 @@ private final class EffectLog {
     private(set) var activatedDirectories: [URL] = []
     private(set) var continuityWrites: [(kind: TerminalContinuityManifest.TargetKind, root: URL, launch: URL)] = []
     private(set) var errors: [String] = []
+    private(set) var adoptedTmuxSessionNames: [String] = []
 
     func record(_ entry: String) { entries.append(entry) }
     func record(navigation: MainWindowNavigationDestination) {
@@ -128,6 +129,12 @@ private final class EffectLog {
     }
     func record(key: HostTerminalSessionKey, directory: URL) {
         entries.append("activate_session")
+        activatedKeys.append(key)
+        activatedDirectories.append(directory)
+    }
+    func record(adoptedTmuxSessionName: String, key: HostTerminalSessionKey, directory: URL) {
+        entries.append("activate_adopted_session")
+        adoptedTmuxSessionNames.append(adoptedTmuxSessionName)
         activatedKeys.append(key)
         activatedDirectories.append(directory)
     }
@@ -226,6 +233,11 @@ struct MainWindowSelectionControllerTests {
                 activateHostSession: MainWindowHostSessionActivator { key, directory, _ in
                     effects.record(key: key, directory: directory)
                     return HostTerminalSession(key: key, directory: directory)
+                },
+                activateAdoptedHostSession: { key, directory, tmuxSessionName in
+                    effects.record(adoptedTmuxSessionName: tmuxSessionName, key: key, directory: directory)
+                    return HostTerminalSession(
+                        key: key, directory: directory, tmuxSessionNameOverride: tmuxSessionName)
                 },
                 persistTerminalContinuity: { kind, _, root, launch in
                     effects.record(kind: kind, root: root, launch: launch)
@@ -339,6 +351,63 @@ struct MainWindowSelectionControllerTests {
         #expect(harness.effects.continuityWrites.first?.kind == .workspace)
         #expect(harness.effects.entries.contains("navigate(workspace_terminal)"))
         #expect(harness.focus.events.first == "cancel_repo_measurement(workspace_selected)")
+    }
+
+    @Test("Adopting with a bound tmux session activates through the adopted-session path")
+    func adoptedWorkspaceWithBoundSessionUsesAdoptedActivator() throws {
+        let container = try makeContainer()
+        let repoRoot = try makeRepoDirectory("alpha")
+        let workspaceRoot = try makeRepoDirectory("issue-1390")
+        let repo = Repo(name: "alpha", localPath: repoRoot)
+        let workspace = Workspace(
+            name: "issue-1390", path: workspaceRoot, sourceRepo: repo, isAdopted: true)
+        let harness = makeHarness(repos: [repo], context: ModelContext(container))
+
+        harness.controller.selectAdoptedWorkspace(workspace, boundTmuxSessionName: "ws-1374")
+
+        #expect(harness.effects.adoptedTmuxSessionNames == ["ws-1374"])
+        #expect(harness.effects.activatedKeys == [.hostPath(workspaceRoot.path)])
+        #expect(harness.effects.entries.contains("navigate(workspace_terminal)"))
+        #expect(harness.effects.continuityWrites.first?.kind == .workspace)
+    }
+
+    @Test("Adopting with no matched session opens a plain shell like any other new workspace")
+    func adoptedWorkspaceWithoutBoundSessionUsesThePlainActivator() throws {
+        let container = try makeContainer()
+        let repoRoot = try makeRepoDirectory("alpha")
+        let workspaceRoot = try makeRepoDirectory("issue-1390")
+        let repo = Repo(name: "alpha", localPath: repoRoot)
+        let workspace = Workspace(
+            name: "issue-1390", path: workspaceRoot, sourceRepo: repo, isAdopted: true)
+        let harness = makeHarness(repos: [repo], context: ModelContext(container))
+
+        harness.controller.selectAdoptedWorkspace(workspace, boundTmuxSessionName: nil)
+
+        #expect(harness.effects.adoptedTmuxSessionNames.isEmpty)
+        #expect(harness.effects.entries.contains("activate_session"))
+        #expect(harness.effects.activatedKeys == [.hostPath(workspaceRoot.path)])
+    }
+
+    /// Adoption always produces a local, active workspace, so this only exercises the escape
+    /// hatch: a future adoption source that somehow produced something else falls back to the
+    /// general path instead of misbehaving under a guarantee this method assumes but does not
+    /// itself enforce.
+    @Test("A non-local or non-active workspace falls back to the general selection path")
+    func nonLocalWorkspaceFallsBackToSelectWorkspace() throws {
+        let container = try makeContainer()
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "remote",
+            path: URL(fileURLWithPath: Workspace.remotePathSentinel),
+            sourceRepo: repo,
+            backendIdentifier: "daytona"
+        )
+        let harness = makeHarness(
+            repos: [repo], providers: [], context: ModelContext(container))
+
+        harness.controller.selectAdoptedWorkspace(workspace, boundTmuxSessionName: "ignored")
+
+        #expect(harness.effects.adoptedTmuxSessionNames.isEmpty)
     }
 
     @Test("Selecting an archived workspace lands on its repo overview and attaches nothing")

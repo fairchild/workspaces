@@ -21,6 +21,7 @@ struct WorkspaceOrphanReconciliationState: Equatable {
     private(set) var items: [WorkspaceOrphanItem] = []
     private(set) var dismissedItemIDs: Set<String> = []
     private(set) var cleaningItemIDs: Set<String> = []
+    private(set) var adoptingItemIDs: Set<String> = []
 
     /// The item awaiting destructive-action confirmation. Non-nil drives the alert.
     var pendingCleanup: WorkspaceOrphanItem?
@@ -31,6 +32,10 @@ struct WorkspaceOrphanReconciliationState: Equatable {
 
     func isCleaning(_ item: WorkspaceOrphanItem) -> Bool {
         cleaningItemIDs.contains(item.id)
+    }
+
+    func isAdopting(_ item: WorkspaceOrphanItem) -> Bool {
+        adoptingItemIDs.contains(item.id)
     }
 
     /// Replaces the scanned set. Dismissals for items the scan no longer reports are
@@ -54,7 +59,17 @@ struct WorkspaceOrphanReconciliationState: Equatable {
         cleaningItemIDs.remove(item.id)
     }
 
-    /// Drops an item that was cleaned successfully, ahead of the confirming rescan.
+    /// Marks an item as in-flight for adoption. Callers guard on `isAdopting(_:)` first, the
+    /// same non-reentrancy rule `beginCleaning` follows.
+    mutating func beginAdopting(_ item: WorkspaceOrphanItem) {
+        adoptingItemIDs.insert(item.id)
+    }
+
+    mutating func endAdopting(_ item: WorkspaceOrphanItem) {
+        adoptingItemIDs.remove(item.id)
+    }
+
+    /// Drops an item that was cleaned or adopted successfully, ahead of the confirming rescan.
     mutating func removeCleanedItem(_ item: WorkspaceOrphanItem) {
         items.removeAll { $0.id == item.id }
         dismissedItemIDs.remove(item.id)
@@ -109,6 +124,51 @@ struct WorkspaceOrphanReconciliationController {
         case .lumeVMWithoutWorkspace:
             return [.deleteLumeVM]
         }
+    }
+
+    /// Whether adoption is offered for this item at all. Only a live, undamaged worktree with
+    /// no record is something the app can adopt as-is — a record whose directory is gone or a
+    /// leftover Lume VM are cleanup-only, since there is no live filesystem state to adopt.
+    func canAdopt(_ item: WorkspaceOrphanItem) -> Bool {
+        item.kind == .gitWorktreeWithoutRecord && !item.hasPrunableGitMetadata
+    }
+
+    /// Creates the `Workspace` record for an existing worktree the app did not create.
+    ///
+    /// Marked `isAdopted` so the archived-workspace purge sweep never deletes this directory on
+    /// a timer the user does not directly act on (#1390) — the sweep is the one path that flag
+    /// closes; archiving or manually deleting an adopted workspace still works like any other.
+    ///
+    /// Returns the created workspace so the caller can select it and, when a live tmux session
+    /// was bound, realize its terminal attached to that session rather than a fresh shell.
+    func adoptGitWorktree(
+        _ item: WorkspaceOrphanItem,
+        in repos: [Repo],
+        modelContext: ModelContext
+    ) throws -> Workspace {
+        guard canAdopt(item),
+            let path = item.path,
+            let repoID = item.repoID,
+            let repo = repos.first(where: { $0.id == repoID })
+        else {
+            throw WorkspaceOrphanReconciliationError.unsupportedCleanupItem
+        }
+
+        let workspace = Workspace(
+            name: item.resourceName,
+            path: URL(fileURLWithPath: path, isDirectory: true),
+            sourceRepo: repo,
+            gitBranch: item.gitBranch,
+            isAdopted: true
+        )
+        modelContext.insert(workspace)
+        do {
+            try modelContext.save()
+        } catch {
+            modelContext.rollback()
+            throw error
+        }
+        return workspace
     }
 
     func deleteWorkspaceRecord(
