@@ -366,6 +366,15 @@ class TemplateContractTests(unittest.TestCase):
             pr_readiness.mergeability_field_labels(Path("/nonexistent/template.md")), []
         )
 
+    def test_paste_block_has_a_line_for_every_template_field(self) -> None:
+        """The paste-ready block CI hands out on failure must never omit a
+        field the template (and therefore the gate) requires — that is
+        exactly the bug that let the gate demand a field its own guidance
+        never mentioned."""
+        block = pr_readiness.mergeability_paste_block()
+        for label in pr_readiness.mergeability_field_labels():
+            self.assertIn(f"- {label}:", block)
+
 
 if __name__ == "__main__":
     unittest.main()
