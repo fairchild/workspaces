@@ -47,6 +47,11 @@ enum SidebarChrome {
         static let disclosurePillVerticalPadding: CGFloat = 4
         static let disclosurePillSpacing: CGFloat = 6
 
+        /// Gap between the parts of the selected row's live status line, and the tighter gap
+        /// inside one part — a glyph and the reading it labels.
+        static let statusLineSpacing: CGFloat = 6
+        static let statusLineGlyphSpacing: CGFloat = 3
+
         static let cardWidth: CGFloat = 260
         static let cardPadding: CGFloat = 14
     }
@@ -69,6 +74,9 @@ enum SidebarChrome {
         static let hoverAction: CGFloat = 7
         static let disclosurePill: CGFloat = 7
         static let statusBadge: CGFloat = 3
+        /// The selected workspace row's card. Wider than a row's own corner because the card
+        /// is a surface rather than a highlight, and the corner is most of what says so.
+        static let activeCard: CGFloat = 8
         static let card: CGFloat = 10
     }
 
@@ -76,6 +84,14 @@ enum SidebarChrome {
     enum Fill {
         static let rowSelection = Color.accentColor.opacity(0.1)
         static let hoverAction = Color.secondary.opacity(0.08)
+
+        /// The selected workspace row, a surface of its own rather than a row washed in accent.
+        /// `.primary` steps away from the ground in whichever direction the appearance leaves
+        /// room — lighter in the dark, darker in the light — so one value separates the card in
+        /// both, and the accent is left to the status glyph and the activity dot. 0.06 is where
+        /// the card holds: below it the dark card dissolves into the sidebar, above it the
+        /// light one starts to read as a well sunk into the list rather than a plate on it.
+        static let activeCard = Color.primary.opacity(0.06)
 
         /// A collapsed repo's badge carries the subtree, so it reads a shade stronger.
         static let workspaceCountBadgeCollapsed = Color.secondary.opacity(0.1)
@@ -106,6 +122,10 @@ enum SidebarChrome {
         static let hoverActionWidth: CGFloat = 1
         static let disclosurePill = Color.secondary.opacity(0.08)
         static let disclosurePillWidth: CGFloat = 1
+        /// The selected row's hairline. A full point rather than the hover card's half: the
+        /// card sits among rows of the same tone, and the edge is what separates them.
+        static let activeCard = Color(nsColor: .separatorColor).opacity(0.55)
+        static let activeCardWidth: CGFloat = 1
         static let card = Color(nsColor: .separatorColor).opacity(0.55)
         static let cardWidth: CGFloat = 0.5
     }
@@ -125,6 +145,14 @@ enum SidebarChrome {
         static let hoverActionGlyph = Font.system(size: 11, weight: .semibold)
         /// Glyphs of the menus that sit inline in a section header.
         static let headerActionGlyph = Font.caption.weight(.semibold)
+
+        /// The selected row's status line. Summary and agent glyph share the caption the note
+        /// and transient-message lines use, so a row's second line keeps one size whatever
+        /// fills it; the two readings trailing it sit a step smaller, with monospaced digits
+        /// so the elapsed timer holds its width as the seconds roll over.
+        static let statusSummary = Font.caption
+        static let statusGlyph = Font.caption
+        static let statusMeta = Font.caption2.monospacedDigit()
     }
 
     /// The identity glyph that heads a repo row: a small rounded square carrying the repo's

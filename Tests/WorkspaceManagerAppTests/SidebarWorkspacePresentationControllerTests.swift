@@ -254,6 +254,87 @@ struct SidebarWorkspacePresentationControllerTests {
         #expect(controller.usesHostWorkspaceFiles(for: localWorkspace, registry: registry))
     }
 
+    @Test("The live status line carries the agent, its run summary, and the session's start")
+    func liveSessionStatusComposesTheLine() {
+        let key = HostTerminalSessionKey.repoPath("/repo")
+        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let startedAt = Date(timeIntervalSince1970: 1_756_000_000)
+        let status = AgentSessionStatus(
+            hostSessionID: session.id,
+            kind: .claudeCode,
+            cwd: "/repo",
+            run: .runningTool(name: "Bash", detail: nil),
+            lastEventAt: startedAt.addingTimeInterval(300),
+            hookActive: true,
+            createdAt: startedAt
+        )
+
+        let live = controller.liveSessionStatus(
+            for: key,
+            sessions: [session],
+            agentStatus: { [session.id: status][$0] }
+        )
+
+        #expect(live?.kind == .claudeCode)
+        #expect(live?.summary == "Running: Bash")
+        // The timer counts from when the session registered, not from its latest event.
+        #expect(live?.startedAt == startedAt)
+    }
+
+    /// A row with no registered agent status has no line to show and so mounts no timer.
+    @Test("A session with no registered agent status yields no live status line")
+    func liveSessionStatusIsAbsentWithoutAgentState() {
+        let key = HostTerminalSessionKey.repoPath("/repo")
+        let session = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+
+        #expect(
+            controller.liveSessionStatus(
+                for: key, sessions: [session], agentStatus: { _ in nil }) == nil
+        )
+        #expect(
+            controller.liveSessionStatus(
+                for: key, sessions: [], agentStatus: { _ in nil }) == nil
+        )
+    }
+
+    /// The line and the activity dot read the same session, so a row never describes one
+    /// session's work beside another's colour.
+    @Test("The line describes the same session the activity dot does — the freshest one")
+    func liveSessionStatusFollowsTheFreshestSession() {
+        let key = HostTerminalSessionKey.repoPath("/repo")
+        let older = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let newer = HostTerminalSession(key: key, directory: URL(fileURLWithPath: "/repo"))
+        let base = Date(timeIntervalSince1970: 1_756_000_000)
+        let statuses = [
+            older.id: AgentSessionStatus(
+                hostSessionID: older.id,
+                kind: .aider,
+                cwd: "/repo",
+                run: .idle,
+                lastEventAt: base,
+                createdAt: base
+            ),
+            newer.id: AgentSessionStatus(
+                hostSessionID: newer.id,
+                kind: .claudeCode,
+                cwd: "/repo",
+                run: .awaitingInput(reason: .permissionPrompt),
+                lastEventAt: base.addingTimeInterval(60),
+                createdAt: base.addingTimeInterval(30)
+            ),
+        ]
+
+        let live = controller.liveSessionStatus(
+            for: key,
+            sessions: [older, newer],
+            agentStatus: { statuses[$0] }
+        )
+
+        #expect(live?.kind == .claudeCode)
+        #expect(live?.summary == "Awaiting input")
+        #expect(live?.startedAt == base.addingTimeInterval(30))
+    }
+
     private func descriptor(
         id: String,
         displayName: String,

@@ -277,6 +277,33 @@ struct RepoRow: View {
     }
 }
 
+/// What a workspace row's second line shows, and the rule that picks it.
+///
+/// The transient action message wins the line while it is showing: it is about this moment, and
+/// neither the session nor the note is. Below it the live status line outranks the note on the
+/// one row that has both — what the agent is doing right now beats a line written hours ago,
+/// which is also why the note renders a shade quieter than either. The live line belongs to the
+/// selected row alone, and that is what holds the sidebar to a single running timer however
+/// many sessions are live.
+enum WorkspaceRowSecondLine: Equatable {
+    case blank
+    case statusMessage(String)
+    case liveStatus(SidebarLiveSessionStatus)
+    case note(String)
+
+    static func resolve(
+        statusMessage: String?,
+        liveStatus: SidebarLiveSessionStatus?,
+        isSelected: Bool,
+        note: String?
+    ) -> WorkspaceRowSecondLine {
+        if let statusMessage { return .statusMessage(statusMessage) }
+        if isSelected, let liveStatus { return .liveStatus(liveStatus) }
+        if let note { return .note(note) }
+        return .blank
+    }
+}
+
 struct WorkspaceRow: View {
     let workspace: Workspace
     var isSelected: Bool = false
@@ -290,6 +317,14 @@ struct WorkspaceRow: View {
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
     var isPinned: Bool = false
+    /// The agent session behind this row, resolved by the sidebar for the selected row alone.
+    /// Non-nil on a selected row is what puts the live status line on the second line and
+    /// mounts the elapsed timer — the one timer the sidebar ever runs.
+    var liveStatus: SidebarLiveSessionStatus? = nil
+    /// Fixes the clock the status line reads, so a still render shows a known elapsed time and
+    /// age and starts no timer. Nil in the app, where the elapsed label runs its own clock and
+    /// the age is read at whatever moment the row draws.
+    var statusClock: Date? = nil
     /// Resolved lazily only when the hover card opens, so frequent agent-status
     /// updates never re-render idle rows.
     var tabsProvider: (() -> [SidebarTabSummary])? = nil
@@ -386,10 +421,11 @@ struct WorkspaceRow: View {
         .padding(.leading, isNested ? SidebarChrome.Indent.nestedRow : 0)
         .padding(.vertical, SidebarChrome.Metrics.rowVerticalPadding)
         .padding(.horizontal, SidebarChrome.Metrics.rowHorizontalPadding)
-        .background(
-            RoundedRectangle(cornerRadius: SidebarChrome.Radius.row)
-                .fill(isSelected ? SidebarChrome.Fill.rowSelection : .clear)
-        )
+        .background {
+            if isSelected {
+                activeCard
+            }
+        }
         .accessibilityLabel(accessibilityDescription)
         .sidebarHoverCard(
             onHoverChange: { isHovering = $0 },
@@ -408,6 +444,21 @@ struct WorkspaceRow: View {
         )
     }
 
+    /// The selected row, raised: an elevated neutral fill and a hairline wrapping both lines.
+    /// The accent that used to wash the whole row is spent on the status glyph and the
+    /// activity dot instead, which is where it says something.
+    private var activeCard: some View {
+        RoundedRectangle(cornerRadius: SidebarChrome.Radius.activeCard, style: .continuous)
+            .fill(SidebarChrome.Fill.activeCard)
+            .overlay {
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.activeCard, style: .continuous)
+                    .strokeBorder(
+                        SidebarChrome.Stroke.activeCard,
+                        lineWidth: SidebarChrome.Stroke.activeCardWidth
+                    )
+            }
+    }
+
     private var accessibilityDescription: String {
         var description = repoContext.map { "\($0), " } ?? ""
         description += "\(workspace.name), \(sessionActivity.accessibilityDescription)"
@@ -422,6 +473,9 @@ struct WorkspaceRow: View {
         }
         if let statusMessage {
             description += ", \(statusMessage)"
+        }
+        if case .liveStatus(let live) = secondLine {
+            description += ", \(live.summary)"
         }
         if let note = workspace.note {
             description += ", note: \(note)"
@@ -507,16 +561,18 @@ struct WorkspaceRow: View {
                 }
             }
 
-            // The transient action message wins the line while it is showing: it is about
-            // this moment, and the note is about the work stream. A note rendered a shade
-            // quieter is what keeps a line written hours ago from reading as live status.
-            if let statusMessage {
-                Text(statusMessage)
+            switch secondLine {
+            case .blank:
+                EmptyView()
+            case .statusMessage(let message):
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, SidebarChrome.Indent.rowSecondLine)
                     .lineLimit(1)
-            } else if let note = workspace.note {
+            case .liveStatus(let live):
+                liveStatusLine(live)
+            case .note(let note):
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -528,6 +584,47 @@ struct WorkspaceRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private var secondLine: WorkspaceRowSecondLine {
+        .resolve(
+            statusMessage: statusMessage,
+            liveStatus: liveStatus,
+            isSelected: isSelected,
+            note: workspace.note
+        )
+    }
+
+    /// Who is working, what they are doing, how long they have been at it, and how old the
+    /// workspace is. The summary is the only part allowed to truncate — the two readings on
+    /// the right are short, fixed, and the reason to glance here in the first place.
+    private func liveStatusLine(_ live: SidebarLiveSessionStatus) -> some View {
+        HStack(spacing: SidebarChrome.Metrics.statusLineSpacing) {
+            Image(systemName: live.kind.symbolName)
+                .font(SidebarChrome.TypeStyle.statusGlyph)
+                .foregroundStyle(live.kind.tintColor)
+
+            Text(live.summary)
+                .font(SidebarChrome.TypeStyle.statusSummary)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: SidebarChrome.Metrics.statusLineSpacing)
+
+            HStack(spacing: SidebarChrome.Metrics.statusLineGlyphSpacing) {
+                Image(systemName: "timer")
+                SessionElapsedLabel(startedAt: live.startedAt, referenceDate: statusClock)
+            }
+            .foregroundStyle(.secondary)
+            .fixedSize()
+
+            Text(WorkspaceAgeFormatter.text(from: workspace.createdAt, to: statusClock ?? Date()))
+                .foregroundStyle(.tertiary)
+                .fixedSize()
+        }
+        .font(SidebarChrome.TypeStyle.statusMeta)
+        .padding(.leading, SidebarChrome.Indent.rowSecondLine)
     }
 }
 
