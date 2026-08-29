@@ -105,6 +105,15 @@ workspaces/
 2. Add or update tests when behavior changes.
 3. Run local checks (`mise run check`, or focused build/test commands when appropriate).
 4. Include a concise summary of behavior changes and verification results in the PR.
+5. Write the body from `.github/pull_request_template.md` rather than from memory, and check it before publishing:
+
+   ```bash
+   cp .github/pull_request_template.md /tmp/pr-body.md   # then fill it in
+   uv run --script scripts/pr-readiness.py --body-file /tmp/pr-body.md
+   gh pr create --body-file /tmp/pr-body.md
+   ```
+
+   The preflight runs the same checks as the `PR Readiness` gate and prints the same failures, so a missing `## Mergeability` section costs one re-edit instead of a CI round trip.
 
 ## CI Runner Lanes
 

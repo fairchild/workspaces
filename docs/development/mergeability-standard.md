@@ -38,6 +38,13 @@ The parser accepts near-miss labels (`Scope`, `Edge cases`, `Follow-ups`, …)
 but not unlabeled narrative bullets. PRs touching release paths additionally
 need a `Release/ops preconditions` field.
 
+Bodies are most accurate when they start from the contract rather than from
+memory: copy `.github/pull_request_template.md`, fill it in, and run the gate
+against the file before publishing — `uv run --script scripts/pr-readiness.py
+--body-file <path>` gives the same verdict in the same words CI will, one step
+earlier. Producers that generate bodies read their field list out of that same
+template, so a field added there reaches generated PRs without a second edit.
+
 PR summary style: prefer concise Markdown links for completed checks and
 artifacts — link the check name, e.g. `Web CI passed`, to the run URL.
 Readability preference, not a merge gate.

@@ -49,8 +49,10 @@ dispatch:
   `sync-execution-state.py` owns that lane (`backlog/CLAUDE.md`).
 - PR-body Mergeability fields need real prose — the `readiness` check
   (`scripts/pr-readiness.py`) fails on empty/default/`n/a` answers; when a
-  field doesn't apply, write *why* it doesn't. Read that script before the
-  session's first PR body — it is the body contract.
+  field doesn't apply, write *why* it doesn't. Build the body by copying
+  `.github/pull_request_template.md`, never from memory, and preflight it with
+  `uv run --script scripts/pr-readiness.py --body-file <path>` before
+  `gh pr create` — same checks, same wording, before the PR exists.
 - Author the Evidence section with a placeholder slot for the hosted CI link
   so the gate edits the PR body exactly once, at ready-flip (every body
   update resends the full text).
