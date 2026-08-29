@@ -1,0 +1,332 @@
+# Gives April one model turn to answer a CHANGES_REQUESTED review on her own
+# pull request (#1125). Before this lane the owner was the only party who
+# could move a diff a reviewer objected to, so every such review ended as an
+# escalation; the Review Response lane now defers to this one and posts
+# nothing, which is safe only because every path here ends in either a
+# revision marker or an owner escalation.
+#
+# Untrusted text (the review, the PR body) reaches a model, so the credential
+# boundary is the same as the implement lane's: admission and resolution run
+# main's scripts with no branch checked out, and only the revise job holds a
+# token that can write to a branch.
+
+name: Factory Revise
+run-name: "Factory Revise #${{ github.event.pull_request.number || inputs.pr_number }}"
+
+on:
+  pull_request_review:
+    types: [submitted]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Factory pull request whose blocking review needs a revision"
+        required: true
+        type: number
+
+# The floor. Each job below narrows or widens its own GITHUB_TOKEN, and the
+# App token that writes to the branch is minted per job.
+permissions:
+  contents: read
+
+concurrency:
+  group: factory-revise-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: false
+
+jobs:
+  admit:
+    # Both kill switches gate both entry paths, manual dispatch included: this
+    # lane spends a model turn and writes to a branch, so it follows the M3
+    # norm (Implement, Evidence Verify), not the review lane's OR-bypass.
+    #
+    # The event path additionally refuses anything the lane could not admit
+    # anyway, so an untrusted review never spins a credentialed runner: a
+    # fork head, a PR April did not author, or a reviewer outside the
+    # counterpart bots and the owner. A rerun by someone other than the
+    # original actor is refused too -- GitHub keeps `github.actor` from the
+    # original run and sets `github.triggering_actor` to whoever pressed
+    # re-run, so requiring them to match stops a third party replaying a
+    # trusted review's event.
+    if: >-
+      (github.triggering_actor == github.actor ||
+      github.triggering_actor == github.repository_owner) &&
+      ((github.event_name == 'workflow_dispatch' &&
+      github.actor == github.repository_owner &&
+      github.triggering_actor == github.repository_owner &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_REVISE_ENABLED == 'true') ||
+      (github.event_name == 'pull_request_review' &&
+      github.event.review.state == 'changes_requested' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'april-clearwater[bot]' &&
+      (github.event.review.user.login == github.repository_owner ||
+      github.event.review.user.login == 'april-clearwater[bot]' ||
+      github.event.review.user.login == 'workspace-agents[bot]') &&
+      vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
+      vars.FACTORY_REVISE_ENABLED == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Read-only throughout: admission decides, it never mutates. `actions`
+    # covers this lane's own run history, which is where the daily budget
+    # comes from.
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      matched: ${{ steps.admit.outputs.matched }}
+      escalate: ${{ steps.admit.outputs.escalate }}
+      decline_reason: ${{ steps.admit.outputs.decline_reason }}
+      pr_number: ${{ steps.admit.outputs.pr_number }}
+      review_id: ${{ steps.admit.outputs.review_id }}
+      head_sha: ${{ steps.admit.outputs.head_sha }}
+      pr_branch: ${{ steps.admit.outputs.pr_branch }}
+      linked_issue: ${{ steps.admit.outputs.linked_issue }}
+    steps:
+      - name: Checkout trusted scripts
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Admit the revision turn
+        id: admit
+        env:
+          AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
+          FACTORY_ACTIONS_TOKEN: ${{ github.token }}
+          FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          FACTORY_REVISE_DAILY_CAP: ${{ vars.FACTORY_REVISE_DAILY_CAP || '4' }}
+          FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
+          FACTORY_REVISE_RUNAWAY_CAP: ${{ vars.FACTORY_REVISE_RUNAWAY_CAP || '' }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          REVIEW_ID: ${{ github.event.review.id }}
+        run: |
+          set -euo pipefail
+          ARGS=(--pr "$PR_NUMBER")
+          if [ -n "${REVIEW_ID:-}" ]; then
+            ARGS+=(--review-id "$REVIEW_ID")
+          fi
+          uv run --script scripts/factory-revise.py admit "${ARGS[@]}"
+
+  revise:
+    needs: admit
+    if: needs.admit.outputs.matched == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      revision_outcome: ${{ steps.contributor.outputs.revision_outcome }}
+      revision_comment_posted: ${{ steps.contributor.outputs.revision_comment_posted }}
+      needs_macos_evidence: ${{ steps.contributor.outputs.needs_macos_evidence }}
+      pr_branch: ${{ steps.contributor.outputs.pr_branch }}
+      pr_number: ${{ steps.contributor.outputs.pr_number }}
+      pr_head_sha: ${{ steps.contributor.outputs.pr_head_sha }}
+      test_commands_json: ${{ steps.contributor.outputs.test_commands_json }}
+    steps:
+      - name: Generate April app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 50
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Fetch the pull request branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_BRANCH: ${{ needs.admit.outputs.pr_branch }}
+        run: |
+          set -euo pipefail
+          # The runtime checks the branch out itself (`-b <branch>
+          # origin/<branch>`), so what it needs from here is the remote-tracking
+          # ref and a credential helper it can push back through.
+          gh auth setup-git
+          git fetch origin "+refs/heads/$PR_BRANCH:refs/remotes/origin/$PR_BRANCH"
+      - name: Revalidate the revision turn
+        id: preflight
+        env:
+          AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
+          FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
+          REVIEW_ID: ${{ needs.admit.outputs.review_id }}
+        run: >-
+          uv run --script scripts/factory-revise.py preflight
+          --pr "$PR_NUMBER" --review-id "$REVIEW_ID" --expected-head "$HEAD_SHA"
+      - name: Run April revision turn
+        id: contributor
+        if: steps.preflight.outputs.matched == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          FACTORY_REQUIRE_EXPLICIT_EVIDENCE: "true"
+          FACTORY_REVISION_REVIEW_ID: ${{ needs.admit.outputs.review_id }}
+          FACTORY_TELEMETRY_DIR: ${{ runner.temp }}/factory-telemetry
+          FACTORY_TELEMETRY_LANE: revise
+          FACTORY_VISUAL_EVIDENCE_AVAILABLE: "false"
+          GH_APP_SLUG: april-clearwater
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ needs.admit.outputs.pr_number }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          MESSAGE="@${REPOSITORY_OWNER} requested changes on your PR #${PR_NUMBER}"
+          uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
+            --prompt-file .agents/skills/cofounder-contributor/references/april-clearwater.md \
+            --mode cli \
+            --message "$MESSAGE"
+      - name: Upload contributor telemetry
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: factory-revise-telemetry
+          path: ${{ runner.temp }}/factory-telemetry
+          if-no-files-found: ignore
+          retention-days: 1
+
+  resolve:
+    needs: [admit, revise]
+    # Also on an escalating decline, and on admission failing outright: the
+    # Review Response lane deferred on this same event and posted nothing, so
+    # a run that ends here without this job is the silent park the whole
+    # arrangement exists to remove. This job is the voice.
+    if: >-
+      always() &&
+      (needs.admit.outputs.matched == 'true' ||
+      needs.admit.outputs.escalate == 'true' ||
+      needs.admit.result == 'failure')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      # dispatch Factory Review when a body-only revision leaves no push to
+      # trigger it -- the same #1379 shape the Evidence Verify lane hit.
+      actions: write
+      contents: read
+    steps:
+      - name: Checkout trusted scripts
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Generate April app token
+        id: app-token
+        uses: actions/create-github-app-token@f8d387b68d61c58ab83c6c016672934102569859 # v3
+        with:
+          app-id: ${{ secrets.APRIL_APP_ID }}
+          private-key: ${{ secrets.APRIL_PRIVATE_KEY }}
+          # `pull-requests: write`, not `read`: for a GitHub App the permission
+          # follows the target, and a pull request is not an issue even when
+          # the endpoint says /issues/ (#1412). `issues: write` covers the
+          # repository-level label create.
+          permission-issues: write
+          permission-pull-requests: write
+      - name: Resolve the revision turn
+        env:
+          AGENT_AUTOMATIONS_ENABLED: ${{ vars.AGENT_AUTOMATIONS_ENABLED }}
+          COMMENT_POSTED: ${{ needs.revise.outputs.revision_comment_posted }}
+          # Falls back to the event's own fields so an admission that crashed
+          # before writing its outputs still resolves to the review it was
+          # handed.
+          DECLINE_REASON: >-
+            ${{ needs.admit.outputs.decline_reason ||
+            (needs.admit.result == 'failure' &&
+            'admission failed before the turn could start') || '' }}
+          FACTORY_ACTIONS_TOKEN: ${{ github.token }}
+          FACTORY_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          HEAD_BEFORE: ${{ needs.admit.outputs.head_sha }}
+          PR_NUMBER: >-
+            ${{ needs.admit.outputs.pr_number ||
+            github.event.pull_request.number || inputs.pr_number }}
+          REVISE_RESULT: ${{ needs.revise.result }}
+          REVISION_OUTCOME: ${{ needs.revise.outputs.revision_outcome }}
+          REVIEW_ID: ${{ needs.admit.outputs.review_id || github.event.review.id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -z "${REVIEW_ID:-}" ]; then
+            echo "Admission resolved no review to answer; nothing to resolve."
+            exit 0
+          fi
+          uv run --script scripts/factory-revise.py resolve \
+            --pr "$PR_NUMBER" \
+            --review-id "$REVIEW_ID" \
+            --head-before "$HEAD_BEFORE" \
+            --revise-result "$REVISE_RESULT" \
+            --revision-outcome "$REVISION_OUTCOME" \
+            --comment-posted "$COMMENT_POSTED" \
+            --reason "$DECLINE_REASON"
+
+  evidence:
+    needs: [admit, revise]
+    if: >-
+      needs.admit.outputs.matched == 'true' &&
+      needs.revise.result == 'success' &&
+      needs.revise.outputs.needs_macos_evidence == 'true'
+    uses: ./.github/workflows/_evidence.yml
+    with:
+      pr_branch: ${{ needs.revise.outputs.pr_branch }}
+      pr_number: ${{ needs.revise.outputs.pr_number }}
+      pr_head_sha: ${{ needs.revise.outputs.pr_head_sha }}
+      test_commands_json: ${{ needs.revise.outputs.test_commands_json }}
+      needs_screenshot_evidence: false
+      upload_screenshots: false
+      upload_text_evidence: true
+      artifact_name: factory-revise-evidence
+    secrets:
+      APP_ID: ${{ secrets.APRIL_APP_ID }}
+      PRIVATE_KEY: ${{ secrets.APRIL_PRIVATE_KEY }}
+      EVIDENCE_UPLOAD_TOKEN: ${{ secrets.EVIDENCE_UPLOAD_TOKEN }}
+
+  telemetry:
+    needs: [revise]
+    # Runs after success or failure (rows can exist either way), but not when
+    # the model job never started — no artifact can exist, so don't spin up a
+    # write-capable runner for nothing.
+    if: always() && needs.revise.result != 'skipped' && needs.revise.result != 'cancelled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The model job stays read-only; only this job may write factory/ops-data.
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+      - name: Download contributor telemetry
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        continue-on-error: true
+        with:
+          pattern: factory-revise-telemetry
+          path: telemetry
+          merge-multiple: true
+          github-token: ${{ github.token }}
+      - name: Append cost telemetry
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ROWS="$GITHUB_WORKSPACE/telemetry/cost-rows.jsonl"
+          if [ ! -f "$ROWS" ]; then
+            echo "No telemetry cost rows found; nothing to append."
+            exit 0
+          fi
+          uv run --script scripts/factory-cost-append.py --rows "$ROWS"

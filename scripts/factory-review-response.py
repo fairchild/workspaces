@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -73,6 +74,23 @@ factory_responder = _load_sibling(
 APRIL_ATTRIBUTION = "*April Clearwater, Application Lead*\n\n"
 RESPONDER_BOT = "april-clearwater[bot]"
 RESPONSE_MARKER_PREFIX = "<!-- factory-review-response review-id:"
+# The revision lane's own marker (`factory-revise.yml`). This module never
+# writes one; it reads them to tell "April is answering that review with a
+# diff" apart from "nobody is moving", which are the same picture otherwise.
+REVISION_MARKER_PREFIX = "<!-- factory-revision review-id:"
+RESPONSE_MARKER_RE = re.compile(
+    rf"^{re.escape(RESPONSE_MARKER_PREFIX)}(?P<id>\d+) -->$"
+)
+REVISION_MARKER_RE = re.compile(
+    rf"^{re.escape(REVISION_MARKER_PREFIX)}(?P<id>\d+) -->$"
+)
+# Revision turns the factory will spend on one pull request before the owner
+# is the only party left who can move it. Two: the second turn is where a
+# model answers what the first one misread, and a third has nothing new to
+# read -- the reviewer's objection has not changed and neither has the code
+# the model can see.
+REVISION_ATTEMPT_CEILING = 2
+REVISION_LANE_SWITCH = "FACTORY_REVISE_ENABLED"
 # Evidence item text is PR-controlled. It is quoted back so the escalation
 # names the line the owner has to edit, so it is neutralized first: HTML
 # comment delimiters would let PR text seed a marker inside April's own
@@ -430,12 +448,58 @@ def label_blockers(labels: set[str], *, evidence_accounted: bool) -> list[Blocke
     return blockers
 
 
+def revision_lane_covers(pull_request: dict[str, Any]) -> bool:
+    """Whether the revision lane's v1 admission scope includes this PR.
+
+    Deferring to a lane that will decline is how a PR gets stranded, so this
+    is the one admission condition the response side has to know about. The
+    revision lane checks out and pushes the head branch, which it will only do
+    for a branch the factory itself wrote -- April's own pull requests.
+    """
+    author = str((pull_request.get("user") or {}).get("login") or "")
+    return author.casefold() == RESPONDER_BOT.casefold()
+
+
+def revision_required_blocker(reason: str) -> Blocker:
+    """The diff has to change and the revision lane is not the one changing it."""
+    return Blocker(
+        key="revision-required",
+        owner_required=True,
+        detail=(
+            "**A change to the diff was requested.** Nothing the owner can act on "
+            "in this PR's machine-readable state (evidence entries, blocking "
+            "labels) accounts for the review, so the requested change is to the "
+            "code or prose itself. The contributor revision loop "
+            f"({REVISION_LOOP_ISSUE}) can take that turn, but {reason}. Gesture: "
+            "push the revision, or re-release the linked issue with the review's "
+            "feedback folded into it."
+        ),
+    )
+
+
+def revision_exhausted_blocker(attempts: int) -> Blocker:
+    return Blocker(
+        key="revision-attempts-exhausted",
+        owner_required=True,
+        detail=(
+            f"**The revision loop has spent its {REVISION_ATTEMPT_CEILING} turns on "
+            f"this PR** ({attempts} reviews answered with a revision) and a reviewer "
+            "is still blocking. Another model turn reads the same code against the "
+            "same objection, so the loop stops here. Gesture: push the revision, or "
+            "re-release the linked issue with the review's feedback folded into it."
+        ),
+    )
+
+
 def evaluate_response(
     pull_request: dict[str, Any],
     review: dict[str, Any] | None,
     *,
     repository_owner: str,
     already_responded: bool,
+    revise_enabled: bool = False,
+    revision_in_flight: bool = False,
+    revision_attempts: int = 0,
 ) -> ResponseDecision:
     if str(pull_request.get("state") or "").casefold() != "open":
         return ResponseDecision("skip", "pull request is not open")
@@ -462,25 +526,34 @@ def evaluate_response(
         # the review is covered: the lane never reads the review's prose, and
         # a `pending-ci` entry can also sit forever (the named check may not
         # exist, may fail, or the verifier may be off or already past its last
-        # check_suite event). Escalating anyway is the fail-safe direction --
-        # a needless ask costs the owner a glance; a false "you are not
+        # check_suite event). Whoever takes the turn from here, somebody does
+        # -- a needless ask costs the owner a glance; a false "you are not
         # needed" costs a parked PR, which is the failure this lane exists to
         # remove.
-        blockers.append(
-            Blocker(
-                key="revision-required",
-                owner_required=True,
-                detail=(
-                    "**A change to the diff was requested.** Nothing the owner can "
-                    "act on in this PR's machine-readable state (evidence entries, "
-                    "blocking labels) accounts for the review, so the requested "
-                    "change is to the code "
-                    f"or prose itself. The factory has no contributor revision loop "
-                    f"yet ({REVISION_LOOP_ISSUE}): push the revision, or re-release "
-                    "the linked issue with the review's feedback folded into it."
-                ),
+        if not revise_enabled:
+            blockers.append(
+                revision_required_blocker(f"`{REVISION_LANE_SWITCH}` is off")
             )
-        )
+        elif not revision_lane_covers(pull_request):
+            blockers.append(
+                revision_required_blocker(
+                    f"it revises only pull requests `{RESPONDER_BOT}` authored"
+                )
+            )
+        elif revision_in_flight:
+            return ResponseDecision(
+                "skip", "a revision turn already answered this review"
+            )
+        elif revision_attempts >= REVISION_ATTEMPT_CEILING:
+            blockers.append(revision_exhausted_blocker(revision_attempts))
+        else:
+            # The revision lane runs off this same event and owns the turn
+            # from here. Every decline path over there ends in either a
+            # revision marker or an owner escalation, so a defer cannot
+            # strand the PR -- it moves who answers, not whether anyone does.
+            return ResponseDecision(
+                "defer", "the revision lane owns this turn", tuple(blockers)
+            )
     return ResponseDecision("respond", "review needs a factory response", tuple(blockers))
 
 
@@ -488,8 +561,12 @@ def response_marker(review_id: int) -> str:
     return f"{RESPONSE_MARKER_PREFIX}{review_id} -->"
 
 
-def is_response_comment(comment: dict[str, Any], review_id: int) -> bool:
-    """True only for a response this lane actually posted for `review_id`.
+def revision_marker(review_id: int) -> str:
+    return f"{REVISION_MARKER_PREFIX}{review_id} -->"
+
+
+def marked_review_id(comment: dict[str, Any], pattern: re.Pattern[str]) -> int | None:
+    """The review id in a factory marker on this comment, or None.
 
     Author-bound and position-bound. A substring search over every comment
     body would let anyone silence the lane by quoting the marker back --
@@ -499,13 +576,45 @@ def is_response_comment(comment: dict[str, Any], review_id: int) -> bool:
     """
     author = str((comment.get("user") or {}).get("login") or "")
     if author.casefold() != RESPONDER_BOT.casefold():
-        return False
+        return None
     visible = factory_responder._unquoted_visible_lines(str(comment.get("body") or ""))
-    return bool(visible) and visible[-1].strip() == response_marker(review_id)
+    if not visible:
+        return None
+    match = pattern.match(visible[-1].strip())
+    return int(match.group("id")) if match else None
+
+
+def is_response_comment(comment: dict[str, Any], review_id: int) -> bool:
+    """True only for a response this lane actually posted for `review_id`."""
+    return marked_review_id(comment, RESPONSE_MARKER_RE) == review_id
 
 
 def has_response_for_review(comments: list[dict[str, Any]], review_id: int) -> bool:
     return any(is_response_comment(comment, review_id) for comment in comments)
+
+
+def has_revision_for_review(comments: list[dict[str, Any]], review_id: int) -> bool:
+    """Whether April already answered `review_id` with a revision turn."""
+    return any(
+        marked_review_id(comment, REVISION_MARKER_RE) == review_id
+        for comment in comments
+    )
+
+
+def count_revision_attempts(comments: list[dict[str, Any]]) -> int:
+    """How many distinct reviews April has answered with a revision here.
+
+    Distinct review ids, not comments: the revision lane repairs a missing
+    marker by posting one itself, and a turn counted twice would spend the
+    ceiling on a single answer.
+    """
+    return len(
+        {
+            review_id
+            for comment in comments
+            if (review_id := marked_review_id(comment, REVISION_MARKER_RE)) is not None
+        }
+    )
 
 
 def reviewer_name(review: dict[str, Any]) -> str:
@@ -652,11 +761,17 @@ def respond(
     pr_number: int,
     review_id: int | None,
     repository_owner: str,
+    *,
+    revise_enabled: bool = False,
 ) -> None:
     pull_request = client.pull_request(pr_number)
     reviews = client.pull_request_reviews(pr_number)
     comments = client.comments(pr_number)
     standing = standing_reviews(reviews, repository_owner)
+    # Escalation markers only, deliberately: this set decides both which
+    # review still needs answering and whether the owner-action marker below
+    # belongs on the PR. A revision-answered review is in flight, not waiting
+    # on the owner, so counting its marker here would label a moving PR.
     answered = {
         int(item.get("id") or 0)
         for item in standing
@@ -674,6 +789,12 @@ def respond(
         review,
         repository_owner=repository_owner,
         already_responded=already_responded,
+        revise_enabled=revise_enabled,
+        revision_in_flight=(
+            review is not None
+            and has_revision_for_review(comments, int(review.get("id") or 0))
+        ),
+        revision_attempts=count_revision_attempts(comments),
     )
     print(f"Factory review response for #{pr_number}: {decision.action} ({decision.reason})")
     labels = factory_implement.label_names(pull_request)
@@ -712,6 +833,12 @@ def respond(
     write_output(
         "blockers",
         ",".join(blocker.key for blocker in decision.blockers),
+    )
+    # Read by nothing in this lane's own workflow: they are how an operator
+    # reading a deferred run's summary can see which review was handed on.
+    write_output("revise_eligible", "true" if decision.action == "defer" else "false")
+    write_output(
+        "review_id", str(int(review.get("id") or 0)) if review is not None else ""
     )
     if decision.action != "respond":
         return
@@ -762,6 +889,7 @@ def main(argv: list[str]) -> int:
         args.pr,
         args.review_id,
         require_env("FACTORY_REPOSITORY_OWNER"),
+        revise_enabled=os.environ.get(REVISION_LANE_SWITCH, "").casefold() == "true",
     )
     return 0
 
