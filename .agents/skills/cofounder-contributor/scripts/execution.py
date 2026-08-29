@@ -363,6 +363,37 @@ MERGEABILITY_SURFACE_RULES: tuple[tuple[str, str], ...] = (
 )
 MERGEABILITY_DOC_SUFFIXES = (".md", ".mdx", ".markdown", ".txt")
 
+# The body contract is `.github/pull_request_template.md`; scripts/pr-readiness.py
+# grades against it. Seeding reads the field list out of that file rather than
+# repeating it, so a field the owner adds to the template reaches every factory
+# PR without a second edit here.
+PR_TEMPLATE_PATH = REPO_ROOT / ".github" / "pull_request_template.md"
+MERGEABILITY_FIELD_PATTERN = re.compile(r"(?m)^[ \t]*[-*][ \t]*(?P<label>[^:\n]+):")
+# Used only when the template is unreadable: a runtime that can't open a PR is
+# worse than one seeding a field list that has drifted.
+FALLBACK_MERGEABILITY_LABELS: tuple[str, ...] = (
+    "Surface",
+    "User-facing behavior changed",
+    "Non-happy paths considered",
+    "Release/ops preconditions",
+    "Residual risk or follow-up",
+)
+
+
+def mergeability_field_labels() -> tuple[str, ...]:
+    """Mergeability field labels the PR template declares, in template order."""
+    try:
+        template = PR_TEMPLATE_PATH.read_text(encoding="utf-8")
+    except OSError:
+        return FALLBACK_MERGEABILITY_LABELS
+    labels = tuple(
+        match.group("label").strip()
+        for match in MERGEABILITY_FIELD_PATTERN.finditer(
+            markdown_section(template, "Mergeability")
+        )
+    )
+    return labels or FALLBACK_MERGEABILITY_LABELS
+
 
 def _mergeability_clip(text: str, max_len: int = 160) -> str:
     text = re.sub(r"\s+", " ", text).strip()
@@ -445,11 +476,12 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     """Seed the `## Mergeability` block scripts/pr-readiness.py requires when
     the agent omitted it.
 
-    Values come from what the runtime actually knows — changed paths for
-    Surface, the agent's own Summary/Validation/Risks sections for the rest —
-    with honest author-must-confirm placeholders where it knows nothing, so
-    the gate's structural checks pass at PR-open time without inventing
-    claims. An agent-authored Mergeability section is kept verbatim.
+    The field list comes from the PR template; the values come from what the
+    runtime actually knows — changed paths for Surface, the agent's own
+    Summary/Validation/Risks sections for the rest — with honest
+    author-must-confirm placeholders where it knows nothing, so the gate's
+    structural checks pass at PR-open time without inventing claims. An
+    agent-authored Mergeability section is kept verbatim.
     """
     if has_markdown_section(summary_body, "Mergeability"):
         return summary_body
@@ -473,13 +505,17 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
         if risks_line
         else "None noted by the author in this run"
     )
+    seeded = {
+        "Surface": _mergeability_surface(changed_files),
+        "User-facing behavior changed": behavior,
+        "Non-happy paths considered": non_happy,
+        "Residual risk or follow-up": residual,
+    }
+    # A field the runtime can't speak to gets "n/a", which the gate reads as
+    # unanswered: silent on an ordinary PR, and still demanding a real answer
+    # where the field is required (Release/ops preconditions on release paths).
     content = "\n".join(
-        [
-            f"- Surface: {_mergeability_surface(changed_files)}",
-            f"- User-facing behavior changed: {behavior}",
-            f"- Non-happy paths considered: {non_happy}",
-            f"- Residual risk or follow-up: {residual}",
-        ]
+        f"- {label}: {seeded.get(label, 'n/a')}" for label in mergeability_field_labels()
     )
     return insert_markdown_section(summary_body, "Mergeability", content)
 
