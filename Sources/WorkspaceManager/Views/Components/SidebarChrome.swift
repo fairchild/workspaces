@@ -132,13 +132,15 @@ enum SidebarChrome {
         static let placeholderMonogram = "?"
         static let placeholderFill = Color.secondary
 
-        /// Hue in `[0, 1)` for a repo name, from FNV-1a over its UTF-8.
+        /// Hue in `[0, 1)` for a repo name, from FNV-1a over its NFC-normalized UTF-8.
         ///
         /// Deliberately not `Hasher`: that one is seeded per process, so the sidebar would
-        /// repaint every repo on relaunch. This hash is fixed for all time.
+        /// repaint every repo on relaunch. This hash is fixed for all time. Canonical
+        /// normalization first, so spellings Swift already treats as the same string
+        /// ("é" vs "e" + combining accent) wear the same color.
         static func hue(for name: String) -> Double {
             var hash: UInt64 = 0xcbf2_9ce4_8422_2325
-            for byte in name.utf8 {
+            for byte in name.precomposedStringWithCanonicalMapping.utf8 {
                 hash ^= UInt64(byte)
                 hash = hash &* 0x0000_0100_0000_01b3
             }
