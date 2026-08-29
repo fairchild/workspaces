@@ -312,6 +312,10 @@ struct WorkspaceRow: View {
         statusMessage != nil || workspace.status == .provisioning
     }
 
+    /// A host workspace is a branch of its repo, so it wears a branch. Lume and Daytona keep
+    /// their provider glyphs: where the work runs is the thing worth reading on those rows,
+    /// and one uniform glyph would spend that distinction. Activity rides the tint, not the
+    /// symbol — hence one branch symbol rather than a fill variant.
     private var providerIconName: String {
         switch workspace.backend {
         case .lume:
@@ -319,7 +323,7 @@ struct WorkspaceRow: View {
         case .daytona:
             return workspace.status == .active ? "cloud.fill" : "cloud"
         case .local, .ssh, .unknown:
-            return sessionActivity.isActive ? "terminal.fill" : "terminal"
+            return "arrow.triangle.branch"
         }
     }
 
@@ -524,6 +528,61 @@ struct WorkspaceRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+}
+
+/// The row that heads a repo's archived workspaces: a count capsule, a muted label, and a
+/// chevron gathered into one quiet pill. Archived work is the least of what a repo is about,
+/// so the pill reads as a lid rather than as another row — its own container, a shade under
+/// the hover chip, holding the count of what is folded away beneath it.
+///
+/// Value-shaped (count, expansion, one action) so a still render can stage it; the expansion
+/// state itself stays with the sidebar, which knows whether a selected archived workspace is
+/// forcing the section open.
+struct ArchivedDisclosureRow: View {
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: SidebarChrome.Metrics.disclosurePillSpacing) {
+                // The capsule carries the hidden subtree while the section is collapsed, and
+                // steps back once its rows are on screen — the same reading the repo row's
+                // badge makes of a collapsed repo.
+                WorkspaceCountBadge(count: count, isCollapsed: !isExpanded)
+                    .accessibilityHidden(true)
+
+                Text("archived")
+                    .font(.callout)
+                    .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, SidebarChrome.Metrics.disclosurePillHorizontalPadding)
+            .padding(.vertical, SidebarChrome.Metrics.disclosurePillVerticalPadding)
+            .background(
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.disclosurePill, style: .continuous)
+                    .fill(SidebarChrome.Fill.disclosurePill)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.disclosurePill, style: .continuous)
+                    .stroke(
+                        SidebarChrome.Stroke.disclosurePill,
+                        lineWidth: SidebarChrome.Stroke.disclosurePillWidth
+                    )
+            }
+            .contentShape(Rectangle())
+            .padding(.leading, SidebarChrome.Indent.repoSubheader)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Archived workspaces, \(count)")
     }
 }
 
