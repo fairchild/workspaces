@@ -37,6 +37,10 @@ SENSITIVE_NAME_MARKERS = (
     "signing",
     "token",
 )
+# Execution configuration wherever it sits: a project `.mcp.json` defines
+# stdio commands a trust-seeded headless session will launch, which is code
+# execution by patch, not a content change.
+SENSITIVE_BASENAMES = frozenset({".mcp.json", ".npmrc"})
 MARKDOWN_DESTINATION_RE = re.compile(r"\]\((?P<path>[^)\s]+)\)")
 CODE_SPAN_RE = re.compile(r"`(?P<path>[^`\n]+)`")
 PLAIN_PATH_RE = re.compile(
@@ -66,6 +70,9 @@ def sensitive_agent_patch_paths(changed_files: list[str]) -> list[str]:
         lower_parts = PurePosixPath(lower_path).parts
 
         if lower_path.endswith(".entitlements"):
+            sensitive.append(rel_path)
+            continue
+        if lower_parts and lower_parts[-1] in SENSITIVE_BASENAMES:
             sensitive.append(rel_path)
             continue
         if lower_path in SENSITIVE_RELEASE_SCRIPT_PATHS:

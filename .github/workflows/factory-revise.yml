@@ -255,7 +255,7 @@ jobs:
           FACTORY_REPOSITORY_OWNER: ${{ github.repository_owner }}
           FACTORY_REVISE_ENABLED: ${{ vars.FACTORY_REVISE_ENABLED }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          HEAD_BEFORE: ${{ needs.admit.outputs.head_sha }}
+          HEAD_AFTER: ${{ needs.revise.outputs.pr_head_sha }}
           PR_NUMBER: >-
             ${{ needs.admit.outputs.pr_number ||
             github.event.pull_request.number || inputs.pr_number }}
@@ -274,7 +274,7 @@ jobs:
           fi
           uv run --script scripts/factory-revise.py resolve \
             "${ARGS[@]}" \
-            --head-before "$HEAD_BEFORE" \
+            --head-after "$HEAD_AFTER" \
             --revise-result "$REVISE_RESULT" \
             --revision-outcome "$REVISION_OUTCOME" \
             --comment-posted "$COMMENT_POSTED" \
@@ -282,9 +282,13 @@ jobs:
 
   evidence:
     needs: [admit, revise]
+    # `pushed` only: a body-only turn moved no code, and a needs-owner turn
+    # moved nothing at all — spending a macOS lane on an unchanged head would
+    # rewrite evidence for a revision that does not exist.
     if: >-
       needs.admit.outputs.matched == 'true' &&
       needs.revise.result == 'success' &&
+      needs.revise.outputs.revision_outcome == 'pushed' &&
       needs.revise.outputs.needs_macos_evidence == 'true'
     uses: ./.github/workflows/_evidence.yml
     with:

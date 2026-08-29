@@ -482,10 +482,12 @@ def create_scratch_workspace(env: dict[str, str]) -> ScratchPatchArtifact:
     shutil.copytree(baseline_dir, scratch_dir, symlinks=True)
     # The model CLI is fetched through npx with the scratch as cwd, so a tree
     # `.npmrc` could point that resolution at another registry and swap the
-    # pinned binary under CLAUDE_CODE_OAUTH_TOKEN. Removed from both trees so
-    # the patch diff cannot see the removal either.
+    # pinned binary under CLAUDE_CODE_OAUTH_TOKEN; a tree `.mcp.json` names
+    # stdio commands a trust-seeded headless session would launch. Removed
+    # from both trees so the patch diff cannot see the removal either.
     for tree in (baseline_dir, scratch_dir):
         (tree / ".npmrc").unlink(missing_ok=True)
+        (tree / ".mcp.json").unlink(missing_ok=True)
     return ScratchPatchArtifact(
         temp_root=temp_root,
         baseline_dir=baseline_dir,
@@ -842,6 +844,11 @@ def run_claude(
         "--output-format",
         "stream-json",
         "--verbose",
+        # No MCP config is passed, so this pins the server set to empty: a
+        # project `.mcp.json` in a trusted scratch would otherwise define
+        # stdio commands the session launches — code execution the tool
+        # allowlist below never sees.
+        "--strict-mcp-config",
         "--system-prompt",
         prompt_text,
     ]

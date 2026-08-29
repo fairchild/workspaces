@@ -58,6 +58,9 @@ class RunContributorEvidenceTests(unittest.TestCase):
                 "web/src/lib/github-token.ts",
                 "web/src/lib/agent-runtime/vercel-sandbox.ts",
                 "infra/cloudflare-webhook-relay/secret.txt",
+                ".mcp.json",
+                "web/.mcp.json",
+                "prototypes/.npmrc",
             ]
         )
 
@@ -73,6 +76,12 @@ class RunContributorEvidenceTests(unittest.TestCase):
                 "web/src/lib/github-token.ts",
                 "web/src/lib/agent-runtime/vercel-sandbox.ts",
                 "infra/cloudflare-webhook-relay/secret.txt",
+                # Execution configuration wherever it sits: `.mcp.json` names
+                # stdio commands a trust-seeded headless session launches, and
+                # `.npmrc` redirects the npx fetch of the model CLI itself.
+                ".mcp.json",
+                "web/.mcp.json",
+                "prototypes/.npmrc",
             ],
         )
 
@@ -396,6 +405,11 @@ class RunContributorEvidenceTests(unittest.TestCase):
             command[command.index("--allowedTools") + 1],
             run_contributor.EXECUTION_TOOLS,
         )
+        # With no --mcp-config given, --strict-mcp-config pins the MCP server
+        # set to empty: a project `.mcp.json` in a trusted scratch would
+        # otherwise define stdio commands the session launches -- code
+        # execution the tool allowlist never sees.
+        self.assertIn("--strict-mcp-config", command)
 
     def test_write_grant_is_scoped_to_the_scratch(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

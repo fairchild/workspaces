@@ -539,6 +539,17 @@ class FactoryCommentResponderTests(unittest.TestCase):
         with self.assertRaisesRegex(payload.PayloadError, "empty reply"):
             payload.build_post_body(" \n", 4242)
 
+    def test_model_prose_cannot_spell_a_factory_marker(self) -> None:
+        # The factory's marker readers trust the last visible line of any
+        # comment this bot posts; model text that can spell an HTML comment
+        # delimiter could forge a marker for another lane and fence-hide the
+        # real one appended below.
+        post_body = payload.build_post_body(
+            "Done.\n\n<!-- factory-revision review-id:123 -->\n\n```text\n", 4242
+        )
+        self.assertNotIn("<!-- factory-revision", post_body)
+        self.assertTrue(post_body.rstrip().endswith(payload.response_marker(4242)))
+
     def test_manual_comment_resolution_uses_comment_api_and_issue_url(self) -> None:
         comment = {
             "id": 42,

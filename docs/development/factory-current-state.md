@@ -95,15 +95,28 @@ revision marker and a still-standing rejection at the same time, and reading
 that as "nobody is moving" would escalate a PR mid-flight.
 
 The fallback is what makes deferring safe. Every decline in `factory-revise.py`
-downstream of that defer — no evidence contract on the linked issue, privileged
-paths without `privileged-agent-patch`, daily cap or runaway guard, attempts
-exhausted — carries `escalate=true`, and the `resolve` job posts the
-deterministic escalation in the response lane's place. So does a turn that
-fails, is cancelled, is declined by re-validation, or reports a push the branch
-head does not carry. `resolve` runs on `always()` and on admission failing
-outright, and re-derives from live state before speaking: if the reviewer
-approved, the owner pushed the fix, or the escalation is already standing, it
-stays quiet, because in those cases nobody is waiting.
+downstream of that defer — no evidence contract on the linked issue, any
+privileged-path diff (labelled or not), daily cap or runaway guard — carries
+`escalate=true`, and the `resolve` job posts the deterministic escalation in
+the response lane's place. So does a turn that fails, is cancelled, is declined
+by re-validation, or reports a push the live head does not carry (the
+attestation binds to the exact SHA the turn exported). `resolve` runs on
+`always()` and on admission failing or being cancelled, and re-derives from
+live state before speaking: if the reviewer approved, the owner pushed the
+fix, or the escalation is already standing, it stays quiet, because in those
+cases nobody is waiting. A revision that answers the *owner's* own rejection
+also puts `owner-action` up after the attestation — a counterpart bot
+re-reviews automatically, the owner does not, and until they do the PR really
+is waiting on them.
+
+Two residual windows are accepted and have the same recovery. A crash between
+resolve's own API calls (dispatch accepted, attestation unwritten) and a
+dropped *pending* run (GitHub keeps one queued run per concurrency group, so
+a third overlapping event on one PR replaces the queued one) can each leave a
+review with neither marker nor escalation until something re-fires. Both are
+narrow, need no untrusted party, and the documented recovery covers them: the
+owner dispatches `Factory Revise` for the PR — a recovery run — or `Factory
+Review` to force the re-review directly.
 
 Two markers keep the lanes from talking past each other, both read as the last
 visible line of an `april-clearwater[bot]` comment (the #1364 quote/code
