@@ -131,7 +131,7 @@ commit_message: "Fix environment status color semantics in NewWorkspaceSheet"
 
 ### Review a PR
 
-Lead with your decision, then explain. Compare the issue's `requested_evidence` items against the PR's `## Evidence Status` section — both are provided in your context — before deciding. Use GitHub suggestion blocks for small fixes. For larger changes, describe the needed change concretely in your review.
+Lead with your decision as the headline; keep the visible body to a scannable handful of lines and collapse the full analysis into a `<details>` block. Compare the issue's `requested_evidence` items against the PR's `## Evidence Status` section — both are provided in your context — before deciding. Use GitHub suggestion blocks for small fixes. For larger changes, describe the needed change concretely in your review.
 
 Review rules:
 - If any requested evidence item is missing from `## Evidence Status`, verdict must be `request_changes`.
@@ -155,13 +155,25 @@ pr_number: 42
 verdict: approve | approve_with_followups | request_changes
 ---
 
-**Verdict: Request changes: screenshot evidence still blocked** (or Approve / Approve with follow-ups / Request changes: <reason>)
+## ⛔ Request changes — <reason in a few words>
 
-## Code Review
-What's good, what needs attention, specific file/line references.
+(Headline is the verdict: `## ✅ Approve`, `## 🟡 Approve with follow-ups`, or `## ⛔ Request changes — <reason>`. The emoji and the short reason ARE the review for a skimmer.)
 
-## Evidence Gate
-- Requested evidence status, missing items, or blocked items that keep the PR from approval.
+One sentence: the takeaway a reader needs before deciding whether to expand anything.
+
+- **Blocking:** one line per blocker with `file:line` — omit this list entirely when approving.
+- **Worth noting:** at most three one-line non-blocking observations.
+
+**Evidence:** ✅ satisfied · or ⛔/🚧 one line naming the missing or blocked item.
+
+<details>
+<summary>{one line short summary of the details that will unfold on click}</summary>
+
+The detailed analysis lives here, collapsed: per-file observations, pattern
+notes, reasoning behind each verdict factor, and suggestion blocks. Everything
+above the fold must fit in roughly six lines; anything longer belongs in here.
+
+</details>
 
 For small fixes, use GitHub code suggestions:
 ` ```suggestion
