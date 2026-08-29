@@ -218,6 +218,121 @@ def compose_pr_body(
     )
 
 
+# Comments the revise lane reads back off the PR. Both markers must be the
+# last visible line of the comment for the #1364 quote-aware reader, and both
+# are keyed by the review id so a marker answers exactly one review:
+# `factory-revision` says a revision turn answered it, `factory-review-response`
+# says the owner is the blocking party.
+REVISION_MARKER_PREFIX = "<!-- factory-revision review-id:"
+REVIEW_RESPONSE_MARKER_PREFIX = "<!-- factory-review-response review-id:"
+REVISION_COMMENT_SECTIONS = ("Summary", "Validation", "Risks")
+
+
+def revision_marker(review_id: str) -> str:
+    return f"{REVISION_MARKER_PREFIX}{review_id} -->"
+
+
+def review_response_marker(review_id: str) -> str:
+    return f"{REVIEW_RESPONSE_MARKER_PREFIX}{review_id} -->"
+
+
+def fetch_review(pr_number: int, review_id: str, env: dict[str, str]) -> dict[str, object]:
+    """The review a revision turn answers, or {} when it cannot be read.
+
+    Best-effort: only the reference line degrades, and the marker the lane
+    matches on carries the review id either way.
+    """
+    owner, name = repo_owner_name(env)
+    raw = run_optional(
+        ["gh", "api", f"repos/{owner}/{name}/pulls/{pr_number}/reviews/{review_id}"],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default="",
+    )
+    try:
+        review = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return review if isinstance(review, dict) else {}
+
+
+def _review_reference(review: dict[str, object]) -> str:
+    """The answered review as plain text, never as an `@` mention: mention
+    triage watches comment bodies, and the reviewer gains nothing from a ping."""
+    user = review.get("user")
+    login = str(user.get("login") or "").strip() if isinstance(user, dict) else ""
+    subject = (
+        f"{login.removesuffix('[bot]')}'s requested changes"
+        if login
+        else "the requested changes"
+    )
+    url = str(review.get("html_url") or "").strip()
+    return f"[{subject}]({url})" if url else subject
+
+
+def compose_revision_comment(
+    persona: str,
+    body: str,
+    *,
+    review: dict[str, object],
+    review_id: str,
+) -> str:
+    """April's reply on the PR after a revision turn: what she did, bound to
+    the review that asked for it."""
+    sections = [
+        f"## {heading}\n{markdown_section(body, heading)}"
+        for heading in REVISION_COMMENT_SECTIONS
+        if markdown_section(body, heading)
+    ]
+    return "\n".join(
+        [
+            f"*{persona}*",
+            "",
+            f"Answering {_review_reference(review)}.",
+            "",
+            "\n\n".join(sections) or "This revision turn recorded no summary.",
+            "",
+            revision_marker(review_id),
+        ]
+    ) + "\n"
+
+
+def compose_revision_escalation_comment(
+    persona: str,
+    body: str,
+    *,
+    owner: str,
+    review_id: str,
+) -> str:
+    """April's explicit hand-back when a revision turn moved nothing: her own
+    reason under the escalation marker the review-response lane already reads."""
+    reason = markdown_section(body, "Summary") or "No reason was recorded; see the workflow run."
+    return "\n".join(
+        [
+            f"*{persona}*",
+            "",
+            f"**This needs @{owner}** — this turn changed neither the code nor the PR body:",
+            "",
+            reason,
+            "",
+            review_response_marker(review_id),
+        ]
+    ) + "\n"
+
+
+def _post_pr_comment(pr_number: int, body: str, env: dict[str, str]) -> bool:
+    sentinel = "__COMMENT_FAILED__"
+    posted = run_optional(
+        ["gh", "pr", "comment", str(pr_number), "--body", body],
+        timeout=GITHUB_API_TIMEOUT,
+        cwd=REPO_ROOT,
+        env=env,
+        default=sentinel,
+    )
+    return posted != sentinel
+
+
 # Path-prefix → readiness surface label, first match wins. Feeds the
 # `## Mergeability` block that scripts/pr-readiness.py requires on every
 # non-draft PR; without a seeded block every factory PR fails the gate at open.
@@ -711,6 +826,9 @@ def _write_github_outputs(
     test_commands: list[str],
     pr_number: int,
     pr_head_sha: str,
+    *,
+    revision_outcome: str = "",
+    revision_comment_posted: bool = False,
 ) -> None:
     output_file = os.environ.get("GITHUB_OUTPUT", "")
     if not output_file:
@@ -723,6 +841,11 @@ def _write_github_outputs(
         f.write(f"pr_number={pr_number}\n")
         f.write(f"pr_head_sha={pr_head_sha}\n")
         f.write(f"test_commands_json={json.dumps(test_commands, separators=(',', ':'))}\n")
+        # Only a revision turn has an outcome; the implement and review lanes
+        # must see the output set they see today.
+        if revision_outcome:
+            f.write(f"revision_outcome={revision_outcome}\n")
+            f.write(f"revision_comment_posted={str(revision_comment_posted).lower()}\n")
     log(
         "Emitted outputs: "
         f"needs_macos_evidence={needs_evidence}, "
@@ -731,6 +854,12 @@ def _write_github_outputs(
         f"pr_number={pr_number}, "
         f"pr_head_sha={pr_head_sha}, "
         f"test_commands={test_commands}"
+        + (
+            f", revision_outcome={revision_outcome}, "
+            f"revision_comment_posted={str(revision_comment_posted).lower()}"
+            if revision_outcome
+            else ""
+        )
     )
 
 
@@ -773,6 +902,115 @@ def _mark_factory_evidence_blocked(
         cwd=REPO_ROOT,
         env=env,
     )
+
+
+def _post_revision_reply(
+    pr_number: int,
+    persona: str,
+    body: str,
+    review_id: str,
+    env: dict[str, str],
+) -> bool:
+    posted = _post_pr_comment(
+        pr_number,
+        compose_revision_comment(
+            persona,
+            body,
+            review=fetch_review(pr_number, review_id, env),
+            review_id=review_id,
+        ),
+        env,
+    )
+    if not posted:
+        log(
+            f"warning: PR #{pr_number} revision reply for review {review_id} was not "
+            "posted; the lane repairs the marker"
+        )
+    return posted
+
+
+def _finish_revision_without_diff(
+    data: dict[str, object],
+    env: dict[str, str],
+    *,
+    persona: str,
+    pr_number: int,
+    pr_body: str,
+    review_id: str,
+    branch: str,
+    requested_evidence: list[str],
+    evidence_needed: bool,
+    factory_evidence_blocked: bool,
+) -> int:
+    """Close out a revision turn that produced no file changes.
+
+    A PR body the model actually rewrote still answers the review, so it lands
+    and the lane sends the PR back for review. A body identical to the live one
+    means the turn moved nothing at all, which is the runtime's signal that the
+    review needs the owner. Labels stay untouched here: the lane's resolve step
+    owns owner-action.
+    """
+    live_body, live_head = _pr_body_and_head(pr_number, env)
+    model_body = str(data.get("body", ""))
+    if live_body.strip() != pr_body.strip():
+        outcome = "body-only"
+        if factory_evidence_blocked:
+            _mark_factory_evidence_blocked(str(pr_number), env=env)
+        run_checked(
+            [
+                "gh",
+                "pr",
+                "edit",
+                str(pr_number),
+                "--title",
+                str(data["pr_title"]).strip(),
+                "--body",
+                pr_body,
+            ],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+        )
+        posted = _post_revision_reply(pr_number, persona, model_body, review_id, env)
+    else:
+        outcome = "needs-owner"
+        owner, _ = repo_owner_name(env)
+        posted = _post_pr_comment(
+            pr_number,
+            compose_revision_escalation_comment(
+                persona, model_body, owner=owner, review_id=review_id
+            ),
+            env,
+        )
+        if not posted:
+            # The comment is the escalation. Failing loudly hands the turn to
+            # the lane's deterministic fallback instead of parking the PR.
+            print(
+                f"error: could not post the owner escalation for review {review_id} "
+                f"on PR #{pr_number}",
+                file=sys.stderr,
+            )
+            log(
+                json.dumps(
+                    {
+                        "error_class": "revision_escalation",
+                        "detail": "owner escalation comment was not posted",
+                        "pr": pr_number,
+                    }
+                )
+            )
+            return 1
+    _write_github_outputs(
+        evidence_needed,
+        _needs_screenshot_evidence(requested_evidence),
+        branch,
+        _extract_test_commands(requested_evidence),
+        pr_number,
+        live_head,
+        revision_outcome=outcome,
+        revision_comment_posted=posted,
+    )
+    return 0
 
 
 def route_execution_action(
@@ -965,6 +1203,44 @@ def route_execution_action(
                 cwd=REPO_ROOT,
                 env=env,
             )
+    # A revision turn answers one blocking review: it must never push onto a
+    # head that moved under it, and an empty diff is an outcome there rather
+    # than the failure it is on every other execution path.
+    revision_review_id = (
+        env.get("FACTORY_REVISION_REVIEW_ID", "").strip() if require_existing_pr else ""
+    )
+    if revision_review_id and own_pr is not None:
+        revision_pr_number = int(own_pr["number"])
+        if not _factory_expected_pr_head_is_current(revision_pr_number, env):
+            print(
+                f"error: PR #{revision_pr_number} head moved during the revision turn; "
+                "nothing was committed",
+                file=sys.stderr,
+            )
+            log(
+                json.dumps(
+                    {
+                        "error_class": "revision_conflict",
+                        "detail": "PR head moved during the revision turn",
+                        "pr": revision_pr_number,
+                    }
+                )
+            )
+            return 1
+        if not working_tree_dirty(env):
+            return _finish_revision_without_diff(
+                data,
+                env,
+                persona=persona,
+                pr_number=revision_pr_number,
+                pr_body=pr_body,
+                review_id=revision_review_id,
+                branch=branch,
+                requested_evidence=requested_evidence,
+                evidence_needed=evidence_needed,
+                factory_evidence_blocked=factory_evidence_blocked,
+            )
+
     if not working_tree_dirty(env):
         print(
             f"error: {data['action']} selected for #{issue_number} but no file changes were made",
@@ -1036,6 +1312,9 @@ def route_execution_action(
             cwd=REPO_ROOT,
             env=env,
         )
+        revision_comment_posted = bool(revision_review_id) and _post_revision_reply(
+            pr_number, persona, str(data.get("body", "")), revision_review_id, env
+        )
         _write_github_outputs(
             evidence_needed,
             screenshot_evidence_needed,
@@ -1043,6 +1322,8 @@ def route_execution_action(
             test_commands,
             pr_number,
             pr_head_sha,
+            revision_outcome="pushed" if revision_review_id else "",
+            revision_comment_posted=revision_comment_posted,
         )
         return 0
 

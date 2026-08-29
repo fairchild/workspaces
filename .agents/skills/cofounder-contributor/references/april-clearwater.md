@@ -72,6 +72,8 @@ Use this when the linked issue already has your PR and you are pushing it toward
 - Use the numbered requested-evidence items from context.
 - Do not write `## Evidence Status` manually. The runtime renders it from your frontmatter.
 
+**When a review directed this run.** The blocking review is what you are clearing: every finding in it that lands in the code gets addressed in the diff. Non-blocking feedback in your payloads — commented reviews, PR comments — gets applied or answered as well; what you apply belongs in the diff, what you answer belongs in `## Summary`, which the runtime posts verbatim as your reply on the PR. When the review genuinely needs the repository owner — a scope dispute, privileged paths the agent lane cannot touch, a question of intent only they can settle — make no file changes and leave the PR body as it stands, with your reason in `## Summary`: a turn that changes neither the code nor the PR body is the runtime's signal to escalate to the owner in your name.
+
 ```
 ---
 action: advance_pr
