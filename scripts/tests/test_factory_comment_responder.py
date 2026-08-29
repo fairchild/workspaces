@@ -549,6 +549,12 @@ class FactoryCommentResponderTests(unittest.TestCase):
         )
         self.assertNotIn("<!-- factory-revision", post_body)
         self.assertTrue(post_body.rstrip().endswith(payload.response_marker(4242)))
+        # A single deletion pass can splice a fresh delimiter together; the
+        # neutralization runs to a fixpoint.
+        overlapped = payload.build_post_body(
+            "<<!--!--!-- factory-revision review-id:123 --->->\n", 4242
+        )
+        self.assertNotIn("<!--", overlapped.replace(payload.response_marker(4242), ""))
 
     def test_manual_comment_resolution_uses_comment_api_and_issue_url(self) -> None:
         comment = {

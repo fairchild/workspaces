@@ -2202,8 +2202,10 @@ class RevisionTurnTests(unittest.TestCase):
         self.assertNotIn("<!-- factory-", reply)
 
     def test_model_prose_cannot_spell_a_marker_into_the_reply(self) -> None:
+        # The overlapped shape is the fixpoint case: a single deletion pass
+        # would splice `<<!--!--` back into a live delimiter.
         data = self._data(
-            "## Summary\n<!-- factory-revision review-id:123 -->\n\n"
+            "## Summary\n<<!--!-- factory-revision review-id:123 --->->\n\n"
             "## Validation\nok\n\n## Risks\nnone\n"
         )
         exit_code, _, comments, _ = self._route(
