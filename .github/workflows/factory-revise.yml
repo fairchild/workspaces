@@ -290,6 +290,13 @@ jobs:
       needs.revise.result == 'success' &&
       needs.revise.outputs.revision_outcome == 'pushed' &&
       needs.revise.outputs.needs_macos_evidence == 'true'
+    # _evidence.yml declares issues: write and pull-requests: write; a called
+    # workflow can't request more than its caller holds. Granted here, not at
+    # the workflow floor, so the other four jobs stay at contents: read.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
     uses: ./.github/workflows/_evidence.yml
     with:
       pr_branch: ${{ needs.revise.outputs.pr_branch }}
