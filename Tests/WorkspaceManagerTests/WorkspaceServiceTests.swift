@@ -964,6 +964,23 @@ struct WorkspaceServiceTests {
         #expect(FileManager.default.fileExists(atPath: destination.path))
     }
 
+    // A record whose directory is already gone is the state archiving is most wanted in —
+    // the relic tiles of #1441. Archiving reports the live path back unchanged and leaves no
+    // `.archived/` tree behind, so the caller marks the record archived without a move.
+    @Test("archiveWorkspace no-ops at the live path when the directory is already gone")
+    func archiveWorkspaceSkipsMoveWhenDirectoryMissing() async throws {
+        let service = WorkspaceService(gitService: MockGitService())
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let wsDir = tempDir.appendingPathComponent("repo/ws", isDirectory: true)
+
+        let destination = try await service.archiveWorkspace(at: wsDir)
+
+        #expect(destination.path == wsDir.path)
+        #expect(!FileManager.default.fileExists(atPath: tempDir.appendingPathComponent(".archived").path))
+    }
+
     @Test("archiveWorkspace runs archive.sh before moving the directory")
     func archiveWorkspaceRunsScript() async throws {
         let mockGit = MockGitService()

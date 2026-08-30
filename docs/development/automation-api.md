@@ -658,6 +658,13 @@ is whatever the sidebar gesture left selected.
   `confirmation_required`. The archive action has no confirmation dialog today,
   but if the UI path gains one the route returns the same structured
   confirmation payload shape as `workspace.create`.
+- **A missing directory is not a failure.** A record whose `path` no longer
+  exists on disk archives with no move: teardown has no scripts left to run,
+  nothing is relocated into `.archived/`, and the record is marked archived at
+  the path it already holds. `deleteWorkspace` reads an absent directory the
+  same way. The record stays restorable — with no `.archived/` component in its
+  path, unarchiving flips status in place. Deleting the record outright, rather
+  than archiving it, remains the cleanup banner's job.
 - **Failure mapping.** A live-window-less app fails `unsupported` (never a
   data-layer fallback), and an unknown or non-UUID `workspaceID` fails
   `invalid_request`. A live terminal without teardown fails typed instead of
