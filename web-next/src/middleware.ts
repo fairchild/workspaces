@@ -14,7 +14,7 @@ import type { NextRequest } from "next/server";
 import {
 	authBypassEnabled,
 	LOCAL_AUTH_COOKIE,
-	loopbackHostOrigin,
+	localRequestOrigin,
 	localModeEnabled,
 	localSessionCookieValid,
 	resolveAuthSecret,
@@ -55,7 +55,7 @@ function unauthorizedJson(): NextResponse {
 
 function forbiddenLocalHostJson(): NextResponse {
 	return NextResponse.json(
-		{ error: "local mode only accepts localhost or 127.0.0.1 Host headers" },
+		{ error: "local mode only accepts loopback or allowlisted Host headers" },
 		{ status: 403 },
 	);
 }
@@ -79,11 +79,14 @@ export async function middleware(request: NextRequest) {
 	const { pathname } = request.nextUrl;
 
 	if (localModeEnabled()) {
-		const localOrigin = loopbackHostOrigin(request.headers.get("host"));
+		const localOrigin = localRequestOrigin(
+			request.headers.get("host"),
+			request.headers.get("x-forwarded-proto"),
+		);
 		if (!localOrigin) {
 			return isApiPath(pathname)
 				? forbiddenLocalHostJson()
-				: new NextResponse("local mode only accepts loopback Host headers", {
+				: new NextResponse("local mode only accepts loopback or allowlisted Host headers", {
 						status: 403,
 					});
 		}
@@ -103,7 +106,7 @@ export async function middleware(request: NextRequest) {
 				path: "/",
 				httpOnly: true,
 				sameSite: "lax",
-				secure: false,
+				secure: localOrigin.startsWith("https:"),
 			});
 			return response;
 		}
