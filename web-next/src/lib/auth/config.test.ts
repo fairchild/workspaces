@@ -5,7 +5,9 @@ import {
 	constantTimeEqual,
 	isLoopbackHostHeader,
 	isLoginAllowed,
+	localRequestOrigin,
 	loopbackHostOrigin,
+	parseExtraLocalOrigins,
 	localModeEnabled,
 	localSessionCookieValid,
 	oauthEnvConfigured,
@@ -154,5 +156,48 @@ describe("local mode config", () => {
 		expect(isLoopbackHostHeader("localhost:")).toBe(false);
 		expect(isLoopbackHostHeader("127.0.0.2:3100")).toBe(false);
 		expect(isLoopbackHostHeader(null)).toBe(false);
+	});
+});
+
+describe("extra local origins", () => {
+	const env = { WEB_NEXT_EXTRA_LOCAL_ORIGINS: "https://mac.tail.ts.net" };
+
+	it("is inert unless set", () => {
+		expect(parseExtraLocalOrigins({}).size).toBe(0);
+		expect(localRequestOrigin("mac.tail.ts.net", "https", {})).toBeNull();
+	});
+
+	it("matches an allowlisted origin exactly, scheme included", () => {
+		expect(localRequestOrigin("mac.tail.ts.net", "https", env)).toBe(
+			"https://mac.tail.ts.net",
+		);
+		expect(localRequestOrigin("mac.tail.ts.net", null, env)).toBeNull();
+		expect(localRequestOrigin("mac.tail.ts.net", "http", env)).toBeNull();
+		expect(localRequestOrigin("evil.tail.ts.net", "https", env)).toBeNull();
+		expect(localRequestOrigin("sub.mac.tail.ts.net", "https", env)).toBeNull();
+	});
+
+	it("canonicalizes the default port into the origin match", () => {
+		expect(localRequestOrigin("mac.tail.ts.net:443", "https", env)).toBe(
+			"https://mac.tail.ts.net",
+		);
+	});
+
+	it("keeps loopback origins working regardless of the allowlist", () => {
+		expect(localRequestOrigin("localhost:3100", null, env)).toBe(
+			"http://localhost:3100",
+		);
+	});
+
+	it("normalizes case, whitespace, and trailing slashes in the env value", () => {
+		const sloppy = { WEB_NEXT_EXTRA_LOCAL_ORIGINS: " HTTPS://Mac.Tail.ts.net/ , " };
+		expect(localRequestOrigin("mac.tail.ts.net", "https", sloppy)).toBe(
+			"https://mac.tail.ts.net",
+		);
+	});
+
+	it("rejects malformed hosts and path-bearing values even when allowlisted", () => {
+		expect(localRequestOrigin("mac.tail.ts.net:evil", "https", env)).toBeNull();
+		expect(localRequestOrigin("mac.tail.ts.net/path", "https", env)).toBeNull();
 	});
 });

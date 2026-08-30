@@ -151,6 +151,52 @@ export function isLoopbackHostHeader(hostHeader: string | null): boolean {
 }
 
 /**
+ * Extra exact-match origins allowed to reach owner-local serving through a
+ * trusted reverse proxy (`tailscale serve` fronting the loopback bind). Set
+ * `WEB_NEXT_EXTRA_LOCAL_ORIGINS` to comma-separated full origins (e.g.
+ * `https://mac.tailxxxx.ts.net`); inert unless set. Exact match only — never
+ * a wildcard — per docs/decisions/mobile-tailnet-design.md.
+ */
+export function parseExtraLocalOrigins(env: Env = process.env): Set<string> {
+	return new Set(
+		(env.WEB_NEXT_EXTRA_LOCAL_ORIGINS ?? "")
+			.split(",")
+			.map((origin) => origin.trim().toLowerCase().replace(/\/+$/, ""))
+			.filter((origin) => origin.length > 0),
+	);
+}
+
+/**
+ * The request's local-serving origin: the loopback origin as always, or an
+ * allowlisted extra origin reconstructed from Host + X-Forwarded-Proto. The
+ * scheme participates in the exact match, so a forged proto header can only
+ * produce an origin that fails the allowlist — and the token cookie, not
+ * this gate, is what authorizes either way.
+ */
+export function localRequestOrigin(
+	hostHeader: string | null,
+	forwardedProto: string | null,
+	env: Env = process.env,
+): string | null {
+	const loopback = loopbackHostOrigin(hostHeader);
+	if (loopback) return loopback;
+	if (!hostHeader) return null;
+	const extras = parseExtraLocalOrigins(env);
+	if (extras.size === 0) return null;
+	const host = hostHeader.trim().toLowerCase();
+	if (!hostHeaderHasValidPortToken(host)) return null;
+	const scheme =
+		forwardedProto?.trim().toLowerCase() === "https" ? "https" : "http";
+	try {
+		const url = new URL(`${scheme}://${host}`);
+		if (url.pathname !== "/" || url.search !== "" || url.hash !== "") return null;
+		return extras.has(url.origin) ? url.origin : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Better Auth signing secret. Required once real OAuth is configured (a
  * guessable secret would forge session cookies); test/bypass modes get a
  * stable throwaway so local servers boot without ceremony.

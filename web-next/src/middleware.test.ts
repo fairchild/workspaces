@@ -97,7 +97,7 @@ describe("middleware local mode", () => {
 		const response = await middleware(localRequestFor("/api/repos", "spaces.example"));
 		expect(response.status).toBe(403);
 		await expect(response.json()).resolves.toEqual({
-			error: "local mode only accepts localhost or 127.0.0.1 Host headers",
+			error: "local mode only accepts loopback or allowlisted Host headers",
 		});
 	});
 
@@ -236,5 +236,66 @@ describe("middleware local mode", () => {
 			localRequestFor("/api/repos", "localhost:3100", "test-auth-login=fairchild"),
 		);
 		expect(bypass.status).toBe(401);
+	});
+});
+
+describe("middleware local mode behind a trusted proxy", () => {
+	beforeEach(() => {
+		process.env.WEB_NEXT_LOCAL_MODE = "1";
+		process.env.WEB_NEXT_LOCAL_TOKEN = "local-secret";
+		process.env.WEB_NEXT_EXTRA_LOCAL_ORIGINS = "https://mac.tail.ts.net";
+		delete process.env.AUTH_BYPASS;
+		delete process.env.GITHUB_OAUTH_CLIENT_ID;
+	});
+
+	afterEach(() => {
+		process.env = { ...ORIGINAL_ENV };
+	});
+
+	function proxiedRequestFor(path: string, proto: string | null = "https"): NextRequest {
+		return new NextRequest(`https://mac.tail.ts.net${path}`, {
+			headers: {
+				host: "mac.tail.ts.net",
+				...(proto ? { "x-forwarded-proto": proto } : {}),
+			},
+		});
+	}
+
+	it("redirects local sign-in to the proxied https origin with a Secure cookie", async () => {
+		const response = await middleware(
+			proxiedRequestFor("/sign-in?token=local-secret"),
+		);
+		expect(response.status).toBe(307);
+		expect(response.headers.get("location")).toBe("https://mac.tail.ts.net/");
+		const cookie = response.headers.get("set-cookie") ?? "";
+		expect(cookie).toContain("web-next-local-session=local-secret");
+		expect(cookie).toContain("Secure");
+	});
+
+	it("serves an authenticated request on the allowlisted origin", async () => {
+		const response = await middleware(
+			proxiedRequestFor("/api/repos?cookiecase", "https"),
+		);
+		// No cookie yet: unauthenticated, but past the Host gate — 401, not 403.
+		expect(response.status).toBe(401);
+	});
+
+	it("still 403s the allowlisted host without the proto the allowlist names", async () => {
+		const response = await middleware(proxiedRequestFor("/api/repos", null));
+		expect(response.status).toBe(403);
+	});
+
+	it("still 403s hosts outside the allowlist", async () => {
+		const request = new NextRequest("https://evil.tail.ts.net/api/repos", {
+			headers: { host: "evil.tail.ts.net", "x-forwarded-proto": "https" },
+		});
+		expect((await middleware(request)).status).toBe(403);
+	});
+
+	it("keeps loopback cookies non-Secure so plain-http localhost still works", async () => {
+		const response = await middleware(localRequestFor("/sign-in?token=local-secret"));
+		const cookie = response.headers.get("set-cookie") ?? "";
+		expect(cookie).toContain("web-next-local-session=local-secret");
+		expect(cookie).not.toContain("Secure");
 	});
 });
