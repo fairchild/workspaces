@@ -63,6 +63,10 @@ public struct WebNextServerConfiguration: Sendable {
     /// Where per-launch server logs (captured child stdout/stderr) are written.
     public var logDirectory: URL
     public var launchCommand: WebNextLaunchCommand
+    /// Extra exact-match origins forwarded to the child as
+    /// `WEB_NEXT_EXTRA_LOCAL_ORIGINS`, so a trusted reverse proxy
+    /// (`tailscale serve`) can front the loopback bind for mobile pairing.
+    public var extraLocalOrigins: [String]
     /// How long to wait for `/api/healthz` after spawn before declaring failure.
     /// Sized for a cold first run: `start:local` builds web-next when
     /// `.next/BUILD_ID` is absent, which takes one to two minutes. A generous
@@ -84,6 +88,7 @@ public struct WebNextServerConfiguration: Sendable {
         dataDir: URL? = nil,
         logDirectory: URL? = nil,
         launchCommand: WebNextLaunchCommand = .default,
+        extraLocalOrigins: [String] = [],
         readinessTimeout: TimeInterval = 180,
         readinessPollInterval: TimeInterval = 0.5,
         terminationGracePeriod: TimeInterval = 5,
@@ -97,6 +102,7 @@ public struct WebNextServerConfiguration: Sendable {
         self.dataDir = resolvedDataDir
         self.logDirectory = logDirectory ?? resolvedDataDir.appendingPathComponent("logs", isDirectory: true)
         self.launchCommand = launchCommand
+        self.extraLocalOrigins = extraLocalOrigins
         self.readinessTimeout = readinessTimeout
         self.readinessPollInterval = readinessPollInterval
         self.terminationGracePeriod = terminationGracePeriod
@@ -330,6 +336,10 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         var environment = ProcessInfo.processInfo.environment
         environment["PORT"] = String(configuration.port)
         environment["WEB_NEXT_DATA_DIR"] = configuration.dataDir.path
+        if !configuration.extraLocalOrigins.isEmpty {
+            environment["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] =
+                configuration.extraLocalOrigins.joined(separator: ",")
+        }
 
         let pid: pid_t
         do {

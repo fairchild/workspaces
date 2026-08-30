@@ -35,9 +35,15 @@ enum WebNextServerSettings {
             root = defaultRoot
         }
         let expanded = (root as NSString).expandingTildeInPath
+        // A resolvable tailnet origin is forwarded to the child so the
+        // mobile pairing path (tailscale serve -> loopback) passes the
+        // server's Host gate; absent Tailscale this stays empty and the
+        // server behaves exactly as before.
+        let tailnetOrigin = TailnetIdentity.httpsOrigin()
         return WebNextServerConfiguration(
             webNextRoot: URL(fileURLWithPath: expanded),
-            port: port
+            port: port,
+            extraLocalOrigins: tailnetOrigin.map { [$0] } ?? []
         )
     }
 }

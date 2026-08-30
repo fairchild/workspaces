@@ -368,6 +368,12 @@ struct WorkspaceManagerApp: App {
                 .defaultAppStorage(LaunchPreferences.defaults)
         }
 
+        Window("Pair Mobile Device", id: "mobile-pairing") {
+            MobilePairingView(server: appRuntimeDependencies.webNextServerService)
+                .defaultAppStorage(LaunchPreferences.defaults)
+        }
+        .windowResizability(.contentSize)
+
         Settings {
             SettingsView(softwareUpdateController: softwareUpdateController)
                 .environment(\.lumeRuntimeService, appRuntimeDependencies.lumeRuntimeService)
