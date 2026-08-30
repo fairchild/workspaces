@@ -1252,5 +1252,106 @@ class RepoVariableContractTests(unittest.TestCase):
         )
 
 
+PERMISSION_LEVELS = {"none": 0, "read": 1, "write": 2}
+
+
+def parse_permissions(text: str, key_indent: str) -> dict[str, str] | None:
+    """Parse the `permissions:` mapping declared at ``key_indent``, or None.
+
+    Returns ``{"*": "read"|"write"}`` for the scalar ``read-all``/``write-all``
+    forms and ``{}`` for ``permissions: {}``, which zeroes every scope. Any
+    scope missing from an explicit mapping is `none` — that replacement
+    semantic is why a narrow block on a reusable-call job matters (#1446).
+    """
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        header = re.match(rf"^{key_indent}permissions:\s*(\S+)?\s*$", line)
+        if not header:
+            continue
+        scalar = header.group(1)
+        if scalar == "read-all":
+            return {"*": "read"}
+        if scalar == "write-all":
+            return {"*": "write"}
+        if scalar == "{}":
+            return {}
+        grants: dict[str, str] = {}
+        for follow in lines[i + 1 :]:
+            if not follow.strip() or follow.lstrip().startswith("#"):
+                continue
+            entry = re.match(rf"^{key_indent}  ([a-z-]+):\s*(none|read|write)\s*(#.*)?$", follow)
+            if entry is None:
+                break
+            grants[entry.group(1)] = entry.group(2)
+        return grants
+    return None
+
+
+def effective_level(grant: dict[str, str], scope: str) -> str:
+    return grant.get("*", grant.get(scope, "none"))
+
+
+def declared_permissions(callee_text: str) -> dict[str, str]:
+    """The strongest level a called workflow declares per scope, at workflow or
+    job level — the set its caller's grant must cover."""
+    required: dict[str, str] = {}
+    blocks = [parse_permissions(callee_text, "")]
+    blocks.extend(parse_permissions(job_text, "    ") for job_text in parse_jobs(callee_text).values())
+    for block in blocks:
+        for scope, level in (block or {}).items():
+            if scope == "*":
+                continue
+            if PERMISSION_LEVELS[level] > PERMISSION_LEVELS[required.get(scope, "none")]:
+                required[scope] = level
+    return required
+
+
+def local_reusable_call_sites() -> list[tuple[Path, str, str]]:
+    """(caller path, job name, callee filename) for every same-repo call."""
+    sites: list[tuple[Path, str, str]] = []
+    for path in sorted(WORKFLOWS_DIR.glob("*.yml")) + sorted(WORKFLOWS_DIR.glob("*.yaml")):
+        for job_name, job_text in parse_jobs(path.read_text(encoding="utf-8")).items():
+            uses = re.search(r"(?m)^\s*uses:\s*\./\.github/workflows/([\w.-]+)\s*$", job_text)
+            if uses:
+                sites.append((path, job_name, uses.group(1)))
+    return sites
+
+
+class ReusableWorkflowPermissionTests(unittest.TestCase):
+    """A job calling a local reusable workflow must hold every permission the
+    callee declares. GitHub validates that at run creation: a shortfall fails
+    the whole run as `startup_failure` with zero jobs, before any `if:` or
+    kill switch is evaluated, and actionlint does not check it (#1446:
+    factory-revise.yml shipped with a `contents: read` floor and no job-level
+    grant on its `_evidence.yml` call site, and every run the lane ever had
+    died at startup with nothing posted anywhere). This is the local gate for
+    that class of failure."""
+
+    def test_every_local_reusable_call_site_grants_what_the_callee_declares(self) -> None:
+        sites = local_reusable_call_sites()
+        self.assertTrue(sites, "expected at least one local reusable-workflow call site under .github/workflows/")
+        failures: list[str] = []
+        for caller, job_name, callee_name in sites:
+            caller_text = caller.read_text(encoding="utf-8")
+            callee_path = WORKFLOWS_DIR / callee_name
+            self.assertTrue(callee_path.is_file(), f"{caller.name} job '{job_name}' calls missing {callee_name}")
+            required = declared_permissions(callee_path.read_text(encoding="utf-8"))
+            grant = parse_permissions(parse_jobs(caller_text)[job_name], "    ")
+            if grant is None:
+                grant = parse_permissions(caller_text, "")
+            if grant is None:
+                # No explicit permissions at either level: the call inherits
+                # the repository default token, which this check cannot see.
+                continue
+            for scope, level in sorted(required.items()):
+                held = effective_level(grant, scope)
+                if PERMISSION_LEVELS[held] < PERMISSION_LEVELS[level]:
+                    failures.append(
+                        f"{caller.name} job '{job_name}' holds {scope}: {held} but "
+                        f"{callee_name} declares {scope}: {level} — the run would die at startup"
+                    )
+        self.assertEqual(failures, [])
+
+
 if __name__ == "__main__":
     unittest.main()
