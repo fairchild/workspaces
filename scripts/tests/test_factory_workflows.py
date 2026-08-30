@@ -52,6 +52,8 @@ def parse_jobs(text: str) -> dict[str, str]:
             continue
         if not in_jobs:
             continue
+        if line.startswith("#"):  # a column-zero comment is not a section end
+            continue
         if re.match(r"^\S", line):  # a new top-level key ends the jobs section
             break
         header = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
@@ -1255,6 +1257,16 @@ class RepoVariableContractTests(unittest.TestCase):
 PERMISSION_LEVELS = {"none": 0, "read": 1, "write": 2}
 
 
+PERMISSION_ENTRY_RE = re.compile(
+    r"""^['"]?([a-z-]+)['"]?\s*:\s*['"]?(none|read|write)['"]?\s*(?:#.*)?$"""
+)
+# `./` and `$/` are both documented same-repository `uses:` forms ($/ is the
+# recommended one); quotes and trailing comments are legal spellings.
+REUSABLE_USES_RE = re.compile(
+    r"""(?m)^\s*uses:\s*['"]?(?:\.|\$)/\.github/workflows/([\w.-]+)['"]?\s*(?:#.*)?$"""
+)
+
+
 def parse_permissions(text: str, key_indent: str) -> dict[str, str] | None:
     """Parse the `permissions:` mapping declared at ``key_indent``, or None.
 
@@ -1262,26 +1274,46 @@ def parse_permissions(text: str, key_indent: str) -> dict[str, str] | None:
     forms and ``{}`` for ``permissions: {}``, which zeroes every scope. Any
     scope missing from an explicit mapping is `none` — that replacement
     semantic is why a narrow block on a reusable-call job matters (#1446).
+    Handles block and flow mappings, quoted keys/values, and trailing
+    comments; raises ValueError on any `permissions:` form it cannot
+    classify — a gate that guessed here would pass real mismatches silently.
     """
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        header = re.match(rf"^{key_indent}permissions:\s*(\S+)?\s*$", line)
+        header = re.match(rf"^{key_indent}permissions:(?P<rest>.*)$", line)
         if not header:
             continue
-        scalar = header.group(1)
-        if scalar == "read-all":
-            return {"*": "read"}
-        if scalar == "write-all":
-            return {"*": "write"}
-        if scalar == "{}":
-            return {}
-        grants: dict[str, str] = {}
+        rest = header.group("rest").strip()
+        if rest.startswith("#"):
+            rest = ""
+        else:
+            rest = re.sub(r"\s+#.*$", "", rest).strip()
+        if rest:
+            scalar = rest.strip("'\"")
+            if scalar == "read-all":
+                return {"*": "read"}
+            if scalar == "write-all":
+                return {"*": "write"}
+            flow = re.match(r"^\{(.*)\}$", rest)
+            if flow is None:
+                raise ValueError(f"unsupported permissions form: {line.strip()!r}")
+            grants: dict[str, str] = {}
+            body = flow.group(1).strip()
+            for pair in filter(None, (p.strip() for p in body.split(","))):
+                entry = PERMISSION_ENTRY_RE.match(pair)
+                if entry is None:
+                    raise ValueError(f"unsupported permissions flow entry: {pair!r}")
+                grants[entry.group(1)] = entry.group(2)
+            return grants
+        grants = {}
         for follow in lines[i + 1 :]:
             if not follow.strip() or follow.lstrip().startswith("#"):
                 continue
-            entry = re.match(rf"^{key_indent}  ([a-z-]+):\s*(none|read|write)\s*(#.*)?$", follow)
+            if not re.match(rf"^{key_indent}\s+\S", follow):
+                break  # dedented: the mapping ended
+            entry = PERMISSION_ENTRY_RE.match(follow.strip())
             if entry is None:
-                break
+                raise ValueError(f"unsupported permissions entry: {follow.strip()!r}")
             grants[entry.group(1)] = entry.group(2)
         return grants
     return None
@@ -1299,8 +1331,6 @@ def declared_permissions(callee_text: str) -> dict[str, str]:
     blocks.extend(parse_permissions(job_text, "    ") for job_text in parse_jobs(callee_text).values())
     for block in blocks:
         for scope, level in (block or {}).items():
-            if scope == "*":
-                continue
             if PERMISSION_LEVELS[level] > PERMISSION_LEVELS[required.get(scope, "none")]:
                 required[scope] = level
     return required
@@ -1311,10 +1341,72 @@ def local_reusable_call_sites() -> list[tuple[Path, str, str]]:
     sites: list[tuple[Path, str, str]] = []
     for path in sorted(WORKFLOWS_DIR.glob("*.yml")) + sorted(WORKFLOWS_DIR.glob("*.yaml")):
         for job_name, job_text in parse_jobs(path.read_text(encoding="utf-8")).items():
-            uses = re.search(r"(?m)^\s*uses:\s*\./\.github/workflows/([\w.-]+)\s*$", job_text)
+            uses = REUSABLE_USES_RE.search(job_text)
             if uses:
                 sites.append((path, job_name, uses.group(1)))
     return sites
+
+
+class ParsePermissionsTests(unittest.TestCase):
+    """Fixtures from the codex review of this gate: presentation-equivalent
+    YAML forms must parse identically, and any `permissions:` form the parser
+    cannot classify must raise instead of silently weakening the contract."""
+
+    def test_flow_mapping(self) -> None:
+        self.assertEqual(
+            parse_permissions("permissions: {contents: read, issues: write}", ""),
+            {"contents": "read", "issues": "write"},
+        )
+
+    def test_empty_flow_mapping_zeroes_every_scope(self) -> None:
+        self.assertEqual(parse_permissions("permissions: {}", ""), {})
+
+    def test_quoted_scalar_and_quoted_entries(self) -> None:
+        self.assertEqual(parse_permissions('permissions: "write-all"', ""), {"*": "write"})
+        self.assertEqual(parse_permissions('permissions:\n  "issues": "write"', ""), {"issues": "write"})
+
+    def test_header_trailing_comment_then_block(self) -> None:
+        self.assertEqual(
+            parse_permissions("permissions: # the floor\n  contents: read", ""),
+            {"contents": "read"},
+        )
+
+    def test_wider_entry_indent(self) -> None:
+        self.assertEqual(parse_permissions("permissions:\n    contents: read", ""), {"contents": "read"})
+
+    def test_unsupported_form_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            parse_permissions("permissions: write", "")
+        with self.assertRaises(ValueError):
+            parse_permissions("permissions:\n  contents: admin", "")
+
+    def test_callee_write_all_survives_as_a_requirement(self) -> None:
+        # A callee declaring write-all requires a caller wildcard of the same
+        # level; an explicit caller mapping cannot satisfy it (conservative:
+        # GitHub compares scope by scope, but listing every scope at write is
+        # not a shape this repo writes).
+        self.assertEqual(declared_permissions("permissions: write-all\njobs:\n"), {"*": "write"})
+
+    def test_job_level_flow_mapping_overrides_workflow_level(self) -> None:
+        workflow = (
+            "permissions: write-all\n"
+            "jobs:\n"
+            "  call:\n"
+            "    permissions: {contents: read}\n"
+            "    uses: ./.github/workflows/_evidence.yml\n"
+        )
+        self.assertEqual(parse_permissions(parse_jobs(workflow)["call"], "    "), {"contents": "read"})
+
+    def test_call_site_discovery_accepts_quoted_and_dollar_forms(self) -> None:
+        for spelling in (
+            'uses: "./.github/workflows/_evidence.yml"',
+            "uses: ./.github/workflows/_evidence.yml # evidence",
+            "uses: $/.github/workflows/_evidence.yml",
+        ):
+            with self.subTest(spelling=spelling):
+                match = REUSABLE_USES_RE.search(f"  call:\n    {spelling}\n")
+                self.assertIsNotNone(match)
+                self.assertEqual(match.group(1), "_evidence.yml")
 
 
 class ReusableWorkflowPermissionTests(unittest.TestCase):
@@ -1340,11 +1432,17 @@ class ReusableWorkflowPermissionTests(unittest.TestCase):
             if grant is None:
                 grant = parse_permissions(caller_text, "")
             if grant is None:
-                # No explicit permissions at either level: the call inherits
-                # the repository default token, which this check cannot see.
+                # The inherited repository default is invisible to a static
+                # check, so an unknowable grant fails closed instead of
+                # skipping (codex review finding).
+                failures.append(
+                    f"{caller.name} job '{job_name}' calls {callee_name} with no explicit "
+                    f"permissions at job or workflow level — declare the grant so this "
+                    f"contract stays checkable"
+                )
                 continue
             for scope, level in sorted(required.items()):
-                held = effective_level(grant, scope)
+                held = grant.get("*", "none") if scope == "*" else effective_level(grant, scope)
                 if PERMISSION_LEVELS[held] < PERMISSION_LEVELS[level]:
                     failures.append(
                         f"{caller.name} job '{job_name}' holds {scope}: {held} but "
