@@ -1,2 +1,11 @@
 packages:
   - "packages/*"
+
+# pnpm refuses dependency build scripts unless approved here; these three ship
+# platform binaries via postinstall, and without the approval a fresh clone's
+# `pnpm install` exits nonzero (the `verify-deps-before-run` check then blocks
+# every `pnpm run`/`pnpm exec`).
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
