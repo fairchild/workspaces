@@ -135,11 +135,21 @@ done
 # reads. Appending the subsystem's entries keeps the captured log complete for
 # consumers that only see this file.
 append_unified_log() {
-    local since="$1"
+    local since="$1" pid="${2:-}"
+    # Scope to the pid this run launched. The subsystem is shared by every build of
+    # the app, and the no-instance guard is deliberately path-anchored so it never
+    # touches an app it does not own — which means another WorkSpaces binary (the
+    # /Applications copy, a debug build) can be running legitimately and emit its own
+    # [Perf] lines into this window. The summarizer does not scope by process, so an
+    # unscoped capture would average a foreign launch into this one's numbers.
+    local predicate='subsystem == "com.cloudcompute.workspaces"'
+    if [[ -n "$pid" ]]; then
+        predicate="$predicate AND processIdentifier == $pid"
+    fi
     log show \
         --info \
         --start "$since" \
-        --predicate 'subsystem == "com.cloudcompute.workspaces"' \
+        --predicate "$predicate" \
         --style compact >>"$LOG_FILE" 2>/dev/null || true
 }
 
@@ -160,7 +170,7 @@ if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
     # leaves the instance behind.
     wait "$APP_PID" 2>/dev/null || true
     perf_assert_clean_exit "$APP_PATH" "$(basename "$0")"
-    append_unified_log "$CAPTURE_START"
+    append_unified_log "$CAPTURE_START" "$APP_PID"
 else
     env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" 2>&1 | tee "$LOG_FILE"
     append_unified_log "$CAPTURE_START"
