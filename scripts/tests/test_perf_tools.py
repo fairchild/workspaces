@@ -497,6 +497,50 @@ class LaunchTriggerLabelTests(unittest.TestCase):
         self.assertNotIn("time-to-foreground", self.findings_text(payload))
 
 
+class InstalledEpochStampTests(unittest.TestCase):
+    """Installed rows must claim the protocol they ran under, not a default (#1251/#1399)."""
+
+    def summarize(self, extra_args: list[str]) -> dict:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "installed.log"
+            log_path.write_text(
+                "2026-08-30 10:00:00.000 [Perf] metric=launch_to_first_prompt "
+                "duration_ms=640.00 trigger=terminal_set_title\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SUMMARIZE_PERF_LOG),
+                    "--json",
+                    "--scenario",
+                    "installed_clean_shell",
+                    "--build-kind",
+                    "installed",
+                    *extra_args,
+                    str(log_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return json.loads(result.stdout)
+
+    def test_live_capture_records_the_epoch_it_ran_under(self) -> None:
+        summary = self.summarize(["--protocol-epoch", "deterministic-delivery-v1"])
+        row = history_row_from_summary(summary, "2026-08-30T00:00:00-0700")
+
+        self.assertEqual(row["protocol_epoch"], "deterministic-delivery-v1")
+
+    def test_resummarized_archive_is_not_relabelled_as_current(self) -> None:
+        """An old log re-run through the summarizer describes its own era, not today's."""
+        summary = self.summarize([])
+        row = history_row_from_summary(summary, "2026-08-30T00:00:00-0700")
+
+        self.assertEqual(row["protocol_epoch"], LEGACY_PROTOCOL_EPOCH)
+
+
 class PerfCompareGuardTests(unittest.TestCase):
     """A delta only means an app change within one scenario and one protocol (#1251)."""
 

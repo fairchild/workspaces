@@ -56,6 +56,15 @@ def parse_args() -> argparse.Namespace:
         help="Build kind for the canonical summary. Defaults to an inference based on the log path.",
     )
     parser.add_argument(
+        "--protocol-epoch",
+        default=None,
+        help=(
+            "Measurement protocol this capture ran under, recorded on the history row. "
+            "Unset means legacy: re-summarizing an archived log must not relabel it as "
+            "current. Live captures pass the epoch via perf-runner.sh."
+        ),
+    )
+    parser.add_argument(
         "--app-path",
         type=Path,
         help="Optional app bundle or binary path used to resolve the app version.",
@@ -202,6 +211,7 @@ def build_summary(
     requested_scenario: str | None,
     requested_build_kind: str | None,
     app_path: Path | None,
+    protocol_epoch: str | None = None,
 ) -> dict[str, Any]:
     lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
 
@@ -292,6 +302,10 @@ def build_summary(
             "phases": phase_summaries,
             "findings": findings,
             "legacy_metric_summaries": metric_summaries,
+            # canonical_summary merges `extra` at the top level and then builds
+            # `metadata` from summary["metadata"], which is where the history row
+            # reads the epoch from.
+            **({"metadata": {"protocol_epoch": protocol_epoch}} if protocol_epoch else {}),
         },
     )
     summary["metrics_by_phase"] = phase_summaries
@@ -477,6 +491,7 @@ def main() -> int:
         requested_scenario=args.scenario,
         requested_build_kind=args.build_kind,
         app_path=args.app_path,
+        protocol_epoch=args.protocol_epoch,
     )
     if args.json:
         json.dump(summary, sys.stdout, indent=2, sort_keys=True)
