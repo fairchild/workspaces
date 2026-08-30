@@ -382,6 +382,13 @@ timestamp_prefix_pattern = re.compile(r"^(?P<ts>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.
 bootstrap_pattern = re.compile(
     r"event=initial_host_session caller=(?P<caller>\w+) branch=(?P<branch>\w+) sessions=(?P<sessions>\d+)"
 )
+# Which trigger closed the interval decides what the sample measured. `terminal_focus`
+# on a backgrounded launch measures time-to-foreground — the app was ready and the clock
+# kept running until something brought it forward — while a readiness trigger measures
+# launch. Indistinguishable by duration alone, so each sample carries its own (#1399).
+launch_trigger_pattern = re.compile(
+    r"metric=launch_to_first_prompt duration_ms=[0-9.]+ trigger=(?P<trigger>\S+)"
+)
 # `domain=scratch` alone is not proof of isolation: when the defaults system refuses a
 # suite the app logs the refusal and falls back to the persistent domain, still under a
 # scratch resolution. `isolated=` is the field that says which store actually backed the
@@ -449,10 +456,14 @@ for log_file in sorted(out_dir.glob("run-*.log"), key=run_index):
     bootstraps = [match.groupdict() for match in bootstrap_pattern.finditer(text)]
     seeding = next((entry for entry in bootstraps if entry["branch"] != "noop"), None)
     preferences_match = preferences_pattern.search(text)
+    launch_trigger_match = launch_trigger_pattern.search(text)
     launch_samples.append(
         {
             "run": run_index(log_file),
             "launch_to_first_prompt_ms": per_run.get("launch_to_first_prompt"),
+            "launch_trigger": (
+                launch_trigger_match.group("trigger") if launch_trigger_match else None
+            ),
             "seeded_by": seeding["caller"] if seeding else None,
             "branch": seeding["branch"] if seeding else None,
             "sessions": int(seeding["sessions"]) if seeding else None,
@@ -612,6 +623,7 @@ for sample in launch_samples:
     print(
         f"  run={sample['run']} "
         f"launch_to_first_prompt={'missing' if duration is None else format(duration, '.2f')} "
+        f"trigger={sample['launch_trigger'] or 'unreported'} "
         f"seeded_by={sample['seeded_by'] or 'none'} "
         f"branch={sample['branch'] or 'none'} "
         f"sessions={sample['sessions'] if sample['sessions'] is not None else 'none'} "
@@ -651,6 +663,33 @@ if isolation_failures:
         print(failure)
     print("")
     sys.exit(2)
+
+# A launch closed by `terminal_focus` stopped its clock when something brought the app
+# forward, not when the app became usable — on a backgrounded launch that is a
+# time-to-foreground number wearing a launch metric's name, and it is indistinguishable
+# from a slow launch by duration alone (#1399). Flagged rather than discarded: the sample
+# is real data about a real launch, and a consumer that knows which trigger closed it can
+# decide. Silence is the one option ruled out — an unlabelled focus close is how a 61 s
+# sample reaches an aggregate unchallenged.
+attention_closed = [
+    sample for sample in launch_samples if sample["launch_trigger"] == "terminal_focus"
+]
+if attention_closed:
+    print("")
+    print(
+        f"NOTE: {len(attention_closed)} of {len(launch_samples)} launch samples closed on "
+        "trigger=terminal_focus (time-to-foreground, not time-to-ready):"
+    )
+    for sample in attention_closed:
+        duration = sample["launch_to_first_prompt_ms"]
+        print(
+            f"  run={sample['run']} "
+            f"launch_to_first_prompt={'missing' if duration is None else format(duration, '.2f')}"
+        )
+    print(
+        "  These measured attention. Exclude them from a launch comparison, or re-measure "
+        "with the app foregrounded."
+    )
 
 sample_loads = [
     sample["load_average_1m"] for sample in launch_samples if sample["load_average_1m"] is not None

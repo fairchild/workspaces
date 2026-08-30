@@ -390,6 +390,27 @@ def derive_findings(phase_summaries: dict[str, Any]) -> list[str]:
     launch = phase_summaries.get("launch_to_first_prompt:none")
     if launch:
         duration_stats = launch["numeric_fields"].get("duration_ms")
+        # Which trigger closed the interval decides what the number means. A
+        # `terminal_focus` close on a backgrounded launch measures time-to-foreground —
+        # the app sat ready behind another window and the clock kept running — while a
+        # readiness trigger measures launch. Both are real; only one belongs in a launch
+        # benchmark, and the reader cannot tell them apart from the duration (#1399).
+        triggers = launch["categorical_fields"].get("trigger", {})
+        if triggers:
+            findings.append(
+                "launch_to_first_prompt was closed by triggers: "
+                + ", ".join(f"{name} ({count})" for name, count in sorted(triggers.items()))
+                + "."
+            )
+            attention_closes = sum(
+                count for name, count in triggers.items() if name == "terminal_focus"
+            )
+            if attention_closes:
+                findings.append(
+                    f"{attention_closes} launch_to_first_prompt sample(s) closed on terminal_focus, which "
+                    "measures time-to-foreground rather than time-to-ready when the launch was backgrounded. "
+                    "Exclude those from a launch benchmark or re-measure in the foreground."
+                )
         if duration_stats and duration_stats["median"] > 5_000:
             findings.append(
                 f"launch_to_first_prompt median is {duration_stats['median']:.2f} ms. Startup is still dominated by terminal readiness or focus."

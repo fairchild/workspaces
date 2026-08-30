@@ -101,6 +101,17 @@ Notes:
   compare within one scenario and epoch, and `perf-compare.py` warns when a
   comparison spans either boundary, so a protocol change is never rendered as an
   app-side regression.
+- **Which trigger closed the interval decides what the sample measured.** Every
+  `launch_to_first_prompt` line carries `trigger=`, and the two values are not the
+  same measurement. A readiness trigger (`terminal_set_title`, `terminal_pwd`) closes
+  when the first shell is usable — that is launch. `terminal_focus` closes when the
+  app was brought forward, so on a **backgrounded** launch it measures
+  time-to-foreground: the app was ready and the clock kept running until something
+  focused it, which is how 61 s and 16 s samples reach the parser (#1399). Duration
+  alone cannot tell them apart, so both parsers now label it — `perf-baseline.sh`
+  prints `trigger=` per sample and calls out focus-closed ones, and the installed
+  summarizer reports the trigger breakdown in its findings. Exclude focus-closed
+  samples from a launch comparison, or re-measure in the foreground.
 - **Why the second boundary exists — this metric could stop early.** Until #1251,
   libghostty occasionally raised the shell signal that closes the interval *inline
   on the main thread*, from inside a call the app made during first-window bring-up.

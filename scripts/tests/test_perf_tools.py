@@ -443,6 +443,60 @@ def rows_summary(row: dict) -> dict:
     }
 
 
+class LaunchTriggerLabelTests(unittest.TestCase):
+    """`launch_to_first_prompt` means different things per trigger (#1399)."""
+
+    def summarize(self, trigger_lines: list[str]) -> dict:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "launch.log"
+            log_path.write_text("\n".join(trigger_lines) + "\n", encoding="utf-8")
+            command = [
+                sys.executable,
+                str(SUMMARIZE_PERF_LOG),
+                "--json",
+                "--scenario",
+                "installed_clean_shell",
+                "--build-kind",
+                "installed",
+                str(log_path),
+            ]
+            result = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+            return json.loads(result.stdout)
+
+    @staticmethod
+    def line(ms: float, trigger: str) -> str:
+        return (
+            f"2026-08-30 10:00:00.000 [Perf] metric=launch_to_first_prompt "
+            f"duration_ms={ms:.2f} trigger={trigger}"
+        )
+
+    def findings_text(self, payload: dict) -> str:
+        return " ".join(payload.get("findings", []))
+
+    def test_trigger_breakdown_is_reported(self) -> None:
+        payload = self.summarize([self.line(600.0, "terminal_set_title")])
+
+        self.assertIn("closed by triggers", self.findings_text(payload))
+        self.assertIn("terminal_set_title", self.findings_text(payload))
+
+    def test_focus_closed_samples_are_called_out_as_time_to_foreground(self) -> None:
+        """A 61s backgrounded launch must not read as a slow launch."""
+        payload = self.summarize(
+            [self.line(61_000.0, "terminal_focus"), self.line(640.0, "terminal_set_title")]
+        )
+        text = self.findings_text(payload)
+
+        self.assertIn("time-to-foreground", text)
+        self.assertIn("1 launch_to_first_prompt sample(s) closed on terminal_focus", text)
+
+    def test_readiness_only_capture_raises_no_attention_warning(self) -> None:
+        payload = self.summarize(
+            [self.line(600.0, "terminal_set_title"), self.line(620.0, "terminal_set_title")]
+        )
+
+        self.assertNotIn("time-to-foreground", self.findings_text(payload))
+
+
 class PerfCompareGuardTests(unittest.TestCase):
     """A delta only means an app change within one scenario and one protocol (#1251)."""
 
