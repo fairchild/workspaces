@@ -144,7 +144,7 @@ struct RepoRow: View {
         return description
     }
 
-    private var folderIconHelp: String {
+    private var repoGlyphHelp: String {
         guard showsExpansion else { return "Open \(repo.name)" }
         return isExpanded ? "Collapse \(repo.name)" : "Expand \(repo.name)"
     }
@@ -156,10 +156,11 @@ struct RepoRow: View {
 
         HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             Button(action: onToggleExpansion) {
-                repoFolderIcon
+                repoIdentityGlyph
             }
             .buttonStyle(.plain)
-            .help(folderIconHelp)
+            .help(repoGlyphHelp)
+            .accessibilityLabel(repoGlyphHelp)
 
             Button(action: onSelectRepo) {
                 repoLabelContent(repoName: repoName, workspaceCount: workspaceCount)
@@ -194,24 +195,25 @@ struct RepoRow: View {
         .accessibilityLabel(accessibilityDescription)
     }
 
-    private var repoFolderIcon: some View {
-        Image(systemName: isExpanded ? "folder.fill" : "folder")
-            .foregroundStyle(
-                isSelected
-                    ? Color.primary
-                    : sessionActivity.iconColor(inactiveColor: SidebarChrome.Foreground.quietSecondary)
-            )
+    /// The repo's identity, constant across selection and session state: those read from the
+    /// row fill and the activity dot instead.
+    private var repoIdentityGlyph: some View {
+        RoundedRectangle(cornerRadius: SidebarChrome.RepoGlyph.radius, style: .continuous)
+            .fill(SidebarChrome.RepoGlyph.fill(for: repo.name))
+            .frame(width: SidebarChrome.RepoGlyph.side, height: SidebarChrome.RepoGlyph.side)
+            .overlay {
+                Text(SidebarChrome.RepoGlyph.monogram(for: repo.name))
+                    .font(SidebarChrome.RepoGlyph.monogramFont)
+                    .foregroundStyle(SidebarChrome.RepoGlyph.monogramColor)
+            }
             .frame(width: SidebarChrome.Metrics.iconColumn, alignment: .center)
-            .contentTransition(.symbolEffect(.replace))
+            .accessibilityHidden(true)
     }
 
     private func repoLabelContent(repoName: String, workspaceCount: Int) -> some View {
         HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             Text(repoName)
-                .font(
-                    SidebarChrome.TypeStyle.rowTitle(
-                        emphasized: isSelected || sessionActivity.isActive)
-                )
+                .font(SidebarChrome.TypeStyle.repoTitle)
                 .lineLimit(1)
 
             Spacer(minLength: 8)
@@ -275,6 +277,34 @@ struct RepoRow: View {
     }
 }
 
+/// What a workspace row's second line shows, and the rule that picks it.
+///
+/// The transient action message wins the line while it is showing: it is about this moment, and
+/// neither the session nor the note is. Below it the live status line outranks the note on the
+/// one row that has both — what the agent is doing right now beats a line written hours ago,
+/// which is also why the note renders a shade quieter than either. The live line belongs to the
+/// selected workspace alone, which caps the sidebar's running timers at the count of that one
+/// workspace's visible rows: one, or two while a pinned selection also shows inside its
+/// auto-expanded repo — the same doubling its selection highlight already accepts.
+enum WorkspaceRowSecondLine: Equatable {
+    case blank
+    case statusMessage(String)
+    case liveStatus(SidebarLiveSessionStatus)
+    case note(String)
+
+    static func resolve(
+        statusMessage: String?,
+        liveStatus: SidebarLiveSessionStatus?,
+        isSelected: Bool,
+        note: String?
+    ) -> WorkspaceRowSecondLine {
+        if let statusMessage { return .statusMessage(statusMessage) }
+        if isSelected, let liveStatus { return .liveStatus(liveStatus) }
+        if let note { return .note(note) }
+        return .blank
+    }
+}
+
 struct WorkspaceRow: View {
     let workspace: Workspace
     var isSelected: Bool = false
@@ -288,6 +318,14 @@ struct WorkspaceRow: View {
     var isExpanded: Bool = false
     var showsDisclosure: Bool = false
     var isPinned: Bool = false
+    /// The agent session behind this row, resolved by the sidebar for the selected workspace
+    /// alone. Non-nil on a selected row is what puts the live status line on the second line
+    /// and mounts the elapsed timer — at most one per visible row of that workspace.
+    var liveStatus: SidebarLiveSessionStatus? = nil
+    /// Fixes the clock the status line reads, so a still render shows a known elapsed time and
+    /// age and starts no timer. Nil in the app, where the elapsed label runs its own clock and
+    /// the age is read at whatever moment the row draws.
+    var statusClock: Date? = nil
     /// Resolved lazily only when the hover card opens, so frequent agent-status
     /// updates never re-render idle rows.
     var tabsProvider: (() -> [SidebarTabSummary])? = nil
@@ -310,6 +348,10 @@ struct WorkspaceRow: View {
         statusMessage != nil || workspace.status == .provisioning
     }
 
+    /// A host workspace is a branch of its repo, so it wears a branch. Lume and Daytona keep
+    /// their provider glyphs: where the work runs is the thing worth reading on those rows,
+    /// and one uniform glyph would spend that distinction. Activity rides the tint, not the
+    /// symbol — hence one branch symbol rather than a fill variant.
     private var providerIconName: String {
         switch workspace.backend {
         case .lume:
@@ -317,7 +359,7 @@ struct WorkspaceRow: View {
         case .daytona:
             return workspace.status == .active ? "cloud.fill" : "cloud"
         case .local, .ssh, .unknown:
-            return sessionActivity.isActive ? "terminal.fill" : "terminal"
+            return "arrow.triangle.branch"
         }
     }
 
@@ -380,10 +422,11 @@ struct WorkspaceRow: View {
         .padding(.leading, isNested ? SidebarChrome.Indent.nestedRow : 0)
         .padding(.vertical, SidebarChrome.Metrics.rowVerticalPadding)
         .padding(.horizontal, SidebarChrome.Metrics.rowHorizontalPadding)
-        .background(
-            RoundedRectangle(cornerRadius: SidebarChrome.Radius.row)
-                .fill(isSelected ? SidebarChrome.Fill.rowSelection : .clear)
-        )
+        .background {
+            if isSelected {
+                activeCard
+            }
+        }
         .accessibilityLabel(accessibilityDescription)
         .sidebarHoverCard(
             onHoverChange: { isHovering = $0 },
@@ -402,6 +445,21 @@ struct WorkspaceRow: View {
         )
     }
 
+    /// The selected row, raised: an elevated neutral fill and a hairline wrapping both lines.
+    /// The accent that used to wash the whole row is spent on the status glyph and the
+    /// activity dot instead, which is where it says something.
+    private var activeCard: some View {
+        RoundedRectangle(cornerRadius: SidebarChrome.Radius.activeCard, style: .continuous)
+            .fill(SidebarChrome.Fill.activeCard)
+            .overlay {
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.activeCard, style: .continuous)
+                    .strokeBorder(
+                        SidebarChrome.Stroke.activeCard,
+                        lineWidth: SidebarChrome.Stroke.activeCardWidth
+                    )
+            }
+    }
+
     private var accessibilityDescription: String {
         var description = repoContext.map { "\($0), " } ?? ""
         description += "\(workspace.name), \(sessionActivity.accessibilityDescription)"
@@ -416,6 +474,9 @@ struct WorkspaceRow: View {
         }
         if let statusMessage {
             description += ", \(statusMessage)"
+        }
+        if case .liveStatus(let live) = secondLine {
+            description += ", \(live.summary)"
         }
         if let note = workspace.note {
             description += ", note: \(note)"
@@ -501,16 +562,18 @@ struct WorkspaceRow: View {
                 }
             }
 
-            // The transient action message wins the line while it is showing: it is about
-            // this moment, and the note is about the work stream. A note rendered a shade
-            // quieter is what keeps a line written hours ago from reading as live status.
-            if let statusMessage {
-                Text(statusMessage)
+            switch secondLine {
+            case .blank:
+                EmptyView()
+            case .statusMessage(let message):
+                Text(message)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.leading, SidebarChrome.Indent.rowSecondLine)
                     .lineLimit(1)
-            } else if let note = workspace.note {
+            case .liveStatus(let live):
+                liveStatusLine(live)
+            case .note(let note):
                 Text(note)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -522,6 +585,152 @@ struct WorkspaceRow: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+    }
+
+    private var secondLine: WorkspaceRowSecondLine {
+        .resolve(
+            statusMessage: statusMessage,
+            liveStatus: liveStatus,
+            isSelected: isSelected,
+            note: workspace.note
+        )
+    }
+
+    /// Who is working, what they are doing, how long they have been at it, and how old the
+    /// workspace is. The summary is the only part allowed to truncate — the two readings on
+    /// the right are short, fixed, and the reason to glance here in the first place.
+    private func liveStatusLine(_ live: SidebarLiveSessionStatus) -> some View {
+        HStack(spacing: SidebarChrome.Metrics.statusLineSpacing) {
+            Image(systemName: live.kind.symbolName)
+                .font(SidebarChrome.TypeStyle.statusGlyph)
+                .foregroundStyle(live.kind.tintColor)
+
+            Text(live.summary)
+                .font(SidebarChrome.TypeStyle.statusSummary)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+
+            Spacer(minLength: SidebarChrome.Metrics.statusLineSpacing)
+
+            HStack(spacing: SidebarChrome.Metrics.statusLineGlyphSpacing) {
+                Image(systemName: "timer")
+                SessionElapsedLabel(startedAt: live.startedAt, referenceDate: statusClock)
+            }
+            .foregroundStyle(.secondary)
+            .fixedSize()
+
+            Text(WorkspaceAgeFormatter.text(from: workspace.createdAt, to: statusClock ?? Date()))
+                .foregroundStyle(.tertiary)
+                .fixedSize()
+        }
+        .font(SidebarChrome.TypeStyle.statusMeta)
+        .padding(.leading, SidebarChrome.Indent.rowSecondLine)
+    }
+}
+
+/// The row that heads a repo's archived workspaces: a count capsule, a muted label, and a
+/// chevron gathered into one quiet pill. Archived work is the least of what a repo is about,
+/// so the pill reads as a lid rather than as another row — its own container, a shade under
+/// the hover chip, holding the count of what is folded away beneath it.
+///
+/// Value-shaped (count, expansion, one action) so a still render can stage it; the expansion
+/// state itself stays with the sidebar, which knows whether a selected archived workspace is
+/// forcing the section open.
+struct ArchivedDisclosureRow: View {
+    let count: Int
+    let isExpanded: Bool
+    let onToggle: () -> Void
+
+    var body: some View {
+        Button(action: onToggle) {
+            HStack(spacing: SidebarChrome.Metrics.disclosurePillSpacing) {
+                // The capsule carries the hidden subtree while the section is collapsed, and
+                // steps back once its rows are on screen — the same reading the repo row's
+                // badge makes of a collapsed repo.
+                WorkspaceCountBadge(count: count, isCollapsed: !isExpanded)
+                    .accessibilityHidden(true)
+
+                Text("archived")
+                    .font(.callout)
+                    .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, SidebarChrome.Metrics.disclosurePillHorizontalPadding)
+            .padding(.vertical, SidebarChrome.Metrics.disclosurePillVerticalPadding)
+            .background(
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.disclosurePill, style: .continuous)
+                    .fill(SidebarChrome.Fill.disclosurePill)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.disclosurePill, style: .continuous)
+                    .stroke(
+                        SidebarChrome.Stroke.disclosurePill,
+                        lineWidth: SidebarChrome.Stroke.disclosurePillWidth
+                    )
+            }
+            .contentShape(Rectangle())
+            .padding(.leading, SidebarChrome.Indent.repoSubheader)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Archived workspaces, \(count)")
+    }
+}
+
+/// The row pinned above the sidebar list: a field-shaped button that opens the session
+/// switcher. Deliberately not a `TextField` — the switcher owns the query and the ranking, so
+/// a field here would be a second place to type with nothing behind it. What this carries is
+/// where search lives and the chord that reaches it without the pointer.
+///
+/// Value-shaped: one action, and a hint read from the shortcut catalog rather than spelled out,
+/// so a rebound chord re-renders instead of going stale.
+struct SidebarSearchRow: View {
+    let onActivate: () -> Void
+
+    var body: some View {
+        Button(action: onActivate) {
+            HStack(spacing: SidebarChrome.Metrics.searchFieldSpacing) {
+                Image(systemName: "magnifyingglass")
+                    .font(SidebarChrome.TypeStyle.searchGlyph)
+                    .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+
+                Text("Search")
+                    .font(SidebarChrome.TypeStyle.searchLabel)
+                    .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: SidebarChrome.Metrics.searchFieldSpacing)
+
+                Text(AppChromeShortcut.workspaceSwitcher.keyboardGlyphs)
+                    .font(SidebarChrome.TypeStyle.searchShortcutHint)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, SidebarChrome.Metrics.searchFieldHorizontalPadding)
+            .padding(.vertical, SidebarChrome.Metrics.searchFieldVerticalPadding)
+            .background(
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.searchField, style: .continuous)
+                    .fill(SidebarChrome.Fill.searchField)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: SidebarChrome.Radius.searchField, style: .continuous)
+                    .stroke(
+                        SidebarChrome.Stroke.searchField,
+                        lineWidth: SidebarChrome.Stroke.searchFieldWidth
+                    )
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Search sessions")
+        .accessibilityHint("Opens the session switcher. Command-P")
     }
 }
 

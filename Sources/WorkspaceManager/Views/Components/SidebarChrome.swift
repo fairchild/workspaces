@@ -26,6 +26,8 @@ enum SidebarChrome {
         static let hoverActionSide: CGFloat = 22
         /// Diameter of the session-activity dot.
         static let activityDot: CGFloat = 7
+        /// Side of the square menu buttons that sit inline in a section header.
+        static let headerActionSide: CGFloat = 18
         static let rowMinHeight: CGFloat = 34
 
         static let rowHorizontalPadding: CGFloat = 8
@@ -37,6 +39,30 @@ enum SidebarChrome {
         static let rowSpacing: CGFloat = 10
         /// Gap between a row's glyph and its label.
         static let rowContentSpacing: CGFloat = 8
+
+        /// Insets and inner gap of the pill that heads a repo's archived workspaces. Tighter
+        /// than a row's own padding: the pill is a block inset from the rows, so its content
+        /// starts where the pill does rather than lining up with the column above it.
+        static let disclosurePillHorizontalPadding: CGFloat = 6
+        static let disclosurePillVerticalPadding: CGFloat = 4
+        static let disclosurePillSpacing: CGFloat = 6
+
+        /// Insets and inner gap of the search row's field. Tighter than a row's padding for
+        /// the same reason the pill's are: the field is a block inset from the list, so its
+        /// content starts where the field does.
+        static let searchFieldHorizontalPadding: CGFloat = 8
+        static let searchFieldVerticalPadding: CGFloat = 6
+        static let searchFieldSpacing: CGFloat = 6
+
+        /// Insets of the bars pinned to the list's edges — the search row above, the count
+        /// bar below. One pair for both, so the sidebar's two fixed edges sit symmetrically.
+        static let chromeBarHorizontalPadding: CGFloat = 12
+        static let chromeBarVerticalPadding: CGFloat = 10
+
+        /// Gap between the parts of the selected row's live status line, and the tighter gap
+        /// inside one part — a glyph and the reading it labels.
+        static let statusLineSpacing: CGFloat = 6
+        static let statusLineGlyphSpacing: CGFloat = 3
 
         static let cardWidth: CGFloat = 260
         static let cardPadding: CGFloat = 14
@@ -58,7 +84,12 @@ enum SidebarChrome {
         static let row: CGFloat = 5
         static let webSourceRow: CGFloat = 6
         static let hoverAction: CGFloat = 7
+        static let disclosurePill: CGFloat = 7
+        static let searchField: CGFloat = 7
         static let statusBadge: CGFloat = 3
+        /// The selected workspace row's card. Wider than a row's own corner because the card
+        /// is a surface rather than a highlight, and the corner is most of what says so.
+        static let activeCard: CGFloat = 8
         static let card: CGFloat = 10
     }
 
@@ -67,11 +98,27 @@ enum SidebarChrome {
         static let rowSelection = Color.accentColor.opacity(0.1)
         static let hoverAction = Color.secondary.opacity(0.08)
 
+        /// The selected workspace row, a surface of its own rather than a row washed in accent.
+        /// `.primary` steps away from the ground in whichever direction the appearance leaves
+        /// room — lighter in the dark, darker in the light — so one value separates the card in
+        /// both, and the accent is left to the status glyph and the activity dot. 0.06 is where
+        /// the card holds: below it the dark card dissolves into the sidebar, above it the
+        /// light one starts to read as a well sunk into the list rather than a plate on it.
+        static let activeCard = Color.primary.opacity(0.06)
+
         /// A collapsed repo's badge carries the subtree, so it reads a shade stronger.
         static let workspaceCountBadgeCollapsed = Color.secondary.opacity(0.1)
         static let workspaceCountBadgeExpanded = Color.secondary.opacity(0.06)
         static let paneCountBadgeActive = Color.secondary.opacity(0.16)
         static let paneCountBadgeIdle = Color.secondary.opacity(0.1)
+
+        /// The archived pill sits a shade under the hover chip: it is chrome that is always
+        /// on screen while a repo holds archived work, not an affordance the pointer summons.
+        static let disclosurePill = Color.secondary.opacity(0.06)
+
+        /// The search row's field, at the pill's level for the same reason: always on screen,
+        /// never summoned. Held separately so the two can part company if one ever needs to.
+        static let searchField = Color.secondary.opacity(0.06)
 
         static let statusBadgeProvisioning = Color.blue.opacity(0.2)
         static let statusBadgeStopped = Color.orange.opacity(0.2)
@@ -90,6 +137,14 @@ enum SidebarChrome {
     enum Stroke {
         static let hoverAction = Color.secondary.opacity(0.08)
         static let hoverActionWidth: CGFloat = 1
+        static let disclosurePill = Color.secondary.opacity(0.08)
+        static let disclosurePillWidth: CGFloat = 1
+        static let searchField = Color.secondary.opacity(0.08)
+        static let searchFieldWidth: CGFloat = 1
+        /// The selected row's hairline. A full point rather than the hover card's half: the
+        /// card sits among rows of the same tone, and the edge is what separates them.
+        static let activeCard = Color(nsColor: .separatorColor).opacity(0.55)
+        static let activeCardWidth: CGFloat = 1
         static let card = Color(nsColor: .separatorColor).opacity(0.55)
         static let cardWidth: CGFloat = 0.5
     }
@@ -100,8 +155,80 @@ enum SidebarChrome {
             .callout.weight(emphasized ? .semibold : .regular)
         }
 
+        /// A repo name heads a group, so it stays bold whatever the row's state — selection
+        /// reads from the row fill and session activity from the dot.
+        static let repoTitle = Font.callout.weight(.semibold)
+
+        /// The search row reads as a field, so its glyph and label take the size a row's own
+        /// label takes; the chord trailing it sits a step smaller, an aside rather than a
+        /// second reading.
+        static let searchGlyph = Font.callout
+        static let searchLabel = Font.callout
+        static let searchShortcutHint = Font.caption2
+
+        /// The bar under the list, stating what the tree holds.
+        static let footerLabel = Font.caption
+
         /// Monospaced digits keep a count capsule from twitching as its number changes.
         static let countBadge = Font.caption2.weight(.medium).monospacedDigit()
         static let hoverActionGlyph = Font.system(size: 11, weight: .semibold)
+        /// Glyphs of the menus that sit inline in a section header.
+        static let headerActionGlyph = Font.caption.weight(.semibold)
+
+        /// The selected row's status line. Summary and agent glyph share the caption the note
+        /// and transient-message lines use, so a row's second line keeps one size whatever
+        /// fills it; the two readings trailing it sit a step smaller, with monospaced digits
+        /// so the elapsed timer holds its width as the seconds roll over.
+        static let statusSummary = Font.caption
+        static let statusGlyph = Font.caption
+        static let statusMeta = Font.caption2.monospacedDigit()
+    }
+
+    /// The identity glyph that heads a repo row: a small rounded square carrying the repo's
+    /// initial over a hue derived from its name, so a repo wears the same color everywhere it
+    /// appears and from one launch to the next.
+    enum RepoGlyph {
+        static let side: CGFloat = 16
+        static let radius: CGFloat = 4
+        static let monogramFont = Font.system(size: 10, weight: .semibold, design: .rounded)
+        static let monogramColor = Color.white
+        /// Hue is the only thing that varies: holding saturation and brightness fixed gives
+        /// every repo's color the same weight. These two are set a step below full — dark
+        /// enough that white holds up over the yellow-green band, bright enough to carry
+        /// against a dark sidebar.
+        static let saturation: Double = 0.52
+        static let brightness: Double = 0.66
+        /// A name with no character to abbreviate gets a neutral glyph rather than a hue that
+        /// would read as an identity it doesn't carry.
+        static let placeholderMonogram = "?"
+        static let placeholderFill = Color.secondary
+
+        /// Hue in `[0, 1)` for a repo name, from FNV-1a over its NFC-normalized UTF-8.
+        ///
+        /// Deliberately not `Hasher`: that one is seeded per process, so the sidebar would
+        /// repaint every repo on relaunch. This hash is fixed for all time. Canonical
+        /// normalization first, so spellings Swift already treats as the same string
+        /// ("é" vs "e" + combining accent) wear the same color.
+        static func hue(for name: String) -> Double {
+            var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+            for byte in name.precomposedStringWithCanonicalMapping.utf8 {
+                hash ^= UInt64(byte)
+                hash = hash &* 0x0000_0100_0000_01b3
+            }
+            return Double(hash % 3600) / 3600
+        }
+
+        /// The single character the glyph shows: the name's first non-blank one, uppercased.
+        static func monogram(for name: String) -> String {
+            guard let first = name.first(where: { !$0.isWhitespace }) else {
+                return placeholderMonogram
+            }
+            return String(first.uppercased().prefix(1))
+        }
+
+        static func fill(for name: String) -> Color {
+            guard name.contains(where: { !$0.isWhitespace }) else { return placeholderFill }
+            return Color(hue: hue(for: name), saturation: saturation, brightness: brightness)
+        }
     }
 }

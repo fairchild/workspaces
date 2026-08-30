@@ -95,6 +95,9 @@ struct SidebarView: View {
     let onRepoTerminalSelected: (Repo) -> Void
     let onWebSourceSelected: (WebSource) -> Void
     let onRequestWebSourceCreation: (WebSourceCreationTarget) -> Void
+    /// Opens the session switcher the search row stands for — the same presentation the
+    /// Cmd-P shortcut drives, so the row and the chord are one surface.
+    let onRequestSessionSwitcher: () -> Void
     /// Resolves a repo's GitHub `owner/name` for the "New Web Session" deep link,
     /// or nil when the remote can't be parsed (the entry is then disabled).
     let webNextSessionSlug: (Repo) -> GitHubRepoSlug?
@@ -249,19 +252,9 @@ struct SidebarView: View {
     var body: some View {
         Group {
             if minimalToolbarEnabled {
-                sidebarList
-                    .listStyle(.sidebar)
-                    .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
-                    .safeAreaInset(edge: .bottom) {
-                        footerBar
-                    }
+                listWithChrome
             } else {
-                sidebarList
-                    .listStyle(.sidebar)
-                    .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
-                    .safeAreaInset(edge: .bottom) {
-                        footerBar
-                    }
+                listWithChrome
                     .toolbar {
                         ToolbarItem(placement: .primaryAction) {
                             addSourceMenu
@@ -442,6 +435,21 @@ struct SidebarView: View {
         )
     }
 
+    /// The list with the chrome pinned to its edges: the search row above, the count bar
+    /// below. The toolbar flag decides only whether the add menu joins them, so both of its
+    /// branches render this same stack.
+    private var listWithChrome: some View {
+        sidebarList
+            .listStyle(.sidebar)
+            .environment(\.defaultMinListRowHeight, SidebarChrome.Metrics.rowMinHeight)
+            .safeAreaInset(edge: .top) {
+                searchBar
+            }
+            .safeAreaInset(edge: .bottom) {
+                footerBar
+            }
+    }
+
     private var sidebarList: some View {
         List {
             pinnedSection
@@ -511,12 +519,12 @@ struct SidebarView: View {
                     )
                 }
             } header: {
-                sidebarSectionHeader(title: "Pinned", showsSortMenu: !repos.isEmpty)
+                sidebarSectionHeader(title: "Pinned", isTopmost: true)
             }
         }
     }
 
-    /// The arrangement menu lives on the topmost header: Pinned when it exists, otherwise
+    /// The header inline actions live on the topmost header: Pinned when it exists, otherwise
     /// the first header of the arrangement itself.
     private var hasPinnedRows: Bool {
         !pinnedWorkspaces.isEmpty
@@ -538,8 +546,8 @@ struct SidebarView: View {
         }
     }
 
-    /// Flat, date-bucketed arrangement. Only the first bucket's header carries the sort
-    /// menu; the empty state still renders one so Recent is never a mode you can't leave.
+    /// Flat, date-bucketed arrangement. Only the first bucket's header carries the inline
+    /// actions; the empty state still renders them so Recent is never a mode you can't leave.
     @ViewBuilder
     private var recentSections: some View {
         let buckets = recentBuckets
@@ -550,7 +558,7 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                     .font(.callout)
             } header: {
-                sidebarSectionHeader(title: "Recent", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
+                sidebarSectionHeader(title: "Recent", isTopmost: !hasPinnedRows)
             }
         } else {
             ForEach(Array(buckets.enumerated()), id: \.element.id) { index, bucket in
@@ -559,7 +567,7 @@ struct SidebarView: View {
                         recentRow(row)
                     }
                 } header: {
-                    sidebarSectionHeader(title: bucket.title, showsSortMenu: index == 0 && !hasPinnedRows)
+                    sidebarSectionHeader(title: bucket.title, isTopmost: index == 0 && !hasPinnedRows)
                 }
             }
         }
@@ -576,38 +584,70 @@ struct SidebarView: View {
     }
 
     private var repositoriesHeader: some View {
-        sidebarSectionHeader(title: "Repositories", showsSortMenu: !repos.isEmpty && !hasPinnedRows)
+        sidebarSectionHeader(title: "Repositories", isTopmost: !hasPinnedRows)
     }
 
-    private func sidebarSectionHeader(title: String, showsSortMenu: Bool) -> some View {
-        HStack(spacing: 8) {
+    /// Which menus show, and where, is `SidebarHeaderActions`' decision — kept pure there so
+    /// the placement rule stays under test without this view's app graph.
+    private func sidebarSectionHeader(title: String, isTopmost: Bool) -> some View {
+        let actions = SidebarHeaderActions.forHeader(
+            isTopmost: isTopmost,
+            hasRepos: !repos.isEmpty,
+            isToolbarMinimal: minimalToolbarEnabled
+        )
+        return HStack(spacing: 8) {
             Text(title)
             Spacer(minLength: 8)
-            if showsSortMenu {
-                Menu {
-                    ForEach(SidebarRepoSortMode.allCases) { mode in
-                        Button {
-                            updateRepoSortMode(mode)
-                        } label: {
-                            if repoSortMode == mode {
-                                Label(mode.title, systemImage: "checkmark")
-                            } else {
-                                Text(mode.title)
-                            }
-                        }
-                    }
-                } label: {
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 18, height: 18)
-                        .contentShape(Rectangle())
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .help("Sort repositories")
+            if actions.showsSort {
+                sortMenu
+            }
+            if actions.showsAdd {
+                headerAddMenu
             }
         }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            ForEach(SidebarRepoSortMode.allCases) { mode in
+                Button {
+                    updateRepoSortMode(mode)
+                } label: {
+                    if repoSortMode == mode {
+                        Label(mode.title, systemImage: "checkmark")
+                    } else {
+                        Text(mode.title)
+                    }
+                }
+            }
+        } label: {
+            headerMenuGlyph("arrow.up.arrow.down")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .help("Sort repositories")
+    }
+
+    private var headerAddMenu: some View {
+        Menu {
+            addSourceMenuItems
+        } label: {
+            headerMenuGlyph("plus")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .help("Add a repository or URL source")
+    }
+
+    private func headerMenuGlyph(_ systemName: String) -> some View {
+        Image(systemName: systemName)
+            .font(SidebarChrome.TypeStyle.headerActionGlyph)
+            .foregroundStyle(.secondary)
+            .frame(
+                width: SidebarChrome.Metrics.headerActionSide,
+                height: SidebarChrome.Metrics.headerActionSide
+            )
+            .contentShape(Rectangle())
     }
 
     private var webSection: some View {
@@ -639,32 +679,50 @@ struct SidebarView: View {
         }
     }
 
+    /// Fixed chrome above the list, mirroring the footer below it: an opaque bar so the rows
+    /// scroll under rather than through it, and the rule on the list's side of the bar.
+    private var searchBar: some View {
+        VStack(spacing: 0) {
+            SidebarSearchRow(onActivate: onRequestSessionSwitcher)
+                .padding(.horizontal, SidebarChrome.Metrics.chromeBarHorizontalPadding)
+                .padding(.vertical, SidebarChrome.Metrics.chromeBarVerticalPadding)
+                .background(SidebarChrome.Fill.surface)
+
+            Divider()
+        }
+    }
+
     private var footerBar: some View {
         VStack(spacing: 0) {
             Divider()
 
-            HStack(spacing: 12) {
-                Text(repos.isEmpty ? "Add a repository to get started" : "\(repos.count) repositories")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(SidebarChrome.Fill.surface)
+            Text(repos.isEmpty ? "Add a repository to get started" : "\(repos.count) repositories")
+                .font(SidebarChrome.TypeStyle.footerLabel)
+                .foregroundStyle(SidebarChrome.Foreground.quietSecondary)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, SidebarChrome.Metrics.chromeBarHorizontalPadding)
+                .padding(.vertical, SidebarChrome.Metrics.chromeBarVerticalPadding)
+                .background(SidebarChrome.Fill.surface)
+        }
+    }
+
+    /// One list of add actions behind both surfaces that offer them — the toolbar menu and
+    /// the Repositories header menu — so the two can't drift apart.
+    @ViewBuilder
+    private var addSourceMenuItems: some View {
+        Button("Add Repository") {
+            isAddingRepo = true
+        }
+
+        Button("Add URL Source") {
+            onRequestWebSourceCreation(.global)
         }
     }
 
     private var addSourceMenu: some View {
         Menu {
-            Button("Add Repository") {
-                isAddingRepo = true
-            }
-
-            Button("Add URL Source") {
-                onRequestWebSourceCreation(.global)
-            }
+            addSourceMenuItems
         } label: {
             Image(systemName: "plus")
         }
@@ -821,6 +879,7 @@ struct SidebarView: View {
             isExpanded: placement.isNested && isWorkspaceExpanded(workspace),
             showsDisclosure: placement.isNested && !workspace.webSources.isEmpty,
             isPinned: workspace.isPinned,
+            liveStatus: liveSessionStatus(for: workspace),
             tabsProvider: {
                 refreshForegroundProcessNames(for: sessionKey(for: workspace))
                 refreshTranscriptTails(for: sessionKey(for: workspace))
@@ -903,27 +962,12 @@ struct SidebarView: View {
         }
     }
 
-    @ViewBuilder
     private func archivedSectionHeader(for repo: Repo, count: Int) -> some View {
-        let expanded = isArchivedSectionExpanded(repo)
-        Button {
-            toggleArchivedSection(for: repo)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.semibold))
-                    .rotationEffect(.degrees(expanded ? 90 : 0))
-                    .foregroundStyle(.secondary)
-                Text("Archived (\(count))")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 0)
-            }
-            .contentShape(Rectangle())
-            .padding(.leading, SidebarChrome.Indent.repoSubheader)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Archived workspaces, \(count)")
+        ArchivedDisclosureRow(
+            count: count,
+            isExpanded: isArchivedSectionExpanded(repo),
+            onToggle: { toggleArchivedSection(for: repo) }
+        )
     }
 
     @ViewBuilder
@@ -1764,6 +1808,20 @@ struct SidebarView: View {
             for: key,
             paneCountBySessionKey: paneCountBySessionKey,
             activeSessionKey: activeSessionKey,
+            sessions: hostSessions,
+            agentStatus: agentStatus
+        )
+    }
+
+    /// The live status line for the selected row, and nothing for any other. Resolving it here
+    /// keeps the lookup to one row per render and, because the elapsed timer only mounts where
+    /// this returns a value, keeps the sidebar to one running clock. The lookup reads the same
+    /// `agentStatus` closure `sessionActivity(for:)` already calls on this key, so it registers
+    /// no observation the row did not have.
+    private func liveSessionStatus(for workspace: Workspace) -> SidebarLiveSessionStatus? {
+        guard selectedWorkspace?.id == workspace.id else { return nil }
+        return workspacePresentationController.liveSessionStatus(
+            for: sessionKey(for: workspace),
             sessions: hostSessions,
             agentStatus: agentStatus
         )

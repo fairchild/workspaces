@@ -6,6 +6,18 @@
 import Foundation
 import WorkspaceManagerCore
 
+/// What the selected workspace row's status line reads: which agent is at work, the run-state
+/// summary the hover card also shows, and the fixed point the elapsed timer counts from.
+/// `startedAt` is the session's registration time — written once, never moved — so the row can
+/// hold it as a plain value and let its timer leaf own the clock. For sessions born in this
+/// app run that is the session's lifetime; a reattach after relaunch registers anew, so the
+/// clock restarts with it (a durable start date is a tracked follow-up).
+struct SidebarLiveSessionStatus: Equatable {
+    let kind: AgentKind
+    let summary: String
+    let startedAt: Date
+}
+
 struct SidebarWorkspacePresentationController {
     func paneCount(
         for key: HostTerminalSessionKey,
@@ -42,6 +54,25 @@ struct SidebarWorkspacePresentationController {
             .filter { $0.key == normalizedKey }
             .compactMap { agentStatus($0.id) }
             .max { $0.lastEventAt < $1.lastEventAt }
+    }
+
+    /// The live status line for one session key, or nil when no session sharing it has a
+    /// registered agent status. Resolved through the same `freshestAgentStatus` lookup the
+    /// activity dot makes, so a row's line and its dot always describe the same session.
+    func liveSessionStatus(
+        for key: HostTerminalSessionKey,
+        sessions: [HostTerminalSession],
+        agentStatus: (UUID) -> AgentSessionStatus?
+    ) -> SidebarLiveSessionStatus? {
+        guard
+            let status = freshestAgentStatus(
+                for: key, sessions: sessions, agentStatus: agentStatus)
+        else { return nil }
+        return SidebarLiveSessionStatus(
+            kind: status.kind,
+            summary: AgentChromeProjection.runState(status.run).summaryText,
+            startedAt: status.createdAt
+        )
     }
 
     func sessionActivity(

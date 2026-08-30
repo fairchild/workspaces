@@ -70,6 +70,7 @@ struct MainWindowLifecycleControllerTests {
             prewarmPerfTerminalSurfacesIfNeeded: recorder.step("prewarmPerfTerminalSurfaces"),
             resolveSurfaceLifecycle: recorder.step("resolveSurfaceLifecycle"),
             applyDiagnosticsFixtureIfNeeded: recorder.step("applyDiagnosticsFixture"),
+            applySelectedWorkspaceFixtureIfNeeded: recorder.step("applySelectedWorkspaceFixture"),
             applySessionSwitcherFixtureIfNeeded: recorder.step("applySessionSwitcherFixture"),
             pruneRightPaneState: recorder.step("pruneRightPaneState"),
             syncOpenInEditorShortcutRouting: recorder.step("syncOpenInEditorShortcutRouting"),
@@ -89,6 +90,7 @@ struct MainWindowLifecycleControllerTests {
             reconcileSelectionAfterModelChange: recorder.step("reconcileSelection"),
             resolveSurfaceLifecycle: recorder.step("resolveSurfaceLifecycle"),
             applyDiagnosticsFixtureIfNeeded: recorder.step("applyDiagnosticsFixture"),
+            applySelectedWorkspaceFixtureIfNeeded: recorder.step("applySelectedWorkspaceFixture"),
             applySessionSwitcherFixtureIfNeeded: recorder.step("applySessionSwitcherFixture"),
             pruneRepoSessions: recorder.step("pruneRepoSessions"),
             refreshWorkspaceStatusAggregator: recorder.step("refreshWorkspaceStatusAggregator"),
@@ -187,6 +189,7 @@ struct MainWindowLifecycleControllerTests {
                 "prewarmPerfTerminalSurfaces",
                 "resolveSurfaceLifecycle",
                 "applyDiagnosticsFixture",
+                "applySelectedWorkspaceFixture",
                 "applySessionSwitcherFixture",
                 "pruneRightPaneState",
                 "syncOpenInEditorShortcutRouting",
@@ -228,7 +231,19 @@ struct MainWindowLifecycleControllerTests {
         await controller.runLaunchSequence(launchActions(recorder))
 
         #expect(recorder.ordered("resolveSurfaceLifecycle", before: "applyDiagnosticsFixture"))
+        #expect(recorder.ordered("resolveSurfaceLifecycle", before: "applySelectedWorkspaceFixture"))
         #expect(recorder.ordered("resolveSurfaceLifecycle", before: "applySessionSwitcherFixture"))
+    }
+
+    /// A fixture that names its workspace is a more specific request than one that picks the
+    /// most recently accessed, so the named selection runs last of the two and wins.
+    @Test("Launch applies the named selection after the fixtures that pick their own target")
+    func launchAppliesNamedSelectionAfterOtherFixtures() async {
+        let recorder = Recorder()
+
+        await controller.runLaunchSequence(launchActions(recorder))
+
+        #expect(recorder.ordered("applyDiagnosticsFixture", before: "applySelectedWorkspaceFixture"))
     }
 
     /// The smoke harnesses block on these signals, so anything they expect to observe has to
@@ -272,6 +287,7 @@ struct MainWindowLifecycleControllerTests {
                 "reconcileSelection",
                 "resolveSurfaceLifecycle",
                 "applyDiagnosticsFixture",
+                "applySelectedWorkspaceFixture",
                 "applySessionSwitcherFixture",
                 "pruneRepoSessions",
                 // The aggregator refresh rebuilds an open switcher itself;
