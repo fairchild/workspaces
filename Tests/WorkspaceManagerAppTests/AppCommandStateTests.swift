@@ -129,7 +129,8 @@ struct AppCommandStateTests {
             canOpenSessionSwitcher: true,
             canOpenCommandRunner: true,
             canSendFeedback: true,
-            canOpenEmbeddedWebNext: true
+            canOpenEmbeddedWebNext: true,
+            canRescanWorkspaceLeftovers: true
         )
 
         state.setMainWindowActions(
@@ -177,5 +178,25 @@ struct AppCommandStateTests {
         state.clearMainWindowActions()
         #expect(state.mainWindowAvailability == .empty)
         #expect(emissions == 2)
+    }
+
+    @Test("the leftover rescan command reaches the window that registered it, and stops when it closes")
+    func rescanWorkspaceLeftoversDispatchesToTheRegisteredWindow() {
+        let state = AppCommandState()
+        var rescanCount = 0
+
+        state.perform(.rescanWorkspaceLeftovers)
+        #expect(rescanCount == 0)
+
+        state.setMainWindowActions(
+            MainWindowFocusedActions(rescanWorkspaceLeftovers: { rescanCount += 1 }),
+            availability: .empty
+        )
+        state.perform(.rescanWorkspaceLeftovers)
+        #expect(rescanCount == 1)
+
+        state.clearMainWindowActions()
+        state.perform(.rescanWorkspaceLeftovers)
+        #expect(rescanCount == 1)
     }
 }

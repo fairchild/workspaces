@@ -23,6 +23,10 @@ struct WorkspaceOrphanReconciliationState: Equatable {
     private(set) var cleaningItemIDs: Set<String> = []
     private(set) var adoptingItemIDs: Set<String> = []
 
+    /// True while a scan is in flight, so the menu command that starts one can disable itself
+    /// rather than stack a second filesystem sweep on the one already running.
+    private(set) var isScanning = false
+
     /// The item awaiting destructive-action confirmation. Non-nil drives the alert.
     var pendingCleanup: WorkspaceOrphanItem?
 
@@ -47,6 +51,23 @@ struct WorkspaceOrphanReconciliationState: Equatable {
 
     mutating func dismissVisibleItems() {
         dismissedItemIDs.formUnion(visibleItems.map(\.id))
+    }
+
+    /// Restores every dismissed item to the banner, for the explicit "check again" command.
+    ///
+    /// Quieting a leftover and resolving it look the same from here, and dismissal outlives every
+    /// automatic rescan — the same leftovers come back and stay suppressed. Un-quieting is what
+    /// makes an asked-for scan report what it finds rather than what the user already hid (#1442).
+    mutating func revealDismissedItems() {
+        dismissedItemIDs.removeAll()
+    }
+
+    mutating func beginScanning() {
+        isScanning = true
+    }
+
+    mutating func endScanning() {
+        isScanning = false
     }
 
     /// Marks an item as in-flight. Callers guard on `isCleaning(_:)` first so a repeat
