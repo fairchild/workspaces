@@ -302,6 +302,11 @@ first to find fails a PR check instead. Note the rehearsal builds `main` as of
 its dispatch and is graded as the version in `Info.plist` at that commit — it
 exercises the lane, not the exact commit you will tag.
 
+Approve the dispatch in the same sitting. The publish step targets the SHA
+`main` pointed at when the run was dispatched, and run #81 — approved two days
+after dispatch, with `main` six commits ahead by then — failed at that step
+with an HTTP 403 no promptly-approved run has hit.
+
 To rehearse:
 
 1. Dispatch `Release` from `main` (Actions > `Release` > `Run workflow` >
