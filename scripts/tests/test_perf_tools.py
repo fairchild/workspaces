@@ -497,6 +497,54 @@ class LaunchTriggerLabelTests(unittest.TestCase):
         self.assertNotIn("time-to-foreground", self.findings_text(payload))
 
 
+class MissingLaunchMetricTests(unittest.TestCase):
+    """A capture that never reached a prompt must not summarize clean (#1238/#1399)."""
+
+    def findings_for(self, lines: list[str], scenario: str = "installed_clean_shell") -> list[str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "capture.log"
+            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SUMMARIZE_PERF_LOG),
+                    "--json",
+                    "--scenario",
+                    scenario,
+                    "--build-kind",
+                    "installed",
+                    str(log_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return json.loads(result.stdout)["findings"]
+
+    def test_absent_launch_metric_is_called_a_failed_measurement(self) -> None:
+        """Observed live: a reattached tmux session emits no readiness signal at all."""
+        findings = self.findings_for(
+            [
+                "2026-08-30 10:00:00.000 [Perf] metric=terminal_investigation "
+                "phase=surface_create_succeeded duration_ms=25.17 shell_profile_mode=clean",
+            ]
+        )
+
+        self.assertTrue(any("MISSING: launch_to_first_prompt" in f for f in findings))
+        self.assertTrue(any("do not record a benchmark row" in f for f in findings))
+
+    def test_present_launch_metric_is_not_flagged(self) -> None:
+        findings = self.findings_for(
+            [
+                "2026-08-30 10:00:00.000 [Perf] metric=launch_to_first_prompt "
+                "duration_ms=640.00 trigger=terminal_set_title",
+            ]
+        )
+
+        self.assertFalse(any("MISSING" in f for f in findings))
+
+
 class InstalledEpochStampTests(unittest.TestCase):
     """Installed rows must claim the protocol they ran under, not a default (#1251/#1399)."""
 

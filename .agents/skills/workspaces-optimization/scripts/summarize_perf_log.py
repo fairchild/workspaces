@@ -283,6 +283,27 @@ def build_summary(
     app_version = app_version_from_binary(app_path)
     canonical_metrics = build_canonical_metrics(all_metrics, phase_summaries)
     contract = load_contract()
+    # Scoped to the one metric a release row is cut from. A capture can legitimately
+    # lack some contract metrics — an installed run does not click a repo, for instance —
+    # so a general sweep would cry wolf. The absence of launch_to_first_prompt is never
+    # legitimate for a scenario that declares it: it means the launch never reached a
+    # prompt inside the capture window, which is a failed measurement, and today that
+    # summarizes clean and becomes a blank cell indistinguishable from the seed row's
+    # honest blank. #1238's rule, restated in docs/performance_benchmarks.md: a skipped
+    # measurement must never be indistinguishable from a passing one. Observed live on
+    # 2026-08-30, 3/3 captures (#1399 follow-up).
+    launch_metric = "launch_to_first_prompt"
+    declares_launch = any(
+        entry.get("name") == launch_metric and scenario in entry.get("supported_scenarios", [])
+        for entry in contract.get("metrics", [])
+    )
+    if declares_launch and launch_metric not in canonical_metrics:
+        findings.append(
+            f"MISSING: {launch_metric} is expected for scenario {scenario} but no sample "
+            "was captured — the launch never reached a prompt inside the capture window. "
+            "This is a failed measurement, not a fast one; do not record a benchmark row "
+            "from this run."
+        )
     summary = canonical_summary(
         scenario=scenario,
         build_kind=build_kind,
