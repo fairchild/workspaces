@@ -2058,8 +2058,12 @@ struct ContentView: View {
         let result = await reconciler.scan(repositories: snapshots)
         workspaceOrphanState.applyScanResult(result.items)
 
+        // `failed_scope_count` sits beside the totals because it is what makes them readable:
+        // `item_count=24` across 52 repos means something different when 25 of those repos
+        // could not be scanned at all. The per-failure warnings are the detail behind it
+        // (#1401).
         perfLog.info(
-            "[Perf] metric=workspace_orphan_scan duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(scanStartedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) repo_count=\(snapshots.count, privacy: .public) item_count=\(result.items.count, privacy: .public)"
+            "[Perf] metric=workspace_orphan_scan duration_ms=\(String(format: "%.2f", Date().timeIntervalSince(scanStartedAt) * 1000), privacy: .public) trigger=\(trigger, privacy: .public) repo_count=\(snapshots.count, privacy: .public) item_count=\(result.items.count, privacy: .public) failed_scope_count=\(result.failures.count, privacy: .public)"
         )
     }
 

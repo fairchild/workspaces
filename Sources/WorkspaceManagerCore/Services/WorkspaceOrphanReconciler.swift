@@ -222,11 +222,34 @@ public struct WorkspaceOrphanItem: Identifiable, Sendable, Equatable, Hashable {
     }
 }
 
+/// Something the scan could not look at, and why.
+///
+/// A repository whose scan throws contributes no items, so a short result and a clean one
+/// are indistinguishable from the outside — "found nothing here" and "could not look here"
+/// arrive as the same silence. Carrying the failures is what lets a caller tell them
+/// apart (#1401).
+public struct WorkspaceOrphanScanFailure: Sendable, Equatable {
+    /// What could not be scanned: a repository's name, or the Lume VM storage.
+    public let scope: String
+    /// The repository directory the scan ran against, when the failure has one.
+    public let path: String?
+    public let message: String
+
+    public init(scope: String, path: String?, message: String) {
+        self.scope = scope
+        self.path = path
+        self.message = message
+    }
+}
+
 public struct WorkspaceOrphanScanResult: Sendable, Equatable {
     public let items: [WorkspaceOrphanItem]
+    /// The scopes this scan could not reach. Empty means the result is complete.
+    public let failures: [WorkspaceOrphanScanFailure]
 
-    public init(items: [WorkspaceOrphanItem]) {
+    public init(items: [WorkspaceOrphanItem], failures: [WorkspaceOrphanScanFailure] = []) {
         self.items = items
+        self.failures = failures
     }
 }
 
@@ -335,13 +358,28 @@ public struct WorkspaceOrphanReconciler: Sendable {
         repositories: [WorkspaceOrphanRepositorySnapshot]
     ) async -> WorkspaceOrphanScanResult {
         var items: [WorkspaceOrphanItem] = []
+        var failures: [WorkspaceOrphanScanFailure] = []
 
         for repository in repositories {
             do {
                 items.append(contentsOf: try await scan(repository: repository))
             } catch {
+                // Public on purpose. Both halves of this line used to redact — the subject and
+                // the reason — which left roughly 25 identical `<private>` failures per launch
+                // that could not be triaged from a log capture at all (#1401). What is named
+                // here is a local repository directory and a git/Foundation error string,
+                // neither of them a secret, and the path is carried explicitly because the
+                // common failure (a record whose directory is gone) surfaces as an
+                // `NSCocoaErrorDomain` message naming only the last path component.
+                failures.append(
+                    WorkspaceOrphanScanFailure(
+                        scope: repository.name,
+                        path: repository.localPath,
+                        message: error.localizedDescription
+                    )
+                )
                 workspaceOrphanLog.warning(
-                    "Failed to scan workspace orphans for \(repository.name): \(error.localizedDescription)"
+                    "Failed to scan workspace orphans for \(repository.name, privacy: .public) at \(repository.localPath, privacy: .public): \(error.localizedDescription, privacy: .public)"
                 )
             }
         }
@@ -349,8 +387,15 @@ public struct WorkspaceOrphanReconciler: Sendable {
         do {
             items.append(contentsOf: try scanLumeVMs(repositories: repositories))
         } catch {
+            failures.append(
+                WorkspaceOrphanScanFailure(
+                    scope: "Lume workspace VM storage",
+                    path: lumeWorkspaceStorageURL?.path,
+                    message: error.localizedDescription
+                )
+            )
             workspaceOrphanLog.warning(
-                "Failed to scan Lume workspace VM orphans: \(error.localizedDescription)"
+                "Failed to scan Lume workspace VM orphans: \(error.localizedDescription, privacy: .public)"
             )
         }
 
@@ -360,7 +405,8 @@ public struct WorkspaceOrphanReconciler: Sendable {
                     return lhs.kind.rawValue < rhs.kind.rawValue
                 }
                 return lhs.resourceName.localizedCaseInsensitiveCompare(rhs.resourceName) == .orderedAscending
-            }
+            },
+            failures: failures
         )
     }
 
