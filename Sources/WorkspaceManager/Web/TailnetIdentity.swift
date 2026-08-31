@@ -52,7 +52,9 @@ enum TailnetIdentity {
         process.arguments = ["status", "--json"]
         let stdout = Pipe()
         process.standardOutput = stdout
-        process.standardError = Pipe()
+        // Discard stderr rather than piping it: an undrained stderr pipe could
+        // fill its buffer and wedge the child, and this call never reads it.
+        process.standardError = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
 
         let box = DataBox()
@@ -64,6 +66,10 @@ enum TailnetIdentity {
         }
         if readDone.wait(timeout: .now() + deadline) == .timedOut {
             process.terminate()
+            // terminate() is best-effort SIGTERM; reap on a detached queue so a
+            // slow-to-exit child is still waited on (no zombie) without holding
+            // the caller past the deadline.
+            DispatchQueue.global(qos: .utility).async { process.waitUntilExit() }
             return nil
         }
 

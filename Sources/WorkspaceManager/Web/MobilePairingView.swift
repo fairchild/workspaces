@@ -31,7 +31,13 @@ final class MobilePairingModel: ObservableObject {
 
     func activate() async {
         phase = .starting
-        guard let origin = TailnetIdentity.httpsOrigin() else {
+        // Resolution can shell out to the Tailscale CLI (bounded ~2s); keep it
+        // off the main actor so opening the window never stalls the UI
+        // (codex review). httpsOrigin() itself is thread-safe.
+        let resolved = await Task.detached(priority: .userInitiated) {
+            TailnetIdentity.httpsOrigin()
+        }.value
+        guard let origin = resolved else {
             phase = .failed("No tailnet detected — is Tailscale installed, running, and connected?")
             return
         }
@@ -147,6 +153,7 @@ struct MobilePairingView: View {
         }
         .padding(24)
         .frame(width: 360)
+        .background(NonRestorableWindowMarker())
         .task { await model.activate() }
     }
 
@@ -172,4 +179,21 @@ struct MobilePairingView: View {
     }
 
     static let serveCommand = "tailscale serve --bg \(WebNextServerSettings.port)"
+}
+
+/// Marks the hosting window non-restorable and opts it out of window snapshots,
+/// so the token-bearing QR bitmap is never written to
+/// `~/Library/Saved Application State` (codex review). `.restorationBehavior`
+/// is macOS 15+, so this uses the AppKit control that exists on the app's
+/// macOS 14 floor.
+private struct NonRestorableWindowMarker: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        DispatchQueue.main.async {
+            guard let window = nsView.window else { return }
+            window.isRestorable = false
+            window.disableSnapshotRestoration()
+        }
+    }
 }
