@@ -8,7 +8,7 @@ This file holds repo-wide invariants plus a routing table; surface guidance live
 
 ## Quality and Mergeability
 
-Craft matters. Plan work to land mergeably: correct, native-feeling, tightly scoped, reviewable, evidence-backed, consistent with existing architecture and UI patterns, and leaving the system easier to operate. Before opening or reviewing a PR, run the surface checklist in `docs/development/mergeability-standard.md`; substantive PRs run the `codex-review-loop` skill first (skip codex for metadata/docs-only diffs).
+Plan work to land mergeably: correct, native-feeling, tightly scoped, reviewable, evidence-backed, consistent with existing architecture and UI patterns, and leaving the system easier to operate. Before opening or reviewing a PR, run the surface checklist in `docs/development/mergeability-standard.md`; substantive PRs run the `codex-review-loop` skill first (skip codex for metadata/docs-only diffs).
 
 Default to carrying an implementation request through to a PR: branch if needed, edit, verify, commit, rebase on latest `origin/main`, push, open the PR, report status. Pause short of the PR when the user wants exploration only, says not to publish, or evidence/permissions are blocked. At the start of a multi-PR session, propose the authority contract up front (who reviews, who flips ready, who merges).
 
@@ -18,7 +18,7 @@ Root `AGENTS.md` is startup context for every session: keep it under about **4,5
 
 ## Issues, Labels, Coordination
 
-Issues and PRDs live in GitHub Issues for `fairchild/workspaces` (`docs/agents/issue-tracker.md`). Any issue link/number or ask to work an issue is a backlog claim, `backlog` skill named or not: read the issue, apply `claimed` (remove `ready`), post a claim comment naming the active Codex thread title/name and session ID (say explicitly if either is unavailable), then follow the lifecycle in `backlog/AGENTS.md`.
+Issues and PRDs (product requirement documents) live in GitHub Issues for `fairchild/workspaces` (`docs/agents/issue-tracker.md`). Any issue link/number or ask to work an issue is a backlog claim, `backlog` skill named or not: read the issue, apply `claimed` (remove `ready`), post a claim comment naming the active Codex thread title/name and session ID (say explicitly if either is unavailable), then follow the lifecycle in `backlog/AGENTS.md`.
 
 Labels: `agent`/`human` ownership, `ready`/`claimed`/`review`/`mergeable` lifecycle, `needs-human` only for human-intervention blockers. **Agent-authored PRs carry exactly one `author:<agent>` label** naming yourself (e.g. `author:claude-code`), created if missing. Both: `docs/agents/triage-labels.md` (slugs: § "Author Labels").
 
@@ -37,7 +37,7 @@ Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an ex
 
 ## High-Signal Lessons (unconditional)
 
-- **Every lane needing macOS is GitHub-hosted `macos-15`** — generic build/test, the UI smoke lane (`ui-smoke-advisory.yml`), agent evidence (`_evidence.yml`), and release/signing/notarization; agent and metadata jobs run `ubuntu-latest`. No self-hosted runner is registered for this repo at all — `blue-workspaces` was deregistered on 2026-08-13, after `lume-macos` and `tart-ui` — so `.github/actionlint.yaml` allows no self-hosted label and a `runs-on` naming one fails lint. Reaching for `signing-host` does not fall back to hosted; it queues forever. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
+- **Every lane needing macOS is GitHub-hosted `macos-15`** — generic build/test, the UI smoke lane (`ui-smoke-advisory.yml`), agent evidence (`_evidence.yml`), and release/signing/notarization; agent and metadata jobs run `ubuntu-latest`. No self-hosted runner is registered for this repo — `blue-workspaces` was deregistered on 2026-08-13, after `lume-macos` and `tart-ui` — so `.github/actionlint.yaml` allows no self-hosted label and a `runs-on` naming one fails lint. Reaching for `signing-host` does not fall back to hosted; it queues forever. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
 - **Ship a diagnostic probe instead of your third guess.** When you're guessing, stop and instrument.
 - **The tracker lags the code — verify before planning from it.** Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
 
