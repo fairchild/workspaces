@@ -65,6 +65,7 @@ mise run lint                  # swift-format lint --strict (CI fails without it
 
 | Working on | Read first |
 |---|---|
+| Planning or any non-trivial change | `GLOSSARY.md` (product domain language); `CONTEXT-MAP.md` → `docs/agents/GLOSSARY.md` (Factory language) |
 | Terminal / keyboard / sidebar / desktop UI | `Sources/AGENTS.md` (dev-verification loop **required**); runbook: `docs/development/libghostty-integration.md` § "Agent self-verification runbook" |
 | Swift tests | `Tests/AGENTS.md` |
 | `web/` dashboard (maintenance mode) | `web/AGENTS.md` |

@@ -4,7 +4,7 @@ date: 2026-07-12
 decision: factory-label-control-plane
 related:
   - docs/development/agent-factory-v2-plan.md
-  - docs/agents/CONTEXT.md
+  - docs/agents/GLOSSARY.md
   - docs/agents/triage-labels.md
 ---
 

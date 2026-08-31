@@ -68,7 +68,7 @@ Any public docs URL ending in `.md` returns raw Markdown, not the rendered reade
 
 ```text
 https://spaces.cloudcompute.com/docs/product_overview.md
-https://spaces.cloudcompute.com/docs/CONTEXT.md
+https://spaces.cloudcompute.com/docs/GLOSSARY.md
 https://spaces.cloudcompute.com/docs/development/libghostty-integration.md
 ```
 
@@ -94,7 +94,7 @@ You can choose a different port when needed:
 mise run docs:serve -- --port 8090
 ```
 
-The server intentionally serves the repository root, not just `docs/`, so rendered pages can fetch root-level Markdown such as `README.md` and `CONTEXT.md`.
+The server intentionally serves the repository root, not just `docs/`, so rendered pages can fetch root-level Markdown such as `README.md` and `GLOSSARY.md`.
 
 ### Local Search API
 
@@ -163,7 +163,7 @@ Rendered pages should stay focused on understanding the product and codebase fir
 
 ## Vocabulary Contract
 
-Use [../CONTEXT.md](../CONTEXT.md) as the canonical language source for the native app. The docs site should prefer these terms:
+Use [../GLOSSARY.md](../GLOSSARY.md) as the canonical language source for the native app. The docs site should prefer these terms:
 
 - **WorkSpaces**
 - **Repository**
@@ -218,6 +218,6 @@ Expected results:
 - `/docs/` returns `200`
 - `/docs/product_overview` returns rendered HTML
 - `/docs/product_overview.md` returns raw Markdown
-- `/docs/CONTEXT` renders root `CONTEXT.md`
+- `/docs/CONTEXT` renders root `GLOSSARY.md`
 - `/` redirects to `/docs/`
 - `/favicon.ico` redirects to the docs favicon

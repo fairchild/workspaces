@@ -17,7 +17,7 @@ What is actually wired and running today, verified against the workflow YAML and
 | Mention Triage → Executor | `agent-mention.yml` → `agent-executor.yml` | `@april-clearwater` / `@plat` / `@peter` / `@claude` mentions on issues/PRs/reviews | `AGENT_AUTOMATIONS_ENABLED`; execution additionally requires the `safe-to-run-agent` label, server-verified | **Live** — this is a distinct lane from the "Triage" pipeline Stage below; naming collision, not the same code path |
 | Milestone Legibility | `milestone-legibility.yml` | daily cron (13:37 UTC); PR touching the check script; `workflow_dispatch` | none (no Factory switch — always runs) | **Live** |
 | Evidence Reminder | `evidence-reminder.yml` | PR opened/edited/`ready_for_review` | none | **Live** — non-blocking: it only posts a reminder comment when evidence looks absent, it never fails the check. Not part of the Factory pipeline. |
-| Triage / Spec (pipeline Stages) | none | — | — | **Aspirational.** `docs/agents/CONTEXT.md` names these as Factory Stages and assigns them to Peter, but no workflow triggers `run-planner.py` today. See "Peter planner: parked" below. |
+| Triage / Spec (pipeline Stages) | none | — | — | **Aspirational.** `docs/agents/GLOSSARY.md` names these as Factory Stages and assigns them to Peter, but no workflow triggers `run-planner.py` today. See "Peter planner: parked" below. |
 | Carl Community | — | — | — | **Deleted this PR.** Daily cron that only 429s or no-ops; never posted once; not a v2-plan persona. |
 | Codespaces Claude Worker | — | — | — | **Deleted this PR.** Manual break-glass dispatch; zero runs since it shipped. |
 | App Review Smoke | — | — | — | **Deleted this PR.** Manual dispatch; dormant since 2026-05-26. |
@@ -297,7 +297,7 @@ Only after that lands does defaulting `FACTORY_WORKER_IDENTITY=app` for worker d
 ## References
 
 - `docs/development/agent-factory-v2-plan.md` — design record: why this pipeline, the decisions behind it, the milestone roadmap
-- `docs/agents/CONTEXT.md` — Factory vocabulary (Stage, Gate, Persona, etc.)
+- `docs/agents/GLOSSARY.md` — Factory vocabulary (Stage, Gate, Persona, etc.)
 - `docs/agents/triage-labels.md` — the `ready`/`claimed`/`review`/`mergeable` label state machine and `author:*` attribution labels
 - `docs/development/evidence.md` — the evidence lane the Implement lane reuses as-is
 - `docs/development/github-app-identities.md` — App identity table, mechanism, and verification checklist

@@ -36,6 +36,7 @@ from scripts.docs_catalog import (  # noqa: E402
 
 SOURCE_OVERRIDES = {
     "/docs/README.md": "/README.md",
+    "/docs/GLOSSARY.md": "/GLOSSARY.md",
     "/docs/CONTEXT.md": "/CONTEXT.md",
     "/docs/docs-site.md": "/docs/README.md",
 }

@@ -13,7 +13,7 @@ The current design lives in:
 - [Event-fired stages replace scheduled persona wake-ups](../decisions/factory-event-driven-stages.md)
 - [Labels and PRs are the Factory's only control plane](../decisions/factory-label-control-plane.md)
 - [Personas manage their own memory through peer-reviewed PRs](../decisions/factory-persona-memory.md)
-- [Agent Factory context and vocabulary](../agents/CONTEXT.md)
+- [Agent Factory context and vocabulary](../agents/GLOSSARY.md)
 
 This file remains as a stable target for inbound links to the retired v1
 architecture.

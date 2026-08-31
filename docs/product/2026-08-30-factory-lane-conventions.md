@@ -14,7 +14,7 @@ stale; re-verify before arguing from them.
 "Lane" in this doc means what `docs/development/factory-current-state.md`'s
 lane table means: one workflow file's slice of the factory pipeline. The word
 carries at least three other meanings in this repo (pipeline Stage in
-`docs/agents/CONTEXT.md`, the `agent`/`human` ownership axis in
+`docs/agents/GLOSSARY.md`, the `agent`/`human` ownership axis in
 `docs/agents/triage-labels.md`, milestone workstream in
 `docs/agents/issue-tracker.md`) — a collision the grilling session should
 resolve in the glossary.
