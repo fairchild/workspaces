@@ -45,7 +45,8 @@ enum WebNextServerSettings {
             webNextRoot: URL(fileURLWithPath: expanded),
             port: port,
             extraLocalOriginsProvider: {
-                TailnetIdentity.httpsOrigin().map { [$0] } ?? []
+                guard MobilePairingFeature.isEnabled else { return [] }
+                return TailnetIdentity.httpsOrigin().map { [$0] } ?? []
             }
         )
     }

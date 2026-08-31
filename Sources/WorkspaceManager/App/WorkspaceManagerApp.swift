@@ -368,9 +368,17 @@ struct WorkspaceManagerApp: App {
                 .defaultAppStorage(LaunchPreferences.defaults)
         }
 
+        // SceneBuilder has no conditionals, so the gate lives on the content:
+        // disabled, the window shows only the policy notice and nothing pairing-
+        // related ever initializes. Forks delete this scene block wholesale
+        // (docs/development/mobile-pairing-isolation.md).
         Window("Pair Mobile Device", id: "mobile-pairing") {
-            MobilePairingView(server: appRuntimeDependencies.webNextServerService)
-                .defaultAppStorage(LaunchPreferences.defaults)
+            if MobilePairingFeature.isEnabled {
+                MobilePairingView(server: appRuntimeDependencies.webNextServerService)
+                    .defaultAppStorage(LaunchPreferences.defaults)
+            } else {
+                MobilePairingDisabledView()
+            }
         }
         .windowResizability(.contentSize)
 

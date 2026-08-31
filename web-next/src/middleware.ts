@@ -16,6 +16,7 @@ import {
 	LOCAL_AUTH_COOKIE,
 	localRequestOrigin,
 	localModeEnabled,
+	parseExtraLocalOrigins,
 	localSessionCookieValid,
 	resolveAuthSecret,
 	TEST_AUTH_COOKIE,
@@ -107,13 +108,18 @@ export async function middleware(request: NextRequest) {
 				resolved.origin === localOrigin
 					? `${resolved.pathname}${resolved.search}`
 					: "/";
-			// Bounce through the redemption route so any successful QR sign-in —
-			// the native scanner and a camera-app Safari scan alike — records the
-			// pairing ack before landing on its destination.
-			const destination = new URL(
-				`/api/pairing/redeemed?next=${encodeURIComponent(nextPath)}`,
-				localOrigin,
-			);
+			// With pairing unconfigured (no extra origins), sign-in behaves
+			// byte-identically to the pre-pairing app: straight to the
+			// destination. Configured, it bounces through the redemption route
+			// so any successful QR sign-in — native scanner and camera-app
+			// Safari alike — records the pairing ack first.
+			const destination =
+				parseExtraLocalOrigins().size === 0
+					? new URL(nextPath, localOrigin)
+					: new URL(
+							`/api/pairing/redeemed?next=${encodeURIComponent(nextPath)}`,
+							localOrigin,
+						);
 			const response = NextResponse.redirect(destination);
 			response.cookies.set(LOCAL_AUTH_COOKIE, queryToken ?? "", {
 				path: "/",
