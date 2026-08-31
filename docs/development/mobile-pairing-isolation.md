@@ -8,11 +8,25 @@ exposes no pairing surface — byte-identical behavior to a build that never
 had the feature.
 
 **Enabled is not exposed.** The gate below controls whether the pairing
-*surface* exists — not whether anything is reachable. Reachability takes two
-further acts that are always the operator's: running `tailscale serve` (or
-equivalent) in front of the loopback bind, and handing a device the minted
-token. A default-enabled build with neither act performed is exactly as
+*surface* exists — not whether anything is reachable. The server binds
+loopback either way; reaching it from another machine takes an operator act
+the app never performs: running `tailscale serve` (or equivalent) in front of
+that bind. A default-enabled build with no proxy in front is exactly as
 reachable as a build compiled without the feature: not at all.
+
+Once a proxy *is* configured, distinguish reachability from authorization. A
+peer can then reach the unauthenticated surface — `/sign-in`, `/api/auth`,
+`/api/healthz`, `/api/pairing/ack` — but every one of those either carries no
+private data or authenticates itself with the minted token, and every other
+path requires the session the token mints. Network position never authorizes;
+a peer can send any `Host` header it likes, so no route may treat one as proof
+of locality.
+
+**Disabling is not revocation.** The gate is read when the app spawns its
+web-next child, so flipping it (MDM, defaults, argument) applies to the next
+launch. It does not tear down a running child or invalidate a phone already
+holding the token — for that, stop the server and rotate the token by deleting
+`local-sign-in-token` from the data dir.
 
 **Staleness test:** `rg -l "MobilePairingFeature|WEB_NEXT_EXTRA_LOCAL_ORIGINS|parseExtraLocalOrigins|localRequestOrigin" Sources web-next scripts`
 must list exactly the integration points named below; anything new must check

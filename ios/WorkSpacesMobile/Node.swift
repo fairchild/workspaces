@@ -25,6 +25,13 @@ struct Node: Codable, Equatable {
     func healthzURL() -> URL {
         baseURL.appending(path: "/api/healthz")
     }
+
+    /// The pairing-status endpoint. Authenticated with this node's token, so
+    /// asking it doubles as "does this node still accept me?" — and reading it
+    /// records nothing, unlike the handshake POST.
+    func pairingAckURL() -> URL {
+        baseURL.appending(path: "/api/pairing/ack")
+    }
 }
 
 /// Keychain persistence for the paired node — the token never touches

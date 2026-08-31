@@ -1,7 +1,8 @@
 /*
- * The pairing handshake contract: POST proves token possession and records
- * the ack (from the phone, so any origin); GET reports the latest ack to the
- * desktop poller over loopback only, and never leaks the token.
+ * The pairing handshake contract: both verbs authenticate with the minted
+ * token and neither trusts network position. POST proves possession in its
+ * body and records the ack; GET reports the latest ack to a Bearer-
+ * authenticated caller, and never echoes the token back.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,8 +12,13 @@ import { GET, POST } from "./route";
 
 let dataDir: string;
 
-function getRequest(host = "localhost:3140"): Request {
-	return new Request("http://localhost:3140/api/pairing/ack", { headers: { host } });
+function getRequest(token: string | null = "the-minted-token", host = "localhost:3140"): Request {
+	return new Request("http://localhost:3140/api/pairing/ack", {
+		headers: {
+			host,
+			...(token === null ? {} : { authorization: `Bearer ${token}` }),
+		},
+	});
 }
 
 function postRequest(body: unknown): Request {
@@ -65,15 +71,23 @@ describe("/api/pairing/ack", () => {
 		expect((await POST(postRequest({}))).status).toBe(401);
 	});
 
-	test("GET refuses a proxied caller — pairing status is loopback-only", async () => {
+	test("GET requires the minted token — no bearer, wrong bearer, right bearer", async () => {
 		await POST(postRequest({ token: "the-minted-token" }));
-		const proxied = await GET(getRequest("mac.tail.ts.net"));
-		expect(proxied.status).toBe(403);
-		await expect(proxied.json()).resolves.toEqual({
-			error: "pairing status is loopback-only",
-		});
-		// …while the loopback poller still sees it.
-		expect((await GET(getRequest("127.0.0.1:3140"))).status).toBe(200);
+		expect((await GET(getRequest(null))).status).toBe(401);
+		const wrong = await GET(getRequest("wrong-token"));
+		expect(wrong.status).toBe(401);
+		await expect(wrong.json()).resolves.toEqual({ error: "invalid pairing token" });
+		expect((await GET(getRequest("the-minted-token"))).status).toBe(200);
+	});
+
+	test("a spoofed loopback Host does not stand in for the token", async () => {
+		// Verified over a real tailnet: `tailscale serve` forwards whatever Host
+		// the peer sent, so `Host: localhost` reaches this route from anywhere.
+		// Network position must never authorize.
+		await POST(postRequest({ token: "the-minted-token" }));
+		for (const host of ["localhost:3140", "127.0.0.1:3140", "[::1]:3140"]) {
+			expect((await GET(getRequest(null, host))).status, host).toBe(401);
+		}
 	});
 
 	test("both verbs 404 outside local mode", async () => {

@@ -30,6 +30,7 @@ final class MobilePairingModel: ObservableObject {
     /// a pairing recorded before this window opened never claims it.
     private var qrShownAt = Date.distantFuture
     private var ackURL: URL?
+    private var ackToken: String?
     private var pollTask: Task<Void, Never>?
 
     init(server: any WebNextServerServiceProtocol) {
@@ -69,6 +70,12 @@ final class MobilePairingModel: ObservableObject {
         }
         lastReady = (qr: qr, origin: origin)
         ackURL = URL(string: "/api/pairing/ack", relativeTo: localURL)?.absoluteURL
+        // The status read authenticates with the same minted token the sign-in
+        // URL carries — a loopback-looking Host proves nothing, since Serve
+        // forwards whatever Host a peer sent (codex review).
+        ackToken =
+            URLComponents(url: localURL, resolvingAgainstBaseURL: false)?
+            .queryItems?.first(where: { $0.name == "token" })?.value
         showQR()
     }
 
@@ -93,7 +100,9 @@ final class MobilePairingModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
                 guard let self, case .ready = self.phase else { return }
-                guard let ack = await Self.fetchAck(from: ackURL) else { continue }
+                guard let token = self.ackToken,
+                    let ack = await Self.fetchAck(from: ackURL, token: token)
+                else { continue }
                 if ack.at > self.qrShownAt {
                     self.phase = .acked(at: ack.at, agent: ack.agent)
                     return
@@ -107,9 +116,11 @@ final class MobilePairingModel: ObservableObject {
         let userAgent: String?
     }
 
-    private static func fetchAck(from url: URL) async -> (at: Date, agent: String)? {
+    private static func fetchAck(from url: URL, token: String) async -> (at: Date, agent: String)? {
+        var request = URLRequest(url: url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         guard
-            let (data, response) = try? await URLSession.shared.data(from: url),
+            let (data, response) = try? await URLSession.shared.data(for: request),
             (response as? HTTPURLResponse)?.statusCode == 200,
             let payload = try? JSONDecoder().decode(AckPayload.self, from: data),
             let pairedAt = payload.pairedAt
