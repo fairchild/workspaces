@@ -159,6 +159,15 @@ struct WorkspaceManagerApp: App {
                     softwareUpdateController.checkForUpdatesWithDisclosure()
                 }
                 .disabled(!softwareUpdateController.canCheckForUpdates)
+
+                // Sits beside "Check for Updates..." because it is the same shape of command:
+                // an app-scope check that takes no selection and opens no dialog. It re-runs the
+                // leftover scan and un-dismisses the banner, the only route back to a dismissed
+                // one short of relaunching (#1442).
+                Button("Check for Workspace Leftovers") {
+                    appCommandState.perform(.rescanWorkspaceLeftovers)
+                }
+                .disabled(!appCommandState.mainWindowAvailability.canRescanWorkspaceLeftovers)
             }
 
             CommandGroup(replacing: .newItem) {
@@ -838,6 +847,7 @@ struct MainWindowFocusedActions {
     var openCommandRunner: Action? = nil
     var sendFeedback: Action? = nil
     var openEmbeddedWebNext: Action? = nil
+    var rescanWorkspaceLeftovers: Action? = nil
 
     @MainActor static let empty = MainWindowFocusedActions()
 }
@@ -860,6 +870,7 @@ struct MainWindowCommandAvailability: Equatable {
     let canOpenCommandRunner: Bool
     let canSendFeedback: Bool
     let canOpenEmbeddedWebNext: Bool
+    let canRescanWorkspaceLeftovers: Bool
 
     static let empty = MainWindowCommandAvailability(
         canToggleSidebar: false,
@@ -878,7 +889,8 @@ struct MainWindowCommandAvailability: Equatable {
         canOpenSessionSwitcher: false,
         canOpenCommandRunner: false,
         canSendFeedback: false,
-        canOpenEmbeddedWebNext: false
+        canOpenEmbeddedWebNext: false,
+        canRescanWorkspaceLeftovers: false
     )
 }
 
@@ -900,6 +912,7 @@ enum MainWindowCommand {
     case openCommandRunner
     case sendFeedback
     case openEmbeddedWebNext
+    case rescanWorkspaceLeftovers
 }
 
 @MainActor
@@ -1014,6 +1027,8 @@ final class AppCommandState: ObservableObject {
             mainWindowActions.sendFeedback?()
         case .openEmbeddedWebNext:
             mainWindowActions.openEmbeddedWebNext?()
+        case .rescanWorkspaceLeftovers:
+            mainWindowActions.rescanWorkspaceLeftovers?()
         }
     }
 }

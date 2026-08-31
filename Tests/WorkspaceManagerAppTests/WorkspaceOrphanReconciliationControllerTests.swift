@@ -89,6 +89,57 @@ struct WorkspaceOrphanReconciliationControllerTests {
         #expect(state.visibleItems.map(\.id) == ["a"])
     }
 
+    // MARK: - Manual rescan (#1442)
+
+    @Test("An automatic rescan leaves a dismissed leftover quiet")
+    func automaticRescanKeepsDismissalsSuppressed() {
+        var state = WorkspaceOrphanReconciliationState()
+        state.applyScanResult([makeItem(id: "a")])
+        state.dismissVisibleItems()
+
+        state.applyScanResult([makeItem(id: "a")])
+
+        #expect(state.visibleItems.isEmpty)
+    }
+
+    @Test("An explicit rescan brings a dismissed leftover back")
+    func explicitRescanRevealsDismissedItems() {
+        var state = WorkspaceOrphanReconciliationState()
+        state.applyScanResult([makeItem(id: "a"), makeItem(id: "b")])
+        state.dismissVisibleItems()
+        #expect(state.visibleItems.isEmpty)
+
+        state.revealDismissedItems()
+        state.applyScanResult([makeItem(id: "a"), makeItem(id: "b")])
+
+        #expect(state.visibleItems.map(\.id) == ["a", "b"])
+    }
+
+    @Test("Revealing then finding nothing shows an empty banner, not the stale set")
+    func explicitRescanThatFindsNothingShowsNothing() {
+        var state = WorkspaceOrphanReconciliationState()
+        state.applyScanResult([makeItem(id: "a")])
+        state.dismissVisibleItems()
+
+        state.revealDismissedItems()
+        state.applyScanResult([])
+
+        #expect(state.visibleItems.isEmpty)
+        #expect(state.dismissedItemIDs.isEmpty)
+    }
+
+    @Test("A scan in flight reports itself so a second one cannot stack on it")
+    func inFlightScanIsObservable() {
+        var state = WorkspaceOrphanReconciliationState()
+        #expect(state.isScanning == false)
+
+        state.beginScanning()
+        #expect(state.isScanning)
+
+        state.endScanning()
+        #expect(state.isScanning == false)
+    }
+
     // MARK: - Cleanup in flight
 
     @Test("An in-flight cleanup reports itself so a second confirmation is skipped")

@@ -608,7 +608,8 @@ struct ContentView: View {
             openSessionSwitcher: presentSessionSwitcher,
             openCommandRunner: { viewState.isShowingThemeOverlay = true },
             sendFeedback: { isShowingFeedbackSheet = true },
-            openEmbeddedWebNext: { openEmbeddedWebNext(redirect: nil) }
+            openEmbeddedWebNext: { openEmbeddedWebNext(redirect: nil) },
+            rescanWorkspaceLeftovers: { Task { await rescanWorkspaceOrphans() } }
         )
     }
 
@@ -635,7 +636,8 @@ struct ContentView: View {
             canOpenSessionSwitcher: true,
             canOpenCommandRunner: true,
             canSendFeedback: true,
-            canOpenEmbeddedWebNext: true
+            canOpenEmbeddedWebNext: true,
+            canRescanWorkspaceLeftovers: !workspaceOrphanState.isScanning
         )
     }
 
@@ -2025,8 +2027,24 @@ struct ContentView: View {
         )
     }
 
+    /// The explicit "check again" path behind Workspaces ▸ Check for Workspace Leftovers (#1442).
+    ///
+    /// Dismissal is per-item and lives for the launch, so a plain rescan would find the same
+    /// leftovers and still render nothing. Un-quieting first is what makes this a way back to a
+    /// banner dismissed hours ago — the recovery that otherwise costs a relaunch, and with it
+    /// every terminal tile the window is holding.
+    @MainActor
+    private func rescanWorkspaceOrphans() async {
+        guard !workspaceOrphanState.isScanning else { return }
+        workspaceOrphanState.revealDismissedItems()
+        await refreshWorkspaceOrphans(trigger: "manual_rescan")
+    }
+
     @MainActor
     private func refreshWorkspaceOrphans(trigger: String) async {
+        workspaceOrphanState.beginScanning()
+        defer { workspaceOrphanState.endScanning() }
+
         // Fixture mode replaces the filesystem scan wholesale: real leftovers on a dev
         // machine would make captures (and ui-state goldens) machine-dependent.
         if let fixtureItems = UIFixtureOrphanBannerBootstrap.fixtureScanResult() {
