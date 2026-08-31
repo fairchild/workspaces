@@ -101,6 +101,27 @@ Notes:
   compare within one scenario and epoch, and `perf-compare.py` warns when a
   comparison spans either boundary, so a protocol change is never rendered as an
   app-side regression.
+- **The tmux server is a state axis the lane does not isolate (#1462).** Sessions live
+  on a shared `tmux -L workspaces` server keyed by workspace, and `new-session -A`
+  attaches when one exists. A session already sitting at a prompt emits no title/pwd
+  on reattach, so `terminal_first_output` never fires and — in `--no-activate` mode,
+  where the focus close path is skipped — `launch_to_first_prompt` never closes at all.
+  Measured 2026-08-30: 3/3 installed captures produced no launch metric on a machine
+  carrying week-old `wm-*` sessions, while the app itself stayed healthy (surface up in
+  25 ms, main-queue heartbeat steady for 10 s). `WORKSPACES_TMUX_SOCKET_LABEL` cannot
+  currently fix this — the app's terminal launch path hardcodes the label. Until it can,
+  read a missing launch metric as "the lane reattached", not "the app is slow".
+- **Which trigger closed the interval decides what the sample measured.** Every
+  `launch_to_first_prompt` line carries `trigger=`, and the two values are not the
+  same measurement. A readiness trigger (`terminal_set_title`, `terminal_pwd`) closes
+  when the first shell is usable — that is launch. `terminal_focus` closes when the
+  app was brought forward, so on a **backgrounded** launch it measures
+  time-to-foreground: the app was ready and the clock kept running until something
+  focused it, which is how 61 s and 16 s samples reach the parser (#1399). Duration
+  alone cannot tell them apart, so both parsers now label it — `perf-baseline.sh`
+  prints `trigger=` per sample and calls out focus-closed ones, and the installed
+  summarizer reports the trigger breakdown in its findings. Exclude focus-closed
+  samples from a launch comparison, or re-measure in the foreground.
 - **Why the second boundary exists — this metric could stop early.** Until #1251,
   libghostty occasionally raised the shell signal that closes the interval *inline
   on the main thread*, from inside a call the app made during first-window bring-up.

@@ -443,6 +443,152 @@ def rows_summary(row: dict) -> dict:
     }
 
 
+class LaunchTriggerLabelTests(unittest.TestCase):
+    """`launch_to_first_prompt` means different things per trigger (#1399)."""
+
+    def summarize(self, trigger_lines: list[str]) -> dict:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "launch.log"
+            log_path.write_text("\n".join(trigger_lines) + "\n", encoding="utf-8")
+            command = [
+                sys.executable,
+                str(SUMMARIZE_PERF_LOG),
+                "--json",
+                "--scenario",
+                "installed_clean_shell",
+                "--build-kind",
+                "installed",
+                str(log_path),
+            ]
+            result = subprocess.run(command, cwd=REPO_ROOT, capture_output=True, text=True, check=True)
+            return json.loads(result.stdout)
+
+    @staticmethod
+    def line(ms: float, trigger: str) -> str:
+        return (
+            f"2026-08-30 10:00:00.000 [Perf] metric=launch_to_first_prompt "
+            f"duration_ms={ms:.2f} trigger={trigger}"
+        )
+
+    def findings_text(self, payload: dict) -> str:
+        return " ".join(payload.get("findings", []))
+
+    def test_trigger_breakdown_is_reported(self) -> None:
+        payload = self.summarize([self.line(600.0, "terminal_set_title")])
+
+        self.assertIn("closed by triggers", self.findings_text(payload))
+        self.assertIn("terminal_set_title", self.findings_text(payload))
+
+    def test_focus_closed_samples_are_called_out_as_time_to_foreground(self) -> None:
+        """A 61s backgrounded launch must not read as a slow launch."""
+        payload = self.summarize(
+            [self.line(61_000.0, "terminal_focus"), self.line(640.0, "terminal_set_title")]
+        )
+        text = self.findings_text(payload)
+
+        self.assertIn("time-to-foreground", text)
+        self.assertIn("1 launch_to_first_prompt sample(s) closed on terminal_focus", text)
+
+    def test_readiness_only_capture_raises_no_attention_warning(self) -> None:
+        payload = self.summarize(
+            [self.line(600.0, "terminal_set_title"), self.line(620.0, "terminal_set_title")]
+        )
+
+        self.assertNotIn("time-to-foreground", self.findings_text(payload))
+
+
+class MissingLaunchMetricTests(unittest.TestCase):
+    """A capture that never reached a prompt must not summarize clean (#1238/#1399)."""
+
+    def findings_for(self, lines: list[str], scenario: str = "installed_clean_shell") -> list[str]:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "capture.log"
+            log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SUMMARIZE_PERF_LOG),
+                    "--json",
+                    "--scenario",
+                    scenario,
+                    "--build-kind",
+                    "installed",
+                    str(log_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return json.loads(result.stdout)["findings"]
+
+    def test_absent_launch_metric_is_called_a_failed_measurement(self) -> None:
+        """Observed live: a reattached tmux session emits no readiness signal at all."""
+        findings = self.findings_for(
+            [
+                "2026-08-30 10:00:00.000 [Perf] metric=terminal_investigation "
+                "phase=surface_create_succeeded duration_ms=25.17 shell_profile_mode=clean",
+            ]
+        )
+
+        self.assertTrue(any("MISSING: launch_to_first_prompt" in f for f in findings))
+        self.assertTrue(any("do not record a benchmark row" in f for f in findings))
+
+    def test_present_launch_metric_is_not_flagged(self) -> None:
+        findings = self.findings_for(
+            [
+                "2026-08-30 10:00:00.000 [Perf] metric=launch_to_first_prompt "
+                "duration_ms=640.00 trigger=terminal_set_title",
+            ]
+        )
+
+        self.assertFalse(any("MISSING" in f for f in findings))
+
+
+class InstalledEpochStampTests(unittest.TestCase):
+    """Installed rows must claim the protocol they ran under, not a default (#1251/#1399)."""
+
+    def summarize(self, extra_args: list[str]) -> dict:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_path = Path(tmpdir) / "installed.log"
+            log_path.write_text(
+                "2026-08-30 10:00:00.000 [Perf] metric=launch_to_first_prompt "
+                "duration_ms=640.00 trigger=terminal_set_title\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SUMMARIZE_PERF_LOG),
+                    "--json",
+                    "--scenario",
+                    "installed_clean_shell",
+                    "--build-kind",
+                    "installed",
+                    *extra_args,
+                    str(log_path),
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return json.loads(result.stdout)
+
+    def test_live_capture_records_the_epoch_it_ran_under(self) -> None:
+        summary = self.summarize(["--protocol-epoch", "deterministic-delivery-v1"])
+        row = history_row_from_summary(summary, "2026-08-30T00:00:00-0700")
+
+        self.assertEqual(row["protocol_epoch"], "deterministic-delivery-v1")
+
+    def test_resummarized_archive_is_not_relabelled_as_current(self) -> None:
+        """An old log re-run through the summarizer describes its own era, not today's."""
+        summary = self.summarize([])
+        row = history_row_from_summary(summary, "2026-08-30T00:00:00-0700")
+
+        self.assertEqual(row["protocol_epoch"], LEGACY_PROTOCOL_EPOCH)
+
+
 class PerfCompareGuardTests(unittest.TestCase):
     """A delta only means an app change within one scenario and one protocol (#1251)."""
 

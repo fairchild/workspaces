@@ -39,6 +39,9 @@ EOF
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT_DIR/scripts/lib/perf-process.sh"
+# Names the measurement protocol live captures run under. Must match the epoch
+# perf-baseline.sh stamps, so debug and installed rows of the same era compare (#1251).
+CURRENT_PROTOCOL_EPOCH="deterministic-delivery-v1"
 SCENARIO=""
 APP_PATH="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 RUNS=5
@@ -178,11 +181,14 @@ summarize_installed_log() {
     local summary_txt="$3"
     local app_path="$4"
 
+    # A live capture ran under the current protocol; an archived log re-summarized later
+    # does not, which is why the epoch is passed here rather than assumed by the summarizer.
     "$ROOT_DIR/.agents/skills/workspaces-optimization/scripts/summarize_perf_log.py" \
         --json \
         --scenario "$SCENARIO" \
         --build-kind installed \
         --app-path "$app_path" \
+        --protocol-epoch "$CURRENT_PROTOCOL_EPOCH" \
         "$log_file" >"$summary_json"
 
     "$ROOT_DIR/.agents/skills/workspaces-optimization/scripts/summarize_perf_log.py" \

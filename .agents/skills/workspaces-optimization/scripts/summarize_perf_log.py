@@ -56,6 +56,15 @@ def parse_args() -> argparse.Namespace:
         help="Build kind for the canonical summary. Defaults to an inference based on the log path.",
     )
     parser.add_argument(
+        "--protocol-epoch",
+        default=None,
+        help=(
+            "Measurement protocol this capture ran under, recorded on the history row. "
+            "Unset means legacy: re-summarizing an archived log must not relabel it as "
+            "current. Live captures pass the epoch via perf-runner.sh."
+        ),
+    )
+    parser.add_argument(
         "--app-path",
         type=Path,
         help="Optional app bundle or binary path used to resolve the app version.",
@@ -202,6 +211,7 @@ def build_summary(
     requested_scenario: str | None,
     requested_build_kind: str | None,
     app_path: Path | None,
+    protocol_epoch: str | None = None,
 ) -> dict[str, Any]:
     lines = log_file.read_text(encoding="utf-8", errors="replace").splitlines()
 
@@ -273,6 +283,27 @@ def build_summary(
     app_version = app_version_from_binary(app_path)
     canonical_metrics = build_canonical_metrics(all_metrics, phase_summaries)
     contract = load_contract()
+    # Scoped to the one metric a release row is cut from. A capture can legitimately
+    # lack some contract metrics — an installed run does not click a repo, for instance —
+    # so a general sweep would cry wolf. The absence of launch_to_first_prompt is never
+    # legitimate for a scenario that declares it: it means the launch never reached a
+    # prompt inside the capture window, which is a failed measurement, and today that
+    # summarizes clean and becomes a blank cell indistinguishable from the seed row's
+    # honest blank. #1238's rule, restated in docs/performance_benchmarks.md: a skipped
+    # measurement must never be indistinguishable from a passing one. Observed live on
+    # 2026-08-30, 3/3 captures (#1399 follow-up).
+    launch_metric = "launch_to_first_prompt"
+    declares_launch = any(
+        entry.get("name") == launch_metric and scenario in entry.get("supported_scenarios", [])
+        for entry in contract.get("metrics", [])
+    )
+    if declares_launch and launch_metric not in canonical_metrics:
+        findings.append(
+            f"MISSING: {launch_metric} is expected for scenario {scenario} but no sample "
+            "was captured — the launch never reached a prompt inside the capture window. "
+            "This is a failed measurement, not a fast one; do not record a benchmark row "
+            "from this run."
+        )
     summary = canonical_summary(
         scenario=scenario,
         build_kind=build_kind,
@@ -292,6 +323,10 @@ def build_summary(
             "phases": phase_summaries,
             "findings": findings,
             "legacy_metric_summaries": metric_summaries,
+            # canonical_summary merges `extra` at the top level and then builds
+            # `metadata` from summary["metadata"], which is where the history row
+            # reads the epoch from.
+            **({"metadata": {"protocol_epoch": protocol_epoch}} if protocol_epoch else {}),
         },
     )
     summary["metrics_by_phase"] = phase_summaries
@@ -390,6 +425,27 @@ def derive_findings(phase_summaries: dict[str, Any]) -> list[str]:
     launch = phase_summaries.get("launch_to_first_prompt:none")
     if launch:
         duration_stats = launch["numeric_fields"].get("duration_ms")
+        # Which trigger closed the interval decides what the number means. A
+        # `terminal_focus` close on a backgrounded launch measures time-to-foreground —
+        # the app sat ready behind another window and the clock kept running — while a
+        # readiness trigger measures launch. Both are real; only one belongs in a launch
+        # benchmark, and the reader cannot tell them apart from the duration (#1399).
+        triggers = launch["categorical_fields"].get("trigger", {})
+        if triggers:
+            findings.append(
+                "launch_to_first_prompt was closed by triggers: "
+                + ", ".join(f"{name} ({count})" for name, count in sorted(triggers.items()))
+                + "."
+            )
+            attention_closes = sum(
+                count for name, count in triggers.items() if name == "terminal_focus"
+            )
+            if attention_closes:
+                findings.append(
+                    f"{attention_closes} launch_to_first_prompt sample(s) closed on terminal_focus, which "
+                    "measures time-to-foreground rather than time-to-ready when the launch was backgrounded. "
+                    "Exclude those from a launch benchmark or re-measure in the foreground."
+                )
         if duration_stats and duration_stats["median"] > 5_000:
             findings.append(
                 f"launch_to_first_prompt median is {duration_stats['median']:.2f} ms. Startup is still dominated by terminal readiness or focus."
@@ -456,6 +512,7 @@ def main() -> int:
         requested_scenario=args.scenario,
         requested_build_kind=args.build_kind,
         app_path=args.app_path,
+        protocol_epoch=args.protocol_epoch,
     )
     if args.json:
         json.dump(summary, sys.stdout, indent=2, sort_keys=True)
