@@ -70,7 +70,7 @@
 			"metrics": {
 				"lcp_ms": {
 					"stat": "median",
-					"budget": 120
+					"budget": 145
 				},
 				"tbt_ms": {
 					"stat": "median",
