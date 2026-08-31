@@ -5,6 +5,10 @@
 # ///
 """Report operational security posture for release and agent automation.
 
+Covers what CI configuration alone cannot say: which runner lanes the workflows
+actually target, which secrets exist at which scope, and which D1 migrations a
+live environment has actually applied.
+
 This script is intentionally report-only by default. Use --strict when a
 release checklist should fail on missing controls.
 """
@@ -16,6 +20,7 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,6 +77,14 @@ EXPECTED_ENVIRONMENT_SECRETS = {
 # itself. No name is dual-scoped by design any more; every credential the
 # release and log lanes use lives on an environment only.
 DUAL_SCOPE_EXPECTED: set[str] = set()
+
+# Services whose D1 migrations are compared against what each environment has
+# actually applied. Scoped to the one service that has the problem; a second
+# entry is cheap when a second case is real.
+D1_SERVICE_DIRS = (REPO_ROOT / "infra" / "feedback-store",)
+# Bounded because this is the check that leaves the machine. An unbounded wait on
+# Cloudflare would hang a release preflight rather than report on one.
+D1_QUERY_TIMEOUT_SECONDS = 60
 
 
 @dataclass(frozen=True)
@@ -371,6 +384,182 @@ def remote_secret_checks(repo: str) -> list[Check]:
     return checks
 
 
+@dataclass(frozen=True)
+class D1Environment:
+    """A wrangler environment and the migration-bearing D1 database it binds."""
+
+    name: str
+    database_name: str
+    migrations_dir: str
+
+
+def d1_environments(config: dict[str, object]) -> list[D1Environment]:
+    """Every environment in a wrangler config that binds a D1 database with migrations.
+
+    Read out of the config rather than listed here. A hardcoded list is how an
+    environment goes unchecked — preview was behind too, and nothing said so — and
+    this file has already been bitten once by an expectation that outlived what it
+    named (see `self_hosted_lanes`).
+
+    The top-level tables are wrangler's default environment; `[env.<name>]` adds the
+    rest.
+    """
+    sections: dict[str, object] = {"production": config}
+    named = config.get("env")
+    if isinstance(named, dict):
+        sections.update(named)
+
+    environments: list[D1Environment] = []
+    for name, section in sorted(sections.items()):
+        if not isinstance(section, dict):
+            continue
+        databases = section.get("d1_databases")
+        if not isinstance(databases, list):
+            continue
+        for database in databases:
+            if not isinstance(database, dict):
+                continue
+            database_name = database.get("database_name")
+            migrations_dir = database.get("migrations_dir")
+            if database_name and migrations_dir:
+                environments.append(
+                    D1Environment(str(name), str(database_name), str(migrations_dir))
+                )
+    return environments
+
+
+def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[str]:
+    """Migration names `d1_migrations` records for a live database.
+
+    Addressed by database name rather than `--env`, so the lookup cannot drift from
+    the binding this environment was read out of. Read-only by construction: a
+    `SELECT` is the whole query, and this script never applies anything — knowing a
+    migration is pending is the gap, and applying one should stay a deliberate act.
+    """
+    result = subprocess.run(
+        [
+            "wrangler",
+            "d1",
+            "execute",
+            environment.database_name,
+            "--remote",
+            "--json",
+            "--command",
+            "SELECT name FROM d1_migrations ORDER BY name",
+        ],
+        cwd=service_dir,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=D1_QUERY_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "wrangler failed")
+
+    payload = json.loads(result.stdout)
+    if not isinstance(payload, list):
+        raise RuntimeError("unexpected wrangler output shape")
+    names: set[str] = set()
+    for statement in payload:
+        if not isinstance(statement, dict):
+            continue
+        for row in statement.get("results") or []:
+            if isinstance(row, dict) and row.get("name"):
+                names.add(str(row["name"]))
+    return names
+
+
+def d1_migration_checks(service_dirs: tuple[Path, ...] = D1_SERVICE_DIRS) -> list[Check]:
+    """Per environment, the repo's migrations against the ones actually applied.
+
+    `0002_feedback_audit.sql` was merged and never applied, and production went a
+    month without the table it creates (#1309). Nothing noticed, because every layer
+    that described the table was green: the schema helper creates it, the tests stub
+    the database, and the contract documents it. Only the live environment knew, and
+    nothing asked it.
+
+    A failure to reach an environment is a `warn`, never a `pass`. "I could not look"
+    reported as healthy is the shape of the original defect, and repeating it here
+    would be worse than not checking at all.
+    """
+    checks: list[Check] = []
+    for service_dir in service_dirs:
+        config_path = service_dir / "wrangler.toml"
+        if not config_path.is_file():
+            continue
+
+        try:
+            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            checks.append(
+                Check("warn", f"D1 migration drift ({service_dir.name})", f"unreadable wrangler.toml: {error}")
+            )
+            continue
+
+        environments = d1_environments(config)
+        if not environments:
+            continue
+
+        if not shutil.which("wrangler"):
+            checks.append(
+                Check(
+                    "warn",
+                    f"D1 migration drift ({service_dir.name})",
+                    "wrangler is not installed, so applied migrations could not be read",
+                )
+            )
+            continue
+
+        for environment in environments:
+            checks.append(d1_environment_check(environment, service_dir))
+    return checks
+
+
+def d1_environment_check(environment: D1Environment, service_dir: Path) -> Check:
+    name = f"D1 migration drift ({service_dir.name}/{environment.name})"
+    migrations_path = service_dir / environment.migrations_dir
+    on_disk = sorted(path.name for path in migrations_path.glob("*.sql"))
+    if not on_disk:
+        return Check("warn", name, f"no .sql files under {environment.migrations_dir}")
+
+    try:
+        applied = applied_d1_migrations(environment, service_dir)
+    except (
+        RuntimeError,
+        OSError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+    ) as error:
+        return Check("warn", name, f"could not read applied migrations: {error}")
+
+    pending = [migration for migration in on_disk if migration not in applied]
+    if pending:
+        return Check(
+            "fail",
+            name,
+            f"{len(pending)} migration(s) never applied to {environment.database_name}: "
+            f"{', '.join(pending)}",
+        )
+
+    # Applied but no longer in the repo. Not the reported failure and not
+    # necessarily wrong (a migration can be deleted after it lands everywhere), but
+    # it means the directory no longer describes the database.
+    unknown = sorted(applied - set(on_disk))
+    if unknown:
+        return Check(
+            "warn",
+            name,
+            f"applied to {environment.database_name} but absent from "
+            f"{environment.migrations_dir}: {', '.join(unknown)}",
+        )
+
+    return Check(
+        "pass",
+        name,
+        f"{len(on_disk)} migration(s), all applied to {environment.database_name}",
+    )
+
+
 def remote_checks(repo: str) -> list[Check]:
     if not shutil.which("gh"):
         return [Check("warn", "GitHub remote audit", "gh CLI is not installed")]
@@ -409,6 +598,9 @@ def main(argv: list[str]) -> int:
             checks.extend(remote_checks(repo))
         except RuntimeError as error:
             checks.append(Check("warn", "GitHub remote audit", str(error)))
+        # Outside the block above: reading a live database does not depend on
+        # resolving the GitHub repo, and a failure to do one should not hide the other.
+        checks.extend(d1_migration_checks())
 
     print_checks(checks)
     failed = any(check.status == "fail" for check in checks)
