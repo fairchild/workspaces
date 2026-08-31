@@ -13,9 +13,9 @@ related:
 
 **`dev`, `next` and `stable` are three labels on one line of development, naming the owner's posture toward the tip rather than three copies of the code.** They ratchet forward over the same commits; promotion is a ref move, not a merge.
 
-- **`dev`** — the owner is changing it. Minted by his first commit after a release.
+- **`dev`** — the owner is changing it. Minted by the owner's first commit after a release.
 - **`next`** — the owner is validating it, and only fixing what validation finds. Stabilization commits land here directly.
-- **`stable`** — the owner has decided it is good. The bit is flipped on a tip he has already been running.
+- **`stable`** — the owner has decided it is good. The bit is flipped on a tip already in daily use.
 
 > "I only live on stable until I make my first commit, which mints a new dev I want to easily pivot onto."
 > — owner, 2026-08-30
@@ -23,7 +23,7 @@ related:
 > "I'm always by definition the first person on stable."
 > — owner, 2026-08-30
 
-The invariant these labels exist to protect is in the title. Because `stable` is flipped onto a tip the owner has been running as `next`, released code is never code nobody has used. There is no separate release candidate to validate, no staging environment standing in for real use, and no test suite asked to substitute for the judgment call — the criterion is that he used it and decided.
+The invariant these labels exist to protect is in the title. Because `stable` is flipped onto a tip the owner has been running as `next`, released code is never code nobody has used. There is no separate release candidate to validate, no staging environment standing in for real use, and no test suite asked to substitute for the judgment call — the criterion is that the owner used it and decided.
 
 ## Why one line rather than three branches
 
@@ -43,7 +43,7 @@ The single line also removes the state problem that three parallel channels crea
 
 The owner's stated reason for the model is that it keeps the pivot path healthy, and the mechanism is worth being precise about, because promotion is not what exercises it.
 
-Promotion is a ref move and costs nothing. What costs something is **commit-and-run**: every commit means a rebuild, and running his own change means standing that build up and carrying live sessions onto it. That happens many times a day, on the critical path of ordinary work, which is the only arrangement this project has found that keeps a lane from rotting quietly.
+Promotion is a ref move and costs nothing. What costs something is **commit-and-run**: every commit means a rebuild, and running the change means standing that build up and carrying live sessions onto it. That happens many times a day, on the critical path of ordinary work, which is the only arrangement this project has found that keeps a lane from rotting quietly.
 
 The evidence for that claim is the record of lanes that sat off the critical path: `agent-stall-sweep.sh` never once fired from cron; `factory-revise` was five-for-five `startup_failure` with zero jobs created; the `Pi Review` gate in a sibling repo had not run since the day it was added. Each stayed broken because nothing anyone did daily depended on it. A pivot performed on every commit announces its own failure the first time it breaks.
 
