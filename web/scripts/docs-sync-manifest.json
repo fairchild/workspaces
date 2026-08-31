@@ -156,8 +156,8 @@
 			"summary": "Repository-level orientation for the native WorkSpaces app."
 		},
 		{
-			"source": "CONTEXT.md",
-			"dest": "CONTEXT.md",
+			"source": "GLOSSARY.md",
+			"dest": "GLOSSARY.md",
 			"title": "Vocabulary",
 			"group": "Start Here",
 			"topics": [

@@ -27,7 +27,7 @@ If a listed file does not exist in a future checkout, proceed silently and use t
 `-- web/
 ```
 
-There is no root `CONTEXT.md` or `CONTEXT-MAP.md` at setup time. If a future skill creates those files, prefer their glossary and domain language for issue titles, refactor proposals, hypotheses, and test names.
+The root `GLOSSARY.md` (product domain language) and `CONTEXT-MAP.md` (which also maps the Agent Factory context in `docs/agents/GLOSSARY.md`) define the repo's glossary. Prefer their language for issue titles, refactor proposals, hypotheses, and test names. If they are missing in a checkout, proceed silently.
 
 ## Decision Conflicts
 

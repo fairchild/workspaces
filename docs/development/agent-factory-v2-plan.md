@@ -4,7 +4,7 @@ date: 2026-07-12
 current-state: docs/development/factory-current-state.md
 supersedes: docs/development/agent-team.md (architecture; file to be rewritten in M1)
 related:
-  - docs/agents/CONTEXT.md
+  - docs/agents/GLOSSARY.md
   - docs/decisions/factory-label-control-plane.md
   - docs/decisions/factory-event-driven-stages.md
   - docs/decisions/factory-persona-memory.md
@@ -14,7 +14,7 @@ related:
 
 > **Design record.** This document captures the decisions, rationale, and milestone roadmap behind the Factory pipeline as of 2026-07-12. For what's actually live today — which lanes run, their trigger/guard/status, the `FACTORY_*` switch inventory, how to enable or disable a lane, the `factory/ops-data` branch contract, and dashboard usage — see [`docs/development/factory-current-state.md`](./factory-current-state.md).
 
-The Factory is the autonomous development system that advances this repo between the Owner's interactive sessions. This plan replaces the v1 "Agent Team" architecture (scheduled persona wake-ups coordinating through GitHub Discussions) with an event-driven, label-fired pipeline. Language is canonical in [docs/agents/CONTEXT.md](../agents/CONTEXT.md); decisions were made in a grilled design session on 2026-07-12 against a live-state audit, an infrastructure deep-dive, and Warp's published software-factory work.
+The Factory is the autonomous development system that advances this repo between the Owner's interactive sessions. This plan replaces the v1 "Agent Team" architecture (scheduled persona wake-ups coordinating through GitHub Discussions) with an event-driven, label-fired pipeline. Language is canonical in [docs/agents/GLOSSARY.md](../agents/GLOSSARY.md); decisions were made in a grilled design session on 2026-07-12 against a live-state audit, an infrastructure deep-dive, and Warp's published software-factory work.
 
 ## Purpose
 
@@ -151,7 +151,7 @@ Dials are reviewed monthly against the dashboard. First pre-defined widening (de
 
 ## Milestones
 
-- **M0 — Decisions on paper** *(this session)*: this plan, three ADRs, glossary (`CONTEXT-MAP.md`, `docs/agents/CONTEXT.md`), doc-nav row. Done when the PR merges.
+- **M0 — Decisions on paper** *(this session)*: this plan, three ADRs, glossary (`CONTEXT-MAP.md`, `docs/agents/GLOSSARY.md`), doc-nav row. Done when the PR merges.
 - **M1 — Eyes + broom**: Monitor v1 (daily Digest posted, dashboard committed by workflow — write path proven, Gate aging, reconciliation janitor) + the cleanup wave. Done when: a Digest exists and updates daily; `docs/ops/` shows a current timestamp; open discussions = 1; the disposition table has been approved and applied; v1 crons are deleted.
 - **M2 — Front door**: Triage stage on issue-opened + feedback-poll cron; worker `status='new'` service endpoint; trust tiers enforced; feedback status write-back. Done when: an Owner feedback submission flows gateless to a `ready` issue with no human touch; a non-owner submission waits in the Digest.
 - **M3 — Hands**: Implement + Review stages on small `ready` work; Profile-based routing; memory v1 (journal, blocks, PR-carried updates, ownership CI check). Done when: the first Factory-authored PR merges carrying machinery-applied `author:` labels, counterpart review, evidence, and a memory diff.

@@ -114,8 +114,8 @@ def source_for_entry(entry: dict[str, Any]) -> str:
     source = str(entry.get("source", ""))
     if source == "/README.md":
         return "README.md"
-    if source == "/CONTEXT.md":
-        return "CONTEXT.md"
+    if source == "/GLOSSARY.md":
+        return "GLOSSARY.md"
     return source.lstrip("/")
 
 

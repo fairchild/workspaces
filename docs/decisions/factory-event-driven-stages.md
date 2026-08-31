@@ -5,7 +5,7 @@ decision: factory-event-driven-stages
 related:
   - docs/development/agent-factory-v2-plan.md
   - docs/decisions/factory-label-control-plane.md
-  - docs/agents/CONTEXT.md
+  - docs/agents/GLOSSARY.md
 ---
 
 # Event-fired Stages replace scheduled persona wake-ups

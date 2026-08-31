@@ -7,4 +7,4 @@ remains as a stable target for inbound links.
 The current design and control-plane vocabulary live in:
 
 - [Agent Factory v2 plan](agent-factory-v2-plan.md)
-- [Agent Factory context and vocabulary](../agents/CONTEXT.md)
+- [Agent Factory context and vocabulary](../agents/GLOSSARY.md)

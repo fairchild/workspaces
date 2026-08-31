@@ -31,7 +31,7 @@ Pointers from a task or symbol to the file that answers it — moved out of `AGE
 | web/ local dev (maintenance mode; mise tasks, auth bypass) | web/docs/local-dev.md | - |
 | web/ architecture | web/docs/architecture.md | - |
 | Agent Factory current state (lanes, switches, ops-data, dashboard) | docs/development/factory-current-state.md | - |
-| Agent Factory design record (why the pipeline looks like this) + glossary | docs/development/agent-factory-v2-plan.md, docs/agents/CONTEXT.md | docs/development/agent-team.md (superseded architecture) |
+| Agent Factory design record (why the pipeline looks like this) + glossary | docs/development/agent-factory-v2-plan.md, docs/agents/GLOSSARY.md | docs/development/agent-team.md (superseded architecture) |
 | Agent Factory system overview + trust model (browser doc) | docs/development/agent-factory-v2-overview.html | - |
 | Roadmap/planning | backlog/ROADMAP.md | - |
 | Deferred work items | backlog/*.md | - |

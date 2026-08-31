@@ -5,7 +5,7 @@ decision: factory-persona-memory
 related:
   - docs/development/agent-factory-v2-plan.md
   - docs/decisions/factory-event-driven-stages.md
-  - docs/agents/CONTEXT.md
+  - docs/agents/GLOSSARY.md
 ---
 
 # Personas manage their own memory through peer-reviewed PRs
