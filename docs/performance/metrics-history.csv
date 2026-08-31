@@ -14,3 +14,8 @@ installed_login_shell,installed,2026-08-07T08:12:53-0700,,,26.4.1,25E253,arm64,"
 installed_clean_shell,installed,2026-08-23T11:48:51-0700,,,26.4.1,25E253,arm64,"Mac16,13",,,444.46,,,,444.46,,,,,legacy-unisolated
 debug_no_activate,debug,2026-08-23T21:37:31-0700,10,8,26.6.2,25G83,arm64,"Mac16,13",28,0,850.1500000000001,1.56,150.67000000000002,,863.789,2.637,148.683,,,deterministic-delivery-v1
 debug_activate,debug,2026-08-23T21:38:53-0700,10,8,26.6.2,25G83,arm64,"Mac16,13",28,0,1389.7,2.0,255.05,,1384.866,3.355,278.716,,405.52,deterministic-delivery-v1
+installed_clean_shell,installed,2026-08-31T07:58:33-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,482.37,,,,482.37,,,,,deterministic-delivery-v1
+installed_clean_shell,installed,2026-08-31T07:59:12-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,115.86,,,,115.86,,,,,deterministic-delivery-v1
+installed_clean_shell,installed,2026-08-31T07:59:27-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,205.22,,,,205.22,,,,,deterministic-delivery-v1
+installed_clean_shell,installed,2026-08-31T07:59:41-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,152.7,,,,152.7,,,,,deterministic-delivery-v1
+installed_clean_shell,installed,2026-08-31T07:59:56-0700,,,26.6.2,25G83,arm64,"Mac16,13",,,146.7,,,,146.7,,,,,deterministic-delivery-v1
