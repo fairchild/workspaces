@@ -114,48 +114,59 @@ extract_changelog_section() {
 render_release_notes_html() {
     local short_version="$1"
     local line=""
-    local escaped=""
+    local kind=""
+    local content=""
     local in_list=false
+    local paragraph=""
 
     printf '        <h2>WorkSpaces %s</h2>\n' "$(printf '%s' "$short_version" | html_escape)"
 
     while IFS= read -r line || [[ -n "$line" ]]; do
+        kind="prose"
+        content="$line"
         if [[ "$line" =~ ^###[[:space:]]+(.+)$ ]]; then
-            if [[ "$in_list" == true ]]; then
-                printf '        </ul>\n'
-                in_list=false
-            fi
-            escaped="$(inline_html "${BASH_REMATCH[1]}")"
-            printf '        <h3>%s</h3>\n' "$escaped"
-            continue
+            kind="heading"
+            content="${BASH_REMATCH[1]}"
+        elif [[ "$line" =~ ^-[[:space:]]+(.+)$ ]]; then
+            kind="item"
+            content="${BASH_REMATCH[1]}"
+        elif [[ -z "${line//[[:space:]]/}" ]]; then
+            kind="blank"
         fi
 
-        if [[ "$line" =~ ^-[[:space:]]+(.+)$ ]]; then
-            if [[ "$in_list" == false ]]; then
-                printf '        <ul>\n'
-                in_list=true
-            fi
-            escaped="$(inline_html "${BASH_REMATCH[1]}")"
-            printf '          <li>%s</li>\n' "$escaped"
-            continue
+        # Changelog prose is soft-wrapped for GitHub, so consecutive prose lines
+        # are one paragraph; a <p> per source line renders the intro as a column
+        # of fragments in the update dialog. Anything else ends the paragraph,
+        # and anything but another item ends an open list.
+        if [[ "$kind" != "prose" && -n "$paragraph" ]]; then
+            printf '        <p>%s</p>\n' "$(inline_html "$paragraph")"
+            paragraph=""
         fi
-
-        if [[ -z "${line//[[:space:]]/}" ]]; then
-            if [[ "$in_list" == true ]]; then
-                printf '        </ul>\n'
-                in_list=false
-            fi
-            continue
-        fi
-
-        if [[ "$in_list" == true ]]; then
+        if [[ "$kind" != "item" && "$in_list" == true ]]; then
             printf '        </ul>\n'
             in_list=false
         fi
-        escaped="$(inline_html "$line")"
-        printf '        <p>%s</p>\n' "$escaped"
+
+        case "$kind" in
+            heading)
+                printf '        <h3>%s</h3>\n' "$(inline_html "$content")"
+                ;;
+            item)
+                if [[ "$in_list" == false ]]; then
+                    printf '        <ul>\n'
+                    in_list=true
+                fi
+                printf '          <li>%s</li>\n' "$(inline_html "$content")"
+                ;;
+            prose)
+                paragraph+="${paragraph:+ }$content"
+                ;;
+        esac
     done
 
+    if [[ -n "$paragraph" ]]; then
+        printf '        <p>%s</p>\n' "$(inline_html "$paragraph")"
+    fi
     if [[ "$in_list" == true ]]; then
         printf '        </ul>\n'
     fi
