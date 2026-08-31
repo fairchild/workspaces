@@ -1,13 +1,15 @@
 /*
- * The pairing handshake endpoint. POST — called by a mobile client right
- * after it validates a scanned pairing code — proves possession of the local
- * sign-in token and records the acknowledgment under WEB_NEXT_DATA_DIR;
- * GET returns the latest acknowledgment so the desktop app's pairing window
- * can flip its QR into a confirmation. Self-authenticating (token in the
- * POST body, never the URL), so middleware treats it as public.
+ * The pairing handshake endpoint, public to middleware but gated per verb.
+ * POST — called by a mobile client right after it validates a scanned pairing
+ * code — proves possession of the local sign-in token (in the body, never the
+ * URL) and records the acknowledgment under WEB_NEXT_DATA_DIR; it must work
+ * from the phone, so it accepts any allowlisted origin. GET returns the latest
+ * acknowledgment for the desktop pairing window to flip its QR, and that
+ * caller is always loopback — so GET refuses proxied callers rather than
+ * telling any tailnet peer who paired last.
  */
 import { localSignInTokenMatches } from "@/lib/auth/local-token";
-import { localModeEnabled } from "@/lib/auth/config";
+import { isLoopbackHostHeader, localModeEnabled } from "@/lib/auth/config";
 import { readPairingAck, writePairingAck } from "@/lib/pairing/ack-store";
 
 export const runtime = "nodejs";
@@ -29,9 +31,16 @@ export async function POST(request: Request): Promise<Response> {
 	return Response.json({ ok: true });
 }
 
-export async function GET(): Promise<Response> {
+export async function GET(request: Request): Promise<Response> {
 	if (!localModeEnabled()) {
 		return Response.json({ error: "pairing is a local-mode feature" }, { status: 404 });
+	}
+	// The desktop pairing window polls this over loopback; nothing else has
+	// standing to read it. Off loopback the token is the gate everywhere
+	// (docs/decisions/mobile-tailnet-design.md), and this response carries no
+	// token — so it refuses rather than leaking who paired last.
+	if (!isLoopbackHostHeader(request.headers.get("host"))) {
+		return Response.json({ error: "pairing status is loopback-only" }, { status: 403 });
 	}
 	return Response.json(await readPairingAck());
 }

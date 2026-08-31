@@ -7,6 +7,13 @@ depth, the embedded web-next server is loopback-only and the desktop app
 exposes no pairing surface — byte-identical behavior to a build that never
 had the feature.
 
+**Enabled is not exposed.** The gate below controls whether the pairing
+*surface* exists — not whether anything is reachable. Reachability takes two
+further acts that are always the operator's: running `tailscale serve` (or
+equivalent) in front of the loopback bind, and handing a device the minted
+token. A default-enabled build with neither act performed is exactly as
+reachable as a build compiled without the feature: not at all.
+
 **Staleness test:** `rg -l "MobilePairingFeature|WEB_NEXT_EXTRA_LOCAL_ORIGINS|parseExtraLocalOrigins|localRequestOrigin" Sources web-next scripts`
 must list exactly the integration points named below; anything new must check
 the same gates.
@@ -34,7 +41,6 @@ var, no remote reachability, regardless of what else runs.
 - `web-next/src/app/api/pairing/` and `web-next/src/lib/pairing/` — the
   handshake routes and ack store
 - `ios/` — the mobile client (a separate target; simply don't build it)
-- `scripts/mobile-server.sh` + its `mise` task — headless convenience only
 
 Integration points to unwind (each is a few lines, marked by the gate call):
 
@@ -61,6 +67,13 @@ Integration points to unwind (each is a few lines, marked by the gate call):
   running `tailscale serve` (or equivalent) themselves; the app does not
   configure the network.
 - Never authorizes by network position — the minted bearer token is the gate
-  on every path (docs/decisions/mobile-tailnet-design.md).
+  on every path (docs/decisions/mobile-tailnet-design.md). The one unauthenticated
+  route, `POST /api/pairing/ack`, authenticates itself with that same token; its
+  `GET` companion answers loopback callers only.
+- Never starts a second server: the app owns its child's port. To serve
+  headlessly without the app (phone Safari, demos), run web-next's own
+  `pnpm start:local` with `PORT`, `WEB_NEXT_DATA_DIR`, and
+  `WEB_NEXT_EXTRA_LOCAL_ORIGINS` set to match — and don't run the app's
+  embedded surface at the same time.
 - Never persists the token-bearing QR (window snapshots disabled) or writes
   it to logs (the child's log reader redacts `token=`).

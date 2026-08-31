@@ -53,10 +53,6 @@ run = "./scripts/launch-dev.sh"
 description = "Launch the debug app, verify a visible window, and tail logs until interrupted."
 run = "./scripts/launch-dev.sh --watch"
 
-[tasks."mobile-server"]
-description = "Cold-start the mobile-pairing web-next server (app-equivalent: same port, data dir, token); no-op when the app's child already owns the port."
-run = "./scripts/mobile-server.sh"
-
 [tasks."dev-smoke"]
 description = "Launch the debug app, verify a visible window, and capture a screenshot."
 run = "./scripts/dev-smoke.sh"
