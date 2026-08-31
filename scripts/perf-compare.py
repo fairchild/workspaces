@@ -35,6 +35,10 @@ def load_summary(path: Path) -> dict[str, Any]:
 def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     metric_names = sorted(set(before.get("metrics", {})) | set(after.get("metrics", {})))
     comparisons: dict[str, Any] = {}
+    # Decided before any arithmetic: a delta across a scenario or epoch boundary is a
+    # real subtraction of two numbers that answer different questions, and printing it
+    # next to a warning still invites it into a PR description as an improvement.
+    incomparable = incomparability_reasons(before, after)
 
     for metric_name in metric_names:
         before_metric = before.get("metrics", {}).get(metric_name) or {}
@@ -43,7 +47,7 @@ def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         after_median = after_metric.get("median")
         delta_ms = None
         delta_percent = None
-        if before_median is not None and after_median is not None:
+        if not incomparable and before_median is not None and after_median is not None:
             delta_ms = float(after_median) - float(before_median)
             if float(before_median) != 0:
                 delta_percent = (delta_ms / float(before_median)) * 100.0
@@ -61,7 +65,7 @@ def compare(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
         "scenario_after": after.get("scenario"),
         "protocol_epoch_before": protocol_epoch(before),
         "protocol_epoch_after": protocol_epoch(after),
-        "incomparable": incomparability_reasons(before, after),
+        "incomparable": incomparable,
         "comparisons": comparisons,
         "contract_version": load_contract().get("version"),
     }
@@ -100,7 +104,7 @@ def print_text(payload: dict[str, Any]) -> None:
         print("  WARNING: these summaries are not directly comparable —")
         for reason in payload["incomparable"]:
             print(f"    - {reason}")
-        print("  The deltas below are real numbers describing different measurements.")
+        print("  Deltas are withheld: subtracting them would answer a question neither run asked.")
     print()
 
     for metric_name, metric_payload in payload["comparisons"].items():

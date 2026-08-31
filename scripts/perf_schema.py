@@ -240,7 +240,11 @@ def app_version_from_binary(binary_path: Path | None) -> str | None:
 
     resolved = binary_path.expanduser().resolve()
     if resolved.name == "WorkspaceManager" and resolved.parent.name == "MacOS":
-        info_plist = resolved.parents[2] / "Info.plist"
+        # .../WorkSpaces.app/Contents/MacOS/WorkspaceManager -> parents[1] is Contents.
+        # parents[2] is the bundle root, where no Info.plist lives, which is why every
+        # installed summary recorded app_version: null and could not say which build it
+        # measured.
+        info_plist = resolved.parents[1] / "Info.plist"
     elif resolved.name == "Info.plist":
         info_plist = resolved
     else:

@@ -288,7 +288,11 @@ struct GhosttyTerminalConfig {
         sessionEnvironment: [(key: String, value: String)],
         seedsEnvironmentOnCreate: Bool = true
     ) -> String {
-        let tmux = "tmux -L \(TmuxSessionProbe.socketLabel)"
+        // Quoted like every other interpolation here: the probes pass this label as a
+        // single argv element, so an unquoted copy in shell source could word-split or
+        // interpret metacharacters and address a *different* server than the probes do —
+        // sessions created here would then read as dead.
+        let tmux = "tmux -L \(singleQuoted(TmuxSessionProbe.socketLabel))"
         // `=` forces an exact name match, as in TmuxSessionProbe.isSessionAlive.
         let exactTarget = singleQuoted("=\(sessionName)")
 

@@ -518,12 +518,12 @@ class MissingLaunchMetricTests(unittest.TestCase):
                 cwd=REPO_ROOT,
                 capture_output=True,
                 text=True,
-                check=True,
+                check=False,  # a failed measurement exits nonzero by design
             )
             return json.loads(result.stdout)["findings"]
 
-    def test_absent_launch_metric_is_called_a_failed_measurement(self) -> None:
-        """Observed live: a reattached tmux session emits no readiness signal at all."""
+    def test_capture_with_no_readiness_evidence_is_a_failed_measurement(self) -> None:
+        """The observed failure: surface up, app responsive, nothing about readiness."""
         findings = self.findings_for(
             [
                 "2026-08-30 10:00:00.000 [Perf] metric=terminal_investigation "
@@ -531,8 +531,19 @@ class MissingLaunchMetricTests(unittest.TestCase):
             ]
         )
 
-        self.assertTrue(any("MISSING: launch_to_first_prompt" in f for f in findings))
+        self.assertTrue(any("produced no readiness evidence" in f for f in findings))
         self.assertTrue(any("do not record a benchmark row" in f for f in findings))
+
+    def test_first_prompt_ready_alone_is_still_a_measurement(self) -> None:
+        """A capture can close on readiness without the launch interval and still be real."""
+        findings = self.findings_for(
+            [
+                "2026-08-30 10:00:00.000 [Perf] metric=first_prompt_ready "
+                "duration_ms=315.08 signal=set_title",
+            ]
+        )
+
+        self.assertFalse(any("MISSING" in f for f in findings))
 
     def test_present_launch_metric_is_not_flagged(self) -> None:
         findings = self.findings_for(

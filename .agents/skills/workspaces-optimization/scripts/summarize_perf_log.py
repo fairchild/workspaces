@@ -139,6 +139,15 @@ def build_canonical_metrics(
     metrics: dict[str, dict[str, Any]] = {}
 
     for metric_name, events in sorted(all_metrics.items()):
+        # Deliberately keeps `terminal_focus` samples in the aggregate. A focus close is
+        # this metric's *primary* documented end event — "when focus manager successfully
+        # sets terminal first responder" — and dropping it would discard the real
+        # measurement for every activating launch, leaving only the readiness path that
+        # no-activation captures fall back to. The pathological case is narrower than the
+        # trigger: a launch that was backgrounded, where focus arrives whenever a human
+        # happens to click. That is reported as a finding and left for the reader, because
+        # the parser cannot tell "focused promptly" from "focused eventually" without
+        # knowing whether anyone was watching (#1399).
         durations = [
             float(duration)
             for duration in (
@@ -297,12 +306,20 @@ def build_summary(
         entry.get("name") == launch_metric and scenario in entry.get("supported_scenarios", [])
         for entry in contract.get("metrics", [])
     )
-    if declares_launch and launch_metric not in canonical_metrics:
+    # Failure means the capture holds no evidence the app ever reached a prompt — not
+    # merely that the launch interval did not close. A capture can legitimately carry
+    # `first_prompt_ready` or `terminal_first_output` without `launch_to_first_prompt`,
+    # and those still tell an operator when the terminal became usable. The observed
+    # failure had none of the three: the app was up and responsive for 10 s with nothing
+    # to say about readiness at all (#1462).
+    readiness_evidence = {launch_metric, "first_prompt_ready", "terminal_first_output"}
+    measurement_failed = declares_launch and not (readiness_evidence & set(canonical_metrics))
+    if measurement_failed:
         findings.append(
-            f"MISSING: {launch_metric} is expected for scenario {scenario} but no sample "
-            "was captured — the launch never reached a prompt inside the capture window. "
-            "This is a failed measurement, not a fast one; do not record a benchmark row "
-            "from this run."
+            f"MISSING: scenario {scenario} produced no readiness evidence at all — no "
+            f"{launch_metric}, first_prompt_ready, or terminal_first_output. The launch "
+            "never reached a prompt inside the capture window. This is a failed "
+            "measurement, not a fast one; do not record a benchmark row from this run."
         )
     summary = canonical_summary(
         scenario=scenario,
@@ -329,6 +346,10 @@ def build_summary(
             **({"metadata": {"protocol_epoch": protocol_epoch}} if protocol_epoch else {}),
         },
     )
+    # A finding nobody reads is not a gate. #1238 says a skipped measurement must never
+    # be indistinguishable from a passing one, and an exit code is the only part of this
+    # the runner and perf-history-record.py actually consult.
+    summary["measurement_failed"] = measurement_failed
     summary["metrics_by_phase"] = phase_summaries
     summary["metrics_detected"] = metric_summaries
     summary["findings"] = findings
@@ -519,6 +540,16 @@ def main() -> int:
         sys.stdout.write("\n")
     else:
         print_text(summary)
+    # The summary is still written on failure — diagnosing why a capture produced no
+    # prompt needs it — but the exit code refuses the run, so the runner stops and
+    # perf-history-record.py is never handed an empty summary to commit.
+    if summary.get("measurement_failed"):
+        print(
+            "error: no launch_to_first_prompt sample in this capture; refusing to report "
+            "it as a successful measurement.",
+            file=sys.stderr,
+        )
+        return 3
     return 0
 
 

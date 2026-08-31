@@ -114,7 +114,27 @@ fi
 # covers. It is not what broke the capture above — a pinned domain fixes that on its
 # own — but an isolated run creating sessions on the desktop's server still leaves
 # litter behind, so the lane names its own.
-PERF_TMUX_SOCKET_LABEL="${WORKSPACES_TMUX_SOCKET_LABEL:-workspaces-perf-$$-$(date +%s)}"
+if [[ -n "${WORKSPACES_TMUX_SOCKET_LABEL:-}" ]]; then
+    PERF_TMUX_SOCKET_LABEL="$WORKSPACES_TMUX_SOCKET_LABEL"
+    PERF_TMUX_SOCKET_LABEL_OWNER="caller"
+else
+    PERF_TMUX_SOCKET_LABEL="workspaces-perf-$$-$(date +%s)"
+    PERF_TMUX_SOCKET_LABEL_OWNER="lane"
+fi
+
+# Inline cleanup only runs when a timed capture succeeds; a Ctrl-C during the capture
+# sleep, a failed teardown, or the untimed branch would leave a scratch suite and a
+# private tmux server behind. perf-baseline.sh traps for the same reason.
+cleanup_isolated_state() {
+    if [[ "${PERF_TMUX_SOCKET_LABEL_OWNER:-}" == "lane" ]]; then
+        tmux -L "$PERF_TMUX_SOCKET_LABEL" kill-server >/dev/null 2>&1 || true
+    fi
+    if [[ "${PERF_PREFERENCES_SUITE_OWNER:-}" == "lane" ]]; then
+        defaults delete "$PERF_PREFERENCES_SUITE" >/dev/null 2>&1 || true
+        rm -f "$HOME/Library/Preferences/$PERF_PREFERENCES_SUITE.plist"
+    fi
+}
+trap cleanup_isolated_state EXIT INT TERM
 
 ENV_VARS=(
     "WORKSPACES_FOCUS_DIAGNOSTICS=1"
@@ -198,15 +218,21 @@ if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
     wait "$APP_PID" 2>/dev/null || true
     perf_assert_clean_exit "$APP_PATH" "$(basename "$0")"
     append_unified_log "$CAPTURE_START" "$APP_PID"
+
+    # Isolation has to fail closed, exactly as it does in perf-baseline.sh. The app
+    # trims the suite name and refuses reserved domains, silently falling back to the
+    # developer's real preferences — so a capture can be *asked* to isolate, decline,
+    # and still look like a clean run. `domain=` is what actually backed the launch.
+    if ! grep -q "\[LaunchPreferences\] domain=scratch" "$LOG_FILE"; then
+        echo "  [$(basename "$0")] the launch did not resolve an isolated preferences domain:" >&2
+        grep -oE "\[LaunchPreferences\][^\"]{0,80}" "$LOG_FILE" | head -1 >&2 \
+            || echo "    (no [LaunchPreferences] line at all)" >&2
+        echo "  [$(basename "$0")] refusing to report an unisolated capture as a measurement." >&2
+        exit 4
+    fi
     # Only a server this invocation invented: a caller-supplied label belongs to the
     # caller, exactly as the preferences suite does.
-    if [[ -z "${WORKSPACES_TMUX_SOCKET_LABEL:-}" ]]; then
-        tmux -L "$PERF_TMUX_SOCKET_LABEL" kill-server >/dev/null 2>&1 || true
-    fi
-    if [[ "$PERF_PREFERENCES_SUITE_OWNER" == "lane" ]]; then
-        defaults delete "$PERF_PREFERENCES_SUITE" >/dev/null 2>&1 || true
-        rm -f "$HOME/Library/Preferences/$PERF_PREFERENCES_SUITE.plist"
-    fi
+
 else
     env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" 2>&1 | tee "$LOG_FILE"
     append_unified_log "$CAPTURE_START"
