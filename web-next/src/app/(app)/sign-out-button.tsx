@@ -1,12 +1,12 @@
-"use client";
-
 /*
- * Quiet sign-out affordance for the access-denied page. Clears both
- * identities — the Better Auth session (real mode) and the test bypass
- * cookie (bypass mode) — then returns to sign-in.
+ * The sign-out affordance, and the one place that picks which door it opens.
+ * Local mode's session cookie is HttpOnly, so the button posts to /sign-out
+ * and lets the server expire it (#1488); every other mode's identity is
+ * script-reachable and exits through RevokeSessionButton. Reading the mode
+ * here keeps call sites — masthead and access-denied alike — unaware of it.
  */
-import { signOut } from "@/lib/auth/auth-client";
-import { TEST_AUTH_COOKIE } from "@/lib/auth/config";
+import { localModeEnabled } from "@/lib/auth/config";
+import { RevokeSessionButton } from "./revoke-session-button";
 
 type SignOutButtonVariant = "page" | "masthead";
 
@@ -21,21 +21,13 @@ export function SignOutButton({
 }: {
 	variant?: SignOutButtonVariant;
 }) {
-	const handleSignOut = async () => {
-		document.cookie = `${TEST_AUTH_COOKIE}=; path=/; max-age=0`;
-		await signOut().catch(() => {
-			// No Better Auth session (bypass mode) — nothing to revoke.
-		});
-		window.location.assign("/sign-in");
-	};
-
+	const className = variantClassName[variant];
+	if (!localModeEnabled()) return <RevokeSessionButton className={className} />;
 	return (
-		<button
-			type="button"
-			onClick={handleSignOut}
-			className={variantClassName[variant]}
-		>
-			sign out
-		</button>
+		<form action="/sign-out" method="post" className="flex">
+			<button type="submit" className={className}>
+				sign out
+			</button>
+		</form>
 	);
 }

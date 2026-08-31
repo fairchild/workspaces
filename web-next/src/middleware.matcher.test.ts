@@ -77,6 +77,13 @@ describe("middleware matcher", () => {
 		}
 	});
 
+	it("runs on /sign-out — the gate is what lands a second sign-out on /sign-in", () => {
+		// The route handler carries no auth gate of its own (#1488): a caller
+		// with no session is meant to be bounced to the sign-in page by the
+		// edge, which only holds while the matcher reaches this path.
+		expect(middlewareRunsOn("/sign-out")).toBe(true);
+	});
+
 	it("still skips the static asset paths the exclusion exists for", () => {
 		for (const pathname of [
 			"/_next/static/chunks/main-abc123.js",

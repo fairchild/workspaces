@@ -222,6 +222,20 @@ describe("middleware local mode", () => {
 		expect(forged.status).toBe(401);
 	});
 
+	it("bounces a sign-out with no session to /sign-in instead of the route", async () => {
+		// /sign-out is deliberately gated rather than public (#1488): the route
+		// itself carries no auth check, so this redirect is what makes signing
+		// out while already signed out land on the sign-in page.
+		const response = await middleware(
+			new NextRequest("http://localhost:3100/sign-out", {
+				method: "POST",
+				headers: { host: "localhost:3100" },
+			}),
+		);
+		expect(response.status).toBe(307);
+		expect(response.headers.get("location")).toBe("http://localhost:3100/sign-in");
+	});
+
 	it("lets a valid local session cookie through and ignores the test bypass cookie", async () => {
 		const response = await middleware(
 			localRequestFor(
