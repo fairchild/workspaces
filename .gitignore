@@ -83,3 +83,7 @@ web/test-results/
 # codex-execution worker reports are untracked-by-contract (skill); three
 # separate `git add -A` accidents shipped one to main before this line existed.
 CODEX_REPORT.md
+
+# iOS local artifacts
+ios/build/
+ios/WorkSpacesMobile.xcodeproj/

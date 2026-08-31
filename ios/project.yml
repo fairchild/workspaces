@@ -1,0 +1,35 @@
+# xcodegen spec for the WorkSpaces mobile variant (#1457). Kept apart from
+# Package.swift on purpose: the iOS build never links GhosttyKit (ADR:
+# docs/decisions/mobile-tailnet-design.md). Regenerate with `xcodegen` here.
+name: WorkSpacesMobile
+options:
+  bundleIdPrefix: com.cloudcompute
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "26.6"
+# Signing identity stays out of the committed spec: export DEVELOPMENT_TEAM
+# before generating (`DEVELOPMENT_TEAM=<team id> xcodegen`). Unset, simulator
+# builds work unsigned and device builds fail at signing with a clear error.
+settings:
+  base:
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+    SWIFT_VERSION: "6.0"
+targets:
+  WorkSpacesMobile:
+    type: application
+    platform: iOS
+    sources:
+      - WorkSpacesMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.cloudcompute.workspaces.mobile
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: WorkSpaces
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_NSCameraUsageDescription: Scans the pairing QR code shown by WorkSpaces on your Mac.
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.1.0"
