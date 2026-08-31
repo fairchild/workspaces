@@ -318,6 +318,15 @@ struct GhosttyTerminalConfig {
         return script
     }
 
+    /// `tmuxLaunchScript` made safe to type into a shell whose state is not fully
+    /// known. The `$TMUX` test short-circuits the whole chain when the shell already
+    /// sits inside tmux, so a repair racing a launch that just attached does nothing
+    /// instead of `exec`-ing a nested tmux — which tmux refuses, taking the exec'd
+    /// shell (and the pane) down with it.
+    static func tmuxRepairScript(_ launchScript: String) -> String {
+        "[ -z \"$TMUX\" ] && \(launchScript)"
+    }
+
     private static func singleQuoted(_ value: String) -> String {
         let escaped = value.replacingOccurrences(of: "'", with: "'\"'\"'")
         return "'\(escaped)'"

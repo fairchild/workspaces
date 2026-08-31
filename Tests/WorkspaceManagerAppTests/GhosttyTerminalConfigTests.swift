@@ -55,6 +55,15 @@ struct GhosttyTerminalConfigTests {
         #expect(try #require(config.command).contains(sessionName))
     }
 
+    @Test("The repair script refuses to run inside tmux")
+    func repairScriptShortCircuitsInsideTmux() {
+        // Typed into a shell that is already a tmux client — a repair racing a launch
+        // that just attached — a bare `exec tmux` would nest, be refused, and take the
+        // exec'd shell and its pane down. The guard makes that case a no-op.
+        let repair = GhosttyTerminalConfig.tmuxRepairScript("exec tmux -L workspaces new-session -A -s 'x'")
+        #expect(repair == "[ -z \"$TMUX\" ] && exec tmux -L workspaces new-session -A -s 'x'")
+    }
+
     @Test("tmux mode without tmux available exposes no launch script")
     func tmuxUnavailableExposesNoLaunchScript() {
         let config = GhosttyTerminalConfig(

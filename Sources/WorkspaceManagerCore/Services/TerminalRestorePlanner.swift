@@ -158,17 +158,28 @@ public struct TerminalRestorePlanner: Sendable {
         previousRunID: String? = nil
     ) -> RestorePlan {
         var surfaces: [RestoreSurfacePlan] = []
-        // Ids already handed to an earlier surface. Two Terminal Sessions can share a
-        // working directory, and giving both the same transcript would resume one
-        // conversation into two panes.
-        var claimedAgentSessionIDs: Set<String> = []
+        // Every id any row records, reserved before allocation begins. A row that
+        // reattaches its tmux session never reaches the resume rung, so it claims
+        // nothing as it goes — yet the conversation it is rejoining is live in that
+        // pane, and an inferred fallback elsewhere would happily hand the same
+        // transcript to a second surface. Reserving up front also makes allocation
+        // order irrelevant, so an unrecorded row cannot take an id that a row further
+        // down the list has positive evidence for.
+        let recordedAgentSessionIDs = Set(rows.compactMap(\.agentSessionID))
+        // Ids actually handed out so far, which is what stops two fallbacks in one
+        // directory from resuming the same conversation into two panes.
+        var usedAgentSessionIDs: Set<String> = []
         for row in rows {
             guard row.endedAt == nil, row.isActive else { continue }
             guard let resolved = resolveTarget(row) else { continue }
             let decision = decideAction(
-                row: row, resolved: resolved, claimedAgentSessionIDs: claimedAgentSessionIDs)
+                row: row,
+                resolved: resolved,
+                usedAgentSessionIDs: usedAgentSessionIDs,
+                recordedAgentSessionIDs: recordedAgentSessionIDs
+            )
             if case .resumeClaude(let agentSessionID) = decision.action {
-                claimedAgentSessionIDs.insert(agentSessionID)
+                usedAgentSessionIDs.insert(agentSessionID)
             }
             surfaces.append(
                 RestoreSurfacePlan(
@@ -191,7 +202,8 @@ public struct TerminalRestorePlanner: Sendable {
     private func decideAction(
         row: TerminalSessionContinuityRow,
         resolved: ResolvedRestoreTarget,
-        claimedAgentSessionIDs: Set<String>
+        usedAgentSessionIDs: Set<String>,
+        recordedAgentSessionIDs: Set<String>
     ) -> (action: RestoreSurfaceAction, directory: URL, fellBack: Bool) {
         if let tmuxSessionName = row.tmuxSessionName, isTmuxSessionAlive(tmuxSessionName) {
             let (directory, fellBack) = nearestValidDirectory(row: row, resolved: resolved)
@@ -203,7 +215,11 @@ public struct TerminalRestorePlanner: Sendable {
         let agentCwd = row.agentCwd ?? row.directoryPath
         if directoryExists(agentCwd),
             let agentSessionID = resumableAgentSessionID(
-                row: row, cwd: agentCwd, claimedAgentSessionIDs: claimedAgentSessionIDs)
+                row: row,
+                cwd: agentCwd,
+                usedAgentSessionIDs: usedAgentSessionIDs,
+                recordedAgentSessionIDs: recordedAgentSessionIDs
+            )
         {
             return (.resumeClaude(agentSessionID: agentSessionID), URL(fileURLWithPath: agentCwd), false)
         }
@@ -222,11 +238,13 @@ public struct TerminalRestorePlanner: Sendable {
     private func resumableAgentSessionID(
         row: TerminalSessionContinuityRow,
         cwd: String,
-        claimedAgentSessionIDs: Set<String>
+        usedAgentSessionIDs: Set<String>,
+        recordedAgentSessionIDs: Set<String>
     ) -> String? {
         if row.agentKind == AgentKind.claudeCode.rawValue,
             let recorded = row.agentSessionID,
-            !claimedAgentSessionIDs.contains(recorded),
+            Self.isWellFormedAgentSessionID(recorded),
+            !usedAgentSessionIDs.contains(recorded),
             isTranscriptResumable(recorded, cwd)
         {
             return recorded
@@ -236,8 +254,26 @@ public struct TerminalRestorePlanner: Sendable {
         // Claude once ran would otherwise hand `claude --resume` to a surface the
         // store knows was running a different agent.
         guard row.agentKind == nil || row.agentKind == AgentKind.claudeCode.rawValue else { return nil }
-        guard let recovered = newestTranscriptID(cwd, claimedAgentSessionIDs) else { return nil }
+        // Never infer an identity another row records: that row's conversation may be
+        // live in the pane it is reattaching, and resuming it here would be a second
+        // agent writing one transcript.
+        let unavailable = usedAgentSessionIDs.union(recordedAgentSessionIDs)
+        guard let recovered = newestTranscriptID(cwd, unavailable),
+            Self.isWellFormedAgentSessionID(recovered)
+        else { return nil }
         return isTranscriptResumable(recovered, cwd) ? recovered : nil
+    }
+
+    /// Whether `value` has the shape of a Claude session id.
+    ///
+    /// The id ends up interpolated into a shell command the user presses Return on,
+    /// and it arrives from places this process does not control — a hook payload, or
+    /// a filename in the transcripts directory that anything can write. A transcript
+    /// named `x; rm -rf ~;.jsonl` would otherwise become exactly that command. Claude
+    /// session ids are UUIDs, so the shape is checked at read and rejected outright
+    /// rather than escaped on the way out.
+    static func isWellFormedAgentSessionID(_ value: String) -> Bool {
+        UUID(uuidString: value) != nil
     }
 
     /// Prefer the recorded launch directory when it still exists; otherwise fall

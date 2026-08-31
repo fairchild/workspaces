@@ -180,11 +180,18 @@ final class SurfaceStore {
     /// state — environment included, because the script carries the tile-scoped pairs
     /// as `-e` and `set-environment` arguments.
     ///
-    /// Repairs only on evidence, never on doubt. A live session is repaired solely on
-    /// a *confirmed* zero-client reading: an unanswered probe leaves the surface
-    /// alone, because typing a shell command into a pane that is in fact attached
-    /// would inject it into whatever agent is running there. A session that is not
-    /// alive at all needs no such care — `new-session -A` will create it.
+    /// Repairs only on evidence, never on doubt, and three separate things can call
+    /// it off. An unanswered client probe means the pane may in fact be attached and
+    /// running something. A tmux binary that does not answer at all makes "no such
+    /// session" meaningless, because `isSessionAlive` reports a timeout and a real
+    /// absence identically. And a surface that has heard a keystroke belongs to the
+    /// person now, whatever tmux says about it — that last check sits immediately
+    /// before the write, because the gap between observing and typing is exactly
+    /// where someone starts an editor.
+    ///
+    /// What is typed is guarded too: `tmuxRepairScript` short-circuits inside tmux,
+    /// so a repair that races a launch which just attached does nothing rather than
+    /// `exec`-ing a nested tmux and taking the pane down with it.
     private func repairLaunchContractIfNeeded(
         terminal: TerminalSurface,
         session: HostTerminalSession,
@@ -210,13 +217,29 @@ final class SurfaceStore {
             if attached > 0 { return }
         }
 
+        // Absence only counts when tmux is the one reporting it.
+        guard await probe.isCommandAvailable() else {
+            log.notice(
+                "[SurfaceStore] launch contract unverifiable for session \(session.id.uuidString, privacy: .public): tmux did not answer at all; leaving the surface alone"
+            )
+            return
+        }
+
+        guard !terminal.surfaceView.hasReceivedUserInput else {
+            log.notice(
+                "[SurfaceStore] skipping launch repair for session \(session.id.uuidString, privacy: .public): the surface has taken keyboard input and is no longer an untouched shell"
+            )
+            return
+        }
+
         log.notice(
             "[SurfaceStore] launch contract unmet for session \(session.id.uuidString, privacy: .public): tmux \(sessionName, privacy: .public) has no attached client; repairing over the text bridge"
         )
 
         guard
             GhosttySurfaceTextInputBridge.writeAutomationText(
-                into: terminal.surfaceView, text: tmuxLaunchScript),
+                into: terminal.surfaceView,
+                text: GhosttyTerminalConfig.tmuxRepairScript(tmuxLaunchScript)),
             GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
         else {
             log.error(

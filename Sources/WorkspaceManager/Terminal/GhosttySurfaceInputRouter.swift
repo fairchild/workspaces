@@ -195,6 +195,9 @@ enum GhosttySurfaceInputRouter {
     }
 
     static func keyDown(in view: GhosttySurfaceView, event: NSEvent) {
+        // The person is using this surface. Restore's launch repair reads this to
+        // stay out of a pane someone has already started working in.
+        view.noteUserInputReceived()
         let handlerStartedAt = ProcessInfo.processInfo.systemUptime
         let eventAgeMs = max(0, (handlerStartedAt - event.timestamp) * 1000)
         var outcome = "handled"

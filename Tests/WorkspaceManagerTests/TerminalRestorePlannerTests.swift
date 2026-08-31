@@ -7,6 +7,18 @@ import Testing
 struct TerminalRestorePlannerTests {
     private static let baseDate = Date(timeIntervalSince1970: 1_700_000_000)
 
+    // Claude session ids are UUIDs, and the planner rejects anything else because the
+    // id reaches a shell command the user presses Return on. Fixtures use real shapes
+    // so they exercise the same path production does.
+    private static let newestTranscript = "11111111-1111-4111-8111-111111111111"
+    private static let olderTranscript = "22222222-2222-4222-8222-222222222222"
+    private static let onlyTranscript = "33333333-3333-4333-8333-333333333333"
+    private static let sharedSession = "44444444-4444-4444-8444-444444444444"
+    private static let sessionOne = "55555555-5555-4555-8555-555555555555"
+    private static let sessionTwo = "66666666-6666-4666-8666-666666666666"
+    private static let sessionThree = "77777777-7777-4777-8777-777777777777"
+    private static let claudeTranscript = "88888888-8888-4888-8888-888888888888"
+
     // MARK: Fixtures
 
     private func makeRow(
@@ -103,11 +115,11 @@ struct TerminalRestorePlannerTests {
         // event ever carried an id. The directory still holds the conversation.
         let planner = makePlanner(
             transcriptResumable: { _, _ in true },
-            newestTranscriptID: transcriptResolver(["/repo": ["newest", "older"]])
+            newestTranscriptID: transcriptResolver(["/repo": [Self.newestTranscript, Self.olderTranscript]])
         )
         let plan = planner.plan(rows: [makeRow()], layout: nil)
         let surface = try #require(plan.surfaces.first)
-        #expect(surface.action == .resumeClaude(agentSessionID: "newest"))
+        #expect(surface.action == .resumeClaude(agentSessionID: Self.newestTranscript))
         #expect(surface.directory == URL(fileURLWithPath: "/repo"))
     }
 
@@ -117,28 +129,28 @@ struct TerminalRestorePlannerTests {
         // same transcript, so the second surface takes the next-newest instead.
         let planner = makePlanner(
             transcriptResumable: { _, _ in true },
-            newestTranscriptID: transcriptResolver(["/repo": ["newest", "older"]])
+            newestTranscriptID: transcriptResolver(["/repo": [Self.newestTranscript, Self.olderTranscript]])
         )
         let plan = planner.plan(rows: [makeRow(), makeRow()], layout: nil)
         #expect(plan.surfaces.count == 2)
-        #expect(plan.surfaces[0].action == .resumeClaude(agentSessionID: "newest"))
-        #expect(plan.surfaces[1].action == .resumeClaude(agentSessionID: "older"))
+        #expect(plan.surfaces[0].action == .resumeClaude(agentSessionID: Self.newestTranscript))
+        #expect(plan.surfaces[1].action == .resumeClaude(agentSessionID: Self.olderTranscript))
     }
 
     @Test("A directory with one transcript and two rows resumes only the first")
     func sharedDirectoryExhaustsTranscripts() throws {
         let planner = makePlanner(
             transcriptResumable: { _, _ in true },
-            newestTranscriptID: transcriptResolver(["/repo": ["only"]])
+            newestTranscriptID: transcriptResolver(["/repo": [Self.onlyTranscript]])
         )
         let plan = planner.plan(rows: [makeRow(), makeRow()], layout: nil)
-        #expect(plan.surfaces[0].action == .resumeClaude(agentSessionID: "only"))
+        #expect(plan.surfaces[0].action == .resumeClaude(agentSessionID: Self.onlyTranscript))
         #expect(plan.surfaces[1].action == .freshShell)
     }
 
     @Test("A recorded id an earlier surface already claimed is not handed out twice")
     func recordedIdentityIsNotReused() throws {
-        let shared = "claude-session-shared"
+        let shared = Self.sharedSession
         let planner = makePlanner(
             transcriptResumable: { _, _ in true },
             newestTranscriptID: transcriptResolver(["/repo": [shared]])
@@ -158,7 +170,7 @@ struct TerminalRestorePlannerTests {
         // must not turn an opencode session into `claude --resume`.
         let planner = makePlanner(
             transcriptResumable: { _, _ in true },
-            newestTranscriptID: transcriptResolver(["/repo": ["claude-transcript"]])
+            newestTranscriptID: transcriptResolver(["/repo": [Self.claudeTranscript]])
         )
         let row = makeRow(agentSessionID: "opencode-session", agentKind: "opencode", agentCwd: "/repo")
         let plan = planner.plan(rows: [row], layout: nil)
@@ -166,12 +178,74 @@ struct TerminalRestorePlannerTests {
         #expect(surface.action == .freshShell)
     }
 
+    @Test("A reattaching row's conversation is not inferred into a second pane")
+    func reattachedIdentityIsReservedFromTheFallback() throws {
+        // Row A rejoins a tmux session where its conversation is live, so it never
+        // reaches the resume rung and claims nothing as it goes. Row B shares the
+        // directory with no recorded identity of its own. Handing B that same
+        // transcript would put two agents on one conversation.
+        let planner = makePlanner(
+            tmuxAlive: { $0 == "wm-repo-live" },
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": [Self.sessionOne]])
+        )
+        let rows = [
+            makeRow(
+                tmuxSessionName: "wm-repo-live",
+                agentSessionID: Self.sessionOne,
+                agentKind: "claudeCode",
+                agentCwd: "/repo"
+            ),
+            makeRow(),
+        ]
+        let plan = planner.plan(rows: rows, layout: nil)
+        #expect(plan.surfaces[0].action == .reattachTmux(sessionName: "wm-repo-live"))
+        #expect(plan.surfaces[1].action == .freshShell)
+    }
+
+    @Test("An inferred row cannot take an identity a later row records")
+    func laterRecordedIdentityIsReservedUpFront() throws {
+        // Allocation runs in row order, so without reserving every recorded id first,
+        // the unrecorded row would take the transcript and leave the row that has
+        // positive evidence for it with something else.
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": [Self.sessionTwo]])
+        )
+        let rows = [
+            makeRow(),
+            makeRow(agentSessionID: Self.sessionTwo, agentKind: "claudeCode", agentCwd: "/repo"),
+        ]
+        let plan = planner.plan(rows: rows, layout: nil)
+        #expect(plan.surfaces[0].action == .freshShell)
+        #expect(plan.surfaces[1].action == .resumeClaude(agentSessionID: Self.sessionTwo))
+    }
+
+    @Test("An id that is not UUID-shaped is refused, not escaped")
+    func malformedIdentityIsRefused() throws {
+        // A transcript filename is attacker-influenced input and the id lands in a
+        // shell command the user presses Return on.
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": ["x; touch /tmp/pwned;"]])
+        )
+        let plan = planner.plan(rows: [makeRow()], layout: nil)
+        #expect(try #require(plan.surfaces.first).action == .freshShell)
+
+        let recordedPlanner = makePlanner(transcriptResumable: { _, _ in true })
+        let recordedPlan = recordedPlanner.plan(
+            rows: [makeRow(agentSessionID: "$(id)", agentKind: "claudeCode", agentCwd: "/repo")],
+            layout: nil
+        )
+        #expect(try #require(recordedPlan.surfaces.first).action == .freshShell)
+    }
+
     @Test("A missing directory blocks the transcript fallback")
     func missingDirectoryBlocksFallback() throws {
         let planner = makePlanner(
             transcriptResumable: { _, _ in true },
             directoryExists: { _ in false },
-            newestTranscriptID: transcriptResolver(["/repo": ["newest"]])
+            newestTranscriptID: transcriptResolver(["/repo": [Self.newestTranscript]])
         )
         let plan = planner.plan(rows: [makeRow()], layout: nil)
         let surface = try #require(plan.surfaces.first)
@@ -187,7 +261,7 @@ struct TerminalRestorePlannerTests {
         )
         let row = makeRow(
             tmuxSessionName: "wm-repo-abcd1234",
-            agentSessionID: "claude-session-1",
+            agentSessionID: Self.sessionOne,
             agentKind: "claudeCode",
             agentCwd: "/repo"
         )
@@ -198,18 +272,18 @@ struct TerminalRestorePlannerTests {
 
     @Test("A present Claude transcript resumes in the recorded cwd")
     func transcriptPresentResumes() throws {
-        let planner = makePlanner(transcriptResumable: { id, cwd in id == "claude-session-2" && cwd == "/repo" })
-        let row = makeRow(agentSessionID: "claude-session-2", agentKind: "claudeCode", agentCwd: "/repo")
+        let planner = makePlanner(transcriptResumable: { id, cwd in id == Self.sessionTwo && cwd == "/repo" })
+        let row = makeRow(agentSessionID: Self.sessionTwo, agentKind: "claudeCode", agentCwd: "/repo")
         let plan = planner.plan(rows: [row], layout: nil)
         let surface = try #require(plan.surfaces.first)
-        #expect(surface.action == .resumeClaude(agentSessionID: "claude-session-2"))
+        #expect(surface.action == .resumeClaude(agentSessionID: Self.sessionTwo))
         #expect(surface.directory == URL(fileURLWithPath: "/repo"))
     }
 
     @Test("An absent transcript falls through to a fresh shell")
     func transcriptAbsentFreshShell() throws {
         let planner = makePlanner(transcriptResumable: { _, _ in false })
-        let row = makeRow(agentSessionID: "claude-session-3", agentKind: "claudeCode", agentCwd: "/repo")
+        let row = makeRow(agentSessionID: Self.sessionThree, agentKind: "claudeCode", agentCwd: "/repo")
         let plan = planner.plan(rows: [row], layout: nil)
         let surface = try #require(plan.surfaces.first)
         #expect(surface.action == .freshShell)

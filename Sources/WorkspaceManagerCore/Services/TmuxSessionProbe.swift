@@ -64,6 +64,14 @@ public struct TmuxSessionProbe: Sendable {
         return exitCode == 0
     }
 
+    /// True when the tmux binary itself answers. Distinguishes "tmux says no such
+    /// session" from "tmux never answered", which `isSessionAlive` alone cannot: it
+    /// collapses a timeout, a launch failure, and a real absent session into one
+    /// `false`. A caller about to act on absence has to know which it got.
+    public func isCommandAvailable() async -> Bool {
+        await runForOutput("/usr/bin/env", ["tmux", "-V"], environment) != nil
+    }
+
     /// How many clients are attached to `tmuxSessionName`, or `nil` when tmux did
     /// not answer — a failed command, a missing binary, or a session that is not
     /// there to have clients.
