@@ -1,330 +1,723 @@
 {
-  "schema_version": 1,
-  "scenario": "debug_activate",
-  "environment": {
-    "build_kind": "debug",
-    "app_version": null,
-    "os_version": "26.6.2",
-    "os_build": "25G83",
-    "machine_model": "Mac16,13",
-    "arch": "arm64"
+  "artifacts": {
+    "line_count": 44,
+    "log_file": "/private/tmp/claude-501/-Users-fairchild-code-workspaces/443f64eb-bbe3-4e70-a1b1-b271796f5c85/scratchpad/bench-3/installed_clean_shell.log",
+    "perf_event_count": 10
   },
-  "metrics": {
+  "budget_results": {
+    "first_prompt_ready": {
+      "diagnostic_stat": "p95",
+      "diagnostic_threshold": 975,
+      "diagnostic_threshold_ms": 975,
+      "gate_budget": 675,
+      "gate_budget_ms": 675,
+      "gate_stat": "median",
+      "observed_diagnostic": 125.95,
+      "observed_gate": 125.95,
+      "observed_median_ms": 125.95,
+      "observed_p95_ms": 125.95,
+      "reference_baseline": {
+        "median_ms": 540,
+        "p95_ms": 650
+      },
+      "status": "pass",
+      "unit": "ms"
+    },
     "launch_to_first_prompt": {
-      "count": 10,
-      "min": 1070.89,
-      "max": 1649.7,
-      "median": 1389.7,
-      "mean": 1384.866,
-      "p95": 1649.7,
+      "diagnostic_stat": "p95",
+      "diagnostic_threshold": 1140,
+      "diagnostic_threshold_ms": 1140,
+      "gate_budget": 800,
+      "gate_budget_ms": 800,
+      "gate_stat": "median",
+      "observed_diagnostic": 147.08,
+      "observed_gate": 147.08,
+      "observed_median_ms": 147.08,
+      "observed_p95_ms": 147.08,
+      "reference_baseline": {
+        "median_ms": 640,
+        "p95_ms": 760
+      },
+      "status": "pass",
       "unit": "ms"
     },
-    "repo_hydration": {
-      "count": 10,
-      "min": 1.47,
-      "max": 15.94,
-      "median": 2.0,
-      "mean": 3.355,
-      "p95": 15.94,
+    "terminal_first_output": {
+      "diagnostic_stat": "p95",
+      "diagnostic_threshold": 975,
+      "diagnostic_threshold_ms": 975,
+      "gate_budget": 675,
+      "gate_budget_ms": 675,
+      "gate_stat": "median",
+      "observed_diagnostic": 125.95,
+      "observed_gate": 125.95,
+      "observed_median_ms": 125.95,
+      "observed_p95_ms": 125.95,
+      "reference_baseline": {
+        "median_ms": 540,
+        "p95_ms": 650
+      },
+      "status": "pass",
       "unit": "ms"
     },
-    "repo_click_to_focus": {
-      "count": 10,
-      "min": 207.76,
-      "max": 430.59,
-      "median": 255.05,
-      "mean": 278.716,
-      "p95": 430.59,
-      "unit": "ms"
+    "terminal_investigation": {
+      "reason": "no_reference_baseline",
+      "status": "ungated"
+    },
+    "workspace_orphan_scan": {
+      "reason": "no_reference_baseline",
+      "status": "ungated"
     }
   },
   "diagnostic_findings": [
-    "launch_to_first_prompt median is 1389.70 ms in debug_activate. Raw SwiftPM debug startup should be compared against debug-only references, not packaged-app release gates."
+    "Terminal surface events were captured for shell modes: clean.",
+    "terminal_first_output was triggered by signals: set_title.",
+    "first_prompt_ready was triggered by signals: set_title.",
+    "Focus diagnostics captured phases: focus_request_enqueued, focus_request_inactive_skip.",
+    "launch_to_first_prompt was closed by triggers: terminal_set_title (1)."
   ],
-  "budget_results": {
-    "launch_to_first_prompt": {
-      "status": "pass",
-      "gate_budget": 1477,
-      "diagnostic_threshold": 2529,
-      "observed_gate": 1389.7,
-      "observed_diagnostic": 1649.7,
-      "gate_stat": "median",
-      "diagnostic_stat": "p95",
-      "unit": "ms",
-      "reference_baseline": {
-        "median_ms": 1181,
-        "p95_ms": 1686
-      },
-      "gate_budget_ms": 1477,
-      "diagnostic_threshold_ms": 2529,
-      "observed_median_ms": 1389.7,
-      "observed_p95_ms": 1649.7
-    },
-    "repo_hydration": {
-      "status": "pass",
-      "gate_budget": 25,
-      "diagnostic_threshold": 45,
-      "observed_gate": 2.0,
-      "observed_diagnostic": 15.94,
-      "gate_stat": "median",
-      "diagnostic_stat": "p95",
-      "unit": "ms",
-      "reference_baseline": {
-        "median_ms": 20,
-        "p95_ms": 30
-      },
-      "gate_budget_ms": 25,
-      "diagnostic_threshold_ms": 45,
-      "observed_median_ms": 2.0,
-      "observed_p95_ms": 15.94
-    },
-    "repo_click_to_focus": {
-      "status": "pass",
-      "gate_budget": 275,
-      "diagnostic_threshold": 450,
-      "observed_gate": 255.05,
-      "observed_diagnostic": 430.59,
-      "gate_stat": "median",
-      "diagnostic_stat": "p95",
-      "unit": "ms",
-      "reference_baseline": {
-        "median_ms": 220,
-        "p95_ms": 300
-      },
-      "gate_budget_ms": 275,
-      "diagnostic_threshold_ms": 450,
-      "observed_median_ms": 255.05,
-      "observed_p95_ms": 430.59
-    }
-  },
-  "artifacts": {
-    "output_dir": "/tmp/workspaces-perf-baseline-20260823-213731",
-    "runs_requested": 10,
-    "sleep_seconds": 8,
-    "log_files": [
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-1.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-10.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-2.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-3.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-4.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-5.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-6.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-7.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-8.log",
-      "/tmp/workspaces-perf-baseline-20260823-213731/run-9.log"
-    ]
-  },
-  "metadata": {
-    "timestamp": "2026-08-23T21:38:53-0700",
-    "runs_requested": 10,
-    "sleep_seconds": 8,
-    "launch_mode": "activate",
-    "os_version": "26.6.2",
-    "os_build": "25G83",
+  "environment": {
+    "app_version": null,
     "arch": "arm64",
-    "model": "Mac16,13",
-    "discovered_repos_median": 28,
-    "imported_repos_median": 0,
-    "activation_to_first_prompt_median_ms": 405.52,
-    "ghostty_resources_dir": "/Users/fairchild/.cache/workspacemanager/ghostty/zig-out/share/ghostty",
-    "shell_profile_mode": "clean",
-    "terminal_diagnostics": "1",
-    "disable_state_restoration": "1",
-    "protocol_epoch": "isolated-preferences-v1",
-    "preferences_mode": "clean",
-    "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-    "preferences_suite_owner": "lane",
-    "launch_samples": [
-      {
-        "run": 1,
-        "launch_to_first_prompt_ms": 1070.89,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 4.45,
-        "repo_hydration_ms": 15.94
-      },
-      {
-        "run": 2,
-        "launch_to_first_prompt_ms": 1315.97,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 4.46,
-        "repo_hydration_ms": 1.72
-      },
-      {
-        "run": 3,
-        "launch_to_first_prompt_ms": 1405.64,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 6.11,
-        "repo_hydration_ms": 1.97
-      },
-      {
-        "run": 4,
-        "launch_to_first_prompt_ms": 1445.62,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 6.8,
-        "repo_hydration_ms": 1.68
-      },
-      {
-        "run": 5,
-        "launch_to_first_prompt_ms": 1580.19,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 6.83,
-        "repo_hydration_ms": 1.83
-      },
-      {
-        "run": 6,
-        "launch_to_first_prompt_ms": 1400.97,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 6.84,
-        "repo_hydration_ms": 2.16
-      },
-      {
-        "run": 7,
-        "launch_to_first_prompt_ms": 1348.62,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 6.88,
-        "repo_hydration_ms": 2.23
-      },
-      {
-        "run": 8,
-        "launch_to_first_prompt_ms": 1378.43,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 7.26,
-        "repo_hydration_ms": 2.03
-      },
-      {
-        "run": 9,
-        "launch_to_first_prompt_ms": 1649.7,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 7.0,
-        "repo_hydration_ms": 2.52
-      },
-      {
-        "run": 10,
-        "launch_to_first_prompt_ms": 1252.63,
-        "seeded_by": "prologue",
-        "branch": "fresh_seed",
-        "sessions": 1,
-        "bootstrap_calls": [
-          "prologue:fresh_seed:1",
-          "sequence:noop:1"
-        ],
-        "preferences_domain": "scratch",
-        "preferences_isolated": "true",
-        "preferences_suite": "com.cloudcompute.workspaces.perf.90790-20260823213731",
-        "load_average_1m": 6.82,
-        "repo_hydration_ms": 1.47
-      }
-    ],
-    "schema_version": 1,
-    "scenario": "debug_activate",
-    "build_kind": "debug"
+    "build_kind": "installed",
+    "machine_model": "Mac16,13",
+    "os_build": "25G83",
+    "os_version": "26.6.2"
+  },
+  "findings": [
+    "Terminal surface events were captured for shell modes: clean.",
+    "terminal_first_output was triggered by signals: set_title.",
+    "first_prompt_ready was triggered by signals: set_title.",
+    "Focus diagnostics captured phases: focus_request_enqueued, focus_request_inactive_skip.",
+    "launch_to_first_prompt was closed by triggers: terminal_set_title (1)."
+  ],
+  "first_prompt_ready": {
+    "count": 1,
+    "max": 125.95,
+    "mean": 125.95,
+    "median": 125.95,
+    "min": 125.95,
+    "p95": 125.95,
+    "unit": "ms"
   },
   "launch_to_first_prompt": {
-    "count": 10,
-    "min": 1070.89,
-    "max": 1649.7,
-    "median": 1389.7,
-    "mean": 1384.866,
-    "p95": 1649.7,
+    "count": 1,
+    "max": 147.08,
+    "mean": 147.08,
+    "median": 147.08,
+    "min": 147.08,
+    "p95": 147.08,
     "unit": "ms"
   },
-  "repo_hydration": {
-    "count": 10,
-    "min": 1.47,
-    "max": 15.94,
-    "median": 2.0,
-    "mean": 3.355,
-    "p95": 15.94,
+  "legacy_metric_summaries": {
+    "first_prompt_ready": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    },
+    "focus_investigation": {
+      "count": 2,
+      "phases": [
+        "focus_request_enqueued",
+        "focus_request_inactive_skip"
+      ]
+    },
+    "launch_to_first_prompt": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    },
+    "terminal_first_output": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    },
+    "terminal_investigation": {
+      "count": 4,
+      "phases": [
+        "first_output_observed",
+        "prompt_ready_observed",
+        "surface_create_started",
+        "surface_create_succeeded"
+      ]
+    },
+    "workspace_orphan_scan": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    }
+  },
+  "line_count": 44,
+  "log_file": "/private/tmp/claude-501/-Users-fairchild-code-workspaces/443f64eb-bbe3-4e70-a1b1-b271796f5c85/scratchpad/bench-3/installed_clean_shell.log",
+  "metadata": {
+    "build_kind": "installed",
+    "protocol_epoch": "deterministic-delivery-v1",
+    "scenario": "installed_clean_shell",
+    "schema_version": 1,
+    "timestamp": null
+  },
+  "metrics": {
+    "first_prompt_ready": {
+      "count": 1,
+      "max": 125.95,
+      "mean": 125.95,
+      "median": 125.95,
+      "min": 125.95,
+      "p95": 125.95,
+      "unit": "ms"
+    },
+    "launch_to_first_prompt": {
+      "count": 1,
+      "max": 147.08,
+      "mean": 147.08,
+      "median": 147.08,
+      "min": 147.08,
+      "p95": 147.08,
+      "unit": "ms"
+    },
+    "terminal_first_output": {
+      "count": 1,
+      "max": 125.95,
+      "mean": 125.95,
+      "median": 125.95,
+      "min": 125.95,
+      "p95": 125.95,
+      "unit": "ms"
+    },
+    "terminal_investigation": {
+      "count": 3,
+      "max": 125.95,
+      "mean": 89.79666666666667,
+      "median": 125.95,
+      "min": 17.49,
+      "p95": 125.95,
+      "unit": "ms"
+    },
+    "workspace_orphan_scan": {
+      "count": 1,
+      "max": 1.24,
+      "mean": 1.24,
+      "median": 1.24,
+      "min": 1.24,
+      "p95": 1.24,
+      "unit": "ms"
+    }
+  },
+  "metrics_by_phase": {
+    "first_prompt_ready:none": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "first_prompt_ready",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "none"
+    },
+    "focus_investigation:focus_request_enqueued": {
+      "categorical_fields": {
+        "had_pending_work": {
+          "false": 1
+        },
+        "is_retry": {
+          "false": 1
+        }
+      },
+      "count": 1,
+      "metric": "focus_investigation",
+      "numeric_fields": {},
+      "phase": "focus_request_enqueued"
+    },
+    "focus_investigation:focus_request_inactive_skip": {
+      "categorical_fields": {
+        "app_active": {
+          "false": 1
+        },
+        "is_retry": {
+          "false": 1
+        },
+        "window_key": {
+          "false": 1
+        }
+      },
+      "count": 1,
+      "metric": "focus_investigation",
+      "numeric_fields": {},
+      "phase": "focus_request_inactive_skip"
+    },
+    "launch_to_first_prompt:none": {
+      "categorical_fields": {
+        "trigger": {
+          "terminal_set_title": 1
+        }
+      },
+      "count": 1,
+      "metric": "launch_to_first_prompt",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 147.08,
+          "mean": 147.08,
+          "median": 147.08,
+          "min": 147.08
+        }
+      },
+      "phase": "none"
+    },
+    "terminal_first_output:none": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_first_output",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "none"
+    },
+    "terminal_investigation:first_output_observed": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "first_output_observed"
+    },
+    "terminal_investigation:prompt_ready_observed": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "prompt_ready_observed"
+    },
+    "terminal_investigation:surface_create_started": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {},
+      "phase": "surface_create_started"
+    },
+    "terminal_investigation:surface_create_succeeded": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 17.49,
+          "mean": 17.49,
+          "median": 17.49,
+          "min": 17.49
+        }
+      },
+      "phase": "surface_create_succeeded"
+    },
+    "workspace_orphan_scan:none": {
+      "categorical_fields": {
+        "trigger": {
+          "launch_deferred": 1
+        }
+      },
+      "count": 1,
+      "metric": "workspace_orphan_scan",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 1.24,
+          "mean": 1.24,
+          "median": 1.24,
+          "min": 1.24
+        },
+        "item_count": {
+          "count": 1,
+          "max": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "repo_count": {
+          "count": 1,
+          "max": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "min": 0.0
+        }
+      },
+      "phase": "none"
+    }
+  },
+  "metrics_detected": {
+    "first_prompt_ready": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    },
+    "focus_investigation": {
+      "count": 2,
+      "phases": [
+        "focus_request_enqueued",
+        "focus_request_inactive_skip"
+      ]
+    },
+    "launch_to_first_prompt": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    },
+    "terminal_first_output": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    },
+    "terminal_investigation": {
+      "count": 4,
+      "phases": [
+        "first_output_observed",
+        "prompt_ready_observed",
+        "surface_create_started",
+        "surface_create_succeeded"
+      ]
+    },
+    "workspace_orphan_scan": {
+      "count": 1,
+      "phases": [
+        "none"
+      ]
+    }
+  },
+  "perf_event_count": 10,
+  "phases": {
+    "first_prompt_ready:none": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "first_prompt_ready",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "none"
+    },
+    "focus_investigation:focus_request_enqueued": {
+      "categorical_fields": {
+        "had_pending_work": {
+          "false": 1
+        },
+        "is_retry": {
+          "false": 1
+        }
+      },
+      "count": 1,
+      "metric": "focus_investigation",
+      "numeric_fields": {},
+      "phase": "focus_request_enqueued"
+    },
+    "focus_investigation:focus_request_inactive_skip": {
+      "categorical_fields": {
+        "app_active": {
+          "false": 1
+        },
+        "is_retry": {
+          "false": 1
+        },
+        "window_key": {
+          "false": 1
+        }
+      },
+      "count": 1,
+      "metric": "focus_investigation",
+      "numeric_fields": {},
+      "phase": "focus_request_inactive_skip"
+    },
+    "launch_to_first_prompt:none": {
+      "categorical_fields": {
+        "trigger": {
+          "terminal_set_title": 1
+        }
+      },
+      "count": 1,
+      "metric": "launch_to_first_prompt",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 147.08,
+          "mean": 147.08,
+          "median": 147.08,
+          "min": 147.08
+        }
+      },
+      "phase": "none"
+    },
+    "terminal_first_output:none": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_first_output",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "none"
+    },
+    "terminal_investigation:first_output_observed": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "first_output_observed"
+    },
+    "terminal_investigation:prompt_ready_observed": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "signal": {
+          "set_title": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 125.95,
+          "mean": 125.95,
+          "median": 125.95,
+          "min": 125.95
+        }
+      },
+      "phase": "prompt_ready_observed"
+    },
+    "terminal_investigation:surface_create_started": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {},
+      "phase": "surface_create_started"
+    },
+    "terminal_investigation:surface_create_succeeded": {
+      "categorical_fields": {
+        "shell_profile_mode": {
+          "clean": 1
+        },
+        "working_directory": {
+          "code": 1
+        }
+      },
+      "count": 1,
+      "metric": "terminal_investigation",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 17.49,
+          "mean": 17.49,
+          "median": 17.49,
+          "min": 17.49
+        }
+      },
+      "phase": "surface_create_succeeded"
+    },
+    "workspace_orphan_scan:none": {
+      "categorical_fields": {
+        "trigger": {
+          "launch_deferred": 1
+        }
+      },
+      "count": 1,
+      "metric": "workspace_orphan_scan",
+      "numeric_fields": {
+        "duration_ms": {
+          "count": 1,
+          "max": 1.24,
+          "mean": 1.24,
+          "median": 1.24,
+          "min": 1.24
+        },
+        "item_count": {
+          "count": 1,
+          "max": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "min": 0.0
+        },
+        "repo_count": {
+          "count": 1,
+          "max": 0.0,
+          "mean": 0.0,
+          "median": 0.0,
+          "min": 0.0
+        }
+      },
+      "phase": "none"
+    }
+  },
+  "scenario": "installed_clean_shell",
+  "schema_version": 1,
+  "terminal_first_output": {
+    "count": 1,
+    "max": 125.95,
+    "mean": 125.95,
+    "median": 125.95,
+    "min": 125.95,
+    "p95": 125.95,
     "unit": "ms"
   },
-  "repo_click_to_focus": {
-    "count": 10,
-    "min": 207.76,
-    "max": 430.59,
-    "median": 255.05,
-    "mean": 278.716,
-    "p95": 430.59,
+  "terminal_investigation": {
+    "count": 3,
+    "max": 125.95,
+    "mean": 89.79666666666667,
+    "median": 125.95,
+    "min": 17.49,
+    "p95": 125.95,
+    "unit": "ms"
+  },
+  "workspace_orphan_scan": {
+    "count": 1,
+    "max": 1.24,
+    "mean": 1.24,
+    "median": 1.24,
+    "min": 1.24,
+    "p95": 1.24,
     "unit": "ms"
   }
 }
