@@ -192,14 +192,22 @@ final class SurfaceStore {
     ) async {
         let sessionName = session.effectiveTmuxSessionName
         let probe = TmuxSessionProbe()
-        if await probe.isSessionAlive(sessionName) {
+        // Give the launch its own chance to land before concluding it lost. A slow
+        // login shell can still be on its way to `exec tmux` after the settle, and
+        // typing a second launch into a shell that is about to exec one would put
+        // the text inside the attached pane — in front of whatever runs there.
+        for attempt in 0..<12 {
+            if attempt > 0 {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            guard await probe.isSessionAlive(sessionName) else { continue }
             guard let attached = await probe.attachedClientCount(forSessionNamed: sessionName) else {
                 log.notice(
                     "[SurfaceStore] launch contract unverifiable for session \(session.id.uuidString, privacy: .public): tmux \(sessionName, privacy: .public) did not answer; leaving the surface alone"
                 )
                 return
             }
-            guard attached == 0 else { return }
+            if attached > 0 { return }
         }
 
         log.notice(

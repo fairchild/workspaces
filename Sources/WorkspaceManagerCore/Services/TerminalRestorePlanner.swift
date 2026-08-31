@@ -231,6 +231,11 @@ public struct TerminalRestorePlanner: Sendable {
         {
             return recorded
         }
+        // The fallback reads a Claude transcript directory, so it may only answer for
+        // a session that was Claude or was never identified at all. A directory where
+        // Claude once ran would otherwise hand `claude --resume` to a surface the
+        // store knows was running a different agent.
+        guard row.agentKind == nil || row.agentKind == AgentKind.claudeCode.rawValue else { return nil }
         guard let recovered = newestTranscriptID(cwd, claimedAgentSessionIDs) else { return nil }
         return isTranscriptResumable(recovered, cwd) ? recovered : nil
     }

@@ -152,6 +152,20 @@ struct TerminalRestorePlannerTests {
         #expect(plan.surfaces[1].action == .freshShell)
     }
 
+    @Test("A non-Claude agent is never handed a Claude transcript")
+    func nonClaudeAgentDoesNotTakeTranscriptFallback() throws {
+        // The fallback reads ~/.claude transcripts. A directory where Claude once ran
+        // must not turn an opencode session into `claude --resume`.
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": ["claude-transcript"]])
+        )
+        let row = makeRow(agentSessionID: "opencode-session", agentKind: "opencode", agentCwd: "/repo")
+        let plan = planner.plan(rows: [row], layout: nil)
+        let surface = try #require(plan.surfaces.first)
+        #expect(surface.action == .freshShell)
+    }
+
     @Test("A missing directory blocks the transcript fallback")
     func missingDirectoryBlocksFallback() throws {
         let planner = makePlanner(
