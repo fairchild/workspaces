@@ -39,8 +39,8 @@ to the monorepo until that lands.
 recursive tile tree, with repo overview and Ghostty underneath. Work here
 protects the layout model, terminal context, and the local state history
 continuity depends on. Restoring sessions on launch is still a default-off
-experiment, so continuity across relaunch remains a goal the foundations
-support.
+experiment; graduating it is not polish, because continuity across relaunch is
+what makes moving to a new build cheap enough to actually do (§ Succession).
 
 **Web.** `web-next` ships at folio.cloudcompute.com, embedded in the desktop
 app; the earlier `web/` dashboard is in maintenance mode and still carries live
@@ -48,6 +48,39 @@ GitHub webhook ingestion. Web work is judged by whether it makes the desktop
 loop more continuous — session continuity, cost visibility, calm. Folio's
 extraction is judged separately, on whether an outside consumer can install it
 and build against it.
+
+## Succession
+
+I am the only user, and I build this with itself. That makes moving onto each new
+version a feature rather than an operational chore. If switching costs me my
+working state I will not switch, I will keep running the old build, and the new
+one stops being used by the person it is for — which removes the reason to build
+it this way at all.
+
+The shape is a stair-step. Run the current build while the next one is assembled,
+move onto it, confirm it holds, and let it become the environment the version
+after that gets built in. Debian's unstable/testing/stable does this with built
+artifacts rather than with codelines, and that distinction matters here: what this
+needs is parallel *installs*, not parallel branches. One developer on a linear
+main can cut a candidate from a tag and install it beside the daily driver, so a
+branching model would add ceremony without answering the question.
+
+Three things make it work, and the order is the point.
+
+**Parallel installability** — two builds coexisting without fighting over
+bundle-keyed state. Largely in place.
+
+**Session portability** — a new install picks up the sessions the previous one
+left. The terminal multiplexer already holds them; what breaks it is a launch path
+that tears down sessions it did not create (#1267). This is the real work, and
+everything else waits on it.
+
+**Channels** — unstable, next, and stable as something I select. A packaging and
+appcast concern, and mostly bookkeeping once the first two hold.
+
+Portability is what makes a channel switch uneventful. Reversing the order buys a
+release process that loses working state on a schedule, which is the failure this
+section exists to avoid.
 
 ## How work gets made
 
