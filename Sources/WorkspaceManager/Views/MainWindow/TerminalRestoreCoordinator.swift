@@ -61,7 +61,8 @@ struct TerminalRestoreCoordinator: Sendable {
         let planner = TerminalRestorePlanner(
             resolveTarget: resolver.asResolver(),
             isTmuxSessionAlive: { liveNames.contains($0) },
-            isTranscriptResumable: transcriptResumability.asCheck()
+            isTranscriptResumable: transcriptResumability.asCheck(),
+            newestTranscriptID: transcriptResumability.asIdentityResolver()
         )
         return planner.plan(rows: rows, layout: layout, previousRunID: previousRunID)
     }

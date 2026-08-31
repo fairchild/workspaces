@@ -17,6 +17,28 @@ struct TmuxSessionProbeTests {
         #expect(await probe.isSessionAlive("wm-repo-abcd1234") == false)
     }
 
+    @Test("Attached client lines are counted, blank lines ignored")
+    func countsAttachedClients() {
+        #expect(TmuxSessionProbe.parseAttachedClientCount(fromListClients: "/dev/ttys001") == 1)
+        #expect(
+            TmuxSessionProbe.parseAttachedClientCount(fromListClients: "/dev/ttys001\n/dev/ttys002\n") == 2
+        )
+        #expect(TmuxSessionProbe.parseAttachedClientCount(fromListClients: "\n  \n") == 0)
+    }
+
+    @Test("An unanswered probe is unknown, not zero")
+    func unansweredProbeIsUnknown() {
+        // The distinction guards a live pane: the launch-contract repair types into
+        // a surface it believes is unattached, so "tmux did not answer" must not read
+        // as "nobody is attached".
+        #expect(TmuxSessionProbe.parseAttachedClientCount(fromListClients: nil) == nil)
+    }
+
+    @Test("Empty output from a live session is a real zero")
+    func emptyOutputIsZero() {
+        #expect(TmuxSessionProbe.parseAttachedClientCount(fromListClients: "") == 0)
+    }
+
     @Test("A launch failure (nil exit) is treated as not alive")
     func launchFailureIsNotAlive() async {
         let probe = TmuxSessionProbe(run: { _, _, _ in nil }, environment: [:])

@@ -35,6 +35,12 @@ struct GhosttyTerminalConfig {
     let environmentVariables: [String: String]
     let shellProfileModeLabel: String
 
+    /// The bare `exec tmux new-session -A …` script this surface's shell should run,
+    /// or `nil` when the surface is not tmux-backed. `command` wraps the same script
+    /// in a login shell for libghostty; this is the unwrapped form, safe to type into
+    /// an already-running shell when the wrapped one never arrived (#1478, #889).
+    let tmuxLaunchScript: String?
+
     init(
         launchContext: TerminalSessionLaunchContext,
         fontSize: Float32 = 13,
@@ -127,8 +133,10 @@ struct GhosttyTerminalConfig {
                     ?? Self.tmuxSupportsSessionEnvironmentFlag
             )
             self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode, command: tmuxScript)
+            self.tmuxLaunchScript = tmuxScript
         } else {
             self.command = Self.shellInvocation(shell: shell, profileMode: shellProfileMode)
+            self.tmuxLaunchScript = nil
         }
         self.shellProfileModeLabel = shellProfileMode.rawValue
         self.environmentVariables = environment
@@ -140,6 +148,7 @@ struct GhosttyTerminalConfig {
         self.fontSize = fontSize
         self.workingDirectory = FileManager.default.temporaryDirectory.path
         self.command = customCommand
+        self.tmuxLaunchScript = nil
         self.shellProfileModeLabel = "custom"
         self.environmentVariables = [
             "TERM": "xterm-256color",
@@ -307,6 +316,15 @@ struct GhosttyTerminalConfig {
             script += " \\; set-environment -t \(exactTarget) \(singleQuoted(pair.key)) \(singleQuoted(pair.value))"
         }
         return script
+    }
+
+    /// `tmuxLaunchScript` made safe to type into a shell whose state is not fully
+    /// known. The `$TMUX` test short-circuits the whole chain when the shell already
+    /// sits inside tmux, so a repair racing a launch that just attached does nothing
+    /// instead of `exec`-ing a nested tmux — which tmux refuses, taking the exec'd
+    /// shell (and the pane) down with it.
+    static func tmuxRepairScript(_ launchScript: String) -> String {
+        "[ -z \"$TMUX\" ] && \(launchScript)"
     }
 
     private static func singleQuoted(_ value: String) -> String {

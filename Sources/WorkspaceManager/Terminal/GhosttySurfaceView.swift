@@ -294,6 +294,25 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         surface != nil
     }
 
+    /// Whether a keystroke has reached this surface since it was created. Restore's
+    /// launch repair types into a pane it believes is an untouched shell, and the
+    /// window between its last observation and that write is where someone can start
+    /// an editor or an agent. A surface that has heard from the keyboard is no longer
+    /// a safe target, whatever tmux says about it.
+    private(set) var hasReceivedUserInput = false
+
+    func noteUserInputReceived() {
+        hasReceivedUserInput = true
+    }
+
+    /// The bare `exec tmux new-session -A …` script this surface was configured to
+    /// run, or `nil` when it is not tmux-backed. Non-`nil` also means tmux resolved
+    /// on the launch PATH, which is what makes a zero-client reading actionable
+    /// rather than ambiguous — see `SurfaceStore.repairLaunchContractIfNeeded`.
+    var tmuxLaunchScript: String? {
+        terminalConfig.tmuxLaunchScript
+    }
+
     var hasProcessExited: Bool {
         guard let surface else { return false }
         return ghostty_surface_process_exited(surface)

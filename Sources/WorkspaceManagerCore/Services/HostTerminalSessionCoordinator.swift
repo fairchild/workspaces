@@ -127,6 +127,16 @@ extension HostTerminalSessionKey: Codable {
 }
 
 public struct HostTerminalSession: Identifiable, Hashable, Sendable {
+    /// What the surface does with `initialCommand` once it reaches the shell.
+    ///
+    /// Restore uses `.prefill`: reconnecting to a live process is free, but starting
+    /// an agent costs memory and tokens, so the command waits at the prompt for the
+    /// user to press Return. `.execute` is for callers that mean "run this now".
+    public enum InitialCommandDelivery: String, Codable, Sendable, Hashable {
+        case prefill
+        case execute
+    }
+
     public let id: UUID
     public let key: HostTerminalSessionKey
     public let directoryPath: String
@@ -138,6 +148,9 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
     /// through the login-shell/tmux path (correct PATH, hook env) and does not mark the
     /// session remote. `nil` for a plain shell.
     public let initialCommand: String?
+    /// Whether `initialCommand` is typed and left at the prompt or typed and run.
+    /// Meaningless when `initialCommand` is `nil`.
+    public let initialCommandDelivery: InitialCommandDelivery
     /// Chosen tmux session name when it must differ from the directory derivation:
     /// a split pane's disambiguated name, or the probed name a restore reattaches
     /// to. `nil` means the default directory-derived name.
@@ -163,6 +176,7 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
         directory: URL,
         customCommand: String? = nil,
         initialCommand: String? = nil,
+        initialCommandDelivery: InitialCommandDelivery = .execute,
         tmuxSessionNameOverride: String? = nil
     ) {
         self.id = id
@@ -170,6 +184,7 @@ public struct HostTerminalSession: Identifiable, Hashable, Sendable {
         self.directoryPath = Self.normalize(directory).path
         self.customCommand = customCommand
         self.initialCommand = initialCommand
+        self.initialCommandDelivery = initialCommandDelivery
         self.tmuxSessionNameOverride = tmuxSessionNameOverride
     }
 
@@ -358,6 +373,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
         key: HostTerminalSessionKey,
         directory: URL,
         initialCommand: String? = nil,
+        initialCommandDelivery: HostTerminalSession.InitialCommandDelivery = .execute,
         tmuxSessionNameOverride: String? = nil,
         adoptedID: UUID? = nil
     ) -> HostTerminalSession {
@@ -372,6 +388,7 @@ public struct HostTerminalSessionCoordinator: Sendable {
             key: key,
             directory: directory,
             initialCommand: initialCommand,
+            initialCommandDelivery: initialCommandDelivery,
             tmuxSessionNameOverride: tmuxSessionNameOverride
         )
         sessions.append(session)

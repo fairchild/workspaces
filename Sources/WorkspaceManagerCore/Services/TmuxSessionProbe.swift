@@ -64,6 +64,49 @@ public struct TmuxSessionProbe: Sendable {
         return exitCode == 0
     }
 
+    /// True when the tmux binary itself answers. Distinguishes "tmux says no such
+    /// session" from "tmux never answered", which `isSessionAlive` alone cannot: it
+    /// collapses a timeout, a launch failure, and a real absent session into one
+    /// `false`. A caller about to act on absence has to know which it got.
+    public func isCommandAvailable() async -> Bool {
+        await runForOutput("/usr/bin/env", ["tmux", "-V"], environment) != nil
+    }
+
+    /// How many clients are attached to `tmuxSessionName`, or `nil` when tmux did
+    /// not answer — a failed command, a missing binary, or a session that is not
+    /// there to have clients.
+    ///
+    /// This is restore's launch-contract signal (#1478). A tmux-mode surface execs
+    /// `new-session -A`, which must leave the session live *and* attached, so a
+    /// confirmed zero means the surface never ran its launch command. The `nil` is
+    /// load-bearing: a caller that repairs on "not attached" would, on a transient
+    /// probe failure, type a shell command into a pane that is actually attached and
+    /// running an agent. Unknown must never be read as zero.
+    public func attachedClientCount(forSessionNamed tmuxSessionName: String) async -> Int? {
+        let output = await runForOutput(
+            "/usr/bin/env",
+            [
+                "tmux", "-L", Self.socketLabel, "list-clients",
+                "-t", "=\(tmuxSessionName)",
+                "-F", "#{client_name}",
+            ],
+            environment
+        )
+        return Self.parseAttachedClientCount(fromListClients: output)
+    }
+
+    /// Counts non-empty lines of `tmux list-clients -F '#{client_name}'` output.
+    /// Empty output is a real zero (a live session nobody is attached to); `nil`
+    /// output is "tmux did not answer" and stays `nil`.
+    static func parseAttachedClientCount(fromListClients output: String?) -> Int? {
+        guard let output else { return nil }
+        return
+            output
+            .split(separator: "\n", omittingEmptySubsequences: true)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .count
+    }
+
     /// The foreground command running in the session's active pane (its
     /// `pane_current_command`, e.g. `vim`, `python`, `zsh`), or `nil` when the
     /// session is not live or tmux is unavailable. Names what a plain terminal tab
