@@ -7,16 +7,12 @@ options:
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "26.6"
-# Signing identity stays out of the committed spec: put your team in an
-# optional, gitignored ios/Local.yml —
-#   settings:
-#     base:
-#       DEVELOPMENT_TEAM: <your team id>
-include:
-  - path: Local.yml
-    optional: true
+# Signing identity stays out of the committed spec: export DEVELOPMENT_TEAM
+# before generating (`DEVELOPMENT_TEAM=<team id> xcodegen`). Unset, simulator
+# builds work unsigned and device builds fail at signing with a clear error.
 settings:
   base:
+    DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
     SWIFT_VERSION: "6.0"
 targets:
   WorkSpacesMobile:

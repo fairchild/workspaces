@@ -85,6 +85,5 @@ web/test-results/
 CODEX_REPORT.md
 
 # iOS local artifacts
-ios/Local.yml
 ios/build/
 ios/WorkSpacesMobile.xcodeproj/

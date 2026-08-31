@@ -41,9 +41,11 @@ final class NodeStore: ObservableObject {
         node = Self.read()
     }
 
-    func save(_ node: Node) {
-        let data = try? JSONEncoder().encode(node)
-        guard let data else { return }
+    /// Publishes the new node only after the Keychain write succeeds, so the
+    /// UI can never claim a pairing that won't survive relaunch.
+    @discardableResult
+    func save(_ node: Node) -> Bool {
+        guard let data = try? JSONEncoder().encode(node) else { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
@@ -52,19 +54,25 @@ final class NodeStore: ObservableObject {
         SecItemDelete(query as CFDictionary)
         var insert = query
         insert[kSecValueData as String] = data
-        insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        SecItemAdd(insert as CFDictionary, nil)
+        // Foreground-only app paired by physical possession of this device:
+        // never syncs, never migrates through backups to another device.
+        insert[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
+        guard SecItemAdd(insert as CFDictionary, nil) == errSecSuccess else { return false }
         self.node = node
+        return true
     }
 
-    func unpair() {
+    @discardableResult
+    func unpair() -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.service,
             kSecAttrAccount as String: Self.account,
         ]
-        SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { return false }
         node = nil
+        return true
     }
 
     private static func read() -> Node? {

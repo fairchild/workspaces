@@ -21,6 +21,7 @@ struct PairingView: View {
                         } label: {
                             Label("Scan QR from your Mac", systemImage: "qrcode.viewfinder")
                         }
+                        .disabled(checking)
                     } footer: {
                         Text("WorkSpaces on the Mac shows a pairing QR carrying its address and token.")
                     }
@@ -93,6 +94,7 @@ struct PairingView: View {
     }
 
     private func connect() {
+        guard !checking else { return }
         guard let url = normalizedBaseURL() else {
             error = "That doesn't look like an https URL."
             return
@@ -110,26 +112,51 @@ struct PairingView: View {
                     error = "The node answered, but not like a WorkSpaces node."
                     return
                 }
-                store.save(candidate)
-                await Self.postAck(candidate)
+                // The ack doubles as token proof: healthz is deliberately
+                // unauthenticated, so the pairing is only real once the node
+                // has accepted this token (codex review).
+                switch await Self.postAck(candidate) {
+                case .accepted:
+                    if !store.save(candidate) {
+                        error = "Couldn't store the pairing in the Keychain."
+                    }
+                case .rejected:
+                    error = "The node rejected that token."
+                case .unsupported:
+                    error = "This node doesn't support pairing yet — update WorkSpaces on the Mac."
+                case .unreachable:
+                    error = "Reached the node, but the pairing handshake failed. Try again."
+                }
             } catch {
                 self.error = "Couldn't reach the node. On the tailnet? \(error.localizedDescription)"
             }
         }
     }
 
-    /// The pairing handshake: prove token possession so the node's desktop
-    /// pairing window can flip its QR into a confirmation. Best-effort —
-    /// the pairing stands even if the ack never lands.
-    private static func postAck(_ node: Node) async {
+    private enum AckOutcome {
+        case accepted, rejected, unsupported, unreachable
+    }
+
+    /// The pairing handshake: proves token possession (healthz can't) and
+    /// flips the node's desktop QR into its confirmation.
+    private static func postAck(_ node: Node) async -> AckOutcome {
         var components = URLComponents(url: node.baseURL, resolvingAgainstBaseURL: false)!
         components.path = "/api/pairing/ack"
-        guard let url = components.url else { return }
+        guard let url = components.url else { return .unreachable }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try? JSONEncoder().encode(["token": node.token])
-        _ = try? await URLSession.shared.data(for: request)
+        guard
+            let (_, response) = try? await URLSession.shared.data(for: request),
+            let http = response as? HTTPURLResponse
+        else { return .unreachable }
+        switch http.statusCode {
+        case 200: return .accepted
+        case 401: return .rejected
+        case 404: return .unsupported
+        default: return .unreachable
+        }
     }
 
     /// https everywhere, with one sanctioned exception: plain http to

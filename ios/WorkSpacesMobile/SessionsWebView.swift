@@ -11,20 +11,31 @@ struct SessionsWebView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
-        configuration.websiteDataStore = .default()
+        // Ephemeral on purpose: the durable credential is the Keychain token,
+        // which re-establishes the cookie on every launch — so unpairing
+        // leaves no WebKit residue behind (codex review).
+        configuration.websiteDataStore = .nonPersistent()
         configuration.allowsInlineMediaPlayback = true
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
         webView.scrollView.contentInsetAdjustmentBehavior = .automatic
         webView.load(URLRequest(url: node.signInURL()))
         context.coordinator.lastReloadToken = reloadToken
+        context.coordinator.lastNode = node
         return webView
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
+        if context.coordinator.lastNode != node {
+            context.coordinator.lastNode = node
+            webView.load(URLRequest(url: node.signInURL()))
+            return
+        }
         if context.coordinator.lastReloadToken != reloadToken {
             context.coordinator.lastReloadToken = reloadToken
-            webView.load(URLRequest(url: node.signInURL()))
+            // Reload the current page; replaying the token-bearing sign-in
+            // URL here would be needless credential exposure (codex review).
+            webView.reload()
         }
     }
 
@@ -32,5 +43,6 @@ struct SessionsWebView: UIViewRepresentable {
 
     final class Coordinator {
         var lastReloadToken = 0
+        var lastNode: Node?
     }
 }
