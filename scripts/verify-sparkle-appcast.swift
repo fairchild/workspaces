@@ -108,6 +108,32 @@ func firstText(localName: String, in document: XMLDocument) throws -> String? {
     return nodes.first?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
+/// Markers that mean generate-sparkle-appcast.sh passed markdown through
+/// unrendered. Sparkle shows the item description verbatim, so whatever is left
+/// here is what a user reads in the update dialog.
+let unrenderedMarkdownMarkers: [(marker: String, syntax: String)] = [
+    ("**", "**bold**"),
+    ("`", "`code`"),
+    ("](", "[text](url)"),
+]
+
+func requireRenderedReleaseNotes(in document: XMLDocument) throws {
+    let nodes = try document.nodes(forXPath: "//*[local-name()='item']/*[local-name()='description']")
+    guard let notes = nodes.first?.stringValue,
+          !notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+        throw VerifyError.message("Appcast item has no release-notes <description>")
+    }
+
+    for (marker, syntax) in unrenderedMarkdownMarkers where notes.contains(marker) {
+        throw VerifyError.message(
+            "Release notes contain unrendered markdown \(syntax) — Sparkle shows it literally. "
+                + "Render it in generate-sparkle-appcast.sh, or keep the CHANGELOG.md section within "
+                + "the subset that script renders."
+        )
+    }
+}
+
 func requireEqual(_ actual: String?, _ expected: String?, label: String) throws {
     guard let expected else { return }
     guard actual == expected else {
@@ -152,6 +178,7 @@ func verify() throws {
         args.expectedShortVersion,
         label: "sparkle:shortVersionString"
     )
+    try requireRenderedReleaseNotes(in: document)
 
     guard let signatureText,
           let signature = Data(base64Encoded: signatureText)
