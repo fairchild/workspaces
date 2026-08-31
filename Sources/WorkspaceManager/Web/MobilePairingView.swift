@@ -18,12 +18,19 @@ final class MobilePairingModel: ObservableObject {
     enum Phase: Equatable {
         case starting
         case ready(qr: NSImage, origin: String)
+        case acked(at: Date, agent: String)
         case failed(String)
     }
 
     @Published private(set) var phase: Phase = .starting
 
     private let server: any WebNextServerServiceProtocol
+    private var lastReady: (qr: NSImage, origin: String)?
+    /// Only an ack newer than the QR's own display time flips the window, so
+    /// a pairing recorded before this window opened never claims it.
+    private var qrShownAt = Date.distantFuture
+    private var ackURL: URL?
+    private var pollTask: Task<Void, Never>?
 
     init(server: any WebNextServerServiceProtocol) {
         self.server = server
@@ -60,7 +67,57 @@ final class MobilePairingModel: ObservableObject {
             phase = .failed("The sign-in token is not available yet — try again in a moment.")
             return
         }
-        phase = .ready(qr: qr, origin: origin)
+        lastReady = (qr: qr, origin: origin)
+        ackURL = URL(string: "/api/pairing/ack", relativeTo: localURL)?.absoluteURL
+        showQR()
+    }
+
+    /// (Re)display the QR and watch the handshake endpoint for an ack newer
+    /// than this display. The confirmation never dismisses itself.
+    func showQR() {
+        guard let ready = lastReady else { return }
+        qrShownAt = Date()
+        phase = .ready(qr: ready.qr, origin: ready.origin)
+        startPollingForAck()
+    }
+
+    func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
+    }
+
+    private func startPollingForAck() {
+        stopPolling()
+        guard let ackURL else { return }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let self, case .ready = self.phase else { return }
+                guard let ack = await Self.fetchAck(from: ackURL) else { continue }
+                if ack.at > self.qrShownAt {
+                    self.phase = .acked(at: ack.at, agent: ack.agent)
+                    return
+                }
+            }
+        }
+    }
+
+    private struct AckPayload: Decodable {
+        let pairedAt: String?
+        let userAgent: String?
+    }
+
+    private static func fetchAck(from url: URL) async -> (at: Date, agent: String)? {
+        guard
+            let (data, response) = try? await URLSession.shared.data(from: url),
+            (response as? HTTPURLResponse)?.statusCode == 200,
+            let payload = try? JSONDecoder().decode(AckPayload.self, from: data),
+            let pairedAt = payload.pairedAt
+        else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let at = formatter.date(from: pairedAt) else { return nil }
+        return (at, payload.userAgent ?? "")
     }
 
     /// Mirrors EmbeddedWebNextModel's backstop: outlast the service's own
@@ -109,6 +166,7 @@ final class MobilePairingModel: ObservableObject {
 }
 
 struct MobilePairingView: View {
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var model: MobilePairingModel
 
     init(server: any WebNextServerServiceProtocol) {
@@ -137,6 +195,21 @@ struct MobilePairingView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 serveHint
+            case .acked(let at, let agent):
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 56))
+                    .foregroundStyle(.green)
+                    .frame(width: 280, height: 120)
+                Text("Phone paired")
+                    .font(.title3.weight(.semibold))
+                Text(ackCaption(at: at, agent: agent))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button("Show QR Again") { model.showQR() }
+                    Button("Done") { dismiss() }
+                        .keyboardShortcut(.defaultAction)
+                }
             case .failed(let reason):
                 Image(systemName: "qrcode")
                     .font(.system(size: 56))
@@ -155,6 +228,13 @@ struct MobilePairingView: View {
         .frame(width: 360)
         .background(NonRestorableWindowMarker())
         .task { await model.activate() }
+        .onDisappear { model.stopPolling() }
+    }
+
+    private func ackCaption(at: Date, agent: String) -> String {
+        let time = at.formatted(date: .omitted, time: .shortened)
+        let device = agent.split(separator: " ").first.map(String.init) ?? ""
+        return device.isEmpty ? time : "\(time) · \(device)"
     }
 
     /// tailscale serve is one-time node state, deliberately not mutated by the

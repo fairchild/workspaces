@@ -305,6 +305,13 @@ describe("middleware local mode behind a trusted proxy", () => {
 		expect(response.headers.get("location")).toBe("https://mac.tail.ts.net/sign-in");
 	});
 
+	it("serves /api/pairing/ack pre-cookie — the handshake self-authenticates", async () => {
+		const response = await middleware(proxiedRequestFor("/api/pairing/ack", "https"));
+		expect(response.headers.get("x-middleware-next")).toBe("1");
+		const nested = await middleware(proxiedRequestFor("/api/pairing/ack/deeper", "https"));
+		expect(nested.status).toBe(401);
+	});
+
 	it("403s a userinfo-prefixed Host that would canonicalize onto the allowlist", async () => {
 		const request = new NextRequest("https://mac.tail.ts.net/api/repos", {
 			headers: { host: "attacker@mac.tail.ts.net", "x-forwarded-proto": "https" },

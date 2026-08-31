@@ -28,7 +28,11 @@ const PUBLIC_PATHS = new Set(["/sign-in", "/api/auth"]);
 // /api/healthz is the embedded-native readiness probe (#987) — it must answer
 // before any sign-in exists, in every auth mode. Exact-match only, so a
 // future route nested under it can't silently inherit the auth bypass.
-const PUBLIC_EXACT_PATHS = new Set(["/api/healthz"]);
+// /api/pairing/ack is the pairing handshake: POST self-authenticates with
+// the minted token in its body, GET returns only the latest ack timestamp
+// (the desktop pairing window polls it pre-cookie). Exact-match, like
+// healthz, so nested paths never inherit the bypass.
+const PUBLIC_EXACT_PATHS = new Set(["/api/healthz", "/api/pairing/ack"]);
 
 function isPublic(pathname: string): boolean {
 	if (PUBLIC_EXACT_PATHS.has(pathname)) return true;
