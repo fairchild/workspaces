@@ -113,7 +113,7 @@ describe("middleware local mode", () => {
 		);
 		expect(response.status).toBe(403);
 		await expect(response.json()).resolves.toEqual({
-			error: "local mode only accepts localhost or 127.0.0.1 Host headers",
+			error: "local mode only accepts loopback or allowlisted Host headers",
 		});
 	});
 

@@ -336,14 +336,12 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         let readEnd = pipeFDs[0]
         let writeEnd = pipeFDs[1]
 
-        var environment = ProcessInfo.processInfo.environment
-        environment["PORT"] = String(configuration.port)
-        environment["WEB_NEXT_DATA_DIR"] = configuration.dataDir.path
-        let extraLocalOrigins = configuration.extraLocalOriginsProvider()
-        if !extraLocalOrigins.isEmpty {
-            environment["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] =
-                extraLocalOrigins.joined(separator: ",")
-        }
+        let environment = Self.childEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            port: configuration.port,
+            dataDir: configuration.dataDir.path,
+            extraLocalOrigins: configuration.extraLocalOriginsProvider()
+        )
 
         let pid: pid_t
         do {
@@ -366,6 +364,27 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         close(writeEnd)
         startLogRedactionReader(readEnd: readEnd, logFD: logFD)
         return pid
+    }
+
+    /// The child's environment. The service is the sole authority over the
+    /// remote-origin surface: with no origins from the provider, any ambient
+    /// WEB_NEXT_EXTRA_LOCAL_ORIGINS inherited from the launching shell is
+    /// stripped — "pairing disabled" always means a loopback-only child.
+    public static func childEnvironment(
+        base: [String: String],
+        port: Int,
+        dataDir: String,
+        extraLocalOrigins: [String]
+    ) -> [String: String] {
+        var environment = base
+        environment["PORT"] = String(port)
+        environment["WEB_NEXT_DATA_DIR"] = dataDir
+        if extraLocalOrigins.isEmpty {
+            environment.removeValue(forKey: "WEB_NEXT_EXTRA_LOCAL_ORIGINS")
+        } else {
+            environment["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] = extraLocalOrigins.joined(separator: ",")
+        }
+        return environment
     }
 
     /// Streams `readEnd` to `logFD`, redacting any `token=<value>` occurrence

@@ -287,6 +287,23 @@ struct WebNextServerServiceTests {
         }
     }
 
+    @Test("childEnvironment is the sole authority over the remote-origin surface")
+    func childEnvironmentStripsAmbientOrigins() {
+        let ambient = [
+            "WEB_NEXT_EXTRA_LOCAL_ORIGINS": "https://ambient.example",
+            "HOME": "/x",
+        ]
+        let stripped = WebNextServerService.childEnvironment(
+            base: ambient, port: 3140, dataDir: "/data", extraLocalOrigins: [])
+        #expect(stripped["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] == nil)
+        #expect(stripped["HOME"] == "/x")
+
+        let set = WebNextServerService.childEnvironment(
+            base: ambient, port: 3140, dataDir: "/data",
+            extraLocalOrigins: ["https://a.example", "https://b.example"])
+        #expect(set["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] == "https://a.example,https://b.example")
+    }
+
     @Test("configured extra local origins reach the child as WEB_NEXT_EXTRA_LOCAL_ORIGINS")
     func extraLocalOriginsInjected() async throws {
         let fixture = try Fixture()

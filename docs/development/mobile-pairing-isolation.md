@@ -7,7 +7,7 @@ depth, the embedded web-next server is loopback-only and the desktop app
 exposes no pairing surface — byte-identical behavior to a build that never
 had the feature.
 
-**Staleness test:** `rg -l "MobilePairingFeature|WEB_NEXT_EXTRA_LOCAL_ORIGINS" Sources web-next/src`
+**Staleness test:** `rg -l "MobilePairingFeature|WEB_NEXT_EXTRA_LOCAL_ORIGINS|parseExtraLocalOrigins|localRequestOrigin" Sources web-next scripts`
 must list exactly the integration points named below; anything new must check
 the same gates.
 
@@ -43,9 +43,17 @@ Integration points to unwind (each is a few lines, marked by the gate call):
   so runtime-disabled shows a policy notice; forks delete the scene block)
 - `Sources/WorkspaceManager/App/WebNextServerSettings.swift` — the
   `extraLocalOriginsProvider` closure (returns `[]` when gated off)
+- `Sources/WorkspaceManagerCore/Services/WebNextServerService.swift` —
+  `childEnvironment` (the sole authority: strips ambient
+  `WEB_NEXT_EXTRA_LOCAL_ORIGINS` when the provider yields none, so an
+  exported shell variable cannot re-enable the surface behind a disabled gate)
+- `web-next/src/lib/auth/config.ts` — `parseExtraLocalOrigins` /
+  `localRequestOrigin` (the gate itself; inert with the env var unset)
 - `web-next/src/middleware.ts` — the extra-origins branch of
   `localRequestOrigin` and the sign-in bounce (both no-ops when
   `WEB_NEXT_EXTRA_LOCAL_ORIGINS` is unset)
+- `web-next/scripts/start-local.ts` — the proxy sign-in printout (prints
+  nothing when unset)
 
 ## What the feature never does
 
