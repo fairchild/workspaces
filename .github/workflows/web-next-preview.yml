@@ -46,7 +46,7 @@ jobs:
 
       - uses: pnpm/action-setup@02f6c237bd2518259fed6c71566509edfb3f2b74 # v4
         with:
-          version: 10
+          package_json_file: web-next/package.json
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
