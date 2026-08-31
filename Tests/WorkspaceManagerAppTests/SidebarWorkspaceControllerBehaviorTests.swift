@@ -750,6 +750,54 @@ struct SidebarWorkspaceControllerBehaviorTests {
         #expect(workspace.path == workspaceURL.path)
     }
 
+    // The relic case of #1441 — the record's directory is already gone, which is exactly when
+    // a person wants the tile out of the sidebar. Driven through the real `WorkspaceService`
+    // rather than the mock, because the refusal being fixed lived in the filesystem move.
+    @Test("Archiving a record whose directory is gone marks it archived at its live path")
+    @MainActor
+    func archivingRecordWithMissingDirectoryMarksItArchived() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let tempDir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let repo = Repo(name: "api", localPath: tempDir.appendingPathComponent("api", isDirectory: true))
+        let liveURL = tempDir.appendingPathComponent("workspaces/api/brisk-trail", isDirectory: true)
+        let workspace = Workspace(
+            name: "brisk-trail",
+            path: liveURL,
+            sourceRepo: repo,
+            status: .active,
+            backendIdentifier: LocalWorkspaceProvider.identifier
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+
+        let controller = SidebarWorkspaceController(
+            modelContext: context,
+            workspaceService: WorkspaceService(),
+            workspaceProviderRegistry: WorkspaceProviderRegistry(providers: [LocalWorkspaceProvider()])
+        )
+
+        try await controller.archive(workspace)
+
+        #expect(workspace.status == .archived)
+        #expect(workspace.archivedAt != nil)
+        #expect(workspace.path == liveURL.path)
+        #expect(
+            !FileManager.default.fileExists(
+                atPath: tempDir.appendingPathComponent("workspaces/.archived").path))
+
+        // The record stays coherent: no `.archived/` component means unarchive flips status
+        // in place rather than walking a level above the workspaces root.
+        try await controller.unarchive(workspace)
+
+        #expect(workspace.status == .active)
+        #expect(workspace.archivedAt == nil)
+        #expect(workspace.path == liveURL.path)
+    }
+
     @Test("Unarchiving a legacy archived workspace restores in place without a directory move")
     @MainActor
     func unarchivingLegacyArchivedWorkspaceRestoresInPlace() async throws {

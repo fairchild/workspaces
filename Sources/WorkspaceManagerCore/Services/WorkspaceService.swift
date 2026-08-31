@@ -256,8 +256,18 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
 
     /// Runs teardown lifecycle scripts, then moves the workspace directory into the
     /// `.archived/` area of the workspaces root. Returns the new archived location.
+    ///
+    /// A directory that is already gone archives as a no-op at the live path: there is nothing
+    /// to move and no teardown script left to run, so the caller marks the record archived and
+    /// its path stands. `deleteWorkspace` already reads an absent directory as work already
+    /// done; refusing here stranded exactly the relic records most in need of archiving (#1441).
+    /// `WorkspaceDirectoryArchiver.move` stays strict — it never invents a source — and a record
+    /// left at its live path restores in place, the way a pre-#661 legacy record does.
     @discardableResult
     public func archiveWorkspace(at workspaceURL: URL) async throws -> URL {
+        guard FileManager.default.fileExists(atPath: workspaceURL.path) else {
+            return workspaceURL
+        }
         try await runTeardownLifecycle(in: workspaceURL)
         let destination = WorkspaceDirectoryArchiver.archivedDestination(for: workspaceURL)
         try await WorkspaceDirectoryArchiver.move(from: workspaceURL, to: destination)
