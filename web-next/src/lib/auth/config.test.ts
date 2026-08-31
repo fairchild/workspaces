@@ -200,4 +200,10 @@ describe("extra local origins", () => {
 		expect(localRequestOrigin("mac.tail.ts.net:evil", "https", env)).toBeNull();
 		expect(localRequestOrigin("mac.tail.ts.net/path", "https", env)).toBeNull();
 	});
+
+	it("rejects userinfo and percent-encoded hosts that canonicalize onto the allowlist", () => {
+		expect(localRequestOrigin("attacker@mac.tail.ts.net", "https", env)).toBeNull();
+		expect(localRequestOrigin("%6dac.tail.ts.net", "https", env)).toBeNull();
+		expect(localRequestOrigin("mac.tail.ts.net%2f", "https", env)).toBeNull();
+	});
 });

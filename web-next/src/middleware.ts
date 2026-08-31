@@ -111,9 +111,16 @@ export async function middleware(request: NextRequest) {
 			return response;
 		}
 		if (isPublic(pathname)) return NextResponse.next();
-		return localSessionCookieValid(request.cookies.get(LOCAL_AUTH_COOKIE)?.value)
-			? NextResponse.next()
-			: unauthenticatedResponse(request);
+		if (localSessionCookieValid(request.cookies.get(LOCAL_AUTH_COOKIE)?.value)) {
+			return NextResponse.next();
+		}
+		// Unauthenticated in local mode: API callers get the same 401 JSON;
+		// a page redirects to /sign-in on the *resolved* origin, so a request
+		// proxied in over the tailnet is never bounced to the server's own
+		// loopback bind (which on the phone is the phone itself) (codex review).
+		return isApiPath(pathname)
+			? unauthorizedJson()
+			: NextResponse.redirect(new URL("/sign-in", localOrigin));
 	}
 
 	if (isPublic(pathname)) return NextResponse.next();

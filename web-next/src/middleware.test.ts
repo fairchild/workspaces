@@ -298,4 +298,17 @@ describe("middleware local mode behind a trusted proxy", () => {
 		expect(cookie).toContain("web-next-local-session=local-secret");
 		expect(cookie).not.toContain("Secure");
 	});
+
+	it("redirects an unauthenticated page to /sign-in on the proxied origin, not loopback", async () => {
+		const response = await middleware(proxiedRequestFor("/", "https"));
+		expect(response.status).toBe(307);
+		expect(response.headers.get("location")).toBe("https://mac.tail.ts.net/sign-in");
+	});
+
+	it("403s a userinfo-prefixed Host that would canonicalize onto the allowlist", async () => {
+		const request = new NextRequest("https://mac.tail.ts.net/api/repos", {
+			headers: { host: "attacker@mac.tail.ts.net", "x-forwarded-proto": "https" },
+		});
+		expect((await middleware(request)).status).toBe(403);
+	});
 });
