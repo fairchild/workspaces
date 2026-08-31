@@ -6,20 +6,11 @@
  * can flip its QR into a confirmation. Self-authenticating (token in the
  * POST body, never the URL), so middleware treats it as public.
  */
-import { readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { localSignInTokenMatches } from "@/lib/auth/local-token";
 import { localModeEnabled } from "@/lib/auth/config";
-import { resolveWebNextDataDir } from "@/lib/local-data-dir";
+import { readPairingAck, writePairingAck } from "@/lib/pairing/ack-store";
 
 export const runtime = "nodejs";
-
-const ACK_FILENAME = "pairing-ack.json";
-const USER_AGENT_MAX = 120;
-
-function ackFilePath(): string {
-	return path.join(resolveWebNextDataDir(process.env), ACK_FILENAME);
-}
 
 export async function POST(request: Request): Promise<Response> {
 	if (!localModeEnabled()) {
@@ -34,11 +25,7 @@ export async function POST(request: Request): Promise<Response> {
 	if (typeof token !== "string" || !localSignInTokenMatches(token)) {
 		return Response.json({ error: "invalid pairing token" }, { status: 401 });
 	}
-	const ack = {
-		pairedAt: new Date().toISOString(),
-		userAgent: (request.headers.get("user-agent") ?? "").slice(0, USER_AGENT_MAX),
-	};
-	await writeFile(ackFilePath(), `${JSON.stringify(ack)}\n`, { mode: 0o600 });
+	await writePairingAck(request.headers.get("user-agent"), "handshake");
 	return Response.json({ ok: true });
 }
 
@@ -46,14 +33,5 @@ export async function GET(): Promise<Response> {
 	if (!localModeEnabled()) {
 		return Response.json({ error: "pairing is a local-mode feature" }, { status: 404 });
 	}
-	try {
-		const raw = await readFile(ackFilePath(), "utf8");
-		const parsed = JSON.parse(raw) as { pairedAt?: string; userAgent?: string };
-		return Response.json({
-			pairedAt: typeof parsed.pairedAt === "string" ? parsed.pairedAt : null,
-			userAgent: typeof parsed.userAgent === "string" ? parsed.userAgent : "",
-		});
-	} catch {
-		return Response.json({ pairedAt: null, userAgent: "" });
-	}
+	return Response.json(await readPairingAck());
 }

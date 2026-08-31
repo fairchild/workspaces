@@ -131,7 +131,9 @@ describe("middleware local mode", () => {
 	it("sets the local session cookie from a valid /sign-in token query", async () => {
 		const response = await middleware(localRequestFor("/sign-in?token=local-secret"));
 		expect(response.status).toBe(307);
-		expect(response.headers.get("location")).toBe("http://localhost:3100/");
+		expect(response.headers.get("location")).toBe(
+			"http://localhost:3100/api/pairing/redeemed?next=%2F",
+		);
 		expect(response.headers.get("set-cookie")).toContain(
 			"web-next-local-session=local-secret",
 		);
@@ -143,7 +145,7 @@ describe("middleware local mode", () => {
 		);
 		expect(response.status).toBe(307);
 		expect(response.headers.get("location")).toBe(
-			"http://localhost:3100/sessions/abc-123",
+			"http://localhost:3100/api/pairing/redeemed?next=%2Fsessions%2Fabc-123",
 		);
 		expect(response.headers.get("set-cookie")).toContain(
 			"web-next-local-session=local-secret",
@@ -165,7 +167,7 @@ describe("middleware local mode", () => {
 			);
 			expect(response.status, encoded).toBe(307);
 			expect(response.headers.get("location"), encoded).toBe(
-				"http://localhost:3100/",
+				"http://localhost:3100/api/pairing/redeemed?next=%2F",
 			);
 		}
 	});
@@ -186,7 +188,7 @@ describe("middleware local mode", () => {
 			);
 			expect(response.status, target).toBe(307);
 			expect(response.headers.get("location"), target).toBe(
-				"http://localhost:3100/",
+				"http://localhost:3100/api/pairing/redeemed?next=%2F",
 			);
 		}
 	});
@@ -206,7 +208,9 @@ describe("middleware local mode", () => {
 			),
 		);
 		expect(response.status).toBe(307);
-		expect(response.headers.get("location")).toBe("http://localhost:3100/");
+		expect(response.headers.get("location")).toBe(
+			"http://localhost:3100/api/pairing/redeemed?next=%2F",
+		);
 	});
 
 	it("does not accept a wrong local token", async () => {
@@ -266,7 +270,9 @@ describe("middleware local mode behind a trusted proxy", () => {
 			proxiedRequestFor("/sign-in?token=local-secret"),
 		);
 		expect(response.status).toBe(307);
-		expect(response.headers.get("location")).toBe("https://mac.tail.ts.net/");
+		expect(response.headers.get("location")).toBe(
+			"https://mac.tail.ts.net/api/pairing/redeemed?next=%2F",
+		);
 		const cookie = response.headers.get("set-cookie") ?? "";
 		expect(cookie).toContain("web-next-local-session=local-secret");
 		expect(cookie).toContain("Secure");
