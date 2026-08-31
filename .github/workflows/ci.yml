@@ -142,6 +142,15 @@ jobs:
       - name: Build (release, unsigned bundle)
         run: ./scripts/build-release.sh --no-sign
 
+      # The bundling step above is fail-open on its resource copies — a missing
+      # Ghostty share dir warns, an SPM copy failure is swallowed — so building
+      # clean says nothing about what landed in the bundle. These assertions are
+      # the ones that do, and until now they only ran after signing, which meant a
+      # resource-layout break passed CI and failed the release minutes later
+      # (#1305). Nothing in this mode needs a secret or a signature.
+      - name: Verify unsigned bundle structure
+        run: ./scripts/verify-release-bundle.sh --structure-only build/WorkSpaces.app
+
       # Proves the release perf gate can execute on this runner. Absent uv made
       # it exit 127 during v0.24.0, and a release rather than a PR is where that
       # surfaced.
