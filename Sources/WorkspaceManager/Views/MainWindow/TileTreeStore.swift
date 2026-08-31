@@ -269,6 +269,7 @@ final class TileTreeStore: ObservableObject {
         key: HostTerminalSessionKey,
         directory: URL,
         initialCommand: String? = nil,
+        initialCommandDelivery: HostTerminalSession.InitialCommandDelivery = .prefill,
         tmuxSessionNameOverride: String? = nil,
         adoptedHostSessionID: UUID? = nil
     ) -> HostTerminalSession {
@@ -276,6 +277,7 @@ final class TileTreeStore: ObservableObject {
             key: key,
             directory: directory,
             initialCommand: initialCommand,
+            initialCommandDelivery: initialCommandDelivery,
             tmuxSessionNameOverride: tmuxSessionNameOverride,
             adoptedID: adoptedHostSessionID
         )

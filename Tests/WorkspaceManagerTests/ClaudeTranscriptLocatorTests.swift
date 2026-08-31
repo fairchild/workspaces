@@ -3,6 +3,43 @@ import Testing
 
 @testable import WorkspaceManagerCore
 
+@Suite("ClaudeTranscriptIdentityRecovery")
+struct ClaudeTranscriptIdentityRecoveryTests {
+    private func makeResumability(
+        transcripts: [String],
+        home: URL = URL(fileURLWithPath: "/Users/test", isDirectory: true)
+    ) -> ClaudeTranscriptResumability {
+        ClaudeTranscriptResumability(
+            environment: [:],
+            homeDirectory: home,
+            fileExists: { _ in true },
+            transcriptIDsNewestFirst: { _ in transcripts }
+        )
+    }
+
+    @Test("The newest unclaimed transcript is the recovered identity")
+    func newestUnclaimedWins() {
+        let resumability = makeResumability(transcripts: ["newest", "middle", "oldest"])
+        #expect(resumability.newestTranscriptID(cwd: "/repo") == "newest")
+        #expect(resumability.newestTranscriptID(cwd: "/repo", claimed: ["newest"]) == "middle")
+        #expect(
+            resumability.newestTranscriptID(cwd: "/repo", claimed: ["newest", "middle"]) == "oldest"
+        )
+    }
+
+    @Test("A directory whose transcripts are all claimed recovers nothing")
+    func exhaustedDirectoryRecoversNothing() {
+        let resumability = makeResumability(transcripts: ["only"])
+        #expect(resumability.newestTranscriptID(cwd: "/repo", claimed: ["only"]) == nil)
+    }
+
+    @Test("A directory with no transcripts recovers nothing")
+    func emptyDirectoryRecoversNothing() {
+        let resumability = makeResumability(transcripts: [])
+        #expect(resumability.newestTranscriptID(cwd: "/repo") == nil)
+    }
+}
+
 @Suite("ClaudeTranscriptLocator")
 struct ClaudeTranscriptLocatorTests {
     // Real cwd → encoded-dir pairs pulled from live ~/.claude/projects transcripts.

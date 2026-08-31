@@ -294,6 +294,14 @@ final class GhosttySurfaceView: NSView, RetirementClosableSurface {
         surface != nil
     }
 
+    /// The bare `exec tmux new-session -A …` script this surface was configured to
+    /// run, or `nil` when it is not tmux-backed. Non-`nil` also means tmux resolved
+    /// on the launch PATH, which is what makes a zero-client reading actionable
+    /// rather than ambiguous — see `SurfaceStore.repairLaunchContractIfNeeded`.
+    var tmuxLaunchScript: String? {
+        terminalConfig.tmuxLaunchScript
+    }
+
     var hasProcessExited: Bool {
         guard let surface else { return false }
         return ghostty_surface_process_exited(surface)

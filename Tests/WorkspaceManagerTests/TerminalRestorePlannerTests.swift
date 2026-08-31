@@ -55,14 +55,24 @@ struct TerminalRestorePlannerTests {
         },
         tmuxAlive: @escaping TerminalRestorePlanner.TmuxLivenessProbe = { _ in false },
         transcriptResumable: @escaping TerminalRestorePlanner.TranscriptResumabilityCheck = { _, _ in false },
-        directoryExists: @escaping TerminalRestorePlanner.DirectoryExistenceCheck = { _ in true }
+        directoryExists: @escaping TerminalRestorePlanner.DirectoryExistenceCheck = { _ in true },
+        newestTranscriptID: @escaping TerminalRestorePlanner.TranscriptIdentityResolver = { _, _ in nil }
     ) -> TerminalRestorePlanner {
         TerminalRestorePlanner(
             resolveTarget: resolve,
             isTmuxSessionAlive: tmuxAlive,
             isTranscriptResumable: transcriptResumable,
-            directoryExists: directoryExists
+            directoryExists: directoryExists,
+            newestTranscriptID: newestTranscriptID
         )
+    }
+
+    /// A resolver over a fixed newest-first transcript list per directory, skipping
+    /// ids an earlier surface already claimed.
+    private func transcriptResolver(
+        _ byDirectory: [String: [String]]
+    ) -> TerminalRestorePlanner.TranscriptIdentityResolver {
+        { cwd, claimed in byDirectory[cwd]?.first { !claimed.contains($0) } }
     }
 
     // MARK: Tests
@@ -85,6 +95,73 @@ struct TerminalRestorePlannerTests {
         let planner = makePlanner(resolve: { _ in nil })
         let plan = planner.plan(rows: [makeRow()], layout: nil)
         #expect(plan.surfaces.isEmpty)
+    }
+
+    @Test("A row that never recorded an agent session resumes its directory's newest transcript")
+    func unrecordedIdentityFallsBackToNewestTranscript() throws {
+        // The #889 shape: the surface launched without its hook environment, so no
+        // event ever carried an id. The directory still holds the conversation.
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": ["newest", "older"]])
+        )
+        let plan = planner.plan(rows: [makeRow()], layout: nil)
+        let surface = try #require(plan.surfaces.first)
+        #expect(surface.action == .resumeClaude(agentSessionID: "newest"))
+        #expect(surface.directory == URL(fileURLWithPath: "/repo"))
+    }
+
+    @Test("Two rows sharing a directory take different transcripts")
+    func sharedDirectoryRowsTakeDistinctTranscripts() throws {
+        // Resuming one conversation into two panes would have both agents writing the
+        // same transcript, so the second surface takes the next-newest instead.
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": ["newest", "older"]])
+        )
+        let plan = planner.plan(rows: [makeRow(), makeRow()], layout: nil)
+        #expect(plan.surfaces.count == 2)
+        #expect(plan.surfaces[0].action == .resumeClaude(agentSessionID: "newest"))
+        #expect(plan.surfaces[1].action == .resumeClaude(agentSessionID: "older"))
+    }
+
+    @Test("A directory with one transcript and two rows resumes only the first")
+    func sharedDirectoryExhaustsTranscripts() throws {
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": ["only"]])
+        )
+        let plan = planner.plan(rows: [makeRow(), makeRow()], layout: nil)
+        #expect(plan.surfaces[0].action == .resumeClaude(agentSessionID: "only"))
+        #expect(plan.surfaces[1].action == .freshShell)
+    }
+
+    @Test("A recorded id an earlier surface already claimed is not handed out twice")
+    func recordedIdentityIsNotReused() throws {
+        let shared = "claude-session-shared"
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            newestTranscriptID: transcriptResolver(["/repo": [shared]])
+        )
+        let rows = [
+            makeRow(agentSessionID: shared, agentKind: "claudeCode", agentCwd: "/repo"),
+            makeRow(agentSessionID: shared, agentKind: "claudeCode", agentCwd: "/repo"),
+        ]
+        let plan = planner.plan(rows: rows, layout: nil)
+        #expect(plan.surfaces[0].action == .resumeClaude(agentSessionID: shared))
+        #expect(plan.surfaces[1].action == .freshShell)
+    }
+
+    @Test("A missing directory blocks the transcript fallback")
+    func missingDirectoryBlocksFallback() throws {
+        let planner = makePlanner(
+            transcriptResumable: { _, _ in true },
+            directoryExists: { _ in false },
+            newestTranscriptID: transcriptResolver(["/repo": ["newest"]])
+        )
+        let plan = planner.plan(rows: [makeRow()], layout: nil)
+        let surface = try #require(plan.surfaces.first)
+        #expect(surface.action == .freshShell)
     }
 
     @Test("Live tmux session reattaches and takes precedence over the resume rung")

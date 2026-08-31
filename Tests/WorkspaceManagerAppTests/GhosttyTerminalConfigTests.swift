@@ -24,6 +24,52 @@ struct GhosttyTerminalConfigTests {
         )
 
         #expect(config.command == "/bin/zsh --login")
+        #expect(config.tmuxLaunchScript == nil)
+    }
+
+    @Test("tmux mode exposes the bare attach script for launch-contract repair")
+    func tmuxModeExposesBareLaunchScript() throws {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_HOST_SESSION_ID": "host-session-1",
+            ],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+
+        // The repair types this into an already-running shell, so it must be the
+        // unwrapped script — `exec tmux …`, not a nested login shell — and it must
+        // still carry the tile-scoped environment the dropped config would have set.
+        let script = try #require(config.tmuxLaunchScript)
+        #expect(script.hasPrefix("exec tmux -L workspaces new-session -A -s "))
+        #expect(!script.contains("/bin/zsh"))
+        #expect(script.contains("WORKSPACES_HOST_SESSION_ID=host-session-1"))
+
+        // `command` is the same script wrapped for libghostty, so it quotes the
+        // script rather than containing it verbatim. Both must name one session.
+        let sessionName = GhosttyTerminalConfig.tmuxSessionName(for: URL(fileURLWithPath: "/tmp/repo-a"))
+        #expect(script.contains(sessionName))
+        #expect(try #require(config.command).contains(sessionName))
+    }
+
+    @Test("tmux mode without tmux available exposes no launch script")
+    func tmuxUnavailableExposesNoLaunchScript() {
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+            ],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: false
+        )
+
+        // A nil script is what tells the repair path to stay out: with no tmux on
+        // PATH, a zero-client reading says nothing about whether the launch landed.
+        #expect(config.tmuxLaunchScript == nil)
     }
 
     @Test("tmux mode launches deterministic session attach-or-create command")

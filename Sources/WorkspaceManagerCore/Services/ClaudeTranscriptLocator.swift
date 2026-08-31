@@ -50,13 +50,39 @@ public struct ClaudeTranscriptLocator: Sendable {
 public struct ClaudeTranscriptResumability: Sendable {
     private let claudeHome: URL
     private let fileExists: @Sendable (String) -> Bool
+    private let transcriptIDsNewestFirst: @Sendable (URL) -> [String]
     private let locator = ClaudeTranscriptLocator()
+
+    /// Transcript ids in one `projects/<encoded-cwd>` directory, newest first by file
+    /// modification date. Unreadable directories yield none rather than throwing:
+    /// "no transcript here" and "cannot look" mean the same thing to restore.
+    public static let defaultTranscriptIDsNewestFirst: @Sendable (URL) -> [String] = { directory in
+        let urls =
+            (try? FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+        return
+            urls
+            .filter { $0.pathExtension == "jsonl" }
+            .map { url in
+                let modified =
+                    (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                    ?? .distantPast
+                return (id: url.deletingPathExtension().lastPathComponent, modified: modified)
+            }
+            .sorted { $0.modified > $1.modified }
+            .map(\.id)
+    }
 
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        fileExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        fileExists: @escaping @Sendable (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        transcriptIDsNewestFirst: @escaping @Sendable (URL) -> [String] = defaultTranscriptIDsNewestFirst
     ) {
+        self.transcriptIDsNewestFirst = transcriptIDsNewestFirst
         if let configDir = environment["CLAUDE_CONFIG_DIR"]?.trimmingCharacters(in: .whitespacesAndNewlines),
             !configDir.isEmpty
         {
@@ -80,8 +106,24 @@ public struct ClaudeTranscriptResumability: Sendable {
         return fileExists(url.path) ? url : nil
     }
 
+    /// The newest transcript id recorded for `cwd` that no earlier surface claimed,
+    /// or `nil` when the directory holds none. Newest-first is what makes "the
+    /// conversation I was just in" the answer.
+    public func newestTranscriptID(cwd: String, claimed: Set<String> = []) -> String? {
+        let directory =
+            claudeHome
+            .appendingPathComponent("projects", isDirectory: true)
+            .appendingPathComponent(ClaudeTranscriptLocator.encodeProjectDirectory(cwd), isDirectory: true)
+        return transcriptIDsNewestFirst(directory).first { !claimed.contains($0) }
+    }
+
     /// Adapt to the planner's injected `TranscriptResumabilityCheck` closure.
     public func asCheck() -> TerminalRestorePlanner.TranscriptResumabilityCheck {
         { agentSessionID, cwd in isResumable(agentSessionID: agentSessionID, cwd: cwd) }
+    }
+
+    /// Adapt to the planner's injected `TranscriptIdentityResolver` closure.
+    public func asIdentityResolver() -> TerminalRestorePlanner.TranscriptIdentityResolver {
+        { cwd, claimed in newestTranscriptID(cwd: cwd, claimed: claimed) }
     }
 }

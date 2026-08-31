@@ -113,28 +113,34 @@ final class SurfaceStore {
         surfaces[tileID] = created
         onSurfaceCreated?(tileID)
         onTerminalSurfaceCreated?(sessionID)
-        deliverInitialCommandIfNeeded(created)
+        deliverLaunchWorkIfNeeded(created)
         return created
     }
 
-    /// Sessions whose initial command has been handed to a surface. Once per
-    /// session, never per surface: a respawned shell must not re-run the agent.
-    private var initialCommandDeliveredSessionIDs: Set<UUID> = []
+    /// Sessions whose post-creation launch work has run. Once per session, never per
+    /// surface: a respawned shell must not re-run the agent.
+    private var launchWorkDeliveredSessionIDs: Set<UUID> = []
 
-    /// Deliver `session.initialCommand` (e.g. `claude --resume <id>` from
-    /// cold-start restore) by typing it into the started shell over the
-    /// automation text bridge. libghostty's per-surface `command` and
-    /// `initial_input` configs are silently ignored for surfaces created after
-    /// the app's first (observed against the 1.3.1 pin with the struct fields
-    /// verified set at `ghostty_surface_new`), so typed delivery is the one
-    /// mechanism that reaches every surface — and it keeps the launch command
-    /// byte-identical to a plain shell, so tmux/plain behavior cannot diverge.
-    private func deliverInitialCommandIfNeeded(_ terminal: TerminalSurface) {
-        guard let initialCommand = terminal.session.initialCommand,
-            !initialCommandDeliveredSessionIDs.contains(terminal.session.id)
-        else { return }
-        initialCommandDeliveredSessionIDs.insert(terminal.session.id)
-        let sessionID = terminal.session.id
+    /// Bring a newly created terminal surface up to its launch contract, then hand it
+    /// `session.initialCommand`.
+    ///
+    /// libghostty applies `working_directory` from `ghostty_surface_config_s` and
+    /// drops `command`, `env_vars`, and `initial_input` for surfaces created in some
+    /// windows (#889). A tmux-mode surface that loses its `command` comes up as a
+    /// bare login shell beside the session it was supposed to attach, holding none of
+    /// its tile-scoped environment — which is why a restored tile looks empty and why
+    /// its agent cannot report identity afterwards (#1478).
+    ///
+    /// So the surface is verified against tmux, repaired by typing its launch script
+    /// when the launch lost, and only then handed the initial command. Verifying
+    /// first keeps the fast path's win: typed delivery is visible to the user and
+    /// races shell startup, so it is worth paying only when the launch actually lost.
+    private func deliverLaunchWorkIfNeeded(_ terminal: TerminalSurface) {
+        let session = terminal.session
+        let tmuxLaunchScript = terminal.surfaceView.tmuxLaunchScript
+        guard tmuxLaunchScript != nil || session.initialCommand != nil else { return }
+        guard !launchWorkDeliveredSessionIDs.contains(session.id) else { return }
+        launchWorkDeliveredSessionIDs.insert(session.id)
 
         Task { @MainActor [weak self, weak terminal] in
             // Wait for the surface's shell to come alive, then settle briefly so
@@ -145,26 +151,103 @@ final class SurfaceStore {
                 try? await Task.sleep(for: .milliseconds(250))
             }
             try? await Task.sleep(for: .milliseconds(1500))
-            // The command reached no shell unless both bridge calls succeed. On any
-            // failure (surface evicted mid-poll, dead surface, dropped write), un-mark
-            // the session so a recreated surface retries — nothing ran, so a retry
-            // cannot double-run the agent.
-            let submitted: Bool
-            if let terminal {
-                submitted =
-                    GhosttySurfaceTextInputBridge.writeAutomationText(
-                        into: terminal.surfaceView, text: initialCommand)
-                    && GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
-            } else {
-                submitted = false
+
+            // Surface evicted mid-poll: nothing ran, so un-mark and let a recreated
+            // surface retry from the top.
+            guard let terminal else {
+                self?.launchWorkDeliveredSessionIDs.remove(session.id)
+                return
             }
-            if !submitted {
-                self?.initialCommandDeliveredSessionIDs.remove(sessionID)
+
+            if let tmuxLaunchScript {
+                await self?.repairLaunchContractIfNeeded(
+                    terminal: terminal,
+                    session: session,
+                    tmuxLaunchScript: tmuxLaunchScript
+                )
             }
-            log.info(
-                "[SurfaceStore] initial command \(submitted ? "delivered" : "DROPPED (will retry on a new surface)", privacy: .public) for session \(sessionID.uuidString, privacy: .public)"
-            )
+
+            guard let initialCommand = session.initialCommand else { return }
+            self?.deliverInitialCommand(initialCommand, to: terminal, session: session)
         }
+    }
+
+    /// Attach a tmux-backed surface to its session when the launch command never ran.
+    ///
+    /// A tmux-mode surface execs `new-session -A`, so a live session with at least one
+    /// attached client is the observable proof the launch landed. Zero clients means
+    /// it did not, and typing the same script into the bare shell reaches the same
+    /// state — environment included, because the script carries the tile-scoped pairs
+    /// as `-e` and `set-environment` arguments.
+    ///
+    /// Repairs only on evidence, never on doubt. A live session is repaired solely on
+    /// a *confirmed* zero-client reading: an unanswered probe leaves the surface
+    /// alone, because typing a shell command into a pane that is in fact attached
+    /// would inject it into whatever agent is running there. A session that is not
+    /// alive at all needs no such care — `new-session -A` will create it.
+    private func repairLaunchContractIfNeeded(
+        terminal: TerminalSurface,
+        session: HostTerminalSession,
+        tmuxLaunchScript: String
+    ) async {
+        let sessionName = session.effectiveTmuxSessionName
+        let probe = TmuxSessionProbe()
+        if await probe.isSessionAlive(sessionName) {
+            guard let attached = await probe.attachedClientCount(forSessionNamed: sessionName) else {
+                log.notice(
+                    "[SurfaceStore] launch contract unverifiable for session \(session.id.uuidString, privacy: .public): tmux \(sessionName, privacy: .public) did not answer; leaving the surface alone"
+                )
+                return
+            }
+            guard attached == 0 else { return }
+        }
+
+        log.notice(
+            "[SurfaceStore] launch contract unmet for session \(session.id.uuidString, privacy: .public): tmux \(sessionName, privacy: .public) has no attached client; repairing over the text bridge"
+        )
+
+        guard
+            GhosttySurfaceTextInputBridge.writeAutomationText(
+                into: terminal.surfaceView, text: tmuxLaunchScript),
+            GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
+        else {
+            log.error(
+                "[SurfaceStore] launch repair could not reach the shell for session \(session.id.uuidString, privacy: .public)"
+            )
+            return
+        }
+
+        try? await Task.sleep(for: .milliseconds(1200))
+        let attachedAfter = await probe.attachedClientCount(forSessionNamed: sessionName)
+        log.info(
+            "[SurfaceStore] launch repair \((attachedAfter ?? 0) > 0 ? "attached" : "DID NOT ATTACH", privacy: .public) tmux \(sessionName, privacy: .public) clients=\(attachedAfter.map(String.init) ?? "unknown", privacy: .public)"
+        )
+    }
+
+    /// Type `initialCommand` into the surface, pressing Return only when the session
+    /// asked to execute it. Restore asks for `.prefill`, so the command waits at the
+    /// prompt: reconnecting to a live process is free, but starting an agent spends
+    /// memory and tokens the user may not want spent on a restart.
+    private func deliverInitialCommand(
+        _ initialCommand: String,
+        to terminal: TerminalSurface,
+        session: HostTerminalSession
+    ) {
+        let delivery = session.initialCommandDelivery
+        // The command reached no shell unless every bridge call succeeds. On any
+        // failure (dead surface, dropped write), un-mark the session so a recreated
+        // surface retries — nothing ran, so a retry cannot double-run the agent.
+        var delivered = GhosttySurfaceTextInputBridge.writeAutomationText(
+            into: terminal.surfaceView, text: initialCommand)
+        if delivered, delivery == .execute {
+            delivered = GhosttySurfaceTextInputBridge.sendAutomationReturn(into: terminal.surfaceView)
+        }
+        if !delivered {
+            launchWorkDeliveredSessionIDs.remove(session.id)
+        }
+        log.info(
+            "[SurfaceStore] initial command \(delivered ? "delivered" : "DROPPED (will retry on a new surface)", privacy: .public) delivery=\(delivery.rawValue, privacy: .public) for session \(session.id.uuidString, privacy: .public)"
+        )
     }
 
     // MARK: - Web

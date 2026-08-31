@@ -765,10 +765,10 @@ public actor LocalStateStore {
                         ts.created_at,
                         ts.last_seen_at,
                         ts.ended_at,
-                        ae.agent_session_id,
-                        ae.agent_kind,
+                        ai.agent_session_id,
+                        COALESCE(ai.agent_kind, ae.agent_kind) AS agent_kind,
                         ae.run_state AS agent_run_state,
-                        ae.cwd AS agent_cwd,
+                        COALESCE(ai.cwd, ae.cwd) AS agent_cwd,
                         ae.model_display_name AS agent_model_display_name,
                         ae.event_at AS agent_event_at
                     FROM terminal_sessions ts
@@ -787,6 +787,26 @@ public actor LocalStateStore {
                             ) AS event_rank
                         FROM agent_status_events
                     ) ae ON ae.host_session_id = ts.host_session_id AND ae.event_rank = 1
+                    -- Identity comes from the newest event that actually carries one,
+                    -- not from the newest event. `agent_session_id` is nullable and the
+                    -- last event before a quit is usually an OSC `awaiting_input` that
+                    -- omits it, so ranking over all events discards ids the store holds
+                    -- and drops the surface to the fresh-shell rung (#1480). Run state
+                    -- and model still come from `ae`: those describe now, identity
+                    -- describes who.
+                    LEFT JOIN (
+                        SELECT
+                            host_session_id,
+                            agent_session_id,
+                            agent_kind,
+                            cwd,
+                            ROW_NUMBER() OVER (
+                                PARTITION BY host_session_id
+                                ORDER BY event_at DESC, id DESC
+                            ) AS identity_rank
+                        FROM agent_status_events
+                        WHERE agent_session_id IS NOT NULL
+                    ) ai ON ai.host_session_id = ts.host_session_id AND ai.identity_rank = 1
                     WHERE ts.run_id = (
                         SELECT run_id
                         FROM terminal_sessions
