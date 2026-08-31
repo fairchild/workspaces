@@ -40,7 +40,10 @@ struct GhosttyTerminalConfigTests {
 
         let command = try #require(config.command)
         #expect(command.contains("/bin/zsh --login -c "))
-        #expect(command.contains("tmux -L workspaces new-session -A -s"))
+        #expect(command.contains("new-session -A -s"))
+        // The label is single-quoted in the script, which the outer `zsh -c '...'`
+        // re-escapes; assert it through the same helper rather than hand-escaping.
+        #expect(command.contains("tmux -L "))
         #expect(command.contains("/tmp/repo-a"))
         #expect(command.contains("'wm-repo-a-"))
     }
@@ -290,7 +293,10 @@ struct GhosttyTerminalConfigTests {
 
         let command = try #require(config.command)
         #expect(command.contains("/bin/zsh -f -c "))
-        #expect(command.contains("tmux -L workspaces new-session -A -s"))
+        #expect(command.contains("new-session -A -s"))
+        // The label is single-quoted in the script, which the outer `zsh -c '...'`
+        // re-escapes; assert it through the same helper rather than hand-escaping.
+        #expect(command.contains("tmux -L "))
         #expect(config.shellProfileModeLabel == "clean")
     }
 
@@ -418,7 +424,7 @@ struct GhosttyTerminalConfigTests {
             sessionEnvironment: Self.tileEnvironment(handle: "handle-b")
         )
 
-        #expect(script.contains("exec tmux -L workspaces new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b'"))
+        #expect(script.contains("exec tmux -L 'workspaces' new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b'"))
         #expect(script.contains("-e '\(AutomationAPI.handleEnvironmentKey)=handle-b'"))
         #expect(script.contains("-e '\(AutomationAPI.socketEnvironmentKey)=/tmp/workspaces-automation.sock'"))
     }
@@ -526,7 +532,12 @@ struct GhosttyTerminalConfigTests {
             seedsEnvironmentOnCreate: false
         )
 
-        #expect(script.hasPrefix("exec tmux -L workspaces new-session -A -s 'wm-repo-b-00000000' -c '/tmp/repo-b' \\;"))
+        #expect(
+            script.hasPrefix(
+                "exec tmux -L 'workspaces' new-session -A -s 'wm-repo-b-00000000' "
+                    + "-c '/tmp/repo-b' \\;"
+            )
+        )
         #expect(!script.contains(" -e "))
         for pair in Self.tileEnvironment(handle: "handle-b") {
             let reseed = "\\; set-environment -t '=wm-repo-b-00000000' '\(pair.key)' '\(pair.value)'"
@@ -603,7 +614,7 @@ struct GhosttyTerminalConfigTests {
             isTmuxAvailableOverride: true
         )
 
-        #expect(script == "exec tmux -L workspaces new-session -A -s 'wm-repo-a' -c '/tmp/repo-a'")
+        #expect(script == "exec tmux -L 'workspaces' new-session -A -s 'wm-repo-a' -c '/tmp/repo-a'")
         let command = try #require(config.command)
         #expect(!command.contains("set-environment"))
     }
