@@ -66,7 +66,10 @@ public struct WebNextServerConfiguration: Sendable {
     /// Extra exact-match origins forwarded to the child as
     /// `WEB_NEXT_EXTRA_LOCAL_ORIGINS`, so a trusted reverse proxy
     /// (`tailscale serve`) can front the loopback bind for mobile pairing.
-    public var extraLocalOrigins: [String]
+    /// A provider, not a value: resolution can shell out (Tailscale CLI),
+    /// so it runs at spawn time — off the launch path, and fresh for every
+    /// relaunch — never at configuration time.
+    public var extraLocalOriginsProvider: @Sendable () -> [String]
     /// How long to wait for `/api/healthz` after spawn before declaring failure.
     /// Sized for a cold first run: `start:local` builds web-next when
     /// `.next/BUILD_ID` is absent, which takes one to two minutes. A generous
@@ -88,7 +91,7 @@ public struct WebNextServerConfiguration: Sendable {
         dataDir: URL? = nil,
         logDirectory: URL? = nil,
         launchCommand: WebNextLaunchCommand = .default,
-        extraLocalOrigins: [String] = [],
+        extraLocalOriginsProvider: @escaping @Sendable () -> [String] = { [] },
         readinessTimeout: TimeInterval = 180,
         readinessPollInterval: TimeInterval = 0.5,
         terminationGracePeriod: TimeInterval = 5,
@@ -102,7 +105,7 @@ public struct WebNextServerConfiguration: Sendable {
         self.dataDir = resolvedDataDir
         self.logDirectory = logDirectory ?? resolvedDataDir.appendingPathComponent("logs", isDirectory: true)
         self.launchCommand = launchCommand
-        self.extraLocalOrigins = extraLocalOrigins
+        self.extraLocalOriginsProvider = extraLocalOriginsProvider
         self.readinessTimeout = readinessTimeout
         self.readinessPollInterval = readinessPollInterval
         self.terminationGracePeriod = terminationGracePeriod
@@ -336,9 +339,10 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         var environment = ProcessInfo.processInfo.environment
         environment["PORT"] = String(configuration.port)
         environment["WEB_NEXT_DATA_DIR"] = configuration.dataDir.path
-        if !configuration.extraLocalOrigins.isEmpty {
+        let extraLocalOrigins = configuration.extraLocalOriginsProvider()
+        if !extraLocalOrigins.isEmpty {
             environment["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] =
-                configuration.extraLocalOrigins.joined(separator: ",")
+                extraLocalOrigins.joined(separator: ",")
         }
 
         let pid: pid_t

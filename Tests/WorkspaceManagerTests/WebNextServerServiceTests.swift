@@ -115,7 +115,7 @@ struct WebNextServerServiceTests {
                 dataDir: dataDir,
                 logDirectory: root.appendingPathComponent("logs", isDirectory: true),
                 launchCommand: WebNextLaunchCommand(executablePath: "/bin/sh", arguments: ["-c", script]),
-                extraLocalOrigins: extraLocalOrigins,
+                extraLocalOriginsProvider: { extraLocalOrigins },
                 readinessTimeout: readinessTimeout,
                 readinessPollInterval: readinessPollInterval,
                 terminationGracePeriod: terminationGracePeriod,
