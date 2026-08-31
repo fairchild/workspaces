@@ -37,12 +37,15 @@ struct GhosttyTerminalConfigTests {
                 "WORKSPACES_HOST_SESSION_ID": "host-session-1",
             ],
             terminalMultiplexingMode: .tmuxPerSession,
-            isTmuxAvailableOverride: true
+            isTmuxAvailableOverride: true,
+            tmuxSupportsSessionEnvironmentFlagOverride: true
         )
 
         // The repair types this into an already-running shell, so it must be the
         // unwrapped script — `exec tmux …`, not a nested login shell — and it must
         // still carry the tile-scoped environment the dropped config would have set.
+        // The `-e` form is pinned by the override: whether this tmux understands the
+        // flag is a property of the host, and CI's tmux is older than the laptop's.
         let script = try #require(config.tmuxLaunchScript)
         #expect(script.hasPrefix("exec tmux -L workspaces new-session -A -s "))
         #expect(!script.contains("/bin/zsh"))
@@ -53,6 +56,29 @@ struct GhosttyTerminalConfigTests {
         let sessionName = GhosttyTerminalConfig.tmuxSessionName(for: URL(fileURLWithPath: "/tmp/repo-a"))
         #expect(script.contains(sessionName))
         #expect(try #require(config.command).contains(sessionName))
+    }
+
+    @Test("The repair carries tile environment on a tmux too old for new-session -e")
+    func repairCarriesEnvironmentWithoutSessionEnvironmentFlag() throws {
+        // Older tmux rejects `-e`, so the tile-scoped pairs travel only on the chained
+        // `set-environment`. The repair has to restore identity on that host too —
+        // this is the shape CI runs.
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: [
+                "SHELL": "/bin/zsh",
+                "PATH": "/usr/bin:/bin",
+                "WORKSPACES_HOST_SESSION_ID": "host-session-1",
+            ],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true,
+            tmuxSupportsSessionEnvironmentFlagOverride: false
+        )
+
+        let script = try #require(config.tmuxLaunchScript)
+        #expect(!script.contains("WORKSPACES_HOST_SESSION_ID=host-session-1"))
+        #expect(script.contains("set-environment"))
+        #expect(script.contains("'WORKSPACES_HOST_SESSION_ID' 'host-session-1'"))
     }
 
     @Test("The repair script refuses to run inside tmux")
