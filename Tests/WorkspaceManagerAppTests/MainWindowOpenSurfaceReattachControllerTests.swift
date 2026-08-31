@@ -3,8 +3,9 @@
 //  WorkspaceManagerAppTests
 //
 //  Coverage for which of the previous run's scopes a launch rejoins (#1374): what makes a
-//  restored session record worth realizing, what makes it a scope's stand-in, and what the
-//  tmux liveness answer does to the set.
+//  restored session record worth realizing, what makes it a scope's stand-in, what the tmux
+//  liveness answer does to the set, and which of the survivors the pass actually attaches
+//  rather than finds already attached (#1398).
 //
 
 import Foundation
@@ -261,6 +262,68 @@ struct MainWindowOpenSurfaceReattachControllerTests {
         let offered = candidates([session(directory: directories.make("alpha"))])
 
         #expect(controller.reattachableSessionIDs(candidates: offered, liveTmuxSessionNames: []).isEmpty)
+    }
+
+    // MARK: - What the pass actually attached
+
+    /// The reason the split exists: a restore plan realizes the scopes it covers, so a scope
+    /// can already be a live surface before the pass reaches it. Realizing it again attaches
+    /// nothing, and reporting it as rejoined told an operator the pass had worked when it had
+    /// not (#1398).
+    @Test("A scope realized before the pass ran counts as already live, not rejoined")
+    func alreadyLiveScopeIsNotCountedAsRejoined() {
+        let restored = UUID()
+        let dark = UUID()
+
+        let split = controller.split(
+            reattachableSessionIDs: [restored, dark],
+            isSurfaceRealized: { $0 == restored }
+        )
+
+        #expect(split.toRealize == [dark])
+        #expect(split.alreadyLive == [restored])
+    }
+
+    /// The launch the pass exists for: nothing was attached before it, so everything it
+    /// realizes is work it did.
+    @Test("Scopes with no surface are all the pass's to realize")
+    func darkScopesAreAllToRealize() {
+        let ids = [UUID(), UUID()]
+
+        let split = controller.split(reattachableSessionIDs: ids, isSurfaceRealized: { _ in false })
+
+        #expect(split.toRealize == ids)
+        #expect(split.alreadyLive.isEmpty)
+    }
+
+    /// The launch from the report: the restore plan covered the whole open set, so the pass had
+    /// nothing left to attach and must say so rather than claim two rejoins.
+    @Test("A fully restored open set leaves the pass nothing to rejoin")
+    func fullyRestoredOpenSetRejoinsNothing() {
+        let ids = [UUID(), UUID()]
+
+        let split = controller.split(reattachableSessionIDs: ids, isSurfaceRealized: { _ in true })
+
+        #expect(split.toRealize.isEmpty)
+        #expect(split.alreadyLive == ids)
+    }
+
+    /// Both sides keep candidate order, so the counts in a log line can be read back against
+    /// the order the manifest replayed.
+    @Test("The split preserves candidate order on both sides")
+    func splitPreservesCandidateOrder() {
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+        let fourth = UUID()
+
+        let split = controller.split(
+            reattachableSessionIDs: [first, second, third, fourth],
+            isSurfaceRealized: { $0 == second || $0 == third }
+        )
+
+        #expect(split.toRealize == [first, fourth])
+        #expect(split.alreadyLive == [second, third])
     }
 
     // MARK: - Policy

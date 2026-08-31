@@ -142,6 +142,13 @@ final class TileTreeStore: ObservableObject {
         surfaceStore.terminalSurface(for: renderTileID(for: session.id), session: session).surfaceView
     }
 
+    /// Whether `sessionID` already has a mounted terminal surface. The non-creating peek beside
+    /// `terminalSurfaceView(for:)`: it neither vends a surface nor memoizes a tile, so the rejoin
+    /// pass can ask what realizing a scope would cost before paying it (#1398).
+    func hasRealizedTerminalSurface(for sessionID: UUID) -> Bool {
+        surfaceStore.terminal(for: sessionID) != nil
+    }
+
     func attach(agentSessionRegistry: AgentSessionRegistry) {
         attach(
             agentSessionRegistry: agentSessionRegistry,
