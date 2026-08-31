@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import subprocess
 import sys
 import tempfile
@@ -27,8 +28,18 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import importlib.util as _importlib_util
 
-from perf_history import LEGACY_PROTOCOL_EPOCH, history_row_from_summary, render_dashboard
-from perf_schema import evaluate_budgets, load_contract, measured_duration_samples
+from perf_history import (
+    HISTORY_FIELDNAMES,
+    LEGACY_PROTOCOL_EPOCH,
+    history_row_from_summary,
+    render_dashboard,
+)
+from perf_schema import (
+    evaluate_budgets,
+    launch_trigger_label,
+    load_contract,
+    measured_duration_samples,
+)
 
 
 def _load_hyphenated_module(name: str, path: Path):
@@ -495,6 +506,150 @@ class LaunchTriggerLabelTests(unittest.TestCase):
         )
 
         self.assertNotIn("time-to-foreground", self.findings_text(payload))
+
+    def test_summary_carries_the_trigger_where_a_recorded_row_reads_it(self) -> None:
+        """Findings are prose for a reader; a row is cut from `metadata` (#1399)."""
+        payload = self.summarize([self.line(600.0, "terminal_set_title")])
+
+        self.assertEqual(payload["metadata"]["launch_trigger"], "terminal_set_title")
+
+    def test_a_focus_closed_capture_reaches_the_row_labelled(self) -> None:
+        """The 61s sample: recorded, it must not present as a launch measurement."""
+        payload = self.summarize([self.line(61_000.0, "terminal_focus")])
+        row = history_row_from_summary(payload, "2026-08-30T10:00:00-0700")
+
+        self.assertEqual(row["launch_trigger"], "terminal_focus")
+
+    def test_a_mixed_capture_names_both_triggers_on_the_row(self) -> None:
+        """A median over a mix is the row that most needs to say so."""
+        payload = self.summarize(
+            [self.line(61_000.0, "terminal_focus"), self.line(640.0, "terminal_set_title")]
+        )
+        row = history_row_from_summary(payload, "2026-08-30T10:00:00-0700")
+
+        self.assertEqual(row["launch_trigger"], "terminal_focus+terminal_set_title")
+
+
+class LaunchTriggerRowTests(unittest.TestCase):
+    """The recorded row carries what the samples measured, not just the number (#1399)."""
+
+    def test_the_history_csv_has_a_column_for_it(self) -> None:
+        self.assertIn("launch_trigger", HISTORY_FIELDNAMES)
+
+    def test_a_summary_predating_the_column_records_blank_not_a_guess(self) -> None:
+        """Blank means unreported. Only a producer that saw a trigger can name one."""
+        row = history_row_from_summary(
+            {
+                "scenario": "debug_no_activate",
+                "metrics": {"launch_to_first_prompt": {"median": 592.0, "mean": 592.0}},
+                "metadata": {"build_kind": "debug"},
+            },
+            "2026-06-08T00:00:00-0700",
+        )
+
+        self.assertEqual(row["launch_trigger"], "")
+
+    def test_both_lanes_render_the_label_the_same_way(self) -> None:
+        """One home for the format, so a cell means the same thing whichever lane wrote it.
+
+        The debug lane hands per-sample strings, the installed summarizer hands a
+        trigger→count mapping; the cell must not depend on which shape arrived.
+        """
+        self.assertEqual(
+            launch_trigger_label(["terminal_focus", "terminal_set_title"]),
+            launch_trigger_label({"terminal_set_title": 3, "terminal_focus": 1}),
+        )
+
+    def test_repeated_triggers_collapse_to_one_name(self) -> None:
+        self.assertEqual(
+            launch_trigger_label(["terminal_set_title", "terminal_set_title"]),
+            "terminal_set_title",
+        )
+
+    def test_samples_without_a_trigger_contribute_nothing(self) -> None:
+        self.assertEqual(launch_trigger_label([None, "terminal_focus", None]), "terminal_focus")
+        self.assertEqual(launch_trigger_label([None, None]), "")
+
+
+class DebugLaneTriggerTests(unittest.TestCase):
+    """The debug lane reaches a recorded row with the same label the installed one does.
+
+    `perf-baseline.sh` embeds its summarizer in a heredoc, so this extracts and runs the
+    program the script actually runs rather than reimplementing it. The fixture is two
+    synthetic run logs: an isolation line, because the lane fails closed without one, and
+    a launch sample carrying its trigger.
+    """
+
+    @staticmethod
+    def embedded_summarizer() -> str:
+        script = (REPO_ROOT / "scripts" / "perf-baseline.sh").read_text(encoding="utf-8")
+        return script.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+
+    def summarize(self, triggers: list[str]) -> dict:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            program = out_dir / "summarize.py"
+            program.write_text(self.embedded_summarizer(), encoding="utf-8")
+            for index, trigger in enumerate(triggers, start=1):
+                (out_dir / f"run-{index}.log").write_text(
+                    "2026-08-30 10:00:00.000 [LaunchPreferences] domain=scratch "
+                    "suite=perf.scratch isolated=true\n"
+                    "2026-08-30 10:00:01.000 [Perf] metric=launch_to_first_prompt "
+                    f"duration_ms=60{index}.00 trigger={trigger}\n",
+                    encoding="utf-8",
+                )
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(program),
+                    str(out_dir),
+                    str(REPO_ROOT),
+                    str(len(triggers)),
+                    "0",
+                    "0",  # record: never touch the committed history from a test
+                    "2026-08-30T10:00:00-0700",
+                    "26.6.2",
+                    "25G100",
+                    "arm64",
+                    "Mac16,13",
+                    "no-activate",
+                    "0",  # assert_budget
+                    "",
+                    "clean",
+                    "off",
+                    "1",
+                    "scratch",
+                    "perf.scratch",
+                    "owner",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=True,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(REPO_ROOT / "scripts"),
+                    "PERF_SUMMARY_TIMESTAMP": "2026-08-30T10:00:00-0700",
+                },
+            )
+            return json.loads((out_dir / "summary.json").read_text(encoding="utf-8"))
+
+    def test_a_readiness_closed_run_records_its_trigger(self) -> None:
+        row = history_row_from_summary(
+            self.summarize(["terminal_set_title", "terminal_set_title"]),
+            "2026-08-30T10:00:00-0700",
+        )
+
+        self.assertEqual(row["launch_trigger"], "terminal_set_title")
+
+    def test_a_focus_close_in_the_debug_lane_reaches_the_row_too(self) -> None:
+        """Both lanes, one label — the debug lane is the exposed one under `activate`."""
+        row = history_row_from_summary(
+            self.summarize(["terminal_focus", "terminal_set_title"]),
+            "2026-08-30T10:00:00-0700",
+        )
+
+        self.assertEqual(row["launch_trigger"], "terminal_focus+terminal_set_title")
 
 
 class MissingLaunchMetricTests(unittest.TestCase):

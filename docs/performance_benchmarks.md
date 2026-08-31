@@ -88,11 +88,35 @@ lifted from the launch-lane history without renaming anything.
 | `build_kind` | `installed` or `debug` — installed is what ships |
 | `protocol_epoch` | measurement protocol; rows are only comparable within one epoch |
 | `launch_to_first_prompt_median_ms` | launch until the first shell prompt is ready |
+| `launch_trigger` | what closed those samples — see below |
 | `repo_hydration_median_ms` | repo list populated |
 | `repo_click_to_focus_median_ms` | click a repo until it is focused |
 | `workspace_click_to_focus_median_ms` | click a workspace until it is focused |
 | `os_version`, `arch`, `model` | host the measurement ran on |
 | `notes` | free text — anomalies, why a number moved |
+
+### launch_trigger says what the launch number measured
+
+`launch_to_first_prompt` closes on whichever comes first: a terminal readiness
+signal, or the terminal taking focus. A `terminal_focus` close stops the clock when
+something brought the window forward, so on a launch that sat in the background it
+is a time-to-foreground number wearing a launch metric's name — 61 s and 16 s
+samples have reached a parser this way
+([#1399](https://github.com/fairchild/workspaces/issues/1399)). Duration alone
+cannot tell the two apart, so the row carries the trigger.
+
+Read it as: a cell naming `terminal_focus` measured attention, not launch, and does
+not belong in a launch comparison. Several triggers joined with `+` mean the median
+was taken over a mix, which is the case that most needs saying so. Blank means the
+producing run reported no trigger — a row recorded before this column existed, or a
+capture where the metric never closed. Values pass through from the log line; the
+vocabulary is whatever `PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger:)`
+is called with.
+
+`terminal_focus` closes on a successful first-responder change rather than on app
+activation, so launching under `WORKSPACES_NO_ACTIVATE_ON_LAUNCH=1` — which
+`installed_clean_shell` does — narrows the exposure without removing it. That is why
+the trigger is recorded per row instead of inferred from the lane.
 
 ### protocol_epoch is not decoration
 

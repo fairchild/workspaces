@@ -353,7 +353,12 @@ import re
 import statistics
 import sys
 
-from perf_schema import canonical_summary, load_contract, measured_duration_samples
+from perf_schema import (
+    canonical_summary,
+    launch_trigger_label,
+    load_contract,
+    measured_duration_samples,
+)
 
 out_dir = pathlib.Path(sys.argv[1])
 root_dir = pathlib.Path(sys.argv[2])
@@ -590,6 +595,12 @@ summary = canonical_summary(
             "preferences_mode": preferences_mode,
             "preferences_suite": preferences_suite,
             "preferences_suite_owner": preferences_suite_owner,
+            # The per-sample triggers reduced to the one value a recorded row carries, so
+            # the console callout below and the committed CSV cell tell the same story
+            # about the same run (#1399).
+            "launch_trigger": launch_trigger_label(
+                sample["launch_trigger"] for sample in launch_samples
+            ),
             "launch_samples": launch_samples,
         }
     },
