@@ -1,0 +1,99 @@
+# Sidebar row equality, and the closures that outlive it
+
+Sidebar rows sit behind `SidebarEquatableRow`, which compares on a display-state value and skips
+the closure that builds the row when that value is unchanged (#1366). A skipped row keeps the
+closures it was built with — its buttons, its context menu, and its hover card's `tabsProvider`
+all still point at the render they were born in. This is the account of what each of those
+closures reads, and why reading it late is safe.
+
+This is the hazard #1347 deliberately deferred the slice over. It is not a thing to assume.
+
+## The rule
+
+A closure captures `self`, and `SidebarView` is a struct, so every plain `let` on it is captured
+**by value** and can go stale. Everything else on it is a box or a reference and reads live:
+
+| On `SidebarView` | Reads |
+|---|---|
+| `@State`, `@Binding`, `@FocusState` | Live — the wrapper holds a reference to storage the view does not own |
+| `@Environment`, `@EnvironmentObject` | Live — same, plus the environment value is itself a reference here |
+| `let` closures from `ContentView` | Live — each closes over `tileTreeStore`, `agentSessionRegistry`, `selectionController` or ContentView's own `@State`, all reference-typed |
+| plain `let` values | **Stale unless fingerprinted** |
+
+So the whole hazard reduces to `SidebarView`'s plain `let` inputs: `repos`, `webSources`,
+`selectedRepo`, `paneCountBySessionKey`, `activeSessionKey`, `hostSessions`, and
+`connectingWorkspaceID`. Every one of them has to reach a row's display state, or be shown not to
+matter to that row.
+
+## Repo rows
+
+| Closure | What it reads that could be stale | Disposition |
+|---|---|---|
+| `onToggleExpansion` | `expansionController` | Live (`@State` box) |
+| `onSelectRepo` → `selectRepo` | `paneCount(for:)` over `paneCountBySessionKey`, which decides whether the click opens the terminal or the overview | **Fingerprinted** — `paneCount` is in `RepoRowDisplayState` |
+| `onSelectRepo` → `selectRepo` | `sidebarHasKeyFocus`, `expansionController` | Live (boxes) |
+| `onSelectRepo` → `selectRepo` | `onRepoSelected` / `onRepoTerminalSelected` | Live — both reach `MainWindowSelectionController` through a stored reference |
+| `onNewWorkspace` | `prepareNewWorkspaceSheet` writes `@State` and reads the `@Environment` provider registry | Live |
+| `onNewWebView` | `onRequestWebSourceCreation` writes `ContentView` `@State` | Live |
+| `tabsProvider` | the row's `SidebarRowSessionState` — its sessions, their statuses, their resolved foreground names and transcript tails | **Fingerprinted** — it *is* the value the row compares on |
+| `tabsProvider` | `titleForSession` | Live — reads `TileTreeStore` (a `final class`) for the override and the surface title |
+| menu · Open Terminal | `onRepoTerminalSelected` | Live |
+| menu · New Workspace… `.disabled` | `isCreatingWorkspace(for:)` | **Fingerprinted** — `isCreatingWorkspace` is in the state (and the underlying `@State` is live besides) |
+| menu · New Web Session `.disabled` | `webNextSessionSlug(repo)` over `repo.remoteURL` | Live (`repo` is a `@Model` class); also **fingerprinted** by `remoteURL` |
+| menu · Reveal in Finder | `repo.localPath` | Live (class) |
+| menu · Remove from List | `modelContext` | Live (`@Environment`) |
+
+## Workspace rows
+
+| Closure | What it reads that could be stale | Disposition |
+|---|---|---|
+| `onToggleExpansion`, `onSelect` | `expansionController`, `sidebarHasKeyFocus`, the two selection `@Binding`s | Live (boxes) |
+| `onTogglePin` → `togglePin` | `allWorkspaces`, derived from the captured `repos`. `pin` reads `max(pinOrder)` across it and `renumber` rewrites the pinned set | **Fingerprinted** — any pin, unpin, reorder, archive or delete changes `pinnedCount` (and usually `pinnedIndex`), which every workspace row carries, so every workspace row rebuilds before the next pin gesture. A workspace *added* while a row was stale carries no `pinOrder`, so it changes neither the maximum nor the pinned set |
+| menu · Move Up / Move Down `.disabled` | used to rebuild the Pinned ordering from the captured list on every open | **Fingerprinted and retired** — `canMovePinUp` / `canMovePinDown` read `pinnedIndex` and `pinnedCount` off the row's own state, which also removes a sort from the menu path |
+| menu · Reveal in Finder gate | `usesHostWorkspaceFiles` over the `@Environment` registry and `workspace.backendIdentifier` | Live; also **fingerprinted** by `backendIdentifier` |
+| menu · Pin / Unpin | `isPinnable`, `isPinned` | **Fingerprinted** |
+| menu · Add/Edit/Clear Note | `workspace.note` | Live (class); also **fingerprinted** by `note` |
+| menu · Archive/Start/Stop/Open Desktop | `workspace.status` (class) and the `@Environment` registry | Live; also **fingerprinted** by `status` |
+| menu · New Web Session | `workspace.sourceRepo?.remoteURL` | Live (classes); also **fingerprinted** by `repoRemoteURL` |
+| menu · Delete Workspace | `@State` | Live |
+| `tabsProvider` | as for repo rows | **Fingerprinted** / live |
+
+## Web-source rows and the archived pill
+
+| Closure | Disposition |
+|---|---|
+| `onWebSourceSelected` | Live — writes `ContentView` `@State` |
+| `openWebSourceExternally`, `removeWebSource` | Live — `source` is a class, `modelContext` is `@Environment` |
+| `WebSourceFaviconView` | Live on its own — holds the image in `@State` and reloads on `.task(id: source.baseURLString)` |
+| `ArchivedDisclosureRow.onToggle` | Live — writes the `expandedArchivedRepoIDs` `@State` |
+
+## Why the hover card needed its own thinking
+
+The card is the only surface that can be *on screen* while its row's body never runs again, so it
+is the one place a fingerprint has to cover more than what the row itself draws:
+
+- **Agent detail the row does not draw** — model, context percent, cost, last-active. A cost tick
+  moves none of the dot, the badge, or the live line, so the row's own appearance would not have
+  caught it. The full `AgentSessionStatus` per tab rides `SidebarRowSessionState`.
+- **The two lazy resolutions** — the foreground process name and the Claude transcript tail are
+  kicked off *by* the card opening and land a moment later. They ride the state for exactly that
+  reason: without it, the first hover on a row would never show the tail it just went and fetched.
+- **Tabs opening and closing** — the row's sessions ride the state, which is what fingerprints the
+  `hostSessions` array the provider captured by value.
+
+None of this costs a new lookup. `sessionActivity` already resolved every one of a row's statuses
+to pick the freshest; gathering them once per row and deriving the dot, the live line, and the
+card's inputs from that one pass replaces three separate walks with one.
+
+## The one accepted residual
+
+**A tab's title changing while its card is already open repaints on the next hover, not in place.**
+
+`titleForSession` resolves through `SurfaceStore.displayTitle(for:)`, which scans every mounted
+surface to find the one owning a session. Putting that in the display state would run it for every
+tab of every row on every evaluation — reintroducing per-render work of exactly the shape #1354
+spent its slice removing, to fix a stale reading that lasts as long as one hover.
+
+It is bounded (one card, until the pointer leaves), self-healing (the next hover reads live), and
+the same class of trade #1353 recorded for its recency-only staleness. If it ever matters, the fix
+is to give `SurfaceStore` a session-keyed title index rather than to widen the fingerprint.

@@ -38,22 +38,41 @@ struct SidebarWorkspacePresentationController {
         return .hostPath(normalizePath(workspace.workspaceURL))
     }
 
+    /// Everything one row needs to know about the tabs sharing its session key, gathered in a
+    /// single pass. Rows compare on this (#1366), and the row's dot, its live status line, and
+    /// its hover card are all derived from it, so a session's tabs are looked up once per row
+    /// per render instead of once per consumer.
+    ///
+    /// The lookups stay closure-shaped for the reason `freshestAgentStatus` always was: a
+    /// SwiftUI body passes `observedStatus(for:)`, so only the sessions actually rendered
+    /// register Observation dependencies.
+    func rowSessionState(
+        for key: HostTerminalSessionKey,
+        sessions: [HostTerminalSession],
+        agentStatus: (UUID) -> AgentSessionStatus?,
+        foregroundName: (UUID) -> String? = { _ in nil },
+        transcriptTail: (UUID) -> String? = { _ in nil }
+    ) -> SidebarRowSessionState {
+        guard !sessions.isEmpty else { return SidebarRowSessionState() }
+        let normalizedKey = key.normalized()
+        let matching = sessions.filter { $0.key == normalizedKey }
+        guard !matching.isEmpty else { return SidebarRowSessionState() }
+        return SidebarRowSessionState(
+            sessions: matching,
+            statuses: matching.map { agentStatus($0.id) },
+            foregroundNames: matching.map { foregroundName($0.id) },
+            transcriptTails: matching.map { transcriptTail($0.id) }
+        )
+    }
+
     /// Pick the freshest registered `AgentSessionStatus` whose host session shares `key`.
-    /// Returns `nil` when no session for that key has a registered status. The lookup
-    /// closure form lets a SwiftUI body pass `observedStatus(for:)` so only the
-    /// sessions actually rendered register Observation dependencies.
+    /// Returns `nil` when no session for that key has a registered status.
     func freshestAgentStatus(
         for key: HostTerminalSessionKey,
         sessions: [HostTerminalSession],
         agentStatus: (UUID) -> AgentSessionStatus?
     ) -> AgentSessionStatus? {
-        guard !sessions.isEmpty else { return nil }
-        let normalizedKey = key.normalized()
-        return
-            sessions
-            .filter { $0.key == normalizedKey }
-            .compactMap { agentStatus($0.id) }
-            .max { $0.lastEventAt < $1.lastEventAt }
+        rowSessionState(for: key, sessions: sessions, agentStatus: agentStatus).freshestStatus
     }
 
     /// The live status line for one session key, or nil when no session sharing it has a
@@ -64,10 +83,13 @@ struct SidebarWorkspacePresentationController {
         sessions: [HostTerminalSession],
         agentStatus: (UUID) -> AgentSessionStatus?
     ) -> SidebarLiveSessionStatus? {
-        guard
-            let status = freshestAgentStatus(
-                for: key, sessions: sessions, agentStatus: agentStatus)
-        else { return nil }
+        liveSessionStatus(
+            from: rowSessionState(for: key, sessions: sessions, agentStatus: agentStatus))
+    }
+
+    /// The live status line for a row whose session state has already been gathered.
+    func liveSessionStatus(from state: SidebarRowSessionState) -> SidebarLiveSessionStatus? {
+        guard let status = state.freshestStatus else { return nil }
         return SidebarLiveSessionStatus(
             kind: status.kind,
             summary: AgentChromeProjection.runState(status.run).summaryText,
@@ -82,6 +104,22 @@ struct SidebarWorkspacePresentationController {
         sessions: [HostTerminalSession] = [],
         agentStatus: (UUID) -> AgentSessionStatus? = { _ in nil }
     ) -> SidebarSessionActivity {
+        sessionActivity(
+            for: key,
+            paneCountBySessionKey: paneCountBySessionKey,
+            activeSessionKey: activeSessionKey,
+            sessionState: rowSessionState(
+                for: key, sessions: sessions, agentStatus: agentStatus)
+        )
+    }
+
+    /// The activity dot for a row whose session state has already been gathered.
+    func sessionActivity(
+        for key: HostTerminalSessionKey,
+        paneCountBySessionKey: [HostTerminalSessionKey: Int],
+        activeSessionKey: HostTerminalSessionKey?,
+        sessionState: SidebarRowSessionState
+    ) -> SidebarSessionActivity {
         // Prefer the agent-derived activity when the registry has a status for any
         // session sharing this key. Fall back to the existing pane-count signal so
         // sessions without registered agent state still show the inactive/live/active
@@ -91,13 +129,7 @@ struct SidebarWorkspacePresentationController {
             isActiveSession: activeSessionKey == key
         )
 
-        let candidate = freshestAgentStatus(
-            for: key,
-            sessions: sessions,
-            agentStatus: agentStatus
-        )
-
-        guard let candidate else { return baseline }
+        guard let candidate = sessionState.freshestStatus else { return baseline }
 
         let agentDerived = SidebarSessionActivity.from(candidate)
         // If the registry only knows the session as `.idle`, the baseline `.live` /

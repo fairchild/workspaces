@@ -183,6 +183,9 @@ struct SidebarView: View {
     @State private var repoSortCache = SidebarRepoSortCache()
     /// Memoized symlink-resolving path normalization for row rendering (#1347).
     @State private var pathNormalizationCache = PathNormalizationCache()
+    /// Memoized section and per-repo orderings — the in-body sort inventory #1354 left behind
+    /// (#1366). In `@State` so the instance survives body evaluations without observation.
+    @State private var orderCache = MainWindowOrderCache()
 
     private var workspaceProviderSetupActionRunner: WorkspaceProviderSetupActionRunner {
         WorkspaceProviderSetupActionRunner(coordinator: workspaceProviderSetupCoordinator)
@@ -221,11 +224,11 @@ struct SidebarView: View {
     }
 
     private var pinnedWorkspaces: [Workspace] {
-        pinController.pinnedWorkspaces(in: allWorkspaces)
+        orderCache.pinnedWorkspaces(in: allWorkspaces, controller: pinController)
     }
 
     private var recentBuckets: [RecentBucket] {
-        SidebarRecentArrangement.buckets(
+        orderCache.recentBuckets(
             repos: repos,
             snapshot: recentSnapshotByID,
             repoRootPaneCounts: repoRootPaneCounts,
@@ -244,9 +247,7 @@ struct SidebarView: View {
     }
 
     private var globalWebSources: [WebSource] {
-        webSources
-            .filter(\.isGlobal)
-            .sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+        orderCache.globalWebSources(in: webSources)
     }
 
     var body: some View {
@@ -653,28 +654,7 @@ struct SidebarView: View {
     private var webSection: some View {
         Section("Web") {
             ForEach(globalWebSources) { source in
-                Button {
-                    onWebSourceSelected(source)
-                } label: {
-                    WebSourceRow(
-                        source: source,
-                        isSelected: selectedWebSource?.id == source.id
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .contextMenu {
-                    Button("Open in Browser") {
-                        openWebSourceExternally(source)
-                    }
-
-                    Divider()
-
-                    Button("Remove from List", role: .destructive) {
-                        removeWebSource(source)
-                    }
-                }
+                sidebarWebSourceButton(source, paddingLeading: 0)
             }
         }
     }
@@ -732,81 +712,99 @@ struct SidebarView: View {
     /// the folder glyph selects the repo rather than toggling an expansion nothing shows.
     @ViewBuilder
     private func repoListRow(_ repo: Repo, showsChildren: Bool = true) -> some View {
-        let normalizedRepoPath = normalizePath(repo.localURL)
-        let repoSessionKey = HostTerminalSessionKey.repoPath(normalizedRepoPath)
-        let baselineActivity = sessionActivity(for: repoSessionKey)
+        let repoSessionKey = HostTerminalSessionKey.repoPath(normalizePath(repo.localURL))
+        let sessionState = rowSessionState(for: repoSessionKey)
+        let baselineActivity = sessionActivity(for: repoSessionKey, sessionState: sessionState)
         let bubbledActivity = bubbledRepoActivity(for: repo, baseline: baselineActivity)
-
-        RepoRow(
-            repo: repo,
+        let state = RepoRowDisplayState(
+            repoID: repo.id,
+            name: repo.name,
+            remoteURL: repo.remoteURL,
             activeWorkspaceCount: SidebarWorkspaceController.activeWorkspaceCount(in: repo.workspaces),
             sessionActivity: bubbledActivity,
             paneCount: paneCount(for: repoSessionKey),
             isSelected: selectedRepo?.id == repo.id,
             isExpanded: showsChildren && isRepoExpanded(repo),
             showsExpansion: showsChildren,
-            sessionActivityTooltip: bubbleTooltip(for: repo, bubbled: bubbledActivity, baseline: baselineActivity),
-            onToggleExpansion: {
-                if showsChildren {
-                    toggleRepoExpansion(repo)
-                } else {
-                    selectRepo(repo, sessionKey: repoSessionKey, expanding: false)
-                }
-            },
-            onSelectRepo: {
-                selectRepo(repo, sessionKey: repoSessionKey, expanding: showsChildren)
-            },
-            onNewWorkspace: {
-                Task { @MainActor in
-                    await prepareNewWorkspaceSheet(for: repo)
-                }
-            },
-            onNewWebView: {
-                onRequestWebSourceCreation(.repo(repo))
-            },
-            tabsProvider: {
-                refreshForegroundProcessNames(for: repoSessionKey)
-                refreshTranscriptTails(for: repoSessionKey)
-                return tabSummaries(for: repoSessionKey)
-            }
+            sessionActivityTooltip: bubbleTooltip(
+                for: repo, bubbled: bubbledActivity, baseline: baselineActivity),
+            isCreatingWorkspace: isCreatingWorkspace(for: repo.id),
+            sessionState: sessionState
         )
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button("Open Terminal") {
-                onRepoTerminalSelected(repo)
-            }
 
-            Divider()
-
-            Button("New Workspace...") {
-                Task { @MainActor in
-                    await prepareNewWorkspaceSheet(for: repo)
+        SidebarEquatableRow(state: state) {
+            RepoRow(
+                repo: repo,
+                activeWorkspaceCount: state.activeWorkspaceCount,
+                sessionActivity: state.sessionActivity,
+                paneCount: state.paneCount,
+                isSelected: state.isSelected,
+                isExpanded: state.isExpanded,
+                showsExpansion: state.showsExpansion,
+                sessionActivityTooltip: state.sessionActivityTooltip,
+                onToggleExpansion: {
+                    if showsChildren {
+                        toggleRepoExpansion(repo)
+                    } else {
+                        selectRepo(repo, sessionKey: repoSessionKey, expanding: false)
+                    }
+                },
+                onSelectRepo: {
+                    selectRepo(repo, sessionKey: repoSessionKey, expanding: showsChildren)
+                },
+                onNewWorkspace: {
+                    Task { @MainActor in
+                        await prepareNewWorkspaceSheet(for: repo)
+                    }
+                },
+                onNewWebView: {
+                    onRequestWebSourceCreation(.repo(repo))
+                },
+                tabsProvider: {
+                    refreshForegroundProcessNames(from: sessionState)
+                    refreshTranscriptTails(from: sessionState)
+                    return tabSummaries(from: sessionState)
                 }
-            }
-            .disabled(isCreatingWorkspace(for: repo.id))
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button("Open Terminal") {
+                    onRepoTerminalSelected(repo)
+                }
 
-            Button("Add Web View...") {
-                onRequestWebSourceCreation(.repo(repo))
-            }
+                Divider()
 
-            Button("New Web Session") {
-                onOpenWebNextSession(repo)
-            }
-            .disabled(webNextSessionSlug(repo) == nil)
+                Button("New Workspace...") {
+                    Task { @MainActor in
+                        await prepareNewWorkspaceSheet(for: repo)
+                    }
+                }
+                .disabled(state.isCreatingWorkspace)
 
-            Divider()
+                Button("Add Web View...") {
+                    onRequestWebSourceCreation(.repo(repo))
+                }
 
-            Button("Reveal in Finder") {
-                NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
-            }
+                Button("New Web Session") {
+                    onOpenWebNextSession(repo)
+                }
+                .disabled(webNextSessionSlug(repo) == nil)
 
-            Divider()
+                Divider()
 
-            Button("Remove from List", role: .destructive) {
-                removeRepo(repo)
+                Button("Reveal in Finder") {
+                    NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
+                }
+
+                Divider()
+
+                Button("Remove from List", role: .destructive) {
+                    removeRepo(repo)
+                }
             }
         }
+        .equatable()
 
         if showsChildren, isRepoExpanded(repo) {
             repoChildrenList(repo)
@@ -868,94 +866,130 @@ struct SidebarView: View {
         _ workspace: Workspace,
         placement: WorkspaceRowPlacement = .nested
     ) -> some View {
-        WorkspaceRow(
-            workspace: workspace,
-            isSelected: selectedWorkspace?.id == workspace.id,
+        let key = sessionKey(for: workspace)
+        let sessionState = rowSessionState(for: key)
+        let isSelected = selectedWorkspace?.id == workspace.id
+        let pinned = pinnedWorkspaces
+        let state = WorkspaceRowDisplayState(
+            workspaceID: workspace.id,
+            name: workspace.name,
+            status: workspace.status,
+            backendIdentifier: workspace.backendIdentifier,
+            gitBranch: workspace.gitBranch,
+            note: workspace.note,
+            createdAt: workspace.createdAt,
+            repoRemoteURL: workspace.sourceRepo?.remoteURL,
+            isSelected: isSelected,
             statusMessage: workspaceStatusMessage(workspace),
-            sessionActivity: sessionActivity(for: sessionKey(for: workspace)),
-            paneCount: paneCount(for: sessionKey(for: workspace)),
+            sessionActivity: sessionActivity(for: key, sessionState: sessionState),
+            paneCount: paneCount(for: key),
             repoContext: placement.repoContext,
             isNested: placement.isNested,
             isExpanded: placement.isNested && isWorkspaceExpanded(workspace),
             showsDisclosure: placement.isNested && !workspace.webSources.isEmpty,
             isPinned: workspace.isPinned,
-            liveStatus: liveSessionStatus(for: workspace),
-            tabsProvider: {
-                refreshForegroundProcessNames(for: sessionKey(for: workspace))
-                refreshTranscriptTails(for: sessionKey(for: workspace))
-                return tabSummaries(for: workspace)
-            },
-            onToggleExpansion: {
-                toggleWorkspaceExpansion(workspace)
-            },
-            onSelect: {
-                selectWorkspace(workspace)
-            },
-            onTogglePin: pinController.isPinnable(workspace) ? { togglePin(workspace) } : nil
+            isPinnable: pinController.isPinnable(workspace),
+            isPinnedSectionRow: placement.isPinnedSection,
+            pinnedIndex: pinned.firstIndex { $0.id == workspace.id },
+            pinnedCount: pinned.count,
+            // The live line and its elapsed timer belong to the selected row alone, which caps
+            // the sidebar's running clocks at that one workspace's visible rows.
+            liveStatus: isSelected
+                ? workspacePresentationController.liveSessionStatus(from: sessionState) : nil,
+            sessionState: sessionState
         )
-        .contextMenu {
-            Button("Open in New Window") {
-                openInNewWindow(workspace)
-            }
-            .disabled(true)
 
-            if usesHostWorkspaceFiles(for: workspace) {
-                Button("Reveal in Finder") {
-                    NSWorkspace.shared.selectFile(
-                        nil, inFileViewerRootedAtPath: workspace.path)
+        SidebarEquatableRow(state: state) {
+            WorkspaceRow(
+                workspace: workspace,
+                isSelected: state.isSelected,
+                statusMessage: state.statusMessage,
+                sessionActivity: state.sessionActivity,
+                paneCount: state.paneCount,
+                repoContext: state.repoContext,
+                isNested: state.isNested,
+                isExpanded: state.isExpanded,
+                showsDisclosure: state.showsDisclosure,
+                isPinned: state.isPinned,
+                liveStatus: state.liveStatus,
+                tabsProvider: {
+                    refreshForegroundProcessNames(from: sessionState)
+                    refreshTranscriptTails(from: sessionState)
+                    return tabSummaries(from: sessionState)
+                },
+                onToggleExpansion: {
+                    toggleWorkspaceExpansion(workspace)
+                },
+                onSelect: {
+                    selectWorkspace(workspace)
+                },
+                onTogglePin: state.isPinnable ? { togglePin(workspace) } : nil
+            )
+            .contextMenu {
+                Button("Open in New Window") {
+                    openInNewWindow(workspace)
                 }
-            }
+                .disabled(true)
 
-            Divider()
-
-            if placement.isPinnedSection {
-                Button("Move Up") {
-                    movePin(workspace, by: -1)
+                if usesHostWorkspaceFiles(for: workspace) {
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.selectFile(
+                            nil, inFileViewerRootedAtPath: workspace.path)
+                    }
                 }
-                .disabled(!pinController.canMove(workspace, by: -1, in: allWorkspaces))
 
-                Button("Move Down") {
-                    movePin(workspace, by: 1)
+                Divider()
+
+                if state.isPinnedSectionRow {
+                    Button("Move Up") {
+                        movePin(workspace, by: -1)
+                    }
+                    .disabled(!state.canMovePinUp)
+
+                    Button("Move Down") {
+                        movePin(workspace, by: 1)
+                    }
+                    .disabled(!state.canMovePinDown)
                 }
-                .disabled(!pinController.canMove(workspace, by: 1, in: allWorkspaces))
-            }
 
-            if pinController.isPinnable(workspace) {
-                Button(workspace.isPinned ? "Unpin" : "Pin") {
-                    togglePin(workspace)
+                if state.isPinnable {
+                    Button(state.isPinned ? "Unpin" : "Pin") {
+                        togglePin(workspace)
+                    }
                 }
-            }
 
-            Button(workspace.note == nil ? "Add Note…" : "Edit Note…") {
-                editNote(workspace)
-            }
-            if workspace.note != nil {
-                Button("Clear Note") {
-                    setNote(nil, on: workspace)
+                Button(state.note == nil ? "Add Note…" : "Edit Note…") {
+                    editNote(workspace)
                 }
-            }
-
-            Divider()
-
-            if workspace.backend == .local {
-                localWorkspaceActions(workspace)
-            } else {
-                providerWorkspaceActions(workspace)
-            }
-
-            if let repo = workspace.sourceRepo {
-                Button("New Web Session") {
-                    onOpenWebNextSession(repo)
+                if state.note != nil {
+                    Button("Clear Note") {
+                        setNote(nil, on: workspace)
+                    }
                 }
-                .disabled(webNextSessionSlug(repo) == nil)
-            }
 
-            Divider()
+                Divider()
 
-            Button("Delete Workspace", role: .destructive) {
-                deleteWorkspace(workspace)
+                if workspace.backend == .local {
+                    localWorkspaceActions(workspace)
+                } else {
+                    providerWorkspaceActions(workspace)
+                }
+
+                if let repo = workspace.sourceRepo {
+                    Button("New Web Session") {
+                        onOpenWebNextSession(repo)
+                    }
+                    .disabled(webNextSessionSlug(repo) == nil)
+                }
+
+                Divider()
+
+                Button("Delete Workspace", role: .destructive) {
+                    deleteWorkspace(workspace)
+                }
             }
         }
+        .equatable()
 
         if placement.isNested, isWorkspaceExpanded(workspace) {
             workspaceWebSourceList(workspace)
@@ -963,11 +997,20 @@ struct SidebarView: View {
     }
 
     private func archivedSectionHeader(for repo: Repo, count: Int) -> some View {
-        ArchivedDisclosureRow(
+        let state = ArchivedDisclosureDisplayState(
+            repoID: repo.id,
             count: count,
-            isExpanded: isArchivedSectionExpanded(repo),
-            onToggle: { toggleArchivedSection(for: repo) }
+            isExpanded: isArchivedSectionExpanded(repo)
         )
+
+        return SidebarEquatableRow(state: state) {
+            ArchivedDisclosureRow(
+                count: state.count,
+                isExpanded: state.isExpanded,
+                onToggle: { toggleArchivedSection(for: repo) }
+            )
+        }
+        .equatable()
     }
 
     @ViewBuilder
@@ -990,31 +1033,45 @@ struct SidebarView: View {
         }
     }
 
+    /// The one web-source row, at whatever indent its owner gives it — the global Web section
+    /// passes zero. Behind the same equality boundary as the repo and workspace rows: a web
+    /// source's row draws nothing an agent event can move, so under load it should never redraw.
     @ViewBuilder
     private func sidebarWebSourceButton(_ source: WebSource, paddingLeading: CGFloat) -> some View {
-        Button {
-            onWebSourceSelected(source)
-        } label: {
-            WebSourceRow(
-                source: source,
-                isSelected: selectedWebSource?.id == source.id
-            )
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-            .padding(.leading, paddingLeading)
-        }
-        .buttonStyle(.plain)
-        .contextMenu {
-            Button("Open in Browser") {
-                openWebSourceExternally(source)
-            }
+        let state = WebSourceRowDisplayState(
+            sourceID: source.id,
+            name: source.name,
+            urlString: source.baseURLString,
+            isSelected: selectedWebSource?.id == source.id,
+            indentation: paddingLeading
+        )
 
-            Divider()
+        SidebarEquatableRow(state: state) {
+            Button {
+                onWebSourceSelected(source)
+            } label: {
+                WebSourceRow(
+                    source: source,
+                    isSelected: state.isSelected
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .padding(.leading, state.indentation)
+            }
+            .buttonStyle(.plain)
+            .contextMenu {
+                Button("Open in Browser") {
+                    openWebSourceExternally(source)
+                }
 
-            Button("Remove from List", role: .destructive) {
-                removeWebSource(source)
+                Divider()
+
+                Button("Remove from List", role: .destructive) {
+                    removeWebSource(source)
+                }
             }
         }
+        .equatable()
     }
 
     // MARK: - Actions
@@ -1803,65 +1860,65 @@ struct SidebarView: View {
         )
     }
 
-    private func sessionActivity(for key: HostTerminalSessionKey) -> SidebarSessionActivity {
+    /// Everything a row needs to know about the tabs sharing its session key, gathered once per
+    /// row per render. Rows compare on this, so a status change on one session leaves every
+    /// other row's state untouched (#1366) — and the two lazy hover resolutions ride it, so a
+    /// process name or transcript tail landing *after* a card opens still invalidates the one
+    /// row that will rebuild that card.
+    private func rowSessionState(for key: HostTerminalSessionKey) -> SidebarRowSessionState {
+        workspacePresentationController.rowSessionState(
+            for: key,
+            sessions: hostSessions,
+            agentStatus: agentStatus,
+            foregroundName: { foregroundNameBySessionID[$0] },
+            transcriptTail: { transcriptTailBySessionID[$0] }
+        )
+    }
+
+    private func sessionActivity(
+        for key: HostTerminalSessionKey,
+        sessionState: SidebarRowSessionState
+    ) -> SidebarSessionActivity {
         workspacePresentationController.sessionActivity(
             for: key,
             paneCountBySessionKey: paneCountBySessionKey,
             activeSessionKey: activeSessionKey,
-            sessions: hostSessions,
-            agentStatus: agentStatus
+            sessionState: sessionState
         )
     }
 
-    /// The live status line for the selected row, and nothing for any other. Resolving it here
-    /// keeps the lookup to one row per render and, because the elapsed timer only mounts where
-    /// this returns a value, keeps the sidebar to one running clock. The lookup reads the same
-    /// `agentStatus` closure `sessionActivity(for:)` already calls on this key, so it registers
-    /// no observation the row did not have.
-    private func liveSessionStatus(for workspace: Workspace) -> SidebarLiveSessionStatus? {
-        guard selectedWorkspace?.id == workspace.id else { return nil }
-        return workspacePresentationController.liveSessionStatus(
-            for: sessionKey(for: workspace),
-            sessions: hostSessions,
-            agentStatus: agentStatus
-        )
-    }
-
-    /// One summary per terminal tab sharing `key`, in session order. Each carries
-    /// its display title and agent status (when that tab runs a known agent).
-    private func tabSummaries(for key: HostTerminalSessionKey) -> [SidebarTabSummary] {
-        let normalizedKey = key.normalized()
-        return
-            hostSessions
-            .filter { $0.key == normalizedKey }
-            .map { session in
-                let sessionAgentStatus = agentStatus(session.id)
-                let title = titleForSession(session)
-                // Plain tabs prefer the real foreground process name; agent tabs keep their
-                // agent-driven title unchanged.
-                let displayTitle =
-                    sessionAgentStatus == nil
-                    ? TerminalForegroundProcessResolver.preferredTabTitle(
-                        foregroundName: foregroundNameBySessionID[session.id],
-                        terminalTitle: title)
-                    : title
-                // Only Claude Code tabs carry a transcript tail. Gating on the current kind (not
-                // just presence of a cached entry) keeps a stale tail from a prior Claude session
-                // from leaking onto a non-Claude agent that later reuses the same host session id.
-                let transcriptTail =
-                    sessionAgentStatus?.kind == .claudeCode
-                    ? transcriptTailBySessionID[session.id] : nil
-                return SidebarTabSummary(
-                    id: session.id,
-                    title: displayTitle,
-                    agentStatus: sessionAgentStatus,
-                    transcriptTail: transcriptTail
-                )
-            }
-    }
-
-    private func tabSummaries(for workspace: Workspace) -> [SidebarTabSummary] {
-        tabSummaries(for: sessionKey(for: workspace))
+    /// One summary per terminal tab of a row, in session order, built from the row's own session
+    /// state — so the card reports exactly the values the row's equality was decided on.
+    ///
+    /// The title is the deliberate exception. `titleForSession` reads the tile-tree store through
+    /// a reference, so it is live whenever it is called; resolving it during a render instead
+    /// would put a scan over every mounted surface into every row of every evaluation, which is
+    /// the shape #1354 spent its slice removing. A title that changes while a card is already
+    /// open therefore repaints on the next hover rather than in place.
+    private func tabSummaries(from state: SidebarRowSessionState) -> [SidebarTabSummary] {
+        state.sessions.enumerated().map { index, session in
+            let sessionAgentStatus = state.statuses[index]
+            let title = titleForSession(session)
+            // Plain tabs prefer the real foreground process name; agent tabs keep their
+            // agent-driven title unchanged.
+            let displayTitle =
+                sessionAgentStatus == nil
+                ? TerminalForegroundProcessResolver.preferredTabTitle(
+                    foregroundName: state.foregroundNames[index],
+                    terminalTitle: title)
+                : title
+            // Only Claude Code tabs carry a transcript tail. Gating on the current kind (not
+            // just presence of a cached entry) keeps a stale tail from a prior Claude session
+            // from leaking onto a non-Claude agent that later reuses the same host session id.
+            let transcriptTail =
+                sessionAgentStatus?.kind == .claudeCode ? state.transcriptTails[index] : nil
+            return SidebarTabSummary(
+                id: session.id,
+                title: displayTitle,
+                agentStatus: sessionAgentStatus,
+                transcriptTail: transcriptTail
+            )
+        }
     }
 
     /// Kicks off async foreground-process resolution for the plain (non-agent) tabs under
@@ -1869,12 +1926,11 @@ struct SidebarView: View {
     /// idempotent — the resolver caches for ~2s and this writes only on change — so it is safe
     /// to call from the hover card's lazy `tabsProvider`. Resolves in every multiplexing mode
     /// (tmux pane command when available, otherwise the directory's running program).
-    private func refreshForegroundProcessNames(for key: HostTerminalSessionKey) {
+    private func refreshForegroundProcessNames(from state: SidebarRowSessionState) {
         let mode = TerminalMultiplexingMode.resolve()
-        let normalizedKey = key.normalized()
-        let plainSessions = hostSessions.filter {
-            $0.key == normalizedKey && agentStatus($0.id) == nil
-        }
+        let plainSessions = zip(state.sessions, state.statuses)
+            .filter { $0.1 == nil }
+            .map(\.0)
         guard !plainSessions.isEmpty else { return }
         let resolver = foregroundResolver
         Task { @MainActor in
@@ -1894,16 +1950,15 @@ struct SidebarView: View {
     /// idempotent — the resolver caches per file for a short TTL and this writes only on change —
     /// so it is safe to call from the hover card's lazy `tabsProvider`. Non-Claude tabs and every
     /// read/parse failure resolve to absent (#680).
-    private func refreshTranscriptTails(for key: HostTerminalSessionKey) {
-        let normalizedKey = key.normalized()
-        let agentSessions = hostSessions.filter {
-            $0.key == normalizedKey && agentStatus($0.id)?.kind == .claudeCode
-        }
+    private func refreshTranscriptTails(from state: SidebarRowSessionState) {
+        let agentSessions = zip(state.sessions, state.statuses)
+            .filter { $0.1?.kind == .claudeCode }
+            .map { (session: $0.0, status: $0.1) }
         guard !agentSessions.isEmpty else { return }
         let resolver = transcriptTailResolver
         Task { @MainActor in
-            for session in agentSessions {
-                guard let status = agentStatus(session.id) else { continue }
+            for (session, status) in agentSessions {
+                guard let status else { continue }
                 let tail = await resolver.tail(
                     cwd: status.cwd, agentSessionID: status.agentSessionID, kind: status.kind)
                 if let tail, transcriptTailBySessionID[session.id] != tail {
@@ -2035,18 +2090,12 @@ struct SidebarView: View {
         return rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func sortedWorkspaces(for repo: Repo) -> [Workspace] {
-        repo.workspaces.sorted { lhs, rhs in
-            lhs.lastAccessedAt > rhs.lastAccessedAt
-        }
-    }
-
     private func activeWorkspaces(for repo: Repo) -> [Workspace] {
-        sortedWorkspaces(for: repo).filter { $0.status != .archived }
+        orderCache.activeWorkspaces(for: repo)
     }
 
     private func archivedWorkspaces(for repo: Repo) -> [Workspace] {
-        sortedWorkspaces(for: repo).filter { $0.status == .archived }
+        orderCache.archivedWorkspaces(for: repo)
     }
 
     /// Collapsed by default; auto-expands when the selected workspace is archived so a
@@ -2073,15 +2122,11 @@ struct SidebarView: View {
     }
 
     private func sortedRepoWebSources(for repo: Repo) -> [WebSource] {
-        repo.webSources.sorted { lhs, rhs in
-            lhs.lastAccessedAt > rhs.lastAccessedAt
-        }
+        orderCache.repoWebSources(for: repo)
     }
 
     private func sortedWorkspaceWebSources(for workspace: Workspace) -> [WebSource] {
-        workspace.webSources.sorted { lhs, rhs in
-            lhs.lastAccessedAt > rhs.lastAccessedAt
-        }
+        orderCache.workspaceWebSources(for: workspace)
     }
 
     private func isRepoExpanded(_ repo: Repo) -> Bool {

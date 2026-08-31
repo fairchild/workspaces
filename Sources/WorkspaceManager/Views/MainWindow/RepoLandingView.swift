@@ -21,13 +21,16 @@ struct RepoLandingView: View {
     let onOpenWorkspaceInEditor: (Workspace) -> Void
 
     @State private var agentStatuses: [UUID: WorkspaceProcessMonitor.AgentStatus] = [:]
+    /// Both lists below sit in `body`, and the agent-status poll re-runs it on its own clock,
+    /// so the orderings are memoized behind their inputs the same way the sidebar's are (#1366).
+    @State private var orderCache = MainWindowOrderCache()
 
     private var sortedWorkspaces: [Workspace] {
-        repo.workspaces.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+        orderCache.workspaces(for: repo)
     }
 
     private var sortedRepoWebSources: [WebSource] {
-        repo.webSources.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+        orderCache.repoWebSources(for: repo)
     }
 
     var body: some View {
