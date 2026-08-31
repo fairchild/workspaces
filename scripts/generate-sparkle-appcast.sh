@@ -15,6 +15,8 @@ OUTPUT_PATH="$PROJECT_DIR/build/appcast.xml"
 CHANGELOG_PATH="$PROJECT_DIR/CHANGELOG.md"
 REPO="${GITHUB_REPOSITORY:-fairchild/workspaces}"
 TAG=""
+NOTES_ONLY=false
+NOTES_VERSION=""
 
 fail() {
     echo "[generate-sparkle-appcast] ERROR: $*" >&2
@@ -27,6 +29,62 @@ html_escape() {
         -e 's/</\&lt;/g' \
         -e 's/>/\&gt;/g' \
         -e 's/"/\&quot;/g'
+}
+
+# Renders the inline markdown subset CHANGELOG.md actually uses — **strong**,
+# `code`, and [text](url) for http/https/mailto — into HTML. Input is already
+# HTML-escaped, so the tags emitted here are the only markup that can reach
+# Sparkle. Anything unrecognized (single asterisks, unclosed pairs, other URL
+# schemes) is left as literal text rather than guessed at.
+render_inline_markdown() {
+    awk '
+        function render(s,   out, n, i, c, rest, endpos, urlrest, uclose, url) {
+            out = ""
+            n = length(s)
+            i = 1
+            while (i <= n) {
+                c = substr(s, i, 1)
+                if (c == "`") {
+                    rest = substr(s, i + 1)
+                    endpos = index(rest, "`")
+                    if (endpos > 1) {
+                        out = out "<code>" substr(rest, 1, endpos - 1) "</code>"
+                        i += endpos + 1
+                        continue
+                    }
+                } else if (substr(s, i, 2) == "**") {
+                    rest = substr(s, i + 2)
+                    endpos = index(rest, "**")
+                    if (endpos > 1) {
+                        out = out "<strong>" render(substr(rest, 1, endpos - 1)) "</strong>"
+                        i += endpos + 3
+                        continue
+                    }
+                } else if (c == "[") {
+                    rest = substr(s, i + 1)
+                    endpos = index(rest, "]")
+                    if (endpos > 1 && substr(rest, endpos + 1, 1) == "(") {
+                        urlrest = substr(rest, endpos + 2)
+                        uclose = index(urlrest, ")")
+                        url = substr(urlrest, 1, uclose - 1)
+                        if (uclose > 1 && url ~ /^(https?:\/\/|mailto:)[^ ]+$/) {
+                            out = out "<a href=\"" url "\">" render(substr(rest, 1, endpos - 1)) "</a>"
+                            i += endpos + uclose + 2
+                            continue
+                        }
+                    }
+                }
+                out = out c
+                i++
+            }
+            return out
+        }
+        { print render($0) }
+    '
+}
+
+inline_html() {
+    printf '%s\n' "$1" | html_escape | render_inline_markdown
 }
 
 extract_changelog_section() {
@@ -67,7 +125,7 @@ render_release_notes_html() {
                 printf '        </ul>\n'
                 in_list=false
             fi
-            escaped="$(printf '%s' "${BASH_REMATCH[1]}" | html_escape)"
+            escaped="$(inline_html "${BASH_REMATCH[1]}")"
             printf '        <h3>%s</h3>\n' "$escaped"
             continue
         fi
@@ -77,7 +135,7 @@ render_release_notes_html() {
                 printf '        <ul>\n'
                 in_list=true
             fi
-            escaped="$(printf '%s' "${BASH_REMATCH[1]}" | html_escape)"
+            escaped="$(inline_html "${BASH_REMATCH[1]}")"
             printf '          <li>%s</li>\n' "$escaped"
             continue
         fi
@@ -94,7 +152,7 @@ render_release_notes_html() {
             printf '        </ul>\n'
             in_list=false
         fi
-        escaped="$(printf '%s' "$line" | html_escape)"
+        escaped="$(inline_html "$line")"
         printf '        <p>%s</p>\n' "$escaped"
     done
 
@@ -107,16 +165,22 @@ usage() {
     cat <<'EOF'
 Usage:
   scripts/generate-sparkle-appcast.sh --dmg <path> --tag <tag> [options]
+  scripts/generate-sparkle-appcast.sh --notes-only --version <version> [--changelog <path>]
 
 Options:
   --app <path>       App bundle used for version metadata (default: build/WorkSpaces.app)
   --output <path>    Output appcast path (default: build/appcast.xml)
   --changelog <path> Changelog used for embedded release notes (default: CHANGELOG.md)
   --repo <owner/repo> GitHub repository for release asset URLs (default: GITHUB_REPOSITORY or fairchild/workspaces)
+  --notes-only       Print the rendered release-notes HTML for --version and exit.
+                     This is exactly what Sparkle shows in the update dialog, so
+                     it previews a release without a DMG, app bundle, or key.
+  --version <ver>    Changelog version that --notes-only renders (e.g. 0.25.0)
   --help            Show this help
 
 Required environment:
   SPARKLE_PRIVATE_KEY  Private EdDSA key exported by Sparkle generate_keys -x.
+                       Not needed for --notes-only.
 EOF
 }
 
@@ -138,6 +202,14 @@ while [[ $# -gt 0 ]]; do
             CHANGELOG_PATH="${2:-}"
             shift 2
             ;;
+        --notes-only)
+            NOTES_ONLY=true
+            shift
+            ;;
+        --version)
+            NOTES_VERSION="${2:-}"
+            shift 2
+            ;;
         --repo)
             REPO="${2:-}"
             shift 2
@@ -157,6 +229,16 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "$NOTES_ONLY" == true ]]; then
+    [[ -n "$NOTES_VERSION" ]] || fail "--notes-only requires --version"
+    [[ -f "$CHANGELOG_PATH" ]] || fail "CHANGELOG.md not found: $CHANGELOG_PATH"
+    if ! NOTES_ENTRY="$(extract_changelog_section "$NOTES_VERSION")"; then
+        fail "CHANGELOG.md does not contain release notes for WorkSpaces $NOTES_VERSION"
+    fi
+    printf '%s\n' "$NOTES_ENTRY" | render_release_notes_html "$NOTES_VERSION"
+    exit 0
+fi
 
 [[ -n "$DMG_PATH" ]] || fail "Missing required --dmg path"
 [[ -n "$TAG" ]] || fail "Missing required --tag"
