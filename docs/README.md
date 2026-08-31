@@ -37,7 +37,7 @@ Public docs navigation is path-based:
 
 ```text
 https://spaces.cloudcompute.com/docs/product_overview
-https://spaces.cloudcompute.com/docs/CONTEXT
+https://spaces.cloudcompute.com/docs/GLOSSARY
 https://spaces.cloudcompute.com/docs/development/libghostty-integration
 ```
 
@@ -140,7 +140,7 @@ Use extensionless paths for rendered docs links:
 
 ```html
 <a href="/docs/product_overview">Product Overview</a>
-<a href="/docs/CONTEXT">Vocabulary</a>
+<a href="/docs/GLOSSARY">Vocabulary</a>
 ```
 
 Direct links to existing HTML pages are fine:
@@ -209,7 +209,7 @@ With the server running, spot-check:
 curl -I http://127.0.0.1:8088/docs/
 curl -I http://127.0.0.1:8088/docs/product_overview
 curl -I http://127.0.0.1:8088/docs/product_overview.md
-curl -I http://127.0.0.1:8088/docs/CONTEXT
+curl -I http://127.0.0.1:8088/docs/GLOSSARY
 curl -I http://127.0.0.1:8088/favicon.ico
 ```
 
@@ -218,6 +218,6 @@ Expected results:
 - `/docs/` returns `200`
 - `/docs/product_overview` returns rendered HTML
 - `/docs/product_overview.md` returns raw Markdown
-- `/docs/CONTEXT` renders root `GLOSSARY.md`
+- `/docs/GLOSSARY` renders root `GLOSSARY.md`
 - `/` redirects to `/docs/`
 - `/favicon.ico` redirects to the docs favicon
