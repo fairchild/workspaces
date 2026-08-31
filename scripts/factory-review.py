@@ -337,6 +337,73 @@ def review_was_posted(jobs: list[dict[str, Any]]) -> bool:
     return False
 
 
+def count_unproductive_attempts(
+    runs: list[dict[str, Any]],
+    produced_by_run: dict[str, bool],
+    current_run_id: str,
+    current_run_attempt: int = 1,
+) -> int:
+    """Raw attempts today that ended without posting anything.
+
+    Once the daily budget is spent, every further trigger dies at the admit
+    gate for free -- and it is those refusals that walk the raw-attempt
+    counter to the runaway ceiling. This is how many of them there were, so
+    the ceiling's message can say so.
+    """
+    productive = [
+        run
+        for run in runs
+        if isinstance(run, dict)
+        and run.get("id") is not None
+        and produced_by_run.get(str(run["id"]), False)
+    ]
+    return count_daily_run_attempts(
+        runs, current_run_id, current_run_attempt
+    ) - count_daily_run_attempts(productive, "")
+
+
+def runaway_guard_reason(
+    *,
+    raw_attempts: int,
+    runaway_cap: int,
+    budget: int,
+    daily_cap: int,
+    unproductive_attempts: int,
+    lane_noun: str,
+) -> str:
+    """Why the raw-attempt ceiling was reached, named for the cause.
+
+    One ceiling, two situations. A crash loop (#1179) posts nothing, so it
+    never spends budget and this ceiling is the only thing that can stop it.
+    But once the daily budget *is* spent, ordinary trigger volume walks the
+    same counter to the same ceiling with every attempt refused at the admit
+    gate -- healthy backpressure, self-clearing at 00:00Z.
+
+    Reporting the second as "possible crash loop" points the reader at a
+    fault that does not exist: on 2026-08-08 two agents diagnosed the runaway
+    cap as the defect and proposed raising it, which would have unblocked
+    nothing, since execution would clear this ceiling only to be refused by
+    the budget check below (#1271; specimen #1487, run 33382299160).
+
+    The budget being over cap is the discriminator rather than "did anything
+    post today", because a crash loop's runs conclude without posting and so
+    release their claim -- it cannot present as an exhausted budget, even on
+    a day that posted reviews before it started.
+    """
+    exceeded = (
+        f"daily runaway guard of {runaway_cap} run attempts is exceeded "
+        f"({raw_attempts} run attempts)"
+    )
+    if budget <= daily_cap:
+        return f"{exceeded} -- possible crash loop"
+    return (
+        f"{exceeded} -- budget exhaustion, not a crash loop: the daily {lane_noun} "
+        f"cap of {daily_cap} is exhausted ({budget} posted or in-flight today) and "
+        f"the {unproductive_attempts} attempts refused since walked the count past "
+        "the ceiling; both counters reset at 00:00Z UTC"
+    )
+
+
 def count_daily_review_budget(
     runs: list[dict[str, Any]],
     review_posted_by_run: dict[str, bool],
@@ -380,16 +447,7 @@ def authorize_execution(
     day = datetime.now(UTC).date().isoformat()
     runs = client.workflow_runs_on("factory-review-execute.yml", day)
 
-    # A crash loop (#1179) never posts a review, so the budget check below
-    # never sees it -- this hard ceiling on raw attempts is what actually
-    # stops it from retrying forever.
     raw_attempts = count_daily_run_attempts(runs, current_run_id, current_run_attempt)
-    print(f"Factory review raw attempt count: {raw_attempts}/{runaway_cap}")
-    if raw_attempts > runaway_cap:
-        raise FactoryReviewError(
-            f"daily runaway guard of {runaway_cap} run attempts is exceeded "
-            f"({raw_attempts} run attempts) -- possible crash loop"
-        )
 
     # Deliberately not filtered by the run's overall conclusion: an unrelated
     # sibling job (e.g. telemetry) failing must not erase a review that the
@@ -400,7 +458,31 @@ def authorize_execution(
         if isinstance(run, dict) and run.get("id") is not None
     }
     review_budget = count_daily_review_budget(runs, review_posted_by_run, current_run_id)
+
+    # Both counters print before either check, so a failure at either one
+    # carries the other's number -- run 33382299160's log stopped at the raw
+    # count and never showed the budget that explained it (#1271).
+    print(f"Factory review raw attempt count: {raw_attempts}/{runaway_cap}")
     print(f"Factory review execution budget: {review_budget}/{daily_cap}")
+
+    # A crash loop (#1179) never posts a review, so the budget check below
+    # never sees it -- this hard ceiling on raw attempts is what actually
+    # stops it from retrying forever, and so it still fires first whatever
+    # the budget says. The budget is only computed earlier, to name which of
+    # the ceiling's two situations this is; neither threshold moves.
+    if raw_attempts > runaway_cap:
+        raise FactoryReviewError(
+            runaway_guard_reason(
+                raw_attempts=raw_attempts,
+                runaway_cap=runaway_cap,
+                budget=review_budget,
+                daily_cap=daily_cap,
+                unproductive_attempts=count_unproductive_attempts(
+                    runs, review_posted_by_run, current_run_id, current_run_attempt
+                ),
+                lane_noun="review",
+            )
+        )
     if review_budget > daily_cap:
         raise FactoryReviewError(
             f"daily review cap of {daily_cap} is exceeded "

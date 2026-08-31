@@ -108,7 +108,7 @@ registries (`config/github/repo-variables.json` + its drift workflow +
 The lanes already share three-quarters of a convention. Every script returns
 0 for a *decision* and reserves non-zero for *errors* — with three places
 that classify a policy outcome as an error. The review executor's
-daily/runaway caps raise and go red (`scripts/factory-review.py:388-408`).
+daily/runaway caps raise and go red (`scripts/factory-review.py:470-489`).
 The implement lane's `authorize` re-checks the same budget its `claim` step
 had treated as a comment-and-exit-0 decision, and raises
 (`scripts/factory-implement.py:877-881`). And implement's
