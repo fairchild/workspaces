@@ -75,12 +75,23 @@ left. The terminal multiplexer already holds them; what breaks it is a launch pa
 that tears down sessions it did not create (#1267). This is the real work, and
 everything else waits on it.
 
-**Channels** — unstable, next, and stable as something I select. A packaging and
-appcast concern, and mostly bookkeeping once the first two hold.
+**Channels** — unstable, next, and stable as builds I select between, and run at
+the same time. A channel is a build-time identity, not a launch flag: UserDefaults
+domains, LaunchServices registration, dock identity, and the update feed all key
+off the bundle identifier, so two installs sharing one identifier share preferences
+and will update over each other whatever the environment says. Data, automation,
+and multiplexer paths derive from that identity; the existing environment overrides
+stay what they are, a way to isolate a single run.
 
 Portability is what makes a channel switch uneventful. Reversing the order buys a
 release process that loses working state on a schedule, which is the failure this
 section exists to avoid.
+
+Concurrency and succession pull the same knob in opposite directions. Channels
+running side by side want separate session substrates so neither disturbs the
+other; stepping onto a new build wants the sessions to come across. Those are
+different operations rather than competing defaults: isolate by default, and move
+sessions across a channel boundary by adopting them deliberately.
 
 ## How work gets made
 
