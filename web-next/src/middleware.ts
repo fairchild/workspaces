@@ -14,8 +14,9 @@ import type { NextRequest } from "next/server";
 import {
 	authBypassEnabled,
 	LOCAL_AUTH_COOKIE,
-	loopbackHostOrigin,
+	localRequestOrigin,
 	localModeEnabled,
+	parseExtraLocalOrigins,
 	localSessionCookieValid,
 	resolveAuthSecret,
 	TEST_AUTH_COOKIE,
@@ -28,7 +29,11 @@ const PUBLIC_PATHS = new Set(["/sign-in", "/api/auth"]);
 // /api/healthz is the embedded-native readiness probe (#987) — it must answer
 // before any sign-in exists, in every auth mode. Exact-match only, so a
 // future route nested under it can't silently inherit the auth bypass.
-const PUBLIC_EXACT_PATHS = new Set(["/api/healthz"]);
+// /api/pairing/ack is the pairing handshake: POST self-authenticates with
+// the minted token in its body, GET returns only the latest ack timestamp
+// (the desktop pairing window polls it pre-cookie). Exact-match, like
+// healthz, so nested paths never inherit the bypass.
+const PUBLIC_EXACT_PATHS = new Set(["/api/healthz", "/api/pairing/ack"]);
 
 function isPublic(pathname: string): boolean {
 	if (PUBLIC_EXACT_PATHS.has(pathname)) return true;
@@ -55,7 +60,7 @@ function unauthorizedJson(): NextResponse {
 
 function forbiddenLocalHostJson(): NextResponse {
 	return NextResponse.json(
-		{ error: "local mode only accepts localhost or 127.0.0.1 Host headers" },
+		{ error: "local mode only accepts loopback or allowlisted Host headers" },
 		{ status: 403 },
 	);
 }
@@ -79,11 +84,14 @@ export async function middleware(request: NextRequest) {
 	const { pathname } = request.nextUrl;
 
 	if (localModeEnabled()) {
-		const localOrigin = loopbackHostOrigin(request.headers.get("host"));
+		const localOrigin = localRequestOrigin(
+			request.headers.get("host"),
+			request.headers.get("x-forwarded-proto"),
+		);
 		if (!localOrigin) {
 			return isApiPath(pathname)
 				? forbiddenLocalHostJson()
-				: new NextResponse("local mode only accepts loopback Host headers", {
+				: new NextResponse("local mode only accepts loopback or allowlisted Host headers", {
 						status: 403,
 					});
 		}
@@ -96,21 +104,42 @@ export async function middleware(request: NextRequest) {
 			// off-origin resolution falls back to "/".
 			const target = safeRedirectPath(request.nextUrl.searchParams.get("redirect"));
 			const resolved = new URL(target, localOrigin);
+			const nextPath =
+				resolved.origin === localOrigin
+					? `${resolved.pathname}${resolved.search}`
+					: "/";
+			// With pairing unconfigured (no extra origins), sign-in behaves
+			// byte-identically to the pre-pairing app: straight to the
+			// destination. Configured, it bounces through the redemption route
+			// so any successful QR sign-in — native scanner and camera-app
+			// Safari alike — records the pairing ack first.
 			const destination =
-				resolved.origin === localOrigin ? resolved : new URL("/", localOrigin);
+				parseExtraLocalOrigins().size === 0
+					? new URL(nextPath, localOrigin)
+					: new URL(
+							`/api/pairing/redeemed?next=${encodeURIComponent(nextPath)}`,
+							localOrigin,
+						);
 			const response = NextResponse.redirect(destination);
 			response.cookies.set(LOCAL_AUTH_COOKIE, queryToken ?? "", {
 				path: "/",
 				httpOnly: true,
 				sameSite: "lax",
-				secure: false,
+				secure: localOrigin.startsWith("https:"),
 			});
 			return response;
 		}
 		if (isPublic(pathname)) return NextResponse.next();
-		return localSessionCookieValid(request.cookies.get(LOCAL_AUTH_COOKIE)?.value)
-			? NextResponse.next()
-			: unauthenticatedResponse(request);
+		if (localSessionCookieValid(request.cookies.get(LOCAL_AUTH_COOKIE)?.value)) {
+			return NextResponse.next();
+		}
+		// Unauthenticated in local mode: API callers get the same 401 JSON;
+		// a page redirects to /sign-in on the *resolved* origin, so a request
+		// proxied in over the tailnet is never bounced to the server's own
+		// loopback bind (which on the phone is the phone itself) (codex review).
+		return isApiPath(pathname)
+			? unauthorizedJson()
+			: NextResponse.redirect(new URL("/sign-in", localOrigin));
 	}
 
 	if (isPublic(pathname)) return NextResponse.next();

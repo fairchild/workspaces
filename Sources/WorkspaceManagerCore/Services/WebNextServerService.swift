@@ -63,6 +63,13 @@ public struct WebNextServerConfiguration: Sendable {
     /// Where per-launch server logs (captured child stdout/stderr) are written.
     public var logDirectory: URL
     public var launchCommand: WebNextLaunchCommand
+    /// Extra exact-match origins forwarded to the child as
+    /// `WEB_NEXT_EXTRA_LOCAL_ORIGINS`, so a trusted reverse proxy
+    /// (`tailscale serve`) can front the loopback bind for mobile pairing.
+    /// A provider, not a value: resolution can shell out (Tailscale CLI),
+    /// so it runs at spawn time — off the launch path, and fresh for every
+    /// relaunch — never at configuration time.
+    public var extraLocalOriginsProvider: @Sendable () -> [String]
     /// How long to wait for `/api/healthz` after spawn before declaring failure.
     /// Sized for a cold first run: `start:local` builds web-next when
     /// `.next/BUILD_ID` is absent, which takes one to two minutes. A generous
@@ -84,6 +91,7 @@ public struct WebNextServerConfiguration: Sendable {
         dataDir: URL? = nil,
         logDirectory: URL? = nil,
         launchCommand: WebNextLaunchCommand = .default,
+        extraLocalOriginsProvider: @escaping @Sendable () -> [String] = { [] },
         readinessTimeout: TimeInterval = 180,
         readinessPollInterval: TimeInterval = 0.5,
         terminationGracePeriod: TimeInterval = 5,
@@ -97,6 +105,7 @@ public struct WebNextServerConfiguration: Sendable {
         self.dataDir = resolvedDataDir
         self.logDirectory = logDirectory ?? resolvedDataDir.appendingPathComponent("logs", isDirectory: true)
         self.launchCommand = launchCommand
+        self.extraLocalOriginsProvider = extraLocalOriginsProvider
         self.readinessTimeout = readinessTimeout
         self.readinessPollInterval = readinessPollInterval
         self.terminationGracePeriod = terminationGracePeriod
@@ -327,9 +336,12 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         let readEnd = pipeFDs[0]
         let writeEnd = pipeFDs[1]
 
-        var environment = ProcessInfo.processInfo.environment
-        environment["PORT"] = String(configuration.port)
-        environment["WEB_NEXT_DATA_DIR"] = configuration.dataDir.path
+        let environment = Self.childEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            port: configuration.port,
+            dataDir: configuration.dataDir.path,
+            extraLocalOrigins: configuration.extraLocalOriginsProvider()
+        )
 
         let pid: pid_t
         do {
@@ -352,6 +364,27 @@ public actor WebNextServerService: WebNextServerServiceProtocol {
         close(writeEnd)
         startLogRedactionReader(readEnd: readEnd, logFD: logFD)
         return pid
+    }
+
+    /// The child's environment. The service is the sole authority over the
+    /// remote-origin surface: with no origins from the provider, any ambient
+    /// WEB_NEXT_EXTRA_LOCAL_ORIGINS inherited from the launching shell is
+    /// stripped — "pairing disabled" always means a loopback-only child.
+    public static func childEnvironment(
+        base: [String: String],
+        port: Int,
+        dataDir: String,
+        extraLocalOrigins: [String]
+    ) -> [String: String] {
+        var environment = base
+        environment["PORT"] = String(port)
+        environment["WEB_NEXT_DATA_DIR"] = dataDir
+        if extraLocalOrigins.isEmpty {
+            environment.removeValue(forKey: "WEB_NEXT_EXTRA_LOCAL_ORIGINS")
+        } else {
+            environment["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] = extraLocalOrigins.joined(separator: ",")
+        }
+        return environment
     }
 
     /// Streams `readEnd` to `logFD`, redacting any `token=<value>` occurrence

@@ -106,7 +106,8 @@ struct WebNextServerServiceTests {
             readinessPollInterval: TimeInterval = 0.25,
             terminationGracePeriod: TimeInterval = 1,
             watchdogInterval: TimeInterval = 5,
-            watchdogFailureThreshold: Int = 3
+            watchdogFailureThreshold: Int = 3,
+            extraLocalOrigins: [String] = []
         ) -> WebNextServerConfiguration {
             WebNextServerConfiguration(
                 webNextRoot: root,
@@ -114,6 +115,7 @@ struct WebNextServerServiceTests {
                 dataDir: dataDir,
                 logDirectory: root.appendingPathComponent("logs", isDirectory: true),
                 launchCommand: WebNextLaunchCommand(executablePath: "/bin/sh", arguments: ["-c", script]),
+                extraLocalOriginsProvider: { extraLocalOrigins },
                 readinessTimeout: readinessTimeout,
                 readinessPollInterval: readinessPollInterval,
                 terminationGracePeriod: terminationGracePeriod,
@@ -282,6 +284,52 @@ struct WebNextServerServiceTests {
                 URL(fileURLWithPath: observedCwd.trimmingCharacters(in: .whitespacesAndNewlines))
                     .resolvingSymlinksInPath().path == fixture.root.resolvingSymlinksInPath().path
             )
+        }
+    }
+
+    @Test("childEnvironment is the sole authority over the remote-origin surface")
+    func childEnvironmentStripsAmbientOrigins() {
+        let ambient = [
+            "WEB_NEXT_EXTRA_LOCAL_ORIGINS": "https://ambient.example",
+            "HOME": "/x",
+        ]
+        let stripped = WebNextServerService.childEnvironment(
+            base: ambient, port: 3140, dataDir: "/data", extraLocalOrigins: [])
+        #expect(stripped["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] == nil)
+        #expect(stripped["HOME"] == "/x")
+
+        let set = WebNextServerService.childEnvironment(
+            base: ambient, port: 3140, dataDir: "/data",
+            extraLocalOrigins: ["https://a.example", "https://b.example"])
+        #expect(set["WEB_NEXT_EXTRA_LOCAL_ORIGINS"] == "https://a.example,https://b.example")
+    }
+
+    @Test("configured extra local origins reach the child as WEB_NEXT_EXTRA_LOCAL_ORIGINS")
+    func extraLocalOriginsInjected() async throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        let script = """
+            echo "${WEB_NEXT_EXTRA_LOCAL_ORIGINS:-unset}" > "$WEB_NEXT_DATA_DIR/observed-origins"
+            \(fixture.healthzServerScript)
+            """
+        let service = WebNextServerService(
+            configuration: fixture.configuration(
+                script: script,
+                readinessTimeout: await Self.readyBudget(),
+                extraLocalOrigins: ["https://mac.tail.ts.net", "https://second.example"]))
+
+        try await withService(service) {
+            await service.start()
+            guard case .ready = await service.state else {
+                Issue.record("expected .ready, got \(await service.state)")
+                return
+            }
+            let observed = try String(
+                contentsOf: fixture.dataDir.appendingPathComponent("observed-origins"),
+                encoding: .utf8)
+            #expect(
+                observed.trimmingCharacters(in: .whitespacesAndNewlines)
+                    == "https://mac.tail.ts.net,https://second.example")
         }
     }
 

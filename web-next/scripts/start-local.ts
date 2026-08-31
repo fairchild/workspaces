@@ -12,7 +12,10 @@ import {
 	localSignInUrl,
 	localTokenPath,
 } from "../src/lib/auth/local-token";
-import { assertAuthModeConfig } from "../src/lib/auth/config";
+import {
+	assertAuthModeConfig,
+	parseExtraLocalOrigins,
+} from "../src/lib/auth/config";
 import { parseDotEnv } from "../src/lib/env/parse-dotenv";
 
 const WEB_NEXT_ROOT = path.resolve(
@@ -74,7 +77,19 @@ async function main(): Promise<void> {
 
 	console.log(`Local sign-in: ${localSignInUrl(port, token)}`);
 	console.log(`Local token: ${localTokenPath(localEnv)}`);
-	console.log("Local mode accepts only localhost, 127.0.0.1, or ::1 Host headers.");
+	const extraOrigins = parseExtraLocalOrigins(serverEnv);
+	if (extraOrigins.size === 0) {
+		console.log("Local mode accepts only localhost, 127.0.0.1, or ::1 Host headers.");
+	} else {
+		for (const origin of extraOrigins) {
+			const proxyUrl = new URL("/sign-in", origin);
+			proxyUrl.searchParams.set("token", token);
+			console.log(`Proxy sign-in: ${proxyUrl}`);
+		}
+		console.log(
+			"Local mode accepts loopback Host headers plus WEB_NEXT_EXTRA_LOCAL_ORIGINS (exact match).",
+		);
+	}
 
 	await run(
 		"pnpm",
