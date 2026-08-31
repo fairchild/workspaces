@@ -101,6 +101,22 @@ describe("middleware local mode", () => {
 		});
 	});
 
+	it("refuses a hostile Host on a dotted /api/auth path — the credential route", async () => {
+		// The gate half of #1467. Calling `middleware` directly bypasses the
+		// matcher, so this passes before the matcher fix too; it is here to pin
+		// that the gate refuses this path once it reaches it. Whether it reaches
+		// it is middleware.matcher.test.ts's job, and that is the half that was
+		// red. /api/auth/* is public, but the local-mode Host check runs before
+		// isPublic(), so a spoofed Host is refused ahead of Better Auth.
+		const response = await middleware(
+			localRequestFor("/api/auth/callback/foo.bar", "evil.example"),
+		);
+		expect(response.status).toBe(403);
+		await expect(response.json()).resolves.toEqual({
+			error: "local mode only accepts localhost or 127.0.0.1 Host headers",
+		});
+	});
+
 	it("rejects malformed loopback-looking Host headers", async () => {
 		for (const host of [
 			"localhost:3100:evil",

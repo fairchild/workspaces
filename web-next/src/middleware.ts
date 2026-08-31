@@ -141,6 +141,27 @@ export async function middleware(request: NextRequest) {
 	return NextResponse.next();
 }
 
+/*
+ * Two entries, because they answer two different questions.
+ *
+ * `/api/:path*` is unconditional: no static asset lives under /api, so every
+ * API request reaches the gate whatever its path looks like. That belt does
+ * not depend on getting an extension list right, which matters most for
+ * /api/auth/* — in local mode the Host gate runs before isPublic(), so it is
+ * the only edge check in front of the route that mints sessions.
+ *
+ * The second entry covers pages and skips the static assets the exclusion was
+ * always for. It tests for a real asset extension at the end of the path
+ * rather than "contains a dot": the old `.*\..*` alternative excluded every
+ * dotted path in the app, so a dotted API or page path silently skipped the
+ * local-mode Host gate and the session-freshness check (#1467). Next
+ * statically analyzes this array at build time, so it stays a literal —
+ * middleware.matcher.test.ts compiles it with Next's own getMiddlewareMatchers
+ * and asserts both halves.
+ */
 export const config = {
-	matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
+	matcher: [
+		"/api/:path*",
+		"/((?!api|_next/static|_next/image|favicon\\.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|avif|ico|bmp|css|js|mjs|map|txt|xml|webmanifest|woff|woff2|ttf|otf|eot|wasm|mp4|webm|pdf)$).*)",
+	],
 };
