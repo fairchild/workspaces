@@ -162,7 +162,7 @@ jobs:
           set -euo pipefail
           fixture="$RUNNER_TEMP/perf-benchmarks-probe.csv"
           head -1 docs/performance_benchmarks.csv > "$fixture"
-          echo "v0.0.0-probe,0000000,2026-01-01T00:00:00Z,probe,installed,probe,,,,,,,,runnability probe" >> "$fixture"
+          echo "v0.0.0-probe,0000000,2026-01-01T00:00:00Z,probe,installed,probe,,,,,,,,,runnability probe" >> "$fixture"
           ./scripts/check-perf-benchmarks.py --tag v0.0.0-probe --csv "$fixture"
 
       - name: Check release harness absence
