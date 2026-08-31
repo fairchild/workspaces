@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -187,6 +188,22 @@ class PerfRunnerScriptTests(unittest.TestCase):
         self.assertIn("normalize_installed_app_path", script)
         self.assertIn("Contents/MacOS/WorkspaceManager", script)
         self.assertIn('--app "$resolved_app_path"', script)
+
+    def test_installed_lanes_isolate_the_preferences_domain(self) -> None:
+        """Every installed launch names a scratch suite rather than the shipped domain.
+
+        Un-isolated, the lane reads whatever `com.cloudcompute.workspaces` happens to
+        hold — the non-determinism `deterministic-delivery-v1` claims to have removed —
+        and writes its own selection state back into the domain the installed app uses.
+        """
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        launches = re.findall(
+            r"(?s)WORKSPACES_DATA_DIR=.*?launch-installed-diagnostics\.sh", script
+        )
+        self.assertTrue(launches, "no installed launch found in perf-runner.sh")
+        for launch in launches:
+            self.assertIn("WORKSPACES_PREFERENCES_SUITE=", launch)
+        self.assertIn("cleanup_preferences_suite", script)
 
     def test_main_window_hotspot_scenarios_delegate_to_helper(self) -> None:
         script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")

@@ -42,6 +42,28 @@ source "$ROOT_DIR/scripts/lib/perf-process.sh"
 # Names the measurement protocol live captures run under. Must match the epoch
 # perf-baseline.sh stamps, so debug and installed rows of the same era compare (#1251).
 CURRENT_PROTOCOL_EPOCH="deterministic-delivery-v1"
+
+# UserDefaults is the state axis WORKSPACES_DATA_DIR does not cover (#1251). The debug
+# lane has isolated it since #1258; the installed lane did not, so an installed capture
+# both read whatever the persistent com.cloudcompute.workspaces domain happened to hold
+# — the non-determinism the epoch name claims to have removed — and wrote its own
+# selection and restore state back into the domain the shipped app uses.
+#
+# Same ownership contract as perf-baseline.sh: a caller-provided suite is used as-is and
+# never reset or removed, and only a suite this run invented is a suite this run may clear.
+if [[ -n "${WORKSPACES_PREFERENCES_SUITE:-}" ]]; then
+    PREFERENCES_SUITE="$WORKSPACES_PREFERENCES_SUITE"
+    PREFERENCES_SUITE_OWNER="caller"
+else
+    PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
+    PREFERENCES_SUITE_OWNER="lane"
+fi
+
+cleanup_preferences_suite() {
+    [[ "$PREFERENCES_SUITE_OWNER" == "lane" ]] || return 0
+    defaults delete "$PREFERENCES_SUITE" >/dev/null 2>&1 || true
+    rm -f "$HOME/Library/Preferences/$PREFERENCES_SUITE.plist"
+}
 SCENARIO=""
 APP_PATH="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 RUNS=5
@@ -168,7 +190,10 @@ run_installed() {
         launch_args+=(--no-activate)
     fi
 
-    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
+    echo "preferences_suite=$PREFERENCES_SUITE (owner: $PREFERENCES_SUITE_OWNER)"
+    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" \
+        WORKSPACES_PREFERENCES_SUITE="$PREFERENCES_SUITE" \
+        "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
         "${launch_args[@]}" \
         "$@"
 
@@ -219,7 +244,10 @@ run_installed_input_short_capture() {
     echo "Interactive capture: Workspaces will activate and run for $CAPTURE_SECONDS seconds."
     echo "Type in the focused terminal during that window to produce input metrics."
 
-    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
+    echo "preferences_suite=$PREFERENCES_SUITE (owner: $PREFERENCES_SUITE_OWNER)"
+    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" \
+        WORKSPACES_PREFERENCES_SUITE="$PREFERENCES_SUITE" \
+        "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
         --app "$resolved_app_path" \
         --login-shell \
         --with-input-diagnostics \
@@ -289,6 +317,9 @@ sweep_survivors() {
         "$ROOT_DIR/.build/debug/WorkspaceManager"; do
         perf_assert_clean_exit "$binary" "$label" || status=1
     done
+    # After the survivor check, so a lane that failed still drops the scratch suite it
+    # invented rather than leaving a plist behind for every aborted run.
+    cleanup_preferences_suite
     return "$status"
 }
 trap 'sweep_survivors || exit 1' EXIT
