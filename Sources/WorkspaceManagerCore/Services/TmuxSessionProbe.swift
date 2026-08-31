@@ -13,8 +13,40 @@
 import Foundation
 
 public struct TmuxSessionProbe: Sendable {
-    /// Matches the `-L workspaces` socket the app launches sessions on.
-    public static let socketLabel = "workspaces"
+    /// The `-L` label used when nothing overrides it — the desktop's own server.
+    public static let defaultSocketLabel = "workspaces"
+
+    /// Names the tmux server this process creates and probes sessions on.
+    public static let socketLabelEnvironmentKey = "WORKSPACES_TMUX_SOCKET_LABEL"
+
+    /// Resolved once, and deliberately shared by the launch path and every probe:
+    /// a process that created a session on one server and looked for it on another
+    /// would report every session dead.
+    ///
+    /// Overridable because the server is cross-run state the app cannot otherwise
+    /// escape. `tmux new-session -A` attaches when the name exists, and a session
+    /// already sitting at a prompt emits no title or pwd on reattach — so a launch
+    /// that reattaches produces no readiness signal and `launch_to_first_prompt`
+    /// never closes. On a machine carrying earlier `wm-*` sessions that made the
+    /// perf lane unmeasurable rather than slow (#1462). A run that must not touch
+    /// the desktop's sessions — the perf lane, a test, a second checkout — names
+    /// its own server.
+    public static let socketLabel = resolveSocketLabel(
+        from: ProcessInfo.processInfo.environment
+    )
+
+    /// Trims, and treats an empty override as absent: an unset variable and one set
+    /// to the empty string are the same intent, and `tmux -L ""` is not a server.
+    public static func resolveSocketLabel(from environment: [String: String]) -> String {
+        guard
+            let override = environment[socketLabelEnvironmentKey]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !override.isEmpty
+        else {
+            return defaultSocketLabel
+        }
+        return override
+    }
 
     /// Runs a command and yields its exit code, or `nil` on launch failure/timeout.
     public typealias CommandRunner =

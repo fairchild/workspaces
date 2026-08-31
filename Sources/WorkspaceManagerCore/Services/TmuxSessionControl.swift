@@ -18,14 +18,16 @@ public struct TmuxSessionControl: Sendable {
         @Sendable (_ executable: String, _ arguments: [String], _ environment: [String: String]?) async
         -> ProcessResult?
 
-    /// The socket label every command carries. Defaults to the app's own
-    /// `workspaces` server; an isolated run (a test, a second checkout) names its
-    /// own so it cannot reach into a live desktop's sessions.
+    /// The socket label every command carries. Defaults to whatever this process
+    /// resolved — the desktop's `workspaces` server unless overridden; an isolated
+    /// run (the perf lane, a test, a second checkout) names its own so it cannot
+    /// reach into a live desktop's sessions.
     public static let defaultSocketLabel = TmuxSessionProbe.socketLabel
 
-    /// Names the socket label for a launch that must not touch the desktop's
-    /// server. Read by the CLI, not by the app.
-    public static let socketLabelEnvironmentKey = "WORKSPACES_TMUX_SOCKET_LABEL"
+    /// Names the socket label for a launch that must not touch the desktop's server.
+    /// Read by the CLI and, since #1462, by the app's own launch and probe paths —
+    /// one key, one server, or a session created on one is invisible on the other.
+    public static let socketLabelEnvironmentKey = TmuxSessionProbe.socketLabelEnvironmentKey
 
     /// Scrollback lines `read` returns when the caller names no bound.
     public static let defaultCaptureLines = 200
@@ -55,14 +57,7 @@ public struct TmuxSessionControl: Sendable {
     /// app's server. An empty override reads as unset rather than as a nameless
     /// socket.
     public static func socketLabel(from environment: [String: String]) -> String {
-        guard
-            let override = environment[socketLabelEnvironmentKey]?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            !override.isEmpty
-        else {
-            return defaultSocketLabel
-        }
-        return override
+        TmuxSessionProbe.resolveSocketLabel(from: environment)
     }
 
     // MARK: - Failure

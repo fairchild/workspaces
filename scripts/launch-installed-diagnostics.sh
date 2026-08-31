@@ -91,10 +91,37 @@ if [[ ! -x "$APP_PATH" ]]; then
     exit 1
 fi
 
+# UserDefaults is the axis that decides what this launch does. #1252 identified it and
+# #1258 made it switchable, but the wiring landed in perf-baseline.sh only — this lane
+# kept running against `domain=standard`, the developer's own preferences. It therefore
+# restored their live workspaces and measured a restore that reattaches long-lived tmux
+# sessions, which emit no readiness signal, so `launch_to_first_prompt` never closed at
+# all: 3/3 captures recorded nothing while the app was healthy. With the domain pinned,
+# the same lane and the same build measure 144.57 ms (#1462).
+#
+# A caller-provided suite belongs to the caller and is never reset or removed here,
+# matching perf-baseline.sh's contract.
+if [[ -n "${WORKSPACES_PREFERENCES_SUITE:-}" ]]; then
+    PERF_PREFERENCES_SUITE="$WORKSPACES_PREFERENCES_SUITE"
+    PERF_PREFERENCES_SUITE_OWNER="caller"
+else
+    PERF_PREFERENCES_SUITE="com.cloudcompute.workspaces.installed-perf.$$-$(date +%Y%m%d%H%M%S)"
+    PERF_PREFERENCES_SUITE_OWNER="lane"
+    defaults delete "$PERF_PREFERENCES_SUITE" >/dev/null 2>&1 || true
+fi
+
+# The tmux server is cross-run state neither the data dir nor the preferences suite
+# covers. It is not what broke the capture above — a pinned domain fixes that on its
+# own — but an isolated run creating sessions on the desktop's server still leaves
+# litter behind, so the lane names its own.
+PERF_TMUX_SOCKET_LABEL="${WORKSPACES_TMUX_SOCKET_LABEL:-workspaces-perf-$$-$(date +%s)}"
+
 ENV_VARS=(
     "WORKSPACES_FOCUS_DIAGNOSTICS=1"
     "WORKSPACES_TERMINAL_DIAGNOSTICS=1"
     "WORKSPACES_DISABLE_STATE_RESTORATION=1"
+    "WORKSPACES_PREFERENCES_SUITE=$PERF_PREFERENCES_SUITE"
+    "WORKSPACES_TMUX_SOCKET_LABEL=$PERF_TMUX_SOCKET_LABEL"
 )
 APP_ARGS=(
     "-ApplePersistenceIgnoreState"
@@ -171,6 +198,15 @@ if [[ "$CAPTURE_SECONDS" -gt 0 ]]; then
     wait "$APP_PID" 2>/dev/null || true
     perf_assert_clean_exit "$APP_PATH" "$(basename "$0")"
     append_unified_log "$CAPTURE_START" "$APP_PID"
+    # Only a server this invocation invented: a caller-supplied label belongs to the
+    # caller, exactly as the preferences suite does.
+    if [[ -z "${WORKSPACES_TMUX_SOCKET_LABEL:-}" ]]; then
+        tmux -L "$PERF_TMUX_SOCKET_LABEL" kill-server >/dev/null 2>&1 || true
+    fi
+    if [[ "$PERF_PREFERENCES_SUITE_OWNER" == "lane" ]]; then
+        defaults delete "$PERF_PREFERENCES_SUITE" >/dev/null 2>&1 || true
+        rm -f "$HOME/Library/Preferences/$PERF_PREFERENCES_SUITE.plist"
+    fi
 else
     env "${ENV_VARS[@]}" "$APP_PATH" "${APP_ARGS[@]}" 2>&1 | tee "$LOG_FILE"
     append_unified_log "$CAPTURE_START"

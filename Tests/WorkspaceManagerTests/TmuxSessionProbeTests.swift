@@ -367,3 +367,42 @@ private final class SynchronousArgumentRecorder: @unchecked Sendable {
         lock.unlock()
     }
 }
+
+@Suite("TmuxSocketLabelResolution")
+struct TmuxSocketLabelResolutionTests {
+    private let key = TmuxSessionProbe.socketLabelEnvironmentKey
+
+    @Test("An unset override resolves to the desktop's own server")
+    func unsetResolvesToDefault() {
+        #expect(TmuxSessionProbe.resolveSocketLabel(from: [:]) == "workspaces")
+        #expect(TmuxSessionProbe.defaultSocketLabel == "workspaces")
+    }
+
+    @Test("A named override wins, so an isolated run cannot reach live sessions")
+    func overrideWins() {
+        let label = TmuxSessionProbe.resolveSocketLabel(from: [key: "perf-lane-42"])
+
+        #expect(label == "perf-lane-42")
+    }
+
+    @Test("An empty or blank override is the same intent as unset")
+    func blankOverrideFallsBack() {
+        // `tmux -L ""` is not a server, and an exported-but-empty variable is how a
+        // shell says "unset" by accident. Both must land on the default rather than
+        // producing an unusable label (#1462).
+        #expect(TmuxSessionProbe.resolveSocketLabel(from: [key: ""]) == "workspaces")
+        #expect(TmuxSessionProbe.resolveSocketLabel(from: [key: "   "]) == "workspaces")
+    }
+
+    @Test("The CLI resolver and the app resolver cannot disagree")
+    func controlDelegatesToProbe() {
+        // A session created on one server is invisible on another, so the launch path,
+        // the probes, and the CLI must all resolve identically.
+        for environment in [[:], [key: "shared-label"], [key: "  "]] as [[String: String]] {
+            #expect(
+                TmuxSessionControl.socketLabel(from: environment)
+                    == TmuxSessionProbe.resolveSocketLabel(from: environment)
+            )
+        }
+    }
+}
