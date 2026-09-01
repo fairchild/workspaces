@@ -205,12 +205,84 @@ class PerfRunnerScriptTests(unittest.TestCase):
             self.assertIn("WORKSPACES_PREFERENCES_SUITE=", launch)
         self.assertIn("cleanup_preferences_suite", script)
 
+    def test_every_installed_launch_reads_its_isolation_back(self) -> None:
+        """Exporting the suite is an intent; each lane must verify what the app resolved."""
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        launches = re.findall(
+            r"(?s)WORKSPACES_DATA_DIR=.*?summarize_installed_log", script
+        )
+        self.assertTrue(launches, "no installed launch found in perf-runner.sh")
+        for launch in launches:
+            self.assertIn("assert_preferences_isolated", launch)
+
     def test_main_window_hotspot_scenarios_delegate_to_helper(self) -> None:
         script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
         self.assertIn("main-window-hotspots-baseline.py", script)
         self.assertIn("main_window_agent_activity_burst", script)
         self.assertIn("main_window_session_switcher_snapshot", script)
         self.assertIn("main_window_resident_memory_20_workspaces", script)
+
+
+class PreferencesIsolationReadBackTests(unittest.TestCase):
+    """The installed lane's isolation check, run against real log shapes.
+
+    `domain=scratch` is not proof of isolation — the refusal path logs that domain too —
+    so each of the three ways the export is silently defeated has to fail closed here.
+    """
+
+    SUITE = "com.cloudcompute.workspaces.perf.mine"
+    PREFIX = "2026-08-31 07:58:19.633 I WorkspaceManager[1:2] [LaunchPreferences] "
+
+    def run_check(self, log_body: str) -> int:
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        match = re.search(
+            r"(?ms)^assert_preferences_isolated\(\) \{.*?^\}", script
+        )
+        self.assertIsNotNone(match, "assert_preferences_isolated not found in perf-runner.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "capture.log"
+            log_path.write_text(log_body, encoding="utf-8")
+            return subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f"set -euo pipefail\nPREFERENCES_SUITE={self.SUITE}\n"
+                    f"{match.group(0)}\nassert_preferences_isolated \"$1\"",
+                    "_",
+                    str(log_path),
+                ],
+                capture_output=True,
+                text=True,
+            ).returncode
+
+    def test_an_isolated_launch_on_the_expected_suite_passes(self) -> None:
+        line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true"
+        self.assertEqual(self.run_check(line + "\n"), 0)
+
+    def test_a_log_without_the_line_fails(self) -> None:
+        """An app older than WORKSPACES_PREFERENCES_SUITE reports no domain at all."""
+        self.assertNotEqual(self.run_check("some capture output\n"), 0)
+
+    def test_the_persistent_domain_fails(self) -> None:
+        """A reserved suite name is logged and ignored, resolving to domain=standard."""
+        self.assertNotEqual(self.run_check(f"{self.PREFIX}domain=standard\n"), 0)
+
+    def test_a_refused_suite_fails(self) -> None:
+        """The defaults system refusing the suite still logs domain=scratch."""
+        line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=false"
+        self.assertNotEqual(self.run_check(line + "\n"), 0)
+
+    def test_a_foreign_suite_fails(self) -> None:
+        line = f"{self.PREFIX}domain=scratch suite=com.cloudcompute.workspaces.perf.other reset=false isolated=true"
+        self.assertNotEqual(self.run_check(line + "\n"), 0)
+
+    def test_the_last_resolution_in_the_log_is_the_one_judged(self) -> None:
+        """A relaunch that fell back must not be masked by an earlier isolated line."""
+        body = (
+            f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true\n"
+            f"{self.PREFIX}domain=standard\n"
+        )
+        self.assertNotEqual(self.run_check(body), 0)
 
 
 class PerfSummarizerTests(unittest.TestCase):

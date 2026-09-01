@@ -64,6 +64,52 @@ cleanup_preferences_suite() {
     defaults delete "$PREFERENCES_SUITE" >/dev/null 2>&1 || true
     rm -f "$HOME/Library/Preferences/$PREFERENCES_SUITE.plist"
 }
+
+# Exporting the suite states an intent; this reads back what the app actually resolved,
+# the way perf-baseline.sh already does for the debug lane. Three things defeat the
+# intent silently: an app build older than the environment variable, a reserved suite
+# name (LaunchPreferences logs it and returns the persistent domain), and a defaults
+# system that refuses the suite and falls back the same way. Each leaves a capture that
+# is labelled isolated, measured against unknown starting state, and writing into the
+# domain the shipped app uses — so a sample whose isolation cannot be shown is a harness
+# failure rather than a slow launch, and the lane records nothing.
+#
+# `domain=scratch` alone is not proof: the refusal path logs that domain too. `isolated=`
+# is the field that says which store actually backed the launch.
+assert_preferences_isolated() {
+    local log_file="$1" line domain isolated suite
+    line="$(grep -o '\[LaunchPreferences\] domain=.*' "$log_file" 2>/dev/null | tail -n 1)"
+    if [[ -z "$line" ]]; then
+        echo "  [preferences] no [LaunchPreferences] line in $log_file" >&2
+        echo "  [preferences] the app did not report which defaults domain backed the launch — an app" >&2
+        echo "  [preferences] predating WORKSPACES_PREFERENCES_SUITE cannot be measured by this lane." >&2
+        return 1
+    fi
+    # Field-anchored rather than a substring match: the suite name is free text and a
+    # loose pattern would happily read a value out of the middle of one.
+    read_field() {
+        awk -v key="$1" '{for (i = 1; i <= NF; i++) if (index($i, key "=") == 1) print substr($i, length(key) + 2)}' <<<"$line"
+    }
+    domain="$(read_field domain)"
+    isolated="$(read_field isolated)"
+    suite="$(read_field suite)"
+
+    if [[ "$domain" != "scratch" ]]; then
+        echo "  [preferences] resolved domain=$domain, not the scratch suite — the launch read and wrote" >&2
+        echo "  [preferences] the persistent com.cloudcompute.workspaces domain." >&2
+        return 1
+    fi
+    if [[ "$isolated" != "true" ]]; then
+        echo "  [preferences] domain=scratch but isolated=${isolated:-unreported} — the defaults system refused" >&2
+        echo "  [preferences] suite '$PREFERENCES_SUITE' and the app fell back to the persistent domain." >&2
+        return 1
+    fi
+    if [[ -n "$suite" && "$suite" != "$PREFERENCES_SUITE" ]]; then
+        echo "  [preferences] launched against suite=$suite, expected $PREFERENCES_SUITE." >&2
+        return 1
+    fi
+    echo "preferences_isolated=true suite=$PREFERENCES_SUITE"
+}
 SCENARIO=""
 APP_PATH="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 RUNS=5
@@ -197,6 +243,8 @@ run_installed() {
         "${launch_args[@]}" \
         "$@"
 
+    assert_preferences_isolated "$log_file"
+
     summarize_installed_log "$log_file" "$summary_json" "$summary_txt" "$resolved_app_path"
 }
 
@@ -253,6 +301,8 @@ run_installed_input_short_capture() {
         --with-input-diagnostics \
         --capture-seconds "$CAPTURE_SECONDS" \
         --log-file "$log_file"
+
+    assert_preferences_isolated "$log_file"
 
     summarize_installed_log "$log_file" "$summary_json" "$summary_txt" "$resolved_app_path"
 
