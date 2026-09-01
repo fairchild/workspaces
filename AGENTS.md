@@ -8,7 +8,7 @@ This file holds repo-wide invariants plus a routing table; surface guidance live
 
 ## Quality and Mergeability
 
-Plan work to land mergeably: correct, native-feeling, tightly scoped, reviewable, evidence-backed, consistent with existing architecture and UI patterns, and leaving the system easier to operate. Before opening or reviewing a PR, run the surface checklist in `docs/development/mergeability-standard.md`; substantive PRs run the `codex-review-loop` skill first (skip codex for metadata/docs-only diffs).
+Craft matters. Plan work to land mergeably: correct, native-feeling, tightly scoped, reviewable, evidence-backed, consistent with existing architecture and UI patterns, and leaving the system easier to operate. Before opening or reviewing a PR, run the surface checklist in `docs/development/mergeability-standard.md`; substantive PRs run the `codex-review-loop` skill first (skip codex for metadata/docs-only diffs).
 
 Default to carrying an implementation request through to a PR: branch if needed, edit, verify, commit, rebase on latest `origin/main`, push, open the PR, report status. Pause short of the PR when the user wants exploration only, says not to publish, or evidence/permissions are blocked. At the start of a multi-PR session, propose the authority contract up front (who reviews, who flips ready, who merges).
 
