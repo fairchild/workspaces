@@ -110,6 +110,28 @@ struct ReleaseBundleVerificationScriptTests {
         #expect(result.stderr.contains("Missing bundled terminfo directory"))
     }
 
+    /// The false positive the directory-only assertions blessed. `build-release.sh:492`
+    /// copies the Ghostty share tree with stderr discarded and exit forced to zero, so a
+    /// partial copy leaves `terminfo/` behind without the compiled entry — and
+    /// `GhosttyResourcesLocator.isUsableResourcesDirectory` calls exactly that bundle
+    /// unusable. Asserting the directory alone would pass the state the gate exists to
+    /// catch.
+    @Test("Structure-only rejects a terminfo directory with no compiled entry")
+    func structureOnlyRejectsTerminfoWithoutSentinel() throws {
+        let fixture = try makeFixture(
+            bundleName: "WorkSpaces.app",
+            includeRuntimeResources: true,
+            includeHookForwarders: true,
+            omitTerminfoSentinel: true
+        )
+        defer { fixture.cleanup() }
+
+        let result = runVerifier(appBundle: fixture.appBundle, structureOnly: true)
+
+        #expect(result.exitCode == 1)
+        #expect(result.stderr.contains("terminfo/78/xterm-ghostty"))
+    }
+
     @Test("Structure-only rejects a bundle missing Ghostty resources")
     func structureOnlyRejectsMissingGhosttyResources() throws {
         let fixture = try makeFixture(
@@ -182,7 +204,8 @@ struct ReleaseBundleVerificationScriptTests {
         includeRuntimeResources: Bool = false,
         includeHookForwarders: Bool = false,
         omitGhostty: Bool = false,
-        omitTerminfo: Bool = false
+        omitTerminfo: Bool = false,
+        omitTerminfoSentinel: Bool = false
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ReleaseBundleVerificationScriptTests-\(UUID().uuidString)", isDirectory: true)
@@ -214,10 +237,15 @@ struct ReleaseBundleVerificationScriptTests {
                 )
             }
             if !omitTerminfo {
-                try FileManager.default.createDirectory(
-                    at: resources.appendingPathComponent("terminfo", isDirectory: true),
-                    withIntermediateDirectories: true
-                )
+                // The compiled entry, not just the directory: it is what
+                // `GhosttyResourcesLocator.isUsableResourcesDirectory` tests, so a fixture
+                // that stopped at the directory would make the false positive the passing
+                // case. `omitTerminfoSentinel` builds that state deliberately instead.
+                let terminfo = resources.appendingPathComponent("terminfo/78", isDirectory: true)
+                try FileManager.default.createDirectory(at: terminfo, withIntermediateDirectories: true)
+                if !omitTerminfoSentinel {
+                    try Data().write(to: terminfo.appendingPathComponent("xterm-ghostty"))
+                }
             }
         }
 

@@ -185,6 +185,14 @@ APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
 verify_bundle_identity "$APP_BUNDLE"
 [[ -d "$APP_BUNDLE/Contents/Resources/ghostty" ]] || fail "Missing Ghostty resources directory"
 [[ -d "$APP_BUNDLE/Contents/Resources/terminfo" ]] || fail "Missing bundled terminfo directory"
+# The directory existing is not the runtime's test. `GhosttyResourcesLocator`
+# .isUsableResourcesDirectory treats the bundled resources as usable only when this
+# compiled terminfo entry is present, so it is what the app actually requires — and it
+# is what a partial copy drops while still leaving the directories behind, since the
+# Ghostty copy discards stderr and forces exit zero (`build-release.sh:492`). Asserting
+# only the directories would bless exactly that state.
+[[ -f "$APP_BUNDLE/Contents/Resources/terminfo/78/xterm-ghostty" ]] \
+    || fail "Missing compiled terminfo entry terminfo/78/xterm-ghostty (the runtime's usability test)"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/event-forwarder.sh" ]] || fail "Missing Claude hook event forwarder"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/statusline.sh" ]] || fail "Missing Claude status-line forwarder"
 
