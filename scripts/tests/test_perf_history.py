@@ -126,6 +126,31 @@ class PerfHistoryTests(unittest.TestCase):
             self.assertIn("scenario", header)
             self.assertIn("workspace_click_to_focus_median_ms", header)
 
+    def test_append_rewrites_existing_rows_byte_for_byte(self) -> None:
+        """One new row must arrive as one added line.
+
+        The whole file is rewritten on every append, so a line terminator that differs
+        from the one already on disk turns a one-row append into a diff touching every
+        row that came before it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "metrics-history.csv"
+            row = history_row_from_summary(debug_summary(), "2026-08-07T10:00:00-0700")
+            append_history_row(csv_path, row)
+            before = csv_path.read_bytes()
+
+            append_history_row(
+                csv_path,
+                history_row_from_summary(debug_summary(), "2026-08-08T10:00:00-0700"),
+            )
+            after = csv_path.read_bytes()
+
+            self.assertNotIn(b"\r", after)
+            self.assertTrue(
+                after.startswith(before),
+                "appending a row rewrote the lines that preceded it",
+            )
+
     def test_record_summary_writes_history_dashboard_and_latest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

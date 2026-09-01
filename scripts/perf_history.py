@@ -108,8 +108,10 @@ def append_history_row(history_csv_path: Path, row: dict[str, Any]) -> list[dict
 
     existing_rows.append(row)
 
+    # csv defaults to CRLF, and this rewrites the whole file on every append — so one
+    # new row arrived as a diff touching every line that came before it.
     with history_csv_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES, lineterminator="\n")
         writer.writeheader()
         for existing in existing_rows:
             writer.writerow({field: existing.get(field, "") for field in HISTORY_FIELDNAMES})
