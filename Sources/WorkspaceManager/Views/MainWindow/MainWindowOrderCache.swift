@@ -60,6 +60,12 @@ final class MainWindowOrderSlot<Value> {
     private var fingerprints: [UUID: [MainWindowOrderSignature]] = [:]
     private var values: [UUID: [Value]] = [:]
 
+    /// How many times this slot has actually sorted. A memo whose hit rate is invisible is a memo
+    /// nobody can prove works: every input is fingerprinted, so a hit and a miss return the same
+    /// answer and no assertion over the *result* can tell them apart. Reading the count is what
+    /// lets a test prove a hit, and lets one pin the caller-shape hazard that would defeat it.
+    private(set) var buildCount = 0
+
     func ordered(
         key: UUID,
         fingerprint: [MainWindowOrderSignature],
@@ -68,6 +74,7 @@ final class MainWindowOrderSlot<Value> {
         if fingerprints[key] == fingerprint, let cached = values[key] {
             return cached
         }
+        buildCount += 1
         if fingerprints.count >= Self.capacity {
             fingerprints.removeAll(keepingCapacity: true)
             values.removeAll(keepingCapacity: true)
@@ -97,6 +104,17 @@ final class MainWindowOrderCache {
     private var recentFingerprint: [MainWindowOrderSignature]?
     private var recentTakenAt: Date?
     private var recentBuckets: [RecentBucket] = []
+    private var recentBuildCount = 0
+
+    /// How many orderings this cache has actually built, across every slot. See
+    /// `MainWindowOrderSlot.buildCount` for why the count rather than the result is what a test
+    /// has to read.
+    var buildCount: Int {
+        allWorkspaceSlot.buildCount + activeWorkspaceSlot.buildCount
+            + archivedWorkspaceSlot.buildCount + pinnedWorkspaceSlot.buildCount
+            + repoWebSourceSlot.buildCount + workspaceWebSourceSlot.buildCount
+            + globalWebSourceSlot.buildCount + recentBuildCount
+    }
 
     /// Every workspace of a repo, most recently accessed first — what the repo landing page
     /// lists, archived rows included.
@@ -176,6 +194,14 @@ final class MainWindowOrderCache {
     /// The Recent arrangement's buckets. Its inputs are already snapshot-driven, so the
     /// fingerprint is the snapshot itself plus the pane counts that decide which repo roots
     /// appear — the arrangement reorders only when the sidebar deliberately re-takes them.
+    ///
+    /// `now` is compared exactly, which makes the memo only as good as the caller's `now`. The
+    /// sidebar passes `recentSnapshotTakenAt`, `@State` re-taken solely by
+    /// `syncRecentSnapshot(forceRefresh:)` — on mode change, on appear, when the repo or
+    /// workspace set changes, and when the app resigns active, never during a redraw. A caller
+    /// that passed a freshly constructed `Date()` per access would miss every time; that is what
+    /// `MainWindowOrderCacheTests.freshInstantPerAccessDefeatsTheRecentMemo` pins, so the hazard
+    /// fails a test rather than going quiet.
     func recentBuckets(
         repos: [Repo],
         snapshot: [UUID: Date],
@@ -191,6 +217,7 @@ final class MainWindowOrderCache {
         if fingerprint == recentFingerprint, now == recentTakenAt {
             return recentBuckets
         }
+        recentBuildCount += 1
         recentBuckets = SidebarRecentArrangement.buckets(
             repos: repos,
             snapshot: snapshot,

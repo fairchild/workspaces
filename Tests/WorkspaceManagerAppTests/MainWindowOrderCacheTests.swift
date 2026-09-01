@@ -165,6 +165,79 @@ struct MainWindowOrderCacheTests {
         #expect(cache.activeWorkspaces(for: repo).first === replacement)
     }
 
+    // MARK: - The memo actually hits
+
+    /// Every input is fingerprinted, so a hit and a miss return the same answer and no assertion
+    /// over the *result* can separate them. These read the build count instead.
+    @Test("The Recent memo hits while the snapshot instant holds still")
+    func recentMemoHitsOnAStableInstant() {
+        let repo = repo()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let alpha = workspace("alpha", in: repo, lastAccessedAt: now)
+        repo.workspaces = [alpha]
+        let snapshot = [alpha.id: now]
+
+        let cache = MainWindowOrderCache()
+        func ask(now instant: Date) {
+            _ = cache.recentBuckets(
+                repos: [repo], snapshot: snapshot, repoRootPaneCounts: [:],
+                now: instant, calendar: .current)
+        }
+
+        ask(now: now)
+        #expect(cache.buildCount == 1)
+
+        // The sidebar's shape: `now` is re-read from `@State`, not re-taken, so repeated body
+        // evaluations pass the same instant and the arrangement is built once.
+        ask(now: now)
+        ask(now: now)
+        #expect(cache.buildCount == 1, "a stable instant must not rebuild the arrangement")
+
+        // Deliberately re-taking the snapshot is the one thing that has to invalidate it.
+        ask(now: now.addingTimeInterval(60))
+        #expect(cache.buildCount == 2)
+    }
+
+    /// The hazard raised in review of #1504: `now` is compared exactly, so a caller taking a fresh
+    /// instant per access would miss every time and the memo would do nothing for this path.
+    /// `SidebarView` passes `recentSnapshotTakenAt` — `@State` re-taken only by
+    /// `syncRecentSnapshot(forceRefresh:)`, never during a redraw — and this pins what changing
+    /// that would cost, so the hazard fails a test rather than going quiet.
+    @Test("A freshly taken instant per access defeats the Recent memo")
+    func freshInstantPerAccessDefeatsTheRecentMemo() {
+        let repo = repo()
+        let alpha = workspace("alpha", in: repo, lastAccessedAt: Date(timeIntervalSince1970: 1_000))
+        repo.workspaces = [alpha]
+
+        let cache = MainWindowOrderCache()
+        for _ in 0..<3 {
+            _ = cache.recentBuckets(
+                repos: [repo], snapshot: [:], repoRootPaneCounts: [:],
+                now: Date(), calendar: .current)
+        }
+
+        #expect(cache.buildCount == 3, "a fresh instant per access must miss every time")
+    }
+
+    @Test("A repeated ordering request with unchanged inputs does not re-sort")
+    func slotMemoHitsOnUnchangedInputs() {
+        let repo = repo()
+        repo.workspaces = [
+            workspace("alpha", in: repo, lastAccessedAt: Date(timeIntervalSince1970: 100)),
+            workspace("beta", in: repo, lastAccessedAt: Date(timeIntervalSince1970: 200)),
+        ]
+
+        let cache = MainWindowOrderCache()
+        _ = cache.activeWorkspaces(for: repo)
+        _ = cache.activeWorkspaces(for: repo)
+        _ = cache.activeWorkspaces(for: repo)
+        #expect(cache.buildCount == 1)
+
+        repo.workspaces[0].lastAccessedAt = Date(timeIntervalSince1970: 300)
+        _ = cache.activeWorkspaces(for: repo)
+        #expect(cache.buildCount == 2)
+    }
+
     @Test("Each repo keeps its own cached ordering")
     func slotsAreKeyedByContainer() {
         let alpha = repo("alpha")
