@@ -78,7 +78,10 @@ cleanup_preferences_suite() {
 # is the field that says which store actually backed the launch.
 assert_preferences_isolated() {
     local log_file="$1" line domain isolated suite
-    line="$(grep -o '\[LaunchPreferences\] domain=.*' "$log_file" 2>/dev/null | tail -n 1)"
+    # `|| true` because a no-match grep exits 1, and under `set -e` with `pipefail` that
+    # aborts the run at this assignment — failing closed, but silently, which is the one
+    # thing this branch exists to avoid.
+    line="$(grep -o '\[LaunchPreferences\] domain=.*' "$log_file" 2>/dev/null | tail -n 1 || true)"
     if [[ -z "$line" ]]; then
         echo "  [preferences] no [LaunchPreferences] line in $log_file" >&2
         echo "  [preferences] the app did not report which defaults domain backed the launch — an app" >&2

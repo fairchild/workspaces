@@ -233,7 +233,7 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
     SUITE = "com.cloudcompute.workspaces.perf.mine"
     PREFIX = "2026-08-31 07:58:19.633 I WorkspaceManager[1:2] [LaunchPreferences] "
 
-    def run_check(self, log_body: str) -> int:
+    def run_check(self, log_body: str) -> subprocess.CompletedProcess:
         script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
         match = re.search(
             r"(?ms)^assert_preferences_isolated\(\) \{.*?^\}", script
@@ -253,28 +253,40 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
                 ],
                 capture_output=True,
                 text=True,
-            ).returncode
+            )
+
+    def assert_refused(self, log_body: str, because: str) -> None:
+        """Fails closed *and* says why.
+
+        The exit code alone is not enough: `set -e` plus `pipefail` will abort this
+        function at its own no-match grep, which refuses the capture without printing
+        anything — a silent abort in the branch whose whole job is to be loud.
+        """
+        result = self.run_check(log_body)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[preferences]", result.stderr)
+        self.assertIn(because, result.stderr)
 
     def test_an_isolated_launch_on_the_expected_suite_passes(self) -> None:
         line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true"
-        self.assertEqual(self.run_check(line + "\n"), 0)
+        self.assertEqual(self.run_check(line + "\n").returncode, 0)
 
-    def test_a_log_without_the_line_fails(self) -> None:
+    def test_a_log_without_the_line_is_refused_out_loud(self) -> None:
         """An app older than WORKSPACES_PREFERENCES_SUITE reports no domain at all."""
-        self.assertNotEqual(self.run_check("some capture output\n"), 0)
+        self.assert_refused("some capture output\n", "no [LaunchPreferences] line")
 
-    def test_the_persistent_domain_fails(self) -> None:
+    def test_the_persistent_domain_is_refused_out_loud(self) -> None:
         """A reserved suite name is logged and ignored, resolving to domain=standard."""
-        self.assertNotEqual(self.run_check(f"{self.PREFIX}domain=standard\n"), 0)
+        self.assert_refused(f"{self.PREFIX}domain=standard\n", "resolved domain=standard")
 
-    def test_a_refused_suite_fails(self) -> None:
+    def test_a_refused_suite_is_refused_out_loud(self) -> None:
         """The defaults system refusing the suite still logs domain=scratch."""
         line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=false"
-        self.assertNotEqual(self.run_check(line + "\n"), 0)
+        self.assert_refused(line + "\n", "isolated=false")
 
-    def test_a_foreign_suite_fails(self) -> None:
+    def test_a_foreign_suite_is_refused_out_loud(self) -> None:
         line = f"{self.PREFIX}domain=scratch suite=com.cloudcompute.workspaces.perf.other reset=false isolated=true"
-        self.assertNotEqual(self.run_check(line + "\n"), 0)
+        self.assert_refused(line + "\n", "expected")
 
     def test_the_last_resolution_in_the_log_is_the_one_judged(self) -> None:
         """A relaunch that fell back must not be masked by an earlier isolated line."""
@@ -282,7 +294,7 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
             f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true\n"
             f"{self.PREFIX}domain=standard\n"
         )
-        self.assertNotEqual(self.run_check(body), 0)
+        self.assert_refused(body, "resolved domain=standard")
 
 
 class PerfSummarizerTests(unittest.TestCase):
