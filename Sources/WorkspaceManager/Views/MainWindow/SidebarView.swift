@@ -718,6 +718,7 @@ struct SidebarView: View {
         let bubbledActivity = bubbledRepoActivity(for: repo, baseline: baselineActivity)
         let state = RepoRowDisplayState(
             repoID: repo.id,
+            identity: ObjectIdentifier(repo),
             name: repo.name,
             remoteURL: repo.remoteURL,
             activeWorkspaceCount: SidebarWorkspaceController.activeWorkspaceCount(in: repo.workspaces),
@@ -872,6 +873,7 @@ struct SidebarView: View {
         let pinned = pinnedWorkspaces
         let state = WorkspaceRowDisplayState(
             workspaceID: workspace.id,
+            identity: ObjectIdentifier(workspace),
             name: workspace.name,
             status: workspace.status,
             backendIdentifier: workspace.backendIdentifier,
@@ -1040,6 +1042,7 @@ struct SidebarView: View {
     private func sidebarWebSourceButton(_ source: WebSource, paddingLeading: CGFloat) -> some View {
         let state = WebSourceRowDisplayState(
             sourceID: source.id,
+            identity: ObjectIdentifier(source),
             name: source.name,
             urlString: source.baseURLString,
             isSelected: selectedWebSource?.id == source.id,

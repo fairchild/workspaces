@@ -67,6 +67,45 @@ matter to that row.
 | `WebSourceFaviconView` | Live on its own — holds the image in `@State` and reloads on `.task(id: source.baseURLString)` |
 | `ArchivedDisclosureRow.onToggle` | Live — writes the `expandedArchivedRepoIDs` `@State` |
 
+## Object identity, and why selection is the exception
+
+`MainWindowOrderCache` fingerprints `ObjectIdentifier` because SwiftData can hand back a
+replacement instance carrying identical values — the hole review found in #1354's
+`SidebarRepoSortCache`. The same threat reaches rows, for the same reason: a row keyed on the
+model's `id` plus the values it draws would compare **equal** across that swap, skip its body, and
+go on handing the *superseded* object to every closure it kept.
+
+So `RepoRowDisplayState`, `WorkspaceRowDisplayState`, and `WebSourceRowDisplayState` each carry
+`identity: ObjectIdentifier`. The closures it protects are the ones that dereference the object
+for something other than its id:
+
+| Closure | What it does with the captured object |
+|---|---|
+| `setNote(_:on:)` | writes `workspace.note` and saves — on a superseded instance the write is lost |
+| `togglePin` / `movePin` | write `pinOrder` |
+| `deleteWorkspace`, `removeRepo`, `removeWebSource` | delete *that* instance |
+| `NSWorkspace.selectFile(workspace.path)`, `repo.localPath` | read a path off it |
+| `markRepoAccessed(repo)`, via `selectRepo` | writes `lastAccessedAt` |
+
+**Selection is the one path that would have been safe without the fingerprint**, and it is worth
+naming because it shows the general shape of the defence. `selectWorkspace` reaches
+`setSelectedWorkspace`, which stores a `MainWindowWorkspaceSelection` — a `UUID`, not the object
+(`MainWindowViewState.swift:4`) — and every read comes back through `cachedWorkspace(with:)`
+against the live index (`MainSelectionCoordinator.swift:62`). A superseded object handed to it is
+reduced to its id and re-resolved. That is exactly the invariant `Sources/AGENTS.md` states as
+*"persist selection state by stable IDs, not live SwiftData objects; resolve models late and
+validate them against current data before selection"*. The mutations have no such boundary, so
+they get the fingerprint instead.
+
+`ArchivedDisclosureDisplayState` deliberately carries no identity: its only closure is
+`toggleArchivedSection(for:)`, which reads `repo.id`, and the state already carries `repoID`.
+
+The fingerprint is close to free, measured rather than assumed: with it the sidebar builds **2.73
+rows/second** under the standard load against **2.75** without, inside run-to-run noise. That is
+the same observation from the other side, and worth recording — SwiftData is *not* churning
+instances during steady-state agent churn, so this is cheap insurance against a rare event rather
+than a cost on the hot path.
+
 ## Why the hover card needed its own thinking
 
 The card is the only surface that can be *on screen* while its row's body never runs again, so it

@@ -248,6 +248,52 @@ struct SidebarRowEqualityTests {
         }
     }
 
+    // MARK: - Object identity
+
+    /// Raised in review of #1504: `MainWindowOrderSignature` defends against SwiftData handing
+    /// back a replacement instance with identical values, but a row keyed on `id` plus drawn
+    /// values alone would compare equal across that swap — skipping its body and keeping closures
+    /// over the superseded object, which `setNote`, `togglePin`, `deleteWorkspace` and
+    /// `workspace.path` all dereference directly. The row-side mirror of
+    /// `MainWindowOrderCacheTests.objectIdentityInvalidates`.
+    @Test("A replacement instance with identical values still moves the row's state")
+    func replacementInstanceMovesTheRowState() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/repos/alpha"))
+        let original = Workspace(
+            name: "ws", path: URL(fileURLWithPath: "/repos/alpha/ws"), sourceRepo: repo)
+
+        let replacement = Workspace(
+            name: original.name,
+            path: URL(fileURLWithPath: original.path),
+            sourceRepo: repo,
+            lastAccessedAt: original.lastAccessedAt
+        )
+        replacement.id = original.id
+        replacement.createdAt = original.createdAt
+
+        let before = Self.pinState(for: original, pinnedIndex: nil, pinnedCount: 0)
+        let after = Self.pinState(for: replacement, pinnedIndex: nil, pinnedCount: 0)
+
+        #expect(before.workspaceID == after.workspaceID, "the same workspace by id")
+        #expect(before.name == after.name, "and by every value the row draws")
+        #expect(before != after, "yet the row must rebuild so its closures drop the old object")
+    }
+
+    /// The converse, and the reason the fingerprint is safe to add: the same instance must not
+    /// manufacture a difference, or every row would rebuild on every evaluation and undo the
+    /// slice this PR is about.
+    @Test("The same instance compares equal, so identity costs no extra rebuilds")
+    func sameInstanceStillComparesEqual() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/repos/alpha"))
+        let workspace = Workspace(
+            name: "ws", path: URL(fileURLWithPath: "/repos/alpha/ws"), sourceRepo: repo)
+
+        #expect(
+            Self.pinState(for: workspace, pinnedIndex: nil, pinnedCount: 0)
+                == Self.pinState(for: workspace, pinnedIndex: nil, pinnedCount: 0)
+        )
+    }
+
     private static func pinState(
         for workspace: Workspace,
         pinnedIndex: Int?,
@@ -255,6 +301,7 @@ struct SidebarRowEqualityTests {
     ) -> WorkspaceRowDisplayState {
         WorkspaceRowDisplayState(
             workspaceID: workspace.id,
+            identity: ObjectIdentifier(workspace),
             name: workspace.name,
             status: workspace.status,
             backendIdentifier: workspace.backendIdentifier,

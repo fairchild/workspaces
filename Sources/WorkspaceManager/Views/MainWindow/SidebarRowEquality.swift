@@ -79,11 +79,33 @@ struct SidebarRowSessionState: Equatable {
     }
 }
 
+// MARK: - SidebarRowIdentity
+//
+// Rows whose closures dereference a SwiftData model carry `identity: ObjectIdentifier` alongside
+// the model's `id`, for the reason `MainWindowOrderSignature` carries one: SwiftData can hand
+// back a replacement instance with identical values (the hole review found in #1354's
+// `SidebarRepoSortCache`). A row keyed on `id` plus values alone would compare equal across that
+// swap, skip its body, and go on handing the *superseded* object to the closures it kept —
+// `setNote`, `togglePin`, `removeRepo`, `removeWebSource`, `workspace.path`.
+//
+// Selection is the one path that would have been safe without it, and it is worth naming because
+// it shows the shape of the general defence: `selectWorkspace` reaches `setSelectedWorkspace`,
+// which stores `MainWindowWorkspaceSelection` — a `UUID`, not the object — and every read goes
+// back through `cachedWorkspace(with:)` against the live index. A superseded object handed to it
+// is reduced to its id and re-resolved, which is the invariant `Sources/AGENTS.md` states as
+// "persist selection state by stable IDs, not live SwiftData objects". The mutations have no such
+// boundary, so they get the fingerprint instead.
+//
+// `ArchivedDisclosureDisplayState` deliberately carries none: its only closure is
+// `toggleArchivedSection(for:)`, which reads `repo.id`, and the state already carries `repoID`.
+
 /// Everything a repo row and its context menu draw. `remoteURL` rather than the parsed
 /// `GitHubRepoSlug`: the slug is what the menu's "New Web Session" entry reads, and
 /// fingerprinting its input costs a string compare instead of a parse per row per render.
 struct RepoRowDisplayState: Equatable {
     let repoID: UUID
+    /// The `Repo` object this row's closures captured — see `SidebarRowIdentity` above.
+    let identity: ObjectIdentifier
     let name: String
     let remoteURL: String?
     let activeWorkspaceCount: Int
@@ -105,6 +127,8 @@ struct RepoRowDisplayState: Equatable {
 /// two numbers both fingerprints that input and retires the sort.
 struct WorkspaceRowDisplayState: Equatable {
     let workspaceID: UUID
+    /// The `Workspace` object this row's closures captured — see `SidebarRowIdentity` above.
+    let identity: ObjectIdentifier
     let name: String
     let status: WorkspaceStatus
     let backendIdentifier: String
@@ -147,6 +171,9 @@ struct WorkspaceRowDisplayState: Equatable {
 /// that skips its body keeps a favicon view that is still watching the right URL.
 struct WebSourceRowDisplayState: Equatable {
     let sourceID: UUID
+    /// The `WebSource` object this row's closures captured — see `SidebarRowIdentity` above.
+    /// `removeWebSource` deletes through it, so a superseded instance would delete nothing.
+    let identity: ObjectIdentifier
     let name: String
     let urlString: String
     let isSelected: Bool
