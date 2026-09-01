@@ -3,6 +3,7 @@
 //  WorkspaceManagerAppTests
 //
 
+import AppKit
 import Foundation
 import Testing
 
@@ -129,9 +130,9 @@ struct GhosttyTerminalConfigTests {
     @Test("A resume session's launch command is identical to a plain shell's")
     func resumeSessionLaunchCommandMatchesPlainShell() throws {
         // The initial command is delivered by SurfaceStore over the automation
-        // text bridge, never embedded in the launch command — libghostty ignores
-        // a per-surface `command` for surfaces created after the app's first,
-        // and an identical command means tmux/plain behavior can't diverge.
+        // text bridge, never embedded in the launch command — typed delivery lets
+        // restore prefill without executing (#1485), and an identical command
+        // means tmux/plain behavior can't diverge.
         let environment = ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"]
         for mode in [TerminalMultiplexingMode.tmuxPerSession, .ghosttyManagedSplits] {
             let resume = GhosttyTerminalConfig(
@@ -834,5 +835,50 @@ struct GhosttyTerminalConfigTests {
         }
 
         #expect(config().command == config().command)
+    }
+
+    /// #889's seam: the C struct actually handed to `ghostty_surface_new`. Every
+    /// other test here asserts the Swift-side composition; this one asserts the
+    /// marshalling, because a field the Swift struct holds but `withCValue` never
+    /// writes is dropped invisibly — and asserting only `command` is what let the
+    /// `env_vars` half of #889 go unnoticed until a live `log stream` caught it.
+    @Test("withCValue hands command, env_vars, and working_directory to the C config together")
+    @MainActor
+    func cValueCarriesEveryPerSurfaceField() throws {
+        let hostSessionID = UUID(uuidString: "5A0BE0DE-9F4D-4E5B-8A44-1FB4EC889000")!
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true,
+            tmuxSupportsSessionEnvironmentFlagOverride: true,
+            hostSessionID: hostSessionID,
+            hooksSocketPath: "/tmp/workspaces-hooks.sock"
+        )
+
+        let observed = config.withCValue(view: NSView()) { cConfig in
+            (
+                command: cConfig.command.map { String(cString: $0) },
+                workingDirectory: cConfig.working_directory.map { String(cString: $0) },
+                environment: (0..<cConfig.env_var_count).reduce(into: [String: String]()) { env, index in
+                    guard let envVars = cConfig.env_vars else { return }
+                    env[String(cString: envVars[index].key)] = String(cString: envVars[index].value)
+                },
+                hasInitialInput: cConfig.initial_input != nil
+            )
+        }
+
+        #expect(observed.command == config.command)
+        #expect(observed.workingDirectory == config.workingDirectory)
+        // Whole-dictionary equality, not count-plus-spot-checks: a mispaired or
+        // corrupted value on any unchecked key must fail too (codex review).
+        #expect(observed.environment == config.environmentVariables)
+        #expect(observed.environment["WORKSPACES_HOST_SESSION_ID"] == hostSessionID.uuidString)
+        #expect(observed.environment["TERM"] == "xterm-256color")
+        // `initial_input` is intentionally not launch-embedded: the initial command
+        // rides the text bridge so restore can prefill without executing (#888,
+        // #1485). If launch-time embedding ever returns, this line forces the
+        // delivery contract to be restated alongside it.
+        #expect(!observed.hasInitialInput)
     }
 }
