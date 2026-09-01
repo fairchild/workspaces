@@ -33,8 +33,10 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -46,8 +48,17 @@ from typing import Any
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_THRESHOLD_HOURS = 3
 RECONCILE_MARKER = "<!-- factory-review-reconcile:head={head_sha} -->"
+# GITHUB_TOKEN-authored comments post under this identity. Matching the
+# marker only against this author, not "any comment on the PR", is what
+# keeps the idempotency check from being a self-suppression switch anyone
+# who can comment could pull.
+RECONCILE_COMMENT_AUTHOR = "github-actions[bot]"
 FLAG_LABELS = ("agent", "needs-human")
 API_ATTEMPTS = 3
+# A pause between each finding's writes, in line with GitHub's own guidance
+# to space mutating requests roughly a second apart rather than firing a
+# burst that trips the ~80/minute secondary rate limit.
+WRITE_PACE_SECONDS = 1.1
 
 
 def _load_factory_review():
@@ -58,8 +69,18 @@ def _load_factory_review():
     `evaluate_review` here would let this reconciliation pass and the
     Executor's admission drift into disagreeing about what "due for review"
     means.
+
+    Reuses an already-loaded module rather than re-execing over it: a second
+    `exec_module` mints a second, distinct `ReviewDecision` class under the
+    same `sys.modules` name, so a `StaleReview` built from the first load's
+    decision would fail `isinstance` against the second. Harmless within a
+    single `uv run --script` process (this only runs once, at import time),
+    but this module and the test file that loads it by the same path can
+    both end up in one interpreter.
     """
     name = "factory_review_for_reconcile"
+    if name in sys.modules:
+        return sys.modules[name]
     spec = importlib.util.spec_from_file_location(name, SCRIPT_DIR / "factory-review.py")
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
@@ -73,6 +94,16 @@ factory_review = _load_factory_review()
 
 class FactoryReviewReconcileError(RuntimeError):
     """Raised when the reconciliation sweep cannot be planned or applied safely."""
+
+
+def _retry_after_seconds(error: urllib.error.HTTPError) -> float | None:
+    raw = error.headers.get("Retry-After") if error.headers else None
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return None
 
 
 class GitHubClient(factory_review.GitHubClient):
@@ -94,10 +125,15 @@ class GitHubClient(factory_review.GitHubClient):
             page += 1
 
     def workflow_runs_for_head(self, workflow: str, head_sha: str) -> list[dict[str, Any]]:
+        # 100, not the default 20: a head with more dispatches against it than
+        # that (retries, reruns, an unrelated flood) would otherwise let a
+        # genuinely successful signal fall off the page and read as "never
+        # ran" (silent false negative — the PR this sweep most needs to catch
+        # never gets flagged).
         payload = dict(
             self.request(
                 f"/repos/{self.repository}/actions/workflows/{workflow}/runs"
-                f"?head_sha={head_sha}&per_page=20"
+                f"?head_sha={head_sha}&per_page=100"
             )
         )
         return [dict(run) for run in payload.get("workflow_runs") or []]
@@ -106,6 +142,18 @@ class GitHubClient(factory_review.GitHubClient):
         return self._paginated(f"/repos/{self.repository}/issues/{number}/comments")
 
     def write(self, method: str, path: str, payload: dict[str, Any]) -> None:
+        """POST with a retry policy scoped to what is actually safe to retry.
+
+        A 429 means GitHub rejected the request before doing anything with
+        it — retrying (after any `Retry-After` it names) cannot double-apply
+        a write. A 5xx or a dropped connection is ambiguous: the mutation may
+        have already landed server-side with the response lost in transit,
+        so retrying it risks a second, real comment or a second label call
+        under a fresh idempotency check that has nothing to compare against
+        yet. Those surface immediately instead — the caller's per-finding
+        isolation lets the run continue, and tomorrow's sweep retries safely
+        because by then the marker check has something to find.
+        """
         data = json.dumps(payload).encode("utf-8")
         for attempt in range(1, API_ATTEMPTS + 1):
             request = urllib.request.Request(
@@ -125,16 +173,19 @@ class GitHubClient(factory_review.GitHubClient):
                     return
             except urllib.error.HTTPError as error:
                 detail = error.read().decode("utf-8", errors="replace")
-                transient = error.code == 429 or 500 <= error.code < 600
-                if not transient or attempt == API_ATTEMPTS:
-                    raise FactoryReviewReconcileError(
-                        f"GitHub API {method} {path} failed with HTTP {error.code}: {detail}"
-                    ) from error
+                if error.code == 429 and attempt < API_ATTEMPTS:
+                    # `or` would treat a genuine `Retry-After: 0` as absent
+                    # and fall through to the exponential backoff instead.
+                    retry_after = _retry_after_seconds(error)
+                    time.sleep(retry_after if retry_after is not None else 2**attempt)
+                    continue
+                raise FactoryReviewReconcileError(
+                    f"GitHub API {method} {path} failed with HTTP {error.code}: {detail}"
+                ) from error
             except urllib.error.URLError as error:
-                if attempt == API_ATTEMPTS:
-                    raise FactoryReviewReconcileError(
-                        f"GitHub API {method} {path} failed: {error.reason}"
-                    ) from error
+                raise FactoryReviewReconcileError(
+                    f"GitHub API {method} {path} failed: {error.reason}"
+                ) from error
 
     def add_flag_labels(self, number: int) -> None:
         self.write(
@@ -158,6 +209,34 @@ class StaleReview:
     head_sha: str
     signal_completed_at: str
     age_hours: float
+
+
+def runs_associated_with_pull_request(
+    runs: list[dict[str, Any]], pr_number: int
+) -> list[dict[str, Any]]:
+    """Drops a run GitHub explicitly ties to a *different* PR; keeps
+    everything else.
+
+    `head_sha` identifies a commit, not a PR — two open PRs can point at the
+    same commit (a rebase, a duplicate branch), and a run genuinely
+    triggered for one would otherwise read as evidence for the other. Each
+    `pull_request`-triggered run carries its own `pull_requests` array
+    naming which PR(s) it belongs to; a run naming some *other* PR is
+    excluded outright. A run with an empty array — cross-repo/fork-triggered
+    runs, where GitHub gives no association at all — is ambiguous rather
+    than wrong, so it stays, on the same best-effort basis `head_sha` alone
+    already was.
+    """
+    kept: list[dict[str, Any]] = []
+    for run in runs:
+        associated_numbers = {
+            int(pr["number"])
+            for pr in run.get("pull_requests") or []
+            if isinstance(pr, dict) and "number" in pr
+        }
+        if not associated_numbers or pr_number in associated_numbers:
+            kept.append(run)
+    return kept
 
 
 def latest_successful_run_completion(runs: list[dict[str, Any]]) -> str | None:
@@ -212,7 +291,17 @@ def evaluate_pull_request(
 
 def already_flagged(comments: list[dict[str, Any]], head_sha: str) -> bool:
     marker = RECONCILE_MARKER.format(head_sha=head_sha)
-    return any(marker in str(comment.get("body") or "") for comment in comments)
+    return any(
+        marker in str(comment.get("body") or "")
+        for comment in comments
+        # Scoped to the sweep's own posting identity: matching any commenter
+        # would let the PR's own author (or anyone who can comment) suppress
+        # the flag for a head by simply pasting the marker text, and the
+        # workflow would exit clean having silently skipped both the label
+        # and the real diagnosis.
+        if str((comment.get("user") or {}).get("login") or "").casefold()
+        == RECONCILE_COMMENT_AUTHOR.casefold()
+    )
 
 
 def comment_body(finding: StaleReview, threshold_hours: float) -> str:
@@ -250,14 +339,24 @@ def find_stale_reviews(
         if factory_review.author_label(pull_request) is None:
             continue
         number = int(pull_request["number"])
-        files = client.pull_request_files(number)
-        reviews = client.pull_request_reviews(number)
-        if factory_review.evaluate_review(pull_request, files, reviews, force=False).action != "review":
+        try:
+            files = client.pull_request_files(number)
+            reviews = client.pull_request_reviews(number)
+            if (
+                factory_review.evaluate_review(pull_request, files, reviews, force=False).action
+                != "review"
+            ):
+                continue
+            head_sha = str((pull_request.get("head") or {}).get("sha") or "")
+            signal_runs = runs_associated_with_pull_request(
+                client.workflow_runs_for_head("factory-review.yml", head_sha), number
+            )
+        except (FactoryReviewReconcileError, factory_review.FactoryReviewError) as error:
+            # A read failure here loses only today's chance to flag this one
+            # PR, not every PR already scanned — the daily cadence retries it
+            # tomorrow, so degrading gracefully beats aborting the batch.
+            print(f"[read-failed] #{number}: {error}", file=sys.stderr)
             continue
-        signal_runs = client.workflow_runs_for_head(
-            "factory-review.yml",
-            str((pull_request.get("head") or {}).get("sha") or ""),
-        )
         finding = evaluate_pull_request(
             pull_request, files, reviews, signal_runs, now=now, threshold_hours=threshold_hours
         )
@@ -277,26 +376,57 @@ def print_findings(findings: list[StaleReview]) -> None:
         )
 
 
+def still_due(client: GitHubClient, finding: StaleReview) -> bool:
+    """Re-checks a finding against live state right before writing.
+
+    Findings are computed in one pass over every open PR, then applied in a
+    second pass afterward — during which the PR this finding names can have
+    moved on: closed, merged, pushed to a new head, or actually reviewed
+    while a sibling PR was still being scanned. Re-fetching only what
+    changed (the PR itself and its reviews, not files — routing does not
+    change without an author-label edit) is cheap next to writing a stale
+    diagnosis onto a PR the owner already resolved.
+    """
+    pull_request = client.pull_request(finding.pr_number)
+    if str(pull_request.get("state") or "").casefold() != "open":
+        return False
+    head_sha = str((pull_request.get("head") or {}).get("sha") or "")
+    if head_sha != finding.head_sha:
+        return False
+    reviews = client.pull_request_reviews(finding.pr_number)
+    return not factory_review.reviewed_head(
+        reviews, reviewer=finding.reviewer, head_sha=finding.head_sha
+    )
+
+
 def apply_findings(
     client: GitHubClient, findings: list[StaleReview], threshold_hours: float
 ) -> None:
-    """Continues past a single PR's write failure rather than aborting the
-    rest of the run: one flaky comment post must not silence every other
-    stale PR this sweep already found. Every failure is still raised at the
-    end, once, so the run fails loudly and CI/cron surfaces it."""
+    """Continues past a single PR's failure rather than aborting the rest of
+    the run: one flaky read or write must not silence every other stale PR
+    this sweep already found. Every failure is still raised at the end,
+    once, so the run fails loudly and CI/cron surfaces it. Paced a beat
+    between PRs so a large batch of findings never bursts past GitHub's
+    secondary rate limit on mutating requests."""
     failures: list[tuple[int, str]] = []
-    for finding in findings:
+    for index, finding in enumerate(findings):
         try:
+            if not still_due(client, finding):
+                print(f"[skip] #{finding.pr_number}: no longer due for review")
+                continue
             comments = client.issue_comments(finding.pr_number)
             if already_flagged(comments, finding.head_sha):
                 print(f"[skip] #{finding.pr_number}: already flagged for head {finding.head_sha}")
                 continue
             client.add_flag_labels(finding.pr_number)
             client.post_comment(finding.pr_number, comment_body(finding, threshold_hours))
-        except FactoryReviewReconcileError as error:
+        except (FactoryReviewReconcileError, factory_review.FactoryReviewError) as error:
             failures.append((finding.pr_number, str(error)))
             print(f"[failed] #{finding.pr_number}: {error}", file=sys.stderr)
             continue
+        finally:
+            if index < len(findings) - 1:
+                time.sleep(WRITE_PACE_SECONDS)
         print(f"[flagged] #{finding.pr_number}")
     if failures:
         rendered = "; ".join(f"#{number}: {detail}" for number, detail in failures)
@@ -332,8 +462,8 @@ def validate_args(args: argparse.Namespace) -> None:
 
 def resolve_threshold_hours(args: argparse.Namespace) -> float:
     if args.threshold_hours is not None:
-        if args.threshold_hours <= 0:
-            raise FactoryReviewReconcileError("--threshold-hours must be positive")
+        if not math.isfinite(args.threshold_hours) or args.threshold_hours <= 0:
+            raise FactoryReviewReconcileError("--threshold-hours must be a positive, finite number")
         return args.threshold_hours
     raw = os.environ.get("FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS", "").strip()
     if not raw:
@@ -342,11 +472,15 @@ def resolve_threshold_hours(args: argparse.Namespace) -> float:
         value = float(raw)
     except ValueError as error:
         raise FactoryReviewReconcileError(
-            f"FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS must be a positive number, got {raw!r}"
+            f"FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS must be a positive, finite number, got {raw!r}"
         ) from error
-    if value <= 0:
+    # `<= 0` alone lets `nan` (every comparison false) and `inf` (compares
+    # true, then flags a 30-minute-old signal or disables every finding)
+    # both through — both are non-finite, so `math.isfinite` catches what a
+    # bare positivity check cannot.
+    if not math.isfinite(value) or value <= 0:
         raise FactoryReviewReconcileError(
-            "FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS must be a positive number"
+            "FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS must be a positive, finite number"
         )
     return value
 

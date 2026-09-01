@@ -14,6 +14,7 @@ head it has already commented on.
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import subprocess
 import sys
@@ -63,6 +64,41 @@ def successful_run(updated_at: str) -> dict[str, object]:
 
 
 NOW = datetime(2026, 8, 31, 14, 0, 0, tzinfo=UTC)
+
+
+class RunsAssociatedWithPullRequestTests(unittest.TestCase):
+    def test_filters_to_runs_naming_this_pr_number(self) -> None:
+        runs = [
+            {"id": 1, "pull_requests": [{"number": 1485}]},
+            {"id": 2, "pull_requests": [{"number": 1490}]},
+        ]
+
+        self.assertEqual(
+            factory_review_reconcile.runs_associated_with_pull_request(runs, 1485),
+            [{"id": 1, "pull_requests": [{"number": 1485}]}],
+        )
+
+    def test_falls_back_to_the_unfiltered_set_when_none_carry_pull_requests(self) -> None:
+        # Cross-repo/fork-triggered runs carry an empty pull_requests array --
+        # head_sha is the only signal GitHub gives there, so discard nothing.
+        runs = [{"id": 1, "pull_requests": []}, {"id": 2}]
+
+        self.assertEqual(factory_review_reconcile.runs_associated_with_pull_request(runs, 1485), runs)
+
+    def test_excludes_only_the_run_explicitly_scoped_to_a_different_pr(self) -> None:
+        # A run naming a different PR is discarded even when a sibling run in
+        # the same batch is ambiguous (no pull_requests info at all) -- the
+        # ambiguous one stays, on the same best-effort basis head_sha alone
+        # already was; the scoped-elsewhere one is definite, so it goes.
+        runs = [
+            {"id": 1, "pull_requests": [{"number": 1490}]},
+            {"id": 2, "pull_requests": []},
+        ]
+
+        self.assertEqual(
+            factory_review_reconcile.runs_associated_with_pull_request(runs, 1485),
+            [{"id": 2, "pull_requests": []}],
+        )
 
 
 class LatestSuccessfulRunCompletionTests(unittest.TestCase):
@@ -172,17 +208,39 @@ class EvaluatePullRequestTests(unittest.TestCase):
 
 class AlreadyFlaggedTests(unittest.TestCase):
     def test_true_when_the_marker_for_this_head_is_present(self) -> None:
-        comments = [{"body": "<!-- factory-review-reconcile:head=sha-stale -->\nsome text"}]
+        comments = [
+            {
+                "body": "<!-- factory-review-reconcile:head=sha-stale -->\nsome text",
+                "user": {"login": "github-actions[bot]"},
+            }
+        ]
 
         self.assertTrue(factory_review_reconcile.already_flagged(comments, "sha-stale"))
 
     def test_false_for_a_different_heads_marker(self) -> None:
-        comments = [{"body": "<!-- factory-review-reconcile:head=sha-old -->"}]
+        comments = [
+            {
+                "body": "<!-- factory-review-reconcile:head=sha-old -->",
+                "user": {"login": "github-actions[bot]"},
+            }
+        ]
 
         self.assertFalse(factory_review_reconcile.already_flagged(comments, "sha-stale"))
 
     def test_false_with_no_comments(self) -> None:
         self.assertFalse(factory_review_reconcile.already_flagged([], "sha-stale"))
+
+    def test_false_when_the_marker_comes_from_an_untrusted_author(self) -> None:
+        # Anyone who can comment on the PR can paste this exact text. Only a
+        # marker the sweep itself posted (github-actions[bot]) counts.
+        comments = [
+            {
+                "body": "<!-- factory-review-reconcile:head=sha-stale -->",
+                "user": {"login": "the-pr-author"},
+            }
+        ]
+
+        self.assertFalse(factory_review_reconcile.already_flagged(comments, "sha-stale"))
 
 
 class FindStaleReviewsTests(unittest.TestCase):
@@ -249,6 +307,82 @@ class FindStaleReviewsTests(unittest.TestCase):
         client.workflow_runs_for_head.assert_not_called()
 
 
+def flagged_comment(head_sha: str) -> dict[str, object]:
+    return {
+        "body": f"<!-- factory-review-reconcile:head={head_sha} -->\nprevious diagnosis",
+        "user": {"login": "github-actions[bot]"},
+    }
+
+
+class StillDueTests(unittest.TestCase):
+    def finding(self, **overrides) -> "factory_review_reconcile.StaleReview":
+        defaults = dict(
+            pr_number=1485,
+            reviewer="april",
+            head_sha="sha-stale",
+            signal_completed_at="2026-08-31T09:00:00Z",
+            age_hours=5.0,
+        )
+        defaults.update(overrides)
+        return factory_review_reconcile.StaleReview(**defaults)
+
+    def client(self, *, state: str = "open", head_sha: str = "sha-stale", reviews=None):
+        c = mock.Mock()
+        c.pull_request.return_value = {"state": state, "head": {"sha": head_sha}}
+        c.pull_request_reviews.return_value = reviews or []
+        return c
+
+    def test_true_when_open_same_head_and_unreviewed(self) -> None:
+        c = self.client()
+
+        self.assertTrue(factory_review_reconcile.still_due(c, self.finding()))
+
+    def test_false_once_the_pr_is_no_longer_open(self) -> None:
+        c = self.client(state="closed")
+
+        self.assertFalse(factory_review_reconcile.still_due(c, self.finding()))
+
+    def test_false_once_the_head_has_moved(self) -> None:
+        # A push landed between discovery and apply -- the new head deserves
+        # its own staleness clock, not the old head's diagnosis.
+        c = self.client(head_sha="sha-newer")
+
+        self.assertFalse(factory_review_reconcile.still_due(c, self.finding()))
+
+    def test_false_once_a_review_landed(self) -> None:
+        c = self.client(
+            reviews=[
+                {
+                    "user": {"login": "april-clearwater[bot]"},
+                    "commit_id": "sha-stale",
+                    "state": "APPROVED",
+                }
+            ]
+        )
+
+        self.assertFalse(factory_review_reconcile.still_due(c, self.finding()))
+
+
+class FindStaleReviewsIsolationTests(unittest.TestCase):
+    def test_a_read_failure_on_one_pr_does_not_lose_findings_already_discovered(self) -> None:
+        client = mock.Mock()
+        client.pull_request_files.side_effect = [
+            factory_review_reconcile.factory_review.FactoryReviewError("boom"),
+            [],
+        ]
+        client.pull_request_reviews.return_value = []
+        client.workflow_runs_for_head.return_value = [successful_run("2026-08-31T09:00:00Z")]
+
+        findings = factory_review_reconcile.find_stale_reviews(
+            client,
+            [pull_request(1485, head_sha="sha-a"), pull_request(1490, head_sha="sha-b")],
+            now=NOW,
+            threshold_hours=3,
+        )
+
+        self.assertEqual([finding.pr_number for finding in findings], [1490])
+
+
 class ApplyFindingsTests(unittest.TestCase):
     def finding(self, **overrides) -> "factory_review_reconcile.StaleReview":
         defaults = dict(
@@ -261,11 +395,18 @@ class ApplyFindingsTests(unittest.TestCase):
         defaults.update(overrides)
         return factory_review_reconcile.StaleReview(**defaults)
 
-    def test_labels_and_comments_a_pr_with_no_existing_flag(self) -> None:
+    def still_due_client(self, *, head_sha: str = "sha-stale") -> mock.Mock:
         client = mock.Mock()
+        client.pull_request.return_value = {"state": "open", "head": {"sha": head_sha}}
+        client.pull_request_reviews.return_value = []
         client.issue_comments.return_value = []
+        return client
 
-        factory_review_reconcile.apply_findings(client, [self.finding()], threshold_hours=3)
+    def test_labels_and_comments_a_pr_with_no_existing_flag(self) -> None:
+        client = self.still_due_client()
+
+        with mock.patch.object(factory_review_reconcile.time, "sleep"):
+            factory_review_reconcile.apply_findings(client, [self.finding()], threshold_hours=3)
 
         client.add_flag_labels.assert_called_once_with(1485)
         client.post_comment.assert_called_once()
@@ -274,42 +415,73 @@ class ApplyFindingsTests(unittest.TestCase):
         self.assertIn("5.0h ago", posted_body)
 
     def test_skips_a_pr_already_flagged_for_this_head(self) -> None:
-        client = mock.Mock()
-        client.issue_comments.return_value = [
-            {"body": "<!-- factory-review-reconcile:head=sha-stale -->\nalready posted"}
-        ]
+        client = self.still_due_client()
+        client.issue_comments.return_value = [flagged_comment("sha-stale")]
 
         factory_review_reconcile.apply_findings(client, [self.finding()], threshold_hours=3)
 
         client.add_flag_labels.assert_not_called()
         client.post_comment.assert_not_called()
 
-    def test_a_new_push_after_being_flagged_reflags(self) -> None:
-        # The marker is keyed by head SHA, so a new commit clears the old
-        # diagnosis and the sweep can flag the PR again on its new head.
-        client = mock.Mock()
+    def test_an_untrusted_authors_marker_does_not_suppress_the_flag(self) -> None:
+        # Anyone who can comment can paste this exact HTML comment. Only a
+        # marker posted by the sweep's own identity may stand it down.
+        client = self.still_due_client()
         client.issue_comments.return_value = [
-            {"body": "<!-- factory-review-reconcile:head=sha-old -->\nprevious diagnosis"}
+            {
+                "body": "<!-- factory-review-reconcile:head=sha-stale -->\nnothing to see here",
+                "user": {"login": "the-pr-author"},
+            }
         ]
 
-        factory_review_reconcile.apply_findings(
-            client, [self.finding(head_sha="sha-new")], threshold_hours=3
-        )
+        with mock.patch.object(factory_review_reconcile.time, "sleep"):
+            factory_review_reconcile.apply_findings(client, [self.finding()], threshold_hours=3)
 
         client.add_flag_labels.assert_called_once_with(1485)
         client.post_comment.assert_called_once()
 
+    def test_a_new_push_after_being_flagged_reflags(self) -> None:
+        # The marker is keyed by head SHA, so a new commit clears the old
+        # diagnosis and the sweep can flag the PR again on its new head.
+        client = self.still_due_client(head_sha="sha-new")
+        client.issue_comments.return_value = [flagged_comment("sha-old")]
+
+        with mock.patch.object(factory_review_reconcile.time, "sleep"):
+            factory_review_reconcile.apply_findings(
+                client, [self.finding(head_sha="sha-new")], threshold_hours=3
+            )
+
+        client.add_flag_labels.assert_called_once_with(1485)
+        client.post_comment.assert_called_once()
+
+    def test_skips_a_pr_that_moved_on_before_it_was_applied(self) -> None:
+        # Discovery and application are two passes; a PR merged or reviewed
+        # in between must not receive a stale diagnosis it no longer earns.
+        client = self.still_due_client()
+        client.pull_request.return_value = {"state": "closed", "head": {"sha": "sha-stale"}}
+
+        factory_review_reconcile.apply_findings(client, [self.finding()], threshold_hours=3)
+
+        client.add_flag_labels.assert_not_called()
+        client.post_comment.assert_not_called()
+
     def test_a_failure_on_one_pr_does_not_block_flagging_the_rest(self) -> None:
-        client = mock.Mock()
-        client.issue_comments.return_value = []
+        client = self.still_due_client()
+        client.pull_request.side_effect = lambda number, _heads={
+            1485: "sha-stale",
+            1490: "sha-b",
+        }: {"state": "open", "head": {"sha": _heads[number]}}
         client.add_flag_labels.side_effect = [
             factory_review_reconcile.FactoryReviewReconcileError("boom"),
             None,
         ]
         findings = [self.finding(pr_number=1485), self.finding(pr_number=1490, head_sha="sha-b")]
 
-        with self.assertRaisesRegex(
-            factory_review_reconcile.FactoryReviewReconcileError, "#1485: boom"
+        with (
+            mock.patch.object(factory_review_reconcile.time, "sleep"),
+            self.assertRaisesRegex(
+                factory_review_reconcile.FactoryReviewReconcileError, "#1485: boom"
+            ),
         ):
             factory_review_reconcile.apply_findings(client, findings, threshold_hours=3)
 
@@ -318,6 +490,175 @@ class ApplyFindingsTests(unittest.TestCase):
         # whole batch has been attempted.
         client.add_flag_labels.assert_has_calls([mock.call(1485), mock.call(1490)])
         client.post_comment.assert_called_once()
+
+    def test_a_read_error_from_the_inherited_get_client_is_caught_too(self) -> None:
+        # issue_comments() raises the base client's error type, not this
+        # module's own -- both must be caught by the same isolation.
+        client = self.still_due_client()
+        client.pull_request.side_effect = lambda number, _heads={
+            1485: "sha-stale",
+            1490: "sha-b",
+        }: {"state": "open", "head": {"sha": _heads[number]}}
+        client.issue_comments.side_effect = [
+            factory_review_reconcile.factory_review.FactoryReviewError("read boom"),
+            [],
+        ]
+        findings = [self.finding(pr_number=1485), self.finding(pr_number=1490, head_sha="sha-b")]
+
+        with (
+            mock.patch.object(factory_review_reconcile.time, "sleep"),
+            self.assertRaisesRegex(
+                factory_review_reconcile.FactoryReviewReconcileError, "#1485: read boom"
+            ),
+        ):
+            factory_review_reconcile.apply_findings(client, findings, threshold_hours=3)
+
+        client.add_flag_labels.assert_called_once_with(1490)
+
+    def test_paces_between_findings_but_not_after_the_last_one(self) -> None:
+        client = self.still_due_client()
+        findings = [self.finding(pr_number=1485), self.finding(pr_number=1490, head_sha="sha-b")]
+
+        with mock.patch.object(factory_review_reconcile.time, "sleep") as sleep:
+            factory_review_reconcile.apply_findings(client, findings, threshold_hours=3)
+
+        sleep.assert_called_once_with(factory_review_reconcile.WRITE_PACE_SECONDS)
+
+
+def http_error(code: int, *, headers: dict[str, str] | None = None) -> "factory_review_reconcile.urllib.error.HTTPError":
+    from email.message import Message
+
+    hdrs = Message()
+    for key, value in (headers or {}).items():
+        hdrs[key] = value
+    return factory_review_reconcile.urllib.error.HTTPError(
+        "https://api.github.com/x", code, "err", hdrs, mock.Mock(read=lambda: b"{}")
+    )
+
+
+class RetryAfterSecondsTests(unittest.TestCase):
+    def test_reads_a_present_header(self) -> None:
+        self.assertEqual(factory_review_reconcile._retry_after_seconds(http_error(429, headers={"Retry-After": "5"})), 5.0)
+
+    def test_none_when_the_header_is_absent(self) -> None:
+        self.assertIsNone(factory_review_reconcile._retry_after_seconds(http_error(429)))
+
+    def test_none_when_the_header_is_not_a_number(self) -> None:
+        self.assertIsNone(
+            factory_review_reconcile._retry_after_seconds(
+                http_error(429, headers={"Retry-After": "not-a-number"})
+            )
+        )
+
+
+class GitHubClientWriteRetryTests(unittest.TestCase):
+    def test_429_retries_after_the_retry_after_header(self) -> None:
+        client = factory_review_reconcile.GitHubClient("fairchild/workspaces", "token")
+        responses = iter([http_error(429, headers={"Retry-After": "0"}), mock.MagicMock()])
+
+        def urlopen(*args, **kwargs):
+            response = next(responses)
+            if isinstance(response, BaseException):
+                raise response
+            return mock.MagicMock(__enter__=mock.Mock(return_value=None), __exit__=mock.Mock(return_value=False))
+
+        with (
+            mock.patch.object(factory_review_reconcile.urllib.request, "urlopen", side_effect=urlopen),
+            mock.patch.object(factory_review_reconcile.time, "sleep") as sleep,
+        ):
+            client.write("POST", "/repos/fairchild/workspaces/issues/1/labels", {"labels": ["agent"]})
+
+        sleep.assert_called_once_with(0.0)
+
+    def test_a_5xx_fails_immediately_without_retrying(self) -> None:
+        # A 5xx is ambiguous -- the mutation may have already landed -- so
+        # this must not retry blind into a possible duplicate.
+        client = factory_review_reconcile.GitHubClient("fairchild/workspaces", "token")
+
+        with (
+            mock.patch.object(
+                factory_review_reconcile.urllib.request,
+                "urlopen",
+                side_effect=http_error(502),
+            ) as urlopen,
+            self.assertRaises(factory_review_reconcile.FactoryReviewReconcileError),
+        ):
+            client.write("POST", "/repos/fairchild/workspaces/issues/1/comments", {"body": "x"})
+
+        self.assertEqual(urlopen.call_count, 1)
+
+    def test_a_dropped_connection_fails_immediately_without_retrying(self) -> None:
+        client = factory_review_reconcile.GitHubClient("fairchild/workspaces", "token")
+
+        with (
+            mock.patch.object(
+                factory_review_reconcile.urllib.request,
+                "urlopen",
+                side_effect=factory_review_reconcile.urllib.error.URLError("dropped"),
+            ) as urlopen,
+            self.assertRaises(factory_review_reconcile.FactoryReviewReconcileError),
+        ):
+            client.write("POST", "/repos/fairchild/workspaces/issues/1/comments", {"body": "x"})
+
+        self.assertEqual(urlopen.call_count, 1)
+
+
+class LoadFactoryReviewReuseTests(unittest.TestCase):
+    def test_a_second_load_returns_the_same_module_object(self) -> None:
+        first = factory_review_reconcile.factory_review
+        second = factory_review_reconcile._load_factory_review()
+
+        self.assertIs(first, second)
+        # The identity that matters in practice: a decision from one load
+        # must still isinstance-check against the other's class.
+        decision = first.ReviewDecision("review", "route", "april")
+        self.assertIsInstance(decision, second.ReviewDecision)
+
+
+class ResolveThresholdHoursTests(unittest.TestCase):
+    def args(self, *, threshold_hours=None):
+        return argparse.Namespace(threshold_hours=threshold_hours)
+
+    def test_rejects_nan_from_the_cli_flag(self) -> None:
+        with self.assertRaisesRegex(
+            factory_review_reconcile.FactoryReviewReconcileError, "positive"
+        ):
+            factory_review_reconcile.resolve_threshold_hours(self.args(threshold_hours=float("nan")))
+
+    def test_rejects_infinity_from_the_cli_flag(self) -> None:
+        with self.assertRaisesRegex(
+            factory_review_reconcile.FactoryReviewReconcileError, "positive"
+        ):
+            factory_review_reconcile.resolve_threshold_hours(self.args(threshold_hours=float("inf")))
+
+    def test_rejects_nan_from_the_environment_variable(self) -> None:
+        with (
+            mock.patch.dict(
+                factory_review_reconcile.os.environ,
+                {"FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS": "nan"},
+            ),
+            self.assertRaisesRegex(
+                factory_review_reconcile.FactoryReviewReconcileError, "positive"
+            ),
+        ):
+            factory_review_reconcile.resolve_threshold_hours(self.args())
+
+    def test_rejects_infinity_from_the_environment_variable(self) -> None:
+        with (
+            mock.patch.dict(
+                factory_review_reconcile.os.environ,
+                {"FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS": "inf"},
+            ),
+            self.assertRaisesRegex(
+                factory_review_reconcile.FactoryReviewReconcileError, "positive"
+            ),
+        ):
+            factory_review_reconcile.resolve_threshold_hours(self.args())
+
+    def test_accepts_a_normal_positive_value(self) -> None:
+        self.assertEqual(
+            factory_review_reconcile.resolve_threshold_hours(self.args(threshold_hours=6.5)), 6.5
+        )
 
 
 class GitHubClientTests(unittest.TestCase):
@@ -342,7 +683,7 @@ class GitHubClientTests(unittest.TestCase):
         self.assertEqual(runs, [{"id": 1}])
         client.request.assert_called_once_with(
             "/repos/fairchild/workspaces/actions/workflows/factory-review.yml/runs"
-            "?head_sha=sha-abc&per_page=20"
+            "?head_sha=sha-abc&per_page=100"
         )
 
 
@@ -408,7 +749,7 @@ class CliFixtureTests(unittest.TestCase):
         )
 
         self.assertEqual(result.returncode, 1)
-        self.assertIn("--threshold-hours must be positive", result.stderr)
+        self.assertIn("--threshold-hours must be a positive, finite number", result.stderr)
 
 
 if __name__ == "__main__":
