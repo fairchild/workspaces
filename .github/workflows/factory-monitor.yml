@@ -217,6 +217,30 @@ jobs:
 
           uv run --script "$GITHUB_WORKSPACE/source/scripts/factory-sweep.py" "${ARGS[@]}"
 
+      # #1507: the signal half of the review lane (factory-review.yml) can
+      # succeed with no follow-through from the Executor half
+      # (factory-review-execute.yml, workflow_run-triggered) -- a
+      # workflow_run delivery gap, an exhausted daily cap, or a crash loop
+      # all look the same from here: a PR that stays due for a counterpart
+      # review past a few hours. Detection only -- it flags with
+      # agent+needs-human and an idempotent comment, never dispatches a
+      # review or touches the Executor's own budget.
+      - name: Reconcile stale counterpart reviews
+        if: vars.AGENT_AUTOMATIONS_ENABLED == 'true' && vars.FACTORY_REVIEW_RECONCILE_ENABLED == 'true'
+        shell: bash
+        env:
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS: ${{ vars.FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS || '3' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ARGS=(--apply)
+          if [ "$DRY_RUN" = "true" ]; then
+            ARGS=(--dry-run)
+          fi
+
+          uv run --script "$GITHUB_WORKSPACE/source/scripts/factory-review-reconcile.py" "${ARGS[@]}"
+
       - name: Update Factory Digest
         shell: bash
         env:
