@@ -103,6 +103,13 @@ a timeout — reports `warn`, never `pass`. Being unable to look is the conditio
 this check exists to make visible, so it is never reported as health.
 `--local-only` skips it entirely.
 
+One SQL failure is deliberately not in that bucket. A database that has never had
+a migration applied has no `d1_migrations` table, so the query errors — but that is
+the answer, not an obstacle, and it is maximal drift: every migration in the repo is
+pending. It reports `fail`. Read as a warn it would make a freshly recreated
+database report *softer* than one missing a single migration, since `--strict` fails
+only on `fail`.
+
 ## Explicit Follow-Ups
 
 - Consider a true WebSocket proxy for terminal access so the browser never sees

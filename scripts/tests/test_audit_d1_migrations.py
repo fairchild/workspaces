@@ -31,6 +31,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +50,7 @@ WRANGLER_TOML = """\
     [[d1_databases]]
     binding = "FEEDBACK_DB"
     database_name = "workspaces-feedback"
+    database_id = "9973e814-8556-429e-88c3-391a722b453d"
     migrations_dir = "migrations"
 
     [env.preview]
@@ -57,6 +59,7 @@ WRANGLER_TOML = """\
     [[env.preview.d1_databases]]
     binding = "FEEDBACK_DB"
     database_name = "workspaces-feedback-preview"
+    database_id = "9ceb2bfb-8cb3-46aa-afe5-b0a5c5f228d6"
     migrations_dir = "migrations"
 """
 
@@ -78,6 +81,111 @@ def service_dir(tmp: Path, *migrations: str, toml: str = WRANGLER_TOML) -> Path:
 
 def environment(name: str = "production", database: str = "workspaces-feedback"):
     return audit.D1Environment(name=name, database_name=database, migrations_dir="migrations")
+
+
+class FreshDatabaseTests(unittest.TestCase):
+    """A database with no migrations at all must be the loudest case, not the quietest.
+
+    It has no `d1_migrations` table, so the query fails — and read as a failure it
+    becomes a warn, which `--strict` does not fail on. That would make a freshly
+    recreated database report *softer* than one missing a single migration, inverting
+    the check. "No such table" is not unable-to-look; it is looked, and the answer is
+    zero.
+    """
+
+    # Wrangler's real output for this case, captured from a live D1 database: SQL
+    # errors come back as JSON on stdout with a non-zero exit, so they arrive through
+    # the same channel as the errors that genuinely mean "could not read".
+    NO_TABLE_STDOUT = json.dumps(
+        {
+            "error": {
+                "text": "A request to the Cloudflare API (/accounts/…/query) failed.",
+                "notes": [{"text": "no such table: d1_migrations: SQLITE_ERROR [code: 7500]"}],
+                "kind": "error",
+                "name": "APIError",
+                "code": 7500,
+            }
+        }
+    )
+
+    def stub_wrangler(self, stdout: str, returncode: int = 1) -> None:
+        def fake_run(*args, **kwargs):  # noqa: ARG001
+            return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+
+        patcher = unittest.mock.patch.object(audit.subprocess, "run", fake_run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_database_with_no_migrations_table_reads_as_zero_applied(self) -> None:
+        self.stub_wrangler(self.NO_TABLE_STDOUT)
+
+        with tempdir() as tmp:
+            applied = audit.applied_d1_migrations(environment(), service_dir(tmp))
+
+        self.assertEqual(applied, set())
+
+    def test_a_fresh_database_fails_rather_than_warns(self) -> None:
+        """The end-to-end verdict: every migration pending is a FAIL, not a WARN."""
+        self.stub_wrangler(self.NO_TABLE_STDOUT)
+
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql", "0002_feedback_audit.sql")
+            check = audit.d1_environment_check(environment(), root)
+
+        self.assertEqual(check.status, "fail")
+        self.assertIn("0001_feedback.sql", check.detail)
+        self.assertIn("0002_feedback_audit.sql", check.detail)
+
+    def test_a_differently_named_missing_table_still_warns(self) -> None:
+        """Only `d1_migrations` itself means zero applied.
+
+        Any other missing table is a query that could not be answered, and swallowing
+        it as "zero" would report drift that was never measured.
+        """
+        stdout = self.NO_TABLE_STDOUT.replace("d1_migrations:", "d1_migrations_v2:")
+        self.stub_wrangler(stdout)
+
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            check = audit.d1_environment_check(environment(), root)
+
+        self.assertEqual(check.status, "warn")
+
+    def test_a_genuine_failure_still_warns(self) -> None:
+        self.stub_wrangler(json.dumps({"error": {"text": "Authentication error [code: 10000]"}}))
+
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            check = audit.d1_environment_check(environment(), root)
+
+        self.assertEqual(check.status, "warn")
+
+
+class D1AddressingTests(unittest.TestCase):
+    """Why the query is aimed at the database name.
+
+    `database_id` would be the stronger identifier — it survives a dashboard rename
+    the config has not caught up with, where the name reads as "database not found"
+    and lands in the soft warn bucket. It is not available: `wrangler d1 execute`
+    takes "the name or binding of the DB" and rejects a uuid ("Couldn't find DB with
+    name '<uuid>'"), verified against a live database. The binding would need `--env`
+    and so reintroduces the environment coupling name-addressing avoids.
+    """
+
+    def test_the_query_is_addressed_by_database_name(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(args, **kwargs):  # noqa: ARG001
+            captured["args"] = args
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="[]", stderr="")
+
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                audit.applied_d1_migrations(environment(), service_dir(tmp))
+
+        args = captured["args"]
+        self.assertIn("workspaces-feedback", args)
+        self.assertEqual(args[args.index("execute") + 1], "workspaces-feedback")
 
 
 class D1EnvironmentDiscoveryTests(unittest.TestCase):

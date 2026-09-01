@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -85,6 +86,11 @@ D1_SERVICE_DIRS = (REPO_ROOT / "infra" / "feedback-store",)
 # Bounded because this is the check that leaves the machine. An unbounded wait on
 # Cloudflare would hang a release preflight rather than report on one.
 D1_QUERY_TIMEOUT_SECONDS = 60
+# The one SQL failure that is an answer rather than an obstacle: a database that has
+# never had a migration applied has no `d1_migrations` table for the query to read.
+# Anchored on a word boundary so a differently-named missing table (`d1_migrations_v2`)
+# still raises instead of being read as "zero applied".
+D1_MISSING_MIGRATIONS_TABLE = re.compile(r"no such table:\s*d1_migrations\b")
 
 
 @dataclass(frozen=True)
@@ -431,10 +437,22 @@ def d1_environments(config: dict[str, object]) -> list[D1Environment]:
 def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[str]:
     """Migration names `d1_migrations` records for a live database.
 
-    Addressed by database name rather than `--env`, so the lookup cannot drift from
-    the binding this environment was read out of. Read-only by construction: a
-    `SELECT` is the whole query, and this script never applies anything — knowing a
-    migration is pending is the gap, and applying one should stay a deliberate act.
+    Addressed by `database_name` rather than by `--env`, so the lookup cannot drift
+    from the binding this environment was read out of.
+
+    Not by `database_id`, though the binding carries one and an id would survive a
+    dashboard rename the config has not caught up with: `wrangler d1 execute` takes
+    "the name or binding of the DB" and rejects a uuid outright ("Couldn't find DB
+    with name '<uuid>'"). The remaining alternative, the binding name, would need
+    `--env` to resolve and so reintroduces exactly the environment coupling this
+    avoids. Name it is, by the tool's constraint rather than by preference.
+
+    Read-only by construction: a `SELECT` is the whole query, and this script never
+    applies anything — knowing a migration is pending is the gap, and applying one
+    should stay a deliberate act.
+
+    An empty set means the database answered and has applied nothing. Callers must not
+    read it as "could not tell", which is what raising is for.
     """
     result = subprocess.run(
         [
@@ -454,7 +472,21 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
         timeout=D1_QUERY_TIMEOUT_SECONDS,
     )
     if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "wrangler failed")
+        # Wrangler reports SQL errors as JSON on stdout with a non-zero exit, so the
+        # one failure that is an *answer* arrives through the same channel as the
+        # failures that are obstacles.
+        #
+        # A database that has never had a migration applied has no `d1_migrations`
+        # table to read. That is maximal drift — every migration in the repo is
+        # pending — but treated as an unreadable answer it becomes a warn, and
+        # `--strict` does not fail on warns. A freshly recreated database would then
+        # report *softer* than one missing a single migration, which inverts the
+        # check. Zero applied is the honest reading, and the pending-fail path below
+        # already handles it.
+        detail = result.stderr.strip() or result.stdout.strip() or "wrangler failed"
+        if D1_MISSING_MIGRATIONS_TABLE.search(detail):
+            return set()
+        raise RuntimeError(detail)
 
     payload = json.loads(result.stdout)
     if not isinstance(payload, list):
