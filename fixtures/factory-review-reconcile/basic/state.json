@@ -1,0 +1,105 @@
+{
+  "now": "2026-08-31T14:00:00Z",
+  "pull_requests": [
+    {
+      "pull_request": {
+        "number": 1485,
+        "state": "open",
+        "draft": false,
+        "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
+        "user": {"login": "fairchild"},
+        "head": {"sha": "sha-stale-1485"},
+        "body": "Closes #1478."
+      },
+      "files": [{"filename": "Sources/WorkspaceManager/Surface/SurfaceStore.swift"}],
+      "reviews": [],
+      "signal_runs": [
+        {
+          "status": "completed",
+          "conclusion": "success",
+          "updated_at": "2026-08-31T09:00:00Z"
+        }
+      ]
+    },
+    {
+      "pull_request": {
+        "number": 1490,
+        "state": "open",
+        "draft": false,
+        "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
+        "user": {"login": "fairchild"},
+        "head": {"sha": "sha-fresh-1490"},
+        "body": "Closes #1491."
+      },
+      "files": [{"filename": "Sources/WorkspaceManager/Views/MainWindow/ContentView.swift"}],
+      "reviews": [],
+      "signal_runs": [
+        {
+          "status": "completed",
+          "conclusion": "success",
+          "updated_at": "2026-08-31T13:30:00Z"
+        }
+      ]
+    },
+    {
+      "pull_request": {
+        "number": 1492,
+        "state": "open",
+        "draft": false,
+        "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
+        "user": {"login": "fairchild"},
+        "head": {"sha": "sha-reviewed-1492"},
+        "body": "Closes #1493."
+      },
+      "files": [{"filename": "scripts/release-version.sh"}],
+      "reviews": [
+        {
+          "user": {"login": "april-clearwater[bot]"},
+          "commit_id": "sha-reviewed-1492",
+          "state": "CHANGES_REQUESTED"
+        }
+      ],
+      "signal_runs": [
+        {
+          "status": "completed",
+          "conclusion": "success",
+          "updated_at": "2026-08-31T08:00:00Z"
+        }
+      ]
+    },
+    {
+      "pull_request": {
+        "number": 1494,
+        "state": "open",
+        "draft": false,
+        "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
+        "user": {"login": "fairchild"},
+        "head": {"sha": "sha-no-signal-1494"},
+        "body": "Closes #1495."
+      },
+      "files": [{"filename": "docs/RELEASING.md"}],
+      "reviews": [],
+      "signal_runs": []
+    },
+    {
+      "pull_request": {
+        "number": 1496,
+        "state": "open",
+        "draft": true,
+        "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
+        "user": {"login": "fairchild"},
+        "head": {"sha": "sha-draft-1496"},
+        "body": "Closes #1497."
+      },
+      "files": [{"filename": "docs/decisions/some-decision.md"}],
+      "reviews": [],
+      "signal_runs": [
+        {
+          "status": "completed",
+          "conclusion": "success",
+          "updated_at": "2026-08-31T09:00:00Z"
+        }
+      ]
+    }
+  ]
+}
