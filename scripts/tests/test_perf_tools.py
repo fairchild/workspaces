@@ -314,6 +314,31 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
         )
         self.assert_refused(body, "no readable domain=")
 
+    # Copied from a v0.26.0 capture rather than composed: the app logs through os_log,
+    # so the real line carries a `<subsystem>:<category>` field of its own before the
+    # marker. A fixture that omits it cannot tell a rule that accepts real entries from
+    # one that rejects every one of them.
+    REAL_CAPTURE_PREFIX = (
+        "2026-08-31 07:58:19.633 I  WorkspaceManager[67446:2a466ed] "
+        "[com.cloudcompute.workspaces:LaunchPreferences] [LaunchPreferences] "
+    )
+
+    def test_the_shape_the_app_actually_logs_is_accepted(self) -> None:
+        line = (
+            f"{self.REAL_CAPTURE_PREFIX}domain=scratch suite={self.SUITE} "
+            "reset=false isolated=true"
+        )
+        self.assertEqual(self.run_check(line + "\n").returncode, 0)
+
+    def test_an_impostor_behind_the_real_prefix_is_still_refused(self) -> None:
+        genuine_failure = f"{self.PREFIX}domain=standard"
+        impostor = (
+            "2026-08-31 07:58:20.000 I  WorkspaceManager[67446:2a466ed] "
+            "[com.cloudcompute.workspaces:HostSession] [HostSession] path=/tmp/x "
+            f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+        )
+        self.assert_refused(f"{genuine_failure}\n{impostor}\n", "resolved domain=standard")
+
     def test_the_marker_must_be_a_field_of_its_own(self) -> None:
         """A path that happens to contain the marker is not a resolution.
 

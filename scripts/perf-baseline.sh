@@ -426,11 +426,11 @@ def read_preferences_entry(text):
     preceded it, and reading the first match lets that earlier line vouch for a
     launch it did not describe.
 
-    The marker has to be the line's category — the first `[...]` field on it. A
-    message that merely carries the literal text somewhere, such as one logging a
-    repository path verbatim, would otherwise read as a newer resolution than the
-    real one. Every message reaches its own category first, so requiring the marker
-    to hold that position is what separates an entry from a mention of one.
+    The marker has to reach the line before any message content does. A message that
+    merely carries the literal text — one logging a repository path verbatim, say —
+    would otherwise read as a newer resolution than the real one. A real line reaches
+    the marker through its prefix alone, and no prefix field carries `=` or `/`, so a
+    field bearing either ends the search and a later marker is only a mention.
 
     Fields are read as whole `key=value` tokens rather than by pattern, which is what
     perf-runner.sh's awk reader does. A key appearing twice on one physical line has
@@ -440,9 +440,10 @@ def read_preferences_entry(text):
     for line in text.split("\n"):
         tokens = log_fields(line)
         for index, token in enumerate(tokens):
-            if token.startswith("[") and token.endswith("]"):
-                if token == PREFERENCES_MARKER:
-                    entry = tokens[index + 1:]
+            if token == PREFERENCES_MARKER:
+                entry = tokens[index + 1:]
+                break
+            if "=" in token or "/" in token:
                 break
     if entry is None:
         return None
