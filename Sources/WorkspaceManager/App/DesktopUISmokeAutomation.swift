@@ -456,7 +456,15 @@
                 if ContinuousClock.now >= deadline {
                     return false
                 }
-                try? await Task.sleep(for: .milliseconds(50))
+                // Give up on cancellation instead of spinning: a cancelled sleep
+                // throws immediately, and swallowing that would busy-loop the
+                // MainActor for the whole timeout — long enough to matter now the
+                // externally-driven waits run for 60s rather than 15 (#958).
+                do {
+                    try await Task.sleep(for: .milliseconds(50))
+                } catch {
+                    return false
+                }
             }
             return true
         }

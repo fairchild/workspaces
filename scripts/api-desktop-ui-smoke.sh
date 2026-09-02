@@ -444,6 +444,11 @@ main() {
 
     log "Waiting for scenario completion..."
     smoke_wait_for_event scenario_complete
+    # The assertion reads the JSONL once. A repo attach appended just after
+    # scenario_complete — the app parking itself on the way out — would otherwise
+    # race past that read. Settle first so it lands in the file being asserted on,
+    # where the "scenario_complete was the final milestone" check catches it.
+    sleep "${POST_COMPLETE_SETTLE_SECONDS:-3}"
     assert_api_milestone_sequence | tee "$RUN_DIR/assertions.log"
 
     if "$CLI_BIN" window snapshot --out "$RUN_DIR/final.png" >/dev/null 2>&1; then
