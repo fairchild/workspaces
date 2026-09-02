@@ -208,13 +208,29 @@ public actor AutomationListener {
         let envelope = AutomationResponseEnvelope<AutomationEmptyResult>(error: error)
         let body = (try? AutomationJSON.encoder.encode(envelope)) ?? Data()
         let response = Self.httpResponse(status: 503, body: body)
+        let writeDeadline = self.writeDeadline
         let watchdog = Self.deadlineWatchdog(connection: connection, after: writeDeadline, label: "busy-write")
         connection.send(
             content: response,
             completion: .contentProcessed { _ in
                 watchdog.cancel()
-                connection.cancel()
+                Self.drainThenCancel(connection: connection, after: writeDeadline)
             })
+    }
+
+    /// Hang up only once the peer's request has arrived, or the deadline passes.
+    ///
+    /// The rejection answers without ever reading the request, so cancelling the moment
+    /// the 503 is written can close the socket while the client is still mid-`write`.
+    /// The client then gets `EPIPE` instead of the typed busy envelope it is owed —
+    /// seen as `.writeFailed(32)` (#1370). One bounded receive closes that window: the
+    /// request is small and already in flight, so this returns as soon as it lands.
+    private nonisolated static func drainThenCancel(connection: NWConnection, after limit: Duration) {
+        let watchdog = deadlineWatchdog(connection: connection, after: limit, label: "busy-drain")
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { _, _, _, _ in
+            watchdog.cancel()
+            connection.cancel()
+        }
     }
 
     /// Cancels `connection` if it is still alive when the deadline elapses, so a hung peer cannot
