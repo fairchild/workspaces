@@ -28,20 +28,81 @@ export function testAuthCookie(baseUrl, login = HARNESS_LOGIN) {
 	return { name: TEST_AUTH_COOKIE, value: login, url: baseUrl };
 }
 
+/** The tables the evidence and perf runs seed and wipe directly. */
+export const SEEDED_TABLES = ["repos", "sessions", "session_events"];
+
+const sleepMs = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function missingSeedTables(db, required) {
+	const { rows } = await db.execute(
+		"SELECT name FROM sqlite_master WHERE type = 'table'",
+	);
+	const present = new Set(rows.map((row) => row.name));
+	return required.filter((table) => !present.has(table));
+}
+
+/**
+ * Proves the warm-up actually migrated the schema instead of trusting its
+ * status code. A warm-up that follows a redirect to /sign-in answers 200
+ * having never opened the sessions database, and the first `DELETE FROM
+ * session_events` is where that used to surface — as `no such table`, three
+ * steps from its cause (#976). Migration can land just after the response, so
+ * poll briefly before giving up.
+ */
+export async function assertSeedSchemaReady(
+	db,
+	{
+		landedUrl,
+		requiredTables = SEEDED_TABLES,
+		attempts = 20,
+		intervalMs = 250,
+		sleep = sleepMs,
+	} = {},
+) {
+	let missing = requiredTables;
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		missing = await missingSeedTables(db, requiredTables);
+		if (missing.length === 0) return;
+		if (attempt < attempts - 1) await sleep(intervalMs);
+	}
+	throw new Error(
+		`Schema warm-up answered 200 from ${landedUrl} but the sessions schema is not migrated — missing table(s): ${missing.join(", ")}. ` +
+			"The warm-up has to land on an authed, DB-touching page; a redirect to /sign-in answers 200 without ever opening the sessions database. " +
+			`Check AUTH_BYPASS, ALLOWED_LOGINS, and the ${TEST_AUTH_COOKIE} cookie for ${HARNESS_LOGIN}.`,
+	);
+}
+
 /**
  * Connects to the harness server's database for direct seeding/wiping.
- * Loads the home page once (signed in) so the app has run its migrations
- * before we touch the file.
+ * Loads the home page once (signed in) so the app runs its migrations, then
+ * verifies the tables exist before handing the client back.
  */
-export async function connectSeedClient(baseUrl, databaseUrl) {
-	const response = await fetch(baseUrl, {
+export async function connectSeedClient(
+	baseUrl,
+	databaseUrl,
+	{ fetchImpl = fetch, createClient, ...schemaOptions } = {},
+) {
+	const response = await fetchImpl(baseUrl, {
 		headers: { cookie: `${TEST_AUTH_COOKIE}=${HARNESS_LOGIN}` },
 	});
 	if (!response.ok) {
-		throw new Error(`schema warm-up failed: HTTP ${response.status}`);
+		throw new Error(
+			`schema warm-up failed: HTTP ${response.status} from ${response.url ?? baseUrl}`,
+		);
 	}
-	const { createClient } = await import("@libsql/client");
-	return createClient({ url: databaseUrl });
+	const create =
+		createClient ?? (await import("@libsql/client")).createClient;
+	const db = create({ url: databaseUrl });
+	try {
+		await assertSeedSchemaReady(db, {
+			landedUrl: response.url ?? baseUrl,
+			...schemaOptions,
+		});
+	} catch (error) {
+		db.close();
+		throw error;
+	}
+	return db;
 }
 
 /**

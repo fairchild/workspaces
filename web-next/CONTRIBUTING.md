@@ -90,6 +90,11 @@ pnpm perf        # perf harness vs perf/contract.json budgets
 pnpm validate    # env-targetable validation (--env local|local-mode|prod, --url <origin>)
 ```
 
+`pnpm evidence` exits 0 only when the whole walk landed: `scripts/evidence-core.mjs`
+declares every capture a run owes and the run fails, naming the files it never
+reached, if any are missing or empty (#976). A stall fails against
+`EVIDENCE_TIMEOUT_MS` (20 minutes by default) rather than exiting quietly.
+
 `pnpm evidence` only writes local files — the repo's evidence gate needs
 uploaded URLs in the PR body (`docs/development/evidence.md`). Upload the
 whole walk in one shot with `pnpm evidence:upload -- --pr <N>` (wraps
