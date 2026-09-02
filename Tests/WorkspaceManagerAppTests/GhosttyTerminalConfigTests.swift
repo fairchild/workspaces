@@ -856,14 +856,24 @@ struct GhosttyTerminalConfigTests {
             hooksSocketPath: "/tmp/workspaces-hooks.sock"
         )
 
-        let observed = config.withCValue(view: NSView()) { cConfig in
-            (
+        let observed = try config.withCValue(view: NSView()) { cConfig in
+            // The buffer's extent, pinned before anything dereferences it.
+            // `withCValue` sets `env_vars` and `env_var_count` from independent
+            // expressions, so a count larger than the buffer reads past the
+            // allocation — undefined behavior, not a failing assertion — and a
+            // null pointer with a non-zero count yields an empty dictionary and
+            // downstream failures that never name the broken invariant. These are
+            // `#require`, so a mismatch stops the test here instead of there.
+            try #require(cConfig.env_var_count == config.environmentVariables.count)
+            let envVars = try #require(cConfig.env_vars)
+            let environmentPairs = (0..<cConfig.env_var_count).map { index in
+                (key: String(cString: envVars[index].key), value: String(cString: envVars[index].value))
+            }
+            return (
                 command: cConfig.command.map { String(cString: $0) },
                 workingDirectory: cConfig.working_directory.map { String(cString: $0) },
-                environment: (0..<cConfig.env_var_count).reduce(into: [String: String]()) { env, index in
-                    guard let envVars = cConfig.env_vars else { return }
-                    env[String(cString: envVars[index].key)] = String(cString: envVars[index].value)
-                },
+                environmentPairs: environmentPairs,
+                environment: Dictionary(environmentPairs, uniquingKeysWith: { _, later in later }),
                 hasInitialInput: cConfig.initial_input != nil
             )
         }
@@ -871,14 +881,59 @@ struct GhosttyTerminalConfigTests {
         #expect(observed.command == config.command)
         #expect(observed.workingDirectory == config.workingDirectory)
         // Whole-dictionary equality, not count-plus-spot-checks: a mispaired or
-        // corrupted value on any unchecked key must fail too (codex review).
+        // corrupted value on any unchecked key must fail too (codex review). The
+        // pair count guards the fold itself — a duplicated key collapses into one
+        // entry, so equality alone would read a doubled row as a clean one.
+        #expect(observed.environment.count == observed.environmentPairs.count)
         #expect(observed.environment == config.environmentVariables)
         #expect(observed.environment["WORKSPACES_HOST_SESSION_ID"] == hostSessionID.uuidString)
         #expect(observed.environment["TERM"] == "xterm-256color")
-        // `initial_input` is intentionally not launch-embedded: the initial command
-        // rides the text bridge so restore can prefill without executing (#888,
-        // #1485). If launch-time embedding ever returns, this line forces the
-        // delivery contract to be restated alongside it.
         #expect(!observed.hasInitialInput)
+    }
+
+    /// `initial_input` is intentionally not launch-embedded: the initial command
+    /// rides the automation text bridge so restore can prefill without executing
+    /// (#888, #1485). The sibling test above pins the field absent for a config
+    /// that has no initial command to embed, where absence is the only possible
+    /// answer. This one marshals a session that *does* carry one — the shape where
+    /// embedding would be the tempting implementation — and reads the field back
+    /// through the same accessor after a value is written into it, so "absent"
+    /// is a measurement rather than a reader that can never see anything.
+    @Test("withCValue leaves initial_input unset for a session carrying an initial command")
+    @MainActor
+    func cValueNeverEmbedsInitialInput() throws {
+        let initialCommand = "claude --resume sess-123"
+        let resume = GhosttyTerminalConfig(
+            launchContext: .hostSession(
+                HostTerminalSession(
+                    key: .repoPath("/tmp/repo-a"),
+                    directory: URL(fileURLWithPath: "/tmp/repo-a"),
+                    initialCommand: initialCommand
+                ),
+                hooksSocketPath: nil
+            ),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+
+        typealias Observation = (marshalled: String?, present: String?, command: String?)
+        let observed = resume.withCValue(view: NSView()) { cConfig -> Observation in
+            let marshalled = cConfig.initial_input.map { String(cString: $0) }
+            let command = cConfig.command.map { String(cString: $0) }
+            return initialCommand.withCString { pointer in
+                cConfig.initial_input = pointer
+                return (marshalled, cConfig.initial_input.map { String(cString: $0) }, command)
+            }
+        }
+
+        // The present case. Fails if the read can no longer see an `initial_input`
+        // that is there, which is the only way the absence pin below goes vacuous.
+        #expect(observed.present == initialCommand)
+        #expect(observed.marshalled == nil)
+        // The command is the plain login-shell/tmux wrap either way: re-adding
+        // launch embedding to either field means restating the delivery contract.
+        #expect(observed.command == resume.command)
+        #expect(observed.command?.contains(initialCommand) == false)
     }
 }
