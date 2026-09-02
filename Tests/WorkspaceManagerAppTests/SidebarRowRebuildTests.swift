@@ -14,11 +14,14 @@ import WorkspaceManagerCore
 ///
 /// What these prove and what they do not, stated because the distinction is easy to lose. They
 /// exercise `SidebarEquatableRow`, the display-state values, and — through
-/// `SidebarPinnedSection.placement(of:)` — the production derivation of a row's pin fields. They
-/// do **not** mount `SidebarView` itself, which needs seven environment dependencies and a dozen
-/// closures, so the one thing still unguarded is that `SidebarView.workspaceRow` calls that
-/// derivation rather than assembling the fields itself. Sharing `placement(of:)` is what narrows
-/// that gap to a single call site.
+/// `SidebarPinnedSection.placement(of:)` — the production derivation of a row's pin fields.
+///
+/// They do **not** mount `SidebarView` itself, which needs seven environment dependencies and a
+/// dozen closures. So none of `SidebarView`'s own wiring is guarded here: that it calls
+/// `.equatable()` on every row, that it builds each state through `placement(of:)` rather than
+/// assembling the fields itself, or that it passes `recentSnapshotTakenAt` rather than a fresh
+/// instant. Those hold by construction and by review. Sharing `placement(of:)` is what keeps the
+/// *derivation* from drifting between here and the app; the call sites themselves stay unguarded.
 @MainActor
 @Suite("Sidebar row rebuild scoping")
 struct SidebarRowRebuildTests {

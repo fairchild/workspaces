@@ -201,8 +201,12 @@ struct MainWindowOrderCacheTests {
     /// The hazard raised in review of #1504: `now` is compared exactly, so a caller taking a fresh
     /// instant per access would miss every time and the memo would do nothing for this path.
     /// `SidebarView` passes `recentSnapshotTakenAt` — `@State` re-taken only by
-    /// `syncRecentSnapshot(forceRefresh:)`, never during a redraw — and this pins what changing
-    /// that would cost, so the hazard fails a test rather than going quiet.
+    /// `syncRecentSnapshot(forceRefresh:)`, never during a redraw — and this prices what changing
+    /// that would cost, so the hazard is written down rather than left to be rediscovered.
+    ///
+    /// It prices the hazard; it does not guard the call site. This drives the cache directly, so
+    /// changing `SidebarView` to pass a fresh `Date()` would still leave it green. Guarding that
+    /// would mean mounting `SidebarView`, which the rebuild suite explains is out of reach.
     @Test("A freshly taken instant per access defeats the Recent memo")
     func freshInstantPerAccessDefeatsTheRecentMemo() {
         let repo = repo()
