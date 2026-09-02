@@ -77,12 +77,21 @@ struct ProcessRunnerTests {
     func returnsWhenBackgroundedChildHoldsPipes() async throws {
         // The grandchild is deliberately long-lived and deliberately reaped: it must
         // outlive any elapsed time the assertion permits, and it must not outlive the
-        // test run. It records its own pid so the `defer` can end it.
+        // test run.
+        //
+        // A recorded pid alone is not enough to reap it safely. On the path this test
+        // exists to catch, the child has already exited by the time the `defer` runs,
+        // and its pid may by then belong to something else — signalling it would make
+        // this test the thing that kills an unrelated process. So the child is launched
+        // under a unique argv[0] and the pid is only signalled while it still answers to
+        // that name.
+        let marker = "wm-processrunner-\(UUID().uuidString.prefix(8))"
         let pidFile = FileManager.default.temporaryDirectory
             .appendingPathComponent("process-runner-bg-\(UUID().uuidString).pid")
         defer {
             if let raw = try? String(contentsOf: pidFile, encoding: .utf8),
-                let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+                let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+                Self.processCommand(pid: pid)?.contains(marker) == true
             {
                 kill(pid, SIGKILL)
             }
@@ -92,7 +101,7 @@ struct ProcessRunnerTests {
         let start = ContinuousClock.now
         let command = [
             "echo before-background",
-            "sleep \(Self.unreachableChildLifetimeSeconds) &",
+            "( exec -a \(marker) sleep \(Self.unreachableChildLifetimeSeconds) ) &",
             "echo $! > \(pidFile.path)",
             "exit 0",
         ].joined(separator: "\n")
@@ -153,6 +162,24 @@ struct ProcessRunnerTests {
     /// keeps a pathological baseline from turning a failure into a hang.
     private static func spawnBoundedCeiling() async -> Double {
         await LaunchBudget.deadline(launches: 3, floor: 10, ceiling: 120)
+    }
+
+    /// The command line `pid` is running, or nil when it is not running at all. The
+    /// identity check that makes reaping the backgrounded child safe: a pid that has
+    /// been recycled answers with somebody else's command.
+    private static func processCommand(pid: pid_t) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "command="]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     @Test("Timeout leaves a process that completes in time untouched")

@@ -96,7 +96,7 @@ struct ClaudeIntegrationLifecycleTests {
     }
 
     @Test("settings installer publishes after startup for Settings scene injection")
-    func settingsInstallerPublishesAfterStartup() async {
+    func settingsInstallerPublishesAfterStartup() async throws {
         let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
 
@@ -118,11 +118,12 @@ struct ClaudeIntegrationLifecycleTests {
         let registry = AgentSessionRegistry()
         ClaudeIntegrationLifecycle.shared.start(registry: registry)
 
-        let deadline = Date().addingTimeInterval(15.0)
-        while Date() < deadline {
-            if didPublishInstaller { break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        // The same signal the install-once tests await, for the same reason: publication
+        // happens inside the startup chain, so the chain finishing is when there is
+        // something to assert. The 15s poll this replaces was the last fixed deadline
+        // left in the file and would flake the same way under starvation.
+        let startup = try #require(ClaudeIntegrationLifecycle.shared.startupTask)
+        await startup.value
 
         await ClaudeIntegrationLifecycle.shared.stop()
         UserDefaults().removePersistentDomain(forName: suiteName)
