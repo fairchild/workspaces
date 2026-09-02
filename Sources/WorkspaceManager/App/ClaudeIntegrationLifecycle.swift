@@ -86,7 +86,17 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         self.notificationPoster = nil
         self.settingsInstaller = nil
         self.socketPath = nil
+        self.startupTask = nil
     }
+
+    /// The startup chain `start(registry:)` kicked off, retained so a caller can await
+    /// the work instead of polling for its side effects. Everything that chain does —
+    /// resolving the socket path, constructing the installer, starting the listener,
+    /// performing the opted-in repair — is observable only once it has finished, and a
+    /// caller with no handle on it has nothing to wait on but a clock. Today the only
+    /// such caller is a test, and that is exactly the gap #1306 flaked in: the install
+    /// had not happened *yet*, and the poll's deadline expired first.
+    private(set) var startupTask: Task<Void, Never>?
 
     func start(registry: AgentSessionRegistry, commandStatusRegistry: LastCommandStatusRegistry? = nil) {
         guard !didStart else { return }
@@ -114,7 +124,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         let optedIn = defaults.bool(forKey: ClaudeIntegrationDefaults.optedInKey)
         let installerFactory = self.installerFactory
 
-        Task { @MainActor in
+        startupTask = Task { @MainActor in
             let resolvedSocketPath = listener.socketPath
             self.socketPath = resolvedSocketPath
             let installer = await installerFactory(resolvedSocketPath)

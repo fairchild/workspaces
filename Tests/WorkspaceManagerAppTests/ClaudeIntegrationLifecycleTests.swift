@@ -63,21 +63,13 @@ struct ClaudeIntegrationLifecycleTests {
         let registry = AgentSessionRegistry()
         ClaudeIntegrationLifecycle.shared.start(registry: registry)
 
-        // Wait for the lifecycle's startup Task chain to complete. The chain awaits
-        // `listener.socketPath`, then calls install(), then starts the listener.
-        // Polling for installCallCount or a timeout is sufficient.
-        let deadline = Date().addingTimeInterval(15.0)
-        while Date() < deadline {
-            let count = await stub.installCallCount
-            if !optedIn {
-                // For the not-opted-in case, we still need to wait long enough that
-                // the Task has had a chance to either call install() or skip it.
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                break
-            }
-            if count > 0 { break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        // Await the lifecycle's own startup chain rather than a deadline over its side
+        // effects. The chain resolves the socket path, constructs the installer, starts
+        // the listener and performs the opted-in repair; when its task completes, the
+        // install has either happened or been skipped, and there is nothing left to
+        // wait for. Polling with a 15s ceiling read `count → 0` on a loaded runner —
+        // not a second install, the first one simply had not happened yet (#1306).
+        await ClaudeIntegrationLifecycle.shared.startupTask?.value
 
         // Tear the listener down so its actor doesn't keep the socket file around.
         await ClaudeIntegrationLifecycle.shared.stop()
