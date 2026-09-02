@@ -131,6 +131,13 @@ jobs:
       # .mise.toml does not provide uv — without this the job resolves it from
       # ambient PATH, which the hosted image does not carry.
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
+        with:
+          # This repo's UV scripts declare their dependencies inline (PEP 723),
+          # so none of the files setup-uv globs for by default —
+          # requirements/constraints/pyproject.toml/uv.lock — exist here. An
+          # empty glob keys the cache the same way an all-miss glob does, and
+          # skips the "No file matched" warning the default emits.
+          cache-dependency-glob: ""
 
       - name: Build GhosttyKit
         run: ./scripts/build-ghosttykit.sh
@@ -464,7 +471,11 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      # v7 is the first major that runs on Node 24; v4–v6 are Node 20, which the
+      # runner now force-upgrades and annotates as deprecated. v8 also defaults
+      # `digest-mismatch` to `error`, so a release asset that arrives corrupted
+      # fails the publish rather than being published with a warning.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-assets-${{ github.run_id }}
           path: release-assets

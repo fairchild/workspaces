@@ -62,11 +62,17 @@ against an installed build:
 ./scripts/perf-runner.sh --scenario installed_clean_shell
 ```
 
-That writes a canonical `summary.json`. Append it to the launch-lane history and
-read the medians back out:
+Each invocation is one launch, so it writes one canonical `summary.json` holding
+one capture. Take several — the first launch of a freshly built binary is cold and
+runs several times slower than the warm ones after it — and say in `notes` how many
+you took and what the spread was. `--app <path>` measures a bundle other than the
+one in `/Applications`, which is how you benchmark a tagged commit without
+installing it over the app you are using.
+
+Append them to the launch-lane history and read the medians back out:
 
 ```bash
-./scripts/perf-history-record.py --summary <path-to-summary.json>
+./scripts/perf-history-record.py --summary <path> --summary <path> ...
 ```
 
 Then add one row to `docs/performance_benchmarks.csv` with the release tag you are
@@ -109,7 +115,9 @@ Read it as: a cell naming `terminal_focus` measured attention, not launch, and d
 not belong in a launch comparison. Several triggers joined with `+` mean the median
 was taken over a mix, which is the case that most needs saying so. Blank means the
 producing run reported no trigger — a row recorded before this column existed, or a
-capture where the metric never closed. Values pass through from the log line; the
+capture where the metric never closed. It is a claim about missing evidence rather
+than about a date: where the run's raw log survives, re-summarizing it with current
+tooling recovers the trigger, and the row carries that value instead of a blank. Values pass through from the log line; the
 vocabulary is whatever `PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger:)`
 is called with.
 
@@ -125,6 +133,12 @@ whatever the persistent UserDefaults domain happened to hold and had no guard
 against measuring alongside a live instance, so a delta across that boundary mixes
 an app change with a protocol change ([#1251](https://github.com/fairchild/workspaces/issues/1251)).
 Record the epoch the run actually used and compare within it.
+
+The installed lane stamped `deterministic-delivery-v1` while still launching into
+that persistent domain — the debug lane had isolated it since #1258, the installed
+lane never did. `v0.26.0` is the first installed row measured with the isolation
+actually in place, so it is the epoch's baseline for this lane rather than a point
+of comparison with anything before it.
 
 ## The seed row
 

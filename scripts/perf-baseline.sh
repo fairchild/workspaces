@@ -170,8 +170,13 @@ resolve_ghostty_resources_dir() {
 # holds here: a caller-provided WORKSPACES_PREFERENCES_SUITE is used as-is and never reset
 # or removed, which also means the per-sample wipe `--preferences clean` promises is the
 # caller's to perform. Only a suite this run invented is a suite this run may clear.
-if [[ -n "${WORKSPACES_PREFERENCES_SUITE:-}" ]]; then
-    PREFERENCES_SUITE="$WORKSPACES_PREFERENCES_SUITE"
+# Trimmed, then treated as unset when nothing survives the trim — the two steps
+# LaunchPreferences.trimmed(_:) takes. Testing the raw value first adopts a
+# whitespace-only override as an empty caller-owned pin, which the app ignores
+# outright, leaving the lane pinned to a suite no launch will ever report.
+CALLER_PREFERENCES_SUITE="$(printf '%s' "${WORKSPACES_PREFERENCES_SUITE:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+if [[ -n "$CALLER_PREFERENCES_SUITE" ]]; then
+    PREFERENCES_SUITE="$CALLER_PREFERENCES_SUITE"
     PREFERENCES_SUITE_OWNER="caller"
 else
     PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
@@ -397,12 +402,59 @@ launch_trigger_pattern = re.compile(
 # `domain=scratch` alone is not proof of isolation: when the defaults system refuses a
 # suite the app logs the refusal and falls back to the persistent domain, still under a
 # scratch resolution. `isolated=` is the field that says which store actually backed the
-# launch, so the sample reports that rather than the intent.
-preferences_pattern = re.compile(
-    r"\[LaunchPreferences\] domain=(?P<domain>\w+)"
-    r"(?:\s+suite=(?P<suite>\S+))?"
-    r"(?:.*?\bisolated=(?P<isolated>\w+))?"
-)
+# launch, and `suite=` is the field that says it was this run's, so the sample reports
+# those rather than the intent.
+PREFERENCES_MARKER = "[LaunchPreferences]"
+
+
+def log_fields(line):
+    """Whitespace-delimited fields of one log line, as awk's default splitting sees them.
+
+    Space and tab only, and a trailing carriage return dropped, so a CRLF log and an
+    LF one read alike and the debug lane tokenizes a line exactly as the installed
+    lane's awk does. `str.split()` would additionally break on a bare carriage return,
+    which awk does not, and that difference is a parser the two lanes do not share.
+    """
+    return [token for token in re.split(r"[ \t]+", line.rstrip("\r").strip(" \t")) if token]
+
+
+def read_preferences_entry(text):
+    """Fields of the last [LaunchPreferences] entry, or None when the log has none.
+
+    The last such entry is the one that decides the capture. The app logs once per
+    resolution, so a relaunch that fell back appends after the isolated line that
+    preceded it, and reading the first match lets that earlier line vouch for a
+    launch it did not describe.
+
+    The marker has to reach the line before any message content does. A message that
+    merely carries the literal text — one logging a repository path verbatim, say —
+    would otherwise read as a newer resolution than the real one. A real line reaches
+    the marker through its prefix alone, and no prefix field carries `=` or `/`, so a
+    field bearing either ends the search and a later marker is only a mention.
+
+    Fields are read as whole `key=value` tokens rather than by pattern, which is what
+    perf-runner.sh's awk reader does. A key appearing twice on one physical line has
+    no answer, so it reads as absent rather than resolving to whichever came first.
+    """
+    entry = None
+    for line in text.split("\n"):
+        tokens = log_fields(line)
+        for index, token in enumerate(tokens):
+            if token == PREFERENCES_MARKER:
+                entry = tokens[index + 1:]
+                break
+            if "=" in token or "/" in token:
+                break
+    if entry is None:
+        return None
+    seen = {}
+    for token in entry:
+        key, separator, value = token.partition("=")
+        if separator:
+            seen.setdefault(key, []).append(value)
+    return {key: values[0] if len(values) == 1 else None for key, values in seen.items()}
+
+
 run_index_pattern = re.compile(r"run-(?P<index>\d+)\.log$")
 
 metric_order = [
@@ -445,8 +497,24 @@ def run_index(log_file):
     return int(match.group("index")) if match else 0
 
 
-for log_file in sorted(out_dir.glob("run-*.log"), key=run_index):
-    text = log_file.read_text(errors="ignore")
+# A run that left no log is a failed capture, not an absent one. The app launches in a
+# background subshell whose failure is suppressed, so a crashed or never-started launch
+# leaves the directory one file short — and a summarizer that reads whatever is there
+# reports a clean set of samples taken over fewer runs than were asked for. Isolation is
+# judged per sample, and a sample that does not exist is never judged at all.
+run_logs = sorted(out_dir.glob("run-*.log"), key=run_index)
+if len(run_logs) != runs:
+    print(
+        f"CAPTURE INCOMPLETE: {len(run_logs)} of {runs} run logs are present in {out_dir} — "
+        "the missing launches produced no log, so they cannot be shown to have run at all.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+for log_file in run_logs:
+    # `replace`, not `ignore`: a dropped undecodable byte can splice its neighbours into
+    # a token that reads as a field — `do<bad byte>main=scratch` becoming `domain=scratch`.
+    text = log_file.read_text(errors="replace")
     per_run = {}
     for metric_name, duration in measured_duration_samples(text):
         per_run[metric_name] = duration
@@ -460,7 +528,7 @@ for log_file in sorted(out_dir.glob("run-*.log"), key=run_index):
     # inferred from the shape of the distribution.
     bootstraps = [match.groupdict() for match in bootstrap_pattern.finditer(text)]
     seeding = next((entry for entry in bootstraps if entry["branch"] != "noop"), None)
-    preferences_match = preferences_pattern.search(text)
+    preferences_entry = read_preferences_entry(text)
     launch_trigger_match = launch_trigger_pattern.search(text)
     launch_samples.append(
         {
@@ -475,14 +543,15 @@ for log_file in sorted(out_dir.glob("run-*.log"), key=run_index):
             "bootstrap_calls": [
                 f"{entry['caller']}:{entry['branch']}:{entry['sessions']}" for entry in bootstraps
             ],
+            "preferences_reported": preferences_entry is not None,
             "preferences_domain": (
-                preferences_match.group("domain") if preferences_match else None
+                preferences_entry.get("domain") if preferences_entry else None
             ),
             "preferences_isolated": (
-                preferences_match.group("isolated") if preferences_match else None
+                preferences_entry.get("isolated") if preferences_entry else None
             ),
             "preferences_suite": (
-                preferences_match.group("suite") if preferences_match else None
+                preferences_entry.get("suite") if preferences_entry else None
             ),
             "load_average_1m": load_by_run.get(run_index(log_file)),
             # The SwiftData store and SQLite sidecar are shared by every sample in an
@@ -645,7 +714,8 @@ for sample in launch_samples:
     )
 
 # Isolation has to fail closed. A sample whose log carries no [LaunchPreferences] line, or
-# reports the persistent domain, or names a different suite, is a sample whose starting state
+# reports the persistent domain, or names no suite at all, or names a different one from the
+# suite this invocation pinned, is a sample whose starting state
 # is unknown — and an unknown starting state is exactly what this lane exists to remove. That
 # is a harness failure rather than a slow launch, so the run exits non-zero and records
 # nothing; summary.json is still written, because diagnosing the failure needs it.
@@ -654,15 +724,25 @@ for sample in launch_samples:
     domain = sample["preferences_domain"]
     isolated = sample["preferences_isolated"]
     suite = sample["preferences_suite"]
-    if domain is None:
+    if not sample["preferences_reported"]:
         isolation_failures.append(f"  run={sample['run']}: no [LaunchPreferences] line in the run log")
+    elif domain is None:
+        isolation_failures.append(
+            f"  run={sample['run']}: the last [LaunchPreferences] entry has no readable domain= field "
+            f"— the log is cut, or repeats the field, at the resolution that decides the capture"
+        )
     elif domain != "scratch":
         isolation_failures.append(f"  run={sample['run']}: resolved domain={domain}, not the scratch suite")
     elif isolated != "true":
         isolation_failures.append(
             f"  run={sample['run']}: domain=scratch but isolated={isolated} — the defaults system refused the suite"
         )
-    elif suite is not None and suite != preferences_suite:
+    elif not suite:
+        isolation_failures.append(
+            f"  run={sample['run']}: domain=scratch isolated=true, but the line reported no suite= "
+            f"field — nothing names the store that backed the launch as {preferences_suite}"
+        )
+    elif suite != preferences_suite:
         isolation_failures.append(
             f"  run={sample['run']}: launched against suite={suite}, expected {preferences_suite}"
         )

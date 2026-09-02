@@ -108,8 +108,10 @@ def append_history_row(history_csv_path: Path, row: dict[str, Any]) -> list[dict
 
     existing_rows.append(row)
 
+    # csv defaults to CRLF, and this rewrites the whole file on every append — so one
+    # new row arrived as a diff touching every line that came before it.
     with history_csv_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES)
+        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES, lineterminator="\n")
         writer.writeheader()
         for existing in existing_rows:
             writer.writerow({field: existing.get(field, "") for field in HISTORY_FIELDNAMES})
@@ -316,9 +318,12 @@ def render_dashboard(
         f"- Portfolio context: discovered={metadata.get('discovered_repos_median', 'n/a')} "
         f"imported={metadata.get('imported_repos_median', 'n/a')}"
     )
+    # The unit belongs to a number. An installed-lane summary reports no sleep, and
+    # "n/as" reads as a malformed value rather than as an absent one.
+    sleep_seconds = metadata.get("sleep_seconds")
     lines.append(
         f"- Sample setup: runs={metadata.get('runs_requested', 'n/a')}, "
-        f"sleep={metadata.get('sleep_seconds', 'n/a')}s"
+        f"sleep={f'{sleep_seconds}s' if sleep_seconds not in (None, '') else 'n/a'}"
     )
     lines.append("")
     lines.append("## Recording Cadence")

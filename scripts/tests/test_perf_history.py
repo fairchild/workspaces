@@ -14,6 +14,7 @@ metrics fail).
 from __future__ import annotations
 
 import csv
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import perf_channel_baseline
 from perf_history import (
+    HISTORY_FIELDNAMES,
     append_history_row,
     history_row_from_summary,
     record_summary,
@@ -126,6 +128,31 @@ class PerfHistoryTests(unittest.TestCase):
             self.assertIn("scenario", header)
             self.assertIn("workspace_click_to_focus_median_ms", header)
 
+    def test_append_rewrites_existing_rows_byte_for_byte(self) -> None:
+        """One new row must arrive as one added line.
+
+        The whole file is rewritten on every append, so a line terminator that differs
+        from the one already on disk turns a one-row append into a diff touching every
+        row that came before it.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "metrics-history.csv"
+            row = history_row_from_summary(debug_summary(), "2026-08-07T10:00:00-0700")
+            append_history_row(csv_path, row)
+            before = csv_path.read_bytes()
+
+            append_history_row(
+                csv_path,
+                history_row_from_summary(debug_summary(), "2026-08-08T10:00:00-0700"),
+            )
+            after = csv_path.read_bytes()
+
+            self.assertNotIn(b"\r", after)
+            self.assertTrue(
+                after.startswith(before),
+                "appending a row rewrote the lines that preceded it",
+            )
+
     def test_record_summary_writes_history_dashboard_and_latest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -158,6 +185,61 @@ class PerfHistoryTests(unittest.TestCase):
 
             trend = dashboard.split("## Trend")[1]
             self.assertLess(trend.index("2026-08-01"), trend.index("2026-08-07"))
+
+
+class CommittedEvidenceSchemaTests(unittest.TestCase):
+    """The checked-in evidence has to parse as the current writer would write it.
+
+    Evidence and schema drifted apart once already: #1495 added `launch_trigger` to
+    `HISTORY_FIELDNAMES`, and the committed history kept a header one column narrower,
+    so the next append would silently rewrite the schema and every row recorded in
+    between carried an unknown readiness signal. Nothing failed, because the release
+    gate reads only `release_tag` — a row can be short, or shifted a field, and still
+    pass. These are the two properties a reader relies on and no other check asserts.
+    """
+
+    def test_the_committed_history_header_is_the_writer_s_schema(self) -> None:
+        history = REPO_ROOT / "docs" / "performance" / "metrics-history.csv"
+        with history.open(newline="") as f:
+            header = next(csv.reader(f))
+
+        self.assertEqual(header, HISTORY_FIELDNAMES)
+
+    def test_every_tracked_csv_row_parses_at_its_header_s_width(self) -> None:
+        """A short row does not raise; it reads back with every later field shifted.
+
+        `csv.DictReader` pairs by position, so a 14-field row under a 15-column header
+        answers `os_version` with an arch and `notes` with None. Counting fields is the
+        only thing that sees it.
+
+        Every tracked CSV, not only the perf ones: the property is about committed data
+        being readable at all, and the release gate that reads these files checks one
+        column. A CSV that is deliberately ragged would need this list narrowed, which is
+        the right moment to argue for it.
+        """
+        tracked = subprocess.run(
+            ["git", "ls-files", "*.csv"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.split()
+        self.assertTrue(tracked, "no tracked CSVs found — the sweep would pass vacuously")
+
+        mismatches = []
+        for relative in tracked:
+            with (REPO_ROOT / relative).open(newline="") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
+                if header is None:
+                    continue
+                # From 2: the header was already consumed, so the first data row is
+                # the file's second line and a reported number has to be openable.
+                for number, row in enumerate(reader, start=2):
+                    if len(row) != len(header):
+                        mismatches.append(f"{relative}:{number} has {len(row)}, header has {len(header)}")
+
+        self.assertEqual(mismatches, [])
 
 
 class PerfChannelBaselineTests(unittest.TestCase):

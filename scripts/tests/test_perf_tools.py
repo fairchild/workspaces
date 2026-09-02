@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -188,12 +189,211 @@ class PerfRunnerScriptTests(unittest.TestCase):
         self.assertIn("Contents/MacOS/WorkspaceManager", script)
         self.assertIn('--app "$resolved_app_path"', script)
 
+    def test_installed_lanes_isolate_the_preferences_domain(self) -> None:
+        """Every installed launch names a scratch suite rather than the shipped domain.
+
+        Un-isolated, the lane reads whatever `com.cloudcompute.workspaces` happens to
+        hold — the non-determinism `deterministic-delivery-v1` claims to have removed —
+        and writes its own selection state back into the domain the installed app uses.
+        """
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        launches = re.findall(
+            r"(?s)WORKSPACES_DATA_DIR=.*?launch-installed-diagnostics\.sh", script
+        )
+        self.assertTrue(launches, "no installed launch found in perf-runner.sh")
+        for launch in launches:
+            self.assertIn("WORKSPACES_PREFERENCES_SUITE=", launch)
+        self.assertIn("cleanup_preferences_suite", script)
+
+    def test_every_installed_launch_reads_its_isolation_back(self) -> None:
+        """Exporting the suite is an intent; each lane must verify what the app resolved."""
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        launches = re.findall(
+            r"(?s)WORKSPACES_DATA_DIR=.*?summarize_installed_log", script
+        )
+        self.assertTrue(launches, "no installed launch found in perf-runner.sh")
+        for launch in launches:
+            self.assertIn("assert_preferences_isolated", launch)
+
     def test_main_window_hotspot_scenarios_delegate_to_helper(self) -> None:
         script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
         self.assertIn("main-window-hotspots-baseline.py", script)
         self.assertIn("main_window_agent_activity_burst", script)
         self.assertIn("main_window_session_switcher_snapshot", script)
         self.assertIn("main_window_resident_memory_20_workspaces", script)
+
+
+class PreferencesIsolationReadBackTests(unittest.TestCase):
+    """The installed lane's isolation check, run against real log shapes.
+
+    `domain=scratch` is not proof of isolation — the refusal path logs that domain too —
+    so each of the three ways the export is silently defeated has to fail closed here.
+    """
+
+    SUITE = "com.cloudcompute.workspaces.perf.mine"
+    PREFIX = "2026-08-31 07:58:19.633 I WorkspaceManager[1:2] [LaunchPreferences] "
+
+    def run_check(self, log_body: str) -> subprocess.CompletedProcess:
+        script = (REPO_ROOT / "scripts" / "perf-runner.sh").read_text(encoding="utf-8")
+        match = re.search(
+            r"(?ms)^assert_preferences_isolated\(\) \{.*?^\}", script
+        )
+        self.assertIsNotNone(match, "assert_preferences_isolated not found in perf-runner.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "capture.log"
+            log_path.write_text(log_body, encoding="utf-8")
+            return subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f"set -euo pipefail\nPREFERENCES_SUITE={self.SUITE}\n"
+                    f"{match.group(0)}\nassert_preferences_isolated \"$1\"",
+                    "_",
+                    str(log_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+    def assert_refused(self, log_body: str, because: str) -> None:
+        """Fails closed *and* says why.
+
+        The exit code alone is not enough: `set -e` plus `pipefail` will abort this
+        function at its own no-match grep, which refuses the capture without printing
+        anything — a silent abort in the branch whose whole job is to be loud.
+        """
+        result = self.run_check(log_body)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("[preferences]", result.stderr)
+        self.assertIn(because, result.stderr)
+
+    def test_an_isolated_launch_on_the_expected_suite_passes(self) -> None:
+        line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true"
+        self.assertEqual(self.run_check(line + "\n").returncode, 0)
+
+    def test_a_log_without_the_line_is_refused_out_loud(self) -> None:
+        """An app older than WORKSPACES_PREFERENCES_SUITE reports no domain at all."""
+        self.assert_refused("some capture output\n", "no [LaunchPreferences] line")
+
+    def test_the_persistent_domain_is_refused_out_loud(self) -> None:
+        """A reserved suite name is logged and ignored, resolving to domain=standard."""
+        self.assert_refused(f"{self.PREFIX}domain=standard\n", "resolved domain=standard")
+
+    def test_a_refused_suite_is_refused_out_loud(self) -> None:
+        """The defaults system refusing the suite still logs domain=scratch."""
+        line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=false"
+        self.assert_refused(line + "\n", "isolated=false")
+
+    def test_a_missing_suite_field_is_refused_out_loud(self) -> None:
+        """A line that never names a suite proves nothing about which store backed it.
+
+        This is the shape a truncated final log entry takes, and the shape any tooling
+        older than the `suite=` field emits. `domain=scratch` and `isolated=true` say a
+        scratch store was opened; only `suite=` says it was *this lane's*. Treating the
+        field as optional lets an isolated-looking capture through against a suite the
+        runner does not own and will not clean up — the failure class the readback
+        exists to close, wearing a passing label.
+        """
+        line = f"{self.PREFIX}domain=scratch reset=false isolated=true"
+        self.assert_refused(line + "\n", "reported no suite=")
+
+    def test_a_foreign_suite_is_refused_out_loud(self) -> None:
+        line = f"{self.PREFIX}domain=scratch suite=com.cloudcompute.workspaces.perf.other reset=false isolated=true"
+        self.assert_refused(line + "\n", "expected")
+
+    def test_a_truncated_final_entry_does_not_fall_back_to_an_earlier_one(self) -> None:
+        """A cut final entry is an unjudged resolution, not an absent one.
+
+        Anchoring the search on `domain=` made a final entry that never reached its
+        first field invisible, so the reader silently fell back to the previous
+        resolution and judged a launch by a line that did not describe it.
+        """
+        body = (
+            f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true\n"
+            f"{self.PREFIX}\n"
+        )
+        self.assert_refused(body, "no readable domain=")
+
+    # Copied from a v0.26.0 capture rather than composed: the app logs through os_log,
+    # so the real line carries a `<subsystem>:<category>` field of its own before the
+    # marker. A fixture that omits it cannot tell a rule that accepts real entries from
+    # one that rejects every one of them.
+    REAL_CAPTURE_PREFIX = (
+        "2026-08-31 07:58:19.633 I  WorkspaceManager[67446:2a466ed] "
+        "[com.cloudcompute.workspaces:LaunchPreferences] [LaunchPreferences] "
+    )
+
+    def test_the_shape_the_app_actually_logs_is_accepted(self) -> None:
+        line = (
+            f"{self.REAL_CAPTURE_PREFIX}domain=scratch suite={self.SUITE} "
+            "reset=false isolated=true"
+        )
+        self.assertEqual(self.run_check(line + "\n").returncode, 0)
+
+    def test_an_impostor_behind_the_real_prefix_is_still_refused(self) -> None:
+        genuine_failure = f"{self.PREFIX}domain=standard"
+        impostor = (
+            "2026-08-31 07:58:20.000 I  WorkspaceManager[67446:2a466ed] "
+            "[com.cloudcompute.workspaces:HostSession] [HostSession] path=/tmp/x "
+            f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+        )
+        self.assert_refused(f"{genuine_failure}\n{impostor}\n", "resolved domain=standard")
+
+    def test_the_marker_must_be_a_field_of_its_own(self) -> None:
+        """A path that happens to contain the marker is not a resolution.
+
+        The installed capture carries every message the process and its subsystem
+        emit, so a logged path or identifier can hold the literal text. Matched as a
+        substring, such a message becomes the newest entry and replaces the genuine
+        resolution before it — the one shape where more log output makes the check
+        weaker. A real entry stands as its own whitespace-delimited field.
+        """
+        genuine_failure = f"{self.PREFIX}domain=standard"
+        impostors = [
+            f"2026-08-31 07:58:20.000 I WorkspaceManager[1:2] [Perf] root=/tmp/[LaunchPreferences] "
+            f"domain=scratch suite={self.SUITE} isolated=true",
+            f"2026-08-31 07:58:20.000 I WorkspaceManager[1:2] "
+            f"[LaunchPreferences]domain=scratch suite={self.SUITE} isolated=true",
+            # The category is the first bracketed field, and a repository path is logged
+            # verbatim after it — so a path with spaces in it can carry the marker as a
+            # field of its own without ever being one.
+            f"2026-08-31 07:58:20.000 I WorkspaceManager[1:2] [HostSession] path=/tmp/x "
+            f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true",
+        ]
+        for impostor in impostors:
+            with self.subTest(impostor=impostor):
+                self.assert_refused(f"{genuine_failure}\n{impostor}\n", "resolved domain=standard")
+
+    def test_a_carriage_return_does_not_survive_into_the_last_field(self) -> None:
+        """A CRLF log must read the same as an LF one, or the lanes disagree."""
+        line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true"
+        self.assertEqual(self.run_check(line + "\r\n").returncode, 0)
+
+    def test_a_field_repeated_on_one_line_has_no_answer(self) -> None:
+        """Two values for one key is unreadable, including when the second is empty.
+
+        A reader that keeps the last non-empty value silently prefers whichever token
+        it happened to see, which is a choice no log entry authorised. The empty case
+        is the one that hides: the shell drops a trailing empty line from a command
+        substitution, so a duplicate that reports nothing looks like no duplicate.
+        """
+        for repeated in (
+            f"domain=scratch suite={self.SUITE} isolated=true domain=",
+            f"domain=scratch suite={self.SUITE} isolated=true suite=",
+            f"domain=scratch suite={self.SUITE} isolated=true isolated=",
+            f"domain=scratch suite={self.SUITE} isolated=true domain=standard",
+            f"domain=scratch suite={self.SUITE} isolated=true suite=perf.other",
+        ):
+            with self.subTest(line=repeated):
+                self.assert_refused(f"{self.PREFIX}{repeated}\n", "[preferences]")
+
+    def test_the_last_resolution_in_the_log_is_the_one_judged(self) -> None:
+        """A relaunch that fell back must not be masked by an earlier isolated line."""
+        body = (
+            f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true\n"
+            f"{self.PREFIX}domain=standard\n"
+        )
+        self.assert_refused(body, "resolved domain=standard")
 
 
 class PerfSummarizerTests(unittest.TestCase):
@@ -650,6 +850,287 @@ class DebugLaneTriggerTests(unittest.TestCase):
         )
 
         self.assertEqual(row["launch_trigger"], "terminal_focus+terminal_set_title")
+
+
+class DebugLaneIsolationTests(unittest.TestCase):
+    """The debug lane's isolation check has to be as strict as the installed lane's.
+
+    `perf-runner.sh` and `perf-baseline.sh` make the same promise about the same log
+    line, so a shape one lane refuses and the other accepts is a hole in whichever is
+    laxer. This runs the summarizer `perf-baseline.sh` actually embeds, against run
+    logs whose isolation line is the shape under test.
+    """
+
+    SUITE = "perf.scratch"
+
+    def run_summarizer(self, log_bodies: list[str]) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            program = out_dir / "summarize.py"
+            program.write_text(
+                DebugLaneTriggerTests.embedded_summarizer(), encoding="utf-8"
+            )
+            for index, body in enumerate(log_bodies, start=1):
+                (out_dir / f"run-{index}.log").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(program),
+                    str(out_dir),
+                    str(REPO_ROOT),
+                    str(len(log_bodies)),
+                    "0",
+                    "0",  # record: never touch the committed history from a test
+                    "2026-08-30T10:00:00-0700",
+                    "26.6.2",
+                    "25G100",
+                    "arm64",
+                    "Mac16,13",
+                    "no-activate",
+                    "0",  # assert_budget
+                    "",
+                    "clean",
+                    "off",
+                    "1",
+                    "scratch",
+                    self.SUITE,
+                    "owner",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(REPO_ROOT / "scripts"),
+                    "PERF_SUMMARY_TIMESTAMP": "2026-08-30T10:00:00-0700",
+                },
+            )
+
+    @staticmethod
+    def run_log(isolation_line: str) -> str:
+        return (
+            f"2026-08-30 10:00:00.000 {isolation_line}\n"
+            "2026-08-30 10:00:01.000 [Perf] metric=launch_to_first_prompt "
+            "duration_ms=601.00 trigger=terminal_set_title\n"
+        )
+
+    def test_an_isolated_launch_on_the_expected_suite_is_accepted(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_missing_suite_field_is_an_isolation_failure(self) -> None:
+        """No `suite=` is no evidence the lane's own store backed the launch.
+
+        The installed lane refuses this shape; the debug lane treated the field as
+        optional and accepted it, so a truncated line reading `domain=scratch
+        isolated=true` reached a recorded row carrying an isolation claim nothing in
+        the log supports.
+        """
+        result = self.run_summarizer(
+            [self.run_log("[LaunchPreferences] domain=scratch isolated=true")]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("ISOLATION FAILURES", result.stdout)
+        self.assertIn("reported no suite", result.stdout)
+
+    def test_the_last_resolution_in_the_log_is_the_one_judged(self) -> None:
+        """Reading the first entry lets an isolated line vouch for a fallback after it.
+
+        The app logs once per resolution, so a relaunch that fell back appends *after*
+        the isolated line that preceded it. Judging the first match means the run that
+        actually happened is never the one examined.
+        """
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace(
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                    "\n2026-08-30 10:00:00.500 [LaunchPreferences] domain=standard"
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("domain=standard", result.stdout)
+
+    def test_a_later_entry_missing_its_suite_is_not_masked_by_an_earlier_one(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace(
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                    "\n2026-08-30 10:00:00.500 [LaunchPreferences] domain=scratch isolated=true"
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("reported no suite", result.stdout)
+
+    def test_a_duplicate_domain_on_one_line_is_unreadable_rather_than_resolved(self) -> None:
+        """Two values for one field is not a field the reader may pick from."""
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} "
+                    "isolated=true domain=standard"
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no readable domain", result.stdout)
+
+    def test_a_truncated_final_entry_is_refused(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace(
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                    "\n2026-08-30 10:00:00.500 [LaunchPreferences]"
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no readable domain", result.stdout)
+
+    def test_the_marker_must_be_a_field_of_its_own(self) -> None:
+        for impostor in (
+            f"[Perf] root=/tmp/[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true",
+            f"[LaunchPreferences]domain=scratch suite={self.SUITE} isolated=true",
+            f"[HostSession] path=/tmp/x [LaunchPreferences] domain=scratch "
+            f"suite={self.SUITE} isolated=true",
+        ):
+            with self.subTest(impostor=impostor):
+                result = self.run_summarizer(
+                    [
+                        self.run_log("[LaunchPreferences] domain=standard").replace(
+                            "\n2026-08-30 10:00:01.000 [Perf]",
+                            f"\n2026-08-30 10:00:00.500 {impostor}"
+                            "\n2026-08-30 10:00:01.000 [Perf]",
+                        )
+                    ]
+                )
+
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("domain=standard", result.stdout)
+
+    def test_a_carriage_return_does_not_survive_into_the_last_field(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace("isolated=true\n", "isolated=true\r\n")
+            ]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_suite_name_containing_the_marker_is_read_as_one_token(self) -> None:
+        """The marker is a log prefix, so the first one on a line is the real one.
+
+        Searching backwards through the whole log finds a marker embedded in a suite
+        name and reads the tail of that name as the entry, which the installed lane —
+        whose grep takes the rest of the line from the first marker — does not do.
+        The name is absurd, but a parser disagreement between the two lanes is the
+        thing this pair of checks exists to not have.
+        """
+        suite = "perf.[LaunchPreferences].scratch"
+        with_marker_pin = self.SUITE
+        try:
+            self.SUITE = suite
+            result = self.run_summarizer(
+                [self.run_log(f"[LaunchPreferences] domain=scratch suite={suite} isolated=true")]
+            )
+        finally:
+            self.SUITE = with_marker_pin
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_foreign_suite_is_still_an_isolation_failure(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    "[LaunchPreferences] domain=scratch suite=perf.someone-else isolated=true"
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("expected", result.stdout)
+
+
+class DebugLaneRunCountTests(unittest.TestCase):
+    """A capture that left no log is a failed capture, not a quiet one.
+
+    The summarizer globs the run logs that exist. The app launches in a background
+    subshell whose failure is suppressed, so a run that never wrote its log left the
+    directory one file short and the lane summarized whatever remained — an empty
+    directory summarized clean. Isolation is checked per sample, and a sample that
+    does not exist is never examined.
+    """
+
+    def run_summarizer(self, logs: int, runs: int) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            program = out_dir / "summarize.py"
+            program.write_text(
+                DebugLaneTriggerTests.embedded_summarizer(), encoding="utf-8"
+            )
+            for index in range(1, logs + 1):
+                (out_dir / f"run-{index}.log").write_text(
+                    "2026-08-30 10:00:00.000 [LaunchPreferences] domain=scratch "
+                    "suite=perf.scratch isolated=true\n"
+                    "2026-08-30 10:00:01.000 [Perf] metric=launch_to_first_prompt "
+                    "duration_ms=601.00 trigger=terminal_set_title\n",
+                    encoding="utf-8",
+                )
+            return subprocess.run(
+                [
+                    sys.executable, str(program), str(out_dir), str(REPO_ROOT), str(runs),
+                    "0", "0", "2026-08-30T10:00:00-0700", "26.6.2", "25G100", "arm64",
+                    "Mac16,13", "no-activate", "0", "", "clean", "off", "1",
+                    "scratch", "perf.scratch", "owner",
+                ],
+                cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(REPO_ROOT / "scripts"),
+                    "PERF_SUMMARY_TIMESTAMP": "2026-08-30T10:00:00-0700",
+                },
+            )
+
+    def test_every_requested_run_must_have_left_a_log(self) -> None:
+        result = self.run_summarizer(logs=2, runs=3)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("2 of 3", result.stdout + result.stderr)
+
+    def test_no_logs_at_all_is_the_loudest_case_not_the_quietest(self) -> None:
+        result = self.run_summarizer(logs=0, runs=3)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_a_complete_set_of_logs_summarizes(self) -> None:
+        result = self.run_summarizer(logs=3, runs=3)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class MissingLaunchMetricTests(unittest.TestCase):

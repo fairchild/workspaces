@@ -42,6 +42,148 @@ source "$ROOT_DIR/scripts/lib/perf-process.sh"
 # Names the measurement protocol live captures run under. Must match the epoch
 # perf-baseline.sh stamps, so debug and installed rows of the same era compare (#1251).
 CURRENT_PROTOCOL_EPOCH="deterministic-delivery-v1"
+
+# UserDefaults is the state axis WORKSPACES_DATA_DIR does not cover (#1251). The debug
+# lane has isolated it since #1258; the installed lane did not, so an installed capture
+# both read whatever the persistent com.cloudcompute.workspaces domain happened to hold
+# — the non-determinism the epoch name claims to have removed — and wrote its own
+# selection and restore state back into the domain the shipped app uses.
+#
+# Same ownership contract as perf-baseline.sh: a caller-provided suite is used as-is and
+# never reset or removed, and only a suite this run invented is a suite this run may clear.
+# Trimmed, then treated as unset when nothing survives the trim — the two steps
+# LaunchPreferences.trimmed(_:) takes. Testing the raw value first adopts a
+# whitespace-only override as an empty caller-owned pin, which the app ignores
+# outright, leaving the lane pinned to a suite no launch will ever report.
+CALLER_PREFERENCES_SUITE="$(printf '%s' "${WORKSPACES_PREFERENCES_SUITE:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+if [[ -n "$CALLER_PREFERENCES_SUITE" ]]; then
+    PREFERENCES_SUITE="$CALLER_PREFERENCES_SUITE"
+    PREFERENCES_SUITE_OWNER="caller"
+else
+    PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
+    PREFERENCES_SUITE_OWNER="lane"
+fi
+
+cleanup_preferences_suite() {
+    [[ "$PREFERENCES_SUITE_OWNER" == "lane" ]] || return 0
+    defaults delete "$PREFERENCES_SUITE" >/dev/null 2>&1 || true
+    rm -f "$HOME/Library/Preferences/$PREFERENCES_SUITE.plist"
+}
+
+# Exporting the suite states an intent; this reads back what the app actually resolved,
+# the way perf-baseline.sh already does for the debug lane. Three things defeat the
+# intent silently: an app build older than the environment variable, a reserved suite
+# name (LaunchPreferences logs it and returns the persistent domain), and a defaults
+# system that refuses the suite and falls back the same way. Each leaves a capture that
+# is labelled isolated, measured against unknown starting state, and writing into the
+# domain the shipped app uses — so a sample whose isolation cannot be shown is a harness
+# failure rather than a slow launch, and the lane records nothing.
+#
+# `domain=scratch` alone is not proof: the refusal path logs that domain too. `isolated=`
+# is the field that says which store actually backed the launch, and `suite=` is the field
+# that says it was this lane's store. All three are required. Treating `suite=` as
+# present-if-reported is how a truncated line — or tooling predating the field — reaches a
+# recorded row labelled isolated against a domain the lane neither owns nor cleans up.
+assert_preferences_isolated() {
+    local log_file="$1" entry line domain isolated suite
+    # `|| true` because a reader that finds nothing may exit non-zero, and under `set -e`
+    # with `pipefail` that aborts the run at this assignment — failing closed, but
+    # silently, which is the one thing this branch exists to avoid.
+    # Anchored on the marker rather than on `domain=`, so a final entry cut before its
+    # first field is still the entry judged. Anchoring on the field made such a line
+    # invisible and quietly promoted the resolution before it — which, on a relaunch that
+    # fell back, is the one line in the log that does not describe the launch measured.
+    #
+    # The marker has to reach the line before any message content does. An installed
+    # capture carries every message the process and its subsystem emit, and some of
+    # those log a repository path verbatim, so `[HostSession] path=/tmp/x
+    # [LaunchPreferences] domain=scratch …` would otherwise read as the newest
+    # resolution and displace the one that decided the launch. That is the single shape
+    # where more log output makes this check weaker, and a path is controlled input.
+    #
+    # A real line reaches the marker through its prefix only:
+    # `2026-08-31 07:58:19.633 I  WorkspaceManager[67446:2a466ed]
+    # [com.cloudcompute.workspaces:LaunchPreferences] [LaunchPreferences] domain=…`.
+    # None of those fields carries `=` or `/`; a logged value or path carries one or
+    # both. So a field bearing either ends the search, and a marker after it is a
+    # mention of the category rather than the category itself.
+    #
+    # `entry:` prefixes the result so an entry with no fields after the marker — the
+    # truncated shape — is still distinguishable from a log that has no marker at all.
+    entry="$(awk '
+        { sub(/\r$/, "") }
+        {
+            for (i = 1; i <= NF; i++) {
+                if ($i == "[LaunchPreferences]") {
+                    fields = ""
+                    for (j = i + 1; j <= NF; j++) fields = fields " " $j
+                    last = fields
+                    found = 1
+                    break
+                }
+                if ($i ~ /[=\/]/) break
+            }
+        }
+        END { if (found) print "entry:" last }
+    ' "$log_file" 2>/dev/null || true)"
+    if [[ -z "$entry" ]]; then
+        echo "  [preferences] no [LaunchPreferences] line in $log_file" >&2
+        echo "  [preferences] the app did not report which defaults domain backed the launch — an app" >&2
+        echo "  [preferences] predating WORKSPACES_PREFERENCES_SUITE cannot be measured by this lane." >&2
+        return 1
+    fi
+    line="${entry#entry:}"
+    # Field-anchored rather than a substring match: the suite name is free text and a
+    # loose pattern would happily read a value out of the middle of one.
+    # Prints nothing unless the key appears exactly once, so a repeated field reads as
+    # absent and the caller's emptiness branch refuses it. Printing every match instead
+    # loses a trailing empty duplicate — the shell strips it from the substitution — so
+    # `domain=scratch ... domain=` read back as a clean `scratch`.
+    read_field() {
+        awk -v key="$1" '
+            {
+                for (i = 1; i <= NF; i++)
+                    if (index($i, key "=") == 1) {
+                        seen++
+                        value = substr($i, length(key) + 2)
+                    }
+            }
+            END { if (seen == 1) print value }
+        ' <<<"$line"
+    }
+    domain="$(read_field domain)"
+    isolated="$(read_field isolated)"
+    suite="$(read_field suite)"
+
+    # Empty covers two shapes: an entry truncated before `domain=`, and a line carrying
+    # `domain=` twice, where awk emits both values and neither is the field's answer.
+    if [[ -z "$domain" ]]; then
+        echo "  [preferences] the last [LaunchPreferences] entry has no readable domain= field — the log" >&2
+        echo "  [preferences] is cut, or repeats the field, at the resolution that decides the capture." >&2
+        return 1
+    fi
+    if [[ "$domain" != "scratch" ]]; then
+        echo "  [preferences] resolved domain=$domain, not the scratch suite — the launch read and wrote" >&2
+        echo "  [preferences] the persistent com.cloudcompute.workspaces domain." >&2
+        return 1
+    fi
+    if [[ "$isolated" != "true" ]]; then
+        echo "  [preferences] domain=scratch but isolated=${isolated:-unreported} — the defaults system refused" >&2
+        echo "  [preferences] suite '$PREFERENCES_SUITE' and the app fell back to the persistent domain." >&2
+        return 1
+    fi
+    if [[ -z "$suite" ]]; then
+        echo "  [preferences] domain=scratch isolated=true, but the line reported no suite= field —" >&2
+        echo "  [preferences] nothing in it says the store that backed the launch was this lane's" >&2
+        echo "  [preferences] '$PREFERENCES_SUITE' rather than one it neither owns nor clears." >&2
+        return 1
+    fi
+    if [[ "$suite" != "$PREFERENCES_SUITE" ]]; then
+        echo "  [preferences] launched against suite=$suite, expected $PREFERENCES_SUITE." >&2
+        return 1
+    fi
+    echo "preferences_isolated=true suite=$PREFERENCES_SUITE"
+}
 SCENARIO=""
 APP_PATH="/Applications/WorkSpaces.app/Contents/MacOS/WorkspaceManager"
 RUNS=5
@@ -168,9 +310,14 @@ run_installed() {
         launch_args+=(--no-activate)
     fi
 
-    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
+    echo "preferences_suite=$PREFERENCES_SUITE (owner: $PREFERENCES_SUITE_OWNER)"
+    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" \
+        WORKSPACES_PREFERENCES_SUITE="$PREFERENCES_SUITE" \
+        "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
         "${launch_args[@]}" \
         "$@"
+
+    assert_preferences_isolated "$log_file"
 
     summarize_installed_log "$log_file" "$summary_json" "$summary_txt" "$resolved_app_path"
 }
@@ -219,12 +366,17 @@ run_installed_input_short_capture() {
     echo "Interactive capture: Workspaces will activate and run for $CAPTURE_SECONDS seconds."
     echo "Type in the focused terminal during that window to produce input metrics."
 
-    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
+    echo "preferences_suite=$PREFERENCES_SUITE (owner: $PREFERENCES_SUITE_OWNER)"
+    WORKSPACES_DATA_DIR="$OUTPUT_DIR/app-data" \
+        WORKSPACES_PREFERENCES_SUITE="$PREFERENCES_SUITE" \
+        "$ROOT_DIR/scripts/launch-installed-diagnostics.sh" \
         --app "$resolved_app_path" \
         --login-shell \
         --with-input-diagnostics \
         --capture-seconds "$CAPTURE_SECONDS" \
         --log-file "$log_file"
+
+    assert_preferences_isolated "$log_file"
 
     summarize_installed_log "$log_file" "$summary_json" "$summary_txt" "$resolved_app_path"
 
@@ -289,6 +441,9 @@ sweep_survivors() {
         "$ROOT_DIR/.build/debug/WorkspaceManager"; do
         perf_assert_clean_exit "$binary" "$label" || status=1
     done
+    # After the survivor check, so a lane that failed still drops the scratch suite it
+    # invented rather than leaving a plist behind for every aborted run.
+    cleanup_preferences_suite
     return "$status"
 }
 trap 'sweep_survivors || exit 1' EXIT
