@@ -1639,21 +1639,16 @@ struct ContentView: View {
         selectionController.applyLaunchSurface(surface)
     }
 
-    /// Shows a surface without letting it become the saved one.
-    ///
-    /// Selection normally writes the last surface on its way through, which is
-    /// right for a choice and wrong for a stand-in: a saved surface awaiting the
-    /// models that would judge it must still be there to restore when they land
-    /// (#845). The persisted value is put back rather than suppressed at the
-    /// selection layer, so this path shares the production selection code exactly
-    /// and differs only in what it leaves behind.
+    /// Shows a surface without letting it become the saved one (#845). The
+    /// preserve-and-restore itself lives in `MainWindowProvisionalSurface` so a
+    /// test can reach it.
     @MainActor
     private func applyProvisionalLaunchSurface(_ surface: MainWindowLaunchSurface) {
-        let awaitingSurfaceRawValue = lastSurfaceRawValue
-        selectionController.applyLaunchSurface(surface)
-        if lastSurfaceRawValue != awaitingSurfaceRawValue {
-            lastSurfaceRawValue = awaitingSurfaceRawValue
-        }
+        MainWindowProvisionalSurface.applyPreservingSavedSurface(
+            readRawValue: { lastSurfaceRawValue },
+            writeRawValue: { lastSurfaceRawValue = $0 },
+            apply: { selectionController.applyLaunchSurface(surface) }
+        )
     }
 
     @MainActor

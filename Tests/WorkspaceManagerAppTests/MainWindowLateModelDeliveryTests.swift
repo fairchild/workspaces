@@ -146,6 +146,43 @@ struct MainWindowLateModelDeliveryTests {
         #expect(state.didResolveInitialSurface)
     }
 
+    @Test("The provisional apply restores the saved value that selection displaced")
+    func provisionalApplyRestoresTheSavedValue() {
+        // This is the production preserve-and-restore itself, not a stub of it.
+        // The stateful test above hands the action handler a closure, so deleting
+        // the restore would leave that suite green; this one goes red.
+        var persisted = "saved-surface"
+
+        MainWindowProvisionalSurface.applyPreservingSavedSurface(
+            readRawValue: { persisted },
+            writeRawValue: { persisted = $0 },
+            apply: { persisted = "fallback-surface" }  // what ordinary selection does
+        )
+
+        #expect(persisted == "saved-surface")
+    }
+
+    @Test("The provisional apply leaves an untouched saved value alone")
+    func provisionalApplyLeavesUntouchedValueAlone() {
+        var persisted = "saved-surface"
+        var writeCount = 0
+
+        MainWindowProvisionalSurface.applyPreservingSavedSurface(
+            readRawValue: { persisted },
+            writeRawValue: {
+                persisted = $0
+                writeCount += 1
+            },
+            apply: {}
+        )
+
+        #expect(persisted == "saved-surface")
+        // No write at all when selection displaced nothing: an `@AppStorage`
+        // write is a publish, and republishing an unchanged value invalidates
+        // the window for nothing (#1347's publication discipline).
+        #expect(writeCount == 0)
+    }
+
     @Test("A saved repo surface survives web sources arriving first")
     func savedRepoSurfaceSurvivesWebSourcesArrivingFirst() {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
