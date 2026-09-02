@@ -75,7 +75,10 @@ cleanup_preferences_suite() {
 # failure rather than a slow launch, and the lane records nothing.
 #
 # `domain=scratch` alone is not proof: the refusal path logs that domain too. `isolated=`
-# is the field that says which store actually backed the launch.
+# is the field that says which store actually backed the launch, and `suite=` is the field
+# that says it was this lane's store. All three are required. Treating `suite=` as
+# present-if-reported is how a truncated line — or tooling predating the field — reaches a
+# recorded row labelled isolated against a domain the lane neither owns nor cleans up.
 assert_preferences_isolated() {
     local log_file="$1" line domain isolated suite
     # `|| true` because a no-match grep exits 1, and under `set -e` with `pipefail` that
@@ -107,7 +110,13 @@ assert_preferences_isolated() {
         echo "  [preferences] suite '$PREFERENCES_SUITE' and the app fell back to the persistent domain." >&2
         return 1
     fi
-    if [[ -n "$suite" && "$suite" != "$PREFERENCES_SUITE" ]]; then
+    if [[ -z "$suite" ]]; then
+        echo "  [preferences] domain=scratch isolated=true, but the line reported no suite= field —" >&2
+        echo "  [preferences] nothing in it says the store that backed the launch was this lane's" >&2
+        echo "  [preferences] '$PREFERENCES_SUITE' rather than one it neither owns nor clears." >&2
+        return 1
+    fi
+    if [[ "$suite" != "$PREFERENCES_SUITE" ]]; then
         echo "  [preferences] launched against suite=$suite, expected $PREFERENCES_SUITE." >&2
         return 1
     fi

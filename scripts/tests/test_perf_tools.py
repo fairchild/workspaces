@@ -284,6 +284,19 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
         line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=false"
         self.assert_refused(line + "\n", "isolated=false")
 
+    def test_a_missing_suite_field_is_refused_out_loud(self) -> None:
+        """A line that never names a suite proves nothing about which store backed it.
+
+        This is the shape a truncated final log entry takes, and the shape any tooling
+        older than the `suite=` field emits. `domain=scratch` and `isolated=true` say a
+        scratch store was opened; only `suite=` says it was *this lane's*. Treating the
+        field as optional lets an isolated-looking capture through against a suite the
+        runner does not own and will not clean up — the failure class the readback
+        exists to close, wearing a passing label.
+        """
+        line = f"{self.PREFIX}domain=scratch reset=false isolated=true"
+        self.assert_refused(line + "\n", "reported no suite=")
+
     def test_a_foreign_suite_is_refused_out_loud(self) -> None:
         line = f"{self.PREFIX}domain=scratch suite=com.cloudcompute.workspaces.perf.other reset=false isolated=true"
         self.assert_refused(line + "\n", "expected")
@@ -751,6 +764,109 @@ class DebugLaneTriggerTests(unittest.TestCase):
         )
 
         self.assertEqual(row["launch_trigger"], "terminal_focus+terminal_set_title")
+
+
+class DebugLaneIsolationTests(unittest.TestCase):
+    """The debug lane's isolation check has to be as strict as the installed lane's.
+
+    `perf-runner.sh` and `perf-baseline.sh` make the same promise about the same log
+    line, so a shape one lane refuses and the other accepts is a hole in whichever is
+    laxer. This runs the summarizer `perf-baseline.sh` actually embeds, against run
+    logs whose isolation line is the shape under test.
+    """
+
+    SUITE = "perf.scratch"
+
+    def run_summarizer(self, log_bodies: list[str]) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            program = out_dir / "summarize.py"
+            program.write_text(
+                DebugLaneTriggerTests.embedded_summarizer(), encoding="utf-8"
+            )
+            for index, body in enumerate(log_bodies, start=1):
+                (out_dir / f"run-{index}.log").write_text(body, encoding="utf-8")
+            return subprocess.run(
+                [
+                    sys.executable,
+                    str(program),
+                    str(out_dir),
+                    str(REPO_ROOT),
+                    str(len(log_bodies)),
+                    "0",
+                    "0",  # record: never touch the committed history from a test
+                    "2026-08-30T10:00:00-0700",
+                    "26.6.2",
+                    "25G100",
+                    "arm64",
+                    "Mac16,13",
+                    "no-activate",
+                    "0",  # assert_budget
+                    "",
+                    "clean",
+                    "off",
+                    "1",
+                    "scratch",
+                    self.SUITE,
+                    "owner",
+                ],
+                cwd=REPO_ROOT,
+                capture_output=True,
+                text=True,
+                check=False,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(REPO_ROOT / "scripts"),
+                    "PERF_SUMMARY_TIMESTAMP": "2026-08-30T10:00:00-0700",
+                },
+            )
+
+    @staticmethod
+    def run_log(isolation_line: str) -> str:
+        return (
+            f"2026-08-30 10:00:00.000 {isolation_line}\n"
+            "2026-08-30 10:00:01.000 [Perf] metric=launch_to_first_prompt "
+            "duration_ms=601.00 trigger=terminal_set_title\n"
+        )
+
+    def test_an_isolated_launch_on_the_expected_suite_is_accepted(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_missing_suite_field_is_an_isolation_failure(self) -> None:
+        """No `suite=` is no evidence the lane's own store backed the launch.
+
+        The installed lane refuses this shape; the debug lane treated the field as
+        optional and accepted it, so a truncated line reading `domain=scratch
+        isolated=true` reached a recorded row carrying an isolation claim nothing in
+        the log supports.
+        """
+        result = self.run_summarizer(
+            [self.run_log("[LaunchPreferences] domain=scratch isolated=true")]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("ISOLATION FAILURES", result.stdout)
+        self.assertIn("reported no suite", result.stdout)
+
+    def test_a_foreign_suite_is_still_an_isolation_failure(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    "[LaunchPreferences] domain=scratch suite=perf.someone-else isolated=true"
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("expected", result.stdout)
 
 
 class MissingLaunchMetricTests(unittest.TestCase):

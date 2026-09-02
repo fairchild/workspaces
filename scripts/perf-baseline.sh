@@ -645,7 +645,8 @@ for sample in launch_samples:
     )
 
 # Isolation has to fail closed. A sample whose log carries no [LaunchPreferences] line, or
-# reports the persistent domain, or names a different suite, is a sample whose starting state
+# reports the persistent domain, or names no suite at all, or names a different one from the
+# suite this invocation pinned, is a sample whose starting state
 # is unknown — and an unknown starting state is exactly what this lane exists to remove. That
 # is a harness failure rather than a slow launch, so the run exits non-zero and records
 # nothing; summary.json is still written, because diagnosing the failure needs it.
@@ -662,7 +663,12 @@ for sample in launch_samples:
         isolation_failures.append(
             f"  run={sample['run']}: domain=scratch but isolated={isolated} — the defaults system refused the suite"
         )
-    elif suite is not None and suite != preferences_suite:
+    elif suite is None:
+        isolation_failures.append(
+            f"  run={sample['run']}: domain=scratch isolated=true, but the line reported no suite= "
+            f"field — nothing names the store that backed the launch as {preferences_suite}"
+        )
+    elif suite != preferences_suite:
         isolation_failures.append(
             f"  run={sample['run']}: launched against suite={suite}, expected {preferences_suite}"
         )
