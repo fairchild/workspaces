@@ -2873,7 +2873,7 @@ struct ContentView: View {
         )
         guard !sessionIDs.isEmpty else {
             restoreLog.info(
-                "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=0 (no surviving tmux session)"
+                "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=0 already_live=0 (no surviving tmux session)"
             )
             return
         }
@@ -2891,8 +2891,17 @@ struct ContentView: View {
         // every later pass, and the record stays selectable either way.
         reattachedOpenSurfaceSessionIDs.formUnion(sessionIDs)
 
+        // A scope can already be showing a live surface by the time the pass reaches it — a
+        // restore plan realizes the scopes it covers, which on a two-scope launch is the whole
+        // candidate set. Realizing one again is a no-op, so the two outcomes are separated
+        // before the loop and reported apart (#1398).
+        let split = controller.split(
+            reattachableSessionIDs: sessionIDs,
+            isSurfaceRealized: { tileTreeStore.hasRealizedTerminalSurface(for: $0) }
+        )
+
         var rejoinedCount = 0
-        for sessionID in sessionIDs {
+        for sessionID in split.toRealize {
             guard !launchWorkLifetime.isWindowTornDown else { break }
             guard let session = tileTreeStore.sessions.first(where: { $0.id == sessionID }) else { continue }
             tileTreeStore.terminalSurfaceView(for: session)
@@ -2901,7 +2910,7 @@ struct ContentView: View {
         }
 
         restoreLog.info(
-            "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=\(rejoinedCount, privacy: .public)"
+            "[Reattach] trigger=\(trigger.rawValue, privacy: .public) candidates=\(candidates.count, privacy: .public) rejoined=\(rejoinedCount, privacy: .public) already_live=\(split.alreadyLive.count, privacy: .public)"
         )
     }
 

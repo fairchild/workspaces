@@ -172,6 +172,37 @@ struct MainWindowOpenSurfaceReattachController {
             .map(\.sessionID)
     }
 
+    /// The reattachable set split by what realizing each scope would actually do.
+    struct Split: Equatable, Sendable {
+        /// Scopes with no surface yet: realizing one is what attaches its tmux client.
+        let toRealize: [UUID]
+        /// Scopes already showing a live surface when the pass reached them.
+        let alreadyLive: [UUID]
+    }
+
+    /// Separate the scopes this pass attaches from the ones that were already attached when it
+    /// got there.
+    ///
+    /// A restore plan realizes the scopes it covers, so on a launch whose plan covers the whole
+    /// open set every candidate is a live surface by the time the pass runs. Realizing one
+    /// again is a no-op, and counting it as rejoined reported work the pass had not done —
+    /// which is the one question the diagnostic exists to answer (#1398).
+    func split(
+        reattachableSessionIDs: [UUID],
+        isSurfaceRealized: (UUID) -> Bool
+    ) -> Split {
+        var toRealize: [UUID] = []
+        var alreadyLive: [UUID] = []
+        for sessionID in reattachableSessionIDs {
+            if isSurfaceRealized(sessionID) {
+                alreadyLive.append(sessionID)
+            } else {
+                toRealize.append(sessionID)
+            }
+        }
+        return Split(toRealize: toRealize, alreadyLive: alreadyLive)
+    }
+
     /// Whether a session is the kind a launch may rejoin without side effects the user did
     /// not ask for: a directory-backed local scope, still on disk, carrying no command of
     /// its own. A remote (`customCommand`) session would re-run its SSH invocation, and an
