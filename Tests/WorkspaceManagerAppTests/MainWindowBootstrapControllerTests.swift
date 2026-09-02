@@ -403,13 +403,21 @@ struct MainWindowBootstrapControllerTests {
         }
     }
 
-    @Test("Restored surface clears invalid targets")
+    // These two once used an empty `repos` array to stand for "the target is
+    // gone". That is the reading #845 is about: an empty query array is equally
+    // consistent with "not delivered yet", and clearing on it destroys a valid
+    // saved selection. The claim they make is unchanged — a stale target is
+    // cleared — but it is now made against a delivered store, which is the only
+    // state that can support it.
+
+    @Test("Restored surface clears invalid targets against a delivered store")
     func restoredSurfaceClearsInvalidTargets() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let saved = MainWindowLastSurface(kind: .repoOverview, id: UUID())
 
         let decision = controller.restoredSurfaceDecision(
             rawValue: saved.rawValue,
-            repos: [],
+            repos: [repo],
             webSources: []
         )
 
@@ -421,13 +429,32 @@ struct MainWindowBootstrapControllerTests {
         }
     }
 
-    @Test("Sanitized last surface clears invalid stored targets")
+    @Test("Restored surface withholds judgement until the store has delivered")
+    func restoredSurfaceWithholdsJudgementBeforeDelivery() {
+        let saved = MainWindowLastSurface(kind: .repoOverview, id: UUID())
+
+        let decision = controller.restoredSurfaceDecision(
+            rawValue: saved.rawValue,
+            repos: [],
+            webSources: []
+        )
+
+        switch decision {
+        case .awaitingModels:
+            _ = Bool(true)
+        default:
+            Issue.record("Expected an undelivered repo list to decide nothing")
+        }
+    }
+
+    @Test("Sanitized last surface clears invalid stored targets against a delivered store")
     func sanitizedLastSurfaceClearsInvalidTarget() {
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
         let saved = MainWindowLastSurface(kind: .repoTerminal, id: UUID())
 
         let sanitized = controller.sanitizedLastSurfaceRawValue(
             rawValue: saved.rawValue,
-            repos: [],
+            repos: [repo],
             webSources: []
         )
 

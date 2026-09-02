@@ -174,6 +174,7 @@ struct MainWindowLaunchActionHandlerTests {
         selectRepoTerminal: @escaping (Repo, URL?) -> Void = { _, _ in },
         selectWebSource: @escaping (WebSource) -> Void = { _ in },
         applyLaunchSurface: @escaping (MainWindowLaunchSurface) -> Void = { _ in },
+        applyProvisionalLaunchSurface: @escaping (MainWindowLaunchSurface) -> Void = { _ in },
         schedulePerfAutoSelect: @escaping (Repo, Bool) -> Void = { _, _ in },
         focusWorkspaceWindow: @escaping () -> Void = {}
     ) -> MainWindowLaunchActionHandler.Actions {
@@ -186,6 +187,7 @@ struct MainWindowLaunchActionHandlerTests {
             selectRepoTerminal: selectRepoTerminal,
             selectWebSource: selectWebSource,
             applyLaunchSurface: applyLaunchSurface,
+            applyProvisionalLaunchSurface: applyProvisionalLaunchSurface,
             schedulePerfAutoSelect: schedulePerfAutoSelect,
             focusWorkspaceWindow: focusWorkspaceWindow
         )

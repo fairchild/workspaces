@@ -18,6 +18,8 @@ struct MainWindowLaunchActionHandler {
         let selectRepoTerminal: (Repo, URL?) -> Void
         let selectWebSource: (WebSource) -> Void
         let applyLaunchSurface: (MainWindowLaunchSurface) -> Void
+        /// Applies a surface for display without recording it as the last surface.
+        let applyProvisionalLaunchSurface: (MainWindowLaunchSurface) -> Void
         let schedulePerfAutoSelect: (Repo, Bool) -> Void
         let focusWorkspaceWindow: () -> Void
     }
@@ -148,6 +150,14 @@ struct MainWindowLaunchActionHandler {
         case .fallback(let surface):
             state.didResolveInitialSurface = true
             actions.applyLaunchSurface(surface)
+            return false
+
+        case .provisionalFallback(let surface):
+            // Deliberately leaves `didResolveInitialSurface` false: the launch has
+            // not resolved while a saved surface is still waiting for the models
+            // that would judge it, and the next delivery must be allowed to run
+            // this resolution again (#845).
+            actions.applyProvisionalLaunchSurface(surface)
             return false
         }
     }

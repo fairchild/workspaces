@@ -1592,6 +1592,9 @@ struct ContentView: View {
                 applyLaunchSurface: { surface in
                     applyLaunchSurface(surface)
                 },
+                applyProvisionalLaunchSurface: { surface in
+                    applyProvisionalLaunchSurface(surface)
+                },
                 schedulePerfAutoSelect: { repo, shouldAutoOpenNewWorkspace in
                     schedulePerfAutoSelection(repo, shouldAutoOpenNewWorkspace: shouldAutoOpenNewWorkspace)
                 },
@@ -1638,6 +1641,18 @@ struct ContentView: View {
     @MainActor
     private func applyLaunchSurface(_ surface: MainWindowLaunchSurface) {
         selectionController.applyLaunchSurface(surface)
+    }
+
+    /// Shows a surface without letting it become the saved one (#845). The
+    /// preserve-and-restore itself lives in `MainWindowProvisionalSurface` so a
+    /// test can reach it.
+    @MainActor
+    private func applyProvisionalLaunchSurface(_ surface: MainWindowLaunchSurface) {
+        MainWindowProvisionalSurface.applyPreservingSavedSurface(
+            readRawValue: { lastSurfaceRawValue },
+            writeRawValue: { lastSurfaceRawValue = $0 },
+            apply: { selectionController.applyLaunchSurface(surface) }
+        )
     }
 
     @MainActor

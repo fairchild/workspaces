@@ -32,6 +32,10 @@ struct MainWindowBootstrapController {
 
     enum RestoredSurfaceDecision {
         case none
+        /// The collection this surface would be resolved against is empty, so
+        /// its absence proves nothing. Neither restore nor clear; ask again when
+        /// there is something to ask against (#845).
+        case awaitingModels
         case clearInvalid
         case select(MainWindowLaunchSurface)
     }
@@ -182,6 +186,17 @@ struct MainWindowBootstrapController {
         return .select(targetName: targetName, source: selectedSource)
     }
 
+    /// Decides what a persisted last surface is worth against the current query
+    /// arrays: restore it, erase it, or say the question cannot be answered yet.
+    ///
+    /// The third answer is the one #845 is about. Erasing the raw value is
+    /// destructive and silent — the user's saved place is gone and the app looks
+    /// like it simply lost it — so it may only follow from evidence, and an empty
+    /// collection is not evidence. A missing id proves absence once the store has
+    /// delivered; before then, "no repos" and "no such repo" are the same
+    /// reading. Each kind is therefore gated on the collection its own lookup
+    /// walks: a delivered repo list says nothing about a web source still in
+    /// flight, and vice versa.
     func restoredSurfaceDecision(
         rawValue: String,
         repos: [Repo],
@@ -193,18 +208,24 @@ struct MainWindowBootstrapController {
 
         switch savedSurface.kind {
         case .repoOverview:
+            guard !repos.isEmpty else { return .awaitingModels }
             guard let repo = selectionCoordinator.repo(with: savedSurface.id, in: repos) else {
                 return .clearInvalid
             }
             return .select(.repoOverview(repo))
 
         case .repoTerminal:
+            guard !repos.isEmpty else { return .awaitingModels }
             guard let repo = selectionCoordinator.repo(with: savedSurface.id, in: repos) else {
                 return .clearInvalid
             }
             return .select(.repoTerminal(repo))
 
         case .workspaceTerminal:
+            // Workspaces are reached through their repos, so the repo list is the
+            // delivery this lookup depends on. A delivered repo holding no
+            // workspaces is a real answer; no repos at all is not one yet.
+            guard !repos.isEmpty else { return .awaitingModels }
             guard let workspace = selectionCoordinator.workspace(with: savedSurface.id, in: repos),
                 workspace.status != .archived
             else {
@@ -213,6 +234,7 @@ struct MainWindowBootstrapController {
             return .select(.workspace(workspace))
 
         case .webView:
+            guard !webSources.isEmpty else { return .awaitingModels }
             guard let source = selectionCoordinator.webSource(with: savedSurface.id, in: webSources) else {
                 return .clearInvalid
             }
@@ -228,7 +250,7 @@ struct MainWindowBootstrapController {
         switch restoredSurfaceDecision(rawValue: rawValue, repos: repos, webSources: webSources) {
         case .clearInvalid:
             return ""
-        case .none, .select:
+        case .none, .awaitingModels, .select:
             return rawValue
         }
     }
