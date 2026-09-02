@@ -1,19 +1,28 @@
 #!/bin/bash
 # ============================================================================
-# verify-release-bundle.sh - Verify Developer ID signing across app code objects
+# verify-release-bundle.sh - Verify a packaged app bundle before it ships
 # ============================================================================
 #
-# Checks that a packaged .app bundle and its nested Mach-O code objects are
-# signed for Developer ID distribution before notarization.
+# Two groups of assertions over a packaged .app: its structure (bundle naming,
+# Info.plist identity, and the resources the app needs at runtime), and its
+# Developer ID signing across nested Mach-O code objects.
+#
+# The structure group needs no secrets and no signature, so `--structure-only`
+# runs it against an unsigned build — which is what lets CI catch a resource
+# layout break on the PR that causes it rather than at the release (#1305).
+# Bundling in `build-release.sh` is fail-open on those copies, so these
+# assertions are the only thing standing behind them.
 #
 # Usage:
 #   ./scripts/verify-release-bundle.sh build/WorkSpaces.app
+#   ./scripts/verify-release-bundle.sh --structure-only build/WorkSpaces.app
 #
 # ============================================================================
 
 set -euo pipefail
 
-APP_BUNDLE="${1:-}"
+APP_BUNDLE=""
+STRUCTURE_ONLY=false
 EXPECTED_BUNDLE_NAME="WorkSpaces.app"
 EXPECTED_DISPLAY_NAME="WorkSpaces"
 EXPECTED_EXECUTABLE_NAME="WorkspaceManager"
@@ -27,12 +36,15 @@ trap cleanup EXIT
 
 usage() {
     cat <<'EOF'
-Usage: ./scripts/verify-release-bundle.sh <WorkSpaces.app>
+Usage: ./scripts/verify-release-bundle.sh [--structure-only] <WorkSpaces.app>
 
-Verifies that the packaged app bundle and nested Mach-O code objects are signed
-with a non-ad-hoc Developer ID signature and a real team identifier. Also
-verifies release identity metadata and bundled Ghostty resources required at
-runtime are present.
+Verifies release identity metadata and the bundled resources required at runtime,
+then that the app bundle and nested Mach-O code objects are signed with a
+non-ad-hoc Developer ID signature and a real team identifier.
+
+  --structure-only   Run the structure assertions and skip signing entirely.
+                     For an unsigned build, where the resource-layout checks are
+                     still meaningful and the signature ones cannot be.
 EOF
 }
 
@@ -132,23 +144,68 @@ collect_code_objects() {
     done < <(find "$root" -type f -print0)
 }
 
-[[ $# -eq 1 ]] || {
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --structure-only)
+            STRUCTURE_ONLY=true
+            shift
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        -*)
+            usage
+            exit 1
+            ;;
+        *)
+            [[ -z "$APP_BUNDLE" ]] || {
+                usage
+                exit 1
+            }
+            APP_BUNDLE="$1"
+            shift
+            ;;
+    esac
+done
+
+[[ -n "$APP_BUNDLE" ]] || {
     usage
     exit 1
 }
 
-require_cmd codesign
-require_cmd file
-require_cmd find
 [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
 
 APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle not found: $APP_BUNDLE"
+
+# Structure: naming, Info.plist identity, and the resources the app reads at runtime.
+# Nothing here depends on a signature, which is the whole reason it can run on the
+# unsigned CI build.
 verify_bundle_identity "$APP_BUNDLE"
 [[ -d "$APP_BUNDLE/Contents/Resources/ghostty" ]] || fail "Missing Ghostty resources directory"
 [[ -d "$APP_BUNDLE/Contents/Resources/terminfo" ]] || fail "Missing bundled terminfo directory"
+# The directory existing is not the runtime's test. `GhosttyResourcesLocator`
+# .isUsableResourcesDirectory treats the bundled resources as usable only when this
+# compiled terminfo entry is present, so it is what the app actually requires — and it
+# is what a partial copy drops while still leaving the directories behind, since the
+# Ghostty copy discards stderr and forces exit zero (`build-release.sh:492`). Asserting
+# only the directories would bless exactly that state.
+[[ -f "$APP_BUNDLE/Contents/Resources/terminfo/78/xterm-ghostty" ]] \
+    || fail "Missing compiled terminfo entry terminfo/78/xterm-ghostty (the runtime's usability test)"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/event-forwarder.sh" ]] || fail "Missing Claude hook event forwarder"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/statusline.sh" ]] || fail "Missing Claude status-line forwarder"
+
+if [[ "$STRUCTURE_ONLY" == true ]]; then
+    echo "Verified release bundle structure for $APP_BUNDLE (signing not checked)"
+    exit 0
+fi
+
+# Signing. Required commands are checked here rather than up top so a structure-only
+# run on a machine without them still does the work it can.
+require_cmd codesign
+require_cmd file
+require_cmd find
 
 CODE_OBJECTS_FILE="$TMP_DIR/code-objects.txt"
 : >"$CODE_OBJECTS_FILE"
