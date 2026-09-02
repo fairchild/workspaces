@@ -601,6 +601,17 @@ final class TileTreeStore: ObservableObject {
         }
     }
 
+    /// Every live session this run is holding: coordinator primaries plus every non-primary
+    /// leaf of every tab's tree.
+    ///
+    /// The pre-restore ownership pass reads this rather than `sessions`, which is primaries
+    /// only. A split seed this launch created is just as much its own to retire, and leaving
+    /// it out means the session survives for a resume surface to `-A`-attach to — which
+    /// silently drops that surface's resume command (#1267).
+    var allLiveSessions: [HostTerminalSession] {
+        coordinator.sessions + derivedSplitSessions
+    }
+
     /// Live split sessions for a tab, including depth ≥ 2 panes. This is the public read path for
     /// app controllers that need every non-primary surface; the legacy `splitSession` projection above
     /// intentionally remains depth-1 only.

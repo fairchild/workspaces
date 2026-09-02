@@ -2755,9 +2755,11 @@ struct ContentView: View {
         // Every host session holding a name, not one of them: two surfaces can share a
         // tmux name while only one carries the record proving this launch created the
         // session behind it, and collapsing to an arbitrary first would strand the seed
-        // the other one's record authorizes retiring (#1267).
+        // the other one's record authorizes retiring (#1267). Split surfaces count too —
+        // `sessions` is primaries only, and a split seed is no less this launch's to
+        // retire than a primary one.
         var ownedHostSessionIDsByTmuxName: [String: [UUID]] = [:]
-        for session in tileTreeStore.sessions {
+        for session in tileTreeStore.allLiveSessions {
             ownedHostSessionIDsByTmuxName[session.effectiveTmuxSessionName, default: []].append(session.id)
         }
         let ownedTmuxSessionNames = Set(ownedHostSessionIDsByTmuxName.keys)
