@@ -170,11 +170,13 @@ resolve_ghostty_resources_dir() {
 # holds here: a caller-provided WORKSPACES_PREFERENCES_SUITE is used as-is and never reset
 # or removed, which also means the per-sample wipe `--preferences clean` promises is the
 # caller's to perform. Only a suite this run invented is a suite this run may clear.
-# Trimmed the way LaunchPreferences trims it, so the name pinned here is the name the app
-# resolves. Comparing an untrimmed value against a trimmed one refuses a suite that was
-# honoured — failing closed, but on the lane's own bookkeeping rather than on the launch.
-if [[ -n "${WORKSPACES_PREFERENCES_SUITE:-}" ]]; then
-    PREFERENCES_SUITE="$(printf '%s' "$WORKSPACES_PREFERENCES_SUITE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+# Trimmed, then treated as unset when nothing survives the trim — the two steps
+# LaunchPreferences.trimmed(_:) takes. Testing the raw value first adopts a
+# whitespace-only override as an empty caller-owned pin, which the app ignores
+# outright, leaving the lane pinned to a suite no launch will ever report.
+CALLER_PREFERENCES_SUITE="$(printf '%s' "${WORKSPACES_PREFERENCES_SUITE:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+if [[ -n "$CALLER_PREFERENCES_SUITE" ]]; then
+    PREFERENCES_SUITE="$CALLER_PREFERENCES_SUITE"
     PREFERENCES_SUITE_OWNER="caller"
 else
     PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
@@ -408,7 +410,7 @@ PREFERENCES_MARKER = "[LaunchPreferences]"
 def read_preferences_entry(text):
     """Fields of the last [LaunchPreferences] entry, or None when the log has none.
 
-    The last entry is the one that decides the capture. The app logs once per
+    The last such line is the one that decides the capture. The app logs once per
     resolution, so a relaunch that fell back appends after the isolated line that
     preceded it, and reading the first match lets that earlier line vouch for a
     launch it did not describe.
@@ -417,16 +419,22 @@ def read_preferences_entry(text):
     perf-runner.sh's awk reader does. A key appearing twice on one physical line has
     no answer, so it reads as absent rather than resolving to whichever came first.
     """
-    index = text.rfind(PREFERENCES_MARKER)
-    if index < 0:
+    entries = [line for line in text.splitlines() if PREFERENCES_MARKER in line]
+    if not entries:
         return None
-    entry = text[index + len(PREFERENCES_MARKER):].split("\n", 1)[0]
+    # The marker is a log prefix, so the first one on a line is the real one and the
+    # rest of that line is the entry — which is what perf-runner.sh's grep takes.
+    # Searching the whole text backwards instead finds a marker inside a suite name
+    # and reads the tail of that name as the entry.
+    entry = entries[-1].split(PREFERENCES_MARKER, 1)[1]
     seen = {}
     for token in entry.split():
         key, separator, value = token.partition("=")
         if separator:
             seen.setdefault(key, []).append(value)
     return {key: values[0] if len(values) == 1 else None for key, values in seen.items()}
+
+
 run_index_pattern = re.compile(r"run-(?P<index>\d+)\.log$")
 
 metric_order = [
@@ -693,7 +701,7 @@ for sample in launch_samples:
         isolation_failures.append(
             f"  run={sample['run']}: domain=scratch but isolated={isolated} — the defaults system refused the suite"
         )
-    elif suite is None:
+    elif not suite:
         isolation_failures.append(
             f"  run={sample['run']}: domain=scratch isolated=true, but the line reported no suite= "
             f"field — nothing names the store that backed the launch as {preferences_suite}"

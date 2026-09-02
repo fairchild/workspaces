@@ -314,6 +314,24 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
         )
         self.assert_refused(body, "no readable domain=")
 
+    def test_a_field_repeated_on_one_line_has_no_answer(self) -> None:
+        """Two values for one key is unreadable, including when the second is empty.
+
+        A reader that keeps the last non-empty value silently prefers whichever token
+        it happened to see, which is a choice no log entry authorised. The empty case
+        is the one that hides: the shell drops a trailing empty line from a command
+        substitution, so a duplicate that reports nothing looks like no duplicate.
+        """
+        for repeated in (
+            f"domain=scratch suite={self.SUITE} isolated=true domain=",
+            f"domain=scratch suite={self.SUITE} isolated=true suite=",
+            f"domain=scratch suite={self.SUITE} isolated=true isolated=",
+            f"domain=scratch suite={self.SUITE} isolated=true domain=standard",
+            f"domain=scratch suite={self.SUITE} isolated=true suite=perf.other",
+        ):
+            with self.subTest(line=repeated):
+                self.assert_refused(f"{self.PREFIX}{repeated}\n", "[preferences]")
+
     def test_the_last_resolution_in_the_log_is_the_one_judged(self) -> None:
         """A relaunch that fell back must not be masked by an earlier isolated line."""
         body = (
@@ -936,6 +954,27 @@ class DebugLaneIsolationTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("no readable domain", result.stdout)
+
+    def test_a_suite_name_containing_the_marker_is_read_as_one_token(self) -> None:
+        """The marker is a log prefix, so the first one on a line is the real one.
+
+        Searching backwards through the whole log finds a marker embedded in a suite
+        name and reads the tail of that name as the entry, which the installed lane —
+        whose grep takes the rest of the line from the first marker — does not do.
+        The name is absurd, but a parser disagreement between the two lanes is the
+        thing this pair of checks exists to not have.
+        """
+        suite = "perf.[LaunchPreferences].scratch"
+        with_marker_pin = self.SUITE
+        try:
+            self.SUITE = suite
+            result = self.run_summarizer(
+                [self.run_log(f"[LaunchPreferences] domain=scratch suite={suite} isolated=true")]
+            )
+        finally:
+            self.SUITE = with_marker_pin
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_a_foreign_suite_is_still_an_isolation_failure(self) -> None:
         result = self.run_summarizer(

@@ -51,11 +51,13 @@ CURRENT_PROTOCOL_EPOCH="deterministic-delivery-v1"
 #
 # Same ownership contract as perf-baseline.sh: a caller-provided suite is used as-is and
 # never reset or removed, and only a suite this run invented is a suite this run may clear.
-# Trimmed the way LaunchPreferences trims it, so the name pinned here is the name the app
-# resolves. Comparing an untrimmed value against a trimmed one refuses a suite that was
-# honoured — failing closed, but on the lane's own bookkeeping rather than on the launch.
-if [[ -n "${WORKSPACES_PREFERENCES_SUITE:-}" ]]; then
-    PREFERENCES_SUITE="$(printf '%s' "$WORKSPACES_PREFERENCES_SUITE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+# Trimmed, then treated as unset when nothing survives the trim — the two steps
+# LaunchPreferences.trimmed(_:) takes. Testing the raw value first adopts a
+# whitespace-only override as an empty caller-owned pin, which the app ignores
+# outright, leaving the lane pinned to a suite no launch will ever report.
+CALLER_PREFERENCES_SUITE="$(printf '%s' "${WORKSPACES_PREFERENCES_SUITE:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+if [[ -n "$CALLER_PREFERENCES_SUITE" ]]; then
+    PREFERENCES_SUITE="$CALLER_PREFERENCES_SUITE"
     PREFERENCES_SUITE_OWNER="caller"
 else
     PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
@@ -100,8 +102,21 @@ assert_preferences_isolated() {
     fi
     # Field-anchored rather than a substring match: the suite name is free text and a
     # loose pattern would happily read a value out of the middle of one.
+    # Prints nothing unless the key appears exactly once, so a repeated field reads as
+    # absent and the caller's emptiness branch refuses it. Printing every match instead
+    # loses a trailing empty duplicate — the shell strips it from the substitution — so
+    # `domain=scratch ... domain=` read back as a clean `scratch`.
     read_field() {
-        awk -v key="$1" '{for (i = 1; i <= NF; i++) if (index($i, key "=") == 1) print substr($i, length(key) + 2)}' <<<"$line"
+        awk -v key="$1" '
+            {
+                for (i = 1; i <= NF; i++)
+                    if (index($i, key "=") == 1) {
+                        seen++
+                        value = substr($i, length(key) + 2)
+                    }
+            }
+            END { if (seen == 1) print value }
+        ' <<<"$line"
     }
     domain="$(read_field domain)"
     isolated="$(read_field isolated)"

@@ -53,7 +53,7 @@ current n/a ms (n/a of target)
 - OS: `26.6.2` (build `25G83`)
 - Hardware: `arm64` / `Mac16,13`
 - Portfolio context: discovered=n/a imported=n/a
-- Sample setup: runs=n/a, sleep=n/as
+- Sample setup: runs=n/a, sleep=n/a
 
 ## Recording Cadence
 
