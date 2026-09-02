@@ -1,10 +1,11 @@
 /*
- * Pure gate logic for scripts/evidence.mjs — the manifest of captures a run
- * owes, the completion check that makes a zero- or partial-PNG success
- * impossible, the run deadline that turns a stall into a diagnosable failure,
- * and the latch that turns a silent exit into a loud one (#976). I/O-free so
- * the gate's own behavior is unit-testable (see evidence-core.test.mjs),
- * mirroring the validate-core.mjs / clean-core.mjs pattern.
+ * Gate logic for scripts/evidence.mjs — the manifest of captures a run owes,
+ * the completion check that makes a zero- or partial-PNG success impossible,
+ * the run deadline that turns a stall into a diagnosable failure, and the latch
+ * that turns a silent exit into a loud one (#976). The manifest and the check
+ * are pure like validate-core.mjs / clean-core.mjs; the deadline and the latch
+ * are not — they own a timer and a process listener — so both take those
+ * collaborators as parameters and stay testable without a real process.
  */
 
 /** Every capture is taken once per theme. */
@@ -60,12 +61,30 @@ export function expectedCaptureFiles(
 	return names.flatMap((name) => themes.map((theme) => `${name}-${theme}.png`));
 }
 
-/** Captures the run owed but never wrote, or wrote as an empty file. */
-export function findMissingCaptures(expected, sizeByFile) {
+/** The first 8 bytes of every PNG. A file that lacks them is not a capture. */
+export const PNG_SIGNATURE = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
+
+function hasPNGSignature(header) {
+	return (
+		header?.length >= PNG_SIGNATURE.length &&
+		PNG_SIGNATURE.every((byte, index) => header[index] === byte)
+	);
+}
+
+/**
+ * Captures the run owed but never wrote, wrote empty, or wrote as something
+ * that is not a PNG. `captures` maps filename → { size, header }, the header
+ * being the file's first bytes; checking the signature rather than only the
+ * size means a truncated or half-written screenshot fails the gate too.
+ */
+export function findMissingCaptures(expected, captures) {
 	return expected.flatMap((file) => {
-		const size = sizeByFile.get(file);
-		if (size === undefined) return [{ file, reason: "never written" }];
-		if (size === 0) return [{ file, reason: "written empty" }];
+		const capture = captures.get(file);
+		if (capture === undefined) return [{ file, reason: "never written" }];
+		if (capture.size === 0) return [{ file, reason: "written empty" }];
+		if (!hasPNGSignature(capture.header)) {
+			return [{ file, reason: "not a PNG" }];
+		}
 		return [];
 	});
 }

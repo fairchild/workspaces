@@ -19,7 +19,15 @@
  * (#976).
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import {
+	closeSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readSync,
+	rmSync,
+	statSync,
+} from "node:fs";
 import path from "node:path";
 import {
 	createRunDeadline,
@@ -28,6 +36,7 @@ import {
 	expectedCaptureFiles,
 	findMissingCaptures,
 	installCompletionLatch,
+	PNG_SIGNATURE,
 	THEMES,
 } from "./evidence-core.mjs";
 import {
@@ -506,16 +515,20 @@ async function runWalk() {
  */
 function assertWalkComplete() {
 	const expected = expectedCaptureFiles();
-	const sizeByFile = new Map();
+	const captures = new Map();
 	for (const entry of readdirSync(OUTPUT_DIR, { withFileTypes: true })) {
-		if (entry.isFile() && entry.name.endsWith(".png")) {
-			sizeByFile.set(
-				entry.name,
-				statSync(path.join(OUTPUT_DIR, entry.name)).size,
-			);
+		if (!entry.isFile() || !entry.name.endsWith(".png")) continue;
+		const file = path.join(OUTPUT_DIR, entry.name);
+		const header = Buffer.alloc(PNG_SIGNATURE.length);
+		const handle = openSync(file, "r");
+		try {
+			readSync(handle, header, 0, header.length, 0);
+		} finally {
+			closeSync(handle);
 		}
+		captures.set(entry.name, { size: statSync(file).size, header });
 	}
-	const missing = findMissingCaptures(expected, sizeByFile);
+	const missing = findMissingCaptures(expected, captures);
 	if (missing.length > 0) {
 		throw new Error(
 			describeMissingCaptures(OUTPUT_DIR, missing, expected.length),

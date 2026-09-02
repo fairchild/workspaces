@@ -11,8 +11,12 @@ import {
 	expectedCaptureFiles,
 	findMissingCaptures,
 	installCompletionLatch,
+	PNG_SIGNATURE,
 	THEMES,
 } from "./evidence-core.mjs";
+
+/** A capture entry as assertWalkComplete builds it: size plus leading bytes. */
+const png = (size = 4096) => ({ size, header: Buffer.from(PNG_SIGNATURE) });
 
 const SCRIPTS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +36,20 @@ describe("capture manifest", () => {
 
 		expect(walked.size).toBeGreaterThan(0);
 		expect([...walked].sort()).toEqual([...EXPECTED_CAPTURE_NAMES].sort());
+	});
+
+	test("pins the walk's shape, so shrinking it has to be deliberate", () => {
+		// THEMES and ERROR_SURFACE_CASES feed both the walk and the manifest, so
+		// dropping a theme or an error case would otherwise shrink the run and the
+		// expectation together and stay green. These are the counts under review.
+		expect(THEMES).toEqual(["light", "dark"]);
+		expect(ERROR_SURFACE_CASES.map(([name]) => name)).toEqual([
+			"session-error-provisioning",
+			"session-error-sandbox-died",
+			"session-error-stream",
+		]);
+		expect(EXPECTED_CAPTURE_NAMES).toHaveLength(25);
+		expect(expectedCaptureFiles()).toHaveLength(50);
 	});
 
 	test("expands to one file per capture per theme", () => {
@@ -57,7 +75,7 @@ describe("completion check", () => {
 	test("a half-finished walk fails on what it never reached", () => {
 		const missing = findMissingCaptures(
 			expected,
-			new Map([["a-light.png", 4096]]),
+			new Map([["a-light.png", png()]]),
 		);
 
 		expect(missing).toEqual([{ file: "b-light.png", reason: "never written" }]);
@@ -67,26 +85,47 @@ describe("completion check", () => {
 		const missing = findMissingCaptures(
 			expected,
 			new Map([
-				["a-light.png", 4096],
-				["b-light.png", 0],
+				["a-light.png", png()],
+				["b-light.png", { size: 0, header: Buffer.alloc(0) }],
 			]),
 		);
 
 		expect(missing).toEqual([{ file: "b-light.png", reason: "written empty" }]);
 	});
 
-	test("a complete walk has nothing missing", () => {
-		const sizes = new Map(expected.map((file) => [file, 4096]));
+	test("a file that is not a PNG does not count as a capture", () => {
+		const missing = findMissingCaptures(
+			expected,
+			new Map([
+				["a-light.png", png()],
+				["b-light.png", { size: 12, header: Buffer.from("not a png!!!") }],
+			]),
+		);
 
-		expect(findMissingCaptures(expected, sizes)).toEqual([]);
+		expect(missing).toEqual([{ file: "b-light.png", reason: "not a PNG" }]);
+	});
+
+	test("a truncated screenshot fails on its header, not its size", () => {
+		const missing = findMissingCaptures(
+			["a-light.png"],
+			new Map([["a-light.png", { size: 3, header: Buffer.from([137, 80, 78]) }]]),
+		);
+
+		expect(missing).toEqual([{ file: "a-light.png", reason: "not a PNG" }]);
+	});
+
+	test("a complete walk has nothing missing", () => {
+		const captures = new Map(expected.map((file) => [file, png()]));
+
+		expect(findMissingCaptures(expected, captures)).toEqual([]);
 	});
 
 	test("extra files from an unrelated run do not satisfy the manifest", () => {
 		const missing = findMissingCaptures(
 			expected,
 			new Map([
-				["a-light.png", 4096],
-				["something-else.png", 4096],
+				["a-light.png", png()],
+				["something-else.png", png()],
 			]),
 		);
 
