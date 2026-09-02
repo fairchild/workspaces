@@ -857,13 +857,16 @@ struct GhosttyTerminalConfigTests {
         )
 
         let observed = try config.withCValue(view: NSView()) { cConfig in
-            // The buffer's extent, pinned before anything dereferences it.
-            // `withCValue` sets `env_vars` and `env_var_count` from independent
-            // expressions, so a count larger than the buffer reads past the
-            // allocation — undefined behavior, not a failing assertion — and a
-            // null pointer with a non-zero count yields an empty dictionary and
-            // downstream failures that never name the broken invariant. These are
-            // `#require`, so a mismatch stops the test here instead of there.
+            // The reported row count, pinned before anything dereferences it.
+            // (The count is what a C pointer lets a test check; the allocation's
+            // real extent is not discoverable, so a buffer short of a count that
+            // still matches stays out of reach.) `withCValue` sets `env_vars` and
+            // `env_var_count` from independent expressions, so a count larger
+            // than the buffer reads past the allocation — undefined behavior, not
+            // a failing assertion — and a null pointer with a non-zero count
+            // yields an empty dictionary and downstream failures that never name
+            // the broken invariant. These are `#require`, so a mismatch stops the
+            // test here instead of there.
             try #require(cConfig.env_var_count == config.environmentVariables.count)
             let envVars = try #require(cConfig.env_vars)
             let environmentPairs = (0..<cConfig.env_var_count).map { index in
@@ -898,7 +901,11 @@ struct GhosttyTerminalConfigTests {
     /// answer. This one marshals a session that *does* carry one — the shape where
     /// embedding would be the tempting implementation — and reads the field back
     /// through the same accessor after a value is written into it, so "absent"
-    /// is a measurement rather than a reader that can never see anything.
+    /// is a measurement rather than a reader that can never see anything. That
+    /// write is a falsifiability control on the read, not coverage: it exercises
+    /// no production marshalling, no `ghostty_surface_new`, and no initial-input
+    /// parsing or cloning. The assertions that carry weight are the marshalled
+    /// nil and the command that does not smuggle the initial command instead.
     @Test("withCValue leaves initial_input unset for a session carrying an initial command")
     @MainActor
     func cValueNeverEmbedsInitialInput() throws {
@@ -927,8 +934,9 @@ struct GhosttyTerminalConfigTests {
             }
         }
 
-        // The present case. Fails if the read can no longer see an `initial_input`
-        // that is there, which is the only way the absence pin below goes vacuous.
+        // The control, not coverage: fails if the read can no longer see an
+        // `initial_input` that is there, which is the only way the pin below
+        // goes vacuous. Nothing here exercises production marshalling.
         #expect(observed.present == initialCommand)
         #expect(observed.marshalled == nil)
         // The command is the plain login-shell/tmux wrap either way: re-adding

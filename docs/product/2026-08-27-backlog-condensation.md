@@ -8,6 +8,11 @@
 > different binding constraint than the one this record originally named. See
 > § 7.
 >
+> **Correction, 2026-09-02 (#1520).** This record calls #889 the lane's "root"
+> and #1266's "probable root". Both readings are superseded: #889 tracks a
+> symptom, its libghostty attribution has not held up, and the loss point is
+> unknown. The lane structure the record decided is unaffected.
+>
 > **Staleness test, in order:** if `[D4]`, `[A3]` and `[F2]` are still the open
 > milestones, this record is current. If a `[D5]` or `[A4]` exists, a lane has
 > moved on and § 3 is history. Re-read § 1's counts against `gh issue list`

@@ -214,7 +214,7 @@ written against S1 as soon as S1's contract is defined. S6 last.
 
 | Issue | Relationship |
 | --- | --- |
-| #889 | Root cause. Widened by this plan (S0). |
+| #889 | Tracks the symptom. Widened by this plan (S0). Called "root cause" when this plan was written; see the 2026-09-02 correction in § Summary — the loss point is unknown. |
 | #1418 | Graduation target (S6). Its "app restart needs none of this" premise is wrong; corrected in a comment. |
 | #1417 | Half of S2 — ids recorded while the app is dead. #1480 is the other half. |
 | #1416 | Launch provenance; informs the S3 offer text, not the executed command. |

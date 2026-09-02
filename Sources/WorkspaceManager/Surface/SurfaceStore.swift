@@ -132,8 +132,9 @@ final class SurfaceStore {
     /// `working_directory` — is written into `ghostty_surface_config_s`, and staged
     /// spawn-layer runs delivered those three to every surface with this repair path
     /// enabled and firing zero times. (`initial_input` is never launch-embedded here,
-    /// so nothing exercises it.) Nothing proves what libghostty does with the struct
-    /// after it is handed over, and the
+    /// so nothing exercises it.) The seam test alone proves nothing about what
+    /// libghostty does with the struct after it is handed over; the staged runs show
+    /// delivery for the runs that were made and no more. The
     /// 2026-08-30 installed-build restore — 12 of 15 surfaces up bare — is still
     /// unexplained. Treat the loss point as unknown rather than as settled upstream
     /// behavior.

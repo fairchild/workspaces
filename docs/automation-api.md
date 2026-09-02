@@ -124,8 +124,10 @@ Two optional fields are available:
 
 `fromRef` must be a plausible git ref name; empty, whitespace-padded,
 option-like, or shell-metacharacter-shaped values fail `invalid_request`. The
-route does not support `startCommand`; that option is intentionally blocked by
-the open libghostty issue tracked as #889.
+route does not support `startCommand`; that option is intentionally blocked
+pending #889, which tracks restored surfaces coming up unconfigured. #889 was
+filed as a libghostty defect; that attribution has not held up and the loss
+point is unknown (#1520).
 
 ## Focus A Neighboring Tile
 
