@@ -442,12 +442,14 @@ struct MainWindowSelectionController {
     }
 
     func handleSelectedWebSourceRemoval(_ source: MainWindowWebSourceSelection) {
-        // The same rule the restore path follows (#845): an empty query array is
-        // not evidence the source is gone, so it cannot authorise erasing the
-        // saved surface. A source that genuinely went away leaves its siblings
-        // behind; a query that momentarily emptied leaves nothing behind at all.
-        if !dependencies.webSources().isEmpty,
-            let lastSurface = MainWindowLastSurface.decode(from: dependencies.lastSurfaceRawValue.wrappedValue),
+        // The restore path's rule — an empty array is not evidence — deliberately
+        // does not apply here (#845). This runs from `reconcileSelectionAfterModelChange`,
+        // which fires *because* a model change was observed, and only for a source
+        // that was selected and is therefore known to have been present. That
+        // sequence is the delivery evidence the launch path lacks. Requiring a
+        // non-empty array here would refuse to clear when the removed source was
+        // the last one, which is the ordinary case.
+        if let lastSurface = MainWindowLastSurface.decode(from: dependencies.lastSurfaceRawValue.wrappedValue),
             lastSurface.kind == .webView,
             lastSurface.id == source.webSourceID
         {
