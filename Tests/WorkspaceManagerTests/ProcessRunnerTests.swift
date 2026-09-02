@@ -75,10 +75,25 @@ struct ProcessRunnerTests {
 
     @Test("Returns after exit when a backgrounded child holds the pipes open")
     func returnsWhenBackgroundedChildHoldsPipes() async throws {
+        // The grandchild is deliberately long-lived and deliberately reaped: it must
+        // outlive any elapsed time the assertion permits, and it must not outlive the
+        // test run. It records its own pid so the `defer` can end it.
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("process-runner-bg-\(UUID().uuidString).pid")
+        defer {
+            if let raw = try? String(contentsOf: pidFile, encoding: .utf8),
+                let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+            {
+                kill(pid, SIGKILL)
+            }
+            try? FileManager.default.removeItem(at: pidFile)
+        }
+
         let start = ContinuousClock.now
         let command = [
             "echo before-background",
             "sleep \(Self.unreachableChildLifetimeSeconds) &",
+            "echo $! > \(pidFile.path)",
             "exit 0",
         ].joined(separator: "\n")
 
@@ -123,12 +138,14 @@ struct ProcessRunnerTests {
         #expect(elapsed < .seconds(await Self.spawnBoundedCeiling()))
     }
 
-    /// How long the child in the two timeout tests sleeps. Far beyond any elapsed time
-    /// the ceiling below permits, so "the runner returned because the child exited" and
-    /// "the runner returned because it enforced its own deadline" can never be confused
-    /// — which is what the previous fixed 30s child and 25s bound left one contended
-    /// runner away from (#1033).
-    private static let unreachableChildLifetimeSeconds = 600
+    /// How long the child in the two timeout tests sleeps: comfortably past the ceiling
+    /// below, so "the runner returned because the child exited" and "the runner returned
+    /// because it enforced its own deadline" can never be confused — which is what the
+    /// previous fixed 30s child and 25s bound left one contended runner away from
+    /// (#1033). It is the cost of a *regression* too, since a runner that waited for its
+    /// child would take this long to fail, so it is sized to clear the ceiling by a wide
+    /// margin rather than by the widest one imaginable.
+    private static let unreachableChildLifetimeSeconds = 300
 
     /// Upper bound on a run that should finish in well under a second of real work,
     /// scaled from this machine's measured cost of spawning a child and hearing back.

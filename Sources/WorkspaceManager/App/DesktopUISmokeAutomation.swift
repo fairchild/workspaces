@@ -389,6 +389,11 @@
             apiSelectCompletionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 _ = await self.waitForSurfaceFocus(after: focusBaseline, timeout: .seconds(15))
+                // The wait returning is not the same as the wait being wanted. A superseded
+                // task now returns *immediately* rather than running to its timeout, so
+                // completing the scenario here unconditionally would report complete earlier
+                // than the bug ever did.
+                guard !Task.isCancelled else { return }
                 await self.noteScenarioComplete()
             }
         }
@@ -427,6 +432,10 @@
         /// `surface_focus_not_applicable` milestone marks the absence as a mode
         /// property rather than a timeout.
         func waitForSurfaceFocus(after baseline: Int, timeout: Duration) async -> Bool {
+            // Before the not-applicable branch, not after: a task cancelled before it first
+            // ran must not spend the one-shot `surface_focus_not_applicable` milestone on
+            // behalf of a wait nobody is listening to.
+            guard !Task.isCancelled else { return false }
             guard surfaceFocusPossible else {
                 if !emittedSurfaceFocusNotApplicable {
                     emittedSurfaceFocusNotApplicable = true

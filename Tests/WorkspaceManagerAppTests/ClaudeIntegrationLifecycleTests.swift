@@ -48,7 +48,7 @@ struct ClaudeIntegrationLifecycleTests {
     /// Helper: configures the singleton with a fresh ephemeral defaults suite and a
     /// stub installer, then waits for the lifecycle's startup Task to finish so the
     /// (a)synchronous install() invocation has been observed.
-    private func runStart(optedIn: Bool) async -> StubInstaller {
+    private func runStart(optedIn: Bool) async throws -> StubInstaller {
         let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.set(optedIn, forKey: ClaudeIntegrationDefaults.optedInKey)
@@ -69,7 +69,11 @@ struct ClaudeIntegrationLifecycleTests {
         // install has either happened or been skipped, and there is nothing left to
         // wait for. Polling with a 15s ceiling read `count → 0` on a loaded runner —
         // not a second install, the first one simply had not happened yet (#1306).
-        await ClaudeIntegrationLifecycle.shared.startupTask?.value
+        // Required, not optional-chained: `startupTask?.value` on a nil task awaits
+        // nothing and would let the not-opted-in case assert `count == 0` against a
+        // lifecycle that never started.
+        let startup = try #require(ClaudeIntegrationLifecycle.shared.startupTask)
+        await startup.value
 
         // Tear the listener down so its actor doesn't keep the socket file around.
         await ClaudeIntegrationLifecycle.shared.stop()
@@ -78,15 +82,15 @@ struct ClaudeIntegrationLifecycleTests {
     }
 
     @Test("install() is called exactly once on launch when the user has opted in")
-    func optedInLaunchTriggersSilentInstall() async {
-        let stub = await runStart(optedIn: true)
+    func optedInLaunchTriggersSilentInstall() async throws {
+        let stub = try await runStart(optedIn: true)
         let count = await stub.installCallCount
         #expect(count == 1)
     }
 
     @Test("install() is not called when the user has not opted in")
-    func notOptedInLaunchDoesNotInstall() async {
-        let stub = await runStart(optedIn: false)
+    func notOptedInLaunchDoesNotInstall() async throws {
+        let stub = try await runStart(optedIn: false)
         let count = await stub.installCallCount
         #expect(count == 0)
     }

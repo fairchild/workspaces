@@ -312,6 +312,56 @@ struct DesktopUISmokeAutomationTests {
         #expect(events.last == "scenario_complete")
     }
 
+    /// The other half of #1316, on the real completion task rather than a standalone wait.
+    ///
+    /// Cancelling that task is what `noteAwaitingAPISelect` does when a select is
+    /// superseded, and the task's body calls `noteScenarioComplete` after its wait
+    /// returns. Once the wait observes cancellation it returns *immediately*, so a body
+    /// that completed the scenario unconditionally would report complete earlier than the
+    /// original bug ever did — before the surface it is waiting for has focused at all.
+    /// The ordering is the assertion: `scenario_complete` must come after
+    /// `surface_focused`, which is the one thing a prematurely-completing task cannot do.
+    @Test("Superseding an API-select wait does not complete the scenario early")
+    @MainActor
+    func supersedingAnAPISelectWaitDoesNotCompleteTheScenarioEarly() async throws {
+        let eventsURL = Self.temporaryEventsURL()
+        defer { try? FileManager.default.removeItem(at: eventsURL) }
+
+        let controller = DesktopUISmokeAutomationController(
+            environment: Self.environment(
+                eventsURL: eventsURL,
+                extra: [DesktopUISmokeAutomationConfiguration.selectDriverEnvironmentKey: "api"]
+            )
+        )
+        let repo = Repo(name: "repo", localPath: URL(fileURLWithPath: "/tmp/repo"))
+        let workspace = Workspace(
+            name: "ui-smoke-v1",
+            path: URL(fileURLWithPath: "/tmp/repo-workspace"),
+            sourceRepo: repo
+        )
+        let sessionID = UUID()
+
+        // First handoff: starts a completion task that is still waiting for focus.
+        await controller.noteAwaitingAPISelect(workspace: workspace)
+        await controller.noteTerminalSessionAttached(
+            kind: .workspace, sessionID: sessionID, scopePath: "/tmp/repo-workspace")
+
+        // Supersede it. This is the `cancel()` under test.
+        await controller.noteAwaitingAPISelect(workspace: workspace)
+        await controller.noteTerminalSessionAttached(
+            kind: .workspace, sessionID: sessionID, scopePath: "/tmp/repo-workspace")
+
+        // Only now does focus arrive, and only the surviving task may act on it.
+        await controller.noteSurfaceFocused(sessionID: sessionID)
+
+        let events = try await Self.awaitEventTypes(at: eventsURL, containing: "scenario_complete")
+        let completeIndex = try #require(events.firstIndex(of: "scenario_complete"))
+        let focusedIndex = try #require(events.lastIndex(of: "surface_focused"))
+        #expect(focusedIndex < completeIndex)
+        #expect(events.filter { $0 == "scenario_complete" }.count == 1)
+        #expect(events.contains("surface_focus_timed_out") == false)
+    }
+
     /// #1316, and the reason it rode along with a flake sweep without being one: this is
     /// production code. `noteAwaitingAPISelect` and `noteTerminalSessionAttached` both
     /// `cancel()` the previous completion task before starting a new one, and `cancel()`
