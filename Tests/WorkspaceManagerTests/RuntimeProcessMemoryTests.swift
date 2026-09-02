@@ -30,33 +30,32 @@ struct RuntimeProcessMemoryTests {
         #expect(lifetimeMax > 0)
     }
 
-    @Test("Overlay replaces readable pids and falls back for unreadable ones")
-    func overlayReplacesAndFallsBack() {
-        let readable = RuntimeProcessSample(
-            pid: 100, parentPID: 1, name: "a", command: "a",
-            cpuPercent: 0, residentMemoryBytes: 1_024)
-        let unreadable = RuntimeProcessSample(
-            pid: 200, parentPID: 1, name: "b", command: "b",
-            cpuPercent: 0, residentMemoryBytes: 2_048)
+    @Test("A sample carries the kernel footprint, not a resident-size stand-in")
+    func sampleCarriesFootprint() {
+        let entry = ProcessInventoryEntry(
+            pid: 100,
+            parentPID: 1,
+            uid: 501,
+            name: "claude",
+            cpuTimeSeconds: 30,
+            footprintBytes: 8_192,
+            elapsedSeconds: 60,
+            currentDirectory: "/Users/fairchild/code",
+            commandLine: "claude --continue"
+        )
 
-        let overlaid = LiveRuntimeProcessSnapshotProvider.overlayingPhysicalFootprint(
-            [readable, unreadable]
-        ) { pid in
-            pid == 100 ? 8_192 : nil
-        }
+        let sample = LiveRuntimeProcessSnapshotProvider.sample(from: entry)
 
-        #expect(overlaid[0].residentMemoryBytes == 8_192)
-        #expect(overlaid[1].residentMemoryBytes == 2_048)
-        #expect(overlaid.map(\.pid) == [100, 200])
+        #expect(sample.residentMemoryBytes == 8_192)
+        #expect(sample.command == "claude --continue")
+        #expect(sample.cpuPercent == 50)
     }
 
-    @Test("A dead pid reads as nil, not zero")
-    func deadPIDReadsNil() {
-        // PID from far beyond the live range; if it somehow exists, skip the
-        // assertion rather than flake.
-        let unlikely: Int32 = 99_999_999 % 99_999
-        if kill(unlikely, 0) != 0 {
-            #expect(RuntimeProcessMemory.physicalFootprint(pid: unlikely) == nil)
-        }
+    @Test("A pid outside the kernel's range reads as nil, not zero")
+    func outOfRangePIDReadsNil() {
+        // `Int32.max` is above `PID_MAX`, so nothing can hold it and this never
+        // skips itself.
+        #expect(RuntimeProcessMemory.physicalFootprint(pid: Int32.max) == nil)
+        #expect(RuntimeProcessMemory.lifetimeMaxPhysicalFootprint(pid: Int32.max) == nil)
     }
 }
