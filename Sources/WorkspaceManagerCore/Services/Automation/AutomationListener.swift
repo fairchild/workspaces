@@ -213,8 +213,49 @@ public actor AutomationListener {
             content: response,
             completion: .contentProcessed { _ in
                 watchdog.cancel()
-                connection.cancel()
+                Self.drainThenCancel(connection: connection, after: Self.busyDrainDeadline)
             })
+    }
+
+    /// How long a rejected connection stays open waiting for the peer to finish writing.
+    ///
+    /// Its own deadline rather than `writeDeadline`, because it is bounding a different
+    /// thing: not a network round trip but a `write` syscall on a loopback socket that
+    /// already has buffer space. What made the client miss its window was scheduling
+    /// delay under parallel load, not transfer time, so a second is orders of magnitude
+    /// more than the syscall needs and still short enough that a burst of rejections
+    /// cannot leave connections pinned. Exceeding it puts the peer back where it was
+    /// before this existed — an `EPIPE` — rather than anywhere worse.
+    static let busyDrainDeadline: Duration = .seconds(1)
+
+    /// Hang up only once the peer has stopped writing, or the deadline passes.
+    ///
+    /// The rejection answers without ever reading the request, so cancelling the moment
+    /// the 503 is written can close the socket while the client is still mid-`write`.
+    /// The client then gets `EPIPE` instead of the typed busy envelope it is owed —
+    /// seen as `.writeFailed(32)` (#1370).
+    ///
+    /// It reads until the peer closes rather than until the first byte arrives: one
+    /// receive returns on whatever happened to be in the buffer, which leaves the tail
+    /// of a request split across writes exposed to the same close. A client that has
+    /// finished writing and is reading its 503 hangs up as soon as it has it, which ends
+    /// the drain; one that says nothing at all is ended by the same `writeDeadline`
+    /// watchdog that bounds the write. A rejected connection never held a cap slot, so
+    /// nothing is pinned while this runs.
+    private nonisolated static func drainThenCancel(connection: NWConnection, after limit: Duration) {
+        let watchdog = deadlineWatchdog(connection: connection, after: limit, label: "busy-drain")
+        func receiveUntilPeerCloses() {
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) {
+                _, _, isComplete, error in
+                guard error == nil, !isComplete else {
+                    watchdog.cancel()
+                    connection.cancel()
+                    return
+                }
+                receiveUntilPeerCloses()
+            }
+        }
+        receiveUntilPeerCloses()
     }
 
     /// Cancels `connection` if it is still alive when the deadline elapses, so a hung peer cannot

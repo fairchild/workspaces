@@ -48,7 +48,7 @@ struct ClaudeIntegrationLifecycleTests {
     /// Helper: configures the singleton with a fresh ephemeral defaults suite and a
     /// stub installer, then waits for the lifecycle's startup Task to finish so the
     /// (a)synchronous install() invocation has been observed.
-    private func runStart(optedIn: Bool) async -> StubInstaller {
+    private func runStart(optedIn: Bool) async throws -> StubInstaller {
         let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.set(optedIn, forKey: ClaudeIntegrationDefaults.optedInKey)
@@ -63,21 +63,17 @@ struct ClaudeIntegrationLifecycleTests {
         let registry = AgentSessionRegistry()
         ClaudeIntegrationLifecycle.shared.start(registry: registry)
 
-        // Wait for the lifecycle's startup Task chain to complete. The chain awaits
-        // `listener.socketPath`, then calls install(), then starts the listener.
-        // Polling for installCallCount or a timeout is sufficient.
-        let deadline = Date().addingTimeInterval(15.0)
-        while Date() < deadline {
-            let count = await stub.installCallCount
-            if !optedIn {
-                // For the not-opted-in case, we still need to wait long enough that
-                // the Task has had a chance to either call install() or skip it.
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                break
-            }
-            if count > 0 { break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        // Await the lifecycle's own startup chain rather than a deadline over its side
+        // effects. The chain resolves the socket path, constructs the installer, starts
+        // the listener and performs the opted-in repair; when its task completes, the
+        // install has either happened or been skipped, and there is nothing left to
+        // wait for. Polling with a 15s ceiling read `count → 0` on a loaded runner —
+        // not a second install, the first one simply had not happened yet (#1306).
+        // Required, not optional-chained: `startupTask?.value` on a nil task awaits
+        // nothing and would let the not-opted-in case assert `count == 0` against a
+        // lifecycle that never started.
+        let startup = try #require(ClaudeIntegrationLifecycle.shared.startupTask)
+        await startup.value
 
         // Tear the listener down so its actor doesn't keep the socket file around.
         await ClaudeIntegrationLifecycle.shared.stop()
@@ -86,21 +82,39 @@ struct ClaudeIntegrationLifecycleTests {
     }
 
     @Test("install() is called exactly once on launch when the user has opted in")
-    func optedInLaunchTriggersSilentInstall() async {
-        let stub = await runStart(optedIn: true)
+    func optedInLaunchTriggersSilentInstall() async throws {
+        let stub = try await runStart(optedIn: true)
         let count = await stub.installCallCount
         #expect(count == 1)
     }
 
+    /// The guard behind retaining the startup task at all: a reconfigured lifecycle must
+    /// not hand a caller the previous run's chain to await. Every test here reconfigures
+    /// before starting, so a stale task would make each one await the run before it —
+    /// exercised implicitly across the suite, asserted directly here because the PR body
+    /// claims it (raised in review by @april-clearwater).
+    @Test("reconfiguring for a fresh start clears the retained startup task")
+    func reconfiguringClearsTheRetainedStartupTask() async throws {
+        _ = try await runStart(optedIn: false)
+        #expect(ClaudeIntegrationLifecycle.shared.startupTask != nil)
+
+        ClaudeIntegrationLifecycle.shared._configureForTesting(
+            defaults: UserDefaults(suiteName: "wm-lifecycle-test-\(UUID().uuidString)")!,
+            installerFactory: { _ in StubInstaller() },
+            socketURLOverride: Self.ephemeralSocketURL()
+        )
+        #expect(ClaudeIntegrationLifecycle.shared.startupTask == nil)
+    }
+
     @Test("install() is not called when the user has not opted in")
-    func notOptedInLaunchDoesNotInstall() async {
-        let stub = await runStart(optedIn: false)
+    func notOptedInLaunchDoesNotInstall() async throws {
+        let stub = try await runStart(optedIn: false)
         let count = await stub.installCallCount
         #expect(count == 0)
     }
 
     @Test("settings installer publishes after startup for Settings scene injection")
-    func settingsInstallerPublishesAfterStartup() async {
+    func settingsInstallerPublishesAfterStartup() async throws {
         let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
 
@@ -122,11 +136,12 @@ struct ClaudeIntegrationLifecycleTests {
         let registry = AgentSessionRegistry()
         ClaudeIntegrationLifecycle.shared.start(registry: registry)
 
-        let deadline = Date().addingTimeInterval(15.0)
-        while Date() < deadline {
-            if didPublishInstaller { break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
-        }
+        // The same signal the install-once tests await, for the same reason: publication
+        // happens inside the startup chain, so the chain finishing is when there is
+        // something to assert. The 15s poll this replaces was the last fixed deadline
+        // left in the file and would flake the same way under starvation.
+        let startup = try #require(ClaudeIntegrationLifecycle.shared.startupTask)
+        await startup.value
 
         await ClaudeIntegrationLifecycle.shared.stop()
         UserDefaults().removePersistentDomain(forName: suiteName)

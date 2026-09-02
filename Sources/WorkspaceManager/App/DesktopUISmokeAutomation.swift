@@ -389,6 +389,11 @@
             apiSelectCompletionTask = Task { @MainActor [weak self] in
                 guard let self else { return }
                 _ = await self.waitForSurfaceFocus(after: focusBaseline, timeout: .seconds(15))
+                // The wait returning is not the same as the wait being wanted. A superseded
+                // task now returns *immediately* rather than running to its timeout, so
+                // completing the scenario here unconditionally would report complete earlier
+                // than the bug ever did.
+                guard !Task.isCancelled else { return }
                 await self.noteScenarioComplete()
             }
         }
@@ -427,6 +432,10 @@
         /// `surface_focus_not_applicable` milestone marks the absence as a mode
         /// property rather than a timeout.
         func waitForSurfaceFocus(after baseline: Int, timeout: Duration) async -> Bool {
+            // Before the not-applicable branch, not after: a task cancelled before it first
+            // ran must not spend the one-shot `surface_focus_not_applicable` milestone on
+            // behalf of a wait nobody is listening to.
+            guard !Task.isCancelled else { return false }
             guard surfaceFocusPossible else {
                 if !emittedSurfaceFocusNotApplicable {
                     emittedSurfaceFocusNotApplicable = true
@@ -436,6 +445,15 @@
             }
             let deadline = ContinuousClock.now.advanced(by: timeout)
             while surfaceFocusCount <= baseline {
+                // A superseded wait must emit nothing. `apiSelectCompletionTask?.cancel()`
+                // replaces this wait with a newer one, and without these two checks the
+                // cancelled task keeps polling: `try?` swallows the sleep's cancellation,
+                // the loop never asks whether it is still wanted, and it goes on to emit
+                // `surface_focus_timed_out` — and to call `noteScenarioComplete` — after
+                // the scenario has already reported complete (#1316). Returning false
+                // without a milestone is correct here: nobody is listening for this
+                // answer any more, so it is not a timeout, it is an abandoned question.
+                if Task.isCancelled { return false }
                 if ContinuousClock.now >= deadline {
                     await emit(makeEvent(type: .surfaceFocusTimedOut))
                     return false

@@ -75,10 +75,34 @@ struct ProcessRunnerTests {
 
     @Test("Returns after exit when a backgrounded child holds the pipes open")
     func returnsWhenBackgroundedChildHoldsPipes() async throws {
+        // The grandchild is deliberately long-lived and deliberately reaped: it must
+        // outlive any elapsed time the assertion permits, and it must not outlive the
+        // test run.
+        //
+        // A recorded pid alone is not enough to reap it safely. On the path this test
+        // exists to catch, the child has already exited by the time the `defer` runs,
+        // and its pid may by then belong to something else — signalling it would make
+        // this test the thing that kills an unrelated process. So the child is launched
+        // under a unique argv[0] and the pid is only signalled while it still answers to
+        // that name.
+        let marker = "wm-processrunner-\(UUID().uuidString.prefix(8))"
+        let pidFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("process-runner-bg-\(UUID().uuidString).pid")
+        defer {
+            if let raw = try? String(contentsOf: pidFile, encoding: .utf8),
+                let pid = pid_t(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+                Self.processCommand(pid: pid)?.contains(marker) == true
+            {
+                kill(pid, SIGKILL)
+            }
+            try? FileManager.default.removeItem(at: pidFile)
+        }
+
         let start = ContinuousClock.now
         let command = [
             "echo before-background",
-            "sleep 30 &",
+            "( exec -a \(marker) sleep \(Self.unreachableChildLifetimeSeconds) ) &",
+            "echo $! > \(pidFile.path)",
             "exit 0",
         ].joined(separator: "\n")
 
@@ -89,29 +113,73 @@ struct ProcessRunnerTests {
         )
         let elapsed = ContinuousClock.now - start
 
+        // The property is the foreground exit: `run` returned it, with its output,
+        // while a grandchild still holds the write end of the pipe. Both assertions
+        // are on that observable outcome rather than on how long it took.
         #expect(result.success)
         #expect(result.stdout.contains("before-background"))
-        // Must stay under the backgrounded child's 30s sleep; the slack above
-        // the 0.5s grace period absorbs loaded-CI process-spawn overhead.
-        #expect(elapsed < .seconds(25))
+        // The residual bound only separates "returned on the exit" from "waited on the
+        // pipe", and the two are now three orders of magnitude apart, so the ceiling is
+        // sized from this machine's measured launch cost instead of a constant a loaded
+        // runner can exceed while behaving correctly.
+        #expect(elapsed < .seconds(await Self.spawnBoundedCeiling()))
     }
 
     @Test("Throws timedOut for a child that never exits")
     func timesOutHungChild() async throws {
         let start = ContinuousClock.now
 
+        // The property is the throw: a child outliving its timeout must surface as
+        // `timedOut`, not as a success once the child eventually exits. With a child
+        // whose lifetime no reasonable elapsed time can reach, a returned result could
+        // only mean the runner stopped enforcing the timeout.
         await #expect(throws: ProcessRunnerError.self) {
             _ = try await ProcessRunner.run(
                 executable: "/bin/bash",
-                arguments: ["-c", "sleep 30"],
+                arguments: ["-c", "sleep \(Self.unreachableChildLifetimeSeconds)"],
                 timeout: 0.5
             )
         }
 
         let elapsed = ContinuousClock.now - start
-        // Must stay under the hung child's 30s sleep; the slack above the 0.5s
-        // timeout absorbs loaded-CI process-spawn overhead.
-        #expect(elapsed < .seconds(25))
+        // Same reasoning as the backgrounded-child test: a launch-scaled ceiling, so a
+        // contended runner does not fail a correct runner.
+        #expect(elapsed < .seconds(await Self.spawnBoundedCeiling()))
+    }
+
+    /// How long the child in the two timeout tests sleeps: comfortably past the ceiling
+    /// below, so "the runner returned because the child exited" and "the runner returned
+    /// because it enforced its own deadline" can never be confused — which is what the
+    /// previous fixed 30s child and 25s bound left one contended runner away from
+    /// (#1033). It is the cost of a *regression* too, since a runner that waited for its
+    /// child would take this long to fail, so it is sized to clear the ceiling by a wide
+    /// margin rather than by the widest one imaginable.
+    private static let unreachableChildLifetimeSeconds = 300
+
+    /// Upper bound on a run that should finish in well under a second of real work,
+    /// scaled from this machine's measured cost of spawning a child and hearing back.
+    /// The floor keeps a genuine hang failing quickly on a fast machine; the ceiling
+    /// keeps a pathological baseline from turning a failure into a hang.
+    private static func spawnBoundedCeiling() async -> Double {
+        await LaunchBudget.deadline(launches: 3, floor: 10, ceiling: 120)
+    }
+
+    /// The command line `pid` is running, or nil when it is not running at all. The
+    /// identity check that makes reaping the backgrounded child safe: a pid that has
+    /// been recycled answers with somebody else's command.
+    private static func processCommand(pid: pid_t) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/ps")
+        process.arguments = ["-p", String(pid), "-o", "command="]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     @Test("Timeout leaves a process that completes in time untouched")
