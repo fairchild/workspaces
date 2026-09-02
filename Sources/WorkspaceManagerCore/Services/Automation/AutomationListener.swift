@@ -31,8 +31,26 @@ public actor AutomationListener {
     private var listener: NWListener?
     private var lockFileDescriptor: Int32?
     private var statistics = Statistics()
-    private var healthServer: AutomationServerDescriptor?
+    /// When this listener came up — the one part of the health descriptor that is fixed at
+    /// start. Everything else is read when a request asks (below).
+    private var launchedAt: Date?
     private var activeConnectionIDs: Set<ObjectIdentifier> = []
+
+    /// The descriptor `/v1/health` answers with, built per request.
+    ///
+    /// It was built once at `start()` and served from a stored property, which made the health
+    /// answer a snapshot of a moment barely a millisecond wide: operator provisioning runs
+    /// immediately *after* the listener is up, so the credential outcome was always read before
+    /// it was written and the field was nil for the life of the process (#1400). The same held
+    /// for any other fact that settles after start, the experiment set among them.
+    ///
+    /// `makeHealthServer` was already written for this — the lifecycle's closure reads a
+    /// lock-guarded box precisely because it expects to run off the MainActor, per request.
+    /// Building the descriptor is a bundle lookup and a date format, which is not a cost worth
+    /// serving a stale answer to avoid.
+    private var healthServer: AutomationServerDescriptor? {
+        launchedAt.map(makeHealthServer)
+    }
 
     public init(
         bundleIdentifier: String,
@@ -117,7 +135,7 @@ public actor AutomationListener {
         }
         listener.start(queue: .global(qos: .userInitiated))
         self.listener = listener
-        self.healthServer = makeHealthServer(Date())
+        self.launchedAt = Date()
         hardenSocketFileIfPresent()
         logger("listener started at \(socketURL.path)")
     }
@@ -126,7 +144,7 @@ public actor AutomationListener {
         let hadListener = listener != nil
         listener?.cancel()
         listener = nil
-        healthServer = nil
+        launchedAt = nil
         if hadListener {
             try? FileManager.default.removeItem(at: socketURL)
             logger("listener stopped; socket file removed at \(socketURL.path)")

@@ -3144,4 +3144,131 @@ struct AutomationListenerTests {
         #expect(envelope.result?.server?.protocolVersion == AutomationAPI.version)
         await listener.stop()
     }
+
+    /// A fact the app settles *after* the listener is up, standing in for the operator
+    /// credential: provisioning runs a millisecond after `start()`, so a descriptor built at
+    /// start read the box before it was written and answered `operatorCredential: nil` for
+    /// the life of the process (#1400).
+    private final class OutcomeBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: AutomationOperatorProvisioning.Outcome?
+
+        var value: AutomationOperatorProvisioning.Outcome? {
+            get {
+                lock.lock()
+                defer { lock.unlock() }
+                return storage
+            }
+            set {
+                lock.lock()
+                defer { lock.unlock() }
+                storage = newValue
+            }
+        }
+    }
+
+    private func health(
+        from client: AutomationSocketClient
+    ) throws -> AutomationServerDescriptor? {
+        let response = try client.request(method: "GET", path: "/v1/health")
+        return try AutomationJSON.decoder.decode(
+            AutomationResponseEnvelope<AutomationHealthResult>.self,
+            from: response.body
+        ).result?.server
+    }
+
+    @Test("Health reports a credential provisioned after the listener started")
+    @MainActor
+    func healthReportsCredentialProvisionedAfterStart() async throws {
+        let socket = URL(fileURLWithPath: "/tmp/wm-auto-\(UUID().uuidString.prefix(8)).sock")
+        let outcome = OutcomeBox()
+        let listener = AutomationListener(
+            bundleIdentifier: "com.test.workspaces",
+            controller: FakeAutomationController(),
+            socketURLOverride: socket,
+            auditLogger: nil,
+            makeHealthServer: { launchedAt in
+                AutomationServerDescriptor.current(
+                    launchedAt: launchedAt,
+                    experiments: [],
+                    operatorCredential: outcome.value
+                )
+            }
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(for: .milliseconds(250))
+
+        let client = AutomationSocketClient(socketPath: socket.path)
+
+        // Nothing provisioned yet, so absent is the honest answer — and the contrast is what
+        // keeps the assertion below from passing for the wrong reason.
+        #expect(try health(from: client)?.operatorCredential == nil)
+
+        outcome.value = .minted
+
+        #expect(try health(from: client)?.operatorCredential == .minted)
+        await listener.stop()
+    }
+
+    /// The reverse direction, which a fix that merely refreshed on mint would not cover: an
+    /// outcome that changes again mid-run (the operator toggle flipped in Settings) has to
+    /// reach health too, or the field goes stale in the other direction.
+    @Test("Health follows a credential outcome that changes again mid-run")
+    @MainActor
+    func healthFollowsLaterOutcomeChanges() async throws {
+        let socket = URL(fileURLWithPath: "/tmp/wm-auto-\(UUID().uuidString.prefix(8)).sock")
+        let outcome = OutcomeBox()
+        outcome.value = .minted
+        let listener = AutomationListener(
+            bundleIdentifier: "com.test.workspaces",
+            controller: FakeAutomationController(),
+            socketURLOverride: socket,
+            auditLogger: nil,
+            makeHealthServer: { launchedAt in
+                AutomationServerDescriptor.current(
+                    launchedAt: launchedAt,
+                    experiments: [],
+                    operatorCredential: outcome.value
+                )
+            }
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(for: .milliseconds(250))
+
+        let client = AutomationSocketClient(socketPath: socket.path)
+        #expect(try health(from: client)?.operatorCredential == .minted)
+
+        outcome.value = .notOptedIn
+
+        #expect(try health(from: client)?.operatorCredential == .notOptedIn)
+        await listener.stop()
+    }
+
+    /// What building the descriptor once was actually protecting: `launchedAt` names when this
+    /// listener came up, so it must not drift to "now" on every request.
+    @Test("The launch instant stays fixed across requests")
+    @MainActor
+    func launchedAtIsStableAcrossRequests() async throws {
+        let socket = URL(fileURLWithPath: "/tmp/wm-auto-\(UUID().uuidString.prefix(8)).sock")
+        let listener = AutomationListener(
+            bundleIdentifier: "com.test.workspaces",
+            controller: FakeAutomationController(),
+            socketURLOverride: socket,
+            auditLogger: nil
+        )
+        try await listener.start()
+        defer { Task { await listener.stop() } }
+        try await Task.sleep(for: .milliseconds(250))
+
+        let client = AutomationSocketClient(socketPath: socket.path)
+        let first = try health(from: client)?.launchedAt
+        try await Task.sleep(for: .milliseconds(1_100))
+        let second = try health(from: client)?.launchedAt
+
+        #expect(first != nil)
+        #expect(first == second)
+        await listener.stop()
+    }
 }
