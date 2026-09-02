@@ -30,11 +30,35 @@ public struct TmuxSessionProbe: Sendable {
         guard
             let override = environment[socketLabelEnvironmentKey]?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
-            !override.isEmpty
+            !override.isEmpty,
+            isSafeSocketLabel(override)
         else {
             return defaultSocketLabel
         }
         return override
+    }
+
+    /// Whether `value` is a socket label this app is willing to use.
+    ///
+    /// A label reaches two very different places: an argv slot in this file's own
+    /// commands, where anything is safe, and — through
+    /// `GhosttyTerminalConfig.tmuxLaunchScript` — the *text of a shell script* a
+    /// terminal execs, where it is not. Making the label configurable is what put a
+    /// value someone else chooses on that second path, so it is checked at the one
+    /// place it enters the app rather than quoted at each place it leaves.
+    ///
+    /// A whitelist rather than an escape, because the set is small and known: tmux
+    /// makes the label a filename in its socket directory, so a legitimate one needs
+    /// letters, digits, and a little punctuation. Anything else is a mistake or an
+    /// attempt, and both are better answered with the default socket than with a
+    /// faithful reproduction of the input.
+    public static func isSafeSocketLabel(_ value: String) -> Bool {
+        guard !value.isEmpty, value.count <= 64 else { return false }
+        return value.allSatisfy { character in
+            character.isASCII
+                && (character.isLetter || character.isNumber
+                    || character == "-" || character == "_" || character == ".")
+        }
     }
 
     /// The socket every command in this file carries, resolved once from the launch

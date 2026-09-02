@@ -134,6 +134,26 @@ struct TmuxSessionOwnershipTests {
                 == "wave3test")
     }
 
+    @Test("A socket label that would become shell text is refused, not reproduced")
+    func unsafeSocketLabelsFallBackToTheDefault() {
+        // The label is interpolated into the shell script a terminal execs, so making
+        // it configurable is what put a caller-chosen value on that path.
+        for hostile in [
+            "wave3test; rm -rf /", "a b", "$(id)", "`id`", "a|b", "a\nb", "../escape",
+            "a'b", "a\"b", "a&b", String(repeating: "x", count: 65),
+        ] {
+            #expect(
+                TmuxSessionProbe.resolvedSocketLabel(
+                    from: ["WORKSPACES_TMUX_SOCKET_LABEL": hostile]) == "workspaces",
+                "expected the default socket for \(hostile)")
+        }
+        for ordinary in ["wave3test", "wm-dev", "wm_dev", "socket.2", "A1"] {
+            #expect(
+                TmuxSessionProbe.resolvedSocketLabel(
+                    from: ["WORKSPACES_TMUX_SOCKET_LABEL": ordinary]) == ordinary)
+        }
+    }
+
     // MARK: - Provenance
 
     @MainActor
