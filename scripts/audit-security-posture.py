@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
 import re
 import shutil
 import subprocess
@@ -140,12 +141,12 @@ def nested_strings(payload: object) -> list[str]:
 def reports_missing_table(texts: list[str], table: str) -> bool:
     """Whether any message says *this* table does not exist.
 
-    The reported name is cut out of the message and compared for equality rather than
-    matched inside it. A character-class boundary has to guess which characters
-    continue an identifier, and wrangler quotes the name so it may contain any of
-    them: `d1_migrations-v2` and `d1_migrations.v2` are different tables that a
-    boundary reads as this one, and a name ending in punctuation is one this table's
-    own error would miss. Equality does not guess.
+    The configured name is checked at the position it must occupy and what follows it
+    must be the end of the message or D1's own suffix. A character-class boundary
+    would have to guess which characters continue an identifier, and wrangler quotes
+    the name so it may contain any of them: `d1_migrations-v2` and `d1_migrations.v2`
+    are different tables that a boundary reads as this one, and a name ending in
+    punctuation is one this table's own error would miss. Anchoring does not guess.
 
     A missing table is the one SQL failure that is an answer rather than an obstacle:
     a database that has never had a migration applied has no migrations table, which
@@ -154,10 +155,14 @@ def reports_missing_table(texts: list[str], table: str) -> bool:
     for text in texts:
         for match in D1_NO_SUCH_TABLE.finditer(text):
             reported = text[match.end() :]
-            suffix = D1_SQLITE_ERROR_SUFFIX.search(reported)
-            if suffix:
-                reported = reported[: suffix.start()]
-            if reported == table or reported.strip() == table:
+            if not reported.startswith(table):
+                continue
+            # The name is checked where it must be, and what follows must be the end of
+            # the message or D1's own suffix. Cutting the message at the first
+            # `: SQLITE_ERROR` instead would truncate a table whose name contains that
+            # text, and the configured name would never match its own error.
+            tail = reported[len(table) :]
+            if not tail.strip() or D1_SQLITE_ERROR_SUFFIX.match(tail):
                 return True
     return False
 
@@ -523,19 +528,44 @@ def d1_environments(config: dict[str, object]) -> list[D1Environment]:
                 # it to `migrations`, so a binding that relies on the default has
                 # migrations this check would otherwise never look at — the same
                 # unwatched-environment failure, reached by omitting a field.
-                migrations_dir = database.get("migrations_dir") or D1_DEFAULT_MIGRATIONS_DIR
+                #
+                # Defaulted the way wrangler defaults it: only an absent value, never
+                # an empty one. Wrangler normalises `""` to `"."`, the project root, so
+                # reading it as `migrations` would compare a directory the service does
+                # not use and pass while a root-level migration sat pending.
+                raw_dir = database.get("migrations_dir")
+                migrations_dir = (
+                    D1_DEFAULT_MIGRATIONS_DIR
+                    if raw_dir is None
+                    else normalize_relative_path(str(raw_dir))
+                )
+                # `migrations_table` is the one wrangler defaults on falseyness rather
+                # than absence, so an empty name does become `d1_migrations` there.
                 table = database.get("migrations_table") or D1_DEFAULT_MIGRATIONS_TABLE
-                pattern = database.get("migrations_pattern")
+                raw_pattern = database.get("migrations_pattern")
+                pattern = (
+                    None if raw_pattern is None else normalize_relative_path(str(raw_pattern))
+                )
                 environments.append(
                     D1Environment(
                         str(name),
                         str(database_name),
-                        str(migrations_dir),
+                        migrations_dir,
                         str(table),
-                        str(pattern) if pattern else None,
+                        pattern,
                     )
                 )
     return environments
+
+
+def normalize_relative_path(value: str) -> str:
+    """Wrangler's own normalisation of a config path.
+
+    Backslashes become forward slashes, the path is normalised, and a trailing slash
+    is dropped — so `migrations/` and `./migrations` are the same directory, and `""`
+    becomes `"."`, the project root.
+    """
+    return posixpath.normpath(value.replace("\\", "/"))
 
 
 def wrangler_command(service_dir: Path) -> str | None:
@@ -655,27 +685,50 @@ def repo_migrations(environment: D1Environment, service_dir: Path) -> list[str]:
     """
     migrations_dir = service_dir / environment.migrations_dir
     if environment.migrations_pattern is None:
-        return sorted(path.name for path in migrations_dir.glob("*.sql"))
-
-    prefix = f"{environment.migrations_dir.rstrip('/')}/"
-    if not environment.migrations_pattern.startswith(prefix):
-        raise RuntimeError(
-            f"migrations_pattern {environment.migrations_pattern!r} does not start with {prefix!r}"
+        return sorted(
+            path.name
+            for path in migrations_dir.glob("*.sql")
+            if path.is_file() and not path.name.startswith(".")
         )
+
+    relative_pattern = strip_dir_prefix(
+        environment.migrations_pattern, environment.migrations_dir
+    )
     # Wrangler matches with minimatch and this matches with `Path.glob`. They agree on
     # `*`, `?` and `**`, which is what the documented layouts use. They do not agree on
-    # braces or extglobs, and a pattern using those would quietly compare a different
-    # set of files than wrangler applies, so it is reported rather than guessed at.
-    if D1_UNSUPPORTED_GLOB.search(environment.migrations_pattern):
+    # braces, extglobs, or a leading `!`, which minimatch reads as negating the whole
+    # pattern. A pattern using any of those would quietly compare a different set of
+    # files than wrangler applies, so it is reported rather than guessed at.
+    if relative_pattern.startswith("!") or D1_UNSUPPORTED_GLOB.search(relative_pattern):
         raise RuntimeError(
             f"migrations_pattern {environment.migrations_pattern!r} uses glob syntax this "
-            "check does not implement (braces or extglobs)"
+            "check does not implement (negation, braces, or extglobs)"
         )
+    # Minimatch runs with `dot: false`, so a dotfile is not a migration there and must
+    # not be one here; `Path.glob` would otherwise report a pending migration wrangler
+    # never applies.
     return sorted(
         path.relative_to(migrations_dir).as_posix()
-        for path in service_dir.glob(environment.migrations_pattern)
+        for path in migrations_dir.glob(relative_pattern)
         if path.is_file()
+        and not any(part.startswith(".") for part in path.relative_to(migrations_dir).parts)
     )
+
+
+def strip_dir_prefix(pattern: str, migrations_dir: str) -> str:
+    """The pattern relative to `migrations_dir`, the way wrangler strips it.
+
+    Wrangler requires `migrations_pattern` to start with `${migrations_dir}/` and then
+    walks from that directory, so the names it records are relative to it. The one
+    exception is its own: a `migrations_dir` of `.` is the project root and strips
+    nothing.
+    """
+    if migrations_dir == ".":
+        return pattern
+    prefix = f"{migrations_dir}/"
+    if not pattern.startswith(prefix):
+        raise RuntimeError(f"migrations_pattern {pattern!r} does not start with {prefix!r}")
+    return pattern[len(prefix) :]
 
 
 def d1_migration_checks(service_dirs: tuple[Path, ...] = D1_SERVICE_DIRS) -> list[Check]:

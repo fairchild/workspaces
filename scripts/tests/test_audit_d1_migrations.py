@@ -585,6 +585,16 @@ class MissingTableMatchTests(unittest.TestCase):
             "no such table: a\\b: SQLITE_ERROR [code: 7500]", "a\\b", True
         )
 
+    def test_a_table_named_after_the_delimiter_still_matches(self) -> None:
+        """Cutting the message at the first `: SQLITE_ERROR` truncates such a name.
+
+        The configured table would then never equal what was extracted, and maximal
+        drift would report as a warn again — the whole bug, one delimiter down.
+        """
+        self.assert_missing(
+            "no such table: a: SQLITE_ERROR: SQLITE_ERROR [code: 7500]", "a: SQLITE_ERROR", True
+        )
+
     def test_a_message_on_a_non_json_stream_still_matches(self) -> None:
         texts = audit.error_texts("", "no such table: d1_migrations")
         self.assertTrue(audit.reports_missing_table(texts, "d1_migrations"))
@@ -708,6 +718,56 @@ class MigrationsPatternTests(unittest.TestCase):
 
         self.assertEqual(check.status, "warn")
         self.assertIn("glob syntax", check.detail)
+
+    def test_a_negated_pattern_warns_rather_than_matching_a_literal_name(self) -> None:
+        """After the prefix is stripped, minimatch reads a leading `!` as negation.
+
+        Treating it as a literal filename finds nothing, which warns — so every pending
+        migration in a service configured this way passes `--strict`.
+        """
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/!0001.sql",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("glob syntax", check.detail)
+
+    def test_a_dotfile_is_not_a_migration(self) -> None:
+        """Minimatch runs with `dot: false`, so wrangler never applies one.
+
+        Counting it here would report a pending migration that cannot exist.
+        """
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            (root / "migrations" / ".hidden.sql").write_text("-- test\n", encoding="utf-8")
+
+            found = audit.repo_migrations(environment(), root)
+
+        self.assertEqual(found, ["0001_feedback.sql"])
+
+    def test_a_dotfile_is_not_a_migration_under_a_pattern_either(self) -> None:
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/*/migration.sql",
+        )
+        with tempdir() as tmp:
+            root = self.nested(tmp)
+            (root / "migrations" / ".draft").mkdir(parents=True, exist_ok=True)
+            (root / "migrations" / ".draft" / "migration.sql").write_text("--\n", encoding="utf-8")
+
+            found = audit.repo_migrations(env, root)
+
+        self.assertEqual(
+            found, ["0001_feedback/migration.sql", "0002_feedback_audit/migration.sql"]
+        )
 
     def test_a_pattern_outside_the_migrations_dir_warns(self) -> None:
         """Wrangler requires the pattern to start with `migrations_dir/`.
@@ -894,6 +954,41 @@ class D1EnvironmentDiscoveryTests(unittest.TestCase):
         found = audit.d1_environments(tomllib.loads(textwrap.dedent(toml)))
 
         self.assertEqual([env.database_name for env in found], ["defaulted-db"])
+        self.assertEqual([env.migrations_dir for env in found], ["migrations"])
+
+    def test_an_empty_migrations_dir_is_the_project_root_not_the_default(self) -> None:
+        """Wrangler defaults on absence, not on falseyness, and normalises `""` to `.`.
+
+        Reading an explicit empty string as `migrations` would compare a directory the
+        service does not use and pass while a root-level migration sat pending.
+        """
+        import tomllib
+
+        toml = """\
+            name = "svc"
+
+            [[d1_databases]]
+            binding = "DB"
+            database_name = "root-db"
+            migrations_dir = ""
+        """
+        found = audit.d1_environments(tomllib.loads(textwrap.dedent(toml)))
+
+        self.assertEqual([env.migrations_dir for env in found], ["."])
+
+    def test_a_trailing_slash_is_the_same_directory(self) -> None:
+        import tomllib
+
+        toml = """\
+            name = "svc"
+
+            [[d1_databases]]
+            binding = "DB"
+            database_name = "db"
+            migrations_dir = "./migrations/"
+        """
+        found = audit.d1_environments(tomllib.loads(textwrap.dedent(toml)))
+
         self.assertEqual([env.migrations_dir for env in found], ["migrations"])
 
     def test_a_config_with_no_d1_at_all_yields_nothing(self) -> None:

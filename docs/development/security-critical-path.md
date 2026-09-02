@@ -117,9 +117,10 @@ wrangler's default of `migrations`, because omitting the field is not opting out
 
 Two places where this check is narrower than wrangler, both reported rather than
 guessed at. Pattern matching uses Python's `Path.glob`, which agrees with
-wrangler's minimatch on `*`, `?` and `**` but not on braces or extglobs, so a
-pattern using those warns instead of comparing a different set of files. A table
-name carrying a NUL, and an empty one, are refused rather than sent.
+wrangler's minimatch on `*`, `?` and `**` and on ignoring dotfiles, but not on
+braces, extglobs, or a leading `!` for negation, so a pattern using those warns
+instead of comparing a different set of files. A table name carrying a NUL, and an
+empty one, are refused rather than sent.
 
 One SQL failure is deliberately not in that bucket. A database that has never had
 a migration applied has no migrations table, so the query errors — but that is the
