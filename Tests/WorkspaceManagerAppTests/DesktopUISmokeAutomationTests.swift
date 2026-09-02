@@ -312,6 +312,60 @@ struct DesktopUISmokeAutomationTests {
         #expect(events.last == "scenario_complete")
     }
 
+    /// #1316, and the reason it rode along with a flake sweep without being one: this is
+    /// production code. `noteAwaitingAPISelect` and `noteTerminalSessionAttached` both
+    /// `cancel()` the previous completion task before starting a new one, and `cancel()`
+    /// on its own stops nothing — the wait it cancels swallowed the cancellation with
+    /// `try?` and never asked `Task.isCancelled`. So a superseded wait kept polling and
+    /// went on to emit `surface_focus_timed_out` after the scenario had already reported
+    /// complete, corrupting the transcript the smoke lane grades.
+    @Test("A superseded completion wait emits nothing after scenario_complete")
+    @MainActor
+    func supersededCompletionWaitEmitsNothingAfterScenarioComplete() async throws {
+        let eventsURL = Self.temporaryEventsURL()
+        defer { try? FileManager.default.removeItem(at: eventsURL) }
+
+        let controller = DesktopUISmokeAutomationController(
+            environment: Self.environment(
+                eventsURL: eventsURL,
+                extra: [DesktopUISmokeAutomationConfiguration.selectDriverEnvironmentKey: "api"]
+            )
+        )
+        let repo = Repo(name: "repo", localPath: URL(fileURLWithPath: "/tmp/repo"))
+        let workspace = Workspace(
+            name: "ui-smoke-v1",
+            path: URL(fileURLWithPath: "/tmp/repo-workspace"),
+            sourceRepo: repo
+        )
+
+        await controller.noteAwaitingAPISelect(workspace: workspace)
+        let sessionID = UUID()
+        await controller.noteTerminalSessionAttached(
+            kind: .workspace,
+            sessionID: sessionID,
+            scopePath: "/tmp/repo-workspace"
+        )
+        await controller.noteSurfaceFocused(sessionID: sessionID)
+        let completed = try await Self.awaitEventTypes(at: eventsURL, containing: "scenario_complete")
+        #expect(completed.last == "scenario_complete")
+
+        // A cancelled wait is an abandoned question, not a timed-out one. The timeout is
+        // short and deliberately reachable: it is what a wait that ignores cancellation
+        // would run to, so leaving it long would hide the regression instead of catching
+        // it. A wait that observes cancellation never reaches it at all.
+        let superseded = Task { @MainActor in
+            await controller.waitForSurfaceFocus(
+                after: controller.surfaceFocusCount, timeout: .milliseconds(150))
+        }
+        superseded.cancel()
+        #expect(await superseded.value == false)
+
+        // Emitted inside the awaited call above, so a milestone would already be on disk.
+        let afterCancellation = try Self.readEventTypes(at: eventsURL)
+        #expect(afterCancellation.contains("surface_focus_timed_out") == false)
+        #expect(afterCancellation.last == "scenario_complete")
+    }
+
     private static func environment(eventsURL: URL, extra: [String: String] = [:]) -> [String: String] {
         var environment = [
             DesktopUISmokeAutomationConfiguration.modeEnvironmentKey: "desktop-ui-smoke",

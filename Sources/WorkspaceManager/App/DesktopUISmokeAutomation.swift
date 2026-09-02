@@ -436,6 +436,15 @@
             }
             let deadline = ContinuousClock.now.advanced(by: timeout)
             while surfaceFocusCount <= baseline {
+                // A superseded wait must emit nothing. `apiSelectCompletionTask?.cancel()`
+                // replaces this wait with a newer one, and without these two checks the
+                // cancelled task keeps polling: `try?` swallows the sleep's cancellation,
+                // the loop never asks whether it is still wanted, and it goes on to emit
+                // `surface_focus_timed_out` — and to call `noteScenarioComplete` — after
+                // the scenario has already reported complete (#1316). Returning false
+                // without a milestone is correct here: nobody is listening for this
+                // answer any more, so it is not a timeout, it is an abandoned question.
+                if Task.isCancelled { return false }
                 if ContinuousClock.now >= deadline {
                     await emit(makeEvent(type: .surfaceFocusTimedOut))
                     return false
