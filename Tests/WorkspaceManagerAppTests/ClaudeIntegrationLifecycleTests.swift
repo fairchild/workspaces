@@ -88,6 +88,24 @@ struct ClaudeIntegrationLifecycleTests {
         #expect(count == 1)
     }
 
+    /// The guard behind retaining the startup task at all: a reconfigured lifecycle must
+    /// not hand a caller the previous run's chain to await. Every test here reconfigures
+    /// before starting, so a stale task would make each one await the run before it —
+    /// exercised implicitly across the suite, asserted directly here because the PR body
+    /// claims it (raised in review by @april-clearwater).
+    @Test("reconfiguring for a fresh start clears the retained startup task")
+    func reconfiguringClearsTheRetainedStartupTask() async throws {
+        _ = try await runStart(optedIn: false)
+        #expect(ClaudeIntegrationLifecycle.shared.startupTask != nil)
+
+        ClaudeIntegrationLifecycle.shared._configureForTesting(
+            defaults: UserDefaults(suiteName: "wm-lifecycle-test-\(UUID().uuidString)")!,
+            installerFactory: { _ in StubInstaller() },
+            socketURLOverride: Self.ephemeralSocketURL()
+        )
+        #expect(ClaudeIntegrationLifecycle.shared.startupTask == nil)
+    }
+
     @Test("install() is not called when the user has not opted in")
     func notOptedInLaunchDoesNotInstall() async throws {
         let stub = try await runStart(optedIn: false)
