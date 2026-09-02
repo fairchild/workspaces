@@ -12,7 +12,11 @@ import {
 import { getChatMessages, pushChatMessage } from "../chat";
 import { addDiscussionComment } from "../github";
 import type { AgentSession, ChatMessage } from "../types";
-import { buildConversationalPrompt, resolvePersona } from "./persona-loader";
+import {
+	buildConversationalPrompt,
+	fetchRepoMemory,
+	resolvePersona,
+} from "./persona-loader";
 import { type ComputeProviderRegistry, getRegistry } from "./provider-registry";
 import {
 	type ComputeProvider,
@@ -232,7 +236,11 @@ export class SessionManager {
 		yield { type: "status", content: "Starting agent session..." };
 
 		try {
-			const conversationalPrompt = buildConversationalPrompt(persona);
+			const repoMemory = await fetchRepoMemory(params.githubToken, owner, repo);
+			const conversationalPrompt = buildConversationalPrompt(
+				persona,
+				repoMemory,
+			);
 			const cloneUrl = `https://github.com/${params.repo}.git`;
 
 			const { chatHistory, contextMessages } =
