@@ -27,8 +27,12 @@ struct WorkspaceTerminalTeardownController {
     let sessionsInScope: @MainActor (HostTerminalSessionKey) -> [HostTerminalSession]
     /// The tmux session name backing a session, or `nil` when none does (non-tmux mode).
     let tmuxSessionName: @MainActor (HostTerminalSession) -> String?
-    /// Kill a tmux session by name; `false` when the kill failed or the session was already gone.
-    let killTmuxSession: (String) async -> Bool
+    /// End the tmux session backing a host session, when the app's ownership ledger
+    /// authorizes it. `false` when nothing died: the kill failed, the session was already
+    /// gone, or the app could not attribute the session to a surface it launched and left
+    /// it running (#1267). Taking the session rather than a name is what makes that
+    /// question answerable — a name on the shared socket proves nothing about ownership.
+    let killTmuxSession: @MainActor (HostTerminalSession) async -> Bool
     /// The graceful retirement close for one session (`GhosttySurfaceRetirementCloser` semantics).
     let closeForRetirement: @MainActor (UUID) async throws -> Void
     /// Remove the scope's rows from the tile tree, returning the retired session ids.
@@ -62,7 +66,7 @@ struct WorkspaceTerminalTeardownController {
         var seen = Set<String>()
         for session in sessions {
             guard let name = tmuxSessionName(session), seen.insert(name).inserted else { continue }
-            if await killTmuxSession(name) {
+            if await killTmuxSession(session) {
                 killed.append(name)
             }
         }

@@ -13,8 +13,36 @@
 import Foundation
 
 public struct TmuxSessionProbe: Sendable {
-    /// Matches the `-L workspaces` socket the app launches sessions on.
-    public static let socketLabel = "workspaces"
+    /// The `-L` socket the app launches sessions on when nothing overrides it.
+    public static let defaultSocketLabel = "workspaces"
+
+    /// Names a socket for a run that must not touch the desktop's server. The CLI
+    /// already honored this (`TmuxSessionControl`); the app honors it too, so the
+    /// whole tmux lane — launch script, probe, and every kill — can be exercised
+    /// against an isolated server instead of the shared one this app's users keep
+    /// live sessions on (#1267).
+    public static let socketLabelEnvironmentKey = "WORKSPACES_TMUX_SOCKET_LABEL"
+
+    /// Resolves the socket label from a launch environment, falling back to the
+    /// app's own server. An empty override reads as unset rather than as a
+    /// nameless socket.
+    public static func resolvedSocketLabel(from environment: [String: String]) -> String {
+        guard
+            let override = environment[socketLabelEnvironmentKey]?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+            !override.isEmpty
+        else {
+            return defaultSocketLabel
+        }
+        return override
+    }
+
+    /// The socket every command in this file carries, resolved once from the launch
+    /// environment. Reading `ProcessInfo` here is the same cheap dictionary lookup
+    /// `defaultEnvironment` already makes from a static initializer; it starts no
+    /// run loop, so the `swift_once` re-entrancy hazard `synchronousOutput`
+    /// documents does not apply.
+    public static let socketLabel = resolvedSocketLabel(from: ProcessInfo.processInfo.environment)
 
     /// Runs a command and yields its exit code, or `nil` on launch failure/timeout.
     public typealias CommandRunner =
@@ -52,7 +80,7 @@ public struct TmuxSessionProbe: Sendable {
         self.environment = environment
     }
 
-    /// True when `tmux -L workspaces has-session -t =<name>` exits 0. The `=`
+    /// True when `tmux has-session -t =<name>` exits 0 on the resolved socket. The `=`
     /// prefix forces an exact match so a hash-suffixed name cannot prefix-match a
     /// different live session.
     public func isSessionAlive(_ tmuxSessionName: String) async -> Bool {
@@ -194,6 +222,77 @@ public struct TmuxSessionProbe: Sendable {
 
     private static func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// Every session live on the socket, or `nil` when tmux did not answer. Read
+    /// only: it enumerates so a caller can *attribute* a name, and nothing here
+    /// acts on what it finds.
+    ///
+    /// This is the lookup a kill resolves through, and it is deliberately taken
+    /// fresh at kill time rather than remembered from plan time: a name can change
+    /// hands between the two, which is the narrower version of the same defect
+    /// killing by name has.
+    public func liveSessions() async -> [TmuxLiveSession]? {
+        let output = await runForOutput(
+            "/usr/bin/env",
+            [
+                "tmux", "-L", Self.socketLabel, "list-sessions",
+                "-F", "#{session_id}\t#{session_name}\t#{session_created}\t#{pid}",
+            ],
+            environment
+        )
+        return Self.parseLiveSessions(fromListSessions: output)
+    }
+
+    /// Parses `list-sessions -F '#{session_id}\t#{session_name}\t#{session_created}\t#{pid}'`.
+    /// A socket with no server answers non-zero, which the runner maps to `nil`; a
+    /// server with no sessions cannot exist, so empty output also reads as no answer
+    /// only when the runner said so — an empty string parses to an empty list.
+    /// Malformed rows are skipped rather than failing the whole read.
+    static func parseLiveSessions(fromListSessions output: String?) -> [TmuxLiveSession]? {
+        guard let output else { return nil }
+        var sessions: [TmuxLiveSession] = []
+        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let fields = rawLine.split(separator: "\t", omittingEmptySubsequences: false)
+            guard fields.count >= 3 else { continue }
+            let sessionID = fields[0].trimmingCharacters(in: .whitespaces)
+            let name = String(fields[1])
+            guard TmuxLiveSession.isWellFormedSessionID(sessionID), !name.isEmpty else { continue }
+            guard let createdEpoch = Double(fields[2].trimmingCharacters(in: .whitespaces)) else { continue }
+            let serverPID = fields.count >= 4 ? Int(fields[3].trimmingCharacters(in: .whitespaces)) : nil
+            sessions.append(
+                TmuxLiveSession(
+                    sessionID: sessionID,
+                    name: name,
+                    createdAt: Date(timeIntervalSince1970: createdEpoch),
+                    serverPID: serverPID
+                )
+            )
+        }
+        return sessions
+    }
+
+    /// Kill the one session tmux assigned `sessionID` (`$3`), whoever holds its name.
+    ///
+    /// A session id is the only handle on this socket a second party cannot arrive at
+    /// by accident: names here are directory derivations, so two tools working in one
+    /// directory agree on a name without ever agreeing on a session. tmux never reuses
+    /// an id within a server's lifetime, which also closes the window where a session
+    /// exits and something else takes its name between the decision and the kill.
+    ///
+    /// A malformed id is refused rather than passed through, because tmux reads a
+    /// missing or empty `-t` as *the current session* and kills it with exit 0 —
+    /// verified on an isolated socket. The one input that must never reach `kill-session`
+    /// is the one an optional collapses to.
+    @discardableResult
+    public func killSession(id sessionID: String) async -> Bool {
+        guard TmuxLiveSession.isWellFormedSessionID(sessionID) else { return false }
+        let exitCode = await run(
+            "/usr/bin/env",
+            ["tmux", "-L", Self.socketLabel, "kill-session", "-t", sessionID],
+            environment
+        )
+        return exitCode == 0
     }
 
     /// Kill an exactly-named session (`=` prefix, as in `isSessionAlive`) so a

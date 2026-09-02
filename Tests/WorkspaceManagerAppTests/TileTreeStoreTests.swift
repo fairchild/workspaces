@@ -82,44 +82,81 @@ struct TileTreeStoreTests {
     }
 
     /// The #1232 reclaim path, end to end through a stubbed `tmux` executable that
-    /// records its argv: explicitly closing a split pane kills the pane-scoped
-    /// session on the workspaces socket by its exact recorded name.
-    @Test("Closing a split pane kills its pane-scoped tmux session")
+    /// records its argv: explicitly closing a split pane kills the pane-scoped session
+    /// on the workspaces socket — by the session id the socket reports for it, not by
+    /// the name the pane derives (#1267).
+    @Test("Closing a split pane kills its pane-scoped tmux session by session id")
     func closingSplitPaneKillsItsTmuxSession() async throws {
-        let stubDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("tmux-stub-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: stubDirectory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: stubDirectory) }
-        let invocationFile = stubDirectory.appendingPathComponent("invocation")
-        let stubExecutable = stubDirectory.appendingPathComponent("tmux")
-        try "#!/bin/sh\necho \"$@\" > \"\(invocationFile.path)\"\nexit 0\n"
-            .write(to: stubExecutable, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o755], ofItemAtPath: stubExecutable.path)
+        let stub = try TmuxStub()
+        defer { stub.cleanUp() }
 
-        let probe = TmuxSessionProbe(environment: ["PATH": "\(stubDirectory.path):/usr/bin:/bin"])
         let store = TileTreeStore()
         store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
-        store.killTmuxSession = { await probe.killSession($0) }
 
         let directory = URL(fileURLWithPath: "/Users/test/code/repo")
         let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
         let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
         let expectedSessionName = try #require(split.tmuxSessionNameOverride)
+        try stub.publish(sessionName: expectedSessionName)
+
+        // The app observed this session backing the pane at launch, which is the only
+        // thing that authorizes ending it.
+        store.tmuxOwnershipLedger.record(
+            hostSessionID: split.id,
+            identity: TmuxLiveSession(
+                sessionID: "$7", name: expectedSessionName,
+                createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
+            launchedAt: Date(timeIntervalSince1970: 100)
+        )
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+            await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
+                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+        }
 
         #expect(store.handleProcessExit(for: split.id))
 
         // The kill is async and crosses a child-process launch, whose round trip
         // varies by orders of magnitude on loaded runners — wait on the stub's
         // recorded invocation, not a tuned clock.
-        let deadline = Date().addingTimeInterval(30)
-        while !FileManager.default.fileExists(atPath: invocationFile.path), Date() < deadline {
-            try await Task.sleep(for: .milliseconds(25))
-        }
-        let invocation = try String(contentsOf: invocationFile, encoding: .utf8)
+        let invocation = try await stub.awaitKillInvocation()
         #expect(invocation.contains("-L workspaces"))
         #expect(invocation.contains("kill-session"))
-        #expect(invocation.contains("-t =\(expectedSessionName)"))
+        #expect(invocation.contains("-t $7"))
+        // The defect this replaces: authorizing on the derived name.
+        #expect(invocation.contains("=\(expectedSessionName)") == false)
+    }
+
+    /// #1267 at the pane-teardown seam. A pane whose tmux session this run never
+    /// observed cannot be attributed to a surface it launched — the name shape says
+    /// only that the app *could* have named it, which on a same-user shared socket is
+    /// not the same as having created it. Closing that pane issues no kill.
+    @Test("A pane whose tmux session this run never observed is not killed on close")
+    func unattributablePaneSessionIsNotKilled() async throws {
+        let stub = try TmuxStub()
+        defer { stub.cleanUp() }
+
+        let store = TileTreeStore()
+        store.resolveTerminalMultiplexingMode = { .tmuxPerSession }
+
+        let directory = URL(fileURLWithPath: "/Users/test/code/repo")
+        let primary = store.activateSession(key: .repoPath(directory.path), directory: directory).session
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        try stub.publish(sessionName: try #require(split.tmuxSessionNameOverride))
+
+        // Deliberately no ledger entry: this is a session holding the pane's name that
+        // the app has no record of launching.
+        let outcomes = OutcomeLog()
+        store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
+            let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
+                .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+            await outcomes.append(outcome)
+            return outcome
+        }
+
+        #expect(store.handleProcessExit(for: split.id))
+
+        #expect(await outcomes.awaitFirst() == .notAttributable)
+        #expect(stub.killWasInvoked == false)
     }
 
     /// Which teardown may reclaim a tmux session: only a pane-scoped override (one
@@ -1076,5 +1113,80 @@ struct TileTreeStoreTests {
                 return id
             })
         #expect(writtenIDs == [recorded])
+    }
+}
+
+/// A `tmux` on `PATH` that answers `list-sessions` for one named session and records the
+/// argv of any `kill-session`. Enough of a server for the teardown seam to be exercised
+/// without going anywhere near a real socket — which for this repo's own developers is a
+/// socket carrying live agent sessions.
+@MainActor
+private struct TmuxStub {
+    let directory: URL
+    let probe: TmuxSessionProbe
+    private let nameFile: URL
+    private let invocationFile: URL
+
+    init() throws {
+        directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tmux-stub-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        nameFile = directory.appendingPathComponent("session-name")
+        invocationFile = directory.appendingPathComponent("invocation")
+        let executable = directory.appendingPathComponent("tmux")
+        let script = """
+            #!/bin/sh
+            NAME=$(cat "\(nameFile.path)" 2>/dev/null)
+            for arg in "$@"; do
+              case "$arg" in
+                list-sessions) printf '$7\\t%s\\t100\\t4242\\n' "$NAME"; exit 0;;
+                kill-session) echo "$@" > "\(invocationFile.path)"; exit 0;;
+              esac
+            done
+            exit 1
+
+            """
+        try script.write(to: executable, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        probe = TmuxSessionProbe(environment: ["PATH": "\(directory.path):/usr/bin:/bin"])
+    }
+
+    func publish(sessionName: String) throws {
+        try sessionName.write(to: nameFile, atomically: true, encoding: .utf8)
+    }
+
+    var killWasInvoked: Bool {
+        FileManager.default.fileExists(atPath: invocationFile.path)
+    }
+
+    func awaitKillInvocation() async throws -> String {
+        let deadline = Date().addingTimeInterval(30)
+        while !killWasInvoked, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        return try String(contentsOf: invocationFile, encoding: .utf8)
+    }
+
+    func cleanUp() {
+        try? FileManager.default.removeItem(at: directory)
+    }
+}
+
+/// Collects termination outcomes from the store's async teardown task so a test can wait
+/// on the outcome itself rather than on a clock.
+private actor OutcomeLog {
+    private var outcomes: [TmuxOwnedSessionTerminator.Outcome] = []
+
+    func append(_ outcome: TmuxOwnedSessionTerminator.Outcome) {
+        outcomes.append(outcome)
+    }
+
+    func awaitFirst() async -> TmuxOwnedSessionTerminator.Outcome? {
+        let deadline = Date().addingTimeInterval(30)
+        while outcomes.isEmpty, Date() < deadline {
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return outcomes.first
     }
 }

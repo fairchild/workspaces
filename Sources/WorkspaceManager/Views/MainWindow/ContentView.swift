@@ -1730,7 +1730,11 @@ struct ContentView: View {
                     mode: tileTreeStore.resolveTerminalMultiplexingMode()
                 )
             },
-            killTmuxSession: tileTreeStore.killTmuxSession,
+            killTmuxSession: { session in
+                await TmuxOwnedSessionTerminator(ledger: tileTreeStore.tmuxOwnershipLedger)
+                    .terminate(hostSessionID: session.id, requiringCreation: false)
+                    .didKill
+            },
             closeForRetirement: { sessionID in
                 _ = try await tileTreeStore.surfaceStore.closeForSessionRetirement(sessionID: sessionID)
             },
@@ -2745,34 +2749,64 @@ struct ContentView: View {
         // pre-restore seed (the default-home fallback) left on those keys, so a
         // resume/reattach surface is created fresh and the coordinator's key-reuse
         // path can't drop its initial command.
-        // Read before retiring: these are the tmux names this launch is holding, and they are
-        // what makes a kill below attributable. After the retire loop the sessions are gone and
-        // the app can no longer tell its own seed from a stranger's session on the shared
-        // socket (#1267).
-        let ownedTmuxSessionNames = Set(tileTreeStore.sessions.map(\.effectiveTmuxSessionName))
+        // Read before retiring: each tmux name this launch is holding, paired with the host
+        // session the ownership ledger files that session's provenance under. After the retire
+        // loop the rows are gone and the pairing is unrecoverable.
+        let ownedHostSessionIDsByTmuxName = Dictionary(
+            tileTreeStore.sessions.map { ($0.effectiveTmuxSessionName, $0.id) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let ownedTmuxSessionNames = Set(ownedHostSessionIDsByTmuxName.keys)
 
         for key in restoreController.ownedSessionKeys(in: plan) {
             _ = tileTreeStore.retireSessions(inScope: key)
         }
 
-        // Same ownership, tmux layer: the planner only chose resume because the
-        // prior tmux session is gone, so a live session on the resume surface's
-        // deterministic name can only be this launch's seed artifact. Kill it so
-        // the resume surface starts a fresh session instead of `-A`-attaching to
-        // the retired seed's leftover shell. Names another surface reattaches to
-        // are excluded by the controller (#1233).
+        // Same ownership, tmux layer: kill this launch's own seed so the resume surface
+        // starts a fresh session instead of `-A`-attaching to the retired seed's leftover
+        // shell. Names another surface reattaches to are excluded by the controller (#1233).
+        //
+        // Two gates, because holding a name is not creating a session. The controller
+        // narrows the candidates to names this launch holds; the ownership ledger then
+        // requires that the live session behind the name is one this launch *created*. A
+        // seed whose `new-session -A` adopted a session that was already there — someone
+        // else's shell, on a name two parties derived from the same directory — fails the
+        // second gate and is left running (#1267).
         let tmuxProbe = TmuxSessionProbe()
+        let terminator = TmuxOwnedSessionTerminator(ledger: tileTreeStore.tmuxOwnershipLedger)
         let teardownScope = restoreController.tmuxSessionNamesToKill(
             in: plan,
             ownedTmuxSessionNames: ownedTmuxSessionNames
         )
         for sessionName in teardownScope.skippedUnowned {
             restoreLog.info(
-                "[Restore] leaving tmux session \(sessionName, privacy: .public) alone: this launch did not create it"
+                "[Restore] leaving tmux session \(sessionName, privacy: .public) alone: this launch is not holding that name"
             )
         }
         for sessionName in teardownScope.kill {
-            await tmuxProbe.killSession(sessionName)
+            guard let hostSessionID = ownedHostSessionIDsByTmuxName[sessionName] else { continue }
+            switch await terminator.terminate(hostSessionID: hostSessionID, requiringCreation: true) {
+            case .killed(let id, _):
+                restoreLog.info(
+                    "[Restore] retired this launch's seed tmux session \(sessionName, privacy: .public) (\(id, privacy: .public))"
+                )
+            case .notAttributable:
+                restoreLog.info(
+                    "[Restore] leaving tmux session \(sessionName, privacy: .public) alone: this launch holds the name but did not create the session behind it"
+                )
+            case .notLive:
+                restoreLog.info(
+                    "[Restore] tmux session \(sessionName, privacy: .public) was already gone before restore"
+                )
+            case .socketUnavailable:
+                restoreLog.notice(
+                    "[Restore] leaving tmux session \(sessionName, privacy: .public) alone: tmux did not answer, so nothing could be attributed"
+                )
+            case .killFailed(let id):
+                restoreLog.notice(
+                    "[Restore] kill failed for tmux session \(sessionName, privacy: .public) (\(id, privacy: .public))"
+                )
+            }
         }
 
         // Probe before launch: any resume launch name still alive after the kill

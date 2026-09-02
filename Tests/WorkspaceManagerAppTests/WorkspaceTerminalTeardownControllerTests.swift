@@ -55,7 +55,8 @@ struct WorkspaceTerminalTeardownControllerTests {
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [pane, primary] },
             tmuxSessionName: { $0.effectiveTmuxSessionName },
-            killTmuxSession: { name in
+            killTmuxSession: { killedSession in
+                let name = killedSession.effectiveTmuxSessionName
                 killOrder.append(name)
                 return server.live.remove(name) != nil
             },
@@ -241,7 +242,8 @@ struct WorkspaceTerminalTeardownControllerTests {
         let controller = WorkspaceTerminalTeardownController(
             sessionsInScope: { _ in [a, b, stubborn] },
             tmuxSessionName: { $0.effectiveTmuxSessionName },
-            killTmuxSession: { name in
+            killTmuxSession: { killedSession in
+                let name = killedSession.effectiveTmuxSessionName
                 killCalls.append(name)
                 return name != "wm-stuck-p1"
             },
@@ -290,8 +292,8 @@ struct WorkspaceTerminalTeardownControllerTests {
             tmuxSessionName: {
                 WorkspaceTerminalTeardownController.tmuxSessionNameForTeardown(of: $0, mode: .tmuxPerSession)
             },
-            killTmuxSession: { name in
-                killCalls.append(name)
+            killTmuxSession: { killedSession in
+                killCalls.append(killedSession.effectiveTmuxSessionName)
                 return true
             },
             closeForRetirement: { closed.append($0) },
