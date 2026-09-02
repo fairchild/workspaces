@@ -23,7 +23,13 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from perf_schema import app_version_from_binary, canonical_summary, load_contract, numeric_stats
+from perf_schema import (
+    app_version_from_binary,
+    canonical_summary,
+    launch_trigger_label,
+    load_contract,
+    numeric_stats,
+)
 
 
 PERF_PATTERN = re.compile(r"\[Perf\]\s+(?P<body>.*)")
@@ -304,6 +310,19 @@ def build_summary(
             "This is a failed measurement, not a fast one; do not record a benchmark row "
             "from this run."
         )
+    # What closed the launch samples, put where a recorded row can reach it. The findings
+    # say this in prose for someone reading the summary; a release row is cut from the
+    # metadata, and a row that drops the qualifier presents a focus close as a launch
+    # number (#1399).
+    launch_phase = phase_summaries.get(f"{launch_metric}:none", {})
+    metadata: dict[str, Any] = {
+        "launch_trigger": launch_trigger_label(
+            launch_phase.get("categorical_fields", {}).get("trigger", {})
+        )
+    }
+    if protocol_epoch:
+        metadata["protocol_epoch"] = protocol_epoch
+
     summary = canonical_summary(
         scenario=scenario,
         build_kind=build_kind,
@@ -325,8 +344,8 @@ def build_summary(
             "legacy_metric_summaries": metric_summaries,
             # canonical_summary merges `extra` at the top level and then builds
             # `metadata` from summary["metadata"], which is where the history row
-            # reads the epoch from.
-            **({"metadata": {"protocol_epoch": protocol_epoch}} if protocol_epoch else {}),
+            # reads the epoch and the launch trigger from.
+            "metadata": metadata,
         },
     )
     summary["metrics_by_phase"] = phase_summaries

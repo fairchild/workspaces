@@ -7,6 +7,7 @@ import plistlib
 import re
 import statistics
 import subprocess
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,11 @@ DEFAULT_CONTRACT_PATH = REPO_ROOT / "config" / "performance" / "contract.json"
 # cannot silently rejoin the sample pool.
 CLICK_TO_FOCUS_METRICS = frozenset({"repo_click_to_focus", "workspace_click_to_focus"})
 CLICK_TO_FOCUS_SUCCESS_OUTCOMES = frozenset({"prompt_ready", "focused"})
+
+# The trigger that names a launch measurement as attention rather than readiness. A
+# `terminal_focus` close stops the clock when something brought the app forward, so on a
+# backgrounded launch the duration is time-to-foreground (#1399).
+ATTENTION_LAUNCH_TRIGGER = "terminal_focus"
 
 _DURATION_LINE_PATTERN = re.compile(
     r"metric=(?P<metric>[a-z_]+) duration_ms=(?P<duration>[0-9]+(?:\.[0-9]+)?)"
@@ -84,6 +90,28 @@ def numeric_stats(values: list[float], unit: str = "ms") -> dict[str, Any] | Non
         "p95": percentile(values, 95),
         "unit": unit,
     }
+
+
+def launch_trigger_label(triggers: Iterable[str | None]) -> str:
+    """How a recorded row names what closed its `launch_to_first_prompt` samples.
+
+    A median is only as meaningful as the samples under it, and `launch_to_first_prompt`
+    can close on either a readiness signal or `terminal_focus` — the second measures
+    time-to-foreground on a backgrounded launch. Duration alone cannot tell them apart,
+    so the row carries the triggers and a reader (or a `grep terminal_focus`) can (#1399).
+
+    Both parsers call this rather than formatting their own, so a `launch_trigger` cell
+    means the same thing whichever lane produced the row — the debug one via
+    `perf-baseline.sh`, the release one via the optimization skill's summarizer.
+
+    The values pass through from the log line: the vocabulary belongs to the Swift call
+    sites of `PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger:)`, and a
+    normalizing enum here would mislabel a newly added trigger until someone noticed.
+    Distinct triggers are joined rather than reduced to one, because a median taken over
+    a mix is exactly the row that most needs saying so.
+    """
+    present = sorted({trigger for trigger in triggers if trigger})
+    return "+".join(present)
 
 
 def metric_aliases(summary: dict[str, Any]) -> dict[str, Any]:

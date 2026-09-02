@@ -36,6 +36,11 @@ HISTORY_FIELDNAMES = [
     "workspace_click_to_focus_mean_ms",
     "activation_to_first_prompt_median_ms",
     "protocol_epoch",
+    # What closed the launch samples this row's median was taken over. A row whose cell
+    # names `terminal_focus` measured time-to-foreground on a backgrounded launch, not
+    # launch — a distinction the duration cannot carry on its own (#1399). Rendered by
+    # `perf_schema.launch_trigger_label`, so the debug and installed lanes agree.
+    "launch_trigger",
 ]
 
 # Which measurement protocol produced a row. Rows are only comparable within an epoch:
@@ -84,6 +89,10 @@ def history_row_from_summary(summary: dict[str, Any], timestamp: str) -> dict[st
         "imported_repos_median": metadata.get("imported_repos_median", ""),
         "activation_to_first_prompt_median_ms": metadata.get("activation_to_first_prompt_median_ms") or "",
         "protocol_epoch": metadata.get("protocol_epoch") or LEGACY_PROTOCOL_EPOCH,
+        # Empty when the producer reported no trigger — an older summary, or a capture
+        # where the metric never closed. Blank says "unreported", which is what it is;
+        # only a producer that saw a trigger can name one.
+        "launch_trigger": metadata.get("launch_trigger") or "",
     }
     for metric in _ROW_METRICS:
         row[f"{metric}_median_ms"] = _metric_stat(summary, metric, "median")
