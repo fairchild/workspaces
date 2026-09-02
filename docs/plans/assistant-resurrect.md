@@ -108,8 +108,10 @@ don't** — and even agents that survive go status-dark (#1397).
   exact recorded cwd → `freshShell`
   (`TerminalRestorePlanner.decideAction`). The resume command is a bare
   `claude --resume <id>` (`RestoreLaunchCommand.swift:17-19`), typed over
-  the automation text bridge because libghostty ignores per-surface launch
-  commands after the first surface.
+  the automation text bridge so restore can prefill without executing
+  (#888/#1485) — the reason is the delivery contract, not a demonstrated
+  libghostty limit; #889 is open on a restore symptom whose loss point is
+  unknown (#1520).
 - The agent session ID feeding that ladder comes exclusively from hook
   events (`agent_status_events`, newest row per host session) — delivered
   by `curl --unix-socket` to a listener that must be alive and must have

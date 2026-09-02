@@ -174,11 +174,17 @@ normally prompt. No more "tell the owner to clean up manually."
   check Console/stdout for a `[TileTreeStore] automation environment
   unavailable for session …` log — it now names exactly which of
   `handleRegistry`/`socketPath` was nil.
-- **`startCommand` does not exist and won't until #889 resolves.** #889
-  (libghostty drops per-surface `command`/`initial_input` for the second and
-  later surfaces created in a launch) is still open and still hard — a prior
-  investigation timeboxed a from-scratch native/zig repro without finding
-  the loss point. The `tile-start` file-drop bootstrap in this skill is the
+- **`startCommand` does not exist and won't until #889 resolves.** #889 is
+  open on a symptom — restored tile surfaces coming up as bare login shells —
+  and not on a demonstrated libghostty rule about second-and-later surfaces.
+  #1520 pinned the Swift-to-C marshalling seam
+  (`GhosttyTerminalConfigTests.cValueCarriesEveryPerSurfaceField`) and ran
+  staged spawn-layer captures: `command`, `env_vars` and `working_directory`
+  each reached `ghostty_surface_config_s`, and every surface got its own.
+  (`initial_input` is never launch-embedded here, so nothing exercises it.) The 2026-08-30
+  installed-build restore is still unexplained, so the loss point is unknown
+  rather than upstream. Don't plan against "libghostty drops it after the
+  first surface". The `tile-start` file-drop bootstrap in this skill is the
   durable workaround, not a stopgap; keep using it.
 - **Fresh worktrees trigger redundant native rebuilds.** A worktree without
   a pre-built `Frameworks/GhosttyKit.xcframework` fails `swift build` until

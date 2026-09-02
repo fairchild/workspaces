@@ -3,6 +3,7 @@
 //  WorkspaceManagerAppTests
 //
 
+import AppKit
 import Foundation
 import Testing
 
@@ -129,9 +130,9 @@ struct GhosttyTerminalConfigTests {
     @Test("A resume session's launch command is identical to a plain shell's")
     func resumeSessionLaunchCommandMatchesPlainShell() throws {
         // The initial command is delivered by SurfaceStore over the automation
-        // text bridge, never embedded in the launch command — libghostty ignores
-        // a per-surface `command` for surfaces created after the app's first,
-        // and an identical command means tmux/plain behavior can't diverge.
+        // text bridge, never embedded in the launch command — typed delivery lets
+        // restore prefill without executing (#1485), and an identical command
+        // means tmux/plain behavior can't diverge.
         let environment = ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"]
         for mode in [TerminalMultiplexingMode.tmuxPerSession, .ghosttyManagedSplits] {
             let resume = GhosttyTerminalConfig(
@@ -834,5 +835,113 @@ struct GhosttyTerminalConfigTests {
         }
 
         #expect(config().command == config().command)
+    }
+
+    /// #889's seam: the C struct actually handed to `ghostty_surface_new`. Every
+    /// other test here asserts the Swift-side composition; this one asserts the
+    /// marshalling, because a field the Swift struct holds but `withCValue` never
+    /// writes is dropped invisibly — and asserting only `command` is what let the
+    /// `env_vars` half of #889 go unnoticed until a live `log stream` caught it.
+    @Test("withCValue hands command, env_vars, and working_directory to the C config together")
+    @MainActor
+    func cValueCarriesEveryPerSurfaceField() throws {
+        let hostSessionID = UUID(uuidString: "5A0BE0DE-9F4D-4E5B-8A44-1FB4EC889000")!
+        let config = GhosttyTerminalConfig(
+            workingDirectory: URL(fileURLWithPath: "/tmp/repo-a"),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true,
+            tmuxSupportsSessionEnvironmentFlagOverride: true,
+            hostSessionID: hostSessionID,
+            hooksSocketPath: "/tmp/workspaces-hooks.sock"
+        )
+
+        let observed = try config.withCValue(view: NSView()) { cConfig in
+            // The reported row count, pinned before anything dereferences it.
+            // (The count is what a C pointer lets a test check; the allocation's
+            // real extent is not discoverable, so a buffer short of a count that
+            // still matches stays out of reach.) `withCValue` sets `env_vars` and
+            // `env_var_count` from independent expressions, so a count larger
+            // than the buffer reads past the allocation — undefined behavior, not
+            // a failing assertion — and a null pointer with a non-zero count
+            // yields an empty dictionary and downstream failures that never name
+            // the broken invariant. These are `#require`, so a mismatch stops the
+            // test here instead of there.
+            try #require(cConfig.env_var_count == config.environmentVariables.count)
+            let envVars = try #require(cConfig.env_vars)
+            let environmentPairs = (0..<cConfig.env_var_count).map { index in
+                (key: String(cString: envVars[index].key), value: String(cString: envVars[index].value))
+            }
+            return (
+                command: cConfig.command.map { String(cString: $0) },
+                workingDirectory: cConfig.working_directory.map { String(cString: $0) },
+                environmentPairs: environmentPairs,
+                environment: Dictionary(environmentPairs, uniquingKeysWith: { _, later in later }),
+                hasInitialInput: cConfig.initial_input != nil
+            )
+        }
+
+        #expect(observed.command == config.command)
+        #expect(observed.workingDirectory == config.workingDirectory)
+        // Whole-dictionary equality, not count-plus-spot-checks: a mispaired or
+        // corrupted value on any unchecked key must fail too (codex review). The
+        // pair count guards the fold itself — a duplicated key collapses into one
+        // entry, so equality alone would read a doubled row as a clean one.
+        #expect(observed.environment.count == observed.environmentPairs.count)
+        #expect(observed.environment == config.environmentVariables)
+        #expect(observed.environment["WORKSPACES_HOST_SESSION_ID"] == hostSessionID.uuidString)
+        #expect(observed.environment["TERM"] == "xterm-256color")
+        #expect(!observed.hasInitialInput)
+    }
+
+    /// `initial_input` is intentionally not launch-embedded: the initial command
+    /// rides the automation text bridge so restore can prefill without executing
+    /// (#888, #1485). The sibling test above pins the field absent for a config
+    /// that has no initial command to embed, where absence is the only possible
+    /// answer. This one marshals a session that *does* carry one — the shape where
+    /// embedding would be the tempting implementation — and reads the field back
+    /// through the same accessor after a value is written into it, so "absent"
+    /// is a measurement rather than a reader that can never see anything. That
+    /// write is a falsifiability control on the read, not coverage: it exercises
+    /// no production marshalling, no `ghostty_surface_new`, and no initial-input
+    /// parsing or cloning. The assertions that carry weight are the marshalled
+    /// nil and the command that does not smuggle the initial command instead.
+    @Test("withCValue leaves initial_input unset for a session carrying an initial command")
+    @MainActor
+    func cValueNeverEmbedsInitialInput() throws {
+        let initialCommand = "claude --resume sess-123"
+        let resume = GhosttyTerminalConfig(
+            launchContext: .hostSession(
+                HostTerminalSession(
+                    key: .repoPath("/tmp/repo-a"),
+                    directory: URL(fileURLWithPath: "/tmp/repo-a"),
+                    initialCommand: initialCommand
+                ),
+                hooksSocketPath: nil
+            ),
+            environment: ["SHELL": "/bin/zsh", "PATH": "/usr/bin:/bin"],
+            terminalMultiplexingMode: .tmuxPerSession,
+            isTmuxAvailableOverride: true
+        )
+
+        typealias Observation = (marshalled: String?, present: String?, command: String?)
+        let observed = resume.withCValue(view: NSView()) { cConfig -> Observation in
+            let marshalled = cConfig.initial_input.map { String(cString: $0) }
+            let command = cConfig.command.map { String(cString: $0) }
+            return initialCommand.withCString { pointer in
+                cConfig.initial_input = pointer
+                return (marshalled, cConfig.initial_input.map { String(cString: $0) }, command)
+            }
+        }
+
+        // The control, not coverage: fails if the read can no longer see an
+        // `initial_input` that is there, which is the only way the pin below
+        // goes vacuous. Nothing here exercises production marshalling.
+        #expect(observed.present == initialCommand)
+        #expect(observed.marshalled == nil)
+        // The command is the plain login-shell/tmux wrap either way: re-adding
+        // launch embedding to either field means restating the delivery contract.
+        #expect(observed.command == resume.command)
+        #expect(observed.command?.contains(initialCommand) == false)
     }
 }

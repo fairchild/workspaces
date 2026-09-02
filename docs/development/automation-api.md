@@ -524,7 +524,9 @@ user must confirm:
   `select: false`, the response reflects the pre-existing selection/active
   surface instead of claiming the new workspace owns focus.
 - **No start command.** `workspace.create` does not accept `startCommand`; that
-  option is intentionally blocked pending the libghostty issue tracked by #889.
+  option is intentionally blocked pending #889, which tracks restored surfaces
+  coming up unconfigured. #889 was filed as a libghostty defect; that
+  attribution has not held up and the loss point is unknown (#1520).
 - **Structured outcome.** `outcome` is `completed` or `confirmation_required`.
   A live-window-less app fails `unsupported` (never a data-layer fallback), an
   unknown/non-UUID `repoID` fails `invalid_request`, and unknown providers fail
