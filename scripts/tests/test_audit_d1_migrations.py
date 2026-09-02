@@ -108,9 +108,11 @@ class FreshDatabaseTests(unittest.TestCase):
         }
     )
 
-    def stub_wrangler(self, stdout: str, returncode: int = 1) -> None:
+    def stub_wrangler(self, stdout: str, returncode: int = 1, stderr: str = "") -> None:
         def fake_run(*args, **kwargs):  # noqa: ARG001
-            return subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr="")
+            return subprocess.CompletedProcess(
+                args=[], returncode=returncode, stdout=stdout, stderr=stderr
+            )
 
         patcher = unittest.mock.patch.object(audit.subprocess, "run", fake_run)
         patcher.start()
@@ -150,6 +152,47 @@ class FreshDatabaseTests(unittest.TestCase):
             check = audit.d1_environment_check(environment(), root)
 
         self.assertEqual(check.status, "warn")
+
+    # Wrangler writes unrelated chatter to stderr routinely — an unwritable debug log
+    # is enough, and that is what the machine reviewing this PR actually produced. The
+    # SQL answer is still on stdout.
+    NOISY_STDERR = (
+        "\n\U0001f6a8  Wrangler could not write to its debug log file at "
+        "/var/folders/xx/wrangler-debug.log\n"
+    )
+
+    def test_the_missing_table_is_seen_through_noise_on_stderr(self) -> None:
+        """The answer is on stdout, so a non-empty stderr must not hide it.
+
+        Reading only whichever stream is non-empty makes the fix above conditional on
+        wrangler happening to be quiet, and it is not reliably quiet.
+        """
+        self.stub_wrangler(self.NO_TABLE_STDOUT, stderr=self.NOISY_STDERR)
+
+        with tempdir() as tmp:
+            applied = audit.applied_d1_migrations(environment(), service_dir(tmp))
+
+        self.assertEqual(applied, set())
+
+    def test_a_fresh_database_fails_even_when_wrangler_writes_to_stderr(self) -> None:
+        """The end-to-end shape of the regression: `warn` here means `--strict` exits 0."""
+        self.stub_wrangler(self.NO_TABLE_STDOUT, stderr=self.NOISY_STDERR)
+
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql", "0002_feedback_audit.sql")
+            check = audit.d1_environment_check(environment(), root)
+
+        self.assertEqual(check.status, "fail")
+        self.assertIn("0002_feedback_audit.sql", check.detail)
+
+    def test_the_missing_table_is_seen_when_it_arrives_on_stderr(self) -> None:
+        """Neither stream is privileged: the error can land on either one."""
+        self.stub_wrangler("", stderr="no such table: d1_migrations: SQLITE_ERROR")
+
+        with tempdir() as tmp:
+            applied = audit.applied_d1_migrations(environment(), service_dir(tmp))
+
+        self.assertEqual(applied, set())
 
     def test_a_genuine_failure_still_warns(self) -> None:
         self.stub_wrangler(json.dumps({"error": {"text": "Authentication error [code: 10000]"}}))

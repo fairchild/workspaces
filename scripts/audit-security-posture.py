@@ -483,9 +483,17 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
         # report *softer* than one missing a single migration, which inverts the
         # check. Zero applied is the honest reading, and the pending-fail path below
         # already handles it.
-        detail = result.stderr.strip() or result.stdout.strip() or "wrangler failed"
-        if D1_MISSING_MIGRATIONS_TABLE.search(detail):
+        #
+        # Both streams are searched, and neither is privileged. Wrangler writes
+        # unrelated chatter to stderr routinely — an unwritable debug log is enough —
+        # so reading whichever stream is non-empty would make the paragraph above
+        # conditional on wrangler happening to be quiet, and the inversion would
+        # return whenever it was not.
+        if D1_MISSING_MIGRATIONS_TABLE.search(result.stdout) or D1_MISSING_MIGRATIONS_TABLE.search(
+            result.stderr
+        ):
             return set()
+        detail = result.stderr.strip() or result.stdout.strip() or "wrangler failed"
         raise RuntimeError(detail)
 
     payload = json.loads(result.stdout)
