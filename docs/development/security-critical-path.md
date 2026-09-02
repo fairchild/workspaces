@@ -118,10 +118,12 @@ wrangler's default of `migrations`, because omitting the field is not opting out
 Two places where this check is narrower than wrangler, both reported rather than
 guessed at. Pattern matching uses Python's `Path.glob`, which agrees with wrangler's
 minimatch on literal characters, `*`, `?` and `**` in segments that do not begin
-with a dot, and on skipping dotfiles and symlinks. A pattern outside that subset —
-character or POSIX classes, brace alternation, extglobs, a leading `!`, or a segment
-naming a dot component — warns and says which part it cannot compare, rather than
-matching a different set of files than wrangler applies. A table name carrying a
+with a dot, and on skipping dotfiles and anything reached through a symlink. A
+pattern outside that subset — character or POSIX classes, brace alternation,
+extglobs, a leading `!` or `#`, a segment naming a dot component, or a trailing
+`**`, whose meaning depends on the Python version — warns and says which part it
+cannot compare, rather than matching a different set of files than wrangler
+applies. A table name carrying a
 NUL, and an empty one, are refused rather than sent.
 
 One SQL failure is deliberately not in that bucket. A database that has never had

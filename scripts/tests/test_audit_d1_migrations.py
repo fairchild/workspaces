@@ -854,6 +854,65 @@ class MigrationsPatternTests(unittest.TestCase):
             found, ["0001_feedback/migration.sql", "0002_feedback_audit/migration.sql"]
         )
 
+    def test_a_migration_under_a_symlinked_directory_is_not_one(self) -> None:
+        """Wrangler descends only where `Dirent.isDirectory()` holds, so not into a link.
+
+        `Path.glob` walks straight through one, so the leaf looks like an ordinary
+        file and the environment fails over a migration wrangler never sees.
+        """
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/*/migration.sql",
+        )
+        with tempdir() as tmp:
+            root = self.nested(tmp)
+            shared = tmp / "shared" / "0003_shared"
+            shared.mkdir(parents=True)
+            (shared / "migration.sql").write_text("--\n", encoding="utf-8")
+            (root / "migrations" / "0003_shared").symlink_to(shared, target_is_directory=True)
+
+            found = audit.repo_migrations(env, root)
+
+        self.assertEqual(
+            found, ["0001_feedback/migration.sql", "0002_feedback_audit/migration.sql"]
+        )
+
+    def test_a_trailing_star_star_warns_rather_than_depending_on_python(self) -> None:
+        """Before 3.13 a trailing `**` matches directories only; wrangler's matches files.
+
+        The interpreter would decide the verdict, which is not something a gate may
+        leave to the machine it runs on.
+        """
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/**",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("trailing `**`", check.detail)
+
+    def test_a_comment_pattern_warns(self) -> None:
+        """Minimatch reads a leading `#` as a comment; `Path.glob` reads it literally."""
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/#0001.sql",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("comment", check.detail)
+
     def test_a_star_star_pattern_is_compared_not_refused(self) -> None:
         """`**` is inside the subset the two engines agree on, so it is supported."""
         env = audit.D1Environment(

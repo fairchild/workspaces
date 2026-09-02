@@ -695,7 +695,7 @@ def repo_migrations(environment: D1Environment, service_dir: Path) -> list[str]:
         return sorted(
             path.name
             for path in migrations_dir.glob("*.sql")
-            if is_migration_file(path) and not path.name.startswith(".")
+            if is_migration_file(path, migrations_dir) and not path.name.startswith(".")
         )
 
     relative_pattern = strip_dir_prefix(
@@ -717,7 +717,8 @@ def repo_migrations(environment: D1Environment, service_dir: Path) -> list[str]:
             (path.relative_to(migrations_dir).as_posix(), path)
             for path in migrations_dir.glob(relative_pattern)
         )
-        if is_migration_file(path) and not any(part.startswith(".") for part in Path(name).parts)
+        if is_migration_file(path, migrations_dir)
+        and not any(part.startswith(".") for part in Path(name).parts)
     )
 
 
@@ -737,7 +738,15 @@ def unsupported_pattern_reason(relative_pattern: str) -> str | None:
     """
     if relative_pattern.startswith("!"):
         return "a leading `!` negates the whole pattern in minimatch"
-    for segment in relative_pattern.split("/"):
+    if relative_pattern.startswith("#"):
+        return "a leading `#` is a comment in minimatch"
+    segments = relative_pattern.split("/")
+    if segments[-1] == "**":
+        # Before Python 3.13 a trailing `**` matches directories only, so the file
+        # filter empties the result; wrangler's `**` matches files. The version this
+        # runs under would decide the answer, which is not a thing a gate may do.
+        return "a trailing `**` matches directories, not files, on Python before 3.13"
+    for segment in segments:
         if segment.startswith("."):
             return f"segment {segment!r} begins with a dot, which minimatch treats specially"
         if D1_UNSUPPORTED_GLOB.search(segment):
@@ -745,14 +754,24 @@ def unsupported_pattern_reason(relative_pattern: str) -> str | None:
     return None
 
 
-def is_migration_file(path: Path) -> bool:
-    """A regular file, not a link to one.
+def is_migration_file(path: Path, root: Path) -> bool:
+    """A regular file reached without following a link.
 
     Wrangler walks with `Dirent.isFile()`, which is false for a symlink however it
-    resolves, so a symlinked `.sql` is not a migration it will ever apply. Counting
-    one here would fail a release over a migration that cannot be pending.
+    resolves, so a symlinked `.sql` is not a migration it will ever apply. It descends
+    only where `Dirent.isDirectory()` is true, which is likewise false for a symlinked
+    directory, so nothing beneath one is a migration either — and `Path.glob` walks
+    straight through it. Counting either would fail a release over a migration that
+    cannot be pending.
     """
-    return path.is_file() and not path.is_symlink()
+    if not path.is_file() or path.is_symlink():
+        return False
+    walked = root
+    for part in path.relative_to(root).parts[:-1]:
+        walked = walked / part
+        if walked.is_symlink():
+            return False
+    return True
 
 
 def strip_dir_prefix(pattern: str, migrations_dir: str) -> str:
