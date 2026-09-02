@@ -34,10 +34,10 @@ is for rules that outlive the incident that taught them.
 
 ## Writing Voice
 
-These rules govern every comment, review body, PR body, issue body, and discussion post an agent writes in this repo. #1420 fixed the shape of review bodies; these rules fix the sentences. They appear once, here — persona references point at this section rather than restating it (#1428).
+These rules govern every comment, review body, pull request body, issue body, and discussion post an agent writes in this repo. They cover sentence-level prose; #1420 covers the structure of a review body. The rules appear once, here. Persona references and agent prompts point at this section rather than restating it (#1428).
 
 - Start with the point. Do not announce what the comment is about to do; state the finding, verdict, or request in the first sentence.
 - Define jargon and acronyms on first use in a few plain words, or drop the term.
 - Use plain words and active voice. In an opening, give each sentence one idea.
 - Cut decoration: rhetorical triads, aphorisms, italics for drama, punchline sentences, stacked "not X, but Y" reversals.
-- Lead with the concrete case — the file, PR, or behavior at hand — and let any general principle follow it. Readable rather than dry: plain writing removes decoration, not specificity.
+- Lead with the concrete case — the file, pull request, or behavior at hand — and let any general principle follow it. Keep every specific fact, name, and number when you cut decoration.
