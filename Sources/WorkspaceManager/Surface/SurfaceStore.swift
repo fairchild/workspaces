@@ -124,12 +124,24 @@ final class SurfaceStore {
     /// Bring a newly created terminal surface up to its launch contract, then hand it
     /// `session.initialCommand`.
     ///
-    /// libghostty applies `working_directory` from `ghostty_surface_config_s` and
-    /// drops `command`, `env_vars`, and `initial_input` for surfaces created in some
-    /// windows (#889). A tmux-mode surface that loses its `command` comes up as a
-    /// bare login shell beside the session it was supposed to attach, holding none of
-    /// its tile-scoped environment — which is why a restored tile looks empty and why
-    /// its agent cannot report identity afterwards (#1478).
+    /// #889 is open on a symptom, not on an established mechanism. It was filed as
+    /// libghostty dropping `command`, `env_vars`, and `initial_input` for surfaces
+    /// after the app's first; that attribution has not held up. The marshalling seam
+    /// is now pinned by `GhosttyTerminalConfigTests.cValueCarriesEveryPerSurfaceField`,
+    /// which proves every per-surface field Swift holds — `command`, `env_vars`,
+    /// `working_directory` — is written into `ghostty_surface_config_s`, and staged
+    /// spawn-layer runs delivered those three to every surface with this repair path
+    /// enabled and firing zero times. (`initial_input` is never launch-embedded here,
+    /// so nothing exercises it.) Nothing proves what libghostty does with the struct
+    /// after it is handed over, and the
+    /// 2026-08-30 installed-build restore — 12 of 15 surfaces up bare — is still
+    /// unexplained. Treat the loss point as unknown rather than as settled upstream
+    /// behavior.
+    ///
+    /// The symptom is what this path answers: a tmux-mode surface that loses its
+    /// `command` comes up as a bare login shell beside the session it was supposed to
+    /// attach, holding none of its tile-scoped environment — which is why a restored
+    /// tile looks empty and why its agent cannot report identity afterwards (#1478).
     ///
     /// So the surface is verified against tmux, repaired by typing its launch script
     /// when the launch lost, and only then handed the initial command. Verifying

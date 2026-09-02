@@ -17,10 +17,18 @@ them. Every tile surface it created launched as a bare login shell: no tmux, no
 environment, no agent. The live tmux sessions holding the user's work sat
 untouched beside them.
 
-The cause is #889 — libghostty drops per-surface launch configuration — and the
-issue is filed narrower than the defect. Fix delivery first. Every other slice
-in the `arc:terminal-continuity` backlog is untestable until a restored tile
-surface can be configured at all.
+The cause is filed as #889 — libghostty drops per-surface launch configuration —
+and the issue is filed narrower than the defect. Fix delivery first. Every other
+slice in the `arc:terminal-continuity` backlog is untestable until a restored
+tile surface can be configured at all.
+
+> **Correction, 2026-09-02 (#1520).** The observations below stand; the
+> attribution in this paragraph does not. The Swift-to-C marshalling seam is now
+> pinned by `GhosttyTerminalConfigTests.cValueCarriesEveryPerSurfaceField`, and
+> staged spawn-layer runs delivered `command`, `env_vars`, and
+> `working_directory` to every surface. What remains unexplained is the capture
+> recorded here, whose loss point no later run has reproduced. Read "the cause is #889" as "the symptom is tracked by #889",
+> with the loss point unknown.
 
 ## What the capture showed
 
@@ -55,9 +63,11 @@ tmux sessions on the `-L workspaces` socket held live Agent UIs, and only the
 hand-opened ones were attached.
 
 **This widens #889.** The issue records that `command` and `initial_input` are
-dropped for surfaces created after the app's first. Environment variables are
-dropped too. The issue does not say so, and the distinction matters: an
-unconfigured environment is what breaks agent identity.
+missing on surfaces created after the app's first. Environment variables are
+missing too. The issue does not say so, and the distinction matters: an
+unconfigured environment is what breaks agent identity. ("After the app's first"
+describes what was observed in that capture, not a keying rule anyone has
+demonstrated — see the correction above.)
 
 ## Why it matters: one defect, three faces
 
