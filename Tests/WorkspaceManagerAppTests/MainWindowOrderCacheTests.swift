@@ -278,4 +278,129 @@ struct MainWindowOrderCacheTests {
         )
         #expect(second.first?.rows.map(\.name) == ["beta", "alpha"])
     }
+
+    /// Raised by the codex pass on #1504: the Recent memo keyed on the model fingerprint and
+    /// `now`, and passed `calendar` only to the builder — yet the calendar is what decides the
+    /// Today / This Week / Earlier boundaries. An automatic time-zone change while the app stays
+    /// active moves a workspace near midnight between buckets without moving any model value.
+    @Test("A calendar change rebuilds the Recent buckets")
+    func calendarChangeRebuildsRecentBuckets() {
+        let repo = repo()
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let alpha = workspace("alpha", in: repo, lastAccessedAt: now)
+        repo.workspaces = [alpha]
+        let snapshot = [alpha.id: now]
+
+        var eastern = Calendar(identifier: .gregorian)
+        eastern.timeZone = TimeZone(identifier: "America/New_York") ?? .gmt
+        var tokyo = Calendar(identifier: .gregorian)
+        tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo") ?? .gmt
+
+        let cache = MainWindowOrderCache()
+        func ask(_ calendar: Calendar) {
+            _ = cache.recentBuckets(
+                repos: [repo], snapshot: snapshot, repoRootPaneCounts: [:],
+                now: now, calendar: calendar)
+        }
+
+        ask(eastern)
+        ask(eastern)
+        #expect(cache.buildCount == 1, "the same calendar must still hit")
+
+        ask(tokyo)
+        #expect(cache.buildCount == 2, "a different calendar must rebuild the buckets")
+    }
+
+    /// The pin fingerprint carries `name` because the Pinned comparator falls back to it when two
+    /// workspaces share a rank — which a store carrying duplicates from an older build does. The
+    /// parity test above uses distinct ranks, so it would pass with `name` deleted from
+    /// `pinSignatures`; this one would not.
+    @Test("A rename reorders the Pinned section when ranks tie")
+    func pinnedOrderingInvalidatesOnRename() {
+        let repo = repo()
+        let alpha = workspace("alpha", in: repo)
+        let beta = workspace("beta", in: repo)
+        alpha.pinOrder = 0
+        beta.pinOrder = 0
+        let all = [alpha, beta]
+
+        let cache = MainWindowOrderCache()
+        let controller = SidebarPinController()
+        #expect(
+            cache.pinnedWorkspaces(in: all, controller: controller).map(\.name)
+                == ["alpha", "beta"]
+        )
+
+        alpha.name = "zulu"
+        #expect(
+            cache.pinnedWorkspaces(in: all, controller: controller).map(\.name)
+                == ["beta", "zulu"]
+        )
+    }
+
+    // MARK: - The pin graph revision
+
+    /// The blocker the codex pass on #1504 found. `togglePin` and `movePin` are reached from
+    /// closures a skipped row keeps, and both walk the *whole* workspace list — so a peer
+    /// replaced by an equal-valued instance has to move the number every row compares on, even
+    /// though that row's own workspace, pinned index, and pinned count are all unchanged.
+    @Test("A replaced peer moves the pin graph revision")
+    func peerReplacementMovesThePinGraphRevision() {
+        let repo = repo()
+        let mine = workspace("mine", in: repo)
+        let peer = workspace("peer", in: repo)
+        mine.pinOrder = 0
+        peer.pinOrder = 1
+
+        let cache = MainWindowOrderCache()
+        let controller = SidebarPinController()
+        let before = cache.pinnedSection(in: [mine, peer], controller: controller)
+
+        let replacement = Workspace(
+            name: peer.name,
+            path: URL(fileURLWithPath: peer.path),
+            sourceRepo: repo,
+            lastAccessedAt: peer.lastAccessedAt
+        )
+        replacement.id = peer.id
+        replacement.createdAt = peer.createdAt
+        replacement.pinOrder = peer.pinOrder
+
+        let after = cache.pinnedSection(in: [mine, replacement], controller: controller)
+
+        #expect(
+            before.workspaces.map(\.name) == after.workspaces.map(\.name),
+            "the section reads identically, which is what makes this hazard quiet"
+        )
+        #expect(
+            before.graphRevision != after.graphRevision,
+            "yet every row must rebuild so no closure keeps the superseded peer"
+        )
+    }
+
+    /// The converse, and the reason the revision is safe to carry on every row: the graph holding
+    /// still must not manufacture rebuilds, or the per-row scoping this slice exists for is gone.
+    @Test("An unchanged graph holds the pin graph revision still")
+    func unchangedGraphHoldsThePinGraphRevision() {
+        let repo = repo()
+        let alpha = workspace("alpha", in: repo)
+        let beta = workspace("beta", in: repo)
+        alpha.pinOrder = 0
+        beta.pinOrder = 1
+        let all = [alpha, beta]
+
+        let cache = MainWindowOrderCache()
+        let controller = SidebarPinController()
+        let first = cache.pinnedSection(in: all, controller: controller).graphRevision
+
+        for _ in 0..<5 {
+            #expect(cache.pinnedSection(in: all, controller: controller).graphRevision == first)
+        }
+
+        beta.pinOrder = 2
+        #expect(
+            cache.pinnedSection(in: all, controller: controller).graphRevision != first,
+            "a real pin move still has to invalidate"
+        )
+    }
 }

@@ -223,8 +223,14 @@ struct SidebarView: View {
         repos.flatMap(\.workspaces)
     }
 
+    /// The Pinned ordering and the revision of the graph it came from. Rows take both from this
+    /// one read so the number a row compares on always describes the list it was ordered against.
+    private var pinnedGraph: SidebarPinnedSection {
+        orderCache.pinnedSection(in: allWorkspaces, controller: pinController)
+    }
+
     private var pinnedWorkspaces: [Workspace] {
-        orderCache.pinnedWorkspaces(in: allWorkspaces, controller: pinController)
+        pinnedGraph.workspaces
     }
 
     private var recentBuckets: [RecentBucket] {
@@ -870,7 +876,7 @@ struct SidebarView: View {
         let key = sessionKey(for: workspace)
         let sessionState = rowSessionState(for: key)
         let isSelected = selectedWorkspace?.id == workspace.id
-        let pinned = pinnedWorkspaces
+        let pinned = pinnedGraph
         let state = WorkspaceRowDisplayState(
             workspaceID: workspace.id,
             identity: ObjectIdentifier(workspace),
@@ -892,8 +898,9 @@ struct SidebarView: View {
             isPinned: workspace.isPinned,
             isPinnable: pinController.isPinnable(workspace),
             isPinnedSectionRow: placement.isPinnedSection,
-            pinnedIndex: pinned.firstIndex { $0.id == workspace.id },
-            pinnedCount: pinned.count,
+            pinnedIndex: pinned.workspaces.firstIndex { $0.id == workspace.id },
+            pinnedCount: pinned.workspaces.count,
+            pinGraphRevision: pinned.graphRevision,
             // The live line and its elapsed timer belong to the selected row alone, which caps
             // the sidebar's running clocks at that one workspace's visible rows.
             liveStatus: isSelected

@@ -622,7 +622,7 @@ struct WorkspaceRow: View {
             .foregroundStyle(.secondary)
             .fixedSize()
 
-            Text(WorkspaceAgeFormatter.text(from: workspace.createdAt, to: statusClock ?? Date()))
+            WorkspaceAgeLabel(createdAt: workspace.createdAt, referenceDate: statusClock)
                 .foregroundStyle(.tertiary)
                 .fixedSize()
         }

@@ -391,6 +391,14 @@ def parse_row_builds(app_log: Path) -> tuple[int, int, float] | None:
 
     The counter is sampled every fiftieth evaluation, so the two endpoints are exact counts at
     exact instants — the rate between them is a measurement, not an estimate.
+
+    Two things it is not, both raised by the codex pass on #1504. It spans the whole app log, so
+    launch, the settling window, and the idle window before replay all sit inside it: this is a
+    lifecycle-window rate, and the true under-load rate is higher than it reads. And the counter
+    sits in `RepoRow.body` and `WorkspaceRow.body` alone, so web-source rows and the archived
+    disclosure are outside it. Both cut the same way in the before and the after arm, which is why
+    the ratio between arms — the 92% this exists to measure — survives them. An absolute
+    rows-per-second figure taken from it does not, so #1505 should re-derive rather than reuse one.
     """
     pattern = re.compile(
         r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d+).*sidebar_row_body_evaluations count=(\d+)",

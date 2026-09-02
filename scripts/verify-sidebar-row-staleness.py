@@ -26,6 +26,20 @@ What it checks, and why each is shaped the way it is:
   * **Rows keep rebuilding.** A boundary that skipped everything would pass the two checks above
     while showing nothing; the row counter has to keep climbing.
 
+What it cannot check, raised by the codex pass on #1504 and recorded here rather than left to be
+rediscovered. `/v1/ui-state` builds a fresh projection straight from the SwiftData models, the
+selection, the status dictionaries and `TileTreeStore` (`AutomationUIStateEnumerator.swift`). It
+reads no pixels and no mounted row values, so a row *displaying* a stale value while the
+projection reports the fresh one passes every check above. That is the shape of the accepted
+hover-title residual, and it was the shape of the frozen workspace age and the stale pin graph
+before those were fixed.
+
+So this pass proves the sidebar's model-side state stays live under churn: that the boundary has
+not frozen selection, derived agent state, or the rows themselves. What a *mounted* row draws is
+proven by the suite instead, where `SidebarRowRebuildTests` mounts real rows, counts their body
+evaluations, and invokes the closures they kept. Closing the gap here would mean reading rendered
+row text back out of the running app, which no automation verb offers today.
+
 Usage:
     ./scripts/launch-dev.sh --fixture --coexist --no-activate --clean-data \\
         --data-dir .dev-data/staleness \\

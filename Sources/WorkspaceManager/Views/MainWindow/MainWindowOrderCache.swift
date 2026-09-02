@@ -86,6 +86,18 @@ final class MainWindowOrderSlot<Value> {
     }
 }
 
+/// The Pinned section in display order, together with a number that changes whenever the
+/// workspace graph it was ordered from changes.
+///
+/// The two travel together because a row needs both and they have to agree: the ordering says
+/// where the row sits, and the revision says whether the *graph* behind it is still the one the
+/// row's retained pin closures hold. Taking them from separate calls would let a row pair an
+/// ordering from one graph with a revision from another.
+struct SidebarPinnedSection {
+    let workspaces: [Workspace]
+    let graphRevision: Int
+}
+
 /// The sidebar's orderings, each behind its own fingerprint.
 @MainActor
 final class MainWindowOrderCache {
@@ -103,8 +115,29 @@ final class MainWindowOrderCache {
     private let globalWebSourceSlot = MainWindowOrderSlot<WebSource>()
     private var recentFingerprint: [MainWindowOrderSignature]?
     private var recentTakenAt: Date?
+    private var recentCalendar: Calendar?
     private var recentBuckets: [RecentBucket] = []
     private var recentBuildCount = 0
+
+    /// Changes whenever the workspace graph the sidebar's pin closures walk changes — a
+    /// workspace joining or leaving it, a `pinOrder` or status moving, or SwiftData handing back
+    /// a replacement instance carrying identical values.
+    ///
+    /// It exists because `togglePin` and `movePin` are called from closures a *skipped* row
+    /// keeps, and both walk the whole workspace list rather than the row's own workspace:
+    /// `pin` reads `max(pinOrder)` across it and every mutation ends in `renumber`, which
+    /// rewrites `pinOrder` on the pinned set. A row fingerprinted on its own workspace plus its
+    /// position in the Pinned section compares equal when a *peer* is replaced, skips its body,
+    /// and goes on renumbering superseded objects — writes that never reach the store, leaving
+    /// duplicate `pinOrder` values or a move that reverts on the next refresh.
+    ///
+    /// It moves on the same fingerprint the Pinned ordering is memoized behind, which is already
+    /// the complete account of that graph: identity, `pinOrder`, name, and status for every
+    /// workspace. Steady-state agent churn moves none of them, so the per-row scoping this cache
+    /// exists to protect is untouched — a peer replacement is a rare event, and paying for it
+    /// with one full sidebar rebuild is the cheap side of the trade.
+    private(set) var pinGraphRevision = 0
+    private var pinGraphFingerprint: [MainWindowOrderSignature]?
 
     /// How many orderings this cache has actually built, across every slot. See
     /// `MainWindowOrderSlot.buildCount` for why the count rather than the result is what a test
@@ -149,19 +182,31 @@ final class MainWindowOrderCache {
         }
     }
 
-    /// The Pinned section in display order. The sidebar reads this twice per evaluation — once
-    /// for the rows, once to decide which header carries the inline actions — so the memo pays
-    /// for itself before any coalescing window is considered.
+    /// The Pinned section in display order, with the revision of the graph behind it. The
+    /// sidebar reads this twice per evaluation — once for the rows, once to decide which header
+    /// carries the inline actions — so the memo pays for itself before any coalescing window is
+    /// considered.
+    func pinnedSection(
+        in workspaces: [Workspace],
+        controller: SidebarPinController
+    ) -> SidebarPinnedSection {
+        let fingerprint = Self.pinSignatures(workspaces)
+        if fingerprint != pinGraphFingerprint {
+            pinGraphFingerprint = fingerprint
+            pinGraphRevision += 1
+        }
+        let ordered = pinnedWorkspaceSlot.ordered(key: globalKey, fingerprint: fingerprint) {
+            controller.pinnedWorkspaces(in: workspaces)
+        }
+        return SidebarPinnedSection(workspaces: ordered, graphRevision: pinGraphRevision)
+    }
+
+    /// The Pinned ordering alone, for callers with no closure to keep fresh.
     func pinnedWorkspaces(
         in workspaces: [Workspace],
         controller: SidebarPinController
     ) -> [Workspace] {
-        pinnedWorkspaceSlot.ordered(
-            key: globalKey,
-            fingerprint: Self.pinSignatures(workspaces)
-        ) {
-            controller.pinnedWorkspaces(in: workspaces)
-        }
+        pinnedSection(in: workspaces, controller: controller).workspaces
     }
 
     func repoWebSources(for repo: Repo) -> [WebSource] {
@@ -202,6 +247,11 @@ final class MainWindowOrderCache {
     /// that passed a freshly constructed `Date()` per access would miss every time; that is what
     /// `MainWindowOrderCacheTests.freshInstantPerAccessDefeatsTheRecentMemo` pins, so the hazard
     /// fails a test rather than going quiet.
+    ///
+    /// `calendar` joins the key rather than only reaching the builder. It is what decides the
+    /// Today / This Week / Earlier boundaries, so an automatic time-zone change while the app
+    /// stays active moves a workspace near midnight between buckets without moving any model
+    /// value or `now`. Keyed on it, that change misses and rebuilds.
     func recentBuckets(
         repos: [Repo],
         snapshot: [UUID: Date],
@@ -214,7 +264,7 @@ final class MainWindowOrderCache {
             snapshot: snapshot,
             repoRootPaneCounts: repoRootPaneCounts
         )
-        if fingerprint == recentFingerprint, now == recentTakenAt {
+        if fingerprint == recentFingerprint, now == recentTakenAt, calendar == recentCalendar {
             return recentBuckets
         }
         recentBuildCount += 1
@@ -227,6 +277,7 @@ final class MainWindowOrderCache {
         )
         recentFingerprint = fingerprint
         recentTakenAt = now
+        recentCalendar = calendar
         return recentBuckets
     }
 

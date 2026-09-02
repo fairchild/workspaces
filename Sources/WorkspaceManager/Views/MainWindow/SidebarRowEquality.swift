@@ -125,6 +125,11 @@ struct RepoRowDisplayState: Equatable {
 /// Down entries used to rebuild that ordering every time the menu opened, and a menu closure
 /// that survives a skipped body would have rebuilt it from a stale workspace list. Carrying the
 /// two numbers both fingerprints that input and retires the sort.
+///
+/// They are not enough on their own, which is what `pinGraphRevision` is for: the pin verbs
+/// walk the *whole* workspace list, not just this row's workspace, so a peer replaced by an
+/// equal-valued instance leaves index and count untouched while the graph underneath them
+/// changes. See `MainWindowOrderCache.pinGraphRevision`.
 struct WorkspaceRowDisplayState: Equatable {
     let workspaceID: UUID
     /// The `Workspace` object this row's closures captured — see `SidebarRowIdentity` above.
@@ -150,6 +155,10 @@ struct WorkspaceRowDisplayState: Equatable {
     /// Position within the Pinned section, `nil` when the workspace is not in it.
     let pinnedIndex: Int?
     let pinnedCount: Int
+    /// The revision of the workspace graph this row's retained `togglePin` and `movePin`
+    /// closures walk. Every workspace row carries the same number, so a peer replacement
+    /// rebuilds all of them and no closure survives holding a superseded object.
+    let pinGraphRevision: Int
     let liveStatus: SidebarLiveSessionStatus?
     let sessionState: SidebarRowSessionState
 

@@ -297,7 +297,8 @@ struct SidebarRowEqualityTests {
     private static func pinState(
         for workspace: Workspace,
         pinnedIndex: Int?,
-        pinnedCount: Int
+        pinnedCount: Int,
+        pinGraphRevision: Int = 0
     ) -> WorkspaceRowDisplayState {
         WorkspaceRowDisplayState(
             workspaceID: workspace.id,
@@ -322,6 +323,7 @@ struct SidebarRowEqualityTests {
             isPinnedSectionRow: pinnedIndex != nil,
             pinnedIndex: pinnedIndex,
             pinnedCount: pinnedCount,
+            pinGraphRevision: pinGraphRevision,
             liveStatus: nil,
             sessionState: SidebarRowSessionState()
         )

@@ -48,7 +48,7 @@ matter to that row.
 | Closure | What it reads that could be stale | Disposition |
 |---|---|---|
 | `onToggleExpansion`, `onSelect` | `expansionController`, `sidebarHasKeyFocus`, the two selection `@Binding`s | Live (boxes) |
-| `onTogglePin` → `togglePin` | `allWorkspaces`, derived from the captured `repos`. `pin` reads `max(pinOrder)` across it and `renumber` rewrites the pinned set | **Fingerprinted** — any pin, unpin, reorder, archive or delete changes `pinnedCount` (and usually `pinnedIndex`), which every workspace row carries, so every workspace row rebuilds before the next pin gesture. A workspace *added* while a row was stale carries no `pinOrder`, so it changes neither the maximum nor the pinned set |
+| `onTogglePin` → `togglePin`, menu · Move Up / Move Down | `allWorkspaces`, derived from the captured `repos`. `pin` reads `max(pinOrder)` across it, and every mutation ends in `renumber`, which rewrites `pinOrder` over the whole pinned set | **Fingerprinted** by `pinGraphRevision` — see "The peer graph" below. `pinnedIndex` and `pinnedCount` are not enough on their own |
 | menu · Move Up / Move Down `.disabled` | used to rebuild the Pinned ordering from the captured list on every open | **Fingerprinted and retired** — `canMovePinUp` / `canMovePinDown` read `pinnedIndex` and `pinnedCount` off the row's own state, which also removes a sort from the menu path |
 | menu · Reveal in Finder gate | `usesHostWorkspaceFiles` over the `@Environment` registry and `workspace.backendIdentifier` | Live; also **fingerprinted** by `backendIdentifier` |
 | menu · Pin / Unpin | `isPinnable`, `isPinned` | **Fingerprinted** |
@@ -106,10 +106,57 @@ the same observation from the other side, and worth recording — SwiftData is *
 instances during steady-state agent churn, so this is cheap insurance against a rare event rather
 than a cost on the hot path.
 
+## The peer graph
+
+Per-row identity closes the hazard for the object a closure *is handed*. It does not close it for
+the objects a closure goes on to *walk*, and the pin verbs walk the whole workspace list:
+`SidebarPinController.pin` reads `max(pinOrder)` across it, and every mutation — pin, unpin, move,
+and the rollback on a failed save — ends in `renumber`, which rewrites `pinOrder` over the pinned
+set.
+
+So when SwiftData replaces a **peer** with an equal-valued instance, a row keyed on its own
+workspace plus `pinnedIndex`/`pinnedCount` compares equal: the ordering reads identically, the
+index and count are unchanged, and the row's own object was never touched. The row skips, keeps
+its `togglePin` closure over the superseded array, and the next Pin or Move Up renumbers objects
+whose writes never reach the store — a move that reverts on the next refresh, duplicate persisted
+`pinOrder` values, or a save that fails outright. Found by the codex pass on #1504.
+
+`WorkspaceRowDisplayState.pinGraphRevision` closes it. `MainWindowOrderCache` already fingerprints
+that graph to memoize the Pinned ordering, and that fingerprint is already the complete account of
+what the pin verbs read: identity, `pinOrder`, name, and status for every workspace. The cache
+bumps a counter whenever it changes and hands it back with the ordering, as one
+`SidebarPinnedSection`, so a row cannot pair an ordering from one graph with a revision from
+another. Every workspace row carries the same number, so a peer replacement rebuilds all of them
+and no closure survives holding a superseded object.
+
+The trade is deliberate and lands on the cheap side. A peer replacement now rebuilds the whole
+workspace list rather than one row, but the measurement above is the reason that is affordable:
+SwiftData does not churn instances during steady-state agent churn, so the revision holds still
+through the load this slice exists to survive. What moves it — a workspace added, archived,
+deleted, pinned, renamed, or replaced — is a human-paced event that was going to rebuild most rows
+anyway.
+
+`SidebarRowRebuildTests.peerReplacementRefreshesTheRetainedPinClosure` mounts the rows and proves
+it through the closure itself rather than through the state value: it invokes the `onTogglePin`
+the row actually kept and asserts the array it walks no longer contains the superseded peer.
+
+## Two surfaces that outlive their row's body
+
+A row that skips its body stops re-reading anything its body computed — including the clock. Two
+places in the row's expression keep drawing after that:
+
+- **The hover card**, below, which needed the most thinking.
+- **The workspace age**, which read `Date()` in the row's body. Under the old shape every sidebar
+  refresh rebuilt every row, so it was never wrong for long; under this one a workspace created 59
+  minutes ago kept showing `59m` past the hour, beside an elapsed timer that was still advancing,
+  until the row's state moved for some unrelated reason. `WorkspaceAgeLabel` takes the fix the
+  elapsed timer already had: `createdAt` is fixed for the workspace's life, so the label takes it
+  and owns a minute clock inside a leaf of its own. Also found by the codex pass on #1504.
+
 ## Why the hover card needed its own thinking
 
-The card is the only surface that can be *on screen* while its row's body never runs again, so it
-is the one place a fingerprint has to cover more than what the row itself draws:
+The card is the surface that can be *on screen* longest while its row's body never runs again, so
+it is the place a fingerprint has to cover most beyond what the row itself draws:
 
 - **Agent detail the row does not draw** — model, context percent, cost, last-active. A cost tick
   moves none of the dot, the badge, or the live line, so the row's own appearance would not have
