@@ -239,6 +239,13 @@ class D1EnvironmentDiscoveryTests(unittest.TestCase):
     """
 
     def test_both_the_default_and_named_environments_are_found(self) -> None:
+        """The unnamed environment is labelled for what it is, not for what it deploys.
+
+        It used to be called `production`, which is true of this repo and not of the
+        config: wrangler's top-level tables are the default environment, and calling
+        them by a guessed deployment name is what let `[env.production]` collide with
+        them.
+        """
         import tomllib
 
         found = audit.d1_environments(tomllib.loads(textwrap.dedent(WRANGLER_TOML)))
@@ -246,10 +253,45 @@ class D1EnvironmentDiscoveryTests(unittest.TestCase):
         self.assertEqual(
             [(env.name, env.database_name) for env in found],
             [
+                ("top-level", "workspaces-feedback"),
                 ("preview", "workspaces-feedback-preview"),
-                ("production", "workspaces-feedback"),
             ],
         )
+
+    def test_a_named_production_environment_does_not_erase_the_default_one(self) -> None:
+        """Wrangler's unnamed top-level environment is distinct from `[env.production]`.
+
+        Both are legal in the same config and they can point at different databases.
+        Keying the top-level one under a guessed name lets a real `[env.production]`
+        overwrite it, and the default environment then gets no check and no warning —
+        the exact "an environment goes unchecked" failure this function claims to avoid.
+        """
+        import tomllib
+
+        toml = """\
+            name = "svc"
+
+            [[d1_databases]]
+            binding = "DB"
+            database_name = "default-db"
+            migrations_dir = "migrations"
+
+            [env.production]
+            name = "svc-production"
+
+            [[env.production.d1_databases]]
+            binding = "DB"
+            database_name = "named-prod-db"
+            migrations_dir = "migrations"
+        """
+        found = audit.d1_environments(tomllib.loads(textwrap.dedent(toml)))
+
+        self.assertIn(
+            "default-db",
+            {env.database_name for env in found},
+            "the top-level environment was dropped from the audit",
+        )
+        self.assertEqual(len(found), 2)
 
     def test_a_binding_without_migrations_is_not_watched(self) -> None:
         """`migrations_dir` is what makes a database one this check has an opinion about."""

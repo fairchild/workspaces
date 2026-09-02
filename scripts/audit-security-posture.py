@@ -91,6 +91,11 @@ D1_QUERY_TIMEOUT_SECONDS = 60
 # Anchored on a word boundary so a differently-named missing table (`d1_migrations_v2`)
 # still raises instead of being read as "zero applied".
 D1_MISSING_MIGRATIONS_TABLE = re.compile(r"no such table:\s*d1_migrations\b")
+# Wrangler's unnamed top-level tables are an environment in their own right,
+# distinct from any `[env.<name>]`. Naming it for what it is rather than for what
+# this repo happens to deploy there keeps a real `[env.production]` from colliding
+# with it.
+D1_DEFAULT_ENVIRONMENT = "top-level"
 
 
 @dataclass(frozen=True)
@@ -408,15 +413,19 @@ def d1_environments(config: dict[str, object]) -> list[D1Environment]:
     named (see `self_hosted_lanes`).
 
     The top-level tables are wrangler's default environment; `[env.<name>]` adds the
-    rest.
+    rest. They are collected as a list rather than keyed by name because the two
+    namespaces can collide: `[env.production]` is legal, distinct from the top-level
+    environment, and may bind a different database. Keyed, the named one would
+    overwrite the default and the default would go unchecked and unreported — the
+    failure this function exists to prevent, arriving from the inside.
     """
-    sections: dict[str, object] = {"production": config}
+    sections: list[tuple[str, object]] = [(D1_DEFAULT_ENVIRONMENT, config)]
     named = config.get("env")
     if isinstance(named, dict):
-        sections.update(named)
+        sections.extend(sorted(named.items()))
 
     environments: list[D1Environment] = []
-    for name, section in sorted(sections.items()):
+    for name, section in sections:
         if not isinstance(section, dict):
             continue
         databases = section.get("d1_databases")
