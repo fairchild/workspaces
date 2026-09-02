@@ -859,14 +859,18 @@ struct ContentView: View {
         }
     }
 
+    /// The repo's most recently opened web source, whose favicon the toolbar wears. One pass
+    /// rather than a sort: the toolbar asks on every evaluation and reads only the winner, so
+    /// ordering the rest is work with nowhere to go, and the tie-break's ICU collation then runs
+    /// only on an actual tie (#1366's sweep of the in-body sort inventory).
     private func preferredToolbarIconSource(for repo: Repo) -> WebSource? {
-        repo.webSources.sorted { lhs, rhs in
+        repo.webSources.min { lhs, rhs in
             if lhs.lastAccessedAt != rhs.lastAccessedAt {
                 return lhs.lastAccessedAt > rhs.lastAccessedAt
             }
 
             return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
-        }.first
+        }
     }
 
     @ViewBuilder

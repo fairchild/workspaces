@@ -21,6 +21,11 @@
         static let commandStatusesEnvKey = "WORKSPACES_UI_FIXTURE_COMMAND_STATUSES"
         static let pinnedEnvKey = "WORKSPACES_UI_FIXTURE_PINNED"
         static let archivedEnvKey = "WORKSPACES_UI_FIXTURE_ARCHIVED"
+        static let loadWorkspacesEnvKey = "WORKSPACES_UI_FIXTURE_LOAD_WORKSPACES"
+
+        /// Upper bound on `WORKSPACES_UI_FIXTURE_LOAD_WORKSPACES`, so a mistyped value seeds a
+        /// crowded sidebar rather than an unbounded one.
+        static let maximumLoadWorkspaces = 64
 
         /// Idempotency latch — `seedAgentStatesIfNeeded` may be invoked multiple times
         /// as views re-appear, but the synthetic events should only land once per launch.
@@ -129,11 +134,69 @@
             )
             context.insert(refactorRuntimeWorkspace)
 
+            seedLoadWorkspaces(
+                in: context,
+                repos: [
+                    skillsRepo, servicesRepo, superpowersRepo,
+                    workspacesRepo, bertramChatRepo, breadBuilderRepo,
+                ],
+                workspacesRoot: workspacesRoot,
+                now: now
+            )
+
             do {
                 try context.save()
             } catch {
                 log.error("[UIFixture] Failed to seed fixture data: \(String(describing: error), privacy: .public)")
             }
+        }
+
+        /// Extra workspaces for load measurement, opt-in via `WORKSPACES_UI_FIXTURE_LOAD_WORKSPACES`
+        /// (a count, capped at `maximumLoadWorkspaces`). Absent or non-positive seeds nothing, so
+        /// every existing fixture capture renders exactly as before.
+        ///
+        /// The perf acceptance inherited from #1347 asks for at least twelve live agent sessions,
+        /// and the standard fixture set carries five — which is why every measurement in that arc
+        /// was taken at six sessions and the twelve-session floor was never reached. One session
+        /// is created per distinct workspace path, so these are named `load-01`… (addressable from
+        /// `WORKSPACES_UI_FIXTURE_AGENT_STATES`), spread round-robin across the seeded repos, and
+        /// dated into the past so none of them displaces the auto-selected `feature-auth`.
+        private static func seedLoadWorkspaces(
+            in context: ModelContext,
+            repos: [Repo],
+            workspacesRoot: URL,
+            now: Date
+        ) {
+            guard
+                let raw = ProcessInfo.processInfo.environment[loadWorkspacesEnvKey],
+                let requested = Int(raw.trimmingCharacters(in: .whitespaces)),
+                requested > 0,
+                !repos.isEmpty
+            else { return }
+
+            let count = min(requested, maximumLoadWorkspaces)
+            if count < requested {
+                log.error(
+                    "[UIFixture] \(loadWorkspacesEnvKey, privacy: .public)=\(requested, privacy: .public) exceeds the cap; seeding \(count, privacy: .public)"
+                )
+            }
+
+            for index in 0..<count {
+                let repo = repos[index % repos.count]
+                let name = String(format: "load-%02d", index + 1)
+                context.insert(
+                    Workspace(
+                        name: name,
+                        path: workspacesRoot.appendingPathComponent(
+                            "\(repo.name)/\(name)", isDirectory: true),
+                        sourceRepo: repo,
+                        lastAccessedAt: now.addingTimeInterval(-Double(index + 1) * 60),
+                        gitBranch: "workspace/\(name)"
+                    )
+                )
+            }
+
+            log.info("[UIFixture] Seeded \(count, privacy: .public) load workspaces")
         }
 
         /// Reads `WORKSPACES_UI_FIXTURE_PINNED` — a comma-separated workspace-name list —

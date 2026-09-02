@@ -1,0 +1,409 @@
+//
+//  MainWindowOrderCache.swift
+//  WorkspaceManager
+//
+//  Memoizes the orderings the main window builds inside `body`: the sidebar's Pinned section,
+//  each repo's active and archived workspaces, each repo's and workspace's web sources, the
+//  global Web section, the Recent buckets, and the repo landing page's two lists. #1354
+//  memoized the repo ordering and left the rest as an inventory; this is that inventory
+//  (#1366). Every one of them allocates a sorted array and most run ICU collation, while their
+//  inputs change only when someone adds, renames, pins, archives, or opens something — these
+//  views re-render far more often than that.
+//
+
+import Foundation
+import WorkspaceManagerCore
+
+/// One element's contribution to an ordering fingerprint.
+///
+/// `identity` rides alongside `id` for the reason review found in #1354: SwiftData can hand back
+/// a replacement instance carrying identical values, and a cache keyed on values alone would go
+/// on serving the superseded object. `date`, `name`, and `rank` are the fields the comparators
+/// read; `stateCode` carries whatever else decides membership — a status, a pinned flag — so a
+/// row leaving or joining a filtered section invalidates the ordering it left or joined.
+///
+/// `ownerIdentity` is the object this element was *reached through*, and only the pin fingerprint
+/// sets it. A caller that captured the owner and re-derives its children on each use — which is
+/// what `SidebarView` does with `let repos` and `repos.flatMap(\.workspaces)` — goes stale when
+/// the owner is replaced, even if every child instance survives the swap. Fingerprinting the
+/// element alone would not see that.
+struct MainWindowOrderSignature: Equatable {
+    let id: UUID
+    let identity: ObjectIdentifier
+    let ownerIdentity: ObjectIdentifier?
+    let date: Date
+    let name: String
+    let rank: Int?
+    let stateCode: Int
+
+    init(
+        id: UUID,
+        identity: ObjectIdentifier,
+        ownerIdentity: ObjectIdentifier? = nil,
+        date: Date = .distantPast,
+        name: String = "",
+        rank: Int? = nil,
+        stateCode: Int = 0
+    ) {
+        self.id = id
+        self.identity = identity
+        self.ownerIdentity = ownerIdentity
+        self.date = date
+        self.name = name
+        self.rank = rank
+        self.stateCode = stateCode
+    }
+}
+
+/// A memoized ordering, keyed by the container it belongs to (a repo id, a workspace id, or
+/// `globalKey` for the sections that have no container).
+///
+/// Held in the sidebar's `@State` so the instance survives body evaluations without registering
+/// observation, the same shape `SidebarRepoSortCache` and `PathNormalizationCache` use. Capacity
+/// is bounded by clearing wholesale and re-missing rather than by eviction bookkeeping: the
+/// keys are model ids, so the bound is only ever reached by a store far larger than a sidebar.
+@MainActor
+final class MainWindowOrderSlot<Value> {
+    private static var capacity: Int { 512 }
+
+    private var fingerprints: [UUID: [MainWindowOrderSignature]] = [:]
+    private var values: [UUID: [Value]] = [:]
+
+    /// How many times this slot has actually sorted. A memo whose hit rate is invisible is a memo
+    /// nobody can prove works: every input is fingerprinted, so a hit and a miss return the same
+    /// answer and no assertion over the *result* can tell them apart. Reading the count is what
+    /// lets a test prove a hit, and lets one pin the caller-shape hazard that would defeat it.
+    private(set) var buildCount = 0
+
+    func ordered(
+        key: UUID,
+        fingerprint: [MainWindowOrderSignature],
+        build: () -> [Value]
+    ) -> [Value] {
+        if fingerprints[key] == fingerprint, let cached = values[key] {
+            return cached
+        }
+        buildCount += 1
+        if fingerprints.count >= Self.capacity {
+            fingerprints.removeAll(keepingCapacity: true)
+            values.removeAll(keepingCapacity: true)
+        }
+        let built = build()
+        fingerprints[key] = fingerprint
+        values[key] = built
+        return built
+    }
+}
+
+/// The Pinned section in display order, together with a number that changes whenever the
+/// workspace graph it was ordered from changes.
+///
+/// The two travel together because a row needs both and they have to agree: the ordering says
+/// where the row sits, and the revision says whether the *graph* behind it is still the one the
+/// row's retained pin closures hold. Taking them from separate calls would let a row pair an
+/// ordering from one graph with a revision from another.
+struct SidebarPinnedSection {
+    let workspaces: [Workspace]
+    let graphRevision: Int
+
+    /// Where one workspace sits in the section, and which graph that answer came from.
+    ///
+    /// The three travel as one value because they are one fact about one graph: a row that
+    /// assembled them separately could take its position from one evaluation and its revision
+    /// from another. It is also the seam the suite builds row states through, so the derivation
+    /// cannot drift between production and the tests.
+    struct Placement: Equatable {
+        let index: Int?
+        let count: Int
+        let graphRevision: Int
+    }
+
+    func placement(of workspace: Workspace) -> Placement {
+        Placement(
+            index: workspaces.firstIndex { $0.id == workspace.id },
+            count: workspaces.count,
+            graphRevision: graphRevision
+        )
+    }
+}
+
+/// The sidebar's orderings, each behind its own fingerprint.
+@MainActor
+final class MainWindowOrderCache {
+    /// Stands in for a container id where the ordering has no container. A fresh UUID per cache
+    /// instance rather than a literal: the slot it keys is private to this object, so it only
+    /// has to be distinct from the model ids sharing the same slot, which it is by construction.
+    private let globalKey = UUID()
+
+    private let allWorkspaceSlot = MainWindowOrderSlot<Workspace>()
+    private let activeWorkspaceSlot = MainWindowOrderSlot<Workspace>()
+    private let archivedWorkspaceSlot = MainWindowOrderSlot<Workspace>()
+    private let pinnedWorkspaceSlot = MainWindowOrderSlot<Workspace>()
+    private let repoWebSourceSlot = MainWindowOrderSlot<WebSource>()
+    private let workspaceWebSourceSlot = MainWindowOrderSlot<WebSource>()
+    private let globalWebSourceSlot = MainWindowOrderSlot<WebSource>()
+    private var recentFingerprint: [MainWindowOrderSignature]?
+    private var recentTakenAt: Date?
+    private var recentCalendar: Calendar?
+    private var recentBuckets: [RecentBucket] = []
+    private var recentBuildCount = 0
+
+    /// Changes whenever the workspace graph the sidebar's pin closures walk changes — a
+    /// workspace joining or leaving it, a `pinOrder` or status moving, or SwiftData handing back
+    /// a replacement instance carrying identical values.
+    ///
+    /// It exists because `togglePin` and `movePin` are called from closures a *skipped* row
+    /// keeps, and both walk the whole workspace list rather than the row's own workspace:
+    /// `pin` reads `max(pinOrder)` across it and every mutation ends in `renumber`, which
+    /// rewrites `pinOrder` on the pinned set. A row fingerprinted on its own workspace plus its
+    /// position in the Pinned section compares equal when a *peer* is replaced, skips its body,
+    /// and goes on renumbering superseded objects — writes that never reach the store, leaving
+    /// duplicate `pinOrder` values or a move that reverts on the next refresh.
+    ///
+    /// It moves on the same fingerprint the Pinned ordering is memoized behind: for every
+    /// workspace, its identity, `pinOrder`, name, status, and the identity of the repo it was
+    /// reached through. The last of those is what makes the account complete rather than merely
+    /// broader — a closure freezes `[Repo]` and re-derives its workspaces on each use, so a repo
+    /// replaced while its workspace instances survive is a stale graph that no workspace-only
+    /// fingerprint can see.
+    ///
+    /// Steady-state agent churn moves none of them, so the per-row scoping this cache exists to
+    /// protect is untouched. A replacement is a rare event, and paying for it with one full
+    /// sidebar rebuild is the cheap side of the trade.
+    private(set) var pinGraphRevision = 0
+    private var pinGraphFingerprint: [MainWindowOrderSignature]?
+
+    /// How many orderings this cache has actually built, across every slot. See
+    /// `MainWindowOrderSlot.buildCount` for why the count rather than the result is what a test
+    /// has to read.
+    var buildCount: Int {
+        allWorkspaceSlot.buildCount + activeWorkspaceSlot.buildCount
+            + archivedWorkspaceSlot.buildCount + pinnedWorkspaceSlot.buildCount
+            + repoWebSourceSlot.buildCount + workspaceWebSourceSlot.buildCount
+            + globalWebSourceSlot.buildCount + recentBuildCount
+    }
+
+    /// Every workspace of a repo, most recently accessed first — what the repo landing page
+    /// lists, archived rows included.
+    func workspaces(for repo: Repo) -> [Workspace] {
+        allWorkspaceSlot.ordered(
+            key: repo.id,
+            fingerprint: Self.workspaceSignatures(repo.workspaces)
+        ) {
+            Self.byLastAccessed(repo.workspaces)
+        }
+    }
+
+    /// A repo's non-archived workspaces, most recently accessed first.
+    func activeWorkspaces(for repo: Repo) -> [Workspace] {
+        activeWorkspaceSlot.ordered(
+            key: repo.id,
+            fingerprint: Self.workspaceSignatures(repo.workspaces)
+        ) {
+            Self.byLastAccessed(repo.workspaces).filter { $0.status != .archived }
+        }
+    }
+
+    /// A repo's archived workspaces, most recently accessed first. Its own slot rather than a
+    /// second filter over one cached sort: the sidebar asks for both on every expanded repo, and
+    /// two cached arrays cost less than the one sort they replace.
+    func archivedWorkspaces(for repo: Repo) -> [Workspace] {
+        archivedWorkspaceSlot.ordered(
+            key: repo.id,
+            fingerprint: Self.workspaceSignatures(repo.workspaces)
+        ) {
+            Self.byLastAccessed(repo.workspaces).filter { $0.status == .archived }
+        }
+    }
+
+    /// The Pinned section in display order, with the revision of the graph behind it. The
+    /// sidebar reads this twice per evaluation — once for the rows, once to decide which header
+    /// carries the inline actions — so the memo pays for itself before any coalescing window is
+    /// considered.
+    func pinnedSection(
+        in workspaces: [Workspace],
+        controller: SidebarPinController
+    ) -> SidebarPinnedSection {
+        let fingerprint = Self.pinSignatures(workspaces)
+        if fingerprint != pinGraphFingerprint {
+            pinGraphFingerprint = fingerprint
+            pinGraphRevision += 1
+        }
+        let ordered = pinnedWorkspaceSlot.ordered(key: globalKey, fingerprint: fingerprint) {
+            controller.pinnedWorkspaces(in: workspaces)
+        }
+        return SidebarPinnedSection(workspaces: ordered, graphRevision: pinGraphRevision)
+    }
+
+    /// The Pinned ordering alone, for callers with no closure to keep fresh.
+    func pinnedWorkspaces(
+        in workspaces: [Workspace],
+        controller: SidebarPinController
+    ) -> [Workspace] {
+        pinnedSection(in: workspaces, controller: controller).workspaces
+    }
+
+    func repoWebSources(for repo: Repo) -> [WebSource] {
+        repoWebSourceSlot.ordered(
+            key: repo.id,
+            fingerprint: Self.webSourceSignatures(repo.webSources)
+        ) {
+            Self.byLastAccessed(repo.webSources)
+        }
+    }
+
+    func workspaceWebSources(for workspace: Workspace) -> [WebSource] {
+        workspaceWebSourceSlot.ordered(
+            key: workspace.id,
+            fingerprint: Self.webSourceSignatures(workspace.webSources)
+        ) {
+            Self.byLastAccessed(workspace.webSources)
+        }
+    }
+
+    func globalWebSources(in sources: [WebSource]) -> [WebSource] {
+        globalWebSourceSlot.ordered(
+            key: globalKey,
+            fingerprint: Self.webSourceSignatures(sources)
+        ) {
+            Self.byLastAccessed(sources.filter(\.isGlobal))
+        }
+    }
+
+    /// The Recent arrangement's buckets. Its inputs are already snapshot-driven, so the
+    /// fingerprint is the snapshot itself plus the pane counts that decide which repo roots
+    /// appear — the arrangement reorders only when the sidebar deliberately re-takes them.
+    ///
+    /// `now` is compared exactly, which makes the memo only as good as the caller's `now`. The
+    /// sidebar passes `recentSnapshotTakenAt`, `@State` re-taken solely by
+    /// `syncRecentSnapshot(forceRefresh:)` — on mode change, on appear, when the repo or
+    /// workspace set changes, and when the app resigns active, never during a redraw. A caller
+    /// that passed a freshly constructed `Date()` per access would miss every time; that is what
+    /// `MainWindowOrderCacheTests.freshInstantPerAccessDefeatsTheRecentMemo` pins, so the hazard
+    /// fails a test rather than going quiet.
+    ///
+    /// `calendar` joins the key rather than only reaching the builder. It is what decides the
+    /// Today / This Week / Earlier boundaries, so an automatic time-zone change while the app
+    /// stays active moves a workspace near midnight between buckets without moving any model
+    /// value or `now`. Keyed on it, that change misses and rebuilds.
+    func recentBuckets(
+        repos: [Repo],
+        snapshot: [UUID: Date],
+        repoRootPaneCounts: [UUID: Int],
+        now: Date,
+        calendar: Calendar
+    ) -> [RecentBucket] {
+        let fingerprint = Self.recentSignatures(
+            repos: repos,
+            snapshot: snapshot,
+            repoRootPaneCounts: repoRootPaneCounts
+        )
+        if fingerprint == recentFingerprint, now == recentTakenAt, calendar == recentCalendar {
+            return recentBuckets
+        }
+        recentBuildCount += 1
+        recentBuckets = SidebarRecentArrangement.buckets(
+            repos: repos,
+            snapshot: snapshot,
+            repoRootPaneCounts: repoRootPaneCounts,
+            now: now,
+            calendar: calendar
+        )
+        recentFingerprint = fingerprint
+        recentTakenAt = now
+        recentCalendar = calendar
+        return recentBuckets
+    }
+
+    // MARK: - Fingerprints
+
+    private static func workspaceSignatures(_ workspaces: [Workspace]) -> [MainWindowOrderSignature] {
+        workspaces.map { workspace in
+            MainWindowOrderSignature(
+                id: workspace.id,
+                identity: ObjectIdentifier(workspace),
+                date: workspace.lastAccessedAt,
+                stateCode: statusCode(workspace.status)
+            )
+        }
+    }
+
+    /// The pin fingerprint carries `ownerIdentity` where no other ordering does, because the pin
+    /// closures reach these workspaces through a captured `[Repo]` rather than holding them. A
+    /// repo replaced while its workspace instances survive — reparented onto the superseding
+    /// object — moves no workspace identity at all, while draining the relationship the stale
+    /// closure still derives from. `sourceRepo` is the link that goes stale, so it is the link
+    /// that gets fingerprinted.
+    private static func pinSignatures(_ workspaces: [Workspace]) -> [MainWindowOrderSignature] {
+        workspaces.map { workspace in
+            MainWindowOrderSignature(
+                id: workspace.id,
+                identity: ObjectIdentifier(workspace),
+                ownerIdentity: workspace.sourceRepo.map(ObjectIdentifier.init),
+                name: workspace.name,
+                rank: workspace.pinOrder,
+                stateCode: statusCode(workspace.status)
+            )
+        }
+    }
+
+    private static func webSourceSignatures(_ sources: [WebSource]) -> [MainWindowOrderSignature] {
+        sources.map { source in
+            MainWindowOrderSignature(
+                id: source.id,
+                identity: ObjectIdentifier(source),
+                date: source.lastAccessedAt,
+                stateCode: source.isGlobal ? 1 : 0
+            )
+        }
+    }
+
+    private static func recentSignatures(
+        repos: [Repo],
+        snapshot: [UUID: Date],
+        repoRootPaneCounts: [UUID: Int]
+    ) -> [MainWindowOrderSignature] {
+        var signatures: [MainWindowOrderSignature] = []
+        for repo in repos {
+            signatures.append(
+                MainWindowOrderSignature(
+                    id: repo.id,
+                    identity: ObjectIdentifier(repo),
+                    date: snapshot[repo.id] ?? repo.lastAccessedAt,
+                    name: repo.name,
+                    rank: repoRootPaneCounts[repo.id, default: 0]
+                )
+            )
+            for workspace in repo.workspaces {
+                signatures.append(
+                    MainWindowOrderSignature(
+                        id: workspace.id,
+                        identity: ObjectIdentifier(workspace),
+                        date: snapshot[workspace.id] ?? workspace.lastAccessedAt,
+                        name: workspace.name,
+                        rank: workspace.pinOrder,
+                        stateCode: statusCode(workspace.status)
+                    )
+                )
+            }
+        }
+        return signatures
+    }
+
+    private static func statusCode(_ status: WorkspaceStatus) -> Int {
+        switch status {
+        case .active: return 0
+        case .provisioning: return 1
+        case .stopped: return 2
+        case .archived: return 3
+        }
+    }
+
+    private static func byLastAccessed(_ workspaces: [Workspace]) -> [Workspace] {
+        workspaces.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+    }
+
+    private static func byLastAccessed(_ sources: [WebSource]) -> [WebSource] {
+        sources.sorted { $0.lastAccessedAt > $1.lastAccessedAt }
+    }
+}

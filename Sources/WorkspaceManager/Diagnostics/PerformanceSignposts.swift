@@ -72,6 +72,31 @@ enum PerformanceSignposts {
         }
     }
 
+    nonisolated(unsafe) private static var sidebarRowBodyEvaluations: UInt64 = 0
+
+    /// Counts sidebar row body evaluations (#1366) — the row-scoped companion to the window
+    /// counter above. That one answers "did this event reach `ContentView`"; this one answers the
+    /// question that outlived it: when the sidebar does redraw, how many of its rows come with it.
+    /// Holding that near one per coalescing window is what the row-level `Equatable` scoping is
+    /// for, and this is the only way to watch it in the running app rather than in a harness.
+    ///
+    /// Sampled every fiftieth, like the window counter, rather than logged per evaluation: the
+    /// reading wanted from it is a rate, and two sampled counts bracket an exact number of rows
+    /// over an exact interval. Logging each one would have the probe cost more than the work it
+    /// is measuring — before this slice the sidebar built rows fast enough that per-evaluation
+    /// lines were a measurable share of the load.
+    static func noteSidebarRowBodyEvaluation() {
+        lock.lock()
+        sidebarRowBodyEvaluations += 1
+        let count = sidebarRowBodyEvaluations
+        lock.unlock()
+
+        signposter.emitEvent("SidebarRowBodyEvaluation")
+        if count == 1 || count.isMultiple(of: 50) {
+            log.info("[Perf] event=sidebar_row_body_evaluations count=\(count, privacy: .public)")
+        }
+    }
+
     /// Whether `launch_to_first_prompt` has closed — the first shell reached a prompt, or the
     /// launch produced no shell to wait on. Work that would contend with that interval reads
     /// this rather than assuming a place in the launch order settles it (#1374).

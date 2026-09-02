@@ -150,11 +150,12 @@ struct RepoRow: View {
     }
 
     var body: some View {
+        PerformanceSignposts.noteSidebarRowBodyEvaluation()
         let repoName = repo.name
         let workspaceCount = activeWorkspaceCount
         let showsVisibleQuickActions = showsQuickActions && isHovering
 
-        HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
+        return HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             Button(action: onToggleExpansion) {
                 repoIdentityGlyph
             }
@@ -388,7 +389,8 @@ struct WorkspaceRow: View {
     }
 
     var body: some View {
-        HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
+        PerformanceSignposts.noteSidebarRowBodyEvaluation()
+        return HStack(spacing: SidebarChrome.Metrics.rowSpacing) {
             if showsDisclosure, let onToggleExpansion {
                 Button(action: onToggleExpansion) {
                     Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
@@ -620,7 +622,7 @@ struct WorkspaceRow: View {
             .foregroundStyle(.secondary)
             .fixedSize()
 
-            Text(WorkspaceAgeFormatter.text(from: workspace.createdAt, to: statusClock ?? Date()))
+            WorkspaceAgeLabel(createdAt: workspace.createdAt, referenceDate: statusClock)
                 .foregroundStyle(.tertiary)
                 .fixedSize()
         }

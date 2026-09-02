@@ -3,8 +3,9 @@
 //  WorkspaceManager
 //
 //  The two clocks on the selected workspace row's status line: how long the agent session has
-//  been running, which ticks once a second inside a leaf of its own, and how old the workspace
-//  is, which is coarse enough to be read whenever the row happens to redraw.
+//  been running, which ticks once a second, and how old the workspace is, which ticks once a
+//  minute. Each owns its clock inside a leaf of its own, so the per-tick invalidation stops
+//  there and never reaches the row, the list, or the sidebar.
 //
 
 import SwiftUI
@@ -67,5 +68,40 @@ struct SessionElapsedLabel: View {
                 Text(SessionElapsedFormatter.text(from: startedAt, to: context.date))
             }
         }
+    }
+}
+
+/// The workspace age, in a leaf that owns its own minute clock.
+///
+/// It needs one for the same reason the elapsed label does, and for one more: since #1366 a
+/// sidebar row only rebuilds when its equality state moves, and nothing about a passing minute
+/// moves it. Reading `Date()` in the row's body left `59m` on screen indefinitely — past the
+/// hour, past the day — beside an elapsed timer that was still counting. `createdAt` is fixed
+/// for the workspace's life, so the leaf takes it and reschedules itself.
+///
+/// The schedule is anchored to `createdAt` rather than to `.now`, so a tick lands when the age
+/// actually turns over instead of up to a minute after it. `tickOrigin` walks that grid forward
+/// to the last boundary at or before now: a schedule origin years in the past is well-defined,
+/// but a near one is cheaper to reason about and keeps the arithmetic in view.
+struct WorkspaceAgeLabel: View {
+    let createdAt: Date
+    /// Fixes the clock for a still render — an evidence PNG, a test — which has no next minute
+    /// to wait for. Nil in the app, where the label runs its own.
+    var referenceDate: Date? = nil
+
+    var body: some View {
+        if let referenceDate {
+            Text(WorkspaceAgeFormatter.text(from: createdAt, to: referenceDate))
+        } else {
+            TimelineView(.periodic(from: tickOrigin, by: 60)) { context in
+                Text(WorkspaceAgeFormatter.text(from: createdAt, to: context.date))
+            }
+        }
+    }
+
+    private var tickOrigin: Date {
+        let elapsed = Date.now.timeIntervalSince(createdAt)
+        guard elapsed > 60 else { return createdAt }
+        return createdAt.addingTimeInterval((elapsed / 60).rounded(.down) * 60)
     }
 }
