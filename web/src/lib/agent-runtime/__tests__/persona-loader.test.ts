@@ -83,4 +83,15 @@ describe("fetchRepoMemory", () => {
 
 		expect(await fetchRepoMemory("tok", "fairchild", "memory-miss")).toBe("");
 	});
+
+	it("does not cache a failure, so one bad fetch does not strip the rules for 15 minutes", async () => {
+		vi.mocked(fetchFileContent).mockRejectedValueOnce(new Error("502"));
+		vi.mocked(fetchFileContent).mockResolvedValueOnce(MEMORY);
+
+		expect(await fetchRepoMemory("tok", "fairchild", "memory-flaky")).toBe("");
+		expect(await fetchRepoMemory("tok", "fairchild", "memory-flaky")).toContain(
+			"## Writing Voice",
+		);
+		expect(fetchFileContent).toHaveBeenCalledTimes(2);
+	});
 });

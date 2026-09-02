@@ -29,7 +29,11 @@ import {
 } from "../../agent-sessions";
 import { getChatMessages, pushChatMessage } from "../../chat";
 import { addDiscussionComment } from "../../github";
-import { buildConversationalPrompt, resolvePersona } from "../persona-loader";
+import {
+	buildConversationalPrompt,
+	fetchRepoMemory,
+	resolvePersona,
+} from "../persona-loader";
 import { getRegistry } from "../provider-registry";
 
 // --- Import real ComputeProviderRegistry for wrapping the mock provider ---
@@ -165,6 +169,30 @@ describe("SessionManager", () => {
 		const textChunks = chunks.filter((c) => c.type === "text");
 		expect(textChunks).toHaveLength(1);
 		expect(textChunks[0].content).toBe("Hello");
+	});
+
+	// 1b. Repo memory reaches the sandbox's system prompt.
+	// Without this the persona pointer names rules the session never receives.
+	it("carries fetched repo memory into the sandbox system prompt", async () => {
+		vi.mocked(fetchRepoMemory).mockResolvedValue(
+			"## Writing Voice\n\n- Marker.",
+		);
+		vi.mocked(buildConversationalPrompt).mockImplementation(
+			(persona, repoMemory) =>
+				`${persona.systemPrompt}\n---\n${repoMemory ?? ""}`,
+		);
+
+		const params = makeParams();
+		await collect(manager.handleMention(params));
+
+		expect(fetchRepoMemory).toHaveBeenCalledWith(
+			params.githubToken,
+			"acme",
+			"app",
+		);
+		expect(provider.createSandbox).toHaveBeenCalledTimes(1);
+		const { systemPrompt } = provider.createSandbox.mock.calls[0][0];
+		expect(systemPrompt).toContain("- Marker.");
 	});
 
 	// 2. Snapshot restore happy path

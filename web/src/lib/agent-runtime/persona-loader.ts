@@ -91,8 +91,11 @@ export async function resolvePersona(
  *
  * The persona references point at this file's § Writing Voice section, so a web
  * chat session that only loaded the persona would be pointed at rules it does
- * not hold. Returns "" when the file is absent; callers degrade to the bare
- * persona prompt.
+ * not hold. Returns "" when the file is absent or the fetch fails; callers
+ * degrade to the bare persona prompt, whose pointer still names the file and
+ * whose session holds read tools. An empty result is never cached — a transient
+ * GitHub failure would otherwise strip the rules from every session for the
+ * next fifteen minutes.
  */
 export async function fetchRepoMemory(
 	token: string,
@@ -111,7 +114,11 @@ export async function fetchRepoMemory(
 	} catch {
 		memory = "";
 	}
-	repoMemoryCache.set(cacheKey, { memory, expires: Date.now() + CACHE_TTL });
+	if (memory) {
+		repoMemoryCache.set(cacheKey, { memory, expires: Date.now() + CACHE_TTL });
+	} else {
+		repoMemoryCache.delete(cacheKey);
+	}
 	return memory;
 }
 
