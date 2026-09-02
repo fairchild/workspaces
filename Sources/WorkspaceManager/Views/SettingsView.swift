@@ -17,6 +17,7 @@ struct SettingsView: View {
     @Environment(\.claudeSettingsInstaller) private var claudeSettingsInstaller
     @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
     @ObservedObject private var terminalThemeStore = GhosttyThemeStore.shared
+    @ObservedObject private var settingsDestination = SettingsDestinationRouter.shared
 
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -64,6 +65,31 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            settingsForm
+                // A caller that asked for a section gets scrolled there once the
+                // form exists — on this appearance if the window was just opened,
+                // or on the request itself when Settings is already up.
+                .onAppear { scrollToPendingSection(using: proxy) }
+                .onReceive(settingsDestination.$pendingSection) { section in
+                    guard section != nil else { return }
+                    scrollToPendingSection(using: proxy)
+                }
+        }
+    }
+
+    /// Deferred a runloop turn for two reasons: the anchor has to exist before
+    /// anything can scroll to it, and `@Published` publishes in `willSet`, so
+    /// the router's property still holds the old value while an `onReceive`
+    /// body runs. Consuming after the hop reads the value that was just set.
+    private func scrollToPendingSection(using proxy: ScrollViewProxy) {
+        Task { @MainActor in
+            guard let section = settingsDestination.consumePendingSection() else { return }
+            withAnimation { proxy.scrollTo(section.id, anchor: .top) }
+        }
+    }
+
+    private var settingsForm: some View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
@@ -289,6 +315,7 @@ struct SettingsView: View {
                 AgentsSettingsView(installer: claudeSettingsInstaller)
             } header: {
                 Text("Agents")
+                    .id(SettingsSection.agents.id)
             }
 
             Section {
