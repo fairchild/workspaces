@@ -88,12 +88,12 @@ final class RuntimeProcessWatchdog: ObservableObject {
     /// rather than as "scope nothing".
     func sampleOnce(force: Bool = false) async {
         if force {
-            // A stop has to be answered by a fresh sweep. `sampleIfNeeded` is rate
-            // limited, and the common SIGTERM path finishes well inside that
-            // window — so the cached ledger would come back still naming the
-            // process that just died, leaving it on screen until the next
-            // cadence and letting a second Stop mark a dead pid "would not stop".
-            _ = await sampler.sample(workspaceDirectories: nil)
+            // A stop has to be answered by a sweep that ran after it. The
+            // rate-limited path would return the cached ledger, and the plain
+            // path would join a sweep already in flight — both can still name the
+            // process that just died, leaving it on screen until the next cadence
+            // and letting a second Stop be aimed at a pid that is already gone.
+            _ = await sampler.sampleFresh(workspaceDirectories: nil)
         } else {
             _ = await sampler.sampleIfNeeded(workspaceDirectories: nil)
         }

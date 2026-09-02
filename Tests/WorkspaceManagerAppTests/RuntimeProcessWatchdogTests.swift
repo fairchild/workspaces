@@ -128,6 +128,50 @@ struct RuntimeProcessWatchdogTests {
         #expect(watchdog.unstoppable.isEmpty)
     }
 
+    @Test("A stop that lands during an in-flight sweep is still answered by a later one")
+    func stopDuringInFlightSweepIsAnsweredFreshly() async {
+        // The coalescing that stops the pane's poll and the watchdog's poll
+        // landing out of order must not let a stop be answered by a sweep that
+        // read the process table before the process died. The provider here holds
+        // one sweep open across the stop, so the only correct answer comes from a
+        // sweep started afterwards.
+        let provider = GatedRuntimeProcessProvider(
+            processes: Self.processes(runawayFootprint: 9 * 1_024 * 1_024 * 1_024)
+        )
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: provider,
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: sampler,
+            cadence: 3_600,
+            stopProcess: { identity in
+                await provider.remove(pid: identity.pid)
+                return true
+            }
+        )
+
+        await watchdog.sampleOnce()
+        guard let alert = watchdog.alerts.first else {
+            Issue.record("expected an alert to stop")
+            return
+        }
+
+        // A sweep that reads the table before the stop, held open across it.
+        await provider.closeGate()
+        let overlapping = Task { await sampler.sample(workspaceDirectories: nil) }
+        await provider.waitForSweepToStart()
+
+        watchdog.stop(alert: alert)
+        await provider.openGate()
+        _ = await overlapping.value
+
+        await settle(until: { await MainActor.run { watchdog.alerts.isEmpty } })
+        #expect(watchdog.alerts.isEmpty)
+        #expect(watchdog.unstoppable.isEmpty)
+    }
+
     @Test("A process that refuses to stop stays visible, marked as unstoppable")
     func unstoppableProcessStaysVisible() async {
         let watchdog = RuntimeProcessWatchdog(
@@ -228,6 +272,56 @@ private actor StoppedIdentities {
 
     func record(_ identity: RuntimeProcessIdentity) {
         all.append(identity)
+    }
+}
+
+/// A mutable provider that can also hold one sweep open, so a test can place a
+/// stop inside an in-flight sweep's lifetime.
+private actor GatedRuntimeProcessProvider: RuntimeProcessSnapshotProviding {
+    private var table: [RuntimeProcessSample]
+    private var gateIsClosed = false
+    private var sweepStarted: CheckedContinuation<Void, Never>?
+    private var gateWaiters: [CheckedContinuation<Void, Never>] = []
+    private var didStartGatedSweep = false
+
+    init(processes: [RuntimeProcessSample]) {
+        self.table = processes
+    }
+
+    func remove(pid: Int32) {
+        table.removeAll { $0.pid == pid }
+    }
+
+    func closeGate() {
+        gateIsClosed = true
+        didStartGatedSweep = false
+    }
+
+    func openGate() {
+        gateIsClosed = false
+        let waiters = gateWaiters
+        gateWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitForSweepToStart() async {
+        guard !didStartGatedSweep else { return }
+        await withCheckedContinuation { continuation in
+            sweepStarted = continuation
+        }
+    }
+
+    func processes() async throws -> [RuntimeProcessSample] {
+        let snapshot = table
+        guard gateIsClosed else { return snapshot }
+        didStartGatedSweep = true
+        sweepStarted?.resume()
+        sweepStarted = nil
+        await withCheckedContinuation { continuation in
+            gateWaiters.append(continuation)
+        }
+        // Deliberately the table as it was when the sweep began.
+        return snapshot
     }
 }
 

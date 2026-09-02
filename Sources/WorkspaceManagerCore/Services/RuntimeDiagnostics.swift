@@ -378,7 +378,12 @@ public actor RuntimeDiagnosticsSampler {
     /// provider `await`, so without this the pane's 5 s poll and the watchdog's
     /// 30 s poll can both pass the interval check and land out of order, leaving
     /// `latestSnapshot()` stale and the growth window running backwards.
-    private var inFlight: Task<RuntimeDiagnosticsSnapshot?, Never>?
+    private var inFlight: (generation: UInt64, task: Task<RuntimeDiagnosticsSnapshot?, Never>)?
+    /// Increases once per sweep started. A caller that must observe the world
+    /// *after* something it just did compares against this: a sweep whose
+    /// generation it already saw may have read the process table before the act,
+    /// and joining it would answer the wrong question.
+    private var sweepGeneration: UInt64 = 0
     /// Last CPU-time reading per process, for the sampled rate.
     private var previousCPUTime: [RuntimeProcessIdentity: (seconds: TimeInterval, at: Date)] = [:]
 
@@ -419,15 +424,42 @@ public actor RuntimeDiagnosticsSampler {
         if let workspaceDirectories { workspaceScope = workspaceDirectories }
 
         if let inFlight {
-            return await inFlight.value
+            return await inFlight.task.value
         }
+        sweepGeneration += 1
+        let generation = sweepGeneration
         let task = Task<RuntimeDiagnosticsSnapshot?, Never> { [self] in
             await performSample()
         }
-        inFlight = task
+        inFlight = (generation: generation, task: task)
         let snapshot = await task.value
-        inFlight = nil
+        if inFlight?.generation == generation {
+            inFlight = nil
+        }
         return snapshot
+    }
+
+    /// Samples the world as it is *after* this call, never joining a sweep that
+    /// may have read it before.
+    ///
+    /// `sample` coalesces, which is right for a poll and wrong for the answer to
+    /// an action: a stop that lands while a sweep is in flight would otherwise be
+    /// reported against a table read before the process died, leaving it on
+    /// screen and letting a second stop be aimed at a pid that is already gone.
+    /// Any sweep already running when this is called is drained first; one
+    /// started after that point began after the action, so joining it is sound.
+    @discardableResult
+    public func sampleFresh(workspaceDirectories: [URL]?) async -> RuntimeDiagnosticsSnapshot? {
+        if let workspaceDirectories { workspaceScope = workspaceDirectories }
+
+        let barrier = sweepGeneration
+        while let current = inFlight, current.generation <= barrier {
+            _ = await current.task.value
+            if inFlight?.generation == current.generation {
+                inFlight = nil
+            }
+        }
+        return await sample(workspaceDirectories: nil)
     }
 
     private func performSample() async -> RuntimeDiagnosticsSnapshot? {
