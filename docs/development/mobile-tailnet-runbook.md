@@ -6,38 +6,50 @@ disabling the feature) and the ADR `../decisions/mobile-tailnet-design.md`
 (which covers why it is shaped this way).
 
 Two paths reach the same server. **Use the app** if you are running the desktop
-app — Window → Pair Mobile Device does everything below for you and renders a
-QR. Use the **headless path** when you want the server without the app, which
-is the case this document exists for: phone Safari against a checkout, demos,
-or a machine with no GUI session.
+app — Window → Pair Mobile Device starts the server, rebases the sign-in URL
+onto the tailnet origin, and renders the QR. It does **not** run `tailscale
+serve`: that is one-time node state the app deliberately never mutates, so step
+1 below is yours either way, and the pairing window shows the exact command
+with a copy button. Use the **headless path** when you want the server without
+the app: phone Safari against a checkout, demos, or a machine with no GUI
+session.
 
 Before either, read the one thing that decides how carefully you handle the
 token.
 
-## The token is filesystem read access
+## What the token is worth
 
-The sign-in token authorizes an agent lane that can read **any file this user
-can read** — not only the workspace. That was probed, not assumed; the verdict
-and its evidence are in the ADR under "Read-tool jail probe". Treat a leaked QR
-or a token in a chat log as a disclosure of your home directory, and rotate
-immediately (below).
+The sign-in token is the only authorization on this surface, so start by
+knowing its blast radius. When the server runs the **host compute provider**,
+the token authorizes an agent lane that can read **any file this user can
+read** — not only the workspace. That was probed, not assumed; the verdict and
+its evidence are in the ADR under "Read-tool jail probe".
+
+The host lane is opt-in: new sessions default to the mock provider, and the
+host lane runs only when `WEB_NEXT_COMPUTE_PROVIDER=host` (which also needs
+`WEB_NEXT_HOST_WORKSPACE_ROOT`). So the exposure is conditional on how you
+configured the server — but treat the token as filesystem-equivalent anyway,
+because the safe assumption survives someone flipping that variable later.
+Treat a leaked QR or a token in a chat log as a disclosure of your home
+directory, and rotate immediately (below).
 
 Nothing here binds beyond loopback. `tailscale serve` is the only thing that
-makes the server reachable, you run it yourself, and it is one-time node state
-the app deliberately never mutates.
+makes the server reachable, and you run it yourself.
 
 ## Headless path
 
-Four steps on the Mac, one on the phone.
+Five steps on the Mac, one on the phone.
 
 **0. Find the CLI.** On macOS the Tailscale app does not put `tailscale` on
-your `PATH`, so every command below needs the real binary. The desktop app
-tries these three, in order, and so should you:
+your `PATH`, so every command below needs the real binary. Take the first of
+the three candidates that exists — the same order, and the same first-match
+rule, the desktop app uses:
 
 ```sh
-TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale   # or
-TS=/opt/homebrew/bin/tailscale                            # or
-TS=/usr/local/bin/tailscale
+for c in /Applications/Tailscale.app/Contents/MacOS/Tailscale /opt/homebrew/bin/tailscale /usr/local/bin/tailscale; do
+	[ -x "$c" ] && TS="$c" && break
+done
+echo "${TS:?no tailscale CLI found}"
 ```
 
 Verified on this machine: only the first exists, and a bare `tailscale` is
@@ -60,15 +72,22 @@ a matching `PORT` below or a matching port here.
 with the trailing dot stripped.
 
 ```sh
-$TS status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'
+FQDN="$($TS status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))')"
+echo "$FQDN"
 ```
 
-This is the same field the app reads (`TailnetIdentity`, `.Self.DNSName`).
-
-Call the result `$FQDN`. It changes only when the machine is renamed.
+This is the same field the app reads (`TailnetIdentity`, `.Self.DNSName`). It
+changes only when the machine is renamed — and note the app caches its resolved
+origin in `UserDefaults` under `tailnetHTTPSOrigin` and does not re-resolve, so
+after a rename the app keeps allowlisting the old name until that key is
+cleared. The headless path re-reads it every time.
 
 **3. Start the server with that origin allowlisted.** The Host gate is
-exact-match, so the origin string must match byte for byte — scheme included.
+exact-match on the whole origin, scheme included. It is not byte-exact: the
+parser lowercases the env value, trims surrounding whitespace, and strips
+trailing slashes, and URL parsing drops a default `:443`. What it will not
+forgive is a wrong scheme, a non-default port, or a different host — including
+a subdomain of an allowlisted name.
 
 ```sh
 cd web-next
@@ -87,9 +106,13 @@ prints the tailnet URL directly:
 
 ```
 Local sign-in: http://localhost:3140/sign-in?token=<token>
-Proxy sign-in: https://your-mac.tailnet.ts.net/sign-in?token=<token>
 Local token: /Users/you/.workspaces-web-next/local-sign-in-token
+Proxy sign-in: https://your-mac.tailnet.ts.net/sign-in?token=<token>
+Local mode accepts loopback Host headers plus WEB_NEXT_EXTRA_LOCAL_ORIGINS (exact match).
 ```
+
+With the allowlist unset the last two lines are replaced by
+`Local mode accepts only localhost, 127.0.0.1, or ::1 Host headers.`
 
 **`Proxy sign-in` is the one for the phone.** Earlier revisions of this flow
 required hand-editing the `localhost` line onto the tailnet FQDN; that is no
@@ -124,10 +147,23 @@ curl -sS -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' \
 ```
 
 That must stay 403 with the allowlist set, and every non-loopback Host must
-403 when `WEB_NEXT_EXTRA_LOCAL_ORIGINS` is unset. Dotted paths are gated too
-(`/api/sessions/foo.bar`), which is not obvious from the matcher and is why
-`web-next/src/middleware.matcher.test.ts` compiles it with Next's own
-`getMiddlewareMatchers` and asserts over paths.
+403 when `WEB_NEXT_EXTRA_LOCAL_ORIGINS` is unset — including the tailnet FQDN
+itself. Dotted paths are gated too (`/api/sessions/foo.bar`), which is not
+obvious from the matcher and is why `web-next/src/middleware.matcher.test.ts`
+compiles it with Next's own `getMiddlewareMatchers` and asserts over paths.
+
+The full matrix, measured against a running server:
+
+| Request | Allowlist set | Allowlist unset |
+| --- | --- | --- |
+| Loopback `/api/healthz` | 200 | 200 |
+| Allowlisted origin `/api/healthz` | 200 | 403 |
+| Allowlisted host, `:443` explicit | 200 | 403 |
+| Allowlisted host, proto `http` | 403 | 403 |
+| Subdomain of allowlisted host | 403 | 403 |
+| Forged Host `/api/sessions` | 403 | 403 |
+| Forged Host `/api/sessions/foo.bar` | 403 | 403 |
+| Forged Host `/api/healthz` | 403 | 403 |
 
 Streaming through `serve` was measured unbuffered: 1-second ticks arrived about
 90 ms after send (#1465). If a live turn appears to stall and then dump, suspect
@@ -139,9 +175,16 @@ Rotation is deletion plus a restart. There is no revocation list, and disabling
 the pairing feature does **not** invalidate a token a phone already holds.
 
 ```sh
-# stop the server (or quit the app), then:
-rm "$WEB_NEXT_DATA_DIR/local-sign-in-token"
+# stop the server (or quit the app), then delete the token file.
+# Spell the path out — WEB_NEXT_DATA_DIR was scoped to the start:local
+# command above and is not set in your shell, so "$WEB_NEXT_DATA_DIR/..."
+# would expand to /local-sign-in-token and delete nothing.
+rm "$HOME/.workspaces-web-next/local-sign-in-token"
 ```
+
+The `Local token:` line the server prints on start is the authoritative path if
+you configured a different data directory; unset, it defaults to `.data` under
+the web-next directory.
 
 The next start mints a fresh 32-byte token at `0600` and every previously
 paired phone is signed out. Rotate whenever a QR was photographed by someone
@@ -162,10 +205,12 @@ To also remove the pairing surface from the app, see
 
 ## When it does not work
 
-- **403 from the phone, healthz fine from curl.** The Host the phone sends does
-  not byte-match the allowlist. Compare the `Proxy sign-in` origin against
-  `WEB_NEXT_EXTRA_LOCAL_ORIGINS` character by character; a trailing slash, a
-  port, or `http` for `https` all fail the exact match by design.
+- **403 from the phone, healthz fine from curl.** The origin the phone produces
+  is not in the allowlist. Compare it against `WEB_NEXT_EXTRA_LOCAL_ORIGINS`,
+  looking at scheme, host, and port — case, surrounding whitespace, a trailing
+  slash, and an explicit `:443` are all normalized away and are not the cause.
+  A wrong scheme, a non-default port, or a subdomain of the allowlisted name
+  will fail, by design.
 - **Redirected to `localhost` and nothing loads.** The server did not see the
   allowlist, so it built the redirect from the loopback origin. Check the env
   var reached the process, then look for the `Proxy sign-in` line.

@@ -152,8 +152,15 @@ So `--tools Read,LS,Glob,Grep,TodoRead` bounds the *verbs*, not the
 workspace root is the model's stated context, not an enforced sandbox, and
 nothing in the current stack enforces one.
 
-**What this decides.** The bearer token is not merely the primary gate, it is
-the only thing standing between a network peer and the owner's entire readable
+**What this decides.** Scope the claim honestly: the host lane is opt-in.
+`defaultComputeProvider()` returns `mock` unless `WEB_NEXT_COMPUTE_PROVIDER=host`
+(`web-next/src/lib/db/start-session.ts`), and host mode additionally needs
+`WEB_NEXT_HOST_WORKSPACE_ROOT`. So a token does not universally expose the
+filesystem — it does so on a node configured for the host lane, which is
+exactly the configuration this arc exists to reach from a phone.
+
+On such a node the bearer token is not merely the primary gate, it is the only
+thing standing between a network peer and the owner's entire readable
 filesystem — SSH keys, cloud credentials, every other repo on the machine.
 Three consequences bind:
 
@@ -180,9 +187,9 @@ the question and the answer changes the posture of every later phase.
 2. Keep the Host allowlist **exact-match** (env-driven additions included) —
    never a wildcard on `.ts.net`.
 3. Namespace session identity by node, even while one node exists.
-4. Treat the sign-in token as equivalent to filesystem read access for the
-   owner's uid — see the jail-probe verdict above. Any change that widens who
-   can hold the token widens that.
+4. On a node running the host compute provider, treat the sign-in token as
+   equivalent to filesystem read access for the owner's uid — see the jail-probe
+   verdict above. Any change that widens who can hold the token widens that.
 
 ## Sequence
 
