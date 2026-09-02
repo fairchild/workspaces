@@ -5,6 +5,10 @@
 # ///
 """Report operational security posture for release and agent automation.
 
+Covers what CI configuration alone cannot say: which runner lanes the workflows
+actually target, which secrets exist at which scope, and which D1 migrations a
+live environment has actually applied.
+
 This script is intentionally report-only by default. Use --strict when a
 release checklist should fail on missing controls.
 """
@@ -13,9 +17,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
+import re
 import shutil
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -72,6 +79,110 @@ EXPECTED_ENVIRONMENT_SECRETS = {
 # itself. No name is dual-scoped by design any more; every credential the
 # release and log lanes use lives on an environment only.
 DUAL_SCOPE_EXPECTED: set[str] = set()
+
+# Services whose D1 migrations are compared against what each environment has
+# actually applied. Scoped to the one service that has the problem; a second
+# entry is cheap when a second case is real.
+D1_SERVICE_DIRS = (REPO_ROOT / "infra" / "feedback-store",)
+# Bounded because this is the check that leaves the machine. An unbounded wait on
+# Cloudflare would hang a release preflight rather than report on one. Per
+# environment, not per run: environments are queried in sequence, so a service with
+# two of them can wait twice this long.
+D1_QUERY_TIMEOUT_SECONDS = 60
+# Wrangler's defaults for the migration settings a binding may override.
+D1_DEFAULT_MIGRATIONS_TABLE = "d1_migrations"
+D1_DEFAULT_MIGRATIONS_DIR = "migrations"
+# Glob syntax beyond what this check implements. Brackets carry character and POSIX
+# classes, braces carry alternation, and parentheses carry extglobs — all of which
+# minimatch matches and `Path.glob` does not, so a pattern using them would compare a
+# different set of files than wrangler applies.
+D1_UNSUPPORTED_GLOB = re.compile(r"[\[\]{}()]")
+# Wrangler's unnamed top-level tables are an environment in their own right, distinct
+# from any `[env.<name>]`. Naming it for what it is rather than for what this repo
+# happens to deploy there keeps a real `[env.production]` from colliding with it.
+D1_DEFAULT_ENVIRONMENT = "top-level"
+
+
+# SQLite writes exactly one space after the colon, so the name starts one character
+# in. The space is not consumed by the pattern, because a table name may itself begin
+# with one and greedy whitespace would eat it.
+D1_NO_SUCH_TABLE = re.compile(r"no such table:")
+# D1 appends this to SQLite's message, so it is where the reported name ends.
+D1_SQLITE_ERROR_SUFFIX = re.compile(r":\s*SQLITE_ERROR\b")
+
+
+def error_texts(*streams: str) -> list[str]:
+    """Every message inside wrangler's output, JSON-decoded where it is JSON.
+
+    Wrangler reports SQL errors as JSON, so a table name in the message arrives
+    escaped: a table named `a"b` reads as `a\\"b` in the raw bytes and would never
+    equal the name we asked for. Decoding first compares like with like. The raw
+    stream is kept too, for output that is not JSON at all.
+    """
+    texts: list[str] = []
+    for stream in streams:
+        if not stream:
+            continue
+        texts.append(stream)
+        try:
+            payload = json.loads(stream)
+        except ValueError:
+            continue
+        texts.extend(nested_strings(payload))
+    return texts
+
+
+def nested_strings(payload: object) -> list[str]:
+    if isinstance(payload, str):
+        return [payload]
+    if isinstance(payload, list):
+        return [text for item in payload for text in nested_strings(item)]
+    if isinstance(payload, dict):
+        return [text for item in payload.values() for text in nested_strings(item)]
+    return []
+
+
+def reports_missing_table(texts: list[str], table: str) -> bool:
+    """Whether any message says *this* table does not exist.
+
+    The configured name is checked at the position it must occupy and what follows it
+    must be the end of the message or D1's own suffix. A character-class boundary
+    would have to guess which characters continue an identifier, and wrangler quotes
+    the name so it may contain any of them: `d1_migrations-v2` and `d1_migrations.v2`
+    are different tables that a boundary reads as this one, and a name ending in
+    punctuation is one this table's own error would miss. Anchoring does not guess.
+
+    A missing table is the one SQL failure that is an answer rather than an obstacle:
+    a database that has never had a migration applied has no migrations table, which
+    is maximal drift rather than an unreadable result.
+    """
+    for text in texts:
+        for match in D1_NO_SUCH_TABLE.finditer(text):
+            reported = text[match.end() :]
+            starts = (reported[1:], reported) if reported.startswith(" ") else (reported,)
+            for start in starts:
+                if not start.startswith(table):
+                    continue
+                # The name is checked where it must be, and what follows must be the
+                # end of the message or D1's own suffix. Cutting the message at the
+                # first `: SQLITE_ERROR` instead would truncate a table whose name
+                # contains that text, and the configured name would never match its
+                # own error.
+                tail = start[len(table) :]
+                if not tail.strip() or D1_SQLITE_ERROR_SUFFIX.match(tail):
+                    return True
+    return False
+
+
+def quote_identifier(name: str) -> str:
+    """A SQLite identifier, quoted the way wrangler quotes it.
+
+    Wrangler writes the migrations table name into its own queries this way, so a
+    binding may legally name a table something a bare identifier could not be.
+    Doubling the quote is what makes the name data rather than syntax.
+    """
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
 
 
 @dataclass(frozen=True)
@@ -371,6 +482,407 @@ def remote_secret_checks(repo: str) -> list[Check]:
     return checks
 
 
+@dataclass(frozen=True)
+class D1Environment:
+    """A wrangler environment and the migration-bearing D1 database it binds.
+
+    `migrations_table` and `migrations_pattern` carry the binding's own overrides of
+    wrangler's defaults. Assuming the defaults would make a service that sets either
+    one read as maximally drifted or as having nothing to compare, which is a verdict
+    about this script rather than about the database.
+    """
+
+    name: str
+    database_name: str
+    migrations_dir: str
+    migrations_table: str = D1_DEFAULT_MIGRATIONS_TABLE
+    migrations_pattern: str | None = None
+
+
+def d1_environments(config: dict[str, object]) -> list[D1Environment]:
+    """Every environment in a wrangler config that binds a D1 database with migrations.
+
+    Read out of the config rather than listed here. A hardcoded list is how an
+    environment goes unchecked — preview was behind too, and nothing said so — and
+    this file has already been bitten once by an expectation that outlived what it
+    named (see `self_hosted_lanes`).
+
+    The top-level tables are wrangler's default environment; `[env.<name>]` adds the
+    rest. They are collected as a list rather than keyed by name because the two
+    namespaces can collide: `[env.production]` is legal, distinct from the top-level
+    environment, and may bind a different database. Keyed, the named one would
+    overwrite the default and the default would go unchecked and unreported — the
+    failure this function exists to prevent, arriving from the inside.
+    """
+    sections: list[tuple[str, object]] = [(D1_DEFAULT_ENVIRONMENT, config)]
+    named = config.get("env")
+    if isinstance(named, dict):
+        sections.extend(sorted(named.items()))
+
+    environments: list[D1Environment] = []
+    for name, section in sections:
+        if not isinstance(section, dict):
+            continue
+        databases = section.get("d1_databases")
+        if not isinstance(databases, list):
+            continue
+        for database in databases:
+            if not isinstance(database, dict):
+                continue
+            database_name = database.get("database_name")
+            if database_name:
+                # `migrations_dir` is defaulted rather than required. Wrangler defaults
+                # it to `migrations`, so a binding that relies on the default has
+                # migrations this check would otherwise never look at — the same
+                # unwatched-environment failure, reached by omitting a field.
+                #
+                # Defaulted the way wrangler defaults it: only an absent value, never
+                # an empty one. Wrangler normalises `""` to `"."`, the project root, so
+                # reading it as `migrations` would compare a directory the service does
+                # not use and pass while a root-level migration sat pending.
+                raw_dir = database.get("migrations_dir")
+                migrations_dir = (
+                    D1_DEFAULT_MIGRATIONS_DIR
+                    if raw_dir is None
+                    else normalize_relative_path(str(raw_dir))
+                )
+                # `migrations_table` is the one wrangler defaults on falseyness rather
+                # than absence, so an empty name does become `d1_migrations` there.
+                table = database.get("migrations_table") or D1_DEFAULT_MIGRATIONS_TABLE
+                raw_pattern = database.get("migrations_pattern")
+                pattern = (
+                    None if raw_pattern is None else normalize_relative_path(str(raw_pattern))
+                )
+                environments.append(
+                    D1Environment(
+                        str(name),
+                        str(database_name),
+                        migrations_dir,
+                        str(table),
+                        pattern,
+                    )
+                )
+    return environments
+
+
+def normalize_relative_path(value: str) -> str:
+    """Wrangler's own normalisation of a config path.
+
+    Backslashes become forward slashes, the path is normalised, and a trailing slash
+    is dropped — so `migrations/` and `./migrations` are the same directory, and `""`
+    becomes `"."`, the project root.
+    """
+    return posixpath.normpath(value.replace("\\", "/"))
+
+
+def wrangler_command(service_dir: Path) -> str | None:
+    """The wrangler to run for a service, or None when there is none to run.
+
+    The service's own install wins over PATH: `package-lock.json` pins a version and a
+    global install can be older, so preferring PATH would let the operator's machine
+    decide what the audit means.
+    """
+    local = service_dir / "node_modules" / ".bin" / "wrangler"
+    if local.is_file():
+        return str(local)
+    return shutil.which("wrangler")
+
+
+def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[str]:
+    """Migration names the binding's migrations table records for a live database.
+
+    Addressed by `database_name` rather than by `--env`, so the lookup cannot drift
+    from the binding this environment was read out of.
+
+    Not by `database_id`, though the binding carries one and an id would survive a
+    dashboard rename the config has not caught up with: `wrangler d1 execute` takes
+    "the name or binding of the DB" and rejects a uuid outright ("Couldn't find DB
+    with name '<uuid>'"). The remaining alternative, the binding name, would need
+    `--env` to resolve and so reintroduces exactly the environment coupling this
+    avoids. Name it is, by the tool's constraint rather than by preference.
+
+    Read-only by construction: a `SELECT` is the whole query, and this script never
+    applies anything — knowing a migration is pending is the gap, and applying one
+    should stay a deliberate act.
+
+    An empty set means the database answered and has applied nothing. Callers must not
+    read it as "could not tell", which is what raising is for.
+    """
+    table = environment.migrations_table
+    # Wrangler quotes the name, so almost anything is legal. A NUL cannot go through
+    # argv at all, and an empty name is not a table.
+    if not table or "\x00" in table:
+        raise RuntimeError(f"unusable migrations_table name: {table!r}")
+
+    result = subprocess.run(
+        [
+            wrangler_command(service_dir) or "wrangler",
+            "d1",
+            "execute",
+            environment.database_name,
+            "--remote",
+            "--json",
+            "--command",
+            f"SELECT name FROM {quote_identifier(table)} ORDER BY name",
+        ],
+        cwd=service_dir,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=D1_QUERY_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        # Wrangler reports SQL errors as JSON on stdout with a non-zero exit, so the
+        # one failure that is an *answer* arrives through the same channel as the
+        # failures that are obstacles.
+        #
+        # A database that has never had a migration applied has no migrations table to
+        # read. That is maximal drift — every migration in the repo is pending — but
+        # treated as an unreadable answer it becomes a warn, and `--strict` does not
+        # fail on warns. A freshly recreated database would then report *softer* than
+        # one missing a single migration, which inverts the check. Zero applied is the
+        # honest reading, and the pending-fail path below already handles it.
+        #
+        # Both streams are read, and neither is privileged. Wrangler writes unrelated
+        # chatter to stderr routinely — an unwritable debug log is enough — so reading
+        # whichever stream is non-empty would make this conditional on wrangler
+        # happening to be quiet, and the inversion would return whenever it was not.
+        if reports_missing_table(error_texts(result.stdout, result.stderr), table):
+            return set()
+        detail = result.stderr.strip() or result.stdout.strip() or "wrangler failed"
+        raise RuntimeError(detail)
+
+    return migration_names(json.loads(result.stdout))
+
+
+def migration_names(payload: object) -> set[str]:
+    """The migration names in a successful wrangler `--json` response.
+
+    Every departure from the expected shape raises rather than being skipped. A shape
+    this does not recognise is a query it could not read, and the caller turns that
+    into a `warn`; silently dropping the rows it cannot parse would instead produce an
+    empty applied set, which reads as maximal drift and fails a release on a parsing
+    accident.
+    """
+    if not isinstance(payload, list):
+        raise RuntimeError(f"unexpected wrangler output: {type(payload).__name__}, expected a list")
+    names: set[str] = set()
+    for statement in payload:
+        if not isinstance(statement, dict):
+            raise RuntimeError(f"unexpected wrangler statement: {type(statement).__name__}")
+        rows = statement.get("results")
+        if rows is None:
+            continue
+        if not isinstance(rows, list):
+            raise RuntimeError(f"unexpected wrangler results: {type(rows).__name__}")
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("name"):
+                raise RuntimeError(f"unexpected wrangler row: {row!r}")
+            names.add(str(row["name"]))
+    return names
+
+
+def repo_migrations(environment: D1Environment, service_dir: Path) -> list[str]:
+    """The migration names on disk, as wrangler would record them.
+
+    Under the default flat layout that is the filename. Under a `migrations_pattern`
+    it is the path relative to `migrations_dir`, which is what wrangler writes into
+    the migrations table, so the two sides of the comparison stay in the same
+    vocabulary.
+    """
+    migrations_dir = service_dir / environment.migrations_dir
+    if environment.migrations_pattern is None:
+        return sorted(
+            path.name
+            for path in migrations_dir.glob("*.sql")
+            if is_migration_file(path, migrations_dir) and not path.name.startswith(".")
+        )
+
+    relative_pattern = strip_dir_prefix(
+        environment.migrations_pattern, environment.migrations_dir
+    )
+    unsupported = unsupported_pattern_reason(relative_pattern)
+    if unsupported:
+        raise RuntimeError(
+            f"migrations_pattern {environment.migrations_pattern!r} is not one this check "
+            f"can compare: {unsupported}"
+        )
+    # Inside the supported subset the two engines agree exactly, dotfiles included:
+    # minimatch runs with `dot: false` and no supported segment begins with a dot, so
+    # every dot component it skips is one to skip here. Counting them would report a
+    # pending migration wrangler can never apply.
+    return sorted(
+        name
+        for name, path in (
+            (path.relative_to(migrations_dir).as_posix(), path)
+            for path in migrations_dir.glob(relative_pattern)
+        )
+        if is_migration_file(path, migrations_dir)
+        and not any(part.startswith(".") for part in Path(name).parts)
+    )
+
+
+def unsupported_pattern_reason(relative_pattern: str) -> str | None:
+    """Why this pattern cannot be compared, or None when it can.
+
+    Wrangler matches with minimatch and this matches with `Path.glob`. They agree on
+    literal characters, `*`, `?` and `**` in segments that do not begin with a dot,
+    which covers the layouts the setting documents. Outside that they diverge — on
+    character and POSIX classes, brace alternation, extglobs, and a leading `!`, which
+    minimatch reads as negating the whole pattern — and a divergence would silently
+    compare a different set of files than wrangler applies.
+
+    Saying so is the point. An unsupported pattern reports the same `warn` as every
+    other thing this check cannot read, and names itself rather than arriving as an
+    empty directory.
+    """
+    if relative_pattern.startswith("!"):
+        return "a leading `!` negates the whole pattern in minimatch"
+    if relative_pattern.startswith("#"):
+        return "a leading `#` is a comment in minimatch"
+    segments = relative_pattern.split("/")
+    if segments[-1] == "**":
+        # Before Python 3.13 a trailing `**` matches directories only, so the file
+        # filter empties the result; wrangler's `**` matches files. The version this
+        # runs under would decide the answer, which is not a thing a gate may do.
+        return "a trailing `**` matches directories, not files, on Python before 3.13"
+    for segment in segments:
+        if segment.startswith("."):
+            return f"segment {segment!r} begins with a dot, which minimatch treats specially"
+        if D1_UNSUPPORTED_GLOB.search(segment):
+            return f"segment {segment!r} uses glob syntax beyond `*`, `?` and `**`"
+    return None
+
+
+def is_migration_file(path: Path, root: Path) -> bool:
+    """A regular file reached without following a link.
+
+    Wrangler walks with `Dirent.isFile()`, which is false for a symlink however it
+    resolves, so a symlinked `.sql` is not a migration it will ever apply. It descends
+    only where `Dirent.isDirectory()` is true, which is likewise false for a symlinked
+    directory, so nothing beneath one is a migration either — and `Path.glob` walks
+    straight through it. Counting either would fail a release over a migration that
+    cannot be pending.
+    """
+    if not path.is_file() or path.is_symlink():
+        return False
+    walked = root
+    for part in path.relative_to(root).parts[:-1]:
+        walked = walked / part
+        if walked.is_symlink():
+            return False
+    return True
+
+
+def strip_dir_prefix(pattern: str, migrations_dir: str) -> str:
+    """The pattern relative to `migrations_dir`, the way wrangler strips it.
+
+    Wrangler requires `migrations_pattern` to start with `${migrations_dir}/` and then
+    walks from that directory, so the names it records are relative to it. The one
+    exception is its own: a `migrations_dir` of `.` is the project root and strips
+    nothing.
+    """
+    if migrations_dir == ".":
+        return pattern
+    prefix = f"{migrations_dir}/"
+    if not pattern.startswith(prefix):
+        raise RuntimeError(f"migrations_pattern {pattern!r} does not start with {prefix!r}")
+    return pattern[len(prefix) :]
+
+
+def d1_migration_checks(service_dirs: tuple[Path, ...] = D1_SERVICE_DIRS) -> list[Check]:
+    """Per environment, the repo's migrations against the ones actually applied.
+
+    `0002_feedback_audit.sql` was merged and never applied, and production went a
+    month without the table it creates (#1309). Nothing noticed, because every layer
+    that described the table was green: the schema helper creates it, the tests stub
+    the database, and the contract documents it. Only the live environment knew, and
+    nothing asked it.
+
+    A failure to reach an environment is a `warn`, never a `pass`. "I could not look"
+    reported as healthy is the shape of the original defect, and repeating it here
+    would be worse than not checking at all.
+    """
+    checks: list[Check] = []
+    for service_dir in service_dirs:
+        config_path = service_dir / "wrangler.toml"
+        if not config_path.is_file():
+            continue
+
+        try:
+            config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, tomllib.TOMLDecodeError) as error:
+            checks.append(
+                Check("warn", f"D1 migration drift ({service_dir.name})", f"unreadable wrangler.toml: {error}")
+            )
+            continue
+
+        environments = d1_environments(config)
+        if not environments:
+            continue
+
+        if wrangler_command(service_dir) is None:
+            checks.append(
+                Check(
+                    "warn",
+                    f"D1 migration drift ({service_dir.name})",
+                    "wrangler is not installed, so applied migrations could not be read",
+                )
+            )
+            continue
+
+        for environment in environments:
+            checks.append(d1_environment_check(environment, service_dir))
+    return checks
+
+
+def d1_environment_check(environment: D1Environment, service_dir: Path) -> Check:
+    name = f"D1 migration drift ({service_dir.name}/{environment.name})"
+    try:
+        on_disk = repo_migrations(environment, service_dir)
+    except (RuntimeError, OSError, ValueError) as error:
+        return Check("warn", name, f"could not list the repo's migrations: {error}")
+    if not on_disk:
+        return Check("warn", name, f"no migration files under {environment.migrations_dir}")
+
+    try:
+        applied = applied_d1_migrations(environment, service_dir)
+    except (
+        RuntimeError,
+        OSError,
+        ValueError,  # json.JSONDecodeError
+        subprocess.TimeoutExpired,
+    ) as error:
+        return Check("warn", name, f"could not read applied migrations: {error}")
+
+    pending = [migration for migration in on_disk if migration not in applied]
+    if pending:
+        return Check(
+            "fail",
+            name,
+            f"{len(pending)} migration(s) never applied to {environment.database_name}: "
+            f"{', '.join(pending)}",
+        )
+
+    # Applied but no longer in the repo. Not the reported failure and not
+    # necessarily wrong (a migration can be deleted after it lands everywhere), but
+    # it means the directory no longer describes the database.
+    unknown = sorted(applied - set(on_disk))
+    if unknown:
+        return Check(
+            "warn",
+            name,
+            f"applied to {environment.database_name} but absent from "
+            f"{environment.migrations_dir}: {', '.join(unknown)}",
+        )
+
+    return Check(
+        "pass",
+        name,
+        f"{len(on_disk)} migration(s), all applied to {environment.database_name}",
+    )
+
+
 def remote_checks(repo: str) -> list[Check]:
     if not shutil.which("gh"):
         return [Check("warn", "GitHub remote audit", "gh CLI is not installed")]
@@ -396,6 +908,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", help="GitHub repository in owner/name form.")
     parser.add_argument("--local-only", action="store_true", help="Skip gh API checks.")
+    parser.add_argument(
+        "--skip-d1",
+        action="store_true",
+        help="Skip the live D1 migration-drift checks, keeping the rest of the remote audit.",
+    )
     parser.add_argument("--strict", action="store_true", help="Exit non-zero on fail checks.")
     return parser.parse_args(argv)
 
@@ -409,6 +926,21 @@ def main(argv: list[str]) -> int:
             checks.extend(remote_checks(repo))
         except RuntimeError as error:
             checks.append(Check("warn", "GitHub remote audit", str(error)))
+        # Outside the block above: reading a live database does not depend on
+        # resolving the GitHub repo, and a failure to do one should not hide the other.
+        #
+        # `--skip-d1` exists because this is the only check needing Cloudflare
+        # credentials; without it, a caller who wants the GitHub audit on a machine
+        # with no D1 access has to give up the whole remote lane via `--local-only`.
+        if not args.skip_d1:
+            try:
+                checks.extend(d1_migration_checks())
+            except Exception as error:  # noqa: BLE001
+                # Broad on purpose: one check must not be able to end the run before
+                # the others are printed. An unanticipated failure here is reported as
+                # a check that could not look, which is what every other D1 obstacle
+                # reports.
+                checks.append(Check("warn", "D1 migration drift", f"check failed: {error}"))
 
     print_checks(checks)
     failed = any(check.status == "fail" for check in checks)

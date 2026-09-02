@@ -73,6 +73,70 @@ When `gh` is authenticated, run the remote posture audit before releases:
 uv run --script scripts/audit-security-posture.py --repo fairchild/workspaces --strict
 ```
 
+### D1 migration drift
+
+The remote audit also compares each Cloudflare environment's applied migrations
+against the ones in the repo, per service in `D1_SERVICE_DIRS`. It fails when the
+repo is ahead — a migration merged but never applied, which is how production went
+a month without `feedback_audit`
+([#1309](https://github.com/fairchild/workspaces/issues/1309)) — and only ever
+reports. Applying a migration stays a deliberate act; the gap was that nobody knew
+one was pending.
+
+It belongs on the release preflight rather than in per-PR CI. It needs Cloudflare
+credentials, so it cannot run in an untrusted lane, and two things make per-PR the
+wrong shape regardless: a PR that *adds* a migration is legitimately ahead of every
+environment and would fail the gate for doing the right thing, and drift only
+becomes a defect once the change has merged and shipped without the environment
+following.
+
+`wrangler` must be installed and authenticated. Where more than one Cloudflare
+account is reachable, set `CLOUDFLARE_ACCOUNT_ID` (already a repository secret) or
+wrangler cannot choose one non-interactively:
+
+```bash
+CLOUDFLARE_ACCOUNT_ID=… uv run --script scripts/audit-security-posture.py --repo fairchild/workspaces
+```
+
+Anything that stops the check reading live state — no `wrangler`, no credentials,
+a timeout, output it cannot parse — reports `warn`, never `pass`. Being unable to
+look is the condition this check exists to make visible, so it is never reported
+as health. `--local-only` skips it along with the rest of the remote audit;
+`--skip-d1` skips only this check, for a machine that has GitHub access but no
+Cloudflare credentials.
+
+The 60-second query timeout is per environment rather than per run, since
+environments are queried in sequence.
+
+The wrangler settings that change where migrations live are honored:
+`migrations_table` when a binding renames the table, and `migrations_pattern` for
+nested layouts, whose migrations wrangler records under their path relative to
+`migrations_dir`. A binding that omits `migrations_dir` is still watched, using
+wrangler's default of `migrations`, because omitting the field is not opting out.
+`infra/feedback-store` sets `migrations_dir` and takes the defaults for the rest.
+
+Two places where this check is narrower than wrangler, both reported rather than
+guessed at. Pattern matching uses Python's `Path.glob`, which agrees with wrangler's
+minimatch on literal characters, `*`, `?` and `**` in segments that do not begin
+with a dot, and on skipping dotfiles and anything reached through a symlink. A
+pattern outside that subset — character or POSIX classes, brace alternation,
+extglobs, a leading `!` or `#`, a segment naming a dot component, or a trailing
+`**`, whose meaning depends on the Python version — warns and says which part it
+cannot compare, rather than matching a different set of files than wrangler
+applies. A table name carrying a
+NUL, and an empty one, are refused rather than sent.
+
+One SQL failure is deliberately not in that bucket. A database that has never had
+a migration applied has no migrations table, so the query errors — but that is the
+answer, not an obstacle, and it is maximal drift: every migration in the repo is
+pending. It reports `fail`. Read as a warn it would make a freshly recreated
+database report *softer* than one missing a single migration, since `--strict` fails
+only on `fail`. Wrangler reports that error on stdout while writing unrelated
+chatter to stderr, so both streams are read. Wrangler's JSON is decoded before the
+table name is compared, and compared for equality rather than matched inside the
+message, so a neighbouring table like `d1_migrations_v2` is an obstacle rather than
+an answer and a quoted name survives the round trip.
+
 ## Explicit Follow-Ups
 
 - Consider a true WebSocket proxy for terminal access so the browser never sees
