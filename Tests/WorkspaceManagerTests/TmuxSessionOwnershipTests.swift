@@ -134,6 +134,16 @@ struct TmuxSessionOwnershipTests {
                 == "wave3test")
     }
 
+    @Test("An unset or blank override still means the app's own socket")
+    func absentOverrideMeansTheDefaultSocket() {
+        #expect(TmuxSessionProbe.resolvedSocketLabel(from: [:]) == "workspaces")
+        #expect(
+            TmuxSessionProbe.resolvedSocketLabel(from: ["WORKSPACES_TMUX_SOCKET_LABEL": "  "])
+                == "workspaces")
+        #expect(TmuxSessionProbe.quarantineSocketLabel != TmuxSessionProbe.defaultSocketLabel)
+        #expect(TmuxSessionProbe.isSafeSocketLabel(TmuxSessionProbe.quarantineSocketLabel))
+    }
+
     @Test("A socket label that would become shell text is refused, not reproduced")
     func unsafeSocketLabelsFallBackToTheDefault() {
         // The label is interpolated into the shell script a terminal execs, so making
@@ -142,10 +152,14 @@ struct TmuxSessionOwnershipTests {
             "wave3test; rm -rf /", "a b", "$(id)", "`id`", "a|b", "a\nb", "../escape",
             "a'b", "a\"b", "a&b", String(repeating: "x", count: 65),
         ] {
+            // Quarantined, never the shared socket. An operator who asked for an
+            // isolated run and mistyped the label must not be handed the socket
+            // carrying the desktop's live sessions.
             #expect(
                 TmuxSessionProbe.resolvedSocketLabel(
-                    from: ["WORKSPACES_TMUX_SOCKET_LABEL": hostile]) == "workspaces",
-                "expected the default socket for \(hostile)")
+                    from: ["WORKSPACES_TMUX_SOCKET_LABEL": hostile])
+                    == TmuxSessionProbe.quarantineSocketLabel,
+                "expected the quarantine socket for \(hostile)")
         }
         for ordinary in ["wave3test", "wm-dev", "wm_dev", "socket.2", "A1"] {
             #expect(

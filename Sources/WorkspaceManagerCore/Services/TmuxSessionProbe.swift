@@ -23,19 +23,30 @@ public struct TmuxSessionProbe: Sendable {
     /// live sessions on (#1267).
     public static let socketLabelEnvironmentKey = "WORKSPACES_TMUX_SOCKET_LABEL"
 
-    /// Resolves the socket label from a launch environment, falling back to the
-    /// app's own server. An empty override reads as unset rather than as a
-    /// nameless socket.
+    /// Where a run lands when it asked for an isolated socket and named one this app
+    /// will not use. Never the shared socket: the request itself is the signal that
+    /// nothing here should touch the desktop's sessions.
+    public static let quarantineSocketLabel = "workspaces-rejected-label"
+
+    /// Resolves the socket label from a launch environment.
+    ///
+    /// Three cases, and the third is the one worth reading. No override at all means
+    /// the app's own server. An override that is blank after trimming reads as unset,
+    /// not as a nameless socket — a variable someone cleared is a variable they are not
+    /// using. But an override that is *present and unusable* is an operator who asked
+    /// for isolation and mistyped it, and answering that with the shared socket would
+    /// point a run that was trying to stay away from the desktop's live sessions
+    /// straight at them. That request is honoured with a socket that is definitely not
+    /// the shared one, so the mistake costs an empty server rather than someone's work.
     public static func resolvedSocketLabel(from environment: [String: String]) -> String {
         guard
             let override = environment[socketLabelEnvironmentKey]?
                 .trimmingCharacters(in: .whitespacesAndNewlines),
-            !override.isEmpty,
-            isSafeSocketLabel(override)
+            !override.isEmpty
         else {
             return defaultSocketLabel
         }
-        return override
+        return isSafeSocketLabel(override) ? override : quarantineSocketLabel
     }
 
     /// Whether `value` is a socket label this app is willing to use.
