@@ -204,6 +204,39 @@ struct WorkspaceTerminalTeardownControllerTests {
                     )))
     }
 
+    /// #1267: authorization is per surface, so dedup has to be on what actually died.
+    /// Two surfaces in one scope can share a tmux name while only one of them carries the
+    /// ownership record that authorizes ending it. Skipping the second occurrence of a
+    /// name would let the unrecorded one consume the only attempt and leave the session
+    /// running.
+    @Test("An unauthorized surface does not consume the only kill attempt for a shared name")
+    func unauthorizedSurfaceDoesNotConsumeTheSharedNameAttempt() async {
+        let unrecorded = session()
+        let recorded = session()  // same directory → same derived tmux name
+        #expect(unrecorded.effectiveTmuxSessionName == recorded.effectiveTmuxSessionName)
+
+        var attempts: [UUID] = []
+        let controller = WorkspaceTerminalTeardownController(
+            sessionsInScope: { _ in [unrecorded, recorded] },
+            tmuxSessionName: { $0.effectiveTmuxSessionName },
+            killTmuxSession: { killedSession in
+                attempts.append(killedSession.id)
+                return killedSession.id == recorded.id
+            },
+            closeForRetirement: { _ in },
+            retireSessions: { _ in [unrecorded.id, recorded.id] }
+        )
+
+        let outcome = await controller.teardown(scopeKey: Self.scope)
+
+        #expect(attempts == [unrecorded.id, recorded.id])
+        guard case .completed(let report) = outcome else {
+            Issue.record("expected completion, got \(outcome)")
+            return
+        }
+        #expect(report.killedTmuxSessions == [recorded.effectiveTmuxSessionName])
+    }
+
     @Test("non-tmux idle scope closes gracefully with no tmux kills")
     func nonTmuxIdleScope() async {
         let idle = session()

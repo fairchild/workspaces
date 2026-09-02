@@ -170,14 +170,23 @@ final class SurfaceStore {
             }
 
             if let tmuxLaunchScript {
+                // Twice, and the order matters both ways. Recording first closes the window
+                // in which a surface torn down early has no record and its session is left
+                // running for good; recording again after the repair catches the launch that
+                // lost and was brought up by the repair instead. The second call is a no-op
+                // once the first has succeeded.
+                let recorded =
+                    await self?.recordTmuxOwnership(
+                        session: session, launchedAt: launchedAt, attempts: 2) ?? false
                 await self?.repairLaunchContractIfNeeded(
                     terminal: terminal,
                     session: session,
                     tmuxLaunchScript: tmuxLaunchScript
                 )
-                // After the repair, not before: a launch that lost and was repaired still
-                // ends with a session this app brought up, and recording first would miss it.
-                await self?.recordTmuxOwnership(session: session, launchedAt: launchedAt)
+                if !recorded {
+                    await self?.recordTmuxOwnership(
+                        session: session, launchedAt: launchedAt, attempts: 6)
+                }
             }
 
             guard let initialCommand = session.initialCommand else { return }
@@ -193,11 +202,17 @@ final class SurfaceStore {
     /// with no record here is one the app cannot attribute, and an unattributable session
     /// is never killed — so the failure mode of this routine is a session left running,
     /// which is the direction #1267 asks it to fail in.
-    private func recordTmuxOwnership(session: HostTerminalSession, launchedAt: Date) async {
-        guard let ledger = tmuxOwnershipLedger else { return }
+    @discardableResult
+    private func recordTmuxOwnership(
+        session: HostTerminalSession,
+        launchedAt: Date,
+        attempts: Int
+    ) async -> Bool {
+        guard let ledger = tmuxOwnershipLedger else { return false }
+        if ledger.ownership(forHostSessionID: session.id) != nil { return true }
         let sessionName = session.effectiveTmuxSessionName
         let probe = TmuxSessionProbe()
-        for attempt in 0..<6 {
+        for attempt in 0..<attempts {
             if attempt > 0 {
                 try? await Task.sleep(for: .milliseconds(500))
             }
@@ -208,11 +223,12 @@ final class SurfaceStore {
             log.info(
                 "[SurfaceStore] tmux \(match.name, privacy: .public) (\(match.sessionID, privacy: .public)) backs session \(session.id.uuidString, privacy: .public), \(ownership.provenance == .createdByThisLaunch ? "created by this launch" : "adopted from an existing session", privacy: .public)"
             )
-            return
+            return true
         }
         log.notice(
-            "[SurfaceStore] no tmux ownership recorded for session \(session.id.uuidString, privacy: .public): nothing on the socket answers to \(sessionName, privacy: .public); it will not be eligible for teardown"
+            "[SurfaceStore] no tmux ownership recorded yet for session \(session.id.uuidString, privacy: .public): nothing on the socket answers to \(sessionName, privacy: .public)"
         )
+        return false
     }
 
     /// Attach a tmux-backed surface to its session when the launch command never ran.

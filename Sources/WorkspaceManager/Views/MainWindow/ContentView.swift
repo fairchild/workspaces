@@ -2752,10 +2752,14 @@ struct ContentView: View {
         // Read before retiring: each tmux name this launch is holding, paired with the host
         // session the ownership ledger files that session's provenance under. After the retire
         // loop the rows are gone and the pairing is unrecoverable.
-        let ownedHostSessionIDsByTmuxName = Dictionary(
-            tileTreeStore.sessions.map { ($0.effectiveTmuxSessionName, $0.id) },
-            uniquingKeysWith: { first, _ in first }
-        )
+        // Every host session holding a name, not one of them: two surfaces can share a
+        // tmux name while only one carries the record proving this launch created the
+        // session behind it, and collapsing to an arbitrary first would strand the seed
+        // the other one's record authorizes retiring (#1267).
+        var ownedHostSessionIDsByTmuxName: [String: [UUID]] = [:]
+        for session in tileTreeStore.sessions {
+            ownedHostSessionIDsByTmuxName[session.effectiveTmuxSessionName, default: []].append(session.id)
+        }
         let ownedTmuxSessionNames = Set(ownedHostSessionIDsByTmuxName.keys)
 
         for key in restoreController.ownedSessionKeys(in: plan) {
@@ -2784,8 +2788,14 @@ struct ContentView: View {
             )
         }
         for sessionName in teardownScope.kill {
-            guard let hostSessionID = ownedHostSessionIDsByTmuxName[sessionName] else { continue }
-            switch await terminator.terminate(hostSessionID: hostSessionID, requiringCreation: true) {
+            var outcome = TmuxOwnedSessionTerminator.Outcome.notAttributable
+            for hostSessionID in ownedHostSessionIDsByTmuxName[sessionName] ?? [] {
+                outcome = await terminator.terminate(
+                    hostSessionID: hostSessionID, requiringCreation: true)
+                if case .notAttributable = outcome { continue }
+                break
+            }
+            switch outcome {
             case .killed(let id, _):
                 restoreLog.info(
                     "[Restore] retired this launch's seed tmux session \(sessionName, privacy: .public) (\(id, privacy: .public))"

@@ -125,11 +125,17 @@ public final class TmuxSessionOwnershipLedger {
     /// The session id a kill for `hostSessionID` may target, or `nil` when the app
     /// cannot prove the session is still the one it recorded.
     ///
-    /// `liveSessions` is the caller's *fresh* read of the socket, not a remembered one.
-    /// Three things have to agree before a kill is authorized: the app recorded an
-    /// identity for this surface, that id is still live, and it still answers to the
-    /// name it was recorded under. The last check is what stops a kill aimed at a
-    /// session that has since been renamed out from under the record.
+    /// `liveSessions` is the caller's *fresh* read of the socket, not a remembered one,
+    /// and the live row must match the recorded one in **every** field: id, name,
+    /// creation time and server pid.
+    ///
+    /// Matching on id and name alone is not enough, and the gap is not hypothetical.
+    /// Session ids are unique for a *server's* lifetime, so a tmux server that dies and
+    /// restarts issues `$0` again — and the names on this socket are directory
+    /// derivations, so the app opening the same directory again produces the same name.
+    /// An id-and-name pair can therefore be reissued to a session that has nothing to do
+    /// with the one recorded. The creation time and the server pid are what separate the
+    /// two server lifetimes, which is why they are captured at all.
     ///
     /// `requiringCreation` is the launch-time posture: the pre-restore pass exists only
     /// to clear away seeds this launch made moments earlier, so it accepts nothing else.
@@ -142,13 +148,8 @@ public final class TmuxSessionOwnershipLedger {
     ) -> String? {
         guard let ownership = ownershipByHostSessionID[hostSessionID] else { return nil }
         if requiringCreation, ownership.provenance != .createdByThisLaunch { return nil }
-        guard
-            let live = liveSessions.first(where: { $0.sessionID == ownership.identity.sessionID }),
-            live.name == ownership.identity.name
-        else {
-            return nil
-        }
-        return live.sessionID
+        guard liveSessions.contains(ownership.identity) else { return nil }
+        return ownership.identity.sessionID
     }
 }
 

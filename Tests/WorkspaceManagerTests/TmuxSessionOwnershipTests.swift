@@ -271,6 +271,39 @@ struct TmuxSessionOwnershipTests {
         )
     }
 
+    @MainActor
+    @Test("An id reissued by a restarted tmux server authorizes nothing")
+    func reissuedIDFromAnotherServerLifetimeAuthorizesNothing() {
+        // Session ids are unique for a *server's* lifetime, so a restarted server issues
+        // `$0` again — and the names here are directory derivations, so the app opening
+        // the same directory again produces the same name. Id and name together can be
+        // reissued to an unrelated session; creation time and server pid cannot.
+        let ledger = TmuxSessionOwnershipLedger()
+        let surface = UUID()
+        ledger.record(
+            hostSessionID: surface,
+            identity: TmuxLiveSession(
+                sessionID: "$0", name: "wm-repo-abcd1234",
+                createdAt: Date(timeIntervalSince1970: 1_788_328_041), serverPID: 35533),
+            launchedAt: Date(timeIntervalSince1970: 1_788_328_040)
+        )
+
+        let afterRestart = TmuxLiveSession(
+            sessionID: "$0", name: "wm-repo-abcd1234",
+            createdAt: Date(timeIntervalSince1970: 1_788_400_000), serverPID: 90210)
+
+        #expect(
+            ledger.authorizedKillTarget(
+                forHostSessionID: surface, liveSessions: [afterRestart], requiringCreation: true)
+                == nil
+        )
+        #expect(
+            ledger.authorizedKillTarget(
+                forHostSessionID: surface, liveSessions: [afterRestart], requiringCreation: false)
+                == nil
+        )
+    }
+
     // MARK: - Terminator
 
     @MainActor
