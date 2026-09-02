@@ -344,6 +344,46 @@ struct SidebarRowRebuildTests {
         )
     }
 
+    /// The same hazard with the workspaces left alone, which is the case a workspace-only
+    /// fingerprint cannot see. SwiftData supersedes the `Repo` and the *same* workspace objects
+    /// move onto it, so every identity, id, name and rank a row draws is untouched. The stale
+    /// closure is left deriving from a drained repo: `pin` would read `max(pinOrder)` over an
+    /// empty list and hand out a rank another workspace already holds.
+    @Test("A replaced repo reaches the pin closure even when its workspaces survive")
+    func repoReplacementRefreshesTheRetainedPinClosure() {
+        let counter = BodyCounter()
+        let recorder = PinClosureRecorder()
+        let cache = MainWindowOrderCache()
+        let repo = pinnedFixture(["mine", "peer", "third"])
+        let original = repo.workspaces
+        let model = GraphModel(repos: [repo])
+
+        let host = NSHostingView(
+            rootView: PinRowHost(
+                model: model, cache: cache, recorder: recorder, counter: counter))
+        host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
+        settle(host)
+
+        let mine = original[0]
+        #expect(recorder.walk(mine.id) == original.map(ObjectIdentifier.init))
+
+        let refreshedRepo = Repo(name: repo.name, localPath: URL(fileURLWithPath: repo.localPath))
+        refreshedRepo.id = repo.id
+        refreshedRepo.workspaces = original
+
+        model.repos = [refreshedRepo]
+        settle(host)
+
+        #expect(
+            repo.workspaces.isEmpty,
+            "the superseded repo is drained, which is what a stale closure would derive from"
+        )
+        #expect(
+            recorder.walk(mine.id) == original.map(ObjectIdentifier.init),
+            "the row must have recaptured, so it walks the full graph and not the drained repo"
+        )
+    }
+
     /// The converse: re-publishing the same instances must not rebuild anything, or carrying the
     /// revision on every row would have undone the per-row scoping it is defending.
     @Test("Re-publishing the same workspace graph rebuilds no row")

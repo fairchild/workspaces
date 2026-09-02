@@ -402,6 +402,44 @@ struct MainWindowOrderCacheTests {
         )
     }
 
+    /// The half a workspace-only fingerprint cannot see, found by the second codex pass. The pin
+    /// closures freeze `[Repo]` and re-derive `repos.flatMap(\.workspaces)` on each use, so a repo
+    /// replaced while its *workspace instances survive* moves no workspace identity — and drains
+    /// the relationship the stale closure still derives from. `pin` would then read
+    /// `max(pinOrder)` over an emptied list and hand out a rank another workspace already holds.
+    @Test("A replaced repo moves the pin graph revision even when its workspaces survive")
+    func repoReplacementMovesThePinGraphRevision() {
+        let original = repo()
+        let mine = workspace("mine", in: original)
+        let peer = workspace("peer", in: original)
+        mine.pinOrder = 0
+        peer.pinOrder = 1
+        original.workspaces = [mine, peer]
+
+        let cache = MainWindowOrderCache()
+        let controller = SidebarPinController()
+        let before = cache.pinnedSection(in: original.workspaces, controller: controller)
+
+        // The superseding repo takes the same workspace objects. Every workspace identity, id,
+        // name, rank and status is unchanged; only the object they hang from is new.
+        let replacement = Repo(
+            name: original.name, localPath: URL(fileURLWithPath: original.localPath))
+        replacement.id = original.id
+        replacement.workspaces = [mine, peer]
+
+        let after = cache.pinnedSection(in: replacement.workspaces, controller: controller)
+
+        #expect(
+            before.workspaces.map(ObjectIdentifier.init)
+                == after.workspaces.map(ObjectIdentifier.init),
+            "the very same workspace objects, invisible to a workspace-only fingerprint"
+        )
+        #expect(
+            before.graphRevision != after.graphRevision,
+            "yet the repo the closures reach them through has been superseded"
+        )
+    }
+
     /// The converse, and the reason the revision is safe to carry on every row: the graph holding
     /// still must not manufacture rebuilds, or the per-row scoping this slice exists for is gone.
     @Test("An unchanged graph holds the pin graph revision still")

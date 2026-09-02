@@ -21,9 +21,16 @@ import WorkspaceManagerCore
 /// on serving the superseded object. `date`, `name`, and `rank` are the fields the comparators
 /// read; `stateCode` carries whatever else decides membership — a status, a pinned flag — so a
 /// row leaving or joining a filtered section invalidates the ordering it left or joined.
+///
+/// `ownerIdentity` is the object this element was *reached through*, and only the pin fingerprint
+/// sets it. A caller that captured the owner and re-derives its children on each use — which is
+/// what `SidebarView` does with `let repos` and `repos.flatMap(\.workspaces)` — goes stale when
+/// the owner is replaced, even if every child instance survives the swap. Fingerprinting the
+/// element alone would not see that.
 struct MainWindowOrderSignature: Equatable {
     let id: UUID
     let identity: ObjectIdentifier
+    let ownerIdentity: ObjectIdentifier?
     let date: Date
     let name: String
     let rank: Int?
@@ -32,6 +39,7 @@ struct MainWindowOrderSignature: Equatable {
     init(
         id: UUID,
         identity: ObjectIdentifier,
+        ownerIdentity: ObjectIdentifier? = nil,
         date: Date = .distantPast,
         name: String = "",
         rank: Int? = nil,
@@ -39,6 +47,7 @@ struct MainWindowOrderSignature: Equatable {
     ) {
         self.id = id
         self.identity = identity
+        self.ownerIdentity = ownerIdentity
         self.date = date
         self.name = name
         self.rank = rank
@@ -151,11 +160,16 @@ final class MainWindowOrderCache {
     /// and goes on renumbering superseded objects — writes that never reach the store, leaving
     /// duplicate `pinOrder` values or a move that reverts on the next refresh.
     ///
-    /// It moves on the same fingerprint the Pinned ordering is memoized behind, which is already
-    /// the complete account of that graph: identity, `pinOrder`, name, and status for every
-    /// workspace. Steady-state agent churn moves none of them, so the per-row scoping this cache
-    /// exists to protect is untouched — a peer replacement is a rare event, and paying for it
-    /// with one full sidebar rebuild is the cheap side of the trade.
+    /// It moves on the same fingerprint the Pinned ordering is memoized behind: for every
+    /// workspace, its identity, `pinOrder`, name, status, and the identity of the repo it was
+    /// reached through. The last of those is what makes the account complete rather than merely
+    /// broader — a closure freezes `[Repo]` and re-derives its workspaces on each use, so a repo
+    /// replaced while its workspace instances survive is a stale graph that no workspace-only
+    /// fingerprint can see.
+    ///
+    /// Steady-state agent churn moves none of them, so the per-row scoping this cache exists to
+    /// protect is untouched. A replacement is a rare event, and paying for it with one full
+    /// sidebar rebuild is the cheap side of the trade.
     private(set) var pinGraphRevision = 0
     private var pinGraphFingerprint: [MainWindowOrderSignature]?
 
@@ -314,11 +328,18 @@ final class MainWindowOrderCache {
         }
     }
 
+    /// The pin fingerprint carries `ownerIdentity` where no other ordering does, because the pin
+    /// closures reach these workspaces through a captured `[Repo]` rather than holding them. A
+    /// repo replaced while its workspace instances survive — reparented onto the superseding
+    /// object — moves no workspace identity at all, while draining the relationship the stale
+    /// closure still derives from. `sourceRepo` is the link that goes stale, so it is the link
+    /// that gets fingerprinted.
     private static func pinSignatures(_ workspaces: [Workspace]) -> [MainWindowOrderSignature] {
         workspaces.map { workspace in
             MainWindowOrderSignature(
                 id: workspace.id,
                 identity: ObjectIdentifier(workspace),
+                ownerIdentity: workspace.sourceRepo.map(ObjectIdentifier.init),
                 name: workspace.name,
                 rank: workspace.pinOrder,
                 stateCode: statusCode(workspace.status)

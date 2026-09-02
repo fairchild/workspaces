@@ -122,12 +122,29 @@ whose writes never reach the store — a move that reverts on the next refresh, 
 `pinOrder` values, or a save that fails outright. Found by the codex pass on #1504.
 
 `WorkspaceRowDisplayState.pinGraphRevision` closes it. `MainWindowOrderCache` already fingerprints
-that graph to memoize the Pinned ordering, and that fingerprint is already the complete account of
-what the pin verbs read: identity, `pinOrder`, name, and status for every workspace. The cache
-bumps a counter whenever it changes and hands it back with the ordering, as one
-`SidebarPinnedSection`, so a row cannot pair an ordering from one graph with a revision from
-another. Every workspace row carries the same number, so a peer replacement rebuilds all of them
-and no closure survives holding a superseded object.
+that graph to memoize the Pinned ordering; it now also carries the identity of the repo each
+workspace was reached through, which makes it the complete account of what the pin verbs read.
+The cache bumps a counter whenever that fingerprint changes and hands it back with the ordering as
+one `SidebarPinnedSection`, whose `placement(of:)` derives a row's index, count and revision
+together. Every workspace row carries the same number.
+
+**Why the repo identity is the load-bearing half.** What a closure freezes is the `[Repo]` array,
+not the workspaces: it re-derives `repos.flatMap(\.workspaces)` each time it runs. So the graph it
+reaches goes stale in two ways, and only one of them moves a workspace identity —
+
+| What SwiftData does | What the closure then walks | What moves in the fingerprint |
+|---|---|---|
+| Replaces a peer **workspace** | the superseded peer, via the repo it still holds | that workspace's `identity` |
+| Replaces a **repo**, its workspace instances surviving onto the superseding object | whatever the drained old repo has left, often nothing | every workspace's `ownerIdentity` |
+| Adds or removes a repo | a list missing or including the wrong repo's workspaces | the signature list's length and contents |
+
+The second row is the one a workspace-only fingerprint cannot see, and it is the worse failure:
+`pin` reads `max(pinOrder)` over an emptied list, gets `-1`, and hands out a `pinOrder` that
+already belongs to another workspace.
+
+The revision is computed by the parent from the same expression the closure re-derives, one
+evaluation later, which is what makes the cover complete rather than a list of cases someone
+remembered.
 
 The trade is deliberate and lands on the cheap side. A peer replacement now rebuilds the whole
 workspace list rather than one row, but the measurement above is the reason that is affordable:
