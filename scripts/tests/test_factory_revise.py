@@ -518,6 +518,36 @@ class BudgetTests(unittest.TestCase):
         assert reason is not None
         self.assertIn("daily revision cap of 4", reason)
 
+    def test_a_spent_revision_budget_is_not_reported_as_a_crash_loop(self) -> None:
+        """#1271's fix reaches this lane too, which shares the same ceiling.
+
+        Four turns posted against a cap of 4, then refused triggers walking
+        the raw count past 12. A crash loop posts nothing and so releases its
+        budget claim; this day's budget is over cap, which is what tells the
+        two apart.
+        """
+        posted = [workflow_run(run_id) for run_id in range(100, 104)]
+        refused = [workflow_run(run_id) for run_id in range(200, 209)]
+        jobs = {run_id: [revise_job()] for run_id in range(100, 104)}
+
+        reason = self.budget(posted + refused, jobs)
+
+        assert reason is not None
+        self.assertNotIn("possible crash loop", reason)
+        self.assertIn("budget exhaustion, not a crash loop", reason)
+        self.assertIn("daily revision cap of 4 is exhausted (5 posted or in-flight today)", reason)
+        self.assertIn("10 attempts refused since", reason)
+
+    def test_a_revise_crash_loop_still_reads_as_a_crash_loop(self) -> None:
+        looping = [workflow_run(100, run_attempt=13)]
+        jobs = {100: [revise_job(conclusion="failure")]}
+
+        reason = self.budget(looping, jobs)
+
+        assert reason is not None
+        self.assertIn("possible crash loop", reason)
+        self.assertNotIn("budget exhaustion", reason)
+
     def test_the_default_cap_is_four(self) -> None:
         self.assertEqual(revise.parse_daily_cap(None), 4)
         self.assertEqual(revise.parse_daily_cap("6"), 6)

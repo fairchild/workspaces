@@ -7,7 +7,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import sys
 import unittest
 from pathlib import Path
@@ -307,6 +309,207 @@ class FactoryReviewTests(unittest.TestCase):
             factory_review.authorize_execution(
                 client, daily_cap=12, runaway_cap=36, current_run_id="1", current_run_attempt=41
             )
+
+        self.assertIn("possible crash loop", self.guard_failure(client, daily_cap=12))
+        self.assertNotIn("budget exhaustion", self.guard_failure(client, daily_cap=12))
+
+    def guard_failure(
+        self,
+        client,
+        *,
+        daily_cap: int = 12,
+        runaway_cap: int = 36,
+        current_run_id: str = "1",
+        current_run_attempt: int = 41,
+    ) -> str:
+        """The message `authorize_execution` dies with, asserting that it dies."""
+        with self.assertRaises(factory_review.FactoryReviewError) as raised:
+            with contextlib.redirect_stdout(io.StringIO()):
+                factory_review.authorize_execution(
+                    client,
+                    daily_cap=daily_cap,
+                    runaway_cap=runaway_cap,
+                    current_run_id=current_run_id,
+                    current_run_attempt=current_run_attempt,
+                )
+        return str(raised.exception)
+
+    def cap_exhausted_morning(self):
+        """Run 33382299160's day, replayed: 36 runs, 12 of which posted a review.
+
+        Verified against the live run list for 2026-08-31 (42 runs, all
+        `run_attempt` 1) and the admit logs either side of the crossover: run
+        33382111323 printed `36/36` and `budget: 13/12` and failed with the
+        daily review cap; 33382299160 printed `37/36` and failed with
+        "possible crash loop", never reaching the budget line.
+        """
+        posted = list(range(1, 13))
+        refused = list(range(13, 37))
+        runs = [
+            {"id": run_id, "run_attempt": 1, "status": "completed", "conclusion": "success"}
+            for run_id in posted
+        ] + [
+            {"id": run_id, "run_attempt": 1, "status": "completed", "conclusion": "failure"}
+            for run_id in refused
+        ]
+        review_step = [
+            {
+                "name": "april",
+                "conclusion": "success",
+                "steps": [{"name": "Run April counterpart review", "conclusion": "success"}],
+            }
+        ]
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        client.workflow_run_jobs.side_effect = lambda run_id: (
+            review_step if run_id in posted else []
+        )
+        return client
+
+    def test_a_cap_exhausted_day_of_refusals_does_not_report_a_crash_loop(self) -> None:
+        """#1271, specimen #1487: the morning of 2026-08-31, under this code.
+
+        Twelve reviews posted, then every later trigger refused at the admit
+        gate -- 25 free no-ops that walked the raw counter past 36 on their
+        own. Under the old code this raised "possible crash loop" while
+        nothing was looping, and on the 2026-08-08 instance of the same
+        sequence two agents spent a diagnosis on the wrong ceiling. The guard
+        still fires (the ceiling is unchanged); it now says why.
+        """
+        message = self.guard_failure(
+            self.cap_exhausted_morning(), current_run_id="33382299160", current_run_attempt=1
+        )
+
+        self.assertNotIn("possible crash loop", message)
+        self.assertIn("budget exhaustion, not a crash loop", message)
+        self.assertIn("37 run attempts", message)
+        self.assertIn("daily review cap of 12 is exhausted (13 posted or in-flight today)", message)
+        self.assertIn("25 attempts refused since", message)
+        self.assertIn("reset at 00:00Z UTC", message)
+
+    def test_the_cap_exhausted_failure_logs_both_counters(self) -> None:
+        """The budget line is the reader's evidence, so it must survive the guard.
+
+        Run 33382299160's log stopped after `raw attempt count: 37/36`: the
+        old ordering raised before the budget was ever computed, so the one
+        number that explained the failure never printed.
+        """
+        buffer = io.StringIO()
+        with self.assertRaises(factory_review.FactoryReviewError):
+            with contextlib.redirect_stdout(buffer):
+                factory_review.authorize_execution(
+                    self.cap_exhausted_morning(),
+                    daily_cap=12,
+                    runaway_cap=36,
+                    current_run_id="33382299160",
+                    current_run_attempt=1,
+                )
+
+        self.assertIn("Factory review raw attempt count: 37/36", buffer.getvalue())
+        self.assertIn("Factory review execution budget: 13/12", buffer.getvalue())
+
+    def test_a_crash_loop_after_a_productive_morning_is_still_a_crash_loop(self) -> None:
+        """The discriminator is the budget, not "did anything post today".
+
+        Three reviews posted, then a genuine loop of 34 attempts posting
+        nothing. A loop's runs conclude without posting, so they release their
+        budget claim -- the budget stays well under cap, and the ceiling is
+        again the only thing that can stop it. Keying the message off "some
+        review was posted today" would have mislabelled this as backpressure.
+        """
+        runs = [
+            {"id": 1, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+            {"id": 2, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+            {"id": 3, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+            {"id": 4, "run_attempt": 34, "status": "completed", "conclusion": "failure"},
+        ]
+        review_step = [
+            {
+                "name": "april",
+                "conclusion": "success",
+                "steps": [{"name": "Run April counterpart review", "conclusion": "success"}],
+            }
+        ]
+        client = mock.Mock()
+        client.workflow_runs_on.return_value = runs
+        client.workflow_run_jobs.side_effect = lambda run_id: (
+            review_step if run_id in (1, 2, 3) else []
+        )
+
+        message = self.guard_failure(client, current_run_id="5", current_run_attempt=1)
+
+        self.assertIn("possible crash loop", message)
+        self.assertNotIn("budget exhaustion", message)
+
+    def test_neither_ceiling_moved_and_the_runaway_check_still_goes_first(self) -> None:
+        """#1271 asks for a message, not a threshold or an ordering change.
+
+        At exactly the cap the guard stays silent (the comparison is still
+        strict), and one attempt later -- with the budget also over -- it is
+        the runaway ceiling that raises, not the budget check, because a crash
+        loop must be stopped whatever the budget says.
+        """
+        client = self.cap_exhausted_morning()
+
+        at_the_ceiling = self.guard_failure(
+            client, runaway_cap=37, current_run_id="33382299160", current_run_attempt=1
+        )
+        self.assertIn("daily review cap of 12 is exceeded", at_the_ceiling)
+        self.assertNotIn("runaway guard", at_the_ceiling)
+
+        one_over = self.guard_failure(
+            client, runaway_cap=36, current_run_id="33382299160", current_run_attempt=1
+        )
+        self.assertTrue(
+            one_over.startswith("daily runaway guard of 36 run attempts is exceeded"),
+            one_over,
+        )
+
+    def test_the_runaway_message_names_the_condition_that_caused_it(self) -> None:
+        """#1271's acceptance, at the message seam itself."""
+        crash_loop = factory_review.runaway_guard_reason(
+            raw_attempts=37,
+            runaway_cap=36,
+            budget=1,
+            daily_cap=12,
+            unproductive_attempts=37,
+            lane_noun="review",
+        )
+        backpressure = factory_review.runaway_guard_reason(
+            raw_attempts=37,
+            runaway_cap=36,
+            budget=13,
+            daily_cap=12,
+            unproductive_attempts=25,
+            lane_noun="review",
+        )
+
+        self.assertEqual(
+            crash_loop,
+            "daily runaway guard of 36 run attempts is exceeded "
+            "(37 run attempts) -- possible crash loop",
+        )
+        self.assertIn("budget exhaustion, not a crash loop", backpressure)
+        self.assertNotIn("possible crash loop", backpressure)
+
+    def test_productive_and_unproductive_attempts_account_for_every_attempt(self) -> None:
+        runs = [
+            {"id": 1, "run_attempt": 1},
+            {"id": 2, "run_attempt": 3},
+            {"id": 3, "run_attempt": 1},
+        ]
+        posted = {"1": True, "2": False, "3": False}
+
+        raw = factory_review.count_daily_run_attempts(runs, "4", 2)
+        unproductive = factory_review.count_unproductive_attempts(runs, posted, "4", 2)
+
+        self.assertEqual(raw, 7)
+        self.assertEqual(unproductive, 6, "run 1's single posting attempt is the only productive one")
+        self.assertEqual(
+            factory_review.count_unproductive_attempts(runs, {}, "", 1),
+            factory_review.count_daily_run_attempts(runs, "", 1),
+            "a day that posted nothing has no productive attempts",
+        )
 
     def test_runaway_cap_defaults_to_a_multiple_of_the_daily_cap(self) -> None:
         self.assertEqual(factory_review.parse_runaway_cap(None, 12), 36)

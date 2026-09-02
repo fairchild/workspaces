@@ -241,17 +241,9 @@ def budget_decline_reason(
     day = datetime.now(UTC).date().isoformat()
     runs = client.workflow_runs_on(REVISE_WORKFLOW, day)
 
-    # A crash loop never posts a revision, so the budget below never sees it;
-    # this ceiling on raw attempts is what stops it retrying forever (#1179).
     raw_attempts = factory_review.count_daily_run_attempts(
         runs, current_run_id, current_run_attempt
     )
-    print(f"Factory revise raw attempt count: {raw_attempts}/{runaway_cap}")
-    if raw_attempts > runaway_cap:
-        return (
-            f"the daily runaway guard of {runaway_cap} run attempts is exceeded "
-            f"({raw_attempts} attempts today) -- possible crash loop"
-        )
 
     # Not filtered by the run's overall conclusion: a sibling job (telemetry,
     # evidence) failing must not erase a revision the model actually made.
@@ -261,7 +253,26 @@ def budget_decline_reason(
         if isinstance(run, dict) and run.get("id") is not None
     }
     budget = factory_review.count_daily_review_budget(runs, posted_by_run, current_run_id)
+
+    print(f"Factory revise raw attempt count: {raw_attempts}/{runaway_cap}")
     print(f"Factory revise execution budget: {budget}/{daily_cap}")
+
+    # A crash loop never posts a revision, so the budget below never sees it;
+    # this ceiling on raw attempts is what stops it retrying forever (#1179),
+    # and it still fires first. Same ceiling, same two situations as the
+    # review lane (#1271): once the revision budget is spent, refused
+    # triggers walk this counter to it on their own.
+    if raw_attempts > runaway_cap:
+        return "the " + factory_review.runaway_guard_reason(
+            raw_attempts=raw_attempts,
+            runaway_cap=runaway_cap,
+            budget=budget,
+            daily_cap=daily_cap,
+            unproductive_attempts=factory_review.count_unproductive_attempts(
+                runs, posted_by_run, current_run_id, current_run_attempt
+            ),
+            lane_noun="revision",
+        )
     if budget > daily_cap:
         return (
             f"the daily revision cap of {daily_cap} is exceeded ({budget} posted or "
