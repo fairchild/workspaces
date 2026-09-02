@@ -236,8 +236,44 @@ class FactoryCommentResponderTests(unittest.TestCase):
         self.assertNotIn("Instrument first.", section)
         self.assertNotIn("## Writing Voice", section)
 
-    def test_writing_voice_rules_are_empty_when_memory_is_unreadable(self) -> None:
-        self.assertEqual(payload.writing_voice_rules(Path("/nonexistent/MEMORY.md")), "")
+    def test_writing_voice_rules_fail_loudly_rather_than_posting_unstyled_prose(
+        self,
+    ) -> None:
+        # This lane posts model output verbatim, so a silently dropped rules
+        # block ships unstyled prose to a real conversation. Every way the
+        # section can go missing must stop the run instead.
+        with self.assertRaises(payload.PayloadError):
+            payload.writing_voice_rules(Path("/nonexistent/MEMORY.md"))
+
+        cases = {
+            "no heading": "# Repo Memory\n\n## Release Discipline\n\n- Tag first.\n",
+            "heading only at h3": "# Repo Memory\n\n### Writing Voice\n\n- Start.\n",
+            "heading inside prose": "See the ## Writing Voice section for rules.\n",
+            "duplicate headings": (
+                "## Writing Voice\n\n- One.\n\n## Writing Voice\n\n- Two.\n"
+            ),
+            "empty section": "## Writing Voice\n\n## Debugging Heuristic\n\n- Probe.\n",
+            "over the byte cap": "## Writing Voice\n\n- " + ("x" * 9_000) + "\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, text in cases.items():
+                memory = Path(tmp) / f"{name.replace(' ', '-')}.md"
+                memory.write_text(text, encoding="utf-8")
+                with self.subTest(case=name), self.assertRaises(payload.PayloadError):
+                    payload.writing_voice_rules(memory)
+
+    def test_prepare_stops_when_the_writing_voice_section_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = Path(tmp) / "MEMORY.md"
+            memory.write_text("# Repo Memory\n\n## Release Discipline\n", encoding="utf-8")
+            with mock.patch.object(payload, "REPO_MEMORY_PATH", memory):
+                with self.assertRaises(payload.PayloadError):
+                    payload.build_prompt(
+                        self.make_context(),
+                        {"title": "t", "body": "b", "html_url": "u"},
+                        "issue",
+                        [],
+                    )
 
     def test_prompt_inlines_writing_voice_because_the_model_has_no_tools(self) -> None:
         # The reply step runs `claude -p --disallowedTools "*"`, so a pointer to

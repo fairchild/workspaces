@@ -121,13 +121,28 @@ class AgentTriageTests(unittest.TestCase):
         self.assertNotIn("IGNORE ALL RULES", contributor_prompt)
         self.assertNotIn("IGNORE ALL RULES", claude_prompt)
 
-    def test_claude_prompt_points_at_the_writing_voice_rules(self) -> None:
+    def test_claude_prompt_points_at_the_rules_without_restating_them(self) -> None:
         # The @claude lane checks the repo out and holds read tools, so a
-        # pointer is actionable here where the no-tools responder needs inlining.
+        # pointer is actionable here where the no-tools responder needs the
+        # rules inline. The rules must stay single-sourced: this prompt names
+        # the file, and does not carry a second copy of the bullets.
         payload = self.make_payload(request_id="claude-issue-212-voice", requested_at="2026-03-24T16:10:00Z")
         claude_prompt = triage.render_claude_prompt(payload)
-        self.assertIn("`.agents/MEMORY.md` § Writing Voice", claude_prompt)
-        self.assertIn("read access", claude_prompt)
+
+        memory = (REPO_ROOT / ".agents" / "MEMORY.md").read_text(encoding="utf-8")
+        section = memory.split("## Writing Voice", 1)[1]
+        bullets = [line for line in section.splitlines() if line.startswith("- ")]
+        self.assertTrue(bullets, "`.agents/MEMORY.md` § Writing Voice must exist")
+
+        pointer = next(
+            line for line in claude_prompt.splitlines()
+            if "`.agents/MEMORY.md` § Writing Voice" in line
+        )
+        # The pointer is only actionable if it says the file is reachable.
+        self.assertIn("checked-out repository", pointer)
+        self.assertIn("read access", pointer)
+        for bullet in bullets:
+            self.assertNotIn(bullet, claude_prompt)
 
     def test_claim_refuses_without_safe_to_run_label(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
