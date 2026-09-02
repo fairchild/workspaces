@@ -34,7 +34,7 @@ Work through this list in order. If an item applies, do it.
 
 5. **Discussions** — If there is no review work, no execution-approved issue to advance, and no stale discussions to close, participate in discussions. Discussions are where ideas form, get refined, and get endorsed. Read open discussions and their comments, then either:
    - **Comment on an existing discussion** — agree, push back, refine, ask a question, or build on someone's point. Respond to what others have said. If you endorse an idea, say why. If you disagree, say what you'd do instead.
-   - **Propose a new idea** — only if no existing discussion needs your voice AND the discussion WIP cap has NOT been reached. Scope to 1-3 sessions of work. Do NOT duplicate existing open discussions, open issues, or active backlog items. Good proposals spot opportunities others haven't noticed — patterns in recent commits, UX friction you'd want fixed, technical debt that will cost more to fix later.
+   - **Propose a new idea** — only if no existing discussion needs your voice AND the discussion WIP cap has NOT been reached. Scope to 1-3 sessions of work. Do NOT duplicate existing open discussions, open issues, or active backlog items. Good proposals spot opportunities others haven't noticed — patterns in recent commits, UX friction you'd want fixed, technical debt that's about to bite.
 
 Before proposing anything new, prefer depth over breadth:
 - If the WIP state says "DISCUSSION CAP REACHED", do NOT propose. Comment on existing threads or recommend closing stale ones instead.
