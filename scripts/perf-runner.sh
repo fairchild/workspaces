@@ -51,8 +51,11 @@ CURRENT_PROTOCOL_EPOCH="deterministic-delivery-v1"
 #
 # Same ownership contract as perf-baseline.sh: a caller-provided suite is used as-is and
 # never reset or removed, and only a suite this run invented is a suite this run may clear.
+# Trimmed the way LaunchPreferences trims it, so the name pinned here is the name the app
+# resolves. Comparing an untrimmed value against a trimmed one refuses a suite that was
+# honoured — failing closed, but on the lane's own bookkeeping rather than on the launch.
 if [[ -n "${WORKSPACES_PREFERENCES_SUITE:-}" ]]; then
-    PREFERENCES_SUITE="$WORKSPACES_PREFERENCES_SUITE"
+    PREFERENCES_SUITE="$(printf '%s' "$WORKSPACES_PREFERENCES_SUITE" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
     PREFERENCES_SUITE_OWNER="caller"
 else
     PREFERENCES_SUITE="com.cloudcompute.workspaces.perf.$$-$(date +%Y%m%d%H%M%S)"
@@ -84,7 +87,11 @@ assert_preferences_isolated() {
     # `|| true` because a no-match grep exits 1, and under `set -e` with `pipefail` that
     # aborts the run at this assignment — failing closed, but silently, which is the one
     # thing this branch exists to avoid.
-    line="$(grep -o '\[LaunchPreferences\] domain=.*' "$log_file" 2>/dev/null | tail -n 1 || true)"
+    # Anchored on the marker rather than on `domain=`, so a final entry cut before its
+    # first field is still the entry judged. Anchoring on the field made such a line
+    # invisible and quietly promoted the resolution before it — which, on a relaunch that
+    # fell back, is the one line in the log that does not describe the launch measured.
+    line="$(grep -o '\[LaunchPreferences\].*' "$log_file" 2>/dev/null | tail -n 1 || true)"
     if [[ -z "$line" ]]; then
         echo "  [preferences] no [LaunchPreferences] line in $log_file" >&2
         echo "  [preferences] the app did not report which defaults domain backed the launch — an app" >&2
@@ -100,6 +107,13 @@ assert_preferences_isolated() {
     isolated="$(read_field isolated)"
     suite="$(read_field suite)"
 
+    # Empty covers two shapes: an entry truncated before `domain=`, and a line carrying
+    # `domain=` twice, where awk emits both values and neither is the field's answer.
+    if [[ -z "$domain" ]]; then
+        echo "  [preferences] the last [LaunchPreferences] entry has no readable domain= field — the log" >&2
+        echo "  [preferences] is cut, or repeats the field, at the resolution that decides the capture." >&2
+        return 1
+    fi
     if [[ "$domain" != "scratch" ]]; then
         echo "  [preferences] resolved domain=$domain, not the scratch suite — the launch read and wrote" >&2
         echo "  [preferences] the persistent com.cloudcompute.workspaces domain." >&2

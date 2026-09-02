@@ -301,6 +301,19 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
         line = f"{self.PREFIX}domain=scratch suite=com.cloudcompute.workspaces.perf.other reset=false isolated=true"
         self.assert_refused(line + "\n", "expected")
 
+    def test_a_truncated_final_entry_does_not_fall_back_to_an_earlier_one(self) -> None:
+        """A cut final entry is an unjudged resolution, not an absent one.
+
+        Anchoring the search on `domain=` made a final entry that never reached its
+        first field invisible, so the reader silently fell back to the previous
+        resolution and judged a launch by a line that did not describe it.
+        """
+        body = (
+            f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true\n"
+            f"{self.PREFIX}\n"
+        )
+        self.assert_refused(body, "no readable domain=")
+
     def test_the_last_resolution_in_the_log_is_the_one_judged(self) -> None:
         """A relaunch that fell back must not be masked by an earlier isolated line."""
         body = (
@@ -855,6 +868,74 @@ class DebugLaneIsolationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("ISOLATION FAILURES", result.stdout)
         self.assertIn("reported no suite", result.stdout)
+
+    def test_the_last_resolution_in_the_log_is_the_one_judged(self) -> None:
+        """Reading the first entry lets an isolated line vouch for a fallback after it.
+
+        The app logs once per resolution, so a relaunch that fell back appends *after*
+        the isolated line that preceded it. Judging the first match means the run that
+        actually happened is never the one examined.
+        """
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace(
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                    "\n2026-08-30 10:00:00.500 [LaunchPreferences] domain=standard"
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("domain=standard", result.stdout)
+
+    def test_a_later_entry_missing_its_suite_is_not_masked_by_an_earlier_one(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace(
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                    "\n2026-08-30 10:00:00.500 [LaunchPreferences] domain=scratch isolated=true"
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("reported no suite", result.stdout)
+
+    def test_a_duplicate_domain_on_one_line_is_unreadable_rather_than_resolved(self) -> None:
+        """Two values for one field is not a field the reader may pick from."""
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} "
+                    "isolated=true domain=standard"
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no readable domain", result.stdout)
+
+    def test_a_truncated_final_entry_is_refused(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace(
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                    "\n2026-08-30 10:00:00.500 [LaunchPreferences]"
+                    "\n2026-08-30 10:00:01.000 [Perf]",
+                )
+            ]
+        )
+
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("no readable domain", result.stdout)
 
     def test_a_foreign_suite_is_still_an_isolation_failure(self) -> None:
         result = self.run_summarizer(

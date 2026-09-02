@@ -211,6 +211,11 @@ class CommittedEvidenceSchemaTests(unittest.TestCase):
         `csv.DictReader` pairs by position, so a 14-field row under a 15-column header
         answers `os_version` with an arch and `notes` with None. Counting fields is the
         only thing that sees it.
+
+        Every tracked CSV, not only the perf ones: the property is about committed data
+        being readable at all, and the release gate that reads these files checks one
+        column. A CSV that is deliberately ragged would need this list narrowed, which is
+        the right moment to argue for it.
         """
         tracked = subprocess.run(
             ["git", "ls-files", "*.csv"],
@@ -228,7 +233,9 @@ class CommittedEvidenceSchemaTests(unittest.TestCase):
                 header = next(reader, None)
                 if header is None:
                     continue
-                for number, row in enumerate(reader, start=1):
+                # From 2: the header was already consumed, so the first data row is
+                # the file's second line and a reported number has to be openable.
+                for number, row in enumerate(reader, start=2):
                     if len(row) != len(header):
                         mismatches.append(f"{relative}:{number} has {len(row)}, header has {len(header)}")
 
