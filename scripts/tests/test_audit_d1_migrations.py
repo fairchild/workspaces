@@ -79,6 +79,17 @@ def service_dir(tmp: Path, *migrations: str, toml: str = WRANGLER_TOML) -> Path:
     return tmp
 
 
+@contextlib.contextmanager
+def no_remote_audit():
+    """Silence the GitHub half of `main()` so a test of the D1 half stays offline.
+
+    These tests are network-free by design; letting `main()` reach for `gh` would make
+    them slow, flaky, and dependent on the runner's credentials.
+    """
+    with unittest.mock.patch.object(audit, "remote_checks", lambda repo: []):  # noqa: ARG005
+        yield
+
+
 def environment(name: str = "production", database: str = "workspaces-feedback"):
     return audit.D1Environment(name=name, database_name=database, migrations_dir="migrations")
 
@@ -202,6 +213,358 @@ class FreshDatabaseTests(unittest.TestCase):
             check = audit.d1_environment_check(environment(), root)
 
         self.assertEqual(check.status, "warn")
+
+
+class WranglerPayloadTests(unittest.TestCase):
+    """What comes back from a *successful* query, put through the real parser.
+
+    The verdict tests below stub `applied_d1_migrations` and inject sets the author
+    chose, so they pin the comparison but never the reading. A parser that is only
+    ever fed its own author's idea of the answer will certify whatever that idea is —
+    the same failure mode as the stubbed database that let #1309 through.
+    """
+
+    # A real `wrangler d1 execute --json` response: a list of statement results, each
+    # carrying `success`, `meta`, and the rows.
+    REAL_PAYLOAD = json.dumps(
+        [
+            {
+                "success": True,
+                "meta": {"served_by": "v3-prod", "duration": 0.2, "changes": 0, "rows_read": 2},
+                "results": [{"name": "0001_feedback.sql"}, {"name": "0002_feedback_audit.sql"}],
+            }
+        ]
+    )
+
+    def stub_wrangler(self, stdout: str) -> None:
+        def fake_run(*args, **kwargs):  # noqa: ARG001
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
+
+        patcher = unittest.mock.patch.object(audit.subprocess, "run", fake_run)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_a_real_wrangler_response_yields_its_migration_names(self) -> None:
+        self.stub_wrangler(self.REAL_PAYLOAD)
+
+        with tempdir() as tmp:
+            applied = audit.applied_d1_migrations(environment(), service_dir(tmp))
+
+        self.assertEqual(applied, {"0001_feedback.sql", "0002_feedback_audit.sql"})
+
+    def test_a_real_response_matching_the_repo_passes_end_to_end(self) -> None:
+        """The pass verdict, reached through the parser rather than around it."""
+        self.stub_wrangler(self.REAL_PAYLOAD)
+
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql", "0002_feedback_audit.sql")
+            check = audit.d1_environment_check(environment(), root)
+
+        self.assertEqual(check.status, "pass")
+
+    def test_a_query_returning_no_rows_is_zero_applied_not_an_error(self) -> None:
+        self.stub_wrangler(json.dumps([{"success": True, "results": []}]))
+
+        with tempdir() as tmp:
+            applied = audit.applied_d1_migrations(environment(), service_dir(tmp))
+
+        self.assertEqual(applied, set())
+
+
+class MalformedPayloadTests(unittest.TestCase):
+    """A shape the parser does not recognise is a query it could not read.
+
+    Both wrong directions are covered. Iterating a non-list `results` used to raise an
+    uncaught `TypeError` that ended the whole audit before any unrelated check was
+    printed; other odd shapes used to be skipped silently, which produced an empty
+    applied set — indistinguishable from a fresh database, so a parsing accident read
+    as maximal drift and would fail a release.
+    """
+
+    def assert_unreadable(self, payload: object) -> None:
+        with self.assertRaises(RuntimeError):
+            audit.migration_names(payload)
+
+    def test_a_non_list_payload_is_unreadable(self) -> None:
+        self.assert_unreadable({"results": []})
+
+    def test_a_non_list_results_is_unreadable_rather_than_a_crash(self) -> None:
+        """`{"results": 42}` raised TypeError out of the parser and sank the run."""
+        self.assert_unreadable([{"results": 42}])
+
+    def test_a_string_results_is_unreadable_rather_than_silently_empty(self) -> None:
+        self.assert_unreadable([{"results": "0001_feedback.sql"}])
+
+    def test_a_row_that_is_not_a_named_record_is_unreadable(self) -> None:
+        self.assert_unreadable([{"results": ["0001_feedback.sql"]}])
+        self.assert_unreadable([{"results": [{"filename": "0001_feedback.sql"}]}])
+
+    def test_an_unreadable_payload_warns_rather_than_failing_the_release(self) -> None:
+        def fake_run(*args, **kwargs):  # noqa: ARG001
+            return subprocess.CompletedProcess(
+                args=[], returncode=0, stdout=json.dumps([{"results": 42}]), stderr=""
+            )
+
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                root = service_dir(tmp, "0001_feedback.sql")
+                check = audit.d1_environment_check(environment(), root)
+
+        self.assertEqual(check.status, "warn")
+
+    def test_the_audit_survives_a_d1_check_that_raises(self) -> None:
+        """One check must not be able to end the run before the others are printed."""
+
+        def explode():
+            raise TypeError("something unanticipated")
+
+        real = audit.d1_migration_checks
+        audit.d1_migration_checks = explode
+        self.addCleanup(setattr, audit, "d1_migration_checks", real)
+
+        captured = io.StringIO()
+        with no_remote_audit(), contextlib.redirect_stdout(captured):
+            exit_code = audit.main(["--repo", "fairchild/workspaces", "--strict"])
+
+        self.assertIn("D1 migration drift", captured.getvalue())
+        self.assertIn("something unanticipated", captured.getvalue())
+        self.assertEqual(exit_code, 0)
+
+
+class MigrationsTableTests(unittest.TestCase):
+    """`migrations_table` is a wrangler setting, not a constant.
+
+    A binding that renames the table used to be queried for `d1_migrations`, which
+    does not exist there — so every migration read as pending and the environment
+    failed for a configuration this script had not read.
+    """
+
+    def test_a_custom_table_is_read_from_the_binding(self) -> None:
+        import tomllib
+
+        toml = """\
+            name = "svc"
+
+            [[d1_databases]]
+            binding = "DB"
+            database_name = "db"
+            migrations_dir = "migrations"
+            migrations_table = "schema_history"
+        """
+        found = audit.d1_environments(tomllib.loads(textwrap.dedent(toml)))
+
+        self.assertEqual([env.migrations_table for env in found], ["schema_history"])
+
+    def test_the_default_table_is_still_d1_migrations(self) -> None:
+        import tomllib
+
+        found = audit.d1_environments(tomllib.loads(textwrap.dedent(WRANGLER_TOML)))
+
+        self.assertEqual({env.migrations_table for env in found}, {"d1_migrations"})
+
+    def test_the_custom_table_is_the_one_queried(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(args, **kwargs):  # noqa: ARG001
+            captured["args"] = args
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="[]", stderr="")
+
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_table="schema_history",
+        )
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                audit.applied_d1_migrations(env, service_dir(tmp))
+
+        self.assertIn("SELECT name FROM schema_history ORDER BY name", captured["args"])
+
+    def test_a_missing_custom_table_is_zero_applied_not_a_warn(self) -> None:
+        """The fresh-database reading follows the configured name, not the default."""
+
+        def fake_run(*args, **kwargs):  # noqa: ARG001
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout=json.dumps({"error": {"text": "no such table: schema_history: SQLITE_ERROR"}}),
+                stderr="",
+            )
+
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_table="schema_history",
+        )
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                applied = audit.applied_d1_migrations(env, service_dir(tmp))
+
+        self.assertEqual(applied, set())
+
+    def test_a_table_name_that_is_not_an_identifier_is_refused(self) -> None:
+        """The name is interpolated into SQL, so it is checked before it is sent."""
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_table="d1_migrations; DROP TABLE feedback",
+        )
+        with tempdir() as tmp:
+            with self.assertRaises(RuntimeError):
+                audit.applied_d1_migrations(env, service_dir(tmp))
+
+
+class MigrationsPatternTests(unittest.TestCase):
+    """`migrations_pattern` opts a service into a nested layout.
+
+    Wrangler then records each migration under its path relative to `migrations_dir`,
+    so a flat `*.sql` glob finds nothing on disk and the environment only warns —
+    drift goes unchecked on exactly the services that configured this.
+    """
+
+    def nested(self, tmp: Path) -> Path:
+        toml = """\
+            name = "svc"
+
+            [[d1_databases]]
+            binding = "DB"
+            database_name = "db"
+            migrations_dir = "migrations"
+            migrations_pattern = "migrations/*/migration.sql"
+        """
+        root = service_dir(tmp, toml=toml)
+        for name in ("0001_feedback", "0002_feedback_audit"):
+            (root / "migrations" / name).mkdir(parents=True, exist_ok=True)
+            (root / "migrations" / name / "migration.sql").write_text("-- test\n", encoding="utf-8")
+        return root
+
+    def environment(self) -> object:
+        return audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/*/migration.sql",
+        )
+
+    def test_nested_migrations_are_named_relative_to_the_migrations_dir(self) -> None:
+        with tempdir() as tmp:
+            found = audit.repo_migrations(self.environment(), self.nested(tmp))
+
+        self.assertEqual(
+            found, ["0001_feedback/migration.sql", "0002_feedback_audit/migration.sql"]
+        )
+
+    def test_a_nested_layout_can_reach_a_pass(self) -> None:
+        real = audit.applied_d1_migrations
+        self.addCleanup(setattr, audit, "applied_d1_migrations", real)
+        audit.applied_d1_migrations = lambda environment, service_dir: {  # noqa: ARG005
+            "0001_feedback/migration.sql",
+            "0002_feedback_audit/migration.sql",
+        }
+
+        with tempdir() as tmp:
+            check = audit.d1_environment_check(self.environment(), self.nested(tmp))
+
+        self.assertEqual(check.status, "pass")
+
+    def test_a_nested_layout_still_detects_drift(self) -> None:
+        real = audit.applied_d1_migrations
+        self.addCleanup(setattr, audit, "applied_d1_migrations", real)
+        audit.applied_d1_migrations = lambda environment, service_dir: {  # noqa: ARG005
+            "0001_feedback/migration.sql"
+        }
+
+        with tempdir() as tmp:
+            check = audit.d1_environment_check(self.environment(), self.nested(tmp))
+
+        self.assertEqual(check.status, "fail")
+        self.assertIn("0002_feedback_audit/migration.sql", check.detail)
+
+    def test_the_default_flat_layout_still_uses_bare_filenames(self) -> None:
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql", "0002_feedback_audit.sql")
+            found = audit.repo_migrations(environment(), root)
+
+        self.assertEqual(found, ["0001_feedback.sql", "0002_feedback_audit.sql"])
+
+    def test_a_pattern_outside_the_migrations_dir_warns(self) -> None:
+        """Wrangler requires the pattern to start with `migrations_dir/`.
+
+        A pattern that does not cannot be turned into the relative names wrangler
+        records, so the comparison would be between two different vocabularies.
+        """
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="sql/*.sql",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("migrations_pattern", check.detail)
+
+
+class WranglerResolutionTests(unittest.TestCase):
+    """The service's pinned wrangler outranks whatever is on PATH.
+
+    `infra/feedback-store/package-lock.json` pins a version; a global install can be
+    older and answer differently, so preferring PATH lets the operator's machine
+    decide what the audit means.
+    """
+
+    def test_the_service_local_wrangler_wins(self) -> None:
+        with tempdir() as tmp:
+            local = tmp / "node_modules" / ".bin"
+            local.mkdir(parents=True)
+            (local / "wrangler").write_text("#!/bin/sh\n", encoding="utf-8")
+
+            self.assertEqual(audit.wrangler_command(tmp), str(local / "wrangler"))
+
+    def test_path_is_the_fallback(self) -> None:
+        with unittest.mock.patch.object(audit.shutil, "which", lambda name: "/usr/bin/" + name):
+            with tempdir() as tmp:
+                self.assertEqual(audit.wrangler_command(tmp), "/usr/bin/wrangler")
+
+    def test_no_wrangler_anywhere_is_reported_as_such(self) -> None:
+        with unittest.mock.patch.object(audit.shutil, "which", lambda name: None):  # noqa: ARG005
+            with tempdir() as tmp:
+                self.assertIsNone(audit.wrangler_command(tmp))
+
+                checks = audit.d1_migration_checks((service_dir(tmp),))
+
+        self.assertEqual([check.status for check in checks], ["warn"])
+        self.assertIn("wrangler is not installed", checks[0].detail)
+
+
+class SkipD1Tests(unittest.TestCase):
+    """`--skip-d1` keeps the GitHub remote audit on a machine with no D1 access.
+
+    Without it the only opt-out is `--local-only`, which gives up the whole remote
+    lane to avoid one check that needs Cloudflare credentials.
+    """
+
+    def test_skip_d1_skips_only_the_d1_checks(self) -> None:
+        called = False
+
+        def fake():
+            nonlocal called
+            called = True
+            return []
+
+        real = audit.d1_migration_checks
+        audit.d1_migration_checks = fake
+        self.addCleanup(setattr, audit, "d1_migration_checks", real)
+
+        with no_remote_audit(), contextlib.redirect_stdout(io.StringIO()):
+            audit.main(["--repo", "fairchild/workspaces", "--skip-d1"])
+
+        self.assertFalse(called)
 
 
 class D1AddressingTests(unittest.TestCase):

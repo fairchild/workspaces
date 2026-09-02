@@ -84,18 +84,30 @@ DUAL_SCOPE_EXPECTED: set[str] = set()
 # entry is cheap when a second case is real.
 D1_SERVICE_DIRS = (REPO_ROOT / "infra" / "feedback-store",)
 # Bounded because this is the check that leaves the machine. An unbounded wait on
-# Cloudflare would hang a release preflight rather than report on one.
+# Cloudflare would hang a release preflight rather than report on one. Per
+# environment, not per run: environments are queried in sequence, so a service with
+# two of them can wait twice this long.
 D1_QUERY_TIMEOUT_SECONDS = 60
-# The one SQL failure that is an answer rather than an obstacle: a database that has
-# never had a migration applied has no `d1_migrations` table for the query to read.
-# Anchored on a word boundary so a differently-named missing table (`d1_migrations_v2`)
-# still raises instead of being read as "zero applied".
-D1_MISSING_MIGRATIONS_TABLE = re.compile(r"no such table:\s*d1_migrations\b")
-# Wrangler's unnamed top-level tables are an environment in their own right,
-# distinct from any `[env.<name>]`. Naming it for what it is rather than for what
-# this repo happens to deploy there keeps a real `[env.production]` from colliding
-# with it.
+# Wrangler's defaults for the two migration settings a binding may override.
+D1_DEFAULT_MIGRATIONS_TABLE = "d1_migrations"
+# Interpolated into SQL, so it is confined to what an unquoted SQLite identifier can
+# be. A name outside this shape is refused rather than sent.
+D1_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# Wrangler's unnamed top-level tables are an environment in their own right, distinct
+# from any `[env.<name>]`. Naming it for what it is rather than for what this repo
+# happens to deploy there keeps a real `[env.production]` from colliding with it.
 D1_DEFAULT_ENVIRONMENT = "top-level"
+
+
+def missing_migrations_table(table: str) -> re.Pattern[str]:
+    """Matches the one SQL failure that is an answer rather than an obstacle.
+
+    A database that has never had a migration applied has no migrations table for the
+    query to read. Anchored on the table's own name and a word boundary, so a
+    differently-named missing table (`d1_migrations_v2`) still raises instead of being
+    read as "zero applied" — that would report drift nobody measured.
+    """
+    return re.compile(rf"no such table:\s*{re.escape(table)}\b")
 
 
 @dataclass(frozen=True)
@@ -397,11 +409,19 @@ def remote_secret_checks(repo: str) -> list[Check]:
 
 @dataclass(frozen=True)
 class D1Environment:
-    """A wrangler environment and the migration-bearing D1 database it binds."""
+    """A wrangler environment and the migration-bearing D1 database it binds.
+
+    `migrations_table` and `migrations_pattern` carry the binding's own overrides of
+    wrangler's defaults. Assuming the defaults would make a service that sets either
+    one read as maximally drifted or as having nothing to compare, which is a verdict
+    about this script rather than about the database.
+    """
 
     name: str
     database_name: str
     migrations_dir: str
+    migrations_table: str = D1_DEFAULT_MIGRATIONS_TABLE
+    migrations_pattern: str | None = None
 
 
 def d1_environments(config: dict[str, object]) -> list[D1Environment]:
@@ -437,14 +457,35 @@ def d1_environments(config: dict[str, object]) -> list[D1Environment]:
             database_name = database.get("database_name")
             migrations_dir = database.get("migrations_dir")
             if database_name and migrations_dir:
+                table = database.get("migrations_table") or D1_DEFAULT_MIGRATIONS_TABLE
+                pattern = database.get("migrations_pattern")
                 environments.append(
-                    D1Environment(str(name), str(database_name), str(migrations_dir))
+                    D1Environment(
+                        str(name),
+                        str(database_name),
+                        str(migrations_dir),
+                        str(table),
+                        str(pattern) if pattern else None,
+                    )
                 )
     return environments
 
 
+def wrangler_command(service_dir: Path) -> str | None:
+    """The wrangler to run for a service, or None when there is none to run.
+
+    The service's own install wins over PATH: `package-lock.json` pins a version and a
+    global install can be older, so preferring PATH would let the operator's machine
+    decide what the audit means.
+    """
+    local = service_dir / "node_modules" / ".bin" / "wrangler"
+    if local.is_file():
+        return str(local)
+    return shutil.which("wrangler")
+
+
 def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[str]:
-    """Migration names `d1_migrations` records for a live database.
+    """Migration names the binding's migrations table records for a live database.
 
     Addressed by `database_name` rather than by `--env`, so the lookup cannot drift
     from the binding this environment was read out of.
@@ -463,16 +504,20 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
     An empty set means the database answered and has applied nothing. Callers must not
     read it as "could not tell", which is what raising is for.
     """
+    table = environment.migrations_table
+    if not D1_TABLE_NAME.match(table):
+        raise RuntimeError(f"unusable migrations_table name: {table!r}")
+
     result = subprocess.run(
         [
-            "wrangler",
+            wrangler_command(service_dir) or "wrangler",
             "d1",
             "execute",
             environment.database_name,
             "--remote",
             "--json",
             "--command",
-            "SELECT name FROM d1_migrations ORDER BY name",
+            f"SELECT name FROM {table} ORDER BY name",
         ],
         cwd=service_dir,
         text=True,
@@ -485,37 +530,76 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
         # one failure that is an *answer* arrives through the same channel as the
         # failures that are obstacles.
         #
-        # A database that has never had a migration applied has no `d1_migrations`
-        # table to read. That is maximal drift — every migration in the repo is
-        # pending — but treated as an unreadable answer it becomes a warn, and
-        # `--strict` does not fail on warns. A freshly recreated database would then
-        # report *softer* than one missing a single migration, which inverts the
-        # check. Zero applied is the honest reading, and the pending-fail path below
-        # already handles it.
+        # A database that has never had a migration applied has no migrations table to
+        # read. That is maximal drift — every migration in the repo is pending — but
+        # treated as an unreadable answer it becomes a warn, and `--strict` does not
+        # fail on warns. A freshly recreated database would then report *softer* than
+        # one missing a single migration, which inverts the check. Zero applied is the
+        # honest reading, and the pending-fail path below already handles it.
         #
         # Both streams are searched, and neither is privileged. Wrangler writes
         # unrelated chatter to stderr routinely — an unwritable debug log is enough —
-        # so reading whichever stream is non-empty would make the paragraph above
-        # conditional on wrangler happening to be quiet, and the inversion would
-        # return whenever it was not.
-        if D1_MISSING_MIGRATIONS_TABLE.search(result.stdout) or D1_MISSING_MIGRATIONS_TABLE.search(
-            result.stderr
-        ):
+        # so reading whichever stream is non-empty would make this conditional on
+        # wrangler happening to be quiet, and the inversion would return whenever it
+        # was not.
+        missing = missing_migrations_table(table)
+        if missing.search(result.stdout) or missing.search(result.stderr):
             return set()
         detail = result.stderr.strip() or result.stdout.strip() or "wrangler failed"
         raise RuntimeError(detail)
 
-    payload = json.loads(result.stdout)
+    return migration_names(json.loads(result.stdout))
+
+
+def migration_names(payload: object) -> set[str]:
+    """The migration names in a successful wrangler `--json` response.
+
+    Every departure from the expected shape raises rather than being skipped. A shape
+    this does not recognise is a query it could not read, and the caller turns that
+    into a `warn`; silently dropping the rows it cannot parse would instead produce an
+    empty applied set, which reads as maximal drift and fails a release on a parsing
+    accident.
+    """
     if not isinstance(payload, list):
-        raise RuntimeError("unexpected wrangler output shape")
+        raise RuntimeError(f"unexpected wrangler output: {type(payload).__name__}, expected a list")
     names: set[str] = set()
     for statement in payload:
         if not isinstance(statement, dict):
+            raise RuntimeError(f"unexpected wrangler statement: {type(statement).__name__}")
+        rows = statement.get("results")
+        if rows is None:
             continue
-        for row in statement.get("results") or []:
-            if isinstance(row, dict) and row.get("name"):
-                names.add(str(row["name"]))
+        if not isinstance(rows, list):
+            raise RuntimeError(f"unexpected wrangler results: {type(rows).__name__}")
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("name"):
+                raise RuntimeError(f"unexpected wrangler row: {row!r}")
+            names.add(str(row["name"]))
     return names
+
+
+def repo_migrations(environment: D1Environment, service_dir: Path) -> list[str]:
+    """The migration names on disk, as wrangler would record them.
+
+    Under the default flat layout that is the filename. Under a `migrations_pattern`
+    it is the path relative to `migrations_dir`, which is what wrangler writes into
+    the migrations table, so the two sides of the comparison stay in the same
+    vocabulary.
+    """
+    migrations_dir = service_dir / environment.migrations_dir
+    if environment.migrations_pattern is None:
+        return sorted(path.name for path in migrations_dir.glob("*.sql"))
+
+    prefix = f"{environment.migrations_dir.rstrip('/')}/"
+    if not environment.migrations_pattern.startswith(prefix):
+        raise RuntimeError(
+            f"migrations_pattern {environment.migrations_pattern!r} does not start with {prefix!r}"
+        )
+    return sorted(
+        path.relative_to(migrations_dir).as_posix()
+        for path in service_dir.glob(environment.migrations_pattern)
+        if path.is_file()
+    )
 
 
 def d1_migration_checks(service_dirs: tuple[Path, ...] = D1_SERVICE_DIRS) -> list[Check]:
@@ -549,7 +633,7 @@ def d1_migration_checks(service_dirs: tuple[Path, ...] = D1_SERVICE_DIRS) -> lis
         if not environments:
             continue
 
-        if not shutil.which("wrangler"):
+        if wrangler_command(service_dir) is None:
             checks.append(
                 Check(
                     "warn",
@@ -566,17 +650,19 @@ def d1_migration_checks(service_dirs: tuple[Path, ...] = D1_SERVICE_DIRS) -> lis
 
 def d1_environment_check(environment: D1Environment, service_dir: Path) -> Check:
     name = f"D1 migration drift ({service_dir.name}/{environment.name})"
-    migrations_path = service_dir / environment.migrations_dir
-    on_disk = sorted(path.name for path in migrations_path.glob("*.sql"))
+    try:
+        on_disk = repo_migrations(environment, service_dir)
+    except (RuntimeError, OSError, ValueError) as error:
+        return Check("warn", name, f"could not list the repo's migrations: {error}")
     if not on_disk:
-        return Check("warn", name, f"no .sql files under {environment.migrations_dir}")
+        return Check("warn", name, f"no migration files under {environment.migrations_dir}")
 
     try:
         applied = applied_d1_migrations(environment, service_dir)
     except (
         RuntimeError,
         OSError,
-        json.JSONDecodeError,
+        ValueError,  # json.JSONDecodeError
         subprocess.TimeoutExpired,
     ) as error:
         return Check("warn", name, f"could not read applied migrations: {error}")
@@ -634,6 +720,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", help="GitHub repository in owner/name form.")
     parser.add_argument("--local-only", action="store_true", help="Skip gh API checks.")
+    parser.add_argument(
+        "--skip-d1",
+        action="store_true",
+        help="Skip the live D1 migration-drift checks, keeping the rest of the remote audit.",
+    )
     parser.add_argument("--strict", action="store_true", help="Exit non-zero on fail checks.")
     return parser.parse_args(argv)
 
@@ -649,7 +740,19 @@ def main(argv: list[str]) -> int:
             checks.append(Check("warn", "GitHub remote audit", str(error)))
         # Outside the block above: reading a live database does not depend on
         # resolving the GitHub repo, and a failure to do one should not hide the other.
-        checks.extend(d1_migration_checks())
+        #
+        # `--skip-d1` exists because this is the only check needing Cloudflare
+        # credentials; without it, a caller who wants the GitHub audit on a machine
+        # with no D1 access has to give up the whole remote lane via `--local-only`.
+        if not args.skip_d1:
+            try:
+                checks.extend(d1_migration_checks())
+            except Exception as error:  # noqa: BLE001
+                # Broad on purpose: one check must not be able to end the run before
+                # the others are printed. An unanticipated failure here is reported as
+                # a check that could not look, which is what every other D1 obstacle
+                # reports.
+                checks.append(Check("warn", "D1 migration drift", f"check failed: {error}"))
 
     print_checks(checks)
     failed = any(check.status == "fail" for check in checks)

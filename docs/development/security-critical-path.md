@@ -99,16 +99,28 @@ CLOUDFLARE_ACCOUNT_ID=… uv run --script scripts/audit-security-posture.py --re
 ```
 
 Anything that stops the check reading live state — no `wrangler`, no credentials,
-a timeout — reports `warn`, never `pass`. Being unable to look is the condition
-this check exists to make visible, so it is never reported as health.
-`--local-only` skips it entirely.
+a timeout, output it cannot parse — reports `warn`, never `pass`. Being unable to
+look is the condition this check exists to make visible, so it is never reported
+as health. `--local-only` skips it along with the rest of the remote audit;
+`--skip-d1` skips only this check, for a machine that has GitHub access but no
+Cloudflare credentials.
+
+The 60-second query timeout is per environment rather than per run, since
+environments are queried in sequence.
+
+Both wrangler settings that change where migrations live are honored:
+`migrations_table` when a binding renames the table, and `migrations_pattern` for
+nested layouts, whose migrations wrangler records under their path relative to
+`migrations_dir`. `infra/feedback-store` sets neither and gets wrangler's
+defaults.
 
 One SQL failure is deliberately not in that bucket. A database that has never had
-a migration applied has no `d1_migrations` table, so the query errors — but that is
-the answer, not an obstacle, and it is maximal drift: every migration in the repo is
+a migration applied has no migrations table, so the query errors — but that is the
+answer, not an obstacle, and it is maximal drift: every migration in the repo is
 pending. It reports `fail`. Read as a warn it would make a freshly recreated
 database report *softer* than one missing a single migration, since `--strict` fails
-only on `fail`.
+only on `fail`. Wrangler reports that error on stdout while writing unrelated
+chatter to stderr, so both streams are searched for it.
 
 ## Explicit Follow-Ups
 
