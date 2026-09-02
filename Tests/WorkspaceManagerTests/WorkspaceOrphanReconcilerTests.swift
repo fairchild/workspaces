@@ -596,6 +596,105 @@ struct WorkspaceOrphanReconcilerTests {
         #expect(result.items.contains { $0.kind == .lumeVMWithoutWorkspace && $0.resourceName == "orphan-vm" })
     }
 
+    // MARK: - Scans that could not look
+    //
+    // A repository whose scan throws contributes no items, so a short result reads exactly
+    // like a clean one. Until #1401 the only trace was a warning with both the subject and
+    // the reason redacted, which is why a launch logging ~25 of them could not be triaged
+    // from a log capture at all.
+
+    /// The production failure, reproduced through the real git lister rather than a stub: a
+    /// repository record whose directory is gone. `Process` cannot set that working
+    /// directory, so the scan throws before git ever runs.
+    @Test("A repository whose directory is gone is reported as a failure, not as clean")
+    func missingRepositoryDirectoryIsReportedAsFailure() async throws {
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+        let missingPath = testRoot.appendingPathComponent("gone-repo", isDirectory: true).path
+
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: testRoot,
+            lumeWorkspaceStorageURL: nil
+        )
+        let result = await reconciler.scan(
+            repositories: [repoSnapshot(name: "gone-repo", localPath: missingPath, workspaces: [])]
+        )
+
+        #expect(result.items.isEmpty)
+        #expect(result.failures.count == 1)
+        #expect(result.failures.first?.scope == "gone-repo")
+        // The path is carried explicitly because the Foundation error names only the last
+        // component — "The file “gone-repo” doesn't exist." — which does not locate the repo.
+        #expect(result.failures.first?.path == missingPath)
+        #expect(result.failures.first?.message.isEmpty == false)
+    }
+
+    /// The distinction the failures list exists for: both of these scans return no items,
+    /// and only one of them means there is nothing to find.
+    @Test("A clean scan and an unreachable one are no longer the same answer")
+    func cleanScanIsDistinguishableFromUnreachableScan() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+        try repo.createFile("README.md", content: "hello\n")
+        try repo.commit(message: "initial")
+
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: testRoot,
+            lumeWorkspaceStorageURL: nil
+        )
+
+        let clean = await reconciler.scan(
+            repositories: [repoSnapshot(name: "present-repo", localPath: repo.url.path, workspaces: [])]
+        )
+        let unreachable = await reconciler.scan(
+            repositories: [
+                repoSnapshot(
+                    name: "gone-repo",
+                    localPath: testRoot.appendingPathComponent("gone-repo").path,
+                    workspaces: []
+                )
+            ]
+        )
+
+        #expect(clean.items.isEmpty)
+        #expect(unreachable.items.isEmpty)
+        #expect(clean.failures.isEmpty)
+        #expect(unreachable.failures.count == 1)
+    }
+
+    /// One bad record must not cost the repositories after it. The scan already continued
+    /// past a failure; recording failures must not change that.
+    @Test("A failing repository does not stop the ones after it")
+    func failingRepositoryDoesNotStopLaterRepositories() async throws {
+        let repo = try TestGitRepository.create()
+        defer { repo.cleanup() }
+        try repo.createFile("README.md", content: "hello\n")
+        try repo.commit(message: "initial")
+
+        let testRoot = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: testRoot) }
+
+        let reconciler = WorkspaceOrphanReconciler(
+            workspacesRoot: testRoot,
+            lumeWorkspaceStorageURL: nil
+        )
+        let result = await reconciler.scan(
+            repositories: [
+                repoSnapshot(
+                    name: "gone-repo",
+                    localPath: testRoot.appendingPathComponent("gone-repo").path,
+                    workspaces: []
+                ),
+                repoSnapshot(name: "present-repo", localPath: repo.url.path, workspaces: []),
+            ]
+        )
+
+        #expect(result.failures.map(\.scope) == ["gone-repo"])
+    }
+
     private func makeTempDir() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceOrphanReconcilerTests-\(UUID().uuidString)", isDirectory: true)
