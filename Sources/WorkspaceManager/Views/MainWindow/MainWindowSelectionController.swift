@@ -442,7 +442,12 @@ struct MainWindowSelectionController {
     }
 
     func handleSelectedWebSourceRemoval(_ source: MainWindowWebSourceSelection) {
-        if let lastSurface = MainWindowLastSurface.decode(from: dependencies.lastSurfaceRawValue.wrappedValue),
+        // The same rule the restore path follows (#845): an empty query array is
+        // not evidence the source is gone, so it cannot authorise erasing the
+        // saved surface. A source that genuinely went away leaves its siblings
+        // behind; a query that momentarily emptied leaves nothing behind at all.
+        if !dependencies.webSources().isEmpty,
+            let lastSurface = MainWindowLastSurface.decode(from: dependencies.lastSurfaceRawValue.wrappedValue),
             lastSurface.kind == .webView,
             lastSurface.id == source.webSourceID
         {

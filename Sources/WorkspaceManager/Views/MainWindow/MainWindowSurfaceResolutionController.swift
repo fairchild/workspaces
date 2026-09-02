@@ -30,6 +30,11 @@ enum MainWindowSurfaceResolutionAction {
     case clearInvalidLastSurface
     case restore(MainWindowLaunchSurface)
     case fallback(MainWindowLaunchSurface)
+    /// Something to show while a saved surface waits for the delivery that would
+    /// judge it (#845). Applied for display only: it is not persisted as the last
+    /// surface and does not end the launch resolution, so the saved selection is
+    /// still there to restore when its collection arrives.
+    case provisionalFallback(MainWindowLaunchSurface)
 }
 
 struct MainWindowSurfaceResolutionController {
@@ -106,6 +111,7 @@ struct MainWindowSurfaceResolutionController {
             return .applyWebBootstrap(targetName, source)
         }
 
+        var savedSurfaceAwaitsDelivery = false
         switch bootstrapController.restoredSurfaceDecision(
             rawValue: context.lastSurfaceRawValue,
             repos: context.repos,
@@ -113,6 +119,8 @@ struct MainWindowSurfaceResolutionController {
         ) {
         case .none:
             break
+        case .awaitingModels:
+            savedSurfaceAwaitsDelivery = true
         case .clearInvalid:
             return .clearInvalidLastSurface
         case .select(let surface):
@@ -127,7 +135,13 @@ struct MainWindowSurfaceResolutionController {
             return .none
         }
 
-        return .fallback(fallback)
+        // A fallback is a decision about what to show, and applying one normally
+        // records it as the last surface. That would destroy a saved surface just
+        // as surely as clearing it — the case where repos have arrived and web
+        // sources have not, with a web source saved, ends with the fallback repo
+        // written over it. So while a saved surface is still unjudged, the
+        // fallback is provisional: shown, not recorded, not final (#845).
+        return savedSurfaceAwaitsDelivery ? .provisionalFallback(fallback) : .fallback(fallback)
     }
 
     private func normalizePath(_ rawPath: String) -> String {
