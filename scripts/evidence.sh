@@ -174,10 +174,11 @@ fi
 # docs/development/evidence.md § "App evidence lane".
 if [[ -n "$FIXTURE" ]]; then
   # Scenario extras that ride process-environment inheritance into the app
-  # (launch-dev.sh preserves the caller's environment). The orphan-banner seed
-  # travels this way so the capture library needs no per-scenario knowledge.
-  if fixture_resolve_scenario "$FIXTURE" && [[ -n "${FIXTURE_SEED_ORPHAN_BANNER:-}" ]]; then
-    export WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER=1
+  # (launch-dev.sh preserves the caller's environment). The banner seeds travel
+  # this way so the capture library needs no per-scenario knowledge.
+  if fixture_resolve_scenario "$FIXTURE"; then
+    [[ -n "${FIXTURE_SEED_ORPHAN_BANNER:-}" ]] && export WORKSPACES_UI_FIXTURE_SEED_ORPHAN_BANNER=1
+    [[ -n "${FIXTURE_SEED_RUNAWAY_ALERT:-}" ]] && export WORKSPACES_UI_FIXTURE_SEED_RUNAWAY_ALERT=1
   fi
   FILE="/tmp/evidence-${NAME}-$(date +%Y%m%d-%H%M%S).png"
   if [[ "$KEEP_RUNNING" != "true" ]]; then

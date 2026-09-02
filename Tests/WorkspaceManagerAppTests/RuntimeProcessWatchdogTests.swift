@@ -1,0 +1,352 @@
+//
+//  RuntimeProcessWatchdogTests.swift
+//  WorkspaceManagerAppTests
+//
+//  The always-on watchdog's contract (#1368): it publishes what the sampler
+//  found, dismissing an alert keeps it dismissed across the next sweep, and
+//  stopping a process that will not die stops nagging about it.
+//
+
+import Darwin
+import Foundation
+import Testing
+
+@testable import WorkspaceManager
+@testable import WorkspaceManagerCore
+
+@Suite("RuntimeProcessWatchdog")
+@MainActor
+struct RuntimeProcessWatchdogTests {
+    private let gigabyte: Int64 = 1_024 * 1_024 * 1_024
+
+    @Test("Publishes the alerts the sampler found")
+    func publishesSamplerAlerts() async {
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: makeSampler(runawayFootprint: 9 * gigabyte),
+            cadence: 3_600,
+            stopProcess: { _ in true }
+        )
+
+        await watchdog.sampleOnce()
+
+        #expect(watchdog.alerts.map(\.pid) == [101])
+        #expect(watchdog.alerts.first?.trigger == .footprintCeiling)
+        #expect(watchdog.lastSampledAt != nil)
+    }
+
+    @Test("A quiet machine publishes nothing")
+    func quietMachinePublishesNothing() async {
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: makeSampler(runawayFootprint: 64 * 1_024 * 1_024),
+            cadence: 3_600,
+            stopProcess: { _ in true }
+        )
+
+        await watchdog.sampleOnce()
+
+        #expect(watchdog.alerts.isEmpty)
+    }
+
+    @Test("A dismissed alert stays dismissed across the next sweep")
+    func dismissedAlertStaysDismissed() async {
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: makeSampler(runawayFootprint: 9 * gigabyte),
+            cadence: 3_600,
+            stopProcess: { _ in true }
+        )
+        await watchdog.sampleOnce()
+        guard let alert = watchdog.alerts.first else {
+            Issue.record("expected an alert to dismiss")
+            return
+        }
+
+        watchdog.dismiss(alert: alert)
+        await settle(until: { await MainActor.run { watchdog.alerts.isEmpty } })
+        #expect(watchdog.alerts.isEmpty)
+
+        await watchdog.sampleOnce()
+        #expect(watchdog.alerts.isEmpty)
+    }
+
+    @Test("Stopping asks the terminator for that pid and re-samples")
+    func stoppingAsksTheTerminator() async {
+        let stopped = StoppedIdentities()
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: makeSampler(runawayFootprint: 9 * gigabyte),
+            cadence: 3_600,
+            stopProcess: { identity in
+                await stopped.record(identity)
+                return true
+            }
+        )
+        await watchdog.sampleOnce()
+        guard let alert = watchdog.alerts.first else {
+            Issue.record("expected an alert to stop")
+            return
+        }
+
+        watchdog.stop(alert: alert)
+        await settle(until: { await !stopped.all.isEmpty })
+
+        // The pid alone is not what gets signalled: the start time travels with
+        // it so a recycled pid cannot be mistaken for the runaway.
+        #expect(await stopped.all == [RuntimeProcessIdentity(pid: 101, startedAt: Self.started)])
+    }
+
+    @Test("A successful stop clears the alert without waiting out the cadence")
+    func successfulStopClearsTheAlertImmediately() async {
+        // The rate limit is deliberately longer than the stop takes, which is the
+        // real-world shape: SIGTERM lands well inside the sampler's minimum
+        // interval. A rate-limited re-sample would return the cached ledger, leave
+        // the dead process on screen, and let a second Stop mark it unstoppable.
+        let provider = MutableRuntimeProcessProvider(
+            processes: Self.processes(runawayFootprint: 9 * 1_024 * 1_024 * 1_024)
+        )
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: provider,
+            processIdentifier: { 100 },
+            minimumSampleInterval: 600
+        )
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: sampler,
+            cadence: 3_600,
+            stopProcess: { identity in
+                await provider.remove(pid: identity.pid)
+                return true
+            }
+        )
+        await watchdog.sampleOnce()
+        guard let alert = watchdog.alerts.first else {
+            Issue.record("expected an alert to stop")
+            return
+        }
+
+        watchdog.stop(alert: alert)
+        await settle(until: { await MainActor.run { watchdog.alerts.isEmpty } })
+
+        #expect(watchdog.alerts.isEmpty)
+        #expect(watchdog.unstoppable.isEmpty)
+    }
+
+    @Test("A stop that lands during an in-flight sweep is still answered by a later one")
+    func stopDuringInFlightSweepIsAnsweredFreshly() async {
+        // The coalescing that stops the pane's poll and the watchdog's poll
+        // landing out of order must not let a stop be answered by a sweep that
+        // read the process table before the process died. The provider here holds
+        // one sweep open across the stop, so the only correct answer comes from a
+        // sweep started afterwards.
+        let provider = GatedRuntimeProcessProvider(
+            processes: Self.processes(runawayFootprint: 9 * 1_024 * 1_024 * 1_024)
+        )
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: provider,
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: sampler,
+            cadence: 3_600,
+            stopProcess: { identity in
+                await provider.remove(pid: identity.pid)
+                return true
+            }
+        )
+
+        await watchdog.sampleOnce()
+        guard let alert = watchdog.alerts.first else {
+            Issue.record("expected an alert to stop")
+            return
+        }
+
+        // A sweep that reads the table before the stop, held open across it.
+        await provider.closeGate()
+        let overlapping = Task { await sampler.sample(workspaceDirectories: nil) }
+        await provider.waitForSweepToStart()
+
+        watchdog.stop(alert: alert)
+        await provider.openGate()
+        _ = await overlapping.value
+
+        await settle(until: { await MainActor.run { watchdog.alerts.isEmpty } })
+        #expect(watchdog.alerts.isEmpty)
+        #expect(watchdog.unstoppable.isEmpty)
+    }
+
+    @Test("A process that refuses to stop stays visible, marked as unstoppable")
+    func unstoppableProcessStaysVisible() async {
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: makeSampler(runawayFootprint: 9 * gigabyte),
+            cadence: 3_600,
+            stopProcess: { _ in false }
+        )
+        await watchdog.sampleOnce()
+        guard let alert = watchdog.alerts.first else {
+            Issue.record("expected an alert to stop")
+            return
+        }
+
+        watchdog.stop(alert: alert)
+        await settle(until: { await MainActor.run { !watchdog.unstoppable.isEmpty } })
+
+        // A runaway that survived both signals is still eating the machine, so
+        // it stays on screen rather than being quietly dismissed.
+        #expect(watchdog.alerts.map(\.pid) == [101])
+        #expect(watchdog.unstoppable == [101])
+    }
+
+    @Test("Stopping refuses to signal launchd, the kernel, or an unidentified pid")
+    func terminatorRefusesReservedPIDs() async {
+        let started = Date(timeIntervalSince1970: 1_000)
+        #expect(await RuntimeProcessTerminator.stop(.init(pid: 0, startedAt: started)) == false)
+        #expect(await RuntimeProcessTerminator.stop(.init(pid: 1, startedAt: started)) == false)
+        // No recorded start time means no way to tell the process from a
+        // successor holding the same pid, so nothing is signalled.
+        #expect(await RuntimeProcessTerminator.stop(.init(pid: 4_242, startedAt: nil)) == false)
+    }
+
+    @Test("Stopping refuses a pid whose start time no longer matches")
+    func terminatorRefusesRecycledPID() async {
+        let stopped = await RuntimeProcessTerminator.stop(
+            .init(pid: 4_242, startedAt: Date(timeIntervalSince1970: 1_000)),
+            startTimeReader: { _ in Date(timeIntervalSince1970: 9_000) }
+        )
+
+        #expect(stopped == false)
+    }
+
+    @Test("Identity matching is exact, not approximate")
+    func terminatorRefusesNearbyStartTime() async {
+        // Both values are the same kernel field read through the same code, so
+        // there is no measurement error to absorb — and any tolerance is a window
+        // in which a recycled pid gets signalled. A millisecond apart is a
+        // different process.
+        let expected = Date(timeIntervalSince1970: 1_000)
+        for offset in [0.001, 0.1, 0.5, 0.999] {
+            let stopped = await RuntimeProcessTerminator.stop(
+                .init(pid: 4_242, startedAt: expected),
+                startTimeReader: { _ in expected.addingTimeInterval(offset) }
+            )
+            #expect(stopped == false, "a start time \(offset)s away must not be signalled")
+        }
+    }
+
+    fileprivate static let started = Date(timeIntervalSince1970: 1_000)
+
+    fileprivate static func processes(runawayFootprint: Int64) -> [RuntimeProcessSample] {
+        [
+            RuntimeProcessSample(
+                pid: 100, parentPID: 1, name: "WorkSpaces", command: "WorkSpaces",
+                cpuPercent: 0, residentMemoryBytes: 512 * 1_024 * 1_024,
+                startedAt: started),
+            RuntimeProcessSample(
+                pid: 101, parentPID: 100, name: "codex", command: "codex",
+                cpuPercent: 0, residentMemoryBytes: runawayFootprint,
+                startedAt: started),
+        ]
+    }
+
+    private func makeSampler(runawayFootprint: Int64) -> RuntimeDiagnosticsSampler {
+        RuntimeDiagnosticsSampler(
+            provider: FixedRuntimeProcessProvider(
+                processes: Self.processes(runawayFootprint: runawayFootprint)
+            ),
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+    }
+
+    /// Waits on the observable change rather than a tuned sleep. The watchdog's
+    /// actions are fire-and-forget `Task`s, so the test yields until the state it
+    /// is asserting on has actually moved.
+    private func settle(until condition: @Sendable () async -> Bool) async {
+        for _ in 0..<400 {
+            if await condition() { return }
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+}
+
+private actor StoppedIdentities {
+    private(set) var all: [RuntimeProcessIdentity] = []
+
+    func record(_ identity: RuntimeProcessIdentity) {
+        all.append(identity)
+    }
+}
+
+/// A mutable provider that can also hold one sweep open, so a test can place a
+/// stop inside an in-flight sweep's lifetime.
+private actor GatedRuntimeProcessProvider: RuntimeProcessSnapshotProviding {
+    private var table: [RuntimeProcessSample]
+    private var gateIsClosed = false
+    private var sweepStarted: CheckedContinuation<Void, Never>?
+    private var gateWaiters: [CheckedContinuation<Void, Never>] = []
+    private var didStartGatedSweep = false
+
+    init(processes: [RuntimeProcessSample]) {
+        self.table = processes
+    }
+
+    func remove(pid: Int32) {
+        table.removeAll { $0.pid == pid }
+    }
+
+    func closeGate() {
+        gateIsClosed = true
+        didStartGatedSweep = false
+    }
+
+    func openGate() {
+        gateIsClosed = false
+        let waiters = gateWaiters
+        gateWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    func waitForSweepToStart() async {
+        guard !didStartGatedSweep else { return }
+        await withCheckedContinuation { continuation in
+            sweepStarted = continuation
+        }
+    }
+
+    func processes() async throws -> [RuntimeProcessSample] {
+        let snapshot = table
+        guard gateIsClosed else { return snapshot }
+        didStartGatedSweep = true
+        sweepStarted?.resume()
+        sweepStarted = nil
+        await withCheckedContinuation { continuation in
+            gateWaiters.append(continuation)
+        }
+        // Deliberately the table as it was when the sweep began.
+        return snapshot
+    }
+}
+
+/// A provider whose table can change, so a test can retire the process it just
+/// asked the watchdog to stop.
+private actor MutableRuntimeProcessProvider: RuntimeProcessSnapshotProviding {
+    private var table: [RuntimeProcessSample]
+
+    init(processes: [RuntimeProcessSample]) {
+        self.table = processes
+    }
+
+    func remove(pid: Int32) {
+        table.removeAll { $0.pid == pid }
+    }
+
+    func processes() async throws -> [RuntimeProcessSample] {
+        table
+    }
+}
+
+private struct FixedRuntimeProcessProvider: RuntimeProcessSnapshotProviding {
+    let processes: [RuntimeProcessSample]
+
+    func processes() async throws -> [RuntimeProcessSample] {
+        processes
+    }
+}

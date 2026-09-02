@@ -12,7 +12,8 @@
 
 # fixture_resolve_scenario <name>
 # Populates FIXTURE_AGENT_STATES, FIXTURE_COMMAND_STATUSES, FIXTURE_SEED_RESTORE_BANNER,
-# FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_FILE_TREE_FAILURE, FIXTURE_SIDEBAR_ARRANGEMENT,
+# FIXTURE_SEED_ORPHAN_BANNER, FIXTURE_SEED_RUNAWAY_ALERT, FIXTURE_FILE_TREE_FAILURE,
+# FIXTURE_SIDEBAR_ARRANGEMENT,
 # FIXTURE_CMD_T_REPO, FIXTURE_TRIGGER_CMD_T, FIXTURE_PINNED, FIXTURE_ARCHIVED,
 # FIXTURE_SELECTED, and FIXTURE_SCENARIO_ID for the named scenario.
 # "inline:<agent-states>" passes a raw agent-states spec straight through. Returns
@@ -23,6 +24,7 @@ fixture_resolve_scenario() {
     FIXTURE_COMMAND_STATUSES=""
     FIXTURE_SEED_RESTORE_BANNER=""
     FIXTURE_SEED_ORPHAN_BANNER=""
+    FIXTURE_SEED_RUNAWAY_ALERT=""
     FIXTURE_FILE_TREE_FAILURE=""
     FIXTURE_SIDEBAR_ARRANGEMENT=""
     FIXTURE_CMD_T_REPO=""
@@ -63,6 +65,14 @@ fixture_resolve_scenario() {
             # launching; fixture mode also suppresses the real filesystem orphan scan
             # so dev-machine leftovers never leak into any scenario's capture.
             FIXTURE_SEED_ORPHAN_BANNER=1
+            ;;
+        runaway-alert)
+            # Stages the sidebar's runaway-process strip via a deterministic synthetic
+            # alert (issue #1368). The env var reaches the app by inheritance — the
+            # evidence lane exports WORKSPACES_UI_FIXTURE_SEED_RUNAWAY_ALERT=1 before
+            # launching; fixture mode also suppresses the real process sweep so a
+            # genuine runaway on the dev machine never leaks into a capture.
+            FIXTURE_SEED_RUNAWAY_ALERT=1
             ;;
         sidebar-recent)
             # Flat, date-bucketed sidebar. UIFixtureSeeder spreads the seeded
@@ -134,5 +144,5 @@ fixture_resolve_scenario() {
 
 # fixture_scenario_names — the known scenario ids, one per line.
 fixture_scenario_names() {
-    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
+    printf '%s\n' phase-1-release m6-status-sliver attention-only restore-banner orphan-banner runaway-alert sidebar-recent sidebar-pinned sidebar-pinned-alphabetical sidebar-archived sidebar-active-card file-tree-unavailable file-tree-permission cmd-t-repo-overview cmd-t-repo-terminal clean
 }

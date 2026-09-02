@@ -19,6 +19,11 @@ public struct RuntimeProcessSample: Codable, Equatable, Identifiable, Sendable {
     public let residentMemoryBytes: Int64
     public let cpuTimeSeconds: TimeInterval
     public let currentDirectory: String?
+    /// When the kernel recorded this process starting, when it could be read.
+    /// A pid alone does not identify a process across samples — pids are reused —
+    /// so anything that carries state between samples, or sends a signal, pairs
+    /// the pid with this.
+    public let startedAt: Date?
 
     public init(
         pid: Int32,
@@ -28,7 +33,8 @@ public struct RuntimeProcessSample: Codable, Equatable, Identifiable, Sendable {
         cpuPercent: Double,
         residentMemoryBytes: Int64,
         cpuTimeSeconds: TimeInterval = 0,
-        currentDirectory: String? = nil
+        currentDirectory: String? = nil,
+        startedAt: Date? = nil
     ) {
         self.pid = pid
         self.parentPID = parentPID
@@ -38,6 +44,26 @@ public struct RuntimeProcessSample: Codable, Equatable, Identifiable, Sendable {
         self.residentMemoryBytes = residentMemoryBytes
         self.cpuTimeSeconds = cpuTimeSeconds
         self.currentDirectory = currentDirectory
+        self.startedAt = startedAt
+    }
+
+    /// Pid plus start time: the pair that survives pid reuse.
+    public var identity: RuntimeProcessIdentity {
+        RuntimeProcessIdentity(pid: pid, startedAt: startedAt)
+    }
+}
+
+/// Names one running process across samples. A pid on its own does not: the
+/// kernel reuses them, and a reused pid inheriting a predecessor's growth history
+/// produces a false alert, while one inheriting its stop request kills a
+/// bystander.
+public struct RuntimeProcessIdentity: Hashable, Sendable {
+    public let pid: Int32
+    public let startedAt: Date?
+
+    public init(pid: Int32, startedAt: Date?) {
+        self.pid = pid
+        self.startedAt = startedAt
     }
 }
 
@@ -246,67 +272,53 @@ public protocol RuntimeProcessSnapshotProviding: Sendable {
     func processes() async throws -> [RuntimeProcessSample]
 }
 
+/// Reads the process table through `libproc` and `sysctl` — no `ps`, no `lsof`,
+/// no subprocess at all (#1368). A sweep that spawns nothing is cheap enough to
+/// run on a background cadence whether or not the Diagnostics pane is open,
+/// which is what makes a runaway visible before the kernel acts on it.
 public struct LiveRuntimeProcessSnapshotProvider: RuntimeProcessSnapshotProviding {
-    public init() {}
+    private let snapshot: @Sendable (Date) -> [ProcessInventoryEntry]
+    private let clock: @Sendable () -> Date
 
-    public func processes() async throws -> [RuntimeProcessSample] {
-        async let processOutput = ProcessRunner.run(
-            executable: "/bin/ps",
-            arguments: ["-axo", "pid=,ppid=,pcpu=,rss=,time=,comm=,args="],
-            timeout: 10
+    public init() {
+        self.init(
+            snapshot: { ProcessInventory.hostSnapshot(now: $0) },
+            clock: { Date() }
         )
-        async let cwdOutput = ProcessRunner.run(
-            executable: "/usr/sbin/lsof",
-            arguments: ["-d", "cwd", "-F", "pcn"],
-            timeout: 10
-        )
-
-        let processResult = try await processOutput
-        guard processResult.exitCode == 0 else {
-            throw RuntimeDiagnosticsError.commandFailed(
-                command: "ps",
-                stderr: processResult.stderr
-            )
-        }
-
-        let cwdByPID: [Int32: String]
-        do {
-            let cwdResult = try await cwdOutput
-            cwdByPID =
-                cwdResult.exitCode == 0
-                ? RuntimeDiagnosticsParser.parseLsofCWDs(cwdResult.stdout)
-                : [:]
-        } catch {
-            cwdByPID = [:]
-        }
-
-        let samples = RuntimeDiagnosticsParser.parsePS(processResult.stdout, cwdByPID: cwdByPID)
-        return Self.overlayingPhysicalFootprint(samples)
     }
 
-    /// `ps rss` excludes compressed pages and graphics memory and
-    /// under-reported this app ~9x against Activity Monitor (#1347 D1).
-    /// Physical footprint is what the kernel's own limits act on; same-user
-    /// processes read it without privileges, unreadable pids keep their rss.
-    static func overlayingPhysicalFootprint(
-        _ samples: [RuntimeProcessSample],
-        reader: (Int32) -> Int64? = RuntimeProcessMemory.physicalFootprint(pid:)
-    ) -> [RuntimeProcessSample] {
-        samples.map { sample in
-            guard let footprint = reader(sample.pid) else {
-                return sample
-            }
-            return RuntimeProcessSample(
-                pid: sample.pid,
-                parentPID: sample.parentPID,
-                name: sample.name,
-                command: sample.command,
-                cpuPercent: sample.cpuPercent,
-                residentMemoryBytes: footprint,
-                cpuTimeSeconds: sample.cpuTimeSeconds,
-                currentDirectory: sample.currentDirectory
-            )
-        }
+    init(
+        snapshot: @escaping @Sendable (Date) -> [ProcessInventoryEntry],
+        clock: @escaping @Sendable () -> Date
+    ) {
+        self.snapshot = snapshot
+        self.clock = clock
+    }
+
+    public func processes() async throws -> [RuntimeProcessSample] {
+        snapshot(clock()).map(Self.sample(from:))
+    }
+
+    /// Maps one kernel-level entry onto the sample shape the pane renders.
+    ///
+    /// `residentMemoryBytes` carries physical footprint, as it has since #1347
+    /// D1: `ps rss` excludes compressed pages and graphics memory and
+    /// under-reported this app about 9x against Activity Monitor. `cpuPercent`
+    /// is the share of one core the process has averaged over its life —
+    /// `ps`'s own `%cpu` is a decaying scheduler estimate, and the long-run
+    /// figure is both reproducible and the one a runaway is judged on.
+    static func sample(from entry: ProcessInventoryEntry) -> RuntimeProcessSample {
+        RuntimeProcessSample(
+            pid: entry.pid,
+            parentPID: entry.parentPID,
+            name: entry.name,
+            command: entry.commandLine ?? entry.name,
+            cpuPercent: entry.lifetimeCPUPercent,
+            residentMemoryBytes: entry.footprintBytes,
+            cpuTimeSeconds: entry.cpuTimeSeconds,
+            currentDirectory: entry.currentDirectory,
+            startedAt: entry.startedAt
+        )
     }
 }
 
@@ -342,117 +354,6 @@ public enum RuntimeProcessMemory {
     }
 }
 
-public enum RuntimeDiagnosticsError: Error, CustomStringConvertible, Equatable, Sendable {
-    case commandFailed(command: String, stderr: String)
-
-    public var description: String {
-        switch self {
-        case .commandFailed(let command, let stderr):
-            let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty
-                ? "\(command) failed while collecting diagnostics."
-                : "\(command) failed while collecting diagnostics: \(trimmed)"
-        }
-    }
-}
-
-public enum RuntimeDiagnosticsParser {
-    public static func parsePS(
-        _ output: String,
-        cwdByPID: [Int32: String] = [:]
-    ) -> [RuntimeProcessSample] {
-        output.split(separator: "\n").compactMap { line in
-            parsePSLine(String(line), cwdByPID: cwdByPID)
-        }
-    }
-
-    static func parsePSLine(
-        _ line: String,
-        cwdByPID: [Int32: String]
-    ) -> RuntimeProcessSample? {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-
-        let parts = trimmed.split(separator: " ", maxSplits: 6, omittingEmptySubsequences: true)
-        guard
-            parts.count >= 6,
-            let pid = Int32(parts[0]),
-            let parentPID = Int32(parts[1]),
-            let cpuPercent = Double(parts[2]),
-            let residentMemoryKB = Int64(parts[3])
-        else {
-            return nil
-        }
-
-        let cpuTimeSeconds = parseCPUTime(String(parts[4]))
-        let name = String(parts[5])
-        let command = parts.count >= 7 ? String(parts[6]) : name
-
-        return RuntimeProcessSample(
-            pid: pid,
-            parentPID: parentPID,
-            name: name,
-            command: command,
-            cpuPercent: cpuPercent,
-            residentMemoryBytes: residentMemoryKB * 1_024,
-            cpuTimeSeconds: cpuTimeSeconds,
-            currentDirectory: cwdByPID[pid]
-        )
-    }
-
-    public static func parseLsofCWDs(_ output: String) -> [Int32: String] {
-        var result: [Int32: String] = [:]
-        var currentPID: Int32?
-
-        for rawLine in output.split(separator: "\n") {
-            let line = String(rawLine)
-            guard let prefix = line.first else { continue }
-            let value = String(line.dropFirst())
-
-            switch prefix {
-            case "p":
-                currentPID = Int32(value)
-            case "n":
-                if let currentPID {
-                    result[currentPID] = value
-                }
-            default:
-                break
-            }
-        }
-
-        return result
-    }
-
-    public static func parseCPUTime(_ value: String) -> TimeInterval {
-        let daySplit = value.split(separator: "-", maxSplits: 1)
-        let dayCount: Int
-        let timePart: Substring
-        if daySplit.count == 2 {
-            dayCount = Int(daySplit[0]) ?? 0
-            timePart = daySplit[1]
-        } else {
-            dayCount = 0
-            timePart = Substring(value)
-        }
-
-        let parts = timePart.split(separator: ":").compactMap { Double($0) }
-        let seconds: Double
-        switch parts.count {
-        case 3:
-            seconds = (parts[0] * 3_600) + (parts[1] * 60) + parts[2]
-        case 2:
-            seconds = (parts[0] * 60) + parts[1]
-        case 1:
-            seconds = parts[0]
-        default:
-            seconds = 0
-        }
-
-        return Double(dayCount * 86_400) + seconds
-    }
-}
-
 public actor RuntimeDiagnosticsSampler {
     public static let shared = RuntimeDiagnosticsSampler()
 
@@ -461,41 +362,121 @@ public actor RuntimeDiagnosticsSampler {
     private let clock: @Sendable () -> Date
     private let minimumSampleInterval: TimeInterval
     private let maxHistoryDuration: TimeInterval
+    private let fullSnapshotRetention: Int
+    private let alertPolicy: RuntimeProcessAlertPolicy
 
     private var snapshots: [RuntimeDiagnosticsSnapshot] = []
+    private var growth = RuntimeProcessGrowthLedger()
+    private var muted: Set<RuntimeProcessIdentity> = []
     private var lastErrorMessage: String?
+    /// The scope the pane last supplied. The always-on sweep has no view of the
+    /// model store, so it samples against whatever scope was last set rather than
+    /// against nothing — sampling against nothing would drop every
+    /// workspace-scoped process from the growth ledger on the next sweep.
+    private var workspaceScope: [URL] = []
+    /// The one sweep allowed to be in flight. This actor suspends at the
+    /// provider `await`, so without this the pane's 5 s poll and the watchdog's
+    /// 30 s poll can both pass the interval check and land out of order, leaving
+    /// `latestSnapshot()` stale and the growth window running backwards.
+    private var inFlight: (generation: UInt64, task: Task<RuntimeDiagnosticsSnapshot?, Never>)?
+    /// Increases once per sweep started. A caller that must observe the world
+    /// *after* something it just did compares against this: a sweep whose
+    /// generation it already saw may have read the process table before the act,
+    /// and joining it would answer the wrong question.
+    private var sweepGeneration: UInt64 = 0
+    /// Last CPU-time reading per process, for the sampled rate.
+    private var previousCPUTime: [RuntimeProcessIdentity: (seconds: TimeInterval, at: Date)] = [:]
 
     public init(
         provider: any RuntimeProcessSnapshotProviding = LiveRuntimeProcessSnapshotProvider(),
         processIdentifier: @escaping @Sendable () -> Int32 = { ProcessInfo.processInfo.processIdentifier },
         clock: @escaping @Sendable () -> Date = { Date() },
         minimumSampleInterval: TimeInterval = 5,
-        maxHistoryDuration: TimeInterval = 3_600
+        maxHistoryDuration: TimeInterval = 3_600,
+        fullSnapshotRetention: Int = 1,
+        alertPolicy: RuntimeProcessAlertPolicy = .default
     ) {
         self.provider = provider
         self.processIdentifier = processIdentifier
         self.clock = clock
         self.minimumSampleInterval = minimumSampleInterval
         self.maxHistoryDuration = maxHistoryDuration
+        self.fullSnapshotRetention = fullSnapshotRetention
+        self.alertPolicy = alertPolicy
     }
 
-    public func sampleIfNeeded(workspaceDirectories: [URL]) async -> RuntimeDiagnosticsSnapshot? {
+    /// Samples unless one is recent enough. `workspaceDirectories` is nil for a
+    /// caller with no view of the model store — the always-on watchdog — which
+    /// then samples against the scope the pane last set.
+    public func sampleIfNeeded(workspaceDirectories: [URL]?) async -> RuntimeDiagnosticsSnapshot? {
         let now = clock()
         if let latest = snapshots.last,
             now.timeIntervalSince(latest.sampledAt) < minimumSampleInterval
         {
+            if let workspaceDirectories { workspaceScope = workspaceDirectories }
             return latest
         }
         return await sample(workspaceDirectories: workspaceDirectories)
     }
 
     @discardableResult
-    public func sample(workspaceDirectories: [URL]) async -> RuntimeDiagnosticsSnapshot? {
+    public func sample(workspaceDirectories: [URL]?) async -> RuntimeDiagnosticsSnapshot? {
+        if let workspaceDirectories { workspaceScope = workspaceDirectories }
+
+        if let inFlight {
+            return await inFlight.task.value
+        }
+        sweepGeneration += 1
+        let generation = sweepGeneration
+        let task = Task<RuntimeDiagnosticsSnapshot?, Never> { [self] in
+            await performSample()
+        }
+        inFlight = (generation: generation, task: task)
+        let snapshot = await task.value
+        if inFlight?.generation == generation {
+            inFlight = nil
+        }
+        return snapshot
+    }
+
+    /// Samples the world as it is *after* this call, never joining a sweep that
+    /// may have read it before.
+    ///
+    /// `sample` coalesces, which is right for a poll and wrong for the answer to
+    /// an action: a stop that lands while a sweep is in flight would otherwise be
+    /// reported against a table read before the process died, leaving it on
+    /// screen and letting a second stop be aimed at a pid that is already gone.
+    /// Any sweep already running when this is called is drained first; one
+    /// started after that point began after the action, so joining it is sound.
+    @discardableResult
+    public func sampleFresh(workspaceDirectories: [URL]?) async -> RuntimeDiagnosticsSnapshot? {
+        if let workspaceDirectories { workspaceScope = workspaceDirectories }
+
+        let barrier = sweepGeneration
+        while let current = inFlight, current.generation <= barrier {
+            _ = await current.task.value
+            if inFlight?.generation == current.generation {
+                inFlight = nil
+            }
+        }
+        return await sample(workspaceDirectories: nil)
+    }
+
+    private func performSample() async -> RuntimeDiagnosticsSnapshot? {
         let now = clock()
         let appPID = processIdentifier()
+        let workspaceDirectories = workspaceScope
 
         do {
-            let allProcesses = try await provider.processes()
+            let allProcesses = Self.overlayingSampledCPU(
+                try await provider.processes(),
+                previous: previousCPUTime,
+                now: now
+            )
+            previousCPUTime = Dictionary(
+                allProcesses.map { ($0.identity, (seconds: $0.cpuTimeSeconds, at: now)) },
+                uniquingKeysWith: { _, latest in latest }
+            )
             let appTreeProcesses = Self.appTreeProcesses(from: allProcesses, rootPID: appPID)
             let workspaceProcesses = Self.workspaceProcesses(
                 from: allProcesses,
@@ -512,6 +493,12 @@ public actor RuntimeDiagnosticsSampler {
                 errorMessage: nil
             )
             snapshots.append(snapshot)
+            recordGrowth(
+                appPID: appPID,
+                appTreeProcesses: appTreeProcesses,
+                workspaceProcesses: workspaceProcesses,
+                at: now
+            )
             lastErrorMessage = nil
             trimHistory(relativeTo: now)
             return snapshot
@@ -555,9 +542,96 @@ public actor RuntimeDiagnosticsSampler {
         snapshots.last
     }
 
+    /// Sets the scope the always-on sweep uses, without taking a sample.
+    ///
+    /// The watchdog has no view of the model store, and `nil` preserves a scope
+    /// rather than establishing one — so before this exists the scope is empty
+    /// until someone opens the Diagnostics pane, and a workspace-scoped process
+    /// outside the app's own tree is invisible for the whole of a cold launch.
+    public func setWorkspaceScope(_ directories: [URL]) {
+        workspaceScope = directories
+    }
+
+    /// Processes currently over a growth or footprint threshold.
+    public func alerts() -> [RuntimeProcessAlert] {
+        growth.alerts(policy: alertPolicy, muted: muted)
+    }
+
+    /// Silences one process until it is unmuted or exits. Dismissing an alert has
+    /// to outlive the next sample, or the banner returns 30 seconds after the user
+    /// waves it away. Keyed by identity, so a recycled pid is not born muted.
+    public func mute(_ identity: RuntimeProcessIdentity) {
+        muted.insert(identity)
+    }
+
+    public func unmute(_ identity: RuntimeProcessIdentity) {
+        muted.remove(identity)
+    }
+
     public func reset() {
         snapshots = []
+        growth = RuntimeProcessGrowthLedger()
+        muted = []
+        previousCPUTime = [:]
+        workspaceScope = []
         lastErrorMessage = nil
+    }
+
+    /// Replaces each process's lifetime CPU average with the share of one core it
+    /// used since the previous sample.
+    ///
+    /// The lifetime figure is stable but answers the wrong question for a
+    /// runaway: a process that idled for a day and then pinned a core reads as
+    /// quiet. A first sighting keeps the lifetime figure, which is the only
+    /// reading available for it.
+    static func overlayingSampledCPU(
+        _ samples: [RuntimeProcessSample],
+        previous: [RuntimeProcessIdentity: (seconds: TimeInterval, at: Date)],
+        now: Date
+    ) -> [RuntimeProcessSample] {
+        samples.map { sample in
+            guard let last = previous[sample.identity] else { return sample }
+            let elapsed = now.timeIntervalSince(last.at)
+            guard elapsed > 0 else { return sample }
+            let used = max(0, sample.cpuTimeSeconds - last.seconds)
+            return RuntimeProcessSample(
+                pid: sample.pid,
+                parentPID: sample.parentPID,
+                name: sample.name,
+                command: sample.command,
+                cpuPercent: (used / elapsed) * 100,
+                residentMemoryBytes: sample.residentMemoryBytes,
+                cpuTimeSeconds: sample.cpuTimeSeconds,
+                currentDirectory: sample.currentDirectory,
+                startedAt: sample.startedAt
+            )
+        }
+    }
+
+    private func recordGrowth(
+        appPID: Int32,
+        appTreeProcesses: [RuntimeProcessSample],
+        workspaceProcesses: [RuntimeProcessSample],
+        at sampledAt: Date
+    ) {
+        // The app is the root of its own tree, not a descendant of it. Leaving it
+        // in the candidate set would let WorkSpaces alert about its own footprint
+        // and offer a Stop button wired to its own pid — the strip would hand the
+        // user a button that quits the app.
+        let descendantPIDs = Set(appTreeProcesses.map(\.pid)).subtracting([appPID])
+        var candidates = appTreeProcesses.filter { $0.pid != appPID }
+        candidates.append(
+            contentsOf: workspaceProcesses.filter {
+                !descendantPIDs.contains($0.pid) && $0.pid != appPID
+            })
+
+        growth.record(
+            candidates: candidates,
+            appDescendantPIDs: descendantPIDs,
+            at: sampledAt,
+            policy: alertPolicy
+        )
+        muted.formIntersection(candidates.map(\.identity))
     }
 
     public static func rescopeWorkspaceProcesses(
@@ -641,9 +715,38 @@ public actor RuntimeDiagnosticsSampler {
         }
     }
 
+    /// Drops readings past the window, and strips the per-process arrays from
+    /// everything but the most recent few snapshots.
+    ///
+    /// The sampler now runs whether or not the pane is open, so an hour of
+    /// history is an hour of every process on the host — tens of megabytes held
+    /// to answer questions (`appCPUAverage`, the peaks, `latest`) that only ever
+    /// read the totals and the newest snapshot. Compacting the tail keeps those
+    /// answers identical and the retention flat.
     private func trimHistory(relativeTo now: Date) {
         let cutoff = now.addingTimeInterval(-maxHistoryDuration)
         snapshots.removeAll { $0.sampledAt < cutoff }
+
+        let compactableCount = snapshots.count - max(fullSnapshotRetention, 1)
+        guard compactableCount > 0 else { return }
+        for index in 0..<compactableCount where !snapshots[index].allProcesses.isEmpty {
+            snapshots[index] = Self.compacted(snapshots[index])
+        }
+    }
+
+    /// A snapshot reduced to its totals. `RuntimeProcessHistory` reads nothing
+    /// else from anything but `latest`, which is never compacted.
+    static func compacted(_ snapshot: RuntimeDiagnosticsSnapshot) -> RuntimeDiagnosticsSnapshot {
+        RuntimeDiagnosticsSnapshot(
+            sampledAt: snapshot.sampledAt,
+            appPID: snapshot.appPID,
+            allProcesses: [],
+            appTreeProcesses: [],
+            appTreeTotals: snapshot.appTreeTotals,
+            workspaceProcesses: [],
+            workspaceTotals: snapshot.workspaceTotals,
+            errorMessage: snapshot.errorMessage
+        )
     }
 
     private static func normalizedPath(_ path: String) -> String {

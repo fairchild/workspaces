@@ -73,6 +73,9 @@ struct SidebarView: View {
     @Environment(\.workspaceProviderRegistry) private var workspaceProviderRegistry
     @Environment(\.openSettings) private var openSettings
     @EnvironmentObject private var workspaceStatusAggregator: WorkspaceStatusAggregator
+    /// The always-on process sampler's findings. Observed here rather than passed in
+    /// because the alert belongs to the machine, not to any repo or workspace (#1368).
+    @ObservedObject private var runtimeProcessWatchdog = RuntimeProcessWatchdog.shared
     @ObservedObject var appCommandState: AppCommandState
     let repos: [Repo]
     let webSources: [WebSource]
@@ -667,8 +670,19 @@ struct SidebarView: View {
 
     /// Fixed chrome above the list, mirroring the footer below it: an opaque bar so the rows
     /// scroll under rather than through it, and the rule on the list's side of the bar.
+    ///
+    /// A runaway-process alert joins this bar above the search row rather than taking a list
+    /// row: it is a statement about the machine, not about anything in the tree, and it has to
+    /// stay put while the tree scrolls (#1368).
     private var searchBar: some View {
         VStack(spacing: 0) {
+            RuntimeProcessAlertStrip(
+                alerts: runtimeProcessWatchdog.alerts,
+                unstoppable: runtimeProcessWatchdog.unstoppable,
+                onStop: { runtimeProcessWatchdog.stop(alert: $0) },
+                onDismiss: { runtimeProcessWatchdog.dismiss(alert: $0) }
+            )
+
             SidebarSearchRow(onActivate: onRequestSessionSwitcher)
                 .padding(.horizontal, SidebarChrome.Metrics.chromeBarHorizontalPadding)
                 .padding(.vertical, SidebarChrome.Metrics.chromeBarVerticalPadding)

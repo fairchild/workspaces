@@ -5,44 +5,53 @@ import Testing
 
 @Suite("RuntimeDiagnostics")
 struct RuntimeDiagnosticsTests {
-    @Test("ps parser preserves process metrics and command")
-    func psParserPreservesProcessMetricsAndCommand() {
-        let output = """
-              100     1   1.5  2048 00:01:02 WorkSpaces /Applications/WorkSpaces.app/Contents/MacOS/WorkSpaces
-              101   100  81.8 65536 01:02:03 claude claude --continue
-            """
-
-        let processes = RuntimeDiagnosticsParser.parsePS(
-            output,
-            cwdByPID: [101: "/Users/fairchild/code/project"]
+    @Test("Kernel entries map onto the sample the pane renders")
+    func kernelEntriesMapOntoSamples() async throws {
+        let provider = LiveRuntimeProcessSnapshotProvider(
+            snapshot: { _ in
+                [
+                    ProcessInventoryEntry(
+                        pid: 101,
+                        parentPID: 100,
+                        uid: 501,
+                        name: "claude",
+                        cpuTimeSeconds: 60,
+                        footprintBytes: 65_536 * 1_024,
+                        elapsedSeconds: 120,
+                        currentDirectory: "/Users/fairchild/code/project",
+                        commandLine: "claude --continue"
+                    ),
+                    ProcessInventoryEntry(
+                        pid: 200,
+                        parentPID: 1,
+                        uid: 0,
+                        name: "kernel-owned",
+                        cpuTimeSeconds: 0,
+                        footprintBytes: 2_048,
+                        elapsedSeconds: 0
+                    ),
+                ]
+            },
+            clock: { Date(timeIntervalSinceReferenceDate: 0) }
         )
 
-        #expect(processes.count == 2)
-        #expect(processes[0].pid == 100)
-        #expect(processes[0].parentPID == 1)
-        #expect(processes[0].cpuPercent == 1.5)
-        #expect(processes[0].residentMemoryBytes == 2_097_152)
-        #expect(processes[0].cpuTimeSeconds == 62)
-        #expect(processes[1].name == "claude")
-        #expect(processes[1].command == "claude --continue")
-        #expect(processes[1].currentDirectory == "/Users/fairchild/code/project")
-    }
+        let samples = try await provider.processes()
 
-    @Test("lsof parser maps cwd by pid")
-    func lsofParserMapsCWDByPID() {
-        let output = """
-            p100
-            cWorkSpaces
-            n/Applications/WorkSpaces.app
-            p101
-            cclaude
-            n/Users/fairchild/code/project
-            """
-
-        let cwdByPID = RuntimeDiagnosticsParser.parseLsofCWDs(output)
-
-        #expect(cwdByPID[100] == "/Applications/WorkSpaces.app")
-        #expect(cwdByPID[101] == "/Users/fairchild/code/project")
+        #expect(samples.count == 2)
+        #expect(samples[0].pid == 101)
+        #expect(samples[0].parentPID == 100)
+        #expect(samples[0].name == "claude")
+        #expect(samples[0].command == "claude --continue")
+        #expect(samples[0].residentMemoryBytes == 67_108_864)
+        #expect(samples[0].cpuTimeSeconds == 60)
+        // 60 s of CPU over 120 s of life is half a core.
+        #expect(samples[0].cpuPercent == 50)
+        #expect(samples[0].currentDirectory == "/Users/fairchild/code/project")
+        // No detail for a process the caller may not inspect: the command falls
+        // back to the accounting name and the directory stays unknown.
+        #expect(samples[1].command == "kernel-owned")
+        #expect(samples[1].currentDirectory == nil)
+        #expect(samples[1].cpuPercent == 0)
     }
 
     @Test("descendant tree includes root and nested children only")
@@ -139,6 +148,135 @@ struct RuntimeDiagnosticsTests {
         #expect(history.latest?.sampledAt == clock.now)
     }
 
+    @Test("Older snapshots keep their totals and shed their process arrays")
+    func olderSnapshotsAreCompacted() async {
+        // The sampler now runs whether or not the pane is open, so an hour of
+        // uncompacted history would be an hour of every process on the host.
+        let clock = MutableClock(Date(timeIntervalSinceReferenceDate: 0))
+        let provider = StubRuntimeProcessProvider(processes: [
+            sample(pid: 100, parentPID: 1, name: "WorkspaceManager", cpu: 3, memory: 2_048),
+            sample(pid: 101, parentPID: 100, name: "claude", cpu: 7, memory: 4_096),
+        ])
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: provider,
+            processIdentifier: { 100 },
+            clock: { clock.now },
+            minimumSampleInterval: 0,
+            maxHistoryDuration: 3_600,
+            fullSnapshotRetention: 2
+        )
+
+        for _ in 0..<6 {
+            _ = await sampler.sample(workspaceDirectories: [])
+            clock.advance(by: 30)
+        }
+
+        let history = await sampler.history(duration: 3_600)
+
+        #expect(history.sampleCount == 6)
+        #expect(history.snapshots.prefix(4).allSatisfy { $0.allProcesses.isEmpty })
+        #expect(history.snapshots.suffix(2).allSatisfy { $0.allProcesses.count == 2 })
+        // The aggregates the pane reads survive compaction: every retained
+        // snapshot still carries its totals, and the peak is read off them.
+        #expect(history.snapshots.allSatisfy { $0.appTreeTotals.processCount == 2 })
+        #expect(history.appMemoryPeakBytes == 6_144)
+        #expect(history.latest?.appTreeProcesses.count == 2)
+    }
+
+    @Test("CPU percent is the share of a core used since the last sample")
+    func cpuPercentIsSampledNotLifetimeAveraged() {
+        let started = Date(timeIntervalSince1970: 1_000)
+        let now = Date(timeIntervalSinceReferenceDate: 60)
+        let sample = RuntimeProcessSample(
+            pid: 42, parentPID: 1, name: "codex", command: "codex",
+            cpuPercent: 1, residentMemoryBytes: 0, cpuTimeSeconds: 105,
+            startedAt: started)
+
+        let overlaid = RuntimeDiagnosticsSampler.overlayingSampledCPU(
+            [sample],
+            previous: [
+                RuntimeProcessIdentity(pid: 42, startedAt: started):
+                    (seconds: 90, at: now.addingTimeInterval(-30))
+            ],
+            now: now
+        )
+
+        // 15 s of CPU over a 30 s window is half a core.
+        #expect(overlaid[0].cpuPercent == 50)
+
+        // A process seen for the first time keeps whatever the provider reported,
+        // because a rate needs two readings.
+        let firstSighting = RuntimeDiagnosticsSampler.overlayingSampledCPU(
+            [sample], previous: [:], now: now)
+        #expect(firstSighting[0].cpuPercent == 1)
+    }
+
+    @Test("A pid seen before under a different start time is treated as new")
+    func recycledPIDDoesNotInheritCPURate() {
+        let now = Date(timeIntervalSinceReferenceDate: 60)
+        let sample = RuntimeProcessSample(
+            pid: 42, parentPID: 1, name: "node", command: "node",
+            cpuPercent: 7, residentMemoryBytes: 0, cpuTimeSeconds: 3,
+            startedAt: Date(timeIntervalSince1970: 9_000))
+
+        let overlaid = RuntimeDiagnosticsSampler.overlayingSampledCPU(
+            [sample],
+            previous: [
+                RuntimeProcessIdentity(pid: 42, startedAt: Date(timeIntervalSince1970: 1_000)):
+                    (seconds: 90, at: now.addingTimeInterval(-30))
+            ],
+            now: now
+        )
+
+        #expect(overlaid[0].cpuPercent == 7)
+    }
+
+    @Test("Concurrent sampling collapses to one sweep")
+    func concurrentSamplingCollapsesToOneSweep() async {
+        // The pane polls every 5 s and the watchdog every 30 s against one
+        // sampler. Without coalescing both can pass the interval check and land
+        // out of order, leaving the newest snapshot behind an older one.
+        let provider = SlowRuntimeProcessProvider(
+            processes: [sample(pid: 100, parentPID: 1, name: "WorkspaceManager")]
+        )
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: provider,
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+
+        async let first = sampler.sample(workspaceDirectories: [])
+        async let second = sampler.sample(workspaceDirectories: [])
+        async let third = sampler.sample(workspaceDirectories: [])
+        _ = await (first, second, third)
+
+        #expect(await provider.callCount == 1)
+        #expect(await sampler.history(duration: 3_600).sampleCount == 1)
+    }
+
+    @Test("The always-on sweep keeps the scope the pane last set")
+    func nilScopeKeepsTheLastScope() async {
+        let workspace = URL(fileURLWithPath: "/Users/fairchild/code/project")
+        let provider = StubRuntimeProcessProvider(processes: [
+            sample(pid: 100, parentPID: 1, name: "WorkspaceManager", cwd: "/Applications"),
+            sample(pid: 200, parentPID: 1, name: "claude", cwd: "/Users/fairchild/code/project"),
+        ])
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: provider,
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+
+        let scoped = await sampler.sample(workspaceDirectories: [workspace])
+        #expect(scoped?.workspaceProcesses.map(\.pid) == [200])
+
+        // The watchdog has no view of the model store and passes nil. Reading
+        // that as "scope nothing" would drop every workspace-scoped process from
+        // the growth ledger on the next sweep.
+        let unscoped = await sampler.sample(workspaceDirectories: nil)
+        #expect(unscoped?.workspaceProcesses.map(\.pid) == [200])
+    }
+
     @Test("summary counts event and agent failures")
     func summaryCountsEventAndAgentFailures() {
         let now = Date(timeIntervalSinceReferenceDate: 100)
@@ -199,6 +337,21 @@ struct RuntimeDiagnosticsTests {
             residentMemoryBytes: memory,
             currentDirectory: cwd
         )
+    }
+}
+
+private actor SlowRuntimeProcessProvider: RuntimeProcessSnapshotProviding {
+    let processes: [RuntimeProcessSample]
+    private(set) var callCount = 0
+
+    init(processes: [RuntimeProcessSample]) {
+        self.processes = processes
+    }
+
+    func processes() async throws -> [RuntimeProcessSample] {
+        callCount += 1
+        try? await Task.sleep(for: .milliseconds(50))
+        return processes
     }
 }
 

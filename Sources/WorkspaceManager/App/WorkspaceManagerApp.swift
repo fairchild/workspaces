@@ -113,6 +113,10 @@ struct WorkspaceManagerApp: App {
                 registry: registry,
                 commandStatusRegistry: commandStatusRegistry
             )
+            // Watch the app's own descendants and the scoped directories for runaway
+            // memory whether or not the Diagnostics pane is open (#1368). The sweep
+            // spawns nothing, so the standing cost is a few milliseconds every 30 s.
+            RuntimeProcessWatchdog.shared.start()
         }
     }
 
