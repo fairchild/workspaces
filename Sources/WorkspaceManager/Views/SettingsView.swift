@@ -67,25 +67,16 @@ struct SettingsView: View {
     var body: some View {
         ScrollViewReader { proxy in
             settingsForm
-                // A caller that asked for a section gets scrolled there once the
-                // form exists — on this appearance if the window was just opened,
-                // or on the request itself when Settings is already up.
-                .onAppear { scrollToPendingSection(using: proxy) }
-                .onReceive(settingsDestination.$pendingSection) { section in
-                    guard section != nil else { return }
-                    scrollToPendingSection(using: proxy)
+                // Keyed on the request so it fires both ways: on this appearance
+                // when the window was just opened, and on a new request when
+                // Settings is already up. Reading the value rather than the
+                // `@Published` publisher also sidesteps willSet ordering.
+                .task(id: settingsDestination.pendingSection) {
+                    await SettingsSectionScroller { section in
+                        withAnimation { proxy.scrollTo(section.id, anchor: .top) }
+                    }
+                    .run(settingsDestination)
                 }
-        }
-    }
-
-    /// Deferred a runloop turn for two reasons: the anchor has to exist before
-    /// anything can scroll to it, and `@Published` publishes in `willSet`, so
-    /// the router's property still holds the old value while an `onReceive`
-    /// body runs. Consuming after the hop reads the value that was just set.
-    private func scrollToPendingSection(using proxy: ScrollViewProxy) {
-        Task { @MainActor in
-            guard let section = settingsDestination.consumePendingSection() else { return }
-            withAnimation { proxy.scrollTo(section.id, anchor: .top) }
         }
     }
 
