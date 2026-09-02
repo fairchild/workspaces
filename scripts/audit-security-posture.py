@@ -92,17 +92,21 @@ D1_QUERY_TIMEOUT_SECONDS = 60
 # Wrangler's defaults for the migration settings a binding may override.
 D1_DEFAULT_MIGRATIONS_TABLE = "d1_migrations"
 D1_DEFAULT_MIGRATIONS_DIR = "migrations"
-# Glob syntax minimatch implements and `Path.glob` does not. A pattern using any of
-# it would silently match a different set of files than wrangler matches, so it is
-# reported rather than guessed at.
-D1_UNSUPPORTED_GLOB = re.compile(r"[{}]|[!?+*@]\(")
+# Glob syntax beyond what this check implements. Brackets carry character and POSIX
+# classes, braces carry alternation, and parentheses carry extglobs — all of which
+# minimatch matches and `Path.glob` does not, so a pattern using them would compare a
+# different set of files than wrangler applies.
+D1_UNSUPPORTED_GLOB = re.compile(r"[\[\]{}()]")
 # Wrangler's unnamed top-level tables are an environment in their own right, distinct
 # from any `[env.<name>]`. Naming it for what it is rather than for what this repo
 # happens to deploy there keeps a real `[env.production]` from colliding with it.
 D1_DEFAULT_ENVIRONMENT = "top-level"
 
 
-D1_NO_SUCH_TABLE = re.compile(r"no such table:\s*")
+# SQLite writes exactly one space after the colon, so the name starts one character
+# in. The space is not consumed by the pattern, because a table name may itself begin
+# with one and greedy whitespace would eat it.
+D1_NO_SUCH_TABLE = re.compile(r"no such table:")
 # D1 appends this to SQLite's message, so it is where the reported name ends.
 D1_SQLITE_ERROR_SUFFIX = re.compile(r":\s*SQLITE_ERROR\b")
 
@@ -155,15 +159,18 @@ def reports_missing_table(texts: list[str], table: str) -> bool:
     for text in texts:
         for match in D1_NO_SUCH_TABLE.finditer(text):
             reported = text[match.end() :]
-            if not reported.startswith(table):
-                continue
-            # The name is checked where it must be, and what follows must be the end of
-            # the message or D1's own suffix. Cutting the message at the first
-            # `: SQLITE_ERROR` instead would truncate a table whose name contains that
-            # text, and the configured name would never match its own error.
-            tail = reported[len(table) :]
-            if not tail.strip() or D1_SQLITE_ERROR_SUFFIX.match(tail):
-                return True
+            starts = (reported[1:], reported) if reported.startswith(" ") else (reported,)
+            for start in starts:
+                if not start.startswith(table):
+                    continue
+                # The name is checked where it must be, and what follows must be the
+                # end of the message or D1's own suffix. Cutting the message at the
+                # first `: SQLITE_ERROR` instead would truncate a table whose name
+                # contains that text, and the configured name would never match its
+                # own error.
+                tail = start[len(table) :]
+                if not tail.strip() or D1_SQLITE_ERROR_SUFFIX.match(tail):
+                    return True
     return False
 
 
@@ -688,31 +695,64 @@ def repo_migrations(environment: D1Environment, service_dir: Path) -> list[str]:
         return sorted(
             path.name
             for path in migrations_dir.glob("*.sql")
-            if path.is_file() and not path.name.startswith(".")
+            if is_migration_file(path) and not path.name.startswith(".")
         )
 
     relative_pattern = strip_dir_prefix(
         environment.migrations_pattern, environment.migrations_dir
     )
-    # Wrangler matches with minimatch and this matches with `Path.glob`. They agree on
-    # `*`, `?` and `**`, which is what the documented layouts use. They do not agree on
-    # braces, extglobs, or a leading `!`, which minimatch reads as negating the whole
-    # pattern. A pattern using any of those would quietly compare a different set of
-    # files than wrangler applies, so it is reported rather than guessed at.
-    if relative_pattern.startswith("!") or D1_UNSUPPORTED_GLOB.search(relative_pattern):
+    unsupported = unsupported_pattern_reason(relative_pattern)
+    if unsupported:
         raise RuntimeError(
-            f"migrations_pattern {environment.migrations_pattern!r} uses glob syntax this "
-            "check does not implement (negation, braces, or extglobs)"
+            f"migrations_pattern {environment.migrations_pattern!r} is not one this check "
+            f"can compare: {unsupported}"
         )
-    # Minimatch runs with `dot: false`, so a dotfile is not a migration there and must
-    # not be one here; `Path.glob` would otherwise report a pending migration wrangler
-    # never applies.
+    # Inside the supported subset the two engines agree exactly, dotfiles included:
+    # minimatch runs with `dot: false` and no supported segment begins with a dot, so
+    # every dot component it skips is one to skip here. Counting them would report a
+    # pending migration wrangler can never apply.
     return sorted(
-        path.relative_to(migrations_dir).as_posix()
-        for path in migrations_dir.glob(relative_pattern)
-        if path.is_file()
-        and not any(part.startswith(".") for part in path.relative_to(migrations_dir).parts)
+        name
+        for name, path in (
+            (path.relative_to(migrations_dir).as_posix(), path)
+            for path in migrations_dir.glob(relative_pattern)
+        )
+        if is_migration_file(path) and not any(part.startswith(".") for part in Path(name).parts)
     )
+
+
+def unsupported_pattern_reason(relative_pattern: str) -> str | None:
+    """Why this pattern cannot be compared, or None when it can.
+
+    Wrangler matches with minimatch and this matches with `Path.glob`. They agree on
+    literal characters, `*`, `?` and `**` in segments that do not begin with a dot,
+    which covers the layouts the setting documents. Outside that they diverge — on
+    character and POSIX classes, brace alternation, extglobs, and a leading `!`, which
+    minimatch reads as negating the whole pattern — and a divergence would silently
+    compare a different set of files than wrangler applies.
+
+    Saying so is the point. An unsupported pattern reports the same `warn` as every
+    other thing this check cannot read, and names itself rather than arriving as an
+    empty directory.
+    """
+    if relative_pattern.startswith("!"):
+        return "a leading `!` negates the whole pattern in minimatch"
+    for segment in relative_pattern.split("/"):
+        if segment.startswith("."):
+            return f"segment {segment!r} begins with a dot, which minimatch treats specially"
+        if D1_UNSUPPORTED_GLOB.search(segment):
+            return f"segment {segment!r} uses glob syntax beyond `*`, `?` and `**`"
+    return None
+
+
+def is_migration_file(path: Path) -> bool:
+    """A regular file, not a link to one.
+
+    Wrangler walks with `Dirent.isFile()`, which is false for a symlink however it
+    resolves, so a symlinked `.sql` is not a migration it will ever apply. Counting
+    one here would fail a release over a migration that cannot be pending.
+    """
+    return path.is_file() and not path.is_symlink()
 
 
 def strip_dir_prefix(pattern: str, migrations_dir: str) -> str:

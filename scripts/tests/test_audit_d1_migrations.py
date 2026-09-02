@@ -595,6 +595,14 @@ class MissingTableMatchTests(unittest.TestCase):
             "no such table: a: SQLITE_ERROR: SQLITE_ERROR [code: 7500]", "a: SQLITE_ERROR", True
         )
 
+    def test_a_table_name_beginning_with_a_space_still_matches(self) -> None:
+        """SQLite writes one space after the colon; the rest of it belongs to the name.
+
+        Consuming the whitespace greedily eats the name's own leading space, and the
+        configured table never matches its own error.
+        """
+        self.assert_missing("no such table:  a: SQLITE_ERROR [code: 7500]", " a", True)
+
     def test_a_message_on_a_non_json_stream_still_matches(self) -> None:
         texts = audit.error_texts("", "no such table: d1_migrations")
         self.assertTrue(audit.reports_missing_table(texts, "d1_migrations"))
@@ -717,7 +725,7 @@ class MigrationsPatternTests(unittest.TestCase):
             check = audit.d1_environment_check(env, root)
 
         self.assertEqual(check.status, "warn")
-        self.assertIn("glob syntax", check.detail)
+        self.assertIn("glob syntax beyond", check.detail)
 
     def test_a_negated_pattern_warns_rather_than_matching_a_literal_name(self) -> None:
         """After the prefix is stripped, minimatch reads a leading `!` as negation.
@@ -736,7 +744,7 @@ class MigrationsPatternTests(unittest.TestCase):
             check = audit.d1_environment_check(env, root)
 
         self.assertEqual(check.status, "warn")
-        self.assertIn("glob syntax", check.detail)
+        self.assertIn("negates", check.detail)
 
     def test_a_dotfile_is_not_a_migration(self) -> None:
         """Minimatch runs with `dot: false`, so wrangler never applies one.
@@ -768,6 +776,102 @@ class MigrationsPatternTests(unittest.TestCase):
         self.assertEqual(
             found, ["0001_feedback/migration.sql", "0002_feedback_audit/migration.sql"]
         )
+
+    def test_a_posix_class_warns_rather_than_matching_nothing(self) -> None:
+        """Minimatch implements POSIX classes; `Path.glob` does not.
+
+        Left unguarded, `[[:digit:]]*.sql` matches nothing here, the environment reads
+        as having no migrations, and every pending one passes `--strict`.
+        """
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/[[:digit:]]*.sql",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp, "1_init.sql")
+            check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("glob syntax beyond", check.detail)
+
+    def test_a_pattern_naming_a_dot_segment_warns_rather_than_dropping_it(self) -> None:
+        """With `dot: false` minimatch still matches a dot component named in the pattern.
+
+        Filtering such a component unconditionally would discard a migration wrangler
+        does apply, so the environment reports drift it cannot see. This check does not
+        implement the distinction, and says so instead of guessing.
+        """
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/.draft/migration.sql",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp)
+            (root / "migrations" / ".draft").mkdir(parents=True)
+            (root / "migrations" / ".draft" / "migration.sql").write_text("--\n", encoding="utf-8")
+            check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("begins with a dot", check.detail)
+
+    def test_a_symlinked_migration_is_not_one(self) -> None:
+        """Wrangler walks with `Dirent.isFile()`, false for a symlink however it resolves.
+
+        Counting one would report a migration as pending that wrangler will never
+        apply, failing a release over a file it does not see.
+        """
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            (tmp / "elsewhere.sql").write_text("-- test\n", encoding="utf-8")
+            (root / "migrations" / "0002_linked.sql").symlink_to(tmp / "elsewhere.sql")
+
+            found = audit.repo_migrations(environment(), root)
+
+        self.assertEqual(found, ["0001_feedback.sql"])
+
+    def test_a_symlinked_migration_is_not_one_under_a_pattern_either(self) -> None:
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/*/migration.sql",
+        )
+        with tempdir() as tmp:
+            root = self.nested(tmp)
+            (tmp / "elsewhere.sql").write_text("--\n", encoding="utf-8")
+            (root / "migrations" / "0003_linked").mkdir()
+            (root / "migrations" / "0003_linked" / "migration.sql").symlink_to(
+                tmp / "elsewhere.sql"
+            )
+
+            found = audit.repo_migrations(env, root)
+
+        self.assertEqual(
+            found, ["0001_feedback/migration.sql", "0002_feedback_audit/migration.sql"]
+        )
+
+    def test_a_star_star_pattern_is_compared_not_refused(self) -> None:
+        """`**` is inside the subset the two engines agree on, so it is supported."""
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/**/*.sql",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp)
+            (root / "migrations" / "a" / "b").mkdir(parents=True)
+            (root / "migrations" / "a" / "b" / "0001.sql").write_text("--\n", encoding="utf-8")
+            (root / "migrations" / ".hidden").mkdir()
+            (root / "migrations" / ".hidden" / "0002.sql").write_text("--\n", encoding="utf-8")
+
+            found = audit.repo_migrations(env, root)
+
+        self.assertEqual(found, ["a/b/0001.sql"])
 
     def test_a_pattern_outside_the_migrations_dir_warns(self) -> None:
         """Wrangler requires the pattern to start with `migrations_dir/`.

@@ -116,11 +116,13 @@ wrangler's default of `migrations`, because omitting the field is not opting out
 `infra/feedback-store` sets `migrations_dir` and takes the defaults for the rest.
 
 Two places where this check is narrower than wrangler, both reported rather than
-guessed at. Pattern matching uses Python's `Path.glob`, which agrees with
-wrangler's minimatch on `*`, `?` and `**` and on ignoring dotfiles, but not on
-braces, extglobs, or a leading `!` for negation, so a pattern using those warns
-instead of comparing a different set of files. A table name carrying a NUL, and an
-empty one, are refused rather than sent.
+guessed at. Pattern matching uses Python's `Path.glob`, which agrees with wrangler's
+minimatch on literal characters, `*`, `?` and `**` in segments that do not begin
+with a dot, and on skipping dotfiles and symlinks. A pattern outside that subset —
+character or POSIX classes, brace alternation, extglobs, a leading `!`, or a segment
+naming a dot component — warns and says which part it cannot compare, rather than
+matching a different set of files than wrangler applies. A table name carrying a
+NUL, and an empty one, are refused rather than sent.
 
 One SQL failure is deliberately not in that bucket. A database that has never had
 a migration applied has no migrations table, so the query errors — but that is the
