@@ -340,12 +340,19 @@ if not (repo_handoffs[0] < await_create < repo_handoffs[1] < await_select):
 
 repo_attach_indices = [index for index, event in attaches if event.get("selectionKind") == "repo"]
 
-# Each handoff needs its OWN attach, before the next handoff — "some attach later
-# in the run" would let one externally driven step cover for a self-parked one.
+# Each handoff needs EXACTLY ONE attach before the next handoff. "At least one"
+# would pass a run where the app parked itself right after announcing the
+# handoff and the verb then attached a second time — the regression this lane
+# exists to catch, wearing the evidence of the fix.
 handoff_bounds = repo_handoffs[1:] + [len(events)]
 for handoff, next_handoff in zip(repo_handoffs, handoff_bounds):
-    if not any(handoff < index < next_handoff for index in repo_attach_indices):
-        fail(f"no repo terminal attach answered the handoff at index {handoff}")
+    answering = [index for index in repo_attach_indices if handoff < index < next_handoff]
+    if len(answering) != 1:
+        fail(
+            f"expected exactly 1 repo terminal attach answering the handoff at index "
+            f"{handoff}, saw {len(answering)} at {answering} — 0 means the verb never ran, "
+            "more than 1 means something attached the repo terminal besides the verb"
+        )
 
 # And nothing may attach the repo terminal before the first handoff: an attach
 # there is the app parking itself, which is the thing this lane stopped doing.
