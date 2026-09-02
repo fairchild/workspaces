@@ -472,6 +472,10 @@ class SecurityHardeningTests(unittest.TestCase):
       <sparkle:version>999</sparkle:version>
       <sparkle:shortVersionString>9.9.9</sparkle:shortVersionString>
       <enclosure url="https://example.com/WorkSpaces-9.9.9.dmg" sparkle:edSignature="{signature}" length="0" />
+      <description><![CDATA[
+        <h2>WorkSpaces 9.9.9</h2>
+        <p>Rendered release notes, which the verifier now requires.</p>
+      ]]></description>
     </item>
   </channel>
 </rss>

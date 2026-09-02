@@ -352,8 +352,9 @@ users. Rehearse first (above) when the release lane itself changed.
    ./scripts/prepare-release.sh --version 0.21.0 --metadata-only --dry-run
    ```
 
-   Review the generated changelog notes, commit the metadata changes, open a
-   PR, attach evidence, and merge it to `main`.
+   Review the generated changelog notes — including how Sparkle renders them
+   (§ "Changelog Notes in the Update Dialog") — then commit the metadata
+   changes, open a PR, attach evidence, and merge it to `main`.
 
 2. **Tag the merged `main` commit**
 
@@ -436,8 +437,9 @@ build anyway.
    ./scripts/prepare-prerelease.sh --version 0.21.0-beta.1 --dry-run
    ```
 
-   Review the generated changelog notes, commit the metadata changes, open a
-   PR, attach evidence, and merge it to `main`.
+   Review the generated changelog notes — including how Sparkle renders them
+   (§ "Changelog Notes in the Update Dialog") — then commit the metadata
+   changes, open a PR, attach evidence, and merge it to `main`.
 
 2. **Dispatch the Release workflow from `main`**
 
@@ -529,6 +531,34 @@ Pre-release versions:
 - `0.1.0-alpha.1` - Alpha releases
 
 Build numbers (CFBundleVersion) are auto-incremented by CI or can be set manually.
+
+---
+
+## Changelog Notes in the Update Dialog
+
+The `CHANGELOG.md` section for the version being released is read twice: GitHub
+renders it on the release page, and `scripts/generate-sparkle-appcast.sh` embeds
+it in the appcast as the release notes Sparkle shows under `Check for
+Updates...`. Preview the second one before merging the metadata PR:
+
+```bash
+./scripts/generate-sparkle-appcast.sh --notes-only --version 0.21.0
+```
+
+That prints the exact HTML the appcast will carry, and needs no DMG, app bundle,
+or signing key.
+
+The generator renders the inline markdown the changelog uses — `**bold**`,
+`` `code` ``, and `[text](url)` for `http`, `https`, and `mailto` — and joins
+soft-wrapped prose lines into one paragraph. Everything else reaches the dialog
+as literal text, so a section that reaches for other markup (tables, images,
+nested lists, reference links, `_emphasis_`) reads correctly on GitHub and
+wrongly in Sparkle. Keep sections within that subset, or extend the renderer.
+
+`scripts/verify-sparkle-appcast.swift` fails the release if raw `**`, a
+backtick, or `](` survives into the notes, and
+`scripts/tests/test_sparkle_release_notes.py` checks every existing changelog
+section against the same rule.
 
 ---
 
@@ -624,6 +654,8 @@ security find-identity -v -p codesigning
 | `scripts/prepare-release.sh` | Prepare stable release metadata; legacy direct commit/tag/push mode remains for exceptional local use |
 | `scripts/prepare-prerelease.sh` | Prepare tester-prerelease version/build metadata and changelog notes for a PR |
 | `scripts/notarize.sh` | Create DMG and notarize |
+| `scripts/generate-sparkle-appcast.sh` | Generate the signed appcast; `--notes-only --version <ver>` previews the release notes Sparkle shows |
+| `scripts/verify-sparkle-appcast.swift` | Verify the appcast signature, version metadata, and that its release notes carry no unrendered markdown |
 | `scripts/setup-release-secrets.sh` | Configure GitHub Actions release secrets/variables from a verified `.p12` and provisioning profile |
 | `scripts/signing-config.sh.template` | Copy to `scripts/signing-config.sh` and fill in your signing credentials (gitignored, not in git) |
 
