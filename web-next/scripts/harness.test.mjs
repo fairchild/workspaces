@@ -4,8 +4,94 @@ import { describe, expect, test, vi } from "vitest";
 import {
 	assertPortAvailable,
 	closeHarnessResources,
+	connectSeedClient,
 	registerParentExitCleanup,
+	SEEDED_TABLES,
 } from "./harness.mjs";
+
+describe("seed-client schema warm-up", () => {
+	const okResponse = (url = "http://localhost:3100/") => ({
+		ok: true,
+		status: 200,
+		url,
+	});
+
+	/**
+	 * A libsql-shaped client whose sqlite_master answers each given table set
+	 * in turn, repeating the last one — one set per expected probe.
+	 */
+	const dbWithTables = (...tableSets) => {
+		let probe = 0;
+		return {
+			execute: vi.fn(async () => {
+				const tables = tableSets[Math.min(probe++, tableSets.length - 1)];
+				return { rows: tables.map((name) => ({ name })) };
+			}),
+			close: vi.fn(),
+		};
+	};
+
+	const connect = (db, options = {}) =>
+		connectSeedClient("http://localhost:3100", "file:/tmp/x.db", {
+			fetchImpl: vi.fn().mockResolvedValue(okResponse(options.landedUrl)),
+			createClient: () => db,
+			sleep: vi.fn().mockResolvedValue(undefined),
+			attempts: 3,
+			...options,
+		});
+
+	test("hands back a client once every seeded table exists", async () => {
+		const db = dbWithTables(SEEDED_TABLES);
+
+		await expect(connect(db)).resolves.toBe(db);
+		expect(db.close).not.toHaveBeenCalled();
+	});
+
+	test("a 200 that never migrated the schema fails at the warm-up, not the first DELETE", async () => {
+		const db = dbWithTables([]);
+
+		await expect(
+			connect(db, { landedUrl: "http://localhost:3100/sign-in" }),
+		).rejects.toThrow(/schema is not migrated/i);
+	});
+
+	test("the failure names where the warm-up landed and what is missing", async () => {
+		const db = dbWithTables(["repos"]);
+
+		await expect(
+			connect(db, { landedUrl: "http://localhost:3100/sign-in" }),
+		).rejects.toThrow(/sign-in.*sessions, session_events/s);
+	});
+
+	test("closes the client it opened rather than leaking it on failure", async () => {
+		const db = dbWithTables([]);
+
+		await expect(connect(db)).rejects.toThrow();
+		expect(db.close).toHaveBeenCalledOnce();
+	});
+
+	test("tolerates a migration that lands just after the warm-up response", async () => {
+		const db = dbWithTables([], SEEDED_TABLES);
+		const sleep = vi.fn().mockResolvedValue(undefined);
+
+		await expect(connect(db, { sleep })).resolves.toBe(db);
+		expect(sleep).toHaveBeenCalledOnce();
+	});
+
+	test("a non-200 warm-up still fails before any client is opened", async () => {
+		const createClient = vi.fn();
+
+		await expect(
+			connectSeedClient("http://localhost:3100", "file:/tmp/x.db", {
+				fetchImpl: vi
+					.fn()
+					.mockResolvedValue({ ok: false, status: 503, url: "http://localhost:3100/" }),
+				createClient,
+			}),
+		).rejects.toThrow(/HTTP 503/);
+		expect(createClient).not.toHaveBeenCalled();
+	});
+});
 
 describe("production harness lifecycle", () => {
 	test("refuses an occupied port before a stale server can satisfy readiness", async () => {

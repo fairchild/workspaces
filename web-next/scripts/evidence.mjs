@@ -12,10 +12,33 @@
  * production build in auth-bypass mode over a throwaway database. Output
  * goes to output/evidence/ (gitignored); CI uploads it as an artifact — the
  * sanctioned publish path per docs/development/remote-sessions.md.
+ *
+ * Exiting 0 means the whole walk landed: evidence-core.mjs declares what the
+ * run owes and this script refuses to report success on less, so a green
+ * `pnpm evidence` is proof captures exist rather than proof nothing threw
+ * (#976).
  */
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import {
+	closeSync,
+	mkdirSync,
+	openSync,
+	readdirSync,
+	readSync,
+	rmSync,
+	statSync,
+} from "node:fs";
 import path from "node:path";
+import {
+	createRunDeadline,
+	describeMissingCaptures,
+	ERROR_SURFACE_CASES,
+	expectedCaptureFiles,
+	findMissingCaptures,
+	installCompletionLatch,
+	PNG_SIGNATURE,
+	THEMES,
+} from "./evidence-core.mjs";
 import {
 	bypassServerEnv,
 	closeHarnessResources,
@@ -28,6 +51,8 @@ import {
 
 const OUTPUT_DIR = path.join(WEB_NEXT_ROOT, "output", "evidence");
 const PORT = Number(process.env.EVIDENCE_PORT ?? 3100);
+/** Whole-walk budget. Generous: the two-theme walk runs several minutes. */
+const RUN_TIMEOUT_MS = Number(process.env.EVIDENCE_TIMEOUT_MS ?? 20 * 60_000);
 const TURN_TIMEOUT_MS = 20_000;
 // Entry animations (rise/settle) finish ~1.1s after load; let them land.
 const ANIMATION_SETTLE_MS = 1500;
@@ -260,12 +285,7 @@ async function newSession(page) {
  * card), stream error (the provider's own structured error text).
  */
 async function captureErrorSurfaces(page, shot) {
-	const cases = [
-		["session-error-provisioning", "Build the importer __mock_provision_error__"],
-		["session-error-sandbox-died", "Fix the flaky test __mock_sandbox_died__"],
-		["session-error-stream", "Refactor the adapter __mock_stream_error__"],
-	];
-	for (const [name, text] of cases) {
+	for (const [name, text] of ERROR_SURFACE_CASES) {
 		await newSession(page);
 		await page.getByRole("textbox", { name: "Reply to Claude" }).fill(text);
 		await page.keyboard.press("Enter");
@@ -426,7 +446,10 @@ async function capturePrototype(page, theme, file) {
 	await page.screenshot({ path: file });
 }
 
-async function main() {
+async function runWalk() {
+	// Start from an empty directory so a previous run's PNGs cannot satisfy
+	// this run's completion check.
+	rmSync(OUTPUT_DIR, { recursive: true, force: true });
 	mkdirSync(OUTPUT_DIR, { recursive: true });
 	const { env, databaseUrl } = bypassServerEnv("evidence-db");
 	let server;
@@ -437,7 +460,7 @@ async function main() {
 		server = await startProductionServer(PORT, env);
 		db = await connectSeedClient(server.baseUrl, databaseUrl);
 		browser = await launchChromium();
-		for (const colorScheme of ["light", "dark"]) {
+		for (const colorScheme of THEMES) {
 			// colorScheme emulation drives the app theme (system preference is
 			// the default resolution); the prototype is forced via its hash.
 			const context = await browser.newContext({
@@ -483,10 +506,52 @@ async function main() {
 			console.error("Harness cleanup also failed after the primary error:", cleanupError);
 		}
 	}
-	console.log(`evidence written to ${OUTPUT_DIR}`);
 }
 
-main().catch((error) => {
-	console.error(error);
-	process.exit(1);
-});
+/**
+ * The gate itself: a run only succeeds having written every capture the
+ * manifest declares, at a non-zero size. Anything less — including the walk
+ * writing nothing at all — is a failure, whatever the exit path believed.
+ */
+function assertWalkComplete() {
+	const expected = expectedCaptureFiles();
+	const captures = new Map();
+	for (const entry of readdirSync(OUTPUT_DIR, { withFileTypes: true })) {
+		if (!entry.isFile() || !entry.name.endsWith(".png")) continue;
+		const file = path.join(OUTPUT_DIR, entry.name);
+		const header = Buffer.alloc(PNG_SIGNATURE.length);
+		const handle = openSync(file, "r");
+		try {
+			readSync(handle, header, 0, header.length, 0);
+		} finally {
+			closeSync(handle);
+		}
+		captures.set(entry.name, { size: statSync(file).size, header });
+	}
+	const missing = findMissingCaptures(expected, captures);
+	if (missing.length > 0) {
+		throw new Error(
+			describeMissingCaptures(OUTPUT_DIR, missing, expected.length),
+		);
+	}
+	return expected.length;
+}
+
+async function main() {
+	const deadline = createRunDeadline(RUN_TIMEOUT_MS);
+	try {
+		await Promise.race([runWalk(), deadline.expired]);
+	} finally {
+		deadline.cancel();
+	}
+	const captured = assertWalkComplete();
+	console.log(`evidence written to ${OUTPUT_DIR} (${captured} captures)`);
+}
+
+const latch = installCompletionLatch();
+main()
+	.then(() => latch.markCompleted())
+	.catch((error) => {
+		console.error(error);
+		process.exit(1);
+	});
