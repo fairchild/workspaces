@@ -22,14 +22,22 @@ import WorkspaceManagerCore
 /// assembling the fields itself, or that it passes `recentSnapshotTakenAt` rather than a fresh
 /// instant. Those hold by construction and by review. Sharing `placement(of:)` is what keeps the
 /// *derivation* from drifting between here and the app; the call sites themselves stay unguarded.
+///
+/// `.serialized` because every test here mounts a view and pumps the main run loop, and a run
+/// loop pumped by one test drives the display cycle of any view another test still has mounted.
 @MainActor
-@Suite("Sidebar row rebuild scoping")
+@Suite("Sidebar row rebuild scoping", .serialized)
 struct SidebarRowRebuildTests {
     private final class BodyCounter {
         private(set) var counts: [Int: Int] = [:]
 
         func note(_ index: Int) {
             counts[index, default: 0] += 1
+        }
+
+        /// What `settle` watches to decide rendering has stopped.
+        var total: Int {
+            counts.values.reduce(0, +)
         }
     }
 
@@ -81,10 +89,29 @@ struct SidebarRowRebuildTests {
         }
     }
 
-    private func settle(_ host: NSHostingView<some View>) {
-        host.layoutSubtreeIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.15))
-        host.layoutSubtreeIfNeeded()
+    /// Pumps until the rows stop rebuilding, rather than for a fixed slice of wall clock.
+    ///
+    /// A fixed slice was the wrong instrument, and it took a CI failure to show it: every
+    /// assertion here compares a count taken before a change against one taken after, so a render
+    /// pass that lands *between* those two reads is indistinguishable from a rebuild the boundary
+    /// should have prevented. On a laptop one 0.15s pump drained the display cycle every time; on
+    /// a loaded CI runner it did not, and every row read one rebuild high — including in the two
+    /// tests that predate this change. Waiting for the counter to hold still measures the thing
+    /// the assertions actually depend on.
+    /// Quiesced means the rows have rendered *and* a further pump added nothing. Requiring the
+    /// first half matters: before the initial render the count is zero and would otherwise read
+    /// as "already still". Short slices because the exit condition, not the clock, is what ends
+    /// this — two 20ms pumps is the common case, well under the fixed 150ms it replaces.
+    private func settle(_ host: NSHostingView<some View>, _ counter: BodyCounter) {
+        var previous = -1
+        for _ in 0..<100 {
+            host.layoutSubtreeIfNeeded()
+            RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+            host.layoutSubtreeIfNeeded()
+            let total = counter.total
+            if total > 0, total == previous { return }
+            previous = total
+        }
     }
 
     @Test("Changing one row's state rebuilds that row alone")
@@ -94,13 +121,13 @@ struct SidebarRowRebuildTests {
         let model = RowStateModel(values: Array(repeating: 0, count: rowCount))
         let host = NSHostingView(rootView: EquatableRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
-        settle(host)
+        settle(host, counter)
 
         let baseline = counter.counts
         #expect(baseline.count == rowCount, "every row should have rendered once to start")
 
         model.values[3] += 1
-        settle(host)
+        settle(host, counter)
 
         for index in 0..<rowCount {
             let delta = (counter.counts[index] ?? 0) - (baseline[index] ?? 0)
@@ -117,11 +144,11 @@ struct SidebarRowRebuildTests {
         let model = RowStateModel(values: Array(repeating: 0, count: rowCount))
         let host = NSHostingView(rootView: PlainRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
-        settle(host)
+        settle(host, counter)
 
         let baseline = counter.counts
         model.values[3] += 1
-        settle(host)
+        settle(host, counter)
 
         let rebuilt = (0..<rowCount).filter { (counter.counts[$0] ?? 0) > (baseline[$0] ?? 0) }
         #expect(rebuilt.count == rowCount, "expected every row to rebuild, got \(rebuilt)")
@@ -313,7 +340,7 @@ struct SidebarRowRebuildTests {
             rootView: PinRowHost(
                 model: model, cache: cache, recorder: recorder, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
-        settle(host)
+        settle(host, counter)
 
         let mine = original[0]
         let peer = original[1]
@@ -331,7 +358,7 @@ struct SidebarRowRebuildTests {
         refreshedRepo.workspaces = refreshedWorkspaces
 
         model.repos = [refreshedRepo]
-        settle(host)
+        settle(host, counter)
 
         // Reparenting moves `mine` and `third` onto the superseding repo, which is what leaves
         // the old instance holding the superseded peer alone. A closure still deriving from it
@@ -365,7 +392,7 @@ struct SidebarRowRebuildTests {
             rootView: PinRowHost(
                 model: model, cache: cache, recorder: recorder, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
-        settle(host)
+        settle(host, counter)
 
         let mine = original[0]
         #expect(recorder.walk(mine.id) == original.map(ObjectIdentifier.init))
@@ -375,7 +402,7 @@ struct SidebarRowRebuildTests {
         refreshedRepo.workspaces = original
 
         model.repos = [refreshedRepo]
-        settle(host)
+        settle(host, counter)
 
         #expect(
             repo.workspaces.isEmpty,
@@ -401,11 +428,11 @@ struct SidebarRowRebuildTests {
             rootView: PinRowHost(
                 model: model, cache: cache, recorder: recorder, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
-        settle(host)
+        settle(host, counter)
 
         let baseline = counter.counts
         model.repos = [repo]
-        settle(host)
+        settle(host, counter)
 
         for index in repo.workspaces.indices {
             #expect(counter.counts[index] == baseline[index], "row \(index) rebuilt")
@@ -419,13 +446,13 @@ struct SidebarRowRebuildTests {
         let model = RowStateModel(values: Array(repeating: 0, count: rowCount))
         let host = NSHostingView(rootView: EquatableRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
-        settle(host)
+        settle(host, counter)
 
         let baseline = counter.counts
         // A publish that leaves every value where it was — the change-gated no-op #1353 lets
         // through when a session's render-relevant state did not actually move.
         model.values = model.values
-        settle(host)
+        settle(host, counter)
 
         for index in 0..<rowCount {
             #expect(counter.counts[index] == baseline[index], "row \(index) rebuilt")
