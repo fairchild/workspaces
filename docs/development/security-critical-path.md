@@ -108,11 +108,18 @@ Cloudflare credentials.
 The 60-second query timeout is per environment rather than per run, since
 environments are queried in sequence.
 
-Both wrangler settings that change where migrations live are honored:
+The wrangler settings that change where migrations live are honored:
 `migrations_table` when a binding renames the table, and `migrations_pattern` for
 nested layouts, whose migrations wrangler records under their path relative to
-`migrations_dir`. `infra/feedback-store` sets neither and gets wrangler's
-defaults.
+`migrations_dir`. A binding that omits `migrations_dir` is still watched, using
+wrangler's default of `migrations`, because omitting the field is not opting out.
+`infra/feedback-store` sets `migrations_dir` and takes the defaults for the rest.
+
+Two places where this check is narrower than wrangler, both reported rather than
+guessed at. Pattern matching uses Python's `Path.glob`, which agrees with
+wrangler's minimatch on `*`, `?` and `**` but not on braces or extglobs, so a
+pattern using those warns instead of comparing a different set of files. A table
+name carrying a NUL, and an empty one, are refused rather than sent.
 
 One SQL failure is deliberately not in that bucket. A database that has never had
 a migration applied has no migrations table, so the query errors — but that is the
@@ -120,7 +127,10 @@ answer, not an obstacle, and it is maximal drift: every migration in the repo is
 pending. It reports `fail`. Read as a warn it would make a freshly recreated
 database report *softer* than one missing a single migration, since `--strict` fails
 only on `fail`. Wrangler reports that error on stdout while writing unrelated
-chatter to stderr, so both streams are searched for it.
+chatter to stderr, so both streams are read. Wrangler's JSON is decoded before the
+table name is compared, and compared for equality rather than matched inside the
+message, so a neighbouring table like `d1_migrations_v2` is an obstacle rather than
+an answer and a quoted name survives the round trip.
 
 ## Explicit Follow-Ups
 

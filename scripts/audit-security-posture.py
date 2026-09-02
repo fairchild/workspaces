@@ -88,33 +88,78 @@ D1_SERVICE_DIRS = (REPO_ROOT / "infra" / "feedback-store",)
 # environment, not per run: environments are queried in sequence, so a service with
 # two of them can wait twice this long.
 D1_QUERY_TIMEOUT_SECONDS = 60
-# Wrangler's defaults for the two migration settings a binding may override.
+# Wrangler's defaults for the migration settings a binding may override.
 D1_DEFAULT_MIGRATIONS_TABLE = "d1_migrations"
-# A table name goes into SQL, so it is quoted the way wrangler quotes it rather than
-# interpolated raw. Anything that cannot survive quoting — a NUL or a newline — is
-# refused instead of sent.
-D1_UNQUOTABLE_TABLE_NAME = re.compile(r"[\x00\r\n]")
+D1_DEFAULT_MIGRATIONS_DIR = "migrations"
+# Glob syntax minimatch implements and `Path.glob` does not. A pattern using any of
+# it would silently match a different set of files than wrangler matches, so it is
+# reported rather than guessed at.
+D1_UNSUPPORTED_GLOB = re.compile(r"[{}]|[!?+*@]\(")
 # Wrangler's unnamed top-level tables are an environment in their own right, distinct
 # from any `[env.<name>]`. Naming it for what it is rather than for what this repo
 # happens to deploy there keeps a real `[env.production]` from colliding with it.
 D1_DEFAULT_ENVIRONMENT = "top-level"
 
 
-def missing_migrations_table(table: str) -> re.Pattern[str]:
-    """Matches the one SQL failure that is an answer rather than an obstacle.
+D1_NO_SUCH_TABLE = re.compile(r"no such table:\s*")
+# D1 appends this to SQLite's message, so it is where the reported name ends.
+D1_SQLITE_ERROR_SUFFIX = re.compile(r":\s*SQLITE_ERROR\b")
 
-    A database that has never had a migration applied has no migrations table for the
-    query to read. Anchored on the table's own name and on the next character not
-    continuing an identifier, so a differently-named missing table
-    (`d1_migrations_v2`, `d1_migrations-v2`) still raises instead of being read as
-    "zero applied" — that would report drift nobody measured.
 
-    The trailing class includes `-` rather than relying on `\b`, because wrangler
-    quotes table names and so permits ones a word boundary reads wrongly: after a name
-    ending in punctuation, `\b` demands a word character that the error message does
-    not have, and the missing table would fall back to a warn.
+def error_texts(*streams: str) -> list[str]:
+    """Every message inside wrangler's output, JSON-decoded where it is JSON.
+
+    Wrangler reports SQL errors as JSON, so a table name in the message arrives
+    escaped: a table named `a"b` reads as `a\\"b` in the raw bytes and would never
+    equal the name we asked for. Decoding first compares like with like. The raw
+    stream is kept too, for output that is not JSON at all.
     """
-    return re.compile(rf"no such table:\s*{re.escape(table)}(?![\w-])")
+    texts: list[str] = []
+    for stream in streams:
+        if not stream:
+            continue
+        texts.append(stream)
+        try:
+            payload = json.loads(stream)
+        except ValueError:
+            continue
+        texts.extend(nested_strings(payload))
+    return texts
+
+
+def nested_strings(payload: object) -> list[str]:
+    if isinstance(payload, str):
+        return [payload]
+    if isinstance(payload, list):
+        return [text for item in payload for text in nested_strings(item)]
+    if isinstance(payload, dict):
+        return [text for item in payload.values() for text in nested_strings(item)]
+    return []
+
+
+def reports_missing_table(texts: list[str], table: str) -> bool:
+    """Whether any message says *this* table does not exist.
+
+    The reported name is cut out of the message and compared for equality rather than
+    matched inside it. A character-class boundary has to guess which characters
+    continue an identifier, and wrangler quotes the name so it may contain any of
+    them: `d1_migrations-v2` and `d1_migrations.v2` are different tables that a
+    boundary reads as this one, and a name ending in punctuation is one this table's
+    own error would miss. Equality does not guess.
+
+    A missing table is the one SQL failure that is an answer rather than an obstacle:
+    a database that has never had a migration applied has no migrations table, which
+    is maximal drift rather than an unreadable result.
+    """
+    for text in texts:
+        for match in D1_NO_SUCH_TABLE.finditer(text):
+            reported = text[match.end() :]
+            suffix = D1_SQLITE_ERROR_SUFFIX.search(reported)
+            if suffix:
+                reported = reported[: suffix.start()]
+            if reported == table or reported.strip() == table:
+                return True
+    return False
 
 
 def quote_identifier(name: str) -> str:
@@ -473,8 +518,12 @@ def d1_environments(config: dict[str, object]) -> list[D1Environment]:
             if not isinstance(database, dict):
                 continue
             database_name = database.get("database_name")
-            migrations_dir = database.get("migrations_dir")
-            if database_name and migrations_dir:
+            if database_name:
+                # `migrations_dir` is defaulted rather than required. Wrangler defaults
+                # it to `migrations`, so a binding that relies on the default has
+                # migrations this check would otherwise never look at — the same
+                # unwatched-environment failure, reached by omitting a field.
+                migrations_dir = database.get("migrations_dir") or D1_DEFAULT_MIGRATIONS_DIR
                 table = database.get("migrations_table") or D1_DEFAULT_MIGRATIONS_TABLE
                 pattern = database.get("migrations_pattern")
                 environments.append(
@@ -523,7 +572,9 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
     read it as "could not tell", which is what raising is for.
     """
     table = environment.migrations_table
-    if not table or D1_UNQUOTABLE_TABLE_NAME.search(table):
+    # Wrangler quotes the name, so almost anything is legal. A NUL cannot go through
+    # argv at all, and an empty name is not a table.
+    if not table or "\x00" in table:
         raise RuntimeError(f"unusable migrations_table name: {table!r}")
 
     result = subprocess.run(
@@ -555,13 +606,11 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
         # one missing a single migration, which inverts the check. Zero applied is the
         # honest reading, and the pending-fail path below already handles it.
         #
-        # Both streams are searched, and neither is privileged. Wrangler writes
-        # unrelated chatter to stderr routinely — an unwritable debug log is enough —
-        # so reading whichever stream is non-empty would make this conditional on
-        # wrangler happening to be quiet, and the inversion would return whenever it
-        # was not.
-        missing = missing_migrations_table(table)
-        if missing.search(result.stdout) or missing.search(result.stderr):
+        # Both streams are read, and neither is privileged. Wrangler writes unrelated
+        # chatter to stderr routinely — an unwritable debug log is enough — so reading
+        # whichever stream is non-empty would make this conditional on wrangler
+        # happening to be quiet, and the inversion would return whenever it was not.
+        if reports_missing_table(error_texts(result.stdout, result.stderr), table):
             return set()
         detail = result.stderr.strip() or result.stdout.strip() or "wrangler failed"
         raise RuntimeError(detail)
@@ -612,6 +661,15 @@ def repo_migrations(environment: D1Environment, service_dir: Path) -> list[str]:
     if not environment.migrations_pattern.startswith(prefix):
         raise RuntimeError(
             f"migrations_pattern {environment.migrations_pattern!r} does not start with {prefix!r}"
+        )
+    # Wrangler matches with minimatch and this matches with `Path.glob`. They agree on
+    # `*`, `?` and `**`, which is what the documented layouts use. They do not agree on
+    # braces or extglobs, and a pattern using those would quietly compare a different
+    # set of files than wrangler applies, so it is reported rather than guessed at.
+    if D1_UNSUPPORTED_GLOB.search(environment.migrations_pattern):
+        raise RuntimeError(
+            f"migrations_pattern {environment.migrations_pattern!r} uses glob syntax this "
+            "check does not implement (braces or extglobs)"
         )
     return sorted(
         path.relative_to(migrations_dir).as_posix()

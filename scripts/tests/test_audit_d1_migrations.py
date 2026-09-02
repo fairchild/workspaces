@@ -500,9 +500,11 @@ class MigrationsTableTests(unittest.TestCase):
 
         self.assertEqual(check.status, "warn")
 
-    def test_a_table_name_that_cannot_be_quoted_is_refused(self) -> None:
-        """A newline or a NUL cannot survive quoting, so it is never sent."""
-        for bad in ("first\nsecond", "nul\x00byte", ""):
+    def test_a_table_name_that_cannot_be_sent_at_all_is_refused(self) -> None:
+        """Only the two names quoting cannot rescue: a NUL, which argv cannot carry,
+        and an empty name, which is not a table. A newline is legal inside a quoted
+        identifier, so refusing it would be this check's opinion, not SQLite's."""
+        for bad in ("nul\x00byte", ""):
             env = audit.D1Environment(
                 name="top-level",
                 database_name="db",
@@ -512,6 +514,106 @@ class MigrationsTableTests(unittest.TestCase):
             with tempdir() as tmp:
                 with self.assertRaises(RuntimeError):
                     audit.applied_d1_migrations(env, service_dir(tmp))
+
+    def test_a_newline_bearing_table_is_queried_rather_than_refused(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(args, **kwargs):  # noqa: ARG001
+            captured["args"] = args
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="[]", stderr="")
+
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_table="first\nsecond",
+        )
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                audit.applied_d1_migrations(env, service_dir(tmp))
+
+        self.assertIn('SELECT name FROM "first\nsecond" ORDER BY name', captured["args"])
+
+
+class MissingTableMatchTests(unittest.TestCase):
+    """Which "no such table" messages are this table's, exactly.
+
+    The name is cut out of the message and compared for equality. Matching the name
+    *inside* the message needs a character-class boundary, and a boundary has to guess
+    which characters continue an identifier — a guess wrangler's quoting makes wrong
+    in both directions.
+    """
+
+    def note(self, text: str) -> str:
+        """Wrangler's real error envelope: JSON on stdout, message in a note."""
+        return json.dumps({"error": {"text": "API failed.", "notes": [{"text": text}]}})
+
+    def assert_missing(self, message: str, table: str, expected: bool) -> None:
+        texts = audit.error_texts(self.note(message), "")
+        self.assertEqual(audit.reports_missing_table(texts, table), expected)
+
+    def test_the_real_d1_message_is_this_table(self) -> None:
+        self.assert_missing(
+            "no such table: d1_migrations: SQLITE_ERROR [code: 7500]", "d1_migrations", True
+        )
+
+    def test_a_neighbouring_table_is_not_this_one(self) -> None:
+        for other in ("d1_migrations_v2", "d1_migrations-v2", "d1_migrations.v2", "d1_migrations+v2"):
+            with self.subTest(other=other):
+                self.assert_missing(
+                    f"no such table: {other}: SQLITE_ERROR [code: 7500]", "d1_migrations", False
+                )
+
+    def test_a_name_ending_in_punctuation_is_still_matched(self) -> None:
+        """A word boundary would demand a word character the message does not have."""
+        self.assert_missing(
+            "no such table: schema-history-: SQLITE_ERROR [code: 7500]", "schema-history-", True
+        )
+
+    def test_a_quoted_name_survives_wranglers_json_escaping(self) -> None:
+        """The name arrives escaped in the raw bytes; the comparison happens decoded.
+
+        Searching the serialized JSON for an unescaped `a"b` never matches, so the
+        missing table falls back to a warn and `--strict` exits zero on maximal drift.
+        """
+        raw = self.note('no such table: a"b: SQLITE_ERROR [code: 7500]')
+        self.assertIn(r"a\"b", raw)  # the escaping that defeats a raw search
+        self.assert_missing('no such table: a"b: SQLITE_ERROR [code: 7500]', 'a"b', True)
+
+    def test_a_backslash_in_the_name_survives_too(self) -> None:
+        self.assert_missing(
+            "no such table: a\\b: SQLITE_ERROR [code: 7500]", "a\\b", True
+        )
+
+    def test_a_message_on_a_non_json_stream_still_matches(self) -> None:
+        texts = audit.error_texts("", "no such table: d1_migrations")
+        self.assertTrue(audit.reports_missing_table(texts, "d1_migrations"))
+
+    def test_a_quoted_name_reaches_fail_end_to_end(self) -> None:
+        """The verdict, not just the matcher: maximal drift stays the loudest case."""
+
+        def fake_run(*args, **kwargs):  # noqa: ARG001
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout=json.dumps(
+                    {"error": {"notes": [{"text": 'no such table: a"b: SQLITE_ERROR [code: 7500]'}]}}
+                ),
+                stderr="",
+            )
+
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_table='a"b',
+        )
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                root = service_dir(tmp, "0001_feedback.sql")
+                check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "fail")
 
 
 class MigrationsPatternTests(unittest.TestCase):
@@ -586,6 +688,26 @@ class MigrationsPatternTests(unittest.TestCase):
             found = audit.repo_migrations(environment(), root)
 
         self.assertEqual(found, ["0001_feedback.sql", "0002_feedback_audit.sql"])
+
+    def test_a_brace_pattern_warns_rather_than_matching_a_different_set(self) -> None:
+        """Wrangler matches with minimatch; this matches with `Path.glob`.
+
+        They agree on `*`, `?` and `**`. They do not agree on braces or extglobs, and
+        quietly comparing a different set of files than wrangler applies is how a
+        migration goes unwatched, so the gap is reported.
+        """
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_pattern="migrations/{a,b}/*.sql",
+        )
+        with tempdir() as tmp:
+            root = service_dir(tmp, "0001_feedback.sql")
+            check = audit.d1_environment_check(env, root)
+
+        self.assertEqual(check.status, "warn")
+        self.assertIn("glob syntax", check.detail)
 
     def test_a_pattern_outside_the_migrations_dir_warns(self) -> None:
         """Wrangler requires the pattern to start with `migrations_dir/`.
@@ -753,8 +875,13 @@ class D1EnvironmentDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(len(found), 2)
 
-    def test_a_binding_without_migrations_is_not_watched(self) -> None:
-        """`migrations_dir` is what makes a database one this check has an opinion about."""
+    def test_a_binding_that_omits_migrations_dir_gets_wranglers_default(self) -> None:
+        """Omitting the field is not opting out; wrangler defaults it to `migrations`.
+
+        Requiring it meant a binding relying on the default had migrations this check
+        never looked at — the same unwatched-environment failure as the collision
+        above, reached by leaving a line out rather than by adding one.
+        """
         import tomllib
 
         toml = """\
@@ -762,9 +889,12 @@ class D1EnvironmentDiscoveryTests(unittest.TestCase):
 
             [[d1_databases]]
             binding = "DB"
-            database_name = "no-migrations"
+            database_name = "defaulted-db"
         """
-        self.assertEqual(audit.d1_environments(tomllib.loads(textwrap.dedent(toml))), [])
+        found = audit.d1_environments(tomllib.loads(textwrap.dedent(toml)))
+
+        self.assertEqual([env.database_name for env in found], ["defaulted-db"])
+        self.assertEqual([env.migrations_dir for env in found], ["migrations"])
 
     def test_a_config_with_no_d1_at_all_yields_nothing(self) -> None:
         import tomllib
