@@ -440,7 +440,15 @@
                     await emit(makeEvent(type: .surfaceFocusTimedOut))
                     return false
                 }
-                try? await Task.sleep(for: .milliseconds(50))
+                // Same reason as waitForTerminalAttach: a cancelled sleep throws
+                // at once, and swallowing it would spin the MainActor for the
+                // rest of the timeout. Callers discard the attach wait's result
+                // and fall straight into this one, so both have to bail.
+                do {
+                    try await Task.sleep(for: .milliseconds(50))
+                } catch {
+                    return false
+                }
             }
             return true
         }

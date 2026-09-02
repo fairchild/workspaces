@@ -109,7 +109,13 @@ if path.exists():
         line = line.strip()
         if not line:
             continue
-        event = json.loads(line)
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            # The app appends while this polls; a half-written final line is
+            # normal and becomes readable on the next pass. smoke_events.py
+            # skips torn records for the same reason.
+            continue
         if event.get("type") == "awaiting_api_repo_terminal":
             handoffs.append(event.get("repoID") or "")
 print(handoffs[occurrence - 1] if len(handoffs) >= occurrence else "")
@@ -444,18 +450,23 @@ main() {
 
     log "Waiting for scenario completion..."
     smoke_wait_for_event scenario_complete
-    # The assertion reads the JSONL once. A repo attach appended just after
-    # scenario_complete — the app parking itself on the way out — would otherwise
-    # race past that read. Settle first so it lands in the file being asserted on,
-    # where the "scenario_complete was the final milestone" check catches it.
-    sleep "${POST_COMPLETE_SETTLE_SECONDS:-3}"
-    assert_api_milestone_sequence | tee "$RUN_DIR/assertions.log"
 
+    # The snapshot needs a live app, so it comes first.
     if "$CLI_BIN" window snapshot --out "$RUN_DIR/final.png" >/dev/null 2>&1; then
         log "Captured final window snapshot: $RUN_DIR/final.png"
     else
         log "Window snapshot unavailable (likely a locked screen) — JSONL + API results stand as evidence."
     fi
+
+    # Then stop the app BEFORE asserting. The assertion reads the JSONL once, and
+    # while the app lives it can still append — a repo attach written after that
+    # read would pass unseen, which is the app parking itself on the way out. A
+    # settle only narrows that window; quiescing the producer closes it, because
+    # a dead app cannot append to the file being asserted on. Idempotent:
+    # finalize calls the same helper again and it no-ops on a gone process.
+    log "Stopping the app so the milestone stream is final before asserting..."
+    smoke_cleanup_app
+    assert_api_milestone_sequence | tee "$RUN_DIR/assertions.log"
 
     RUN_STATUS="passed"
     smoke_finalize_and_exit 0 "PASS — API-driven lane created and reselected the workspace through operator verbs."
