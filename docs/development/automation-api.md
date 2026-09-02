@@ -272,6 +272,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `GET /v1/workspaces` | **Operator scope.** Returns the app's tracked repos and workspaces with stable SwiftData model ids, names, and enough state to target: per workspace, its `status`, `isArchived`, `backend`, and whether it `isSelected`; per repo, whether it `isSelected`. Read-only — mutation verbs use these stable targets. Requires `workspace.read`; a tile handle lacks it and fails `capability_denied`. See [Workspace list](#workspace-list). |
 | `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null,"select":true,"fromRef":"origin/main"}`; `providerID` defaults to `local`, `select` defaults to `true`, and `fromRef` is omitted by default. Returns `completed` with the created workspace and, when selected, the attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
+| `POST /v1/repo/terminal` | **Operator scope, mutation.** Opens the repo terminal for the repo named by the body's `repoID` (a `workspace.read` id) by driving the same selection path the sidebar's "Open Terminal" item takes. Returns the surface it attached, so the caller never has to guess which PTY a following write lands in; a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `repo.terminal`. See [Repo terminal](#repo-terminal). |
 | `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from any live terminal surface. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is a live host-session id (e.g. the `attachedSurfaceID` from a create/select result). Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles fail `capability_denied`. See [Surface read](#surface-read). |
 | `POST /v1/wait` | **Operator scope, typed wait.** Evaluates a condition (`surface_attached`, `workspace_selected`, `surface_text_matches`, `prompt_ready`) server-side until satisfied, a bounded timeout elapses, or current state proves it unsatisfiable. Body is `{"for":"…","predicate":{…},"timeoutMS":n}`; the outcome is the typed enum `satisfied` / `timed_out` / `not_applicable`, never a bare boolean. Topology/selection conditions require `workspace.read`; content conditions require `surface.read`. See [Wait](#wait). |
 | `GET /v1/focus` | **Operator scope.** Truthful report of the app's live focus state: `{appIsActive, keyWindowID, firstResponderSurfaceID, focusPossible}`. `focusPossible: false` marks a no-activate (or CI) launch where the app cannot take focus — absent focus is then "unavailable", not a focus failure. Requires `window.read`. See [Focus](#focus). |
@@ -311,6 +312,7 @@ handle.
 | `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); granted only to operator handles, never to tile handles |
 | `workspace.create` | `POST /v1/workspace/create` (drive the real sidebar create helper for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.read` and `workspace.select` so the read/write split stays legible |
 | `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for any live terminal surface) and `POST /v1/wait` for the `surface_text_matches` / `prompt_ready` conditions; granted only to operator handles, never to tile handles |
+| `repo.terminal` | `POST /v1/repo/terminal` (drive the real repo-terminal selection for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.select` because its target is a repo, not a workspace |
 | `workspace.archive` | `POST /v1/workspace/archive` (drive the real sidebar archive action for a workspace); granted only to operator handles, never to tile handles |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
@@ -528,6 +530,46 @@ user must confirm:
   unknown/non-UUID `repoID` fails `invalid_request`, and unknown providers fail
   `invalid_request`.
 - **Operator mutation.** Requires `workspace.create`, distinct from
+  `workspace.read` and `workspace.select`. A tile handle lacks it and fails
+  `capability_denied`.
+
+## Repo terminal
+
+`POST /v1/repo/terminal` (operator scope, `repo.terminal`) opens a repo's own
+terminal. The body names the target by a `repoID` obtained from
+`workspace.read`:
+
+```json
+{ "repoID": "…" }
+```
+
+The success envelope reports the gesture outcome, the repo the app resolved, and
+the surface it attached:
+
+```json
+{ "repoID": "…", "outcome": "completed", "repoName": "workspaces",
+  "attachedTerminal": true, "attachedSurfaceID": "…",
+  "directoryPath": "/Users/…/workspaces", "system": { "capabilities": [ … ] } }
+```
+
+- **Same path as a click.** The verb enters
+  `MainWindowSelectionController.selectRepoTerminal` — the function the sidebar's
+  "Open Terminal" item and the row click's terminal arm both reach. It attaches
+  the repo-scoped PTY, marks the repo accessed, navigates, persists terminal
+  continuity, and requests focus.
+- **Reads back what it attached.** `attachedSurfaceID` is reported only when the
+  active session is the one this repo's scope owns; a selection that landed
+  elsewhere reports no surface rather than the wrong one. `attachedTerminal:
+  false` therefore means the gesture ran but did not leave this repo's terminal
+  active — never a claim the caller can act on blindly.
+- **Not a second route into repo selection.** `repo.terminal` is the only verb
+  that selects a repo, per
+  [`automation-operator-scope.md`](../decisions/automation-operator-scope.md). A
+  repo row click whose repo has no live panes lands on the repo *overview*
+  instead, and that arm has no verb today.
+- **Structured outcome.** A live-window-less app fails `unsupported` (never a
+  data-layer fallback); an unknown or non-UUID `repoID` fails `invalid_request`.
+- **Operator mutation.** Requires `repo.terminal`, distinct from
   `workspace.read` and `workspace.select`. A tile handle lacks it and fails
   `capability_denied`.
 
@@ -885,6 +927,8 @@ workspaces automation workspace create <repo-id> feature-a --provider lume --gue
 workspaces automation workspace archive <id>                     # archive through the sidebar action path
 workspaces automation workspace archive <id> --teardown          # kill tmux + retire terminals first
 workspaces automation workspace archive <id> --json
+workspaces automation repo terminal <repo-id>                     # open the repo terminal through the UI path
+workspaces automation repo terminal <repo-id> --json
 workspaces automation wait --for workspace_selected --workspace-id <id> --timeout-ms 10000 --json
 workspaces automation wait --for surface_text_matches --surface-id <id> --pattern 'PASS|FAIL'
 workspaces automation wait --for prompt_ready --surface-id <id>
@@ -919,6 +963,12 @@ terminal. If provider setup needs user confirmation, the command prints the
 confirmation message; `--json` includes the structured confirmation payload.
 Absent a live window it fails `unsupported` — it never falls back to a data-layer
 write.
+
+`automation repo terminal <repo-id>` drives the running app's repo-terminal
+selection for the repo with stable `<repo-id>` (from `automation workspace
+list`). It prints the repo, the directory, and the surface it attached;
+`--json` emits the raw result envelope. This is the verb the API parity lane
+uses for the repo step of the daily-driver walk.
 
 `automation wait` is the server-side typed wait: its exit code follows the
 outcome so `set -e` scripts branch without parsing JSON — 0 `satisfied`,
@@ -977,6 +1027,14 @@ milestones that prove the verb entered the real UI path:
 ./scripts/api-desktop-ui-smoke.sh --no-build
 uv run --script scripts/desktop-ui-smoke-parity.py --runs 3 --no-build
 ```
+
+Every selection in the parity lane's daily-driver walk is driven from outside the
+app: `workspace.create`, then `repo.terminal` for the repo step, then
+`workspace.select` back to the workspace. The app announces each repo step with an
+`awaiting_api_repo_terminal` milestone carrying the `repoID` and waits for the
+attach the verb produces, so the lane's `terminal_session_attached:repo` is the
+verb's work rather than the scenario's own (#958). The parity report no longer
+carries a repo-selection divergence.
 
 If docs or public examples changed, also run the docs checks listed in
 [Docs Site Runbook](../README.md).

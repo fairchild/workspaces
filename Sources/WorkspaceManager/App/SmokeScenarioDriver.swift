@@ -108,16 +108,20 @@ struct SmokeScenarioSidebarContext {
             await desktopUI.noteRepoReady(repo)
             guard desktopUI.shouldStartScenario() else { return }
             if desktopUI.usesAPICreateDriver {
+                // The repo park is an external step now (#958): announce it, then wait for the
+                // attach the host's `repo.terminal` verb produces. The waits are the same ones the
+                // app-side park used to satisfy, so what they assert is unchanged — only who drove
+                // the gesture. The budget is wider because it now spans a round trip.
                 let attachBaselineBeforeRepoPark = desktopUI.terminalAttachCount
                 let focusBaselineBeforeRepoPark = desktopUI.surfaceFocusCount
-                context.selectRepoTerminal(repo)
+                await desktopUI.noteAwaitingAPIRepoTerminal(repo: repo)
                 _ = await desktopUI.waitForTerminalAttach(
                     after: attachBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: .seconds(60)
                 )
                 _ = await desktopUI.waitForSurfaceFocus(
                     after: focusBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: .seconds(60)
                 )
                 await desktopUI.noteAwaitingAPICreate(repo: repo)
                 return
@@ -383,14 +387,14 @@ struct SmokeScenarioSidebarContext {
             }
         }
 
-        /// After an API-driven `workspace.create` that selected the new workspace, park the
-        /// active surface on the repo terminal and hand the reselect to the external
-        /// `workspace.select` verb. Only fires when both API drivers are live.
+        /// After an API-driven `workspace.create` that selected the new workspace, hand the walk's
+        /// repo step to the external `repo.terminal` verb and then the reselect to `workspace.select`.
+        /// This is the middle of the daily-driver walk — workspace → repo → workspace — and the app
+        /// no longer drives any of it (#958). Only fires when both API drivers are live.
         func noteAPIWorkspaceCreateCompleted(
             repoID: UUID,
             workspaceID: UUID,
-            repos: [Repo],
-            parkOnRepoTerminal: @escaping @MainActor (Repo) -> Void
+            repos: [Repo]
         ) {
             guard desktopUI.usesAPICreateDriver, desktopUI.usesAPISelectDriver else { return }
             guard
@@ -400,14 +404,14 @@ struct SmokeScenarioSidebarContext {
             Task { @MainActor in
                 let attachBaselineBeforeRepoPark = desktopUI.terminalAttachCount
                 let focusBaselineBeforeRepoPark = desktopUI.surfaceFocusCount
-                parkOnRepoTerminal(repo)
+                await desktopUI.noteAwaitingAPIRepoTerminal(repo: repo)
                 _ = await desktopUI.waitForTerminalAttach(
                     after: attachBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: .seconds(60)
                 )
                 _ = await desktopUI.waitForSurfaceFocus(
                     after: focusBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: .seconds(60)
                 )
                 await desktopUI.noteAwaitingAPISelect(workspace: workspace)
             }
@@ -452,8 +456,7 @@ struct SmokeScenarioSidebarContext {
         func noteAPIWorkspaceCreateCompleted(
             repoID: UUID,
             workspaceID: UUID,
-            repos: [Repo],
-            parkOnRepoTerminal: @escaping @MainActor (Repo) -> Void
+            repos: [Repo]
         ) {}
         func waitForFixtureContinuitySeed() async {}
     }

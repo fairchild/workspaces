@@ -192,12 +192,8 @@ def analyze_divergences(runs: list[LaneRun]) -> list[str]:
     api_runs = [run for run in runs if run.lane == "api"]
     if api_runs:
         divergences.append(
-            "Expected API-lane-only handoffs: awaiting_api_create and awaiting_api_select mark where "
-            "the host script calls operator verbs."
-        )
-        divergences.append(
-            "Expected residual gap: repo selection is still app-side because the shipped operator API "
-            "has workspace.select but no reviewed repo-select verb."
+            "Expected API-lane-only handoffs: awaiting_api_create, awaiting_api_repo_terminal and "
+            "awaiting_api_select mark where the host script calls operator verbs."
         )
 
     ui_has_web = any("web_surface_attached" in run.tokens for run in runs if run.lane == "ui")

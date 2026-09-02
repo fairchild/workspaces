@@ -9,10 +9,15 @@
 #   1. Launch the debug app headless-safe with operator scope enabled.
 #   2. Read the repo target with `workspaces workspace list`, then create a
 #      local workspace with `workspaces workspace create`.
-#   3. Read the workspace target with `workspaces workspace list`, then reselect
-#      the workspace with `workspaces workspace select` after the app parks on
-#      the repo terminal. Repo selection is app-side because no reviewed
-#      repo-select operator verb exists.
+#   3. Answer each `awaiting_api_repo_terminal` handoff with `workspaces
+#      automation repo terminal <repo-id>`, so the walk's repo step crosses the
+#      socket like the rest of it (#958). The app holds at the handoff and waits
+#      for the attach this verb produces instead of driving the gesture itself.
+#   4. Read the workspace target with `workspaces workspace list`, then reselect
+#      the workspace with `workspaces workspace select`.
+#
+# Every selection in the daily-driver walk — workspace, repo, workspace — is
+# therefore driven from outside the app.
 #
 # Artifacts land under output/api-desktop-ui-smoke/<timestamp>/. Setup/teardown
 # (run dir, disposable repo, app launch/kill, unconditional cleanup) is shared
@@ -84,11 +89,70 @@ smoke_write_summary() {
 - Events: $EVENTS_PATH
 - Create result: $RUN_DIR/create-result.json
 - Select result: $RUN_DIR/select-result.json
-- Repo selection driver: app-side handoff; no reviewed repo-select operator verb exists yet
+- Repo selection driver: external \`workspaces automation repo terminal\` (#958)
 EOF
     if [[ -n "$LAUNCH_LOG_PATH" && -f "$LAUNCH_LOG_PATH" ]]; then
         cp "$LAUNCH_LOG_PATH" "$RUN_DIR/launch.log" 2>/dev/null || true
     fi
+}
+
+# Prints the repoID carried by the <n>th (1-based) awaiting_api_repo_terminal
+# milestone, or "" when that many have not landed yet.
+repo_terminal_handoff_id() {
+    python3 - "$EVENTS_PATH" "$1" <<'HANDOFF_PY'
+import json, sys
+from pathlib import Path
+path, occurrence = Path(sys.argv[1]), int(sys.argv[2])
+handoffs = []
+if path.exists():
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        event = json.loads(line)
+        if event.get("type") == "awaiting_api_repo_terminal":
+            handoffs.append(event.get("repoID") or "")
+print(handoffs[occurrence - 1] if len(handoffs) >= occurrence else "")
+HANDOFF_PY
+}
+
+# The verb has to report the attach it made, not merely exit 0 — an "opened, no
+# terminal attached" result is the walk quietly losing its repo step.
+assert_repo_terminal_result() {
+    python3 - "$1" "$2" <<'REPO_RESULT_PY'
+import json, sys
+from pathlib import Path
+result, label = json.loads(Path(sys.argv[1]).read_text()), sys.argv[2]
+if not result.get("attachedTerminal"):
+    print(f"ASSERTION FAILED: repo.terminal ({label}) attached no terminal: {result}", file=sys.stderr)
+    sys.exit(1)
+if not result.get("attachedSurfaceID"):
+    print(f"ASSERTION FAILED: repo.terminal ({label}) reported no surface: {result}", file=sys.stderr)
+    sys.exit(1)
+print(f"OK: repo.terminal ({label}) attached surface {result['attachedSurfaceID']} at {result.get('directoryPath')}")
+REPO_RESULT_PY
+}
+
+# Blocks for the <n>th repo-terminal handoff, then answers it with the operator
+# verb. The app is holding its own attach wait while this runs, so a round trip
+# slow enough to matter surfaces as that wait expiring rather than as a hang.
+drive_repo_terminal_handoff() {
+    local occurrence="$1" label="$2" repo_id=""
+    local deadline=$(( $(date +%s) + TOTAL_TIMEOUT_SECONDS ))
+    while (( $(date +%s) < deadline )); do
+        repo_id="$(repo_terminal_handoff_id "$occurrence")"
+        [[ -n "$repo_id" ]] && break
+        if [[ "$(smoke_event_index failure)" != "-1" ]]; then
+            fail "App reported a failure milestone: $(smoke_read_event_field message failure)"
+        fi
+        sleep 1
+    done
+    [[ -n "$repo_id" ]] || fail "Timed out waiting for repo-terminal handoff #$occurrence"
+
+    log "Driving API repo terminal ($label): workspaces automation repo terminal $repo_id"
+    "$CLI_BIN" automation repo terminal "$repo_id" --json \
+        | tee "$RUN_DIR/repo-terminal-$label.json"
+    assert_repo_terminal_result "$RUN_DIR/repo-terminal-$label.json" "$label"
 }
 
 workspace_list_json() {
@@ -212,6 +276,7 @@ def index_of(kind):
 required = [
     "launch_ready",
     "repo_ready",
+    "awaiting_api_repo_terminal",
     "awaiting_api_create",
     "workspace_created",
     "sidebar_updated",
@@ -259,6 +324,24 @@ workspace_after_select = [
     event for index, event in attaches
     if index > await_select and event.get("selectionKind") == "workspace"
 ]
+
+# The repo step is externally driven now (#958): each repo attach must follow an
+# awaiting_api_repo_terminal handoff, which is what makes it the verb's work and
+# not the app's. Two handoffs, one before create and one mid-walk.
+repo_handoffs = [index for index, event in enumerate(events)
+                 if event.get("type") == "awaiting_api_repo_terminal"]
+if len(repo_handoffs) != 2:
+    fail(f"expected 2 repo-terminal handoffs, saw {len(repo_handoffs)}")
+if not (repo_handoffs[0] < await_create < repo_handoffs[1] < await_select):
+    fail(
+        "repo-terminal handoffs were not one before create and one before select: "
+        f"{repo_handoffs} against create={await_create} select={await_select}"
+    )
+
+repo_attach_indices = [index for index, event in attaches if event.get("selectionKind") == "repo"]
+for handoff in repo_handoffs:
+    if not any(index > handoff for index in repo_attach_indices):
+        fail(f"no repo terminal attach followed the handoff at index {handoff}")
 
 if not repo_before_create:
     fail("repo terminal did not attach before API create handoff")
@@ -313,6 +396,9 @@ main() {
         "WORKSPACES_AUTOMATION_CREATE_DRIVER=api" \
         "WORKSPACES_AUTOMATION_SELECT_DRIVER=api"
 
+    log "Answering the repo-terminal handoff that precedes create..."
+    drive_repo_terminal_handoff 1 before-create
+
     log "Waiting for API create handoff..."
     smoke_wait_for_event awaiting_api_create
 
@@ -324,6 +410,9 @@ main() {
     log "Driving API create: workspaces workspace create $repo_id $WORKSPACE_NAME"
     "$CLI_BIN" workspace create "$repo_id" "$WORKSPACE_NAME" --json | tee "$RUN_DIR/create-result.json"
     assert_create_result
+
+    log "Answering the repo-terminal handoff in the middle of the walk..."
+    drive_repo_terminal_handoff 2 walk-repo-step
 
     log "Waiting for API select handoff..."
     smoke_wait_for_event awaiting_api_select

@@ -109,6 +109,7 @@
             case sidebarUpdated = "sidebar_updated"
             case terminalSessionAttached = "terminal_session_attached"
             case awaitingApiCreate = "awaiting_api_create"
+            case awaitingApiRepoTerminal = "awaiting_api_repo_terminal"
             case awaitingApiSelect = "awaiting_api_select"
             case webSurfaceAttached = "web_surface_attached"
             case surfaceFocused = "surface_focused"
@@ -241,8 +242,24 @@
             configuration?.createDriver == .api
         }
 
-        /// Signals the scenario has created the workspace, parked the active surface on the repo terminal,
-        /// and is now waiting for an external API-driven select to switch back to the workspace. The
+        /// Signals the scenario is holding at the walk's repo step and wants the active surface parked
+        /// on the repo terminal from outside — the host script answers with `workspaces automation repo
+        /// terminal <repo-id>` (#958). The scenario used to call the selection path itself here, which
+        /// left the one step of the daily-driver walk the parity lane could not claim was API-driven.
+        func noteAwaitingAPIRepoTerminal(repo: Repo) async {
+            guard isEnabled else { return }
+            await emit(
+                makeEvent(
+                    type: .awaitingApiRepoTerminal,
+                    repoName: repo.name,
+                    repoID: repo.id.uuidString,
+                    repoPath: repo.localURL.standardizedFileURL.resolvingSymlinksInPath().path
+                )
+            )
+        }
+
+        /// Signals the scenario has created the workspace, the repo terminal is parked, and it is now
+        /// waiting for an external API-driven select to switch back to the workspace. The
         /// api-select smoke script keys its `workspaces workspace select` on this milestone.
         func noteAwaitingAPISelect(workspace: Workspace) async {
             guard isEnabled else { return }
