@@ -193,6 +193,87 @@ struct RuntimeProcessAlertTests {
         #expect(ledger.series[7]?.readings.count == 1)
     }
 
+    @Test("The app never alerts about itself, so it can never offer to stop itself")
+    func appRootIsNotACandidate() async {
+        // The app is the root of its own tree, not a descendant of it. Left in
+        // the candidate set, an app over the ceiling would put a Stop button in
+        // the sidebar wired to the app's own pid.
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: FixedRuntimeProcessProvider(
+                processes: [
+                    RuntimeProcessSample(
+                        pid: 100, parentPID: 1, name: "WorkSpaces", command: "WorkSpaces",
+                        cpuPercent: 0, residentMemoryBytes: 12 * gigabyte,
+                        startedAt: Date(timeIntervalSince1970: 1_000)),
+                    RuntimeProcessSample(
+                        pid: 101, parentPID: 100, name: "codex", command: "codex",
+                        cpuPercent: 0, residentMemoryBytes: 9 * gigabyte,
+                        startedAt: Date(timeIntervalSince1970: 1_000)),
+                ]
+            ),
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+
+        _ = await sampler.sample(workspaceDirectories: [])
+
+        // The app is the larger of the two and would otherwise sort first.
+        #expect(await sampler.alerts().map(\.pid) == [101])
+    }
+
+    @Test("A workspace-scoped process that happens to be the app is still not a candidate")
+    func appRootIsNotACandidateEvenWhenWorkspaceScoped() async {
+        let workspace = URL(fileURLWithPath: "/Users/fairchild/code/project")
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: FixedRuntimeProcessProvider(
+                processes: [
+                    RuntimeProcessSample(
+                        pid: 100, parentPID: 1, name: "WorkSpaces", command: "WorkSpaces",
+                        cpuPercent: 0, residentMemoryBytes: 12 * gigabyte,
+                        currentDirectory: "/Users/fairchild/code/project",
+                        startedAt: Date(timeIntervalSince1970: 1_000))
+                ]
+            ),
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+
+        _ = await sampler.sample(workspaceDirectories: [workspace])
+
+        #expect(await sampler.alerts().isEmpty)
+    }
+
+    @Test("An always-on sweep can be given a scope before the pane ever opens")
+    func scopeCanBeSetWithoutSampling() async {
+        let workspace = URL(fileURLWithPath: "/Users/fairchild/code/project")
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: FixedRuntimeProcessProvider(
+                processes: [
+                    RuntimeProcessSample(
+                        pid: 100, parentPID: 1, name: "WorkSpaces", command: "WorkSpaces",
+                        cpuPercent: 0, residentMemoryBytes: megabyte,
+                        startedAt: Date(timeIntervalSince1970: 1_000)),
+                    RuntimeProcessSample(
+                        pid: 200, parentPID: 1, name: "claude", command: "claude",
+                        cpuPercent: 0, residentMemoryBytes: 9 * gigabyte,
+                        currentDirectory: "/Users/fairchild/code/project",
+                        startedAt: Date(timeIntervalSince1970: 1_000)),
+                ]
+            ),
+            processIdentifier: { 100 },
+            minimumSampleInterval: 0
+        )
+
+        // Nil preserves a scope; it does not establish one. Without this call the
+        // watchdog watches nothing outside the app's own tree until somebody
+        // opens the Diagnostics pane.
+        await sampler.setWorkspaceScope([workspace])
+        _ = await sampler.sampleIfNeeded(workspaceDirectories: nil)
+
+        #expect(await sampler.alerts().map(\.pid) == [200])
+        #expect(await sampler.alerts().first?.isAppDescendant == false)
+    }
+
     @Test("A muted pid is not reported")
     func mutedPIDIsNotReported() {
         var ledger = RuntimeProcessGrowthLedger()

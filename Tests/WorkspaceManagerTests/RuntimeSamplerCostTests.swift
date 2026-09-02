@@ -18,7 +18,7 @@ import Testing
 
 @testable import WorkspaceManagerCore
 
-@Suite("RuntimeSamplerCost")
+@Suite("RuntimeSamplerCost", .serialized)
 struct RuntimeSamplerCostTests {
 
     private static var costRunEnabled: Bool {
@@ -130,25 +130,77 @@ struct RuntimeSamplerCostTests {
             )
         )
 
-        // What can be asserted, and where.
+        // The app-tree criterion, made gating.
         //
-        // The host-wide comparison is the population-scale claim: ~900 processes
-        // re-read independently either side of the sweep, dominated by large
-        // processes that do not move in the milliseconds between the reads. That
-        // is the number the 10% criterion belongs on.
-        //
-        // The app tree inside a test runner is one process, and that process is
-        // the test bundle itself running 2,000 tests in parallel. It allocates
-        // and frees faster than two reads can bracket it — measured swings of
-        // 35% — so a 10% threshold there would measure the harness, not the
-        // sampler. Its numbers are reported, and the invariant that can be
-        // asserted about the tree is the exact one below: the reported total is
-        // the sum of the very samples it was built from, which is what catches a
-        // mis-scoped tree.
+        // An earlier form of this compared the reported total against the sum of
+        // the very array the total was reduced from, which is an identity — a
+        // tree missing every descendant but the root still passed. Membership is
+        // now checked against the kernel instead: every pid the sampler placed in
+        // the tree has its parentage walked independently, and must reach the
+        // root. Comparing against a *snapshot* of the descendant set does not
+        // work here, because neighbouring suites spawn and reap children of this
+        // same process while the sweep runs; parentage is a per-pid fact and is
+        // not disturbed by them. The other direction — that live descendants are
+        // not dropped — is `appTreeContainsRealDescendants`, which brings its own
+        // child rather than borrowing someone else's.
+        let root = getpid()
+        for process in snapshot.appTreeProcesses where process.pid != root {
+            var walker = process.pid
+            var reachedRoot = false
+            for _ in 0..<64 {
+                guard let entry = ProcessInventory.entry(pid: walker) else { break }
+                if entry.parentPID == root {
+                    reachedRoot = true
+                    break
+                }
+                guard entry.parentPID > 1 else { break }
+                walker = entry.parentPID
+            }
+            // A pid that exited between the sweep and this walk reads as gone,
+            // which is an absence of evidence rather than a stranger.
+            let stillLive = ProcessInventory.entry(pid: process.pid) != nil
+            #expect(
+                reachedRoot || !stillLive,
+                "pid \(process.pid) (\(process.name)) is in the app tree but is not a descendant"
+            )
+        }
+
         #expect(treeReported > 0)
-        #expect(treeReported == snapshot.appTreeProcesses.reduce(Int64(0)) { $0 + $1.residentMemoryBytes })
+        #expect(treeDrift < 0.10)
         #expect(hostReported > 0)
         #expect(hostDrift < 0.10)
+    }
+
+    @Test("The app tree contains the app's actual descendants, not just its root")
+    func appTreeContainsRealDescendants() async throws {
+        // The membership check above cannot fail on its own: a test runner has no
+        // children, so "tree == root" is both the correct answer and what a broken
+        // tree builder returns. This gives the tree a descendant to find. Verified
+        // by mutation — making `appTreeProcesses` return only the root turns this
+        // red while every other test in the suite stays green.
+        let child = Process()
+        child.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        child.arguments = ["30"]
+        try child.run()
+        defer {
+            if child.isRunning { child.terminate() }
+            child.waitUntilExit()
+        }
+
+        let sampler = RuntimeDiagnosticsSampler(minimumSampleInterval: 0)
+        guard let snapshot = await sampler.sample(workspaceDirectories: []) else {
+            Issue.record("sampler returned no snapshot")
+            return
+        }
+
+        let tree = snapshot.appTreeProcesses
+        #expect(tree.map(\.pid).contains(child.processIdentifier))
+        #expect(tree.count >= 2)
+        // The total is over the whole tree, so the child's footprint is inside it.
+        let childFootprint = tree.first { $0.pid == child.processIdentifier }?.residentMemoryBytes ?? 0
+        #expect(childFootprint > 0)
+        #expect(snapshot.appTreeTotals.residentMemoryBytes >= childFootprint)
+        #expect(snapshot.appTreeTotals.processCount == tree.count)
     }
 
     private static func summedFootprints(_ pids: [Int32]) -> Int64 {

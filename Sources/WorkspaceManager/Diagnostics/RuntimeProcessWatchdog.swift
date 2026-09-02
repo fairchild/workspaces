@@ -67,6 +67,14 @@ final class RuntimeProcessWatchdog: ObservableObject {
         }
     }
 
+    /// Establishes the scope the always-on sweep judges workspace processes
+    /// against. Pushed from the main window as soon as it appears, and again
+    /// whenever the model changes, so a cold launch that never opens Diagnostics
+    /// still watches the workspaces the app manages.
+    func updateWorkspaceScope(_ directories: [URL]) async {
+        await sampler.setWorkspaceScope(directories)
+    }
+
     func stop() {
         pollingTask?.cancel()
         pollingTask = nil
@@ -153,14 +161,18 @@ enum RuntimeProcessTerminator {
         return !stillTheSameProcess(identity, startTimeReader)
     }
 
-    /// True only when the pid is live *and* started when the alert said it did.
-    /// An unknown start time on either side fails closed.
+    /// True only when the pid is live *and* started at exactly the instant the
+    /// alert recorded. An unknown start time on either side fails closed.
+    ///
+    /// Exactly, not approximately: both values are the same kernel field read
+    /// through the same code, so there is no measurement error to absorb — and a
+    /// tolerance is a window in which a recycled pid gets signalled.
     private static func stillTheSameProcess(
         _ identity: RuntimeProcessIdentity,
         _ startTimeReader: @Sendable (Int32) -> Date?
     ) -> Bool {
         guard let expected = identity.startedAt else { return false }
         guard let actual = startTimeReader(identity.pid) else { return false }
-        return abs(actual.timeIntervalSince(expected)) < 1
+        return actual == expected
     }
 }

@@ -135,6 +135,22 @@ struct RuntimeProcessWatchdogTests {
         #expect(stopped == false)
     }
 
+    @Test("Identity matching is exact, not approximate")
+    func terminatorRefusesNearbyStartTime() async {
+        // Both values are the same kernel field read through the same code, so
+        // there is no measurement error to absorb — and any tolerance is a window
+        // in which a recycled pid gets signalled. A millisecond apart is a
+        // different process.
+        let expected = Date(timeIntervalSince1970: 1_000)
+        for offset in [0.001, 0.1, 0.5, 0.999] {
+            let stopped = await RuntimeProcessTerminator.stop(
+                .init(pid: 4_242, startedAt: expected),
+                startTimeReader: { _ in expected.addingTimeInterval(offset) }
+            )
+            #expect(stopped == false, "a start time \(offset)s away must not be signalled")
+        }
+    }
+
     fileprivate static let started = Date(timeIntervalSince1970: 1_000)
 
     private func makeSampler(runawayFootprint: Int64) -> RuntimeDiagnosticsSampler {

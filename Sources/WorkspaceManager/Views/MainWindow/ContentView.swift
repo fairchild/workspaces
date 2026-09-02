@@ -352,6 +352,27 @@ struct ContentView: View {
         return currentSelectedRepoForLanding
     }
 
+    /// Every directory the app manages: each repository and each of its
+    /// non-archived workspaces. Broader than the Diagnostics pane's own scope,
+    /// which follows the current selection and the live terminal sessions —
+    /// always-on watching cannot depend on what happens to be selected.
+    private var managedWorkspaceDirectories: [URL] {
+        var seen = Set<String>()
+        var directories: [URL] = []
+        for repo in repos {
+            for candidate in [repo.localURL]
+                + repo.workspaces
+                .filter({ $0.status != .archived })
+                .map(\.workspaceURL)
+            {
+                let path = candidate.standardizedFileURL.resolvingSymlinksInPath().path
+                guard !path.isEmpty, seen.insert(path).inserted else { continue }
+                directories.append(candidate)
+            }
+        }
+        return directories
+    }
+
     private var modelSnapshot: ModelSnapshot {
         ModelSnapshot(
             repoIDs: repos.map(\.id),
@@ -1021,6 +1042,14 @@ struct ContentView: View {
             }
             .onChange(of: modelSnapshot) { old, new in
                 lifecycleController.runModelChangeSequence(modelChangeActions(old: old, new: new))
+            }
+            // The always-on process sweep judges workspace-scoped processes against
+            // this scope. It has no view of the model store, so the window pushes it
+            // on appearance and on every model change — otherwise the scope stays
+            // empty until someone opens the Diagnostics pane, and a runaway in a
+            // managed workspace is invisible for the whole of a cold launch (#1368).
+            .task(id: modelSnapshot) {
+                await RuntimeProcessWatchdog.shared.updateWorkspaceScope(managedWorkspaceDirectories)
             }
             .onChange(of: inspectorTargetIDSet) { _, _ in
                 pruneRightPaneState()

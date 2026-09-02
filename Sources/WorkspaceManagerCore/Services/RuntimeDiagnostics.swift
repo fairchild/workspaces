@@ -462,6 +462,7 @@ public actor RuntimeDiagnosticsSampler {
             )
             snapshots.append(snapshot)
             recordGrowth(
+                appPID: appPID,
                 appTreeProcesses: appTreeProcesses,
                 workspaceProcesses: workspaceProcesses,
                 at: now
@@ -507,6 +508,16 @@ public actor RuntimeDiagnosticsSampler {
 
     public func latestSnapshot() -> RuntimeDiagnosticsSnapshot? {
         snapshots.last
+    }
+
+    /// Sets the scope the always-on sweep uses, without taking a sample.
+    ///
+    /// The watchdog has no view of the model store, and `nil` preserves a scope
+    /// rather than establishing one — so before this exists the scope is empty
+    /// until someone opens the Diagnostics pane, and a workspace-scoped process
+    /// outside the app's own tree is invisible for the whole of a cold launch.
+    public func setWorkspaceScope(_ directories: [URL]) {
+        workspaceScope = directories
     }
 
     /// Processes currently over a growth or footprint threshold.
@@ -566,13 +577,21 @@ public actor RuntimeDiagnosticsSampler {
     }
 
     private func recordGrowth(
+        appPID: Int32,
         appTreeProcesses: [RuntimeProcessSample],
         workspaceProcesses: [RuntimeProcessSample],
         at sampledAt: Date
     ) {
-        let descendantPIDs = Set(appTreeProcesses.map(\.pid))
-        var candidates = appTreeProcesses
-        candidates.append(contentsOf: workspaceProcesses.filter { !descendantPIDs.contains($0.pid) })
+        // The app is the root of its own tree, not a descendant of it. Leaving it
+        // in the candidate set would let WorkSpaces alert about its own footprint
+        // and offer a Stop button wired to its own pid — the strip would hand the
+        // user a button that quits the app.
+        let descendantPIDs = Set(appTreeProcesses.map(\.pid)).subtracting([appPID])
+        var candidates = appTreeProcesses.filter { $0.pid != appPID }
+        candidates.append(
+            contentsOf: workspaceProcesses.filter {
+                !descendantPIDs.contains($0.pid) && $0.pid != appPID
+            })
 
         growth.record(
             candidates: candidates,
