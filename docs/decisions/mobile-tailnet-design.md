@@ -152,12 +152,18 @@ So `--tools Read,LS,Glob,Grep,TodoRead` bounds the *verbs*, not the
 workspace root is the model's stated context, not an enforced sandbox, and
 nothing in the current stack enforces one.
 
-**What this decides.** Scope the claim honestly: the host lane is opt-in.
-`defaultComputeProvider()` returns `mock` unless `WEB_NEXT_COMPUTE_PROVIDER=host`
-(`web-next/src/lib/db/start-session.ts`), and host mode additionally needs
-`WEB_NEXT_HOST_WORKSPACE_ROOT`. So a token does not universally expose the
-filesystem — it does so on a node configured for the host lane, which is
-exactly the configuration this arc exists to reach from a phone.
+**What this decides.** Scope the claim precisely, because the obvious scoping
+is wrong. `WEB_NEXT_COMPUTE_PROVIDER` sets only the *default* provider
+(`defaultComputeProvider()` returns `mock` without it). It does not restrict
+what a caller may ask for: `POST /api/sessions` accepts any registered provider
+id from the request body, and `hostProvider` is unconditionally in the registry
+(`web-next/src/lib/agent-runtime/provider.ts`). So **any token holder can select
+the host lane explicitly**, whatever the default says.
+
+The one precondition that actually gates it is `WEB_NEXT_HOST_WORKSPACE_ROOT`:
+unset, `resolveHostWorkspaceDir` fails with `host_workspace_root_unset` and no
+turn runs. That variable, not the provider default, is the switch — and this
+arc's whole purpose is to reach a node where it is set.
 
 On such a node the bearer token is not merely the primary gate, it is the only
 thing standing between a network peer and the owner's entire readable
@@ -187,9 +193,11 @@ the question and the answer changes the posture of every later phase.
 2. Keep the Host allowlist **exact-match** (env-driven additions included) —
    never a wildcard on `.ts.net`.
 3. Namespace session identity by node, even while one node exists.
-4. On a node running the host compute provider, treat the sign-in token as
-   equivalent to filesystem read access for the owner's uid — see the jail-probe
-   verdict above. Any change that widens who can hold the token widens that.
+4. On any node with `WEB_NEXT_HOST_WORKSPACE_ROOT` set, treat the sign-in token
+   as equivalent to filesystem read access for the owner's uid — a token holder
+   can select the host lane per-request, so the provider default does not
+   contain this. See the jail-probe verdict above. Any change that widens who
+   can hold the token widens that.
 
 ## Sequence
 

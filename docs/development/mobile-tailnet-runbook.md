@@ -25,13 +25,16 @@ the token authorizes an agent lane that can read **any file this user can
 read** — not only the workspace. That was probed, not assumed; the verdict and
 its evidence are in the ADR under "Read-tool jail probe".
 
-The host lane is opt-in: new sessions default to the mock provider, and the
-host lane runs only when `WEB_NEXT_COMPUTE_PROVIDER=host` (which also needs
-`WEB_NEXT_HOST_WORKSPACE_ROOT`). So the exposure is conditional on how you
-configured the server — but treat the token as filesystem-equivalent anyway,
-because the safe assumption survives someone flipping that variable later.
-Treat a leaked QR or a token in a chat log as a disclosure of your home
-directory, and rotate immediately (below).
+Do not read `WEB_NEXT_COMPUTE_PROVIDER` as a safety control. It picks the
+default provider for new sessions, and nothing more: `POST /api/sessions`
+accepts a `provider` in the request body, and `host` is always a registered
+choice. Any token holder can therefore ask for the host lane directly, whatever
+the default is.
+
+The switch that actually gates it is `WEB_NEXT_HOST_WORKSPACE_ROOT`. Unset, a
+host turn fails immediately and reads nothing. Set, the token is filesystem
+read access — so treat a leaked QR or a token in a chat log as a disclosure of
+your home directory, and rotate immediately (below).
 
 Nothing here binds beyond loopback. `tailscale serve` is the only thing that
 makes the server reachable, and you run it yourself.
@@ -83,11 +86,20 @@ after a rename the app keeps allowlisting the old name until that key is
 cleared. The headless path re-reads it every time.
 
 **3. Start the server with that origin allowlisted.** The Host gate is
-exact-match on the whole origin, scheme included. It is not byte-exact: the
-parser lowercases the env value, trims surrounding whitespace, and strips
-trailing slashes, and URL parsing drops a default `:443`. What it will not
-forgive is a wrong scheme, a non-default port, or a different host — including
-a subdomain of an allowlisted name.
+exact-match on the whole origin, scheme included. It is not byte-exact, but the
+two sides normalize differently, which is the one trap here:
+
+- The **allowlist value** you set is lowercased, trimmed, and stripped of
+  trailing slashes. A port is left exactly as written.
+- The **incoming request origin** is rebuilt through `new URL()`, which drops a
+  default `:443`.
+
+So write the allowlist without a port. Measured: with `https://host:443`
+allowlisted, *every* request 403s — both `Host: host` and `Host: host:443` —
+because the request side canonicalizes to `https://host` while the allowlist
+side keeps the `:443`, and nothing can then match. A wrong scheme, a genuinely
+non-default port, or a different host — a subdomain of an allowlisted name
+included — will not match either.
 
 ```sh
 cd web-next
@@ -206,11 +218,10 @@ To also remove the pairing surface from the app, see
 ## When it does not work
 
 - **403 from the phone, healthz fine from curl.** The origin the phone produces
-  is not in the allowlist. Compare it against `WEB_NEXT_EXTRA_LOCAL_ORIGINS`,
-  looking at scheme, host, and port — case, surrounding whitespace, a trailing
-  slash, and an explicit `:443` are all normalized away and are not the cause.
-  A wrong scheme, a non-default port, or a subdomain of the allowlisted name
-  will fail, by design.
+  is not in the allowlist. Case, surrounding whitespace, and a trailing slash on
+  the allowlist value are normalized away and are not the cause. Check scheme
+  and host first, then check whether you wrote a port: `https://host:443` in the
+  allowlist fails, because only the request side drops the default port.
 - **Redirected to `localhost` and nothing loads.** The server did not see the
   allowlist, so it built the redirect from the loopback origin. Check the env
   var reached the process, then look for the `Proxy sign-in` line.
