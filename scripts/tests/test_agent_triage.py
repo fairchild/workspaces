@@ -121,6 +121,14 @@ class AgentTriageTests(unittest.TestCase):
         self.assertNotIn("IGNORE ALL RULES", contributor_prompt)
         self.assertNotIn("IGNORE ALL RULES", claude_prompt)
 
+    def test_claude_prompt_points_at_the_writing_voice_rules(self) -> None:
+        # The @claude lane checks the repo out and holds read tools, so a
+        # pointer is actionable here where the no-tools responder needs inlining.
+        payload = self.make_payload(request_id="claude-issue-212-voice", requested_at="2026-03-24T16:10:00Z")
+        claude_prompt = triage.render_claude_prompt(payload)
+        self.assertIn("`.agents/MEMORY.md` § Writing Voice", claude_prompt)
+        self.assertIn("read access", claude_prompt)
+
     def test_claim_refuses_without_safe_to_run_label(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             event_path = Path(tmpdir) / "event.json"

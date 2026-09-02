@@ -217,6 +217,47 @@ class FactoryCommentResponderTests(unittest.TestCase):
         self.assertGreaterEqual(prompt.count("[truncated to 16384 UTF-8 bytes]"), 3)
         self.assertNotIn(payload.response_marker(4242), prompt)
 
+    def test_writing_voice_rules_extracts_only_that_section(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = Path(tmp) / "MEMORY.md"
+            memory.write_text(
+                "# Repo Memory\n\n"
+                "## Release Discipline\n\n- Tag before you ship.\n\n"
+                "## Writing Voice\n\n"
+                "Rules preamble.\n\n- Start with the point.\n\n"
+                "## Debugging Heuristic\n\n- Instrument first.\n",
+                encoding="utf-8",
+            )
+            section = payload.writing_voice_rules(memory)
+
+        self.assertIn("Start with the point.", section)
+        self.assertIn("Rules preamble.", section)
+        self.assertNotIn("Tag before you ship.", section)
+        self.assertNotIn("Instrument first.", section)
+        self.assertNotIn("## Writing Voice", section)
+
+    def test_writing_voice_rules_are_empty_when_memory_is_unreadable(self) -> None:
+        self.assertEqual(payload.writing_voice_rules(Path("/nonexistent/MEMORY.md")), "")
+
+    def test_prompt_inlines_writing_voice_because_the_model_has_no_tools(self) -> None:
+        # The reply step runs `claude -p --disallowedTools "*"`, so a pointer to
+        # `.agents/MEMORY.md` would name a file this model cannot open.
+        context = self.make_context()
+        target = {
+            "title": "Responder",
+            "body": "Target body",
+            "html_url": "https://github.com/fairchild/workspaces/issues/1089",
+        }
+
+        prompt = payload.build_prompt(context, target, "issue", [])
+
+        rules = payload.writing_voice_rules()
+        self.assertTrue(rules, "`.agents/MEMORY.md` § Writing Voice must exist")
+        for bullet in [line for line in rules.splitlines() if line.startswith("- ")]:
+            self.assertIn(bullet, prompt)
+        # The rules precede the untrusted GitHub data they must not be confused with.
+        self.assertLess(prompt.index("Writing Voice"), prompt.index("Gated target:"))
+
     def run_prepare_with_body(self, body: str):
         event = {
             "comment": {
