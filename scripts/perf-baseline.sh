@@ -426,9 +426,11 @@ def read_preferences_entry(text):
     preceded it, and reading the first match lets that earlier line vouch for a
     launch it did not describe.
 
-    The marker has to stand as its own field. Matched as a substring it is
-    impersonable by any message that happens to carry the literal text — a logged
-    path, say — which would then read as a newer resolution than the real one.
+    The marker has to be the line's category — the first `[...]` field on it. A
+    message that merely carries the literal text somewhere, such as one logging a
+    repository path verbatim, would otherwise read as a newer resolution than the
+    real one. Every message reaches its own category first, so requiring the marker
+    to hold that position is what separates an entry from a mention of one.
 
     Fields are read as whole `key=value` tokens rather than by pattern, which is what
     perf-runner.sh's awk reader does. A key appearing twice on one physical line has
@@ -438,8 +440,10 @@ def read_preferences_entry(text):
     for line in text.split("\n"):
         tokens = log_fields(line)
         for index, token in enumerate(tokens):
-            if token == PREFERENCES_MARKER:
-                entry = tokens[index + 1:]
+            if token.startswith("[") and token.endswith("]"):
+                if token == PREFERENCES_MARKER:
+                    entry = tokens[index + 1:]
+                break
     if entry is None:
         return None
     seen = {}
@@ -492,7 +496,21 @@ def run_index(log_file):
     return int(match.group("index")) if match else 0
 
 
-for log_file in sorted(out_dir.glob("run-*.log"), key=run_index):
+# A run that left no log is a failed capture, not an absent one. The app launches in a
+# background subshell whose failure is suppressed, so a crashed or never-started launch
+# leaves the directory one file short — and a summarizer that reads whatever is there
+# reports a clean set of samples taken over fewer runs than were asked for. Isolation is
+# judged per sample, and a sample that does not exist is never judged at all.
+run_logs = sorted(out_dir.glob("run-*.log"), key=run_index)
+if len(run_logs) != runs:
+    print(
+        f"CAPTURE INCOMPLETE: {len(run_logs)} of {runs} run logs are present in {out_dir} — "
+        "the missing launches produced no log, so they cannot be shown to have run at all.",
+        file=sys.stderr,
+    )
+    sys.exit(2)
+
+for log_file in run_logs:
     # `replace`, not `ignore`: a dropped undecodable byte can splice its neighbours into
     # a token that reads as a field — `do<bad byte>main=scratch` becoming `domain=scratch`.
     text = log_file.read_text(errors="replace")

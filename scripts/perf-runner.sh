@@ -94,11 +94,16 @@ assert_preferences_isolated() {
     # invisible and quietly promoted the resolution before it — which, on a relaunch that
     # fell back, is the one line in the log that does not describe the launch measured.
     #
-    # The marker has to stand as its own field. Matched as a substring it is
-    # impersonable: an installed capture carries every message the process and its
-    # subsystem emit, so a logged path holding the literal text reads as the newest
-    # resolution and displaces the one that decided the launch — the single shape where
-    # more log output makes this check weaker rather than stronger.
+    # The marker has to be the line's category — the first `[...]` field on it — not
+    # merely a field somewhere on it. An installed capture carries every message the
+    # process and its subsystem emit, and some of those log a repository path verbatim,
+    # so a path holding the literal text reads as the newest resolution and displaces
+    # the one that decided the launch. That is the single shape where more log output
+    # makes this check weaker rather than stronger, and a path is attacker-shaped input.
+    #
+    # A real entry has the category first: `… WorkspaceManager[1:2] [LaunchPreferences]
+    # domain=…`. `WorkspaceManager[1:2]` is not bracket-delimited, so the first field
+    # that is, is the category. Any other message reaches its own category first.
     #
     # `entry:` prefixes the result so an entry with no fields after the marker — the
     # truncated shape — is still distinguishable from a log that has no marker at all.
@@ -106,11 +111,14 @@ assert_preferences_isolated() {
         { sub(/\r$/, "") }
         {
             for (i = 1; i <= NF; i++)
-                if ($i == "[LaunchPreferences]") {
-                    fields = ""
-                    for (j = i + 1; j <= NF; j++) fields = fields " " $j
-                    last = fields
-                    found = 1
+                if ($i ~ /^\[.*\]$/) {
+                    if ($i == "[LaunchPreferences]") {
+                        fields = ""
+                        for (j = i + 1; j <= NF; j++) fields = fields " " $j
+                        last = fields
+                        found = 1
+                    }
+                    break
                 }
         }
         END { if (found) print "entry:" last }

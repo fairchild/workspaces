@@ -329,6 +329,11 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
             f"domain=scratch suite={self.SUITE} isolated=true",
             f"2026-08-31 07:58:20.000 I WorkspaceManager[1:2] "
             f"[LaunchPreferences]domain=scratch suite={self.SUITE} isolated=true",
+            # The category is the first bracketed field, and a repository path is logged
+            # verbatim after it — so a path with spaces in it can carry the marker as a
+            # field of its own without ever being one.
+            f"2026-08-31 07:58:20.000 I WorkspaceManager[1:2] [HostSession] path=/tmp/x "
+            f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true",
         ]
         for impostor in impostors:
             with self.subTest(impostor=impostor):
@@ -984,6 +989,8 @@ class DebugLaneIsolationTests(unittest.TestCase):
         for impostor in (
             f"[Perf] root=/tmp/[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true",
             f"[LaunchPreferences]domain=scratch suite={self.SUITE} isolated=true",
+            f"[HostSession] path=/tmp/x [LaunchPreferences] domain=scratch "
+            f"suite={self.SUITE} isolated=true",
         ):
             with self.subTest(impostor=impostor):
                 result = self.run_summarizer(
@@ -1042,6 +1049,63 @@ class DebugLaneIsolationTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("expected", result.stdout)
+
+
+class DebugLaneRunCountTests(unittest.TestCase):
+    """A capture that left no log is a failed capture, not a quiet one.
+
+    The summarizer globs the run logs that exist. The app launches in a background
+    subshell whose failure is suppressed, so a run that never wrote its log left the
+    directory one file short and the lane summarized whatever remained — an empty
+    directory summarized clean. Isolation is checked per sample, and a sample that
+    does not exist is never examined.
+    """
+
+    def run_summarizer(self, logs: int, runs: int) -> subprocess.CompletedProcess:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            program = out_dir / "summarize.py"
+            program.write_text(
+                DebugLaneTriggerTests.embedded_summarizer(), encoding="utf-8"
+            )
+            for index in range(1, logs + 1):
+                (out_dir / f"run-{index}.log").write_text(
+                    "2026-08-30 10:00:00.000 [LaunchPreferences] domain=scratch "
+                    "suite=perf.scratch isolated=true\n"
+                    "2026-08-30 10:00:01.000 [Perf] metric=launch_to_first_prompt "
+                    "duration_ms=601.00 trigger=terminal_set_title\n",
+                    encoding="utf-8",
+                )
+            return subprocess.run(
+                [
+                    sys.executable, str(program), str(out_dir), str(REPO_ROOT), str(runs),
+                    "0", "0", "2026-08-30T10:00:00-0700", "26.6.2", "25G100", "arm64",
+                    "Mac16,13", "no-activate", "0", "", "clean", "off", "1",
+                    "scratch", "perf.scratch", "owner",
+                ],
+                cwd=REPO_ROOT, capture_output=True, text=True, check=False,
+                env={
+                    **os.environ,
+                    "PYTHONPATH": str(REPO_ROOT / "scripts"),
+                    "PERF_SUMMARY_TIMESTAMP": "2026-08-30T10:00:00-0700",
+                },
+            )
+
+    def test_every_requested_run_must_have_left_a_log(self) -> None:
+        result = self.run_summarizer(logs=2, runs=3)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("2 of 3", result.stdout + result.stderr)
+
+    def test_no_logs_at_all_is_the_loudest_case_not_the_quietest(self) -> None:
+        result = self.run_summarizer(logs=0, runs=3)
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+
+    def test_a_complete_set_of_logs_summarizes(self) -> None:
+        result = self.run_summarizer(logs=3, runs=3)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
 class MissingLaunchMetricTests(unittest.TestCase):
