@@ -105,7 +105,9 @@ from pathlib import Path
 path, occurrence = Path(sys.argv[1]), int(sys.argv[2])
 handoffs = []
 if path.exists():
-    for line in path.read_text().splitlines():
+    # errors="replace" for the same reason smoke_events.py uses it: a write torn
+    # mid-multibyte would raise before the JSON handler below ever sees the line.
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -159,6 +161,27 @@ drive_repo_terminal_handoff() {
     "$CLI_BIN" automation repo terminal "$repo_id" --json \
         | tee "$RUN_DIR/repo-terminal-$label.json"
     assert_repo_terminal_result "$RUN_DIR/repo-terminal-$label.json" "$label"
+}
+
+# smoke_cleanup_app signals and returns; it never establishes that the process
+# is gone, and a signalled-but-alive app can still append to the JSONL the
+# assertion is about to read once. Escalate and confirm, so quiescence is a fact
+# rather than an assumption.
+wait_for_app_exit() {
+    [[ -n "${APP_PID:-}" ]] || return 0
+    local deadline=$(( $(date +%s) + 15 ))
+    while (( $(date +%s) < deadline )); do
+        kill -0 "$APP_PID" >/dev/null 2>&1 || { log "App $APP_PID exited."; return 0; }
+        sleep 1
+    done
+    log "App $APP_PID ignored SIGTERM; escalating to SIGKILL."
+    kill -9 "$APP_PID" >/dev/null 2>&1 || true
+    deadline=$(( $(date +%s) + 10 ))
+    while (( $(date +%s) < deadline )); do
+        kill -0 "$APP_PID" >/dev/null 2>&1 || { log "App $APP_PID exited after SIGKILL."; return 0; }
+        sleep 1
+    done
+    fail "App $APP_PID is still running after SIGKILL; refusing to assert on a stream that can still grow."
 }
 
 workspace_list_json() {
@@ -466,6 +489,7 @@ main() {
     # finalize calls the same helper again and it no-ops on a gone process.
     log "Stopping the app so the milestone stream is final before asserting..."
     smoke_cleanup_app
+    wait_for_app_exit
     assert_api_milestone_sequence | tee "$RUN_DIR/assertions.log"
 
     RUN_STATUS="passed"

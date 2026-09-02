@@ -108,20 +108,28 @@ struct SmokeScenarioSidebarContext {
             await desktopUI.noteRepoReady(repo)
             guard desktopUI.shouldStartScenario() else { return }
             if desktopUI.usesAPICreateDriver {
-                // The repo park is an external step now (#958): announce it, then wait for the
-                // attach the host's `repo.terminal` verb produces. The waits are the same ones the
-                // app-side park used to satisfy, so what they assert is unchanged — only who drove
-                // the gesture. The budget is wider because it now spans a round trip.
                 let attachBaselineBeforeRepoPark = desktopUI.terminalAttachCount
                 let focusBaselineBeforeRepoPark = desktopUI.surfaceFocusCount
-                await desktopUI.noteAwaitingAPIRepoTerminal(repo: repo)
+                // Only the full parity configuration hands the repo park outside (#958).
+                // api-create-smoke.sh enables the create driver alone and answers no
+                // repo-terminal handoff, so externalizing on that flag by itself would
+                // strand that lane for the whole wait and then fail its repo-attach
+                // assertion. Same both-drivers condition noteAPIWorkspaceCreateCompleted uses.
+                let repoParkIsExternal = desktopUI.usesAPISelectDriver
+                if repoParkIsExternal {
+                    await desktopUI.noteAwaitingAPIRepoTerminal(repo: repo)
+                } else {
+                    context.selectRepoTerminal(repo)
+                }
+                // A round trip needs a wider budget than an in-process gesture.
+                let parkTimeout: Duration = repoParkIsExternal ? .seconds(60) : .seconds(15)
                 _ = await desktopUI.waitForTerminalAttach(
                     after: attachBaselineBeforeRepoPark,
-                    timeout: .seconds(60)
+                    timeout: parkTimeout
                 )
                 _ = await desktopUI.waitForSurfaceFocus(
                     after: focusBaselineBeforeRepoPark,
-                    timeout: .seconds(60)
+                    timeout: parkTimeout
                 )
                 await desktopUI.noteAwaitingAPICreate(repo: repo)
                 return
