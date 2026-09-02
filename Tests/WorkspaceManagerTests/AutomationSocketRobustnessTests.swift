@@ -221,7 +221,9 @@ struct AutomationSocketRobustnessTests {
             // Has to outlive the whole test: this connection's job is to hold the only slot, so a
             // deadline the test can reach would hang it up and dissolve the precondition — which
             // is what a 30s deadline did on a runner where this suite takes ~50s to get its turns.
-            readDeadline: .seconds(600)
+            // Expressed as a multiple of the ceiling every wait in this file is bounded by, so the
+            // invariant is stated rather than left to arithmetic on a bare number (#1321).
+            readDeadline: .seconds(Self.observationCeiling * 10)
         )
         try await listener.start()
 
