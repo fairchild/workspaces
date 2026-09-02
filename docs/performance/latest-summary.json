@@ -154,6 +154,7 @@
   "log_file": "/private/tmp/claude-501/-Users-fairchild-workspaces-code-steward-v6/6f54d7db-4670-452b-83b8-b62229233c4c/scratchpad/perf/run5/installed_clean_shell.log",
   "metadata": {
     "build_kind": "installed",
+    "launch_trigger": "terminal_set_title",
     "protocol_epoch": "deterministic-delivery-v1",
     "scenario": "installed_clean_shell",
     "schema_version": 1,

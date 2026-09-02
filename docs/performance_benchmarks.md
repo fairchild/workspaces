@@ -115,7 +115,9 @@ Read it as: a cell naming `terminal_focus` measured attention, not launch, and d
 not belong in a launch comparison. Several triggers joined with `+` mean the median
 was taken over a mix, which is the case that most needs saying so. Blank means the
 producing run reported no trigger — a row recorded before this column existed, or a
-capture where the metric never closed. Values pass through from the log line; the
+capture where the metric never closed. It is a claim about missing evidence rather
+than about a date: where the run's raw log survives, re-summarizing it with current
+tooling recovers the trigger, and the row carries that value instead of a blank. Values pass through from the log line; the
 vocabulary is whatever `PerformanceSignposts.endLaunchToFirstPromptIfNeeded(trigger:)`
 is called with.
 
