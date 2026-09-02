@@ -86,8 +86,17 @@ final class RuntimeProcessWatchdog: ObservableObject {
     /// nobody is looking. It passes no directories — it has no view of the model
     /// store — which the sampler reads as "keep the scope the pane last set"
     /// rather than as "scope nothing".
-    func sampleOnce() async {
-        _ = await sampler.sampleIfNeeded(workspaceDirectories: nil)
+    func sampleOnce(force: Bool = false) async {
+        if force {
+            // A stop has to be answered by a fresh sweep. `sampleIfNeeded` is rate
+            // limited, and the common SIGTERM path finishes well inside that
+            // window — so the cached ledger would come back still naming the
+            // process that just died, leaving it on screen until the next
+            // cadence and letting a second Stop mark a dead pid "would not stop".
+            _ = await sampler.sample(workspaceDirectories: nil)
+        } else {
+            _ = await sampler.sampleIfNeeded(workspaceDirectories: nil)
+        }
         let nextAlerts = await sampler.alerts()
         // Gated assignment, per #1347's publication discipline: a sweep that
         // finds the same processes must not invalidate anything that observes us.
@@ -115,7 +124,7 @@ final class RuntimeProcessWatchdog: ObservableObject {
             }
             // A stopped pid leaves the candidate set on the next sweep, which
             // drops its series and clears the strip without special handling.
-            await sampleOnce()
+            await sampleOnce(force: true)
         }
     }
 

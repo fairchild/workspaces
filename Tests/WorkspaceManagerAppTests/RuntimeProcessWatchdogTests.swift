@@ -93,6 +93,41 @@ struct RuntimeProcessWatchdogTests {
         #expect(await stopped.all == [RuntimeProcessIdentity(pid: 101, startedAt: Self.started)])
     }
 
+    @Test("A successful stop clears the alert without waiting out the cadence")
+    func successfulStopClearsTheAlertImmediately() async {
+        // The rate limit is deliberately longer than the stop takes, which is the
+        // real-world shape: SIGTERM lands well inside the sampler's minimum
+        // interval. A rate-limited re-sample would return the cached ledger, leave
+        // the dead process on screen, and let a second Stop mark it unstoppable.
+        let provider = MutableRuntimeProcessProvider(
+            processes: Self.processes(runawayFootprint: 9 * 1_024 * 1_024 * 1_024)
+        )
+        let sampler = RuntimeDiagnosticsSampler(
+            provider: provider,
+            processIdentifier: { 100 },
+            minimumSampleInterval: 600
+        )
+        let watchdog = RuntimeProcessWatchdog(
+            sampler: sampler,
+            cadence: 3_600,
+            stopProcess: { identity in
+                await provider.remove(pid: identity.pid)
+                return true
+            }
+        )
+        await watchdog.sampleOnce()
+        guard let alert = watchdog.alerts.first else {
+            Issue.record("expected an alert to stop")
+            return
+        }
+
+        watchdog.stop(alert: alert)
+        await settle(until: { await MainActor.run { watchdog.alerts.isEmpty } })
+
+        #expect(watchdog.alerts.isEmpty)
+        #expect(watchdog.unstoppable.isEmpty)
+    }
+
     @Test("A process that refuses to stop stays visible, marked as unstoppable")
     func unstoppableProcessStaysVisible() async {
         let watchdog = RuntimeProcessWatchdog(
@@ -153,19 +188,23 @@ struct RuntimeProcessWatchdogTests {
 
     fileprivate static let started = Date(timeIntervalSince1970: 1_000)
 
+    fileprivate static func processes(runawayFootprint: Int64) -> [RuntimeProcessSample] {
+        [
+            RuntimeProcessSample(
+                pid: 100, parentPID: 1, name: "WorkSpaces", command: "WorkSpaces",
+                cpuPercent: 0, residentMemoryBytes: 512 * 1_024 * 1_024,
+                startedAt: started),
+            RuntimeProcessSample(
+                pid: 101, parentPID: 100, name: "codex", command: "codex",
+                cpuPercent: 0, residentMemoryBytes: runawayFootprint,
+                startedAt: started),
+        ]
+    }
+
     private func makeSampler(runawayFootprint: Int64) -> RuntimeDiagnosticsSampler {
         RuntimeDiagnosticsSampler(
             provider: FixedRuntimeProcessProvider(
-                processes: [
-                    RuntimeProcessSample(
-                        pid: 100, parentPID: 1, name: "WorkSpaces", command: "WorkSpaces",
-                        cpuPercent: 0, residentMemoryBytes: 512 * 1_024 * 1_024,
-                        startedAt: Self.started),
-                    RuntimeProcessSample(
-                        pid: 101, parentPID: 100, name: "codex", command: "codex",
-                        cpuPercent: 0, residentMemoryBytes: runawayFootprint,
-                        startedAt: Self.started),
-                ]
+                processes: Self.processes(runawayFootprint: runawayFootprint)
             ),
             processIdentifier: { 100 },
             minimumSampleInterval: 0
@@ -189,6 +228,24 @@ private actor StoppedIdentities {
 
     func record(_ identity: RuntimeProcessIdentity) {
         all.append(identity)
+    }
+}
+
+/// A provider whose table can change, so a test can retire the process it just
+/// asked the watchdog to stop.
+private actor MutableRuntimeProcessProvider: RuntimeProcessSnapshotProviding {
+    private var table: [RuntimeProcessSample]
+
+    init(processes: [RuntimeProcessSample]) {
+        self.table = processes
+    }
+
+    func remove(pid: Int32) {
+        table.removeAll { $0.pid == pid }
+    }
+
+    func processes() async throws -> [RuntimeProcessSample] {
+        table
     }
 }
 
