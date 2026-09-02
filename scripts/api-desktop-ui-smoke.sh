@@ -9,10 +9,15 @@
 #   1. Launch the debug app headless-safe with operator scope enabled.
 #   2. Read the repo target with `workspaces workspace list`, then create a
 #      local workspace with `workspaces workspace create`.
-#   3. Read the workspace target with `workspaces workspace list`, then reselect
-#      the workspace with `workspaces workspace select` after the app parks on
-#      the repo terminal. Repo selection is app-side because no reviewed
-#      repo-select operator verb exists.
+#   3. Answer each `awaiting_api_repo_terminal` handoff with `workspaces
+#      automation repo terminal <repo-id>`, so the walk's repo step crosses the
+#      socket like the rest of it (#958). The app holds at the handoff and waits
+#      for the attach this verb produces instead of driving the gesture itself.
+#   4. Read the workspace target with `workspaces workspace list`, then reselect
+#      the workspace with `workspaces workspace select`.
+#
+# Every selection in the daily-driver walk — workspace, repo, workspace — is
+# therefore driven from outside the app.
 #
 # Artifacts land under output/api-desktop-ui-smoke/<timestamp>/. Setup/teardown
 # (run dir, disposable repo, app launch/kill, unconditional cleanup) is shared
@@ -84,11 +89,99 @@ smoke_write_summary() {
 - Events: $EVENTS_PATH
 - Create result: $RUN_DIR/create-result.json
 - Select result: $RUN_DIR/select-result.json
-- Repo selection driver: app-side handoff; no reviewed repo-select operator verb exists yet
+- Repo selection driver: external \`workspaces automation repo terminal\` (#958)
 EOF
     if [[ -n "$LAUNCH_LOG_PATH" && -f "$LAUNCH_LOG_PATH" ]]; then
         cp "$LAUNCH_LOG_PATH" "$RUN_DIR/launch.log" 2>/dev/null || true
     fi
+}
+
+# Prints the repoID carried by the <n>th (1-based) awaiting_api_repo_terminal
+# milestone, or "" when that many have not landed yet.
+repo_terminal_handoff_id() {
+    python3 - "$EVENTS_PATH" "$1" <<'HANDOFF_PY'
+import json, sys
+from pathlib import Path
+path, occurrence = Path(sys.argv[1]), int(sys.argv[2])
+handoffs = []
+if path.exists():
+    # errors="replace" for the same reason smoke_events.py uses it: a write torn
+    # mid-multibyte would raise before the JSON handler below ever sees the line.
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            # The app appends while this polls; a half-written final line is
+            # normal and becomes readable on the next pass. smoke_events.py
+            # skips torn records for the same reason.
+            continue
+        if event.get("type") == "awaiting_api_repo_terminal":
+            handoffs.append(event.get("repoID") or "")
+print(handoffs[occurrence - 1] if len(handoffs) >= occurrence else "")
+HANDOFF_PY
+}
+
+# The verb has to report the attach it made, not merely exit 0 — an "opened, no
+# terminal attached" result is the walk quietly losing its repo step.
+assert_repo_terminal_result() {
+    python3 - "$1" "$2" <<'REPO_RESULT_PY'
+import json, sys
+from pathlib import Path
+result, label = json.loads(Path(sys.argv[1]).read_text()), sys.argv[2]
+if not result.get("attachedTerminal"):
+    print(f"ASSERTION FAILED: repo.terminal ({label}) attached no terminal: {result}", file=sys.stderr)
+    sys.exit(1)
+if not result.get("attachedSurfaceID"):
+    print(f"ASSERTION FAILED: repo.terminal ({label}) reported no surface: {result}", file=sys.stderr)
+    sys.exit(1)
+print(f"OK: repo.terminal ({label}) attached surface {result['attachedSurfaceID']} at {result.get('directoryPath')}")
+REPO_RESULT_PY
+}
+
+# Blocks for the <n>th repo-terminal handoff, then answers it with the operator
+# verb. The app is holding its own attach wait while this runs, so a round trip
+# slow enough to matter surfaces as that wait expiring rather than as a hang.
+drive_repo_terminal_handoff() {
+    local occurrence="$1" label="$2" repo_id=""
+    local deadline=$(( $(date +%s) + TOTAL_TIMEOUT_SECONDS ))
+    while (( $(date +%s) < deadline )); do
+        repo_id="$(repo_terminal_handoff_id "$occurrence")"
+        [[ -n "$repo_id" ]] && break
+        if [[ "$(smoke_event_index failure)" != "-1" ]]; then
+            fail "App reported a failure milestone: $(smoke_read_event_field message failure)"
+        fi
+        sleep 1
+    done
+    [[ -n "$repo_id" ]] || fail "Timed out waiting for repo-terminal handoff #$occurrence"
+
+    log "Driving API repo terminal ($label): workspaces automation repo terminal $repo_id"
+    "$CLI_BIN" automation repo terminal "$repo_id" --json \
+        | tee "$RUN_DIR/repo-terminal-$label.json"
+    assert_repo_terminal_result "$RUN_DIR/repo-terminal-$label.json" "$label"
+}
+
+# smoke_cleanup_app signals and returns; it never establishes that the process
+# is gone, and a signalled-but-alive app can still append to the JSONL the
+# assertion is about to read once. Escalate and confirm, so quiescence is a fact
+# rather than an assumption.
+wait_for_app_exit() {
+    [[ -n "${APP_PID:-}" ]] || return 0
+    local deadline=$(( $(date +%s) + 15 ))
+    while (( $(date +%s) < deadline )); do
+        kill -0 "$APP_PID" >/dev/null 2>&1 || { log "App $APP_PID exited."; return 0; }
+        sleep 1
+    done
+    log "App $APP_PID ignored SIGTERM; escalating to SIGKILL."
+    kill -9 "$APP_PID" >/dev/null 2>&1 || true
+    deadline=$(( $(date +%s) + 10 ))
+    while (( $(date +%s) < deadline )); do
+        kill -0 "$APP_PID" >/dev/null 2>&1 || { log "App $APP_PID exited after SIGKILL."; return 0; }
+        sleep 1
+    done
+    fail "App $APP_PID is still running after SIGKILL; refusing to assert on a stream that can still grow."
 }
 
 workspace_list_json() {
@@ -212,6 +305,7 @@ def index_of(kind):
 required = [
     "launch_ready",
     "repo_ready",
+    "awaiting_api_repo_terminal",
     "awaiting_api_create",
     "workspace_created",
     "sidebar_updated",
@@ -259,6 +353,40 @@ workspace_after_select = [
     event for index, event in attaches
     if index > await_select and event.get("selectionKind") == "workspace"
 ]
+
+# The repo step is externally driven now (#958): each repo attach must follow an
+# awaiting_api_repo_terminal handoff, which is what makes it the verb's work and
+# not the app's. Two handoffs, one before create and one mid-walk.
+repo_handoffs = [index for index, event in enumerate(events)
+                 if event.get("type") == "awaiting_api_repo_terminal"]
+if len(repo_handoffs) != 2:
+    fail(f"expected 2 repo-terminal handoffs, saw {len(repo_handoffs)}")
+if not (repo_handoffs[0] < await_create < repo_handoffs[1] < await_select):
+    fail(
+        "repo-terminal handoffs were not one before create and one before select: "
+        f"{repo_handoffs} against create={await_create} select={await_select}"
+    )
+
+repo_attach_indices = [index for index, event in attaches if event.get("selectionKind") == "repo"]
+
+# Each handoff needs EXACTLY ONE attach before the next handoff. "At least one"
+# would pass a run where the app parked itself right after announcing the
+# handoff and the verb then attached a second time — the regression this lane
+# exists to catch, wearing the evidence of the fix.
+handoff_bounds = repo_handoffs[1:] + [len(events)]
+for handoff, next_handoff in zip(repo_handoffs, handoff_bounds):
+    answering = [index for index in repo_attach_indices if handoff < index < next_handoff]
+    if len(answering) != 1:
+        fail(
+            f"expected exactly 1 repo terminal attach answering the handoff at index "
+            f"{handoff}, saw {len(answering)} at {answering} — 0 means the verb never ran, "
+            "more than 1 means something attached the repo terminal besides the verb"
+        )
+
+# And nothing may attach the repo terminal before the first handoff: an attach
+# there is the app parking itself, which is the thing this lane stopped doing.
+if any(index < repo_handoffs[0] for index in repo_attach_indices):
+    fail("a repo terminal attached before any handoff — the app parked itself")
 
 if not repo_before_create:
     fail("repo terminal did not attach before API create handoff")
@@ -313,6 +441,9 @@ main() {
         "WORKSPACES_AUTOMATION_CREATE_DRIVER=api" \
         "WORKSPACES_AUTOMATION_SELECT_DRIVER=api"
 
+    log "Answering the repo-terminal handoff that precedes create..."
+    drive_repo_terminal_handoff 1 before-create
+
     log "Waiting for API create handoff..."
     smoke_wait_for_event awaiting_api_create
 
@@ -324,6 +455,9 @@ main() {
     log "Driving API create: workspaces workspace create $repo_id $WORKSPACE_NAME"
     "$CLI_BIN" workspace create "$repo_id" "$WORKSPACE_NAME" --json | tee "$RUN_DIR/create-result.json"
     assert_create_result
+
+    log "Answering the repo-terminal handoff in the middle of the walk..."
+    drive_repo_terminal_handoff 2 walk-repo-step
 
     log "Waiting for API select handoff..."
     smoke_wait_for_event awaiting_api_select
@@ -339,13 +473,24 @@ main() {
 
     log "Waiting for scenario completion..."
     smoke_wait_for_event scenario_complete
-    assert_api_milestone_sequence | tee "$RUN_DIR/assertions.log"
 
+    # The snapshot needs a live app, so it comes first.
     if "$CLI_BIN" window snapshot --out "$RUN_DIR/final.png" >/dev/null 2>&1; then
         log "Captured final window snapshot: $RUN_DIR/final.png"
     else
         log "Window snapshot unavailable (likely a locked screen) — JSONL + API results stand as evidence."
     fi
+
+    # Then stop the app BEFORE asserting. The assertion reads the JSONL once, and
+    # while the app lives it can still append — a repo attach written after that
+    # read would pass unseen, which is the app parking itself on the way out. A
+    # settle only narrows that window; quiescing the producer closes it, because
+    # a dead app cannot append to the file being asserted on. Idempotent:
+    # finalize calls the same helper again and it no-ops on a gone process.
+    log "Stopping the app so the milestone stream is final before asserting..."
+    smoke_cleanup_app
+    wait_for_app_exit
+    assert_api_milestone_sequence | tee "$RUN_DIR/assertions.log"
 
     RUN_STATUS="passed"
     smoke_finalize_and_exit 0 "PASS — API-driven lane created and reselected the workspace through operator verbs."

@@ -157,8 +157,7 @@ struct MainWindowAutomationGestureVerbs {
             dependencies.smokeDriver.noteAPIWorkspaceCreateCompleted(
                 repoID: effect.repoID,
                 workspaceID: effect.workspaceID,
-                repos: dependencies.repos(),
-                parkOnRepoTerminal: { dependencies.selectRepoTerminal($0) }
+                repos: dependencies.repos()
             )
         }
         return .completed(

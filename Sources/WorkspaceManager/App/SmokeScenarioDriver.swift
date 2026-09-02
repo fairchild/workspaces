@@ -110,14 +110,26 @@ struct SmokeScenarioSidebarContext {
             if desktopUI.usesAPICreateDriver {
                 let attachBaselineBeforeRepoPark = desktopUI.terminalAttachCount
                 let focusBaselineBeforeRepoPark = desktopUI.surfaceFocusCount
-                context.selectRepoTerminal(repo)
+                // Only the full parity configuration hands the repo park outside (#958).
+                // api-create-smoke.sh enables the create driver alone and answers no
+                // repo-terminal handoff, so externalizing on that flag by itself would
+                // strand that lane for the whole wait and then fail its repo-attach
+                // assertion. Same both-drivers condition noteAPIWorkspaceCreateCompleted uses.
+                let repoParkIsExternal = desktopUI.usesAPISelectDriver
+                if repoParkIsExternal {
+                    await desktopUI.noteAwaitingAPIRepoTerminal(repo: repo)
+                } else {
+                    context.selectRepoTerminal(repo)
+                }
+                // A round trip needs a wider budget than an in-process gesture.
+                let parkTimeout: Duration = repoParkIsExternal ? .seconds(60) : .seconds(15)
                 _ = await desktopUI.waitForTerminalAttach(
                     after: attachBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: parkTimeout
                 )
                 _ = await desktopUI.waitForSurfaceFocus(
                     after: focusBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: parkTimeout
                 )
                 await desktopUI.noteAwaitingAPICreate(repo: repo)
                 return
@@ -383,14 +395,14 @@ struct SmokeScenarioSidebarContext {
             }
         }
 
-        /// After an API-driven `workspace.create` that selected the new workspace, park the
-        /// active surface on the repo terminal and hand the reselect to the external
-        /// `workspace.select` verb. Only fires when both API drivers are live.
+        /// After an API-driven `workspace.create` that selected the new workspace, hand the walk's
+        /// repo step to the external `repo.terminal` verb and then the reselect to `workspace.select`.
+        /// This is the middle of the daily-driver walk — workspace → repo → workspace — and the app
+        /// no longer drives any of it (#958). Only fires when both API drivers are live.
         func noteAPIWorkspaceCreateCompleted(
             repoID: UUID,
             workspaceID: UUID,
-            repos: [Repo],
-            parkOnRepoTerminal: @escaping @MainActor (Repo) -> Void
+            repos: [Repo]
         ) {
             guard desktopUI.usesAPICreateDriver, desktopUI.usesAPISelectDriver else { return }
             guard
@@ -400,14 +412,14 @@ struct SmokeScenarioSidebarContext {
             Task { @MainActor in
                 let attachBaselineBeforeRepoPark = desktopUI.terminalAttachCount
                 let focusBaselineBeforeRepoPark = desktopUI.surfaceFocusCount
-                parkOnRepoTerminal(repo)
+                await desktopUI.noteAwaitingAPIRepoTerminal(repo: repo)
                 _ = await desktopUI.waitForTerminalAttach(
                     after: attachBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: .seconds(60)
                 )
                 _ = await desktopUI.waitForSurfaceFocus(
                     after: focusBaselineBeforeRepoPark,
-                    timeout: .seconds(15)
+                    timeout: .seconds(60)
                 )
                 await desktopUI.noteAwaitingAPISelect(workspace: workspace)
             }
@@ -452,8 +464,7 @@ struct SmokeScenarioSidebarContext {
         func noteAPIWorkspaceCreateCompleted(
             repoID: UUID,
             workspaceID: UUID,
-            repos: [Repo],
-            parkOnRepoTerminal: @escaping @MainActor (Repo) -> Void
+            repos: [Repo]
         ) {}
         func waitForFixtureContinuitySeed() async {}
     }

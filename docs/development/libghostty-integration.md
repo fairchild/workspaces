@@ -345,7 +345,7 @@ Use this exact loop in future sessions to avoid stale-build confusion:
    - gate semantics: terminal-attach and follows-selection are hard gates; `surface_focused` is best-effort — the lane is scheduled non-PR-blocking for now
    - API parity lane: `./scripts/api-desktop-ui-smoke.sh --no-build`
    - repeated comparison report: `uv run --script scripts/desktop-ui-smoke-parity.py --runs 3 --no-build`
-   - the API lane drives `workspace.create` and `workspace.select` through the operator socket; repo selection remains app-side until a reviewed repo-select verb exists
+   - the API lane drives every selection in the walk through the operator socket: `workspace.create`, then `repo.terminal` for the repo step, then `workspace.select` back to the workspace (#958). The app announces each repo step with an `awaiting_api_repo_terminal` milestone and waits for the attach the verb produces rather than driving the gesture itself
 7. Exercise shortcuts when activation is allowed:
    - `Cmd+B` collapse/restore sidebar
    - `Cmd+D` create split pane
