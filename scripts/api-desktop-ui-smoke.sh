@@ -339,9 +339,18 @@ if not (repo_handoffs[0] < await_create < repo_handoffs[1] < await_select):
     )
 
 repo_attach_indices = [index for index, event in attaches if event.get("selectionKind") == "repo"]
-for handoff in repo_handoffs:
-    if not any(index > handoff for index in repo_attach_indices):
-        fail(f"no repo terminal attach followed the handoff at index {handoff}")
+
+# Each handoff needs its OWN attach, before the next handoff — "some attach later
+# in the run" would let one externally driven step cover for a self-parked one.
+handoff_bounds = repo_handoffs[1:] + [len(events)]
+for handoff, next_handoff in zip(repo_handoffs, handoff_bounds):
+    if not any(handoff < index < next_handoff for index in repo_attach_indices):
+        fail(f"no repo terminal attach answered the handoff at index {handoff}")
+
+# And nothing may attach the repo terminal before the first handoff: an attach
+# there is the app parking itself, which is the thing this lane stopped doing.
+if any(index < repo_handoffs[0] for index in repo_attach_indices):
+    fail("a repo terminal attached before any handoff — the app parked itself")
 
 if not repo_before_create:
     fail("repo terminal did not attach before API create handoff")
