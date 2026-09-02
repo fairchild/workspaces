@@ -90,9 +90,10 @@ D1_SERVICE_DIRS = (REPO_ROOT / "infra" / "feedback-store",)
 D1_QUERY_TIMEOUT_SECONDS = 60
 # Wrangler's defaults for the two migration settings a binding may override.
 D1_DEFAULT_MIGRATIONS_TABLE = "d1_migrations"
-# Interpolated into SQL, so it is confined to what an unquoted SQLite identifier can
-# be. A name outside this shape is refused rather than sent.
-D1_TABLE_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# A table name goes into SQL, so it is quoted the way wrangler quotes it rather than
+# interpolated raw. Anything that cannot survive quoting — a NUL or a newline — is
+# refused instead of sent.
+D1_UNQUOTABLE_TABLE_NAME = re.compile(r"[\x00\r\n]")
 # Wrangler's unnamed top-level tables are an environment in their own right, distinct
 # from any `[env.<name>]`. Naming it for what it is rather than for what this repo
 # happens to deploy there keeps a real `[env.production]` from colliding with it.
@@ -103,11 +104,28 @@ def missing_migrations_table(table: str) -> re.Pattern[str]:
     """Matches the one SQL failure that is an answer rather than an obstacle.
 
     A database that has never had a migration applied has no migrations table for the
-    query to read. Anchored on the table's own name and a word boundary, so a
-    differently-named missing table (`d1_migrations_v2`) still raises instead of being
-    read as "zero applied" — that would report drift nobody measured.
+    query to read. Anchored on the table's own name and on the next character not
+    continuing an identifier, so a differently-named missing table
+    (`d1_migrations_v2`, `d1_migrations-v2`) still raises instead of being read as
+    "zero applied" — that would report drift nobody measured.
+
+    The trailing class includes `-` rather than relying on `\b`, because wrangler
+    quotes table names and so permits ones a word boundary reads wrongly: after a name
+    ending in punctuation, `\b` demands a word character that the error message does
+    not have, and the missing table would fall back to a warn.
     """
-    return re.compile(rf"no such table:\s*{re.escape(table)}\b")
+    return re.compile(rf"no such table:\s*{re.escape(table)}(?![\w-])")
+
+
+def quote_identifier(name: str) -> str:
+    """A SQLite identifier, quoted the way wrangler quotes it.
+
+    Wrangler writes the migrations table name into its own queries this way, so a
+    binding may legally name a table something a bare identifier could not be.
+    Doubling the quote is what makes the name data rather than syntax.
+    """
+    escaped = name.replace('"', '""')
+    return f'"{escaped}"'
 
 
 @dataclass(frozen=True)
@@ -505,7 +523,7 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
     read it as "could not tell", which is what raising is for.
     """
     table = environment.migrations_table
-    if not D1_TABLE_NAME.match(table):
+    if not table or D1_UNQUOTABLE_TABLE_NAME.search(table):
         raise RuntimeError(f"unusable migrations_table name: {table!r}")
 
     result = subprocess.run(
@@ -517,7 +535,7 @@ def applied_d1_migrations(environment: D1Environment, service_dir: Path) -> set[
             "--remote",
             "--json",
             "--command",
-            f"SELECT name FROM {table} ORDER BY name",
+            f"SELECT name FROM {quote_identifier(table)} ORDER BY name",
         ],
         cwd=service_dir,
         text=True,

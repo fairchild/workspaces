@@ -362,6 +362,32 @@ class MigrationsTableTests(unittest.TestCase):
 
         self.assertEqual({env.migrations_table for env in found}, {"d1_migrations"})
 
+    def test_a_hyphenated_table_is_quoted_rather_than_refused(self) -> None:
+        """Wrangler quotes the identifier, so a name a bare identifier could not be is legal.
+
+        Refusing it would be a warn about this script rather than about the database.
+        """
+        captured: dict[str, object] = {}
+
+        def fake_run(args, **kwargs):  # noqa: ARG001
+            captured["args"] = args
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="[]", stderr="")
+
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_table="schema-history",
+        )
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                audit.applied_d1_migrations(env, service_dir(tmp))
+
+        self.assertIn('SELECT name FROM "schema-history" ORDER BY name', captured["args"])
+
+    def test_a_quote_in_the_table_name_is_escaped_not_injected(self) -> None:
+        self.assertEqual(audit.quote_identifier('a"b'), '"a""b"')
+
     def test_the_custom_table_is_the_one_queried(self) -> None:
         captured: dict[str, object] = {}
 
@@ -379,7 +405,7 @@ class MigrationsTableTests(unittest.TestCase):
             with tempdir() as tmp:
                 audit.applied_d1_migrations(env, service_dir(tmp))
 
-        self.assertIn("SELECT name FROM schema_history ORDER BY name", captured["args"])
+        self.assertIn('SELECT name FROM "schema_history" ORDER BY name', captured["args"])
 
     def test_a_missing_custom_table_is_zero_applied_not_a_warn(self) -> None:
         """The fresh-database reading follows the configured name, not the default."""
@@ -404,17 +430,88 @@ class MigrationsTableTests(unittest.TestCase):
 
         self.assertEqual(applied, set())
 
-    def test_a_table_name_that_is_not_an_identifier_is_refused(self) -> None:
-        """The name is interpolated into SQL, so it is checked before it is sent."""
+    def test_a_statement_in_the_table_name_stays_one_identifier(self) -> None:
+        """Quoting is what keeps the name data: it cannot end the SELECT and start a DROP."""
+        captured: dict[str, object] = {}
+
+        def fake_run(args, **kwargs):  # noqa: ARG001
+            captured["args"] = args
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="[]", stderr="")
+
         env = audit.D1Environment(
             name="top-level",
             database_name="db",
             migrations_dir="migrations",
             migrations_table="d1_migrations; DROP TABLE feedback",
         )
-        with tempdir() as tmp:
-            with self.assertRaises(RuntimeError):
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
                 audit.applied_d1_migrations(env, service_dir(tmp))
+
+        query = [arg for arg in captured["args"] if isinstance(arg, str) and "SELECT" in arg][0]
+        self.assertIn('"d1_migrations; DROP TABLE feedback"', query)
+        self.assertEqual(query.count(";"), 1)
+
+    def test_a_missing_table_whose_name_ends_in_punctuation_is_still_zero_applied(self) -> None:
+        """The boundary has to survive the names quoting makes legal.
+
+        A word boundary after a name ending in `-` demands a word character the error
+        message does not have, so the missing table would fall back to a warn and
+        `--strict` would exit zero on maximal drift — the same bypass, one layer down.
+        """
+
+        def fake_run(*args, **kwargs):  # noqa: ARG001
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout=json.dumps(
+                    {"error": {"text": "no such table: schema-history-: SQLITE_ERROR [code: 7500]"}}
+                ),
+                stderr="",
+            )
+
+        env = audit.D1Environment(
+            name="top-level",
+            database_name="db",
+            migrations_dir="migrations",
+            migrations_table="schema-history-",
+        )
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                applied = audit.applied_d1_migrations(env, service_dir(tmp))
+
+        self.assertEqual(applied, set())
+
+    def test_a_hyphen_suffixed_other_table_still_warns(self) -> None:
+        """`d1_migrations-v2` is a different table, so it is an obstacle, not an answer."""
+
+        def fake_run(*args, **kwargs):  # noqa: ARG001
+            return subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout=json.dumps({"error": {"text": "no such table: d1_migrations-v2"}}),
+                stderr="",
+            )
+
+        with unittest.mock.patch.object(audit.subprocess, "run", fake_run):
+            with tempdir() as tmp:
+                root = service_dir(tmp, "0001_feedback.sql")
+                check = audit.d1_environment_check(environment(), root)
+
+        self.assertEqual(check.status, "warn")
+
+    def test_a_table_name_that_cannot_be_quoted_is_refused(self) -> None:
+        """A newline or a NUL cannot survive quoting, so it is never sent."""
+        for bad in ("first\nsecond", "nul\x00byte", ""):
+            env = audit.D1Environment(
+                name="top-level",
+                database_name="db",
+                migrations_dir="migrations",
+                migrations_table=bad,
+            )
+            with tempdir() as tmp:
+                with self.assertRaises(RuntimeError):
+                    audit.applied_d1_migrations(env, service_dir(tmp))
 
 
 class MigrationsPatternTests(unittest.TestCase):
