@@ -3,11 +3,16 @@
 ## Status
 
 Accepted 2026-08-30, after a multi-day design session and an adversarial review
-that verified every load-bearing claim against the tree. Nothing below is
-implemented yet; issue #721 is rewritten as the umbrella tracking execution.
+that verified every load-bearing claim against the tree. Issue #721 is the
+umbrella tracking execution.
 
-**Staleness test:** if `rg WEB_NEXT_EXTRA_LOCAL_ORIGINS web-next/src` matches,
-Phase 1 has landed. If `HOST_ALLOWED_TOOLS` in
+**Phase 1 has landed** (#1454): the Host-gate env hook and the pairing surface
+shipped in #1465, hardened for dotted paths by #1469 and for ack/rotation by
+#1486; the streaming-through-`serve` probe and the on-device pass are recorded
+in #1465; the Read-tool jail probe's verdict is below; the runbook is
+`../development/mobile-tailnet-runbook.md`.
+
+**Staleness test:** if `HOST_ALLOWED_TOOLS` in
 `web-next/src/lib/agent-runtime/host-provider.ts` includes a write tool,
 Phase 3 has landed and the "read-only host lane" statements here are history.
 
@@ -120,22 +125,90 @@ and is never extended.
   cost, and `automation-operator-scope.md`'s boundary stands — no new verb
   semantics or trust surface from the mobile side.
 
+### Read-tool jail probe — verdict: there is no jail
+
+Phase 1 asked whether the read-only host lane can escape the workspace root
+under `--safe-mode` with `--permission-mode dontAsk`. Probed 2026-09-01 against
+a scratch repo, running the exact invocation `buildClaudeArgs` produces
+(`web-next/src/lib/agent-runtime/host-provider.ts`) with the child's working
+directory set to the workspace root, as `runClaude` spawns it.
+
+**It escapes, every way it was asked to.** Four reads, no prompt and no denial:
+
+| Probe | Path | Result |
+| --- | --- | --- |
+| Control | `src/inside.txt` | read |
+| Absolute, outside root | `<tmp>/outside/canary.txt` | read |
+| Relative traversal | `../canary-parent.txt` | read |
+| Filesystem root | `/etc/hosts` | read |
+| Home directory | `~/.claude/settings.json` | read |
+
+`Glob` also enumerates directories outside the root. Two home-directory globs
+returned a ripgrep 20-second timeout, which is a performance limit on a large
+tree and not a boundary — the direct read of a home path succeeded.
+
+So `--tools Read,LS,Glob,Grep,TodoRead` bounds the *verbs*, not the
+*filesystem*. The host lane reads anything the owner's uid can read. The
+workspace root is the model's stated context, not an enforced sandbox, and
+nothing in the current stack enforces one.
+
+**What this decides.** Scope the claim precisely, because the obvious scoping
+is wrong. `WEB_NEXT_COMPUTE_PROVIDER` sets only the *default* provider
+(`defaultComputeProvider()` returns `mock` without it). It does not restrict
+what a caller may ask for: `POST /api/sessions` accepts any registered provider
+id from the request body, and `hostProvider` is unconditionally in the registry
+(`web-next/src/lib/agent-runtime/provider.ts`). So **any token holder can select
+the host lane explicitly**, whatever the default says.
+
+The one precondition that actually gates it is `WEB_NEXT_HOST_WORKSPACE_ROOT`:
+unset, `resolveHostWorkspaceDir` fails with `host_workspace_root_unset` and no
+turn runs. That variable, not the provider default, is the switch — and this
+arc's whole purpose is to reach a node where it is set.
+
+On such a node the bearer token is not merely the primary gate, it is the only
+thing standing between a network peer and the owner's entire readable
+filesystem — SSH keys, cloud credentials, every other repo on the machine.
+Three consequences bind:
+
+1. **LAN mode stays HTTPS-pinned and native-only**, as already decided above.
+   This verdict removes the option of relaxing it: a token sniffed off shared
+   wifi does not merely expose session transcripts, it reads `~/.aws`.
+2. **Token rotation is an incident response, not a chore.** A leaked QR is a
+   full local-filesystem disclosure. The rotation procedure belongs in the
+   runbook, not in folklore (`docs/development/mobile-tailnet-runbook.md`).
+3. **Filesystem confinement is Phase 3 scope, not Phase 1's.** Phase 3 adds
+   write tools and approvals; a read boundary has to land with it or before it,
+   because "read-only" currently understates the lane's reach. Confinement
+   needs a mechanism the harness does not supply today — a sandbox profile, a
+   container, or a per-read path check in a wrapper — and choosing one is its
+   own decision.
+
+This is a finding about the harness, not a regression in this repo: no
+WorkSpaces code claims to confine reads. It is recorded because Phase 1 asked
+the question and the answer changes the posture of every later phase.
+
 ### Security conditions that must hold from the first commit
 
 1. Never let an identity header be the sole gate on a non-loopback listener.
 2. Keep the Host allowlist **exact-match** (env-driven additions included) —
    never a wildcard on `.ts.net`.
 3. Namespace session identity by node, even while one node exists.
+4. On any node with `WEB_NEXT_HOST_WORKSPACE_ROOT` set, treat the sign-in token
+   as equivalent to filesystem read access for the owner's uid — a token holder
+   can select the host lane per-request, so the provider default does not
+   contain this. See the jail-probe verdict above. Any change that widens who
+   can hold the token widens that.
 
 ## Sequence
 
 1. **Phase 0 — record** (this ADR, #721 rewrite, child issues).
-2. **Phase 1 — MVP, days:** streaming-through-`serve` probe first; Host-gate
-   env hook (`WEB_NEXT_EXTRA_LOCAL_ORIGINS`, exact-match, inert unless set,
-   honoring `X-Forwarded-Proto` — `loopbackHostOrigin` hardcodes `http://`
-   today and the sign-in redirect builds from it); Read-tool jail probe (can
-   the read-only host lane escape the workspace root under `--safe-mode` +
-   `dontAsk`? verdict recorded here); runbook; verify from the phone.
+2. **Phase 1 — MVP — done 2026-09-01 (#1454).** Streaming through `serve` does
+   not buffer (#1465: 1 s ticks arrived ~90 ms after send). The Host-gate env
+   hook `WEB_NEXT_EXTRA_LOCAL_ORIGINS` is exact-match, inert unless set, and
+   honors `X-Forwarded-Proto` so the sign-in redirect lands on the proxied
+   https origin (#1465, #1469). The Read-tool jail probe found no jail — verdict
+   above. Runbook: `../development/mobile-tailnet-runbook.md`. Verified from the
+   phone in #1465.
 3. **Phase 2 — tighten + contract:** ACL (owner, console), `/api/node`,
    bearer-header auth, contract doc + golden fixtures, roster endpoint.
 4. **Phase 3 — host lane grows writes + approvals.** The host lane is
