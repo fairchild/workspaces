@@ -96,6 +96,26 @@ final class MainWindowOrderSlot<Value> {
 struct SidebarPinnedSection {
     let workspaces: [Workspace]
     let graphRevision: Int
+
+    /// Where one workspace sits in the section, and which graph that answer came from.
+    ///
+    /// The three travel as one value because they are one fact about one graph: a row that
+    /// assembled them separately could take its position from one evaluation and its revision
+    /// from another. It is also the seam the suite builds row states through, so the derivation
+    /// cannot drift between production and the tests.
+    struct Placement: Equatable {
+        let index: Int?
+        let count: Int
+        let graphRevision: Int
+    }
+
+    func placement(of workspace: Workspace) -> Placement {
+        Placement(
+            index: workspaces.firstIndex { $0.id == workspace.id },
+            count: workspaces.count,
+            graphRevision: graphRevision
+        )
+    }
 }
 
 /// The sidebar's orderings, each behind its own fingerprint.

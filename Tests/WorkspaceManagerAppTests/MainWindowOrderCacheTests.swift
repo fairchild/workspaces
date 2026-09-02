@@ -248,7 +248,13 @@ struct MainWindowOrderCacheTests {
         let cache = MainWindowOrderCache()
         #expect(cache.activeWorkspaces(for: alpha).map(\.name) == ["a1"])
         #expect(cache.activeWorkspaces(for: beta).count == 2)
+        #expect(cache.buildCount == 2, "one build per container")
+
+        // The build count is the assertion that matters: asking for alpha again after beta has
+        // to hit, or the slot is a single-entry cache the second repo keeps evicting. Reading
+        // the result alone cannot tell a hit from a rebuild.
         #expect(cache.activeWorkspaces(for: alpha).map(\.name) == ["a1"])
+        #expect(cache.buildCount == 2, "a second container must not have evicted the first")
     }
 
     @Test("Recent buckets rebuild when the snapshot is re-taken")
@@ -283,32 +289,50 @@ struct MainWindowOrderCacheTests {
     /// `now`, and passed `calendar` only to the builder — yet the calendar is what decides the
     /// Today / This Week / Earlier boundaries. An automatic time-zone change while the app stays
     /// active moves a workspace near midnight between buckets without moving any model value.
-    @Test("A calendar change rebuilds the Recent buckets")
-    func calendarChangeRebuildsRecentBuckets() {
+    @Test("A calendar change rebuilds the Recent buckets, and moves a row across midnight")
+    func calendarChangeRebuildsRecentBuckets() throws {
+        // 2026-09-02 02:00 UTC, with the row last touched fourteen hours earlier. New York is
+        // still on 2026-09-01 and calls both today; Tokyo has already turned over, so the same
+        // row reads as yesterday. Same models, same `now` — only the calendar decides.
+        let now = Date(timeIntervalSince1970: 1_788_314_400)
+        let touched = now.addingTimeInterval(-14 * 3_600)
         let repo = repo()
-        let now = Date(timeIntervalSince1970: 1_000_000)
-        let alpha = workspace("alpha", in: repo, lastAccessedAt: now)
+        let alpha = workspace("alpha", in: repo, lastAccessedAt: touched)
         repo.workspaces = [alpha]
-        let snapshot = [alpha.id: now]
+        let snapshot = [alpha.id: touched]
 
-        var eastern = Calendar(identifier: .gregorian)
-        eastern.timeZone = TimeZone(identifier: "America/New_York") ?? .gmt
-        var tokyo = Calendar(identifier: .gregorian)
-        tokyo.timeZone = TimeZone(identifier: "Asia/Tokyo") ?? .gmt
+        func calendar(_ identifier: String) throws -> Calendar {
+            var calendar = Calendar(identifier: .gregorian)
+            calendar.timeZone = try #require(TimeZone(identifier: identifier))
+            return calendar
+        }
+        let newYork = try calendar("America/New_York")
+        let tokyo = try calendar("Asia/Tokyo")
+
+        #expect(
+            SidebarRecentArrangement.bucketKind(for: touched, now: now, calendar: newYork)
+                == .today
+        )
+        #expect(
+            SidebarRecentArrangement.bucketKind(for: touched, now: now, calendar: tokyo)
+                == .thisWeek,
+            "the fixture has to straddle a midnight, or the memo key would not matter"
+        )
 
         let cache = MainWindowOrderCache()
-        func ask(_ calendar: Calendar) {
-            _ = cache.recentBuckets(
+        func ask(_ calendar: Calendar) -> [RecentBucketKind] {
+            cache.recentBuckets(
                 repos: [repo], snapshot: snapshot, repoRootPaneCounts: [:],
-                now: now, calendar: calendar)
+                now: now, calendar: calendar
+            ).map(\.kind)
         }
 
-        ask(eastern)
-        ask(eastern)
+        #expect(ask(newYork) == [.today])
+        #expect(ask(newYork) == [.today])
         #expect(cache.buildCount == 1, "the same calendar must still hit")
 
-        ask(tokyo)
-        #expect(cache.buildCount == 2, "a different calendar must rebuild the buckets")
+        #expect(ask(tokyo) == [.thisWeek], "the row has to move buckets, not just rebuild")
+        #expect(cache.buildCount == 2)
     }
 
     /// The pin fingerprint carries `name` because the Pinned comparator falls back to it when two

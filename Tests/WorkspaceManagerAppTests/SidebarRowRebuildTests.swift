@@ -11,6 +11,14 @@ import WorkspaceManagerCore
 /// The leaf carries a closure, which is the shape every sidebar row has and the reason none of
 /// them could ever compare memberwise-equal — so a leaf that rebuilds when its neighbour changes
 /// is exactly the behaviour this slice removes.
+///
+/// What these prove and what they do not, stated because the distinction is easy to lose. They
+/// exercise `SidebarEquatableRow`, the display-state values, and — through
+/// `SidebarPinnedSection.placement(of:)` — the production derivation of a row's pin fields. They
+/// do **not** mount `SidebarView` itself, which needs seven environment dependencies and a dozen
+/// closures, so the one thing still unguarded is that `SidebarView.workspaceRow` calls that
+/// derivation rather than assembling the fields itself. Sharing `placement(of:)` is what narrows
+/// that gap to a single call site.
 @MainActor
 @Suite("Sidebar row rebuild scoping")
 struct SidebarRowRebuildTests {
@@ -140,21 +148,33 @@ struct SidebarRowRebuildTests {
         }
     }
 
-    /// The production capture shape: `workspaces` is a plain `let`, so a closure calling a method
-    /// on this view captures the array **by value** — exactly what `SidebarView` does with
-    /// `repos`, and why `togglePin` can end up renumbering superseded objects.
+    /// The production capture shape, down to which array is frozen. `SidebarView` holds
+    /// `let repos: [Repo]` and derives `allWorkspaces` as `repos.flatMap(\.workspaces)` *at call
+    /// time*, so what a retained closure freezes is the **repo** array; the workspaces it reaches
+    /// are whatever those repo objects' relationships hold when the closure runs.
+    ///
+    /// That distinction is the whole hazard. A closure holding a superseded `Repo` re-derives
+    /// from that instance's relationship and gets the graph as it was, and `pinGraphRevision` is
+    /// computed by the parent from the *fresh* `repos.flatMap(\.workspaces)` — which is exactly
+    /// the expression the closure re-derives, one evaluation later. Freezing the workspace array
+    /// here instead would have proved a fixture rather than the shipping shape.
     private struct PinRowList: View {
-        let workspaces: [Workspace]
+        let repos: [Repo]
         let cache: MainWindowOrderCache
         let recorder: PinClosureRecorder
         let counter: BodyCounter
 
         private let controller = SidebarPinController()
 
+        /// `SidebarView.allWorkspaces`, verbatim.
+        private var allWorkspaces: [Workspace] {
+            repos.flatMap(\.workspaces)
+        }
+
         var body: some View {
-            let pinned = cache.pinnedSection(in: workspaces, controller: controller)
+            let pinned = cache.pinnedSection(in: allWorkspaces, controller: controller)
             VStack(spacing: 0) {
-                ForEach(Array(workspaces.enumerated()), id: \.element.id) { index, workspace in
+                ForEach(Array(allWorkspaces.enumerated()), id: \.element.id) { index, workspace in
                     SidebarEquatableRow(state: rowState(workspace, pinned: pinned)) {
                         CountingLeaf {
                             counter.note(index)
@@ -166,19 +186,21 @@ struct SidebarRowRebuildTests {
             }
         }
 
-        /// Stands in for `SidebarView.togglePin`, which reads `allWorkspaces` off the captured
-        /// `self` and hands every one of them to `SidebarPinController` to renumber.
+        /// Stands in for `SidebarView.togglePin`, which re-derives `allWorkspaces` off the
+        /// captured `self` and hands every one of them to `SidebarPinController` to renumber.
         private func togglePin(_ workspace: Workspace) {
-            recorder.note(workspaces.map(ObjectIdentifier.init))
+            recorder.note(allWorkspaces.map(ObjectIdentifier.init))
         }
 
-        /// The pin half comes from the production cache and controller rather than from numbers
-        /// chosen here; the rest is fixture.
+        /// The pin fields come from `SidebarPinnedSection.placement(of:)` — the same production
+        /// call `SidebarView` makes, so the derivation cannot drift between here and the app. The
+        /// rest is fixture.
         private func rowState(
             _ workspace: Workspace,
             pinned: SidebarPinnedSection
         ) -> WorkspaceRowDisplayState {
-            WorkspaceRowDisplayState(
+            let placement = pinned.placement(of: workspace)
+            return WorkspaceRowDisplayState(
                 workspaceID: workspace.id,
                 identity: ObjectIdentifier(workspace),
                 name: workspace.name,
@@ -199,9 +221,9 @@ struct SidebarRowRebuildTests {
                 isPinned: workspace.isPinned,
                 isPinnable: controller.isPinnable(workspace),
                 isPinnedSectionRow: true,
-                pinnedIndex: pinned.workspaces.firstIndex { $0.id == workspace.id },
-                pinnedCount: pinned.workspaces.count,
-                pinGraphRevision: pinned.graphRevision,
+                pinnedIndex: placement.index,
+                pinnedCount: placement.count,
+                pinGraphRevision: placement.graphRevision,
                 liveStatus: nil,
                 sessionState: SidebarRowSessionState()
             )
@@ -209,10 +231,10 @@ struct SidebarRowRebuildTests {
     }
 
     private final class GraphModel: ObservableObject {
-        @Published var workspaces: [Workspace]
+        @Published var repos: [Repo]
 
-        init(workspaces: [Workspace]) {
-            self.workspaces = workspaces
+        init(repos: [Repo]) {
+            self.repos = repos
         }
     }
 
@@ -226,7 +248,7 @@ struct SidebarRowRebuildTests {
 
         var body: some View {
             PinRowList(
-                workspaces: model.workspaces,
+                repos: model.repos,
                 cache: cache,
                 recorder: recorder,
                 counter: counter
@@ -234,9 +256,9 @@ struct SidebarRowRebuildTests {
         }
     }
 
-    private func pinnedFixture(_ names: [String]) -> (Repo, [Workspace]) {
+    private func pinnedFixture(_ names: [String]) -> Repo {
         let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/repos/alpha"))
-        let workspaces = names.enumerated().map { order, name -> Workspace in
+        repo.workspaces = names.enumerated().map { order, name in
             let workspace = Workspace(
                 name: name,
                 path: URL(fileURLWithPath: "/repos/alpha/\(name)"),
@@ -245,23 +267,44 @@ struct SidebarRowRebuildTests {
             workspace.pinOrder = order
             return workspace
         }
-        repo.workspaces = workspaces
-        return (repo, workspaces)
+        return repo
     }
 
-    /// The blocker the codex pass on #1504 found, at the render level. A row keeps its
-    /// `onTogglePin` closure across a skipped body, and that closure walks the whole workspace
-    /// list. When SwiftData replaces a *peer* with an equal-valued instance, nothing about this
-    /// row's own workspace, pinned index, or pinned count moves — so before `pinGraphRevision`
-    /// the row skipped, and the next Pin or Move renumbered an object whose writes never reach
-    /// the store: a pin move that reverts on refresh, or duplicate persisted `pinOrder` values.
+    /// An equal-valued stand-in for one workspace: same id, same drawn values, same rank, a
+    /// different object. What SwiftData can hand back, and what a value-keyed fingerprint cannot
+    /// see.
+    private func replacement(for workspace: Workspace, in repo: Repo) -> Workspace {
+        let replacement = Workspace(
+            name: workspace.name,
+            path: URL(fileURLWithPath: workspace.path),
+            sourceRepo: repo,
+            lastAccessedAt: workspace.lastAccessedAt
+        )
+        replacement.id = workspace.id
+        replacement.createdAt = workspace.createdAt
+        replacement.pinOrder = workspace.pinOrder
+        replacement.status = workspace.status
+        return replacement
+    }
+
+    /// The blocker the codex pass on #1504 found, at the render level and in the shipping capture
+    /// shape. A row keeps its `onTogglePin` closure across a skipped body, and that closure
+    /// re-derives the whole workspace list from the `[Repo]` array it froze.
+    ///
+    /// So the replacement modelled here is the one that actually bites: SwiftData hands back a
+    /// `Repo` whose relationship holds a replacement for one *peer* workspace. The row under test
+    /// keeps its own workspace object, its name, its pinned index and its pinned count — nothing
+    /// it draws moves — so before `pinGraphRevision` it skipped, kept the superseded repo, and
+    /// the next Pin or Move renumbered an object whose writes never reach the store: a pin move
+    /// that reverts on refresh, or duplicate persisted `pinOrder` values.
     @Test("A replaced peer reaches the pin closure the row kept")
     func peerReplacementRefreshesTheRetainedPinClosure() {
         let counter = BodyCounter()
         let recorder = PinClosureRecorder()
         let cache = MainWindowOrderCache()
-        let (repo, original) = pinnedFixture(["mine", "peer", "third"])
-        let model = GraphModel(workspaces: original)
+        let repo = pinnedFixture(["mine", "peer", "third"])
+        let original = repo.workspaces
+        let model = GraphModel(repos: [repo])
 
         let host = NSHostingView(
             rootView: PinRowHost(
@@ -276,27 +319,27 @@ struct SidebarRowRebuildTests {
             "the closure starts out walking the graph it was built with"
         )
 
-        let replacement = Workspace(
-            name: peer.name,
-            path: URL(fileURLWithPath: peer.path),
-            sourceRepo: repo,
-            lastAccessedAt: peer.lastAccessedAt
-        )
-        replacement.id = peer.id
-        replacement.createdAt = peer.createdAt
-        replacement.pinOrder = peer.pinOrder
+        // The superseding repo: same values, a different object, and a replacement for one peer
+        // in its relationship. `mine` and `third` are carried across unchanged, so the row under
+        // test has nothing of its own to notice.
+        let refreshedRepo = Repo(name: repo.name, localPath: URL(fileURLWithPath: repo.localPath))
+        refreshedRepo.id = repo.id
+        let refreshedWorkspaces = [mine, replacement(for: peer, in: refreshedRepo), original[2]]
+        refreshedRepo.workspaces = refreshedWorkspaces
 
-        let refreshed = [mine, replacement, original[2]]
-        model.workspaces = refreshed
+        model.repos = [refreshedRepo]
         settle(host)
 
+        // Reparenting moves `mine` and `third` onto the superseding repo, which is what leaves
+        // the old instance holding the superseded peer alone. A closure still deriving from it
+        // would renumber a one-element list — the corruption in its starkest form.
         let walked = recorder.walk(mine.id)
         #expect(
             !walked.contains(ObjectIdentifier(peer)),
             "the row must not still be handing the superseded peer to the pin controller"
         )
         #expect(
-            walked == refreshed.map(ObjectIdentifier.init),
+            walked == refreshedWorkspaces.map(ObjectIdentifier.init),
             "it must walk the graph SwiftData now holds"
         )
     }
@@ -308,8 +351,8 @@ struct SidebarRowRebuildTests {
         let counter = BodyCounter()
         let recorder = PinClosureRecorder()
         let cache = MainWindowOrderCache()
-        let (_, workspaces) = pinnedFixture(["mine", "peer", "third"])
-        let model = GraphModel(workspaces: workspaces)
+        let repo = pinnedFixture(["mine", "peer", "third"])
+        let model = GraphModel(repos: [repo])
 
         let host = NSHostingView(
             rootView: PinRowHost(
@@ -318,10 +361,10 @@ struct SidebarRowRebuildTests {
         settle(host)
 
         let baseline = counter.counts
-        model.workspaces = workspaces
+        model.repos = [repo]
         settle(host)
 
-        for index in workspaces.indices {
+        for index in repo.workspaces.indices {
             #expect(counter.counts[index] == baseline[index], "row \(index) rebuilt")
         }
     }

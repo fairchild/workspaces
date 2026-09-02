@@ -876,7 +876,7 @@ struct SidebarView: View {
         let key = sessionKey(for: workspace)
         let sessionState = rowSessionState(for: key)
         let isSelected = selectedWorkspace?.id == workspace.id
-        let pinned = pinnedGraph
+        let pinPlacement = pinnedGraph.placement(of: workspace)
         let state = WorkspaceRowDisplayState(
             workspaceID: workspace.id,
             identity: ObjectIdentifier(workspace),
@@ -898,9 +898,9 @@ struct SidebarView: View {
             isPinned: workspace.isPinned,
             isPinnable: pinController.isPinnable(workspace),
             isPinnedSectionRow: placement.isPinnedSection,
-            pinnedIndex: pinned.workspaces.firstIndex { $0.id == workspace.id },
-            pinnedCount: pinned.workspaces.count,
-            pinGraphRevision: pinned.graphRevision,
+            pinnedIndex: pinPlacement.index,
+            pinnedCount: pinPlacement.count,
+            pinGraphRevision: pinPlacement.graphRevision,
             // The live line and its elapsed timer belong to the selected row alone, which caps
             // the sidebar's running clocks at that one workspace's visible rows.
             liveStatus: isSelected
