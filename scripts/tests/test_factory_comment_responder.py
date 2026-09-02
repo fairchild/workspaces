@@ -254,6 +254,14 @@ class FactoryCommentResponderTests(unittest.TestCase):
             ),
             "empty section": "## Writing Voice\n\n## Debugging Heuristic\n\n- Probe.\n",
             "over the byte cap": "## Writing Voice\n\n- " + ("x" * 9_000) + "\n",
+            "heading only inside a fenced example": (
+                "# Repo Memory\n\n"
+                "Documenting the shape:\n\n"
+                "```markdown\n## Writing Voice\n\n- Example only.\n```\n"
+            ),
+            "tilde-fenced example": (
+                "# Repo Memory\n\n~~~\n## Writing Voice\n\n- Example only.\n~~~\n"
+            ),
         }
         with tempfile.TemporaryDirectory() as tmp:
             for name, text in cases.items():
@@ -262,18 +270,31 @@ class FactoryCommentResponderTests(unittest.TestCase):
                 with self.subTest(case=name), self.assertRaises(payload.PayloadError):
                     payload.writing_voice_rules(memory)
 
+    def test_a_fenced_example_does_not_shadow_the_real_section(self) -> None:
+        # A file may document the section's shape and still carry it.
+        text = (
+            "# Repo Memory\n\n"
+            "The canonical section looks like this:\n\n"
+            "```markdown\n## Writing Voice\n\n- Example only.\n```\n\n"
+            "## Writing Voice\n\n- Start with the point.\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            memory = Path(tmp) / "MEMORY.md"
+            memory.write_text(text, encoding="utf-8")
+            section = payload.writing_voice_rules(memory)
+
+        self.assertEqual(section, "- Start with the point.")
+        self.assertNotIn("Example only.", section)
+
     def test_prepare_stops_when_the_writing_voice_section_is_missing(self) -> None:
+        # Reaching prepare's prompt step with no rules would post unstyled prose,
+        # so the whole run must fail before the model is invoked.
         with tempfile.TemporaryDirectory() as tmp:
             memory = Path(tmp) / "MEMORY.md"
             memory.write_text("# Repo Memory\n\n## Release Discipline\n", encoding="utf-8")
             with mock.patch.object(payload, "REPO_MEMORY_PATH", memory):
                 with self.assertRaises(payload.PayloadError):
-                    payload.build_prompt(
-                        self.make_context(),
-                        {"title": "t", "body": "b", "html_url": "u"},
-                        "issue",
-                        [],
-                    )
+                    self.run_prepare_with_body("Can you restate the CI story?")
 
     def test_prompt_inlines_writing_voice_because_the_model_has_no_tools(self) -> None:
         # The reply step runs `claude -p --disallowedTools "*"`, so a pointer to
