@@ -2792,7 +2792,13 @@ struct ContentView: View {
             for hostSessionID in ownedHostSessionIDsByTmuxName[sessionName] ?? [] {
                 outcome = await terminator.terminate(
                     hostSessionID: hostSessionID, requiringCreation: true)
+                // Keep looking on both "not mine" and "already gone". A `.notLive` answer is
+                // about *this* host session's recorded id, and says nothing about whether a
+                // sibling sharing the same directory-derived name still has a live record
+                // worth acting on. Stopping there would leave a killable seed behind
+                // whenever the dead one happened to be evaluated first.
                 if case .notAttributable = outcome { continue }
+                if case .notLive = outcome { continue }
                 break
             }
             switch outcome {
