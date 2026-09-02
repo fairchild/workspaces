@@ -274,6 +274,8 @@ def render_claude_prompt(payload: dict[str, Any]) -> str:
             f"- Approval label: {APPROVAL_LABEL}",
             "",
             "Work only on the approved request. If the summary is insufficient, ask clarifying questions on the target thread instead of inferring hidden intent from public text.",
+            "",
+            "Before writing any comment, pull request body, or issue body, read `.agents/MEMORY.md` § Writing Voice in the checked-out repository and follow it. This lane checks the repository out and grants read access, so open the file rather than guessing at the rules.",
         ]
     )
 
