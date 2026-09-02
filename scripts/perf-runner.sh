@@ -85,21 +85,43 @@ cleanup_preferences_suite() {
 # present-if-reported is how a truncated line — or tooling predating the field — reaches a
 # recorded row labelled isolated against a domain the lane neither owns nor cleans up.
 assert_preferences_isolated() {
-    local log_file="$1" line domain isolated suite
-    # `|| true` because a no-match grep exits 1, and under `set -e` with `pipefail` that
-    # aborts the run at this assignment — failing closed, but silently, which is the one
-    # thing this branch exists to avoid.
+    local log_file="$1" entry line domain isolated suite
+    # `|| true` because a reader that finds nothing may exit non-zero, and under `set -e`
+    # with `pipefail` that aborts the run at this assignment — failing closed, but
+    # silently, which is the one thing this branch exists to avoid.
     # Anchored on the marker rather than on `domain=`, so a final entry cut before its
     # first field is still the entry judged. Anchoring on the field made such a line
     # invisible and quietly promoted the resolution before it — which, on a relaunch that
     # fell back, is the one line in the log that does not describe the launch measured.
-    line="$(grep -o '\[LaunchPreferences\].*' "$log_file" 2>/dev/null | tail -n 1 || true)"
-    if [[ -z "$line" ]]; then
+    #
+    # The marker has to stand as its own field. Matched as a substring it is
+    # impersonable: an installed capture carries every message the process and its
+    # subsystem emit, so a logged path holding the literal text reads as the newest
+    # resolution and displaces the one that decided the launch — the single shape where
+    # more log output makes this check weaker rather than stronger.
+    #
+    # `entry:` prefixes the result so an entry with no fields after the marker — the
+    # truncated shape — is still distinguishable from a log that has no marker at all.
+    entry="$(awk '
+        { sub(/\r$/, "") }
+        {
+            for (i = 1; i <= NF; i++)
+                if ($i == "[LaunchPreferences]") {
+                    fields = ""
+                    for (j = i + 1; j <= NF; j++) fields = fields " " $j
+                    last = fields
+                    found = 1
+                }
+        }
+        END { if (found) print "entry:" last }
+    ' "$log_file" 2>/dev/null || true)"
+    if [[ -z "$entry" ]]; then
         echo "  [preferences] no [LaunchPreferences] line in $log_file" >&2
         echo "  [preferences] the app did not report which defaults domain backed the launch — an app" >&2
         echo "  [preferences] predating WORKSPACES_PREFERENCES_SUITE cannot be measured by this lane." >&2
         return 1
     fi
+    line="${entry#entry:}"
     # Field-anchored rather than a substring match: the suite name is free text and a
     # loose pattern would happily read a value out of the middle of one.
     # Prints nothing unless the key appears exactly once, so a repeated field reads as

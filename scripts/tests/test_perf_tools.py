@@ -314,6 +314,31 @@ class PreferencesIsolationReadBackTests(unittest.TestCase):
         )
         self.assert_refused(body, "no readable domain=")
 
+    def test_the_marker_must_be_a_field_of_its_own(self) -> None:
+        """A path that happens to contain the marker is not a resolution.
+
+        The installed capture carries every message the process and its subsystem
+        emit, so a logged path or identifier can hold the literal text. Matched as a
+        substring, such a message becomes the newest entry and replaces the genuine
+        resolution before it — the one shape where more log output makes the check
+        weaker. A real entry stands as its own whitespace-delimited field.
+        """
+        genuine_failure = f"{self.PREFIX}domain=standard"
+        impostors = [
+            f"2026-08-31 07:58:20.000 I WorkspaceManager[1:2] [Perf] root=/tmp/[LaunchPreferences] "
+            f"domain=scratch suite={self.SUITE} isolated=true",
+            f"2026-08-31 07:58:20.000 I WorkspaceManager[1:2] "
+            f"[LaunchPreferences]domain=scratch suite={self.SUITE} isolated=true",
+        ]
+        for impostor in impostors:
+            with self.subTest(impostor=impostor):
+                self.assert_refused(f"{genuine_failure}\n{impostor}\n", "resolved domain=standard")
+
+    def test_a_carriage_return_does_not_survive_into_the_last_field(self) -> None:
+        """A CRLF log must read the same as an LF one, or the lanes disagree."""
+        line = f"{self.PREFIX}domain=scratch suite={self.SUITE} reset=false isolated=true"
+        self.assertEqual(self.run_check(line + "\r\n").returncode, 0)
+
     def test_a_field_repeated_on_one_line_has_no_answer(self) -> None:
         """Two values for one key is unreadable, including when the second is empty.
 
@@ -954,6 +979,36 @@ class DebugLaneIsolationTests(unittest.TestCase):
 
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("no readable domain", result.stdout)
+
+    def test_the_marker_must_be_a_field_of_its_own(self) -> None:
+        for impostor in (
+            f"[Perf] root=/tmp/[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true",
+            f"[LaunchPreferences]domain=scratch suite={self.SUITE} isolated=true",
+        ):
+            with self.subTest(impostor=impostor):
+                result = self.run_summarizer(
+                    [
+                        self.run_log("[LaunchPreferences] domain=standard").replace(
+                            "\n2026-08-30 10:00:01.000 [Perf]",
+                            f"\n2026-08-30 10:00:00.500 {impostor}"
+                            "\n2026-08-30 10:00:01.000 [Perf]",
+                        )
+                    ]
+                )
+
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn("domain=standard", result.stdout)
+
+    def test_a_carriage_return_does_not_survive_into_the_last_field(self) -> None:
+        result = self.run_summarizer(
+            [
+                self.run_log(
+                    f"[LaunchPreferences] domain=scratch suite={self.SUITE} isolated=true"
+                ).replace("isolated=true\n", "isolated=true\r\n")
+            ]
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_a_suite_name_containing_the_marker_is_read_as_one_token(self) -> None:
         """The marker is a log prefix, so the first one on a line is the real one.

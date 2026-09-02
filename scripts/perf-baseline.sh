@@ -407,28 +407,43 @@ launch_trigger_pattern = re.compile(
 PREFERENCES_MARKER = "[LaunchPreferences]"
 
 
+def log_fields(line):
+    """Whitespace-delimited fields of one log line, as awk's default splitting sees them.
+
+    Space and tab only, and a trailing carriage return dropped, so a CRLF log and an
+    LF one read alike and the debug lane tokenizes a line exactly as the installed
+    lane's awk does. `str.split()` would additionally break on a bare carriage return,
+    which awk does not, and that difference is a parser the two lanes do not share.
+    """
+    return [token for token in re.split(r"[ \t]+", line.rstrip("\r").strip(" \t")) if token]
+
+
 def read_preferences_entry(text):
     """Fields of the last [LaunchPreferences] entry, or None when the log has none.
 
-    The last such line is the one that decides the capture. The app logs once per
+    The last such entry is the one that decides the capture. The app logs once per
     resolution, so a relaunch that fell back appends after the isolated line that
     preceded it, and reading the first match lets that earlier line vouch for a
     launch it did not describe.
+
+    The marker has to stand as its own field. Matched as a substring it is
+    impersonable by any message that happens to carry the literal text — a logged
+    path, say — which would then read as a newer resolution than the real one.
 
     Fields are read as whole `key=value` tokens rather than by pattern, which is what
     perf-runner.sh's awk reader does. A key appearing twice on one physical line has
     no answer, so it reads as absent rather than resolving to whichever came first.
     """
-    entries = [line for line in text.splitlines() if PREFERENCES_MARKER in line]
-    if not entries:
+    entry = None
+    for line in text.split("\n"):
+        tokens = log_fields(line)
+        for index, token in enumerate(tokens):
+            if token == PREFERENCES_MARKER:
+                entry = tokens[index + 1:]
+    if entry is None:
         return None
-    # The marker is a log prefix, so the first one on a line is the real one and the
-    # rest of that line is the entry — which is what perf-runner.sh's grep takes.
-    # Searching the whole text backwards instead finds a marker inside a suite name
-    # and reads the tail of that name as the entry.
-    entry = entries[-1].split(PREFERENCES_MARKER, 1)[1]
     seen = {}
-    for token in entry.split():
+    for token in entry:
         key, separator, value = token.partition("=")
         if separator:
             seen.setdefault(key, []).append(value)
@@ -478,7 +493,9 @@ def run_index(log_file):
 
 
 for log_file in sorted(out_dir.glob("run-*.log"), key=run_index):
-    text = log_file.read_text(errors="ignore")
+    # `replace`, not `ignore`: a dropped undecodable byte can splice its neighbours into
+    # a token that reads as a field — `do<bad byte>main=scratch` becoming `domain=scratch`.
+    text = log_file.read_text(errors="replace")
     per_run = {}
     for metric_name, duration in measured_duration_samples(text):
         per_run[metric_name] = duration
