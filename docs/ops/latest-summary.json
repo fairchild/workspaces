@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-02T13:35:42.733327Z",
+  "generated_at": "2026-09-03T13:35:19.911454Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -19,10 +19,10 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-08-03T13:35:42.733327Z",
+    "window_start": "2026-08-04T13:35:19.911454Z",
     "completed_runs": 498,
-    "failure_runs": 26,
-    "failure_rate": 5.220883534136546,
+    "failure_runs": 24,
+    "failure_rate": 4.819277108433735,
     "rerun_runs": 0,
     "rerun_rate": 0.0,
     "top_failing_workflows": [
@@ -32,27 +32,23 @@
       },
       {
         "workflow_name": "PR Readiness",
-        "failures": 11
+        "failures": 10
       },
       {
         "workflow_name": "CI Fallback",
         "failures": 2
-      },
-      {
-        "workflow_name": "CI",
-        "failures": 1
       }
     ],
     "agents": {
       "Mention Triage": {
-        "completed_runs": 58,
+        "completed_runs": 51,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
         "rerun_rate": 0.0
       },
       "Approved Mention Execution": {
-        "completed_runs": 11,
+        "completed_runs": 8,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
@@ -62,20 +58,20 @@
   },
   "perf": {
     "available": true,
-    "latest_timestamp": "2026-08-23T21:38:53-0700",
-    "freshness_days": 9.37279783943287,
+    "latest_timestamp": null,
+    "freshness_days": null,
     "metrics": {
       "launch_to_first_prompt": {
-        "latest_median_ms": 1389.7,
-        "previous_median_ms": 850.1500000000001,
-        "delta_percent": 63.465270834558595,
+        "latest_median_ms": 146.7,
+        "previous_median_ms": 152.7,
+        "delta_percent": -3.9292730844793717,
         "target_ms": 1115,
-        "status": "fail"
+        "status": "pass"
       },
       "repo_hydration": {
-        "latest_median_ms": 2.0,
-        "previous_median_ms": 1.56,
-        "delta_percent": 28.2051282051282,
+        "latest_median_ms": null,
+        "previous_median_ms": null,
+        "delta_percent": null,
         "target_ms": 25,
         "status": "pass"
       }
@@ -85,37 +81,17 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 170.87328395054396,
+      "days_since_activity": 171.87301980849537,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
     },
     {
       "discussion_number": 110,
       "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-      "days_since_activity": 45.983341820914355,
+      "days_since_activity": 46.98307767886574,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
     }
   ],
   "breaches": [
-    {
-      "category": "perf",
-      "title": "[idea] [ops] Investigate performance regression",
-      "summary": "Performance targets regressed or exceeded threshold",
-      "details": [
-        {
-          "metric": "launch_to_first_prompt",
-          "latest_median_ms": 1389.7,
-          "target_ms": 1115,
-          "delta_percent": 63.465270834558595
-        },
-        {
-          "metric": "repo_hydration",
-          "latest_median_ms": 2.0,
-          "target_ms": 25,
-          "delta_percent": 28.2051282051282
-        }
-      ],
-      "suggested_direction": "Re-run the affected benchmarks, isolate the regression window, and harden the slow path before adding new surface area."
-    },
     {
       "category": "throughput",
       "title": "[idea] [ops] Unblock planned work from execution",
@@ -124,13 +100,13 @@
         {
           "discussion_number": 43,
           "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-          "days_since_activity": 170.87328395054396,
+          "days_since_activity": 171.87301980849537,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
         },
         {
           "discussion_number": 110,
           "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-          "days_since_activity": 45.983341820914355,
+          "days_since_activity": 46.98307767886574,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
         }
       ],
