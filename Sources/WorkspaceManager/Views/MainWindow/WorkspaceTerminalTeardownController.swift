@@ -27,8 +27,12 @@ struct WorkspaceTerminalTeardownController {
     let sessionsInScope: @MainActor (HostTerminalSessionKey) -> [HostTerminalSession]
     /// The tmux session name backing a session, or `nil` when none does (non-tmux mode).
     let tmuxSessionName: @MainActor (HostTerminalSession) -> String?
-    /// Kill a tmux session by name; `false` when the kill failed or the session was already gone.
-    let killTmuxSession: (String) async -> Bool
+    /// End the tmux session backing a host session, when the app's ownership ledger
+    /// authorizes it. `false` when nothing died: the kill failed, the session was already
+    /// gone, or the app could not attribute the session to a surface it launched and left
+    /// it running (#1267). Taking the session rather than a name is what makes that
+    /// question answerable — a name on the shared socket proves nothing about ownership.
+    let killTmuxSession: @MainActor (HostTerminalSession) async -> Bool
     /// The graceful retirement close for one session (`GhosttySurfaceRetirementCloser` semantics).
     let closeForRetirement: @MainActor (UUID) async throws -> Void
     /// Remove the scope's rows from the tile tree, returning the retired session ids.
@@ -57,16 +61,21 @@ struct WorkspaceTerminalTeardownController {
 
         // tmux dies first: killing the session ends the client process inside each surface, which
         // is what lets the close below complete without the runtime's process-alive confirmation.
-        // Order-preserving dedup keeps the report deterministic.
+        //
+        // Dedup on what actually died, not on what was considered, and the order-preserving list
+        // keeps the report deterministic. Two surfaces in a scope can share a tmux name while only
+        // one of them carries the ownership record that authorizes ending it, so skipping the
+        // second occurrence of a name would let an unrecorded surface consume the only attempt
+        // (#1267).
         var killed: [String] = []
-        var seen = Set<String>()
+        var killedNames = Set<String>()
         for session in sessions {
-            guard let name = tmuxSessionName(session), seen.insert(name).inserted else { continue }
-            if await killTmuxSession(name) {
+            guard let name = tmuxSessionName(session), !killedNames.contains(name) else { continue }
+            if await killTmuxSession(session) {
+                killedNames.insert(name)
                 killed.append(name)
             }
         }
-        let killedNames = Set(killed)
 
         // Graceful close per session. `timedOut` proceeds — retirement below reclaims the surface —
         // but `processStillRunning` means the close-confirmation hook fired. For a session whose

@@ -297,6 +297,10 @@ struct GhosttyTerminalConfig {
         sessionEnvironment: [(key: String, value: String)],
         seedsEnvironmentOnCreate: Bool = true
     ) -> String {
+        // Unquoted, and safe only because of that: `TmuxSessionProbe.isSafeSocketLabel`
+        // rejects any label carrying a character that would need quoting here, at the
+        // single point one enters the app. Quoting as well changes the script text every
+        // launch-shape test in this repo pins, for no reachable case.
         let tmux = "tmux -L \(TmuxSessionProbe.socketLabel)"
         // `=` forces an exact name match, as in TmuxSessionProbe.isSessionAlive.
         let exactTarget = singleQuoted("=\(sessionName)")

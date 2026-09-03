@@ -83,14 +83,21 @@ final class TileTreeStore: ObservableObject {
     /// so we only register/deregister on real edge transitions.
     private var registeredAgentSessionIDs: Set<UUID> = []
 
+    /// What this run knows about the tmux sessions behind its surfaces: which session id
+    /// backs each one, and whether this launch created it or joined one already running.
+    /// `SurfaceStore` writes it at launch; every teardown path here and in the window
+    /// wiring asks it before killing anything (#1267).
+    let tmuxOwnershipLedger = TmuxSessionOwnershipLedger()
+
     /// Test seams for pane-scoped tmux session reclamation (#1232) and continuity
     /// row recording (#1239): production resolves the real multiplexing mode and
-    /// kills on the workspaces socket; tests inject a fixed mode and a probe wired
-    /// to a stubbed tmux executable.
+    /// terminates through the ownership ledger on the workspaces socket; tests inject
+    /// a fixed mode and a terminator wired to a stubbed tmux executable.
     var resolveTerminalMultiplexingMode: () -> TerminalMultiplexingMode = { TerminalMultiplexingMode.resolve() }
-    var killTmuxSession: @Sendable (String) async -> Bool = { await TmuxSessionProbe().killSession($0) }
+    var terminateOwnedTmuxSession: (@MainActor (UUID) async -> TmuxOwnedSessionTerminator.Outcome)?
 
     init() {
+        surfaceStore.tmuxOwnershipLedger = tmuxOwnershipLedger
         surfaceStore.onTerminalTitleChanged = { [weak self] _ in
             self?.objectWillChange.send()
         }
@@ -594,6 +601,17 @@ final class TileTreeStore: ObservableObject {
         }
     }
 
+    /// Every live session this run is holding: coordinator primaries plus every non-primary
+    /// leaf of every tab's tree.
+    ///
+    /// The pre-restore ownership pass reads this rather than `sessions`, which is primaries
+    /// only. A split seed this launch created is just as much its own to retire, and leaving
+    /// it out means the session survives for a resume surface to `-A`-attach to — which
+    /// silently drops that surface's resume command (#1267).
+    var allLiveSessions: [HostTerminalSession] {
+        coordinator.sessions + derivedSplitSessions
+    }
+
     /// Live split sessions for a tab, including depth ≥ 2 panes. This is the public read path for
     /// app controllers that need every non-primary surface; the legacy `splitSession` projection above
     /// intentionally remains depth-1 only.
@@ -1033,18 +1051,45 @@ final class TileTreeStore: ObservableObject {
 
     /// Best-effort async kill of a torn-down pane's tmux session. In-app teardown only —
     /// app quit never reaches the close paths, so directory-derived sessions (and every
-    /// session on quit) survive for cold-start restore. Failure just logs: the session
-    /// may already be gone (its shell exited, which is what ended the surface).
+    /// session on quit) survive for cold-start restore.
+    ///
+    /// Two gates, and they answer different questions. The name shape says the session is
+    /// one only the app could have named; the ownership ledger says the live session
+    /// holding it is the one this app actually launched, which the shape alone cannot
+    /// establish on a socket a name can be arrived at independently (#1267). Anything the
+    /// run cannot attribute is left running and logged.
     private func killPaneScopedTmuxSession(for session: HostTerminalSession) {
         guard let sessionName = paneScopedTmuxSessionNameToKill(for: session) else { return }
-        let kill = killTmuxSession
-        Task {
-            if await kill(sessionName) {
-                log.info(
-                    "[TileTreeStore] reclaimed pane tmux session \(sessionName, privacy: .public) on close")
+        let hostSessionID = session.id
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let outcome: TmuxOwnedSessionTerminator.Outcome
+            if let terminate = self.terminateOwnedTmuxSession {
+                outcome = await terminate(hostSessionID)
             } else {
+                outcome = await TmuxOwnedSessionTerminator(ledger: self.tmuxOwnershipLedger)
+                    .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+            }
+            switch outcome {
+            case .killed(let id, _):
+                log.info(
+                    "[TileTreeStore] reclaimed pane tmux session \(sessionName, privacy: .public) (\(id, privacy: .public)) on close"
+                )
+            case .notAttributable:
                 log.notice(
-                    "[TileTreeStore] pane tmux session \(sessionName, privacy: .public) kill failed or already gone"
+                    "[TileTreeStore] leaving pane tmux session \(sessionName, privacy: .public) alone on close: this run cannot attribute it to a surface it launched"
+                )
+            case .notLive:
+                log.info(
+                    "[TileTreeStore] pane tmux session \(sessionName, privacy: .public) was already gone on close"
+                )
+            case .socketUnavailable:
+                log.notice(
+                    "[TileTreeStore] pane tmux session \(sessionName, privacy: .public) not reclaimed on close: tmux did not answer"
+                )
+            case .killFailed(let id):
+                log.notice(
+                    "[TileTreeStore] pane tmux session \(sessionName, privacy: .public) (\(id, privacy: .public)) kill failed"
                 )
             }
         }

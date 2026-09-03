@@ -21,11 +21,12 @@ public struct TmuxSessionControl: Sendable {
     /// The socket label every command carries. Defaults to the app's own
     /// `workspaces` server; an isolated run (a test, a second checkout) names its
     /// own so it cannot reach into a live desktop's sessions.
-    public static let defaultSocketLabel = TmuxSessionProbe.socketLabel
+    public static let defaultSocketLabel = TmuxSessionProbe.defaultSocketLabel
 
     /// Names the socket label for a launch that must not touch the desktop's
-    /// server. Read by the CLI, not by the app.
-    public static let socketLabelEnvironmentKey = "WORKSPACES_TMUX_SOCKET_LABEL"
+    /// server. Honored by the app as well as the CLI since #1267, so an isolated
+    /// run exercises the app's own launch/probe/kill lane end to end.
+    public static let socketLabelEnvironmentKey = TmuxSessionProbe.socketLabelEnvironmentKey
 
     /// Scrollback lines `read` returns when the caller names no bound.
     public static let defaultCaptureLines = 200
@@ -55,14 +56,7 @@ public struct TmuxSessionControl: Sendable {
     /// app's server. An empty override reads as unset rather than as a nameless
     /// socket.
     public static func socketLabel(from environment: [String: String]) -> String {
-        guard
-            let override = environment[socketLabelEnvironmentKey]?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            !override.isEmpty
-        else {
-            return defaultSocketLabel
-        }
-        return override
+        TmuxSessionProbe.resolvedSocketLabel(from: environment)
     }
 
     // MARK: - Failure

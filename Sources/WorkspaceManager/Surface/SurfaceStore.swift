@@ -53,6 +53,12 @@ final class SurfaceStore {
     /// Fired when a terminal surface's libghostty title changes, so the tab strip / subtitle refresh.
     var onTerminalTitleChanged: (@MainActor (UUID) -> Void)?
 
+    /// Where this store records which tmux session ended up backing each surface it
+    /// launched, and whether that launch created the session or joined one already
+    /// running. Teardown reads it instead of reasoning about names (#1267). Absent in
+    /// previews and in tests that never reach tmux.
+    var tmuxOwnershipLedger: TmuxSessionOwnershipLedger?
+
     // MARK: - Access
 
     func surface(for tileID: TileID) -> (any Surface)? {
@@ -150,6 +156,10 @@ final class SurfaceStore {
     /// races shell startup, so it is worth paying only when the launch actually lost.
     private func deliverLaunchWorkIfNeeded(_ terminal: TerminalSurface) {
         let session = terminal.session
+        // Stamped before anything awaits. The surface's shell is already on its way to
+        // `exec tmux new-session -A`, so a session on that name older than this instant
+        // is one the launch will adopt rather than create (#1267).
+        let launchedAt = Date()
         let tmuxLaunchScript = terminal.surfaceView.tmuxLaunchScript
         guard tmuxLaunchScript != nil || session.initialCommand != nil else { return }
         guard !launchWorkDeliveredSessionIDs.contains(session.id) else { return }
@@ -173,16 +183,65 @@ final class SurfaceStore {
             }
 
             if let tmuxLaunchScript {
+                // Twice, and the order matters both ways. Recording first closes the window
+                // in which a surface torn down early has no record and its session is left
+                // running for good; recording again after the repair catches the launch that
+                // lost and was brought up by the repair instead. The second call is a no-op
+                // once the first has succeeded.
+                let recorded =
+                    await self?.recordTmuxOwnership(
+                        session: session, launchedAt: launchedAt, attempts: 2) ?? false
                 await self?.repairLaunchContractIfNeeded(
                     terminal: terminal,
                     session: session,
                     tmuxLaunchScript: tmuxLaunchScript
                 )
+                if !recorded {
+                    await self?.recordTmuxOwnership(
+                        session: session, launchedAt: launchedAt, attempts: 6)
+                }
             }
 
             guard let initialCommand = session.initialCommand else { return }
             self?.deliverInitialCommand(initialCommand, to: terminal, session: session)
         }
+    }
+
+    /// Record which tmux session this surface's launch landed on, and whether the
+    /// launch created it.
+    ///
+    /// This is the only place the app learns that a specific session id is serving one of
+    /// its surfaces, and every later kill is authorized from what it writes. A surface
+    /// with no record here is one the app cannot attribute, and an unattributable session
+    /// is never killed — so the failure mode of this routine is a session left running,
+    /// which is the direction #1267 asks it to fail in.
+    @discardableResult
+    private func recordTmuxOwnership(
+        session: HostTerminalSession,
+        launchedAt: Date,
+        attempts: Int
+    ) async -> Bool {
+        guard let ledger = tmuxOwnershipLedger else { return false }
+        if ledger.ownership(forHostSessionID: session.id) != nil { return true }
+        let sessionName = session.effectiveTmuxSessionName
+        let probe = TmuxSessionProbe()
+        for attempt in 0..<attempts {
+            if attempt > 0 {
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+            guard let live = await probe.liveSessions() else { continue }
+            guard let match = live.first(where: { $0.name == sessionName }) else { continue }
+            let ownership = ledger.record(
+                hostSessionID: session.id, identity: match, launchedAt: launchedAt)
+            log.info(
+                "[SurfaceStore] tmux \(match.name, privacy: .public) (\(match.sessionID, privacy: .public)) backs session \(session.id.uuidString, privacy: .public), \(ownership.provenance == .createdByThisLaunch ? "created by this launch" : "adopted from an existing session", privacy: .public)"
+            )
+            return true
+        }
+        log.notice(
+            "[SurfaceStore] no tmux ownership recorded yet for session \(session.id.uuidString, privacy: .public): nothing on the socket answers to \(sessionName, privacy: .public)"
+        )
+        return false
     }
 
     /// Attach a tmux-backed surface to its session when the launch command never ran.
