@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-03T13:35:19.911454Z",
+  "generated_at": "2026-09-04T13:34:47.823484Z",
   "source_mode": "live",
   "fixture_name": null,
   "window_days": 30,
@@ -19,10 +19,10 @@
   },
   "ci": {
     "window_days": 30,
-    "window_start": "2026-08-04T13:35:19.911454Z",
+    "window_start": "2026-08-05T13:34:47.823484Z",
     "completed_runs": 498,
-    "failure_runs": 24,
-    "failure_rate": 4.819277108433735,
+    "failure_runs": 23,
+    "failure_rate": 4.618473895582329,
     "rerun_runs": 0,
     "rerun_rate": 0.0,
     "top_failing_workflows": [
@@ -36,12 +36,12 @@
       },
       {
         "workflow_name": "CI Fallback",
-        "failures": 2
+        "failures": 1
       }
     ],
     "agents": {
       "Mention Triage": {
-        "completed_runs": 51,
+        "completed_runs": 50,
         "failure_runs": 0,
         "failure_rate": 0.0,
         "rerun_runs": 0,
@@ -81,13 +81,13 @@
     {
       "discussion_number": 43,
       "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-      "days_since_activity": 171.87301980849537,
+      "days_since_activity": 172.8726484199537,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
     },
     {
       "discussion_number": 110,
       "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-      "days_since_activity": 46.98307767886574,
+      "days_since_activity": 47.982706290324074,
       "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
     }
   ],
@@ -100,13 +100,13 @@
         {
           "discussion_number": 43,
           "discussion_title": "[task] [idea][endorsed] Isolate intrusive CI jobs onto a Tart VM runner lane",
-          "days_since_activity": 171.87301980849537,
+          "days_since_activity": 172.8726484199537,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/43"
         },
         {
           "discussion_number": 110,
           "discussion_title": "[idea][endorsed] Fix environment status color semantics in New Workspace sheet",
-          "days_since_activity": 46.98307767886574,
+          "days_since_activity": 47.982706290324074,
           "discussion_url": "https://github.com/fairchild/workspaces/discussions/110"
         }
       ],
