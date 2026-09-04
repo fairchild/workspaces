@@ -197,6 +197,102 @@ struct SurfaceStoreTests {
         #expect(titled == [session.id])
     }
 
+    // MARK: - Initial-command delivery on a shared tmux socket (#1267)
+
+    @Test("A surface that adopted its tmux session prefills its command instead of running it")
+    func adoptedTmuxSessionDowngradesExecuteToPrefill() {
+        let store = SurfaceStore()
+        let ledger = TmuxSessionOwnershipLedger()
+        store.tmuxOwnershipLedger = ledger
+        let session = makeSession(delivery: .execute)
+
+        ledger.record(
+            hostSessionID: session.id,
+            identity: liveSession(createdAt: Date(timeIntervalSince1970: 1_000)),
+            launchedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        #expect(store.deliveryForLaunch(session: session, isTmuxBacked: true) == .prefill)
+    }
+
+    @Test("A surface that created its tmux session runs its command as asked")
+    func createdTmuxSessionKeepsExecute() {
+        let store = SurfaceStore()
+        let ledger = TmuxSessionOwnershipLedger()
+        store.tmuxOwnershipLedger = ledger
+        let session = makeSession(delivery: .execute)
+
+        ledger.record(
+            hostSessionID: session.id,
+            identity: liveSession(createdAt: Date(timeIntervalSince1970: 2_000)),
+            launchedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        #expect(store.deliveryForLaunch(session: session, isTmuxBacked: true) == .execute)
+    }
+
+    @Test("No ownership record is not evidence of adoption, so the command still runs")
+    func unrecordedSessionKeepsExecute() {
+        let store = SurfaceStore()
+        store.tmuxOwnershipLedger = TmuxSessionOwnershipLedger()
+        let session = makeSession(delivery: .execute)
+
+        #expect(store.deliveryForLaunch(session: session, isTmuxBacked: true) == .execute)
+    }
+
+    @Test("A non-tmux surface is unaffected by an adoption record")
+    func nonTmuxSurfaceKeepsExecute() {
+        let store = SurfaceStore()
+        let ledger = TmuxSessionOwnershipLedger()
+        store.tmuxOwnershipLedger = ledger
+        let session = makeSession(delivery: .execute)
+
+        ledger.record(
+            hostSessionID: session.id,
+            identity: liveSession(createdAt: Date(timeIntervalSince1970: 1_000)),
+            launchedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        #expect(store.deliveryForLaunch(session: session, isTmuxBacked: false) == .execute)
+    }
+
+    @Test("A session that asked to prefill is never upgraded")
+    func prefillStaysPrefill() {
+        let store = SurfaceStore()
+        let ledger = TmuxSessionOwnershipLedger()
+        store.tmuxOwnershipLedger = ledger
+        let session = makeSession(delivery: .prefill)
+
+        ledger.record(
+            hostSessionID: session.id,
+            identity: liveSession(createdAt: Date(timeIntervalSince1970: 2_000)),
+            launchedAt: Date(timeIntervalSince1970: 2_000)
+        )
+
+        #expect(store.deliveryForLaunch(session: session, isTmuxBacked: true) == .prefill)
+    }
+
+    private func liveSession(createdAt: Date) -> TmuxLiveSession {
+        TmuxLiveSession(
+            sessionID: "$0",
+            name: "wm-repo-abcd1234",
+            createdAt: createdAt,
+            serverPID: 4242
+        )
+    }
+
+    private func makeSession(
+        path: String = "/Users/test/repo",
+        delivery: HostTerminalSession.InitialCommandDelivery
+    ) -> HostTerminalSession {
+        HostTerminalSession(
+            key: .repoPath(path),
+            directory: URL(fileURLWithPath: path),
+            initialCommand: "claude --resume",
+            initialCommandDelivery: delivery
+        )
+    }
+
     private func makeSession(path: String = "/Users/test/repo") -> HostTerminalSession {
         HostTerminalSession(key: .repoPath(path), directory: URL(fileURLWithPath: path))
     }
