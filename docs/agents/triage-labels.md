@@ -25,11 +25,12 @@ Most agent work in this repo still pushes under the owner's own GitHub account (
 Rules:
 
 - **Every agent-authored PR carries exactly one `author:<slug>` label** identifying its author, applied at PR creation. Human-authored PRs carry none.
+- **Review no longer depends on it.** Counterpart review used to require exactly one `author:*` label and skip silently without one, which meant a PR nobody labelled got no review and nothing said so. Review is now the default for any pull request whose head branch is on this repository; the label decides only *which* reviewer, and only for `author:april` and `author:plat`, where it keeps a persona off its own work. Attribution is still the reason to apply it.
 - **Slug = the agent's stable identity, lowercase kebab-case.** Use the persona when acting as one (`author:april`, `author:plat`, `author:carl`, `author:fable-orchestrator`); otherwise the harness (`author:claude-code`, `author:codex`). Keep it stable across sessions — it's a workstream identity, not a per-session id (session/thread ids belong in the claim comment's `claimer=<harness>:<stable-id>`, and the model belongs in the commit `Co-Authored-By` trailer).
 - **Create the label if it's new:** `gh label create "author:<slug>" --color BFD4F2 --description "PRs authored by the <slug> agent"`. Reuse an existing `author:*` label rather than minting a near-duplicate.
 - This is an **authorship** label — a distinct axis from lane/state/dimension/gate (none of those answer "which agent wrote this"). It is **not** a revival of the retired `agent:*` ownership labels (see § "Live Label Migration"): `author:claude-code` says who *wrote* a PR, orthogonal to the `agent`/`human` lane that says who *owns* the work. A PR can be `author:claude-code` while its issue sits in the `agent` lane.
 
-Not yet CI-enforced; it's the cheapest surface today. If drift shows up, a readiness check that requires one `author:*` label on non-human PRs is the natural next step.
+Not CI-enforced, and no longer load-bearing: a missing label costs attribution, not review.
 
 ## State Labels
 
@@ -86,6 +87,8 @@ Gate labels are not ownership or topic labels. They authorize or block a specifi
 | `needs-human` | The current lane needs human intervention before continuing. May be used with either `agent` or `human`. Applied by people; the factory never applies or removes it. |
 | `owner-action` | The factory determined the owner is the blocking party and said so in a comment naming the gesture. Machine-managed: applied by the review-response lane, withdrawn by it once no reviewer is blocking. Surfaced as "Waiting on you" in the Factory Digest. |
 | `safe-to-run-agent` | Maintainer approval for the GitHub Actions mention executor to run against a public issue or PR request. The executor consumes and clears this gate through its own workflow. |
+| `safe-to-review-fork` | Admits a fork pull request into the counterpart-review lane. Same-repository heads are reviewed by default; a fork is not, because review reads the diff and writes under a reviewer app's token. Persistent — unlike `safe-to-run-agent` it is not consumed, so review survives later pushes to the fork. |
+| `skip-review` | Suppresses counterpart review on a pull request that does not want one. |
 | `privileged-agent-patch` | Break-glass approval for an agent patch to touch privileged repo-control, auth/token/sandbox, release/signing, or infra-secret paths. |
 
 Do not use gate labels as backlog categories. Remove them when the gate has been consumed or the intervention is no longer needed.

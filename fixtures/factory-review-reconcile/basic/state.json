@@ -8,7 +8,8 @@
         "draft": false,
         "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
         "user": {"login": "fairchild"},
-        "head": {"sha": "sha-stale-1485"},
+        "head": {"sha": "sha-stale-1485", "repo": {"full_name": "fairchild/workspaces"}},
+        "base": {"repo": {"full_name": "fairchild/workspaces"}},
         "body": "Closes #1478."
       },
       "files": [{"filename": "Sources/WorkspaceManager/Surface/SurfaceStore.swift"}],
@@ -28,7 +29,8 @@
         "draft": false,
         "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
         "user": {"login": "fairchild"},
-        "head": {"sha": "sha-fresh-1490"},
+        "head": {"sha": "sha-fresh-1490", "repo": {"full_name": "fairchild/workspaces"}},
+        "base": {"repo": {"full_name": "fairchild/workspaces"}},
         "body": "Closes #1491."
       },
       "files": [{"filename": "Sources/WorkspaceManager/Views/MainWindow/ContentView.swift"}],
@@ -48,7 +50,8 @@
         "draft": false,
         "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
         "user": {"login": "fairchild"},
-        "head": {"sha": "sha-reviewed-1492"},
+        "head": {"sha": "sha-reviewed-1492", "repo": {"full_name": "fairchild/workspaces"}},
+        "base": {"repo": {"full_name": "fairchild/workspaces"}},
         "body": "Closes #1493."
       },
       "files": [{"filename": "scripts/release-version.sh"}],
@@ -74,7 +77,8 @@
         "draft": false,
         "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
         "user": {"login": "fairchild"},
-        "head": {"sha": "sha-no-signal-1494"},
+        "head": {"sha": "sha-no-signal-1494", "repo": {"full_name": "fairchild/workspaces"}},
+        "base": {"repo": {"full_name": "fairchild/workspaces"}},
         "body": "Closes #1495."
       },
       "files": [{"filename": "docs/RELEASING.md"}],
@@ -88,7 +92,8 @@
         "draft": true,
         "labels": [{"name": "author:claude-code"}, {"name": "agent"}],
         "user": {"login": "fairchild"},
-        "head": {"sha": "sha-draft-1496"},
+        "head": {"sha": "sha-draft-1496", "repo": {"full_name": "fairchild/workspaces"}},
+        "base": {"repo": {"full_name": "fairchild/workspaces"}},
         "body": "Closes #1497."
       },
       "files": [{"filename": "docs/decisions/some-decision.md"}],
