@@ -31,8 +31,6 @@ EVIDENCE_STATUS_PREFIX_RE = re.compile(
 # Zero-width on both sides, so two separators sharing one space still yield
 # two candidate splits rather than one.
 EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
-# A `--` inside a code span is an argument, not a boundary: `resolve_persona.py
-# -- mara` is one name.
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
@@ -144,6 +142,9 @@ SAFE_CANDIDATE_ENV_KEYS = {
 
 def _code_span_ranges(text: str) -> list[tuple[int, int]]:
     """Half-open ranges covering each code span, by CommonMark's own rules.
+
+    A `--` inside one is an argument rather than a boundary: `resolve_persona.py
+    -- mara` is one name.
 
     A backtick run opens a span and the next run of equal length closes it; a
     run that finds no match is literal text. Backslash escapes hide a backtick
