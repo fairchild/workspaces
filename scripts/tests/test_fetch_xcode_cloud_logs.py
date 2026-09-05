@@ -51,6 +51,19 @@ class ExcerptTests(unittest.TestCase):
         self.assertIn(f"tail -{logs.TAIL_LINES}", rendered)
         self.assertLessEqual(len(rendered.splitlines()), logs.TAIL_LINES + 12)
 
+    def test_runtime_failure_wins_over_hundreds_of_successful_test_names(self) -> None:
+        lines = [f'✔ Test "error behavior {index}" passed' for index in range(300)]
+        runtime_index = len(lines)
+        lines.extend(["setup begins", "env: uv: No such file or directory", "setup aborts"])
+
+        contexts = logs.failure_contexts(lines, before=len(lines))
+
+        self.assertTrue(any(start <= runtime_index < end for start, end in contexts))
+        self.assertLessEqual(len(contexts), logs.MAX_FAILURE_CONTEXTS)
+
+    def test_zero_before_means_no_lines_before_the_tail(self) -> None:
+        self.assertEqual(logs.failure_contexts(["env: uv: No such file or directory"], before=0), [])
+
 
 if __name__ == "__main__":
     unittest.main()

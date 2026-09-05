@@ -34,6 +34,12 @@ import jwt
 API_BASE = "https://api.appstoreconnect.apple.com"
 INTERESTING_LOG = re.compile(r"post[_-]?clone|pre[_-]?xcodebuild|RunScript|ghosttykit", re.I)
 FAILURE_LINE = re.compile(r"error|failed|fatal|No such file|command not found|sudo", re.I)
+RUNTIME_FAILURE_LINE = re.compile(r"env:\s*uv:|command not found|No such file(?: or directory)?", re.I)
+PRIMARY_FAILURE_LINE = re.compile(
+    r"env:\s*uv:|command not found|No such file(?: or directory)?|fatal(?: error)?|error:|"
+    r"recorded an issue|^.*✘ .*failed|^.*✘ Suite|^.*✘ Test run",
+    re.I,
+)
 TAIL_LINES = 200
 MAX_LINE_CHARS = 400
 FAILURE_CONTEXT_LINES = 3
@@ -126,28 +132,40 @@ def clip(line: str) -> str:
     return line if len(line) <= MAX_LINE_CHARS else line[:MAX_LINE_CHARS] + " …[truncated]"
 
 
-def failure_contexts(lines: list[str], *, before: int = 0) -> list[tuple[int, list[str]]]:
-    """Return bounded context for failure lines outside a trailing excerpt."""
-    contexts = []
-    for index, line in enumerate(lines[:before] if before else lines):
-        if not FAILURE_LINE.search(line):
-            continue
+def failure_contexts(lines: list[str], *, before: int | None = None) -> list[tuple[int, int]]:
+    """Return merged, bounded failure spans outside an optional trailing excerpt."""
+    search_lines = lines if before is None else lines[:before]
+
+    # Test names routinely contain words such as "error" and "failed". Prefer
+    # runtime/tool failures first, then concrete failure records, and use broad
+    # matching only when neither signal exists.
+    runtime = [index for index, line in enumerate(search_lines) if RUNTIME_FAILURE_LINE.search(line)]
+    primary = [index for index, line in enumerate(search_lines) if PRIMARY_FAILURE_LINE.search(line)]
+    if runtime or primary:
+        selected = runtime + [index for index in primary if index not in runtime]
+    else:
+        selected = [index for index, line in enumerate(search_lines) if FAILURE_LINE.search(line)]
+
+    spans: list[tuple[int, int]] = []
+    for index in sorted(selected):
         start = max(0, index - FAILURE_CONTEXT_LINES)
         end = min(len(lines), index + FAILURE_CONTEXT_LINES + 1)
-        contexts.append((index, lines[start:end]))
-        if len(contexts) == MAX_FAILURE_CONTEXTS:
+        if spans and start <= spans[-1][1]:
+            spans[-1] = (spans[-1][0], max(spans[-1][1], end))
+            continue
+        spans.append((start, end))
+        if len(spans) == MAX_FAILURE_CONTEXTS:
             break
-    return contexts
+    return spans
 
 
-def print_failure_contexts(path: Path, lines: list[str], *, before: int = 0) -> None:
+def print_failure_contexts(path: Path, lines: list[str], *, before: int | None = None) -> None:
     contexts = failure_contexts(lines, before=before)
     if not contexts:
         return
     print(f"    ---- failure context (up to {MAX_FAILURE_CONTEXTS}) {path.name} ----")
-    for index, context in contexts:
-        start = max(0, index - FAILURE_CONTEXT_LINES)
-        for line_number, line in enumerate(context, start=start + 1):
+    for start, end in contexts:
+        for line_number, line in enumerate(lines[start:end], start=start + 1):
             print(f"    {path.name}:{line_number}: {clip(line)}")
 
 
