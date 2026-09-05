@@ -808,6 +808,35 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # Splitting it would name the item "`a" and the detail "b`". Reporting
         # the line as unreadable is what the gate can act on.
         self.assertIsNone(run_contributor.split_evidence_status_line("- [complete] `a -- b`"))
+    def test_a_code_span_is_delimited_by_matching_backtick_runs(self) -> None:
+        # A span closes on a run of the SAME length, so a double-backtick span
+        # holds its own `--` and a lone backtick, and an escaped backtick opens
+        # nothing. Pairing backticks left to right instead gets all three wrong.
+        for line, expected in (
+            (
+                "- [complete] ``alpha -- beta`` holds -- proof",
+                ("complete", "``alpha -- beta`` holds", "proof"),
+            ),
+            (
+                "- [complete] ``a ` b`` -- proof",
+                ("complete", "``a ` b``", "proof"),
+            ),
+            (
+                "- [complete] a literal \\` token -- proof shows a \\` token",
+                ("complete", "a literal \\` token", "proof shows a \\` token"),
+            ),
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(run_contributor.split_evidence_status_line(line), expected)
+
+    def test_an_over_indented_fence_is_code_not_a_fence(self) -> None:
+        # CommonMark allows a fence at most three spaces of indentation. Past
+        # that GitHub renders indented code, so treating it as a fence would
+        # open a block that swallows every later requested item.
+        body = "## Requested Evidence\n\n- first\n\n    ```\n\n- second\n"
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body), ["first", "second"]
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -32,8 +32,11 @@ EVIDENCE_STATUS_PREFIX_RE = re.compile(
 # two candidate splits rather than one.
 EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
 # A `--` inside a code span is an argument, not a boundary: `resolve_persona.py
-# -- mara` is one name.
-EVIDENCE_CODE_SPAN_RE = re.compile(r"`[^`]*`")
+# -- mara` is one name. A span opens on a run of backticks and closes on the
+# next run of the SAME length, so a double-backtick span may hold a lone
+# backtick, and an escaped backtick opens nothing.
+EVIDENCE_BACKTICK_RUN_RE = re.compile(r"`+")
+MARKDOWN_ESCAPE_RE = re.compile(r"\\.")
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
@@ -143,6 +146,30 @@ SAFE_CANDIDATE_ENV_KEYS = {
 }
 
 
+def _code_span_ranges(text: str) -> list[tuple[int, int]]:
+    """Half-open ranges covering each code span, by CommonMark's own rule.
+
+    A backtick run opens a span and the next run of equal length closes it; a
+    run that never finds its match is literal text. Escapes are blanked to the
+    same width first, so `\\`` neither opens a span nor shifts an offset.
+    """
+    masked = MARKDOWN_ESCAPE_RE.sub("  ", text)
+    runs = [run.span() for run in EVIDENCE_BACKTICK_RUN_RE.finditer(masked)]
+    ranges: list[tuple[int, int]] = []
+    index = 0
+    while index < len(runs):
+        start, opened = runs[index]
+        width = opened - start
+        for closer in range(index + 1, len(runs)):
+            if runs[closer][1] - runs[closer][0] == width:
+                ranges.append((start, runs[closer][1]))
+                index = closer + 1
+                break
+        else:
+            index += 1
+    return ranges
+
+
 def _evidence_status_readings(line: str) -> list[tuple[str, str, str, str]]:
     """`(status, item, detail, separator)` for every reading, leftmost first."""
     prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
@@ -150,9 +177,7 @@ def _evidence_status_readings(line: str) -> list[tuple[str, str, str, str]]:
         return []
     rest = prefix.group("rest")
     status = prefix.group("status")
-    spans = [
-        span.span() for span in EVIDENCE_CODE_SPAN_RE.finditer(rest)
-    ]
+    spans = _code_span_ranges(rest)
     readings = []
     for separator in EVIDENCE_SEPARATOR_RE.finditer(rest):
         if any(start < separator.start() < end for start, end in spans):
@@ -231,7 +256,8 @@ def _wrapped_bullets(section: str) -> list[str]:
     reads it as part of the bullet above, so the contract reads it that way
     too. A blank line, a line at column zero, or an indented line that starts
     its own block ends the bullet, which keeps a following paragraph, nested
-    list, or quote out of the item text. A fenced block is skipped whole, so a
+    list, or quote out of the item text. A fenced block -- opened with at most
+    three spaces of indentation, as CommonMark asks -- is skipped whole, so a
     bullet quoted as sample code is not read as a requested item.
     """
     bullets: list[str] = []
@@ -240,7 +266,7 @@ def _wrapped_bullets(section: str) -> list[str]:
     for line in section.splitlines():
         stripped = line.strip()
         fence = MARKDOWN_FENCE_RE.fullmatch(stripped)
-        if fence and _fence_transition(fence, fenced):
+        if fence and len(line) - len(line.lstrip()) <= 3 and _fence_transition(fence, fenced):
             fenced = None if fenced else fence.group("run")
             open_bullet = False
             continue

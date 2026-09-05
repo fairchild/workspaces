@@ -118,7 +118,6 @@ from evidence import (  # noqa: E402, F401
     extract_evidence_status_entries,
     extract_requested_evidence,
     format_requested_evidence_numbered,
-    is_numeric_evidence_item,
     latest_completed_check_run,
     parse_structured_evidence_updates,
     reconcile_pending_ci_evidence,
