@@ -15,6 +15,7 @@ on:
       - ci/xcode-cloud-logs
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -52,3 +53,31 @@ jobs:
           path: ${{ runner.temp }}/xcode-cloud-logs
           retention-days: 5
           if-no-files-found: ignore
+
+      # This is deliberately inert until both environment-scoped values exist.
+      # The configured endpoint receives a raw-log-free manifest only; it must
+      # use GitHub's Actions API to verify this workflow path, workflow_dispatch
+      # event, main head branch, and completed successful run before confirming
+      # an incident. A running workflow cannot truthfully confirm its own final
+      # conclusion, so that verification belongs to the trusted collector.
+      - name: Optionally hand off trusted diagnosis
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && vars.OPS_DIAGNOSTIC_URL != '' }}
+        env:
+          OPS_DIAGNOSTIC_URL: ${{ vars.OPS_DIAGNOSTIC_URL }}
+          OPS_DIAGNOSTIC_TOKEN: ${{ secrets.OPS_DIAGNOSTIC_TOKEN }}
+          DIAGNOSTIC_REPORT: ${{ runner.temp }}/xcode-cloud-logs/diagnostic-handoff.json
+        run: |
+          set -euo pipefail
+          test -n "${OPS_DIAGNOSTIC_TOKEN:-}" || exit 0
+          test -s "$DIAGNOSTIC_REPORT"
+          test "$(jq '.observations | length' "$DIAGNOSTIC_REPORT")" -gt 0 || exit 0
+          case "$OPS_DIAGNOSTIC_URL" in
+            https://*/api/diagnostics) ;;
+            *) echo "error: OPS_DIAGNOSTIC_URL must be a configured HTTPS /api/diagnostics endpoint" >&2; exit 1 ;;
+          esac
+          echo "::add-mask::$OPS_DIAGNOSTIC_TOKEN"
+          curl --fail --silent --show-error --request POST \
+            --header "Authorization: Bearer $OPS_DIAGNOSTIC_TOKEN" \
+            --header "Content-Type: application/json" \
+            --data-binary "@$DIAGNOSTIC_REPORT" \
+            "$OPS_DIAGNOSTIC_URL" >/dev/null

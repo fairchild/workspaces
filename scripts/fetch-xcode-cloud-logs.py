@@ -22,6 +22,7 @@ import os
 import re
 import sys
 import time
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Iterator
@@ -46,6 +47,16 @@ FAILURE_CONTEXT_LINES = 3
 MAX_FAILURE_CONTEXTS = 20
 SENSITIVE_VALUE = re.compile(
     r"(?i)\b(authorization\s*:\s*bearer|(?:api[_-]?key|token|password|secret)\s*[=:])\s*\S+"
+)
+DIAGNOSTIC_SCHEMA = 1
+DIAGNOSTIC_REPOSITORY = "fairchild/workspaces"
+DIAGNOSTIC_REPORT_NAME = "diagnostic-handoff.json"
+MAX_DIAGNOSTIC_BYTES = 8 * 1024
+MAX_DIAGNOSTIC_OBSERVATIONS = 32
+MISSING_UV = re.compile(
+    r"(?:env:\s*)?uv:\s*(?:No such file or directory|command not found)|"
+    r"Required command not found:\s*uv",
+    re.I,
 )
 
 
@@ -103,6 +114,51 @@ def paged(token: str, path: str, max_pages: int = 5, **params: str) -> Iterator[
 def commit_sha(run: dict[str, Any]) -> str:
     source = run.get("attributes", {}).get("sourceCommit") or {}
     return source.get("commitSha") or source.get("sha") or ""
+
+
+def diagnostic_run_id() -> int:
+    raw = os.environ.get("GITHUB_RUN_ID", "")
+    if not raw.isdecimal():
+        sys.exit("error: GITHUB_RUN_ID must be a numeric GitHub Actions run ID for diagnostic handoff")
+    return int(raw)
+
+
+def diagnostic_observation(build_id: str, action_id: str, sha: str, log: Path) -> dict[str, str] | None:
+    """Return a trusted missing-uv observation for the exact downloaded log."""
+    if log.name != "ci_pre_xcodebuild.log":
+        return None
+    try:
+        uuid.UUID(build_id)
+        uuid.UUID(action_id)
+        contents = log.read_text(errors="replace")
+    except (OSError, ValueError):
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", sha, re.I) or not MISSING_UV.search(contents):
+        return None
+    return {
+        "buildId": build_id,
+        "actionId": action_id,
+        "sha": sha.lower(),
+        "signature": "missing-uv",
+        "stage": "ci_pre_xcodebuild",
+    }
+
+
+def write_diagnostic_report(output_dir: Path, observations: list[dict[str, str]]) -> Path:
+    """Write the bounded, raw-log-free handoff used by a trusted collector."""
+    report = {
+        "schema": DIAGNOSTIC_SCHEMA,
+        "repository": DIAGNOSTIC_REPOSITORY,
+        "runId": diagnostic_run_id(),
+        "observations": observations[:MAX_DIAGNOSTIC_OBSERVATIONS],
+    }
+    encoded = json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
+    if len(encoded) > MAX_DIAGNOSTIC_BYTES:
+        raise RuntimeError("diagnostic handoff exceeds its 8 KiB bound")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / DIAGNOSTIC_REPORT_NAME
+    report_path.write_bytes(encoded + b"\n")
+    return report_path
 
 
 def find_build_runs(token: str, sha: str) -> list[dict[str, Any]]:
@@ -194,7 +250,15 @@ def excerpt(path: Path) -> None:
             print(f"    {path.name}: {clip(line)}")
 
 
-def download_artifacts(token: str, action_id: str, dest: Path) -> None:
+def download_artifacts(
+    token: str,
+    action_id: str,
+    dest: Path,
+    *,
+    build_id: str,
+    sha: str,
+    observations: list[dict[str, str]],
+) -> None:
     for artifact in paged(token, f"/v1/ciBuildActions/{action_id}/artifacts"):
         attrs = artifact.get("attributes", {})
         file_type, file_name = attrs.get("fileType", ""), attrs.get("fileName", "artifact")
@@ -219,8 +283,14 @@ def download_artifacts(token: str, action_id: str, dest: Path) -> None:
                 if member.is_file():
                     print(f"      extracted: {member.relative_to(dest)}")
                     excerpt(member)
+                    observation = diagnostic_observation(build_id, action_id, sha, member)
+                    if observation and observation not in observations:
+                        observations.append(observation)
         else:
             excerpt(target)
+            observation = diagnostic_observation(build_id, action_id, sha, target)
+            if observation and observation not in observations:
+                observations.append(observation)
 
 
 def main() -> int:
@@ -235,6 +305,7 @@ def main() -> int:
         print(f"no Xcode Cloud build runs found for {args.sha}", file=sys.stderr)
         return 2
 
+    observations: list[dict[str, str]] = []
     for run in runs:
         attrs = run.get("attributes", {})
         print(
@@ -247,7 +318,16 @@ def main() -> int:
             name = a_attrs.get("name", "action")
             print(f"  action {name} [{a_attrs.get('actionType')}]: {a_attrs.get('completionStatus')}")
             print_issues(token, action["id"])
-            download_artifacts(token, action["id"], args.out / f"run-{attrs.get('number')}" / slug(name))
+            download_artifacts(
+                token,
+                action["id"],
+                args.out / f"run-{attrs.get('number')}" / slug(name),
+                build_id=run["id"],
+                sha=commit_sha(run),
+                observations=observations,
+            )
+    report_path = write_diagnostic_report(args.out, observations)
+    print(f"diagnostic handoff: {report_path} ({len(observations)} observations)")
     return 0
 
 
