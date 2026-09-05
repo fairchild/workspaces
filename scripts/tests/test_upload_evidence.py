@@ -5,14 +5,17 @@
 # ///
 """Evidence upload contract tests.
 
-Intent: protect video MIME handling and the local upload-size guard without
-network access, secrets, UI access, or live evidence-store mutations.
+Intent: protect video MIME handling, the local upload-size guard, and the rule
+that the printed URL comes from the store rather than from the path we asked
+for — without network access, secrets, UI access, or live evidence-store
+mutations.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import os
 import sys
 import tempfile
@@ -20,6 +23,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import urlsplit, urlunsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -30,14 +34,32 @@ upload_evidence = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(upload_evidence)
 
 
+MINTED_SEGMENT = "PRF-zMRuZN3Ih0j14u_o3g"
+
+
 class FakeResponse:
     status = 201
+
+    def __init__(self, body: bytes = b"") -> None:
+        self._body = body
+
+    def read(self) -> bytes:
+        return self._body
 
     def __enter__(self) -> "FakeResponse":
         return self
 
     def __exit__(self, *_args: object) -> None:
         return None
+
+
+def minting_store(request: object, *_args: object, **_kwargs: object) -> FakeResponse:
+    """Stand in for the worker, which stores under a key it mints itself."""
+    parts = urlsplit(request.full_url)  # type: ignore[attr-defined]
+    head, _, filename = parts.path.rpartition("/")
+    key = f"{head}/{MINTED_SEGMENT}/{filename}".lstrip("/")
+    url = urlunsplit((parts.scheme, parts.netloc, f"/{key}", "", ""))
+    return FakeResponse(json.dumps({"url": url, "key": key}).encode())
 
 
 class UploadEvidenceTests(unittest.TestCase):
@@ -73,7 +95,7 @@ class UploadEvidenceTests(unittest.TestCase):
                     video = Path(tmp) / f"hero-flow.{extension}"
                     video.write_bytes(b"video-evidence")
                     with patch.object(
-                        upload_evidence, "urlopen", return_value=FakeResponse()
+                        upload_evidence, "urlopen", side_effect=minting_store
                     ) as urlopen:
                         result, stdout, stderr = self.run_main(video)
 
@@ -88,7 +110,7 @@ class UploadEvidenceTests(unittest.TestCase):
             log = Path(tmp) / "swift-test.txt"
             log.write_text("All tests passed\n", encoding="utf-8")
             with patch.object(
-                upload_evidence, "urlopen", return_value=FakeResponse()
+                upload_evidence, "urlopen", side_effect=minting_store
             ) as urlopen:
                 result, stdout, stderr = self.run_main(log)
 
@@ -128,6 +150,39 @@ class UploadEvidenceTests(unittest.TestCase):
             self.assertEqual(result, 1)
             self.assertIn("file grew to 5 bytes", stderr)
             urlopen.assert_not_called()
+
+    def test_prints_the_url_the_store_returned_not_the_one_we_asked_for(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shot = Path(tmp) / "sidebar.png"
+            shot.write_bytes(b"png-bytes")
+
+            with patch.object(
+                upload_evidence, "urlopen", side_effect=minting_store
+            ) as urlopen:
+                result, stdout, stderr = self.run_main(shot)
+
+            self.assertEqual(result, 0, stderr)
+            requested = urlopen.call_args.args[0].full_url
+            printed = stdout.strip()
+            self.assertNotEqual(printed, requested)
+            self.assertIn(MINTED_SEGMENT, printed)
+            self.assertTrue(printed.endswith("sidebar.png"), printed)
+
+    def test_fails_when_the_store_reports_no_url(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shot = Path(tmp) / "sidebar.png"
+            shot.write_bytes(b"png-bytes")
+
+            for body in (b"", b"not json", b"{}", b'{"url": ""}'):
+                with self.subTest(body=body):
+                    with patch.object(
+                        upload_evidence, "urlopen", return_value=FakeResponse(body)
+                    ):
+                        result, stdout, stderr = self.run_main(shot)
+
+                    self.assertEqual(result, 1)
+                    self.assertEqual(stdout, "")
+                    self.assertIn("returned no URL", stderr)
 
 
 if __name__ == "__main__":
