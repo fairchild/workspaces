@@ -36,6 +36,7 @@ jobs:
       pr_number: ${{ steps.admit.outputs.pr_number }}
       reviewer: ${{ steps.admit.outputs.reviewer }}
       head_sha: ${{ steps.admit.outputs.head_sha }}
+      standing_review: ${{ steps.admit.outputs.standing_review }}
       linked_issue: ${{ steps.admit.outputs.linked_issue }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -178,6 +179,7 @@ jobs:
           FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REFRESH_STALE: ${{ needs.admit.outputs.refresh_stale }}
+          STANDING_REVIEW: ${{ needs.admit.outputs.standing_review }}
         run: |
           ARGS=(--pr "${{ needs.admit.outputs.pr_number }}")
           ARGS+=(--expected-head "${{ needs.admit.outputs.head_sha }}")
@@ -190,6 +192,13 @@ jobs:
           fi
           if [ "$BODY_EDIT" = "true" ]; then
             ARGS+=(--body-edit-review)
+          fi
+          # Admission recorded which standing verdict this run set out to
+          # answer. If a concurrent admission answering the same one has since
+          # posted, that verdict is no longer standing and this run stands down
+          # rather than reviewing the head twice (#1509).
+          if [ -n "$STANDING_REVIEW" ]; then
+            ARGS+=(--expected-standing-review "$STANDING_REVIEW")
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
       - name: Checkout admitted pull request head
@@ -275,6 +284,7 @@ jobs:
           FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REFRESH_STALE: ${{ needs.admit.outputs.refresh_stale }}
+          STANDING_REVIEW: ${{ needs.admit.outputs.standing_review }}
         run: |
           ARGS=(--pr "${{ needs.admit.outputs.pr_number }}")
           ARGS+=(--expected-head "${{ needs.admit.outputs.head_sha }}")
@@ -287,6 +297,13 @@ jobs:
           fi
           if [ "$BODY_EDIT" = "true" ]; then
             ARGS+=(--body-edit-review)
+          fi
+          # Admission recorded which standing verdict this run set out to
+          # answer. If a concurrent admission answering the same one has since
+          # posted, that verdict is no longer standing and this run stands down
+          # rather than reviewing the head twice (#1509).
+          if [ -n "$STANDING_REVIEW" ]; then
+            ARGS+=(--expected-standing-review "$STANDING_REVIEW")
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
       - name: Checkout admitted pull request head

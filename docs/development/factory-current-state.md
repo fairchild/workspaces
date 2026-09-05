@@ -61,6 +61,17 @@ automatic paths converge on the same derivation, so neither is a second opinion
 about when a rejection is answered; the owner's dispatch overrides that
 derivation outright rather than consulting it.
 
+More than one of them can fire for a single answer, and one of those pairings
+is by design: Factory Revise edits the body under an app token — which raises
+events, where `GITHUB_TOKEN` does not — and then dispatches a review itself, so
+a body-only revision arrives as both. Author cannot separate the cases, since
+the evidence lane reconciles `[pending-ci]` entries under the same kind of
+token and dispatches nothing. What makes it exactly one review is that
+admission records the id of the standing verdict it set out to answer, and each
+reviewer's serialized preflight requires that verdict to still be the standing
+one (`--expected-standing-review`). Whichever admission gets there second finds
+its objection superseded and stands down.
+
 - **The edit itself.** A body edit is a Review-lane trigger (`edited`, #1509).
   It carries `--body-edit-review`, which asks the same question
   `--refresh-stale-review` asks *and* is bound by the answer: an edit with no

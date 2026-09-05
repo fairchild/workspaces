@@ -657,9 +657,11 @@ class FactoryReviewTests(unittest.TestCase):
         state: str = "CHANGES_REQUESTED",
         head: str = "headsha",
         submitted_at: str = "2026-08-27T02:00:00Z",
+        review_id: int = 1,
     ) -> list[dict[str, object]]:
         return [
             {
+                "id": review_id,
                 "user": {"login": "workspace-agents[bot]"},
                 "commit_id": head,
                 "state": state,
@@ -805,18 +807,24 @@ class FactoryReviewTests(unittest.TestCase):
             "vars.FACTORY_REVIEW_ENABLED == 'true')) && "
             "(github.event.action != 'edited' || "
             "(github.event.changes.body != null && "
-            "github.event.pull_request.draft == false && "
-            "github.event.sender.type != 'Bot'))",
+            "github.event.pull_request.draft == false))",
         )
-        # The bot clause is not cosmetic. Factory Revise answers a body-only
-        # objection under April's app token -- app tokens raise events where
-        # GITHUB_TOKEN does not -- and then dispatches Factory Review itself.
-        # Subscribing to that edit as well admits the same answer twice, and
-        # re-reviews a head the first pass had just rejected again.
-        revise = (
-            REPO_ROOT / "scripts" / "factory-revise.py"
-        ).read_text(encoding="utf-8")
+        # No filter on the sender, deliberately. Factory Revise answers a
+        # body-only objection under April's app token -- app tokens raise
+        # events where GITHUB_TOKEN does not -- and then dispatches Factory
+        # Review itself, so its revisions do arrive twice. But `_evidence.yml`
+        # reconciles `[pending-ci]` entries under the same kind of token and
+        # dispatches nothing, and that edit is exactly the objection #1509
+        # exists to re-fire. Author cannot separate them; the standing-review
+        # binding below does.
+        self.assertNotIn("github.event.sender", WORKFLOW_PATH.read_text(encoding="utf-8"))
+        revise = (REPO_ROOT / "scripts" / "factory-revise.py").read_text(encoding="utf-8")
         self.assertIn("request_fresh_review(", revise)
+        evidence = (
+            REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("gh pr edit \"$PR_NUMBER\" --body-file pr-body.md", evidence)
+        self.assertNotIn("factory-review.yml", evidence)
         # Still secret-free, still no review-event subscription of its own.
         self.assertNotIn("secrets.", workflow)
         self.assertNotIn("pull_request_review:", workflow)
@@ -968,6 +976,74 @@ class FactoryReviewTests(unittest.TestCase):
             "matched=true",
             self.main_decision(standing, "--pr", "1509", "--body-edit-review"),
         )
+
+    def test_one_objection_is_answered_once_however_many_admissions_arrive(self) -> None:
+        # A body-only revision arrives twice by design: Factory Revise edits
+        # the PR under an app token, which raises `edited`, and then dispatches
+        # Factory Review itself. Both admissions bind to the verdict they set
+        # out to answer, so the second one stands down instead of reviewing a
+        # head the first pass just reviewed.
+        reviews = self.stale_reviews(review_id=4242)
+        self.assertEqual(
+            factory_review.standing_rejection_id(
+                reviews, reviewer="plat", head_sha="headsha"
+            ),
+            4242,
+        )
+        # Answered: the reviewer's standing verdict on this head is no longer
+        # the one that was admitted, so there is nothing left to bind to.
+        answered = reviews + self.stale_reviews(
+            state="APPROVED", submitted_at="2026-08-27T03:00:00Z", review_id=4243
+        )
+        self.assertIsNone(
+            factory_review.standing_rejection_id(
+                answered, reviewer="plat", head_sha="headsha"
+            )
+        )
+        # Answered with a fresh rejection is equally "not mine any more".
+        rejected_again = reviews + self.stale_reviews(
+            submitted_at="2026-08-27T03:00:00Z", review_id=4244
+        )
+        self.assertEqual(
+            factory_review.standing_rejection_id(
+                rejected_again, reviewer="plat", head_sha="headsha"
+            ),
+            4244,
+        )
+
+        # End to end: the second admission skips.
+        client = self.review_client(reviews)
+        self.assertIn(
+            "matched=true",
+            self.main_decision(
+                client, "--pr", "1509", "--body-edit-review",
+                "--expected-standing-review", "4242",
+            ),
+        )
+        self.assertIn(
+            "matched=false",
+            self.main_decision(
+                self.review_client(rejected_again), "--pr", "1509",
+                "--body-edit-review", "--expected-standing-review", "4242",
+            ),
+        )
+        # And admission publishes the id for the preflight to bind to.
+        self.assertIn(
+            "standing_review=4242",
+            self.main_decision(client, "--pr", "1509", "--body-edit-review"),
+        )
+
+    def test_the_executor_binds_each_reviewer_preflight_to_that_verdict(self) -> None:
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn("standing_review: ${{ steps.admit.outputs.standing_review }}", executor)
+        # Both reviewers, and only in the serialized preflight -- admission is
+        # what records the id, so it has nothing to bind to yet.
+        self.assertEqual(executor.count("ARGS+=(--expected-standing-review "), 2)
+        self.assertEqual(
+            executor.count("STANDING_REVIEW: ${{ needs.admit.outputs.standing_review }}"), 2
+        )
+        admit = executor.split("  april:", 1)[0]
+        self.assertNotIn("--expected-standing-review", admit)
 
     def test_a_skipped_run_is_not_an_attempt(self) -> None:
         # A run whose jobs were all skipped by `if:` ran no step, so it is

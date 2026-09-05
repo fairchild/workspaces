@@ -283,6 +283,29 @@ def latest_review_by(
     return max(mine, key=lambda review: str(review.get("submitted_at") or ""))
 
 
+def standing_rejection_id(
+    reviews: list[dict[str, Any]],
+    *,
+    reviewer: str,
+    head_sha: str,
+) -> int | None:
+    """The id of the reviewer's standing CHANGES_REQUESTED verdict on this head.
+
+    Two admissions answering one objection have this id in common, and it is
+    also what tells them apart once either has answered it: posting a review
+    replaces the standing verdict, so the id changes or disappears. Binding an
+    admission to the id it set out to answer is what makes "exactly one fresh
+    review" a mechanism rather than a hope -- a body edit and the Factory
+    Revise dispatch that accompanies it both arrive, and the second one finds
+    the objection already superseded (#1509).
+    """
+    standing = latest_review_by(reviews, reviewer=reviewer, head_sha=head_sha)
+    if standing is None or str(standing.get("state") or "").upper() != "CHANGES_REQUESTED":
+        return None
+    identifier = standing.get("id")
+    return int(identifier) if isinstance(identifier, int) else None
+
+
 def stale_review_refreshable(
     pull_request: dict[str, Any],
     files: list[dict[str, Any]],
@@ -671,6 +694,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--expected-head", default="")
     parser.add_argument("--expected-reviewer", choices=sorted(REVIEWER_BOTS))
+    parser.add_argument(
+        "--expected-standing-review",
+        default="",
+        help=(
+            "The id of the standing CHANGES_REQUESTED verdict this run was "
+            "admitted to answer. Skip if it is no longer the standing one: "
+            "another admission answering the same objection got there first."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -742,11 +774,28 @@ def main() -> int:
         and args.expected_reviewer != decision.reviewer
     ):
         decision = ReviewDecision("skip", "counterpart route changed after admission")
+    if args.expected_standing_review and decision.action == "review":
+        current = standing_rejection_id(
+            reviews, reviewer=decision.reviewer, head_sha=head_sha
+        )
+        if str(current or "") != args.expected_standing_review:
+            decision = ReviewDecision(
+                "skip", "the standing review this answers was already answered"
+            )
     print(f"Factory review decision for #{args.pr}: {decision.action} ({decision.reason})")
+    standing_review = ""
+    if decision.action == "review" and decision.reviewer:
+        standing_review = str(
+            standing_rejection_id(
+                reviews, reviewer=decision.reviewer, head_sha=head_sha
+            )
+            or ""
+        )
     write_output("matched", "true" if decision.action == "review" else "false")
     write_output("pr_number", str(args.pr))
     write_output("reviewer", decision.reviewer)
     write_output("head_sha", head_sha)
+    write_output("standing_review", standing_review)
     write_output("linked_issue", str(linked_issue_number(pull_request) or ""))
     return 0
 
