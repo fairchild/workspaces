@@ -587,6 +587,18 @@ class FactoryReviewTests(unittest.TestCase):
             "skip",
         )
 
+    def test_the_sweep_and_the_lane_share_one_admission_definition(self) -> None:
+        """Both ask `admitted_for_review`; a gate written twice is a gate that drifts."""
+        fork = self.pull_request(head_repository="stranger/workspaces")
+        vouched = self.pull_request(
+            labels=("safe-to-review-fork",), head_repository="stranger/workspaces"
+        )
+
+        self.assertFalse(factory_review.admitted_for_review(fork))
+        self.assertTrue(factory_review.admitted_for_review(vouched))
+        self.assertTrue(factory_review.admitted_for_review(self.pull_request()))
+        self.assertEqual(self.decide(fork).action, "skip")
+
     def test_a_pull_request_with_no_known_provenance_is_refused(self) -> None:
         self.assertEqual(self.decide({"state": "open", "labels": []}).action, "skip")
 

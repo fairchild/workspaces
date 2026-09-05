@@ -340,9 +340,7 @@ def find_stale_reviews(
     the daily sweep, exactly the silent miss the review lane stopped having."""
     findings: list[StaleReview] = []
     for pull_request in pull_requests:
-        if not factory_review.head_is_on_this_repository(
-            pull_request
-        ) and factory_review.FORK_ADMISSION_LABEL not in factory_review.label_names(pull_request):
+        if not factory_review.admitted_for_review(pull_request):
             continue
         number = int(pull_request["number"])
         try:

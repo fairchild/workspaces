@@ -238,6 +238,17 @@ def head_is_on_this_repository(pull_request: dict[str, Any]) -> bool:
     return head_repository.casefold() == base_repository.casefold()
 
 
+def admitted_for_review(pull_request: dict[str, Any]) -> bool:
+    """Whether this pull request may enter the review lane at all.
+
+    One definition, because both the event-driven lane and the daily reconcile
+    sweep ask it and a security gate written twice is a security gate that drifts.
+    """
+    if not head_is_on_this_repository(pull_request):
+        return FORK_ADMISSION_LABEL in label_names(pull_request)
+    return True
+
+
 def reviewed_any_head(reviews: list[dict[str, Any]], *, reviewer: str) -> bool:
     """Whether this reviewer has ever submitted a verdict on this pull request."""
     expected_login = REVIEWER_BOTS[reviewer].casefold()
@@ -560,7 +571,7 @@ def evaluate_review(
     # token, so admitting an arbitrary fork would spend the review budget on anyone
     # who asks and would put text a stranger wrote in front of an agent that can
     # post. A fork enters only when someone with write access vouches for it.
-    if not head_is_on_this_repository(pull_request) and FORK_ADMISSION_LABEL not in labels:
+    if not admitted_for_review(pull_request):
         return ReviewDecision(
             "skip",
             f"pull request head is not on this repository; apply {FORK_ADMISSION_LABEL} to admit it",
@@ -653,16 +664,15 @@ def main() -> int:
     stale_refresh = False
     if args.refresh_stale_review and head_sha:
         reviewer = route_reviewer(pull_request, files)
-        if reviewer is not None:
-            stale_refresh = stale_review_refreshable(
-                pull_request,
-                files,
-                reviews,
-                reviewer=reviewer,
-                head_sha=head_sha,
-            )
-            if not stale_refresh:
-                print(
+        stale_refresh = stale_review_refreshable(
+            pull_request,
+            files,
+            reviews,
+            reviewer=reviewer,
+            head_sha=head_sha,
+        )
+        if not stale_refresh:
+            print(
                     f"Factory review stale-refresh for #{args.pr}: declined "
                     "(no standing changes-requested verdict on this head, or the "
                     "readiness gate still fails)"
