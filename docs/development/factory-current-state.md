@@ -56,16 +56,22 @@ live on #1102, again on #1377, and once more on #1491 where the objection was a
 missing evidence citation and the owner dispatched the re-review by hand.
 
 Three paths clear it, and none dismisses the review: the reviewer supersedes
-their own verdict, which keeps the review lane the thing that decides. All three
-converge on the same derivation, so none of them is a second opinion about when
-a rejection is answered.
+their own verdict, which keeps the review lane the thing that decides. The two
+automatic paths converge on the same derivation, so neither is a second opinion
+about when a rejection is answered; the owner's dispatch overrides that
+derivation outright rather than consulting it.
 
 - **The edit itself.** A body edit is a Review-lane trigger (`edited`, #1509).
   It carries `--body-edit-review`, which asks the same question
   `--refresh-stale-review` asks *and* is bound by the answer: an edit with no
   standing rejection to answer reviews nothing, so an ordinary body edit on an
   ordinary PR spends no review. Title and base-branch edits, and edits to
-  drafts, are filtered at the signal job, where a skipped run costs nothing.
+  drafts, are filtered at the signal job: `signal` is that workflow's only job,
+  so the run concludes `skipped` and the Executor's admission never fires. The
+  Executor is still handed a `workflow_run` record for it, which is why
+  `count_daily_run_attempts` no longer counts skipped runs — a run that ran no
+  step is neither crash-loop evidence nor spend, and counting them would let
+  ordinary title edits walk the runaway ceiling.
 - **Evidence Verify.** When it completes the last blocking evidence entry and no
   `blocked:` label remains, it dispatches Factory Review for that PR. The
   request is only a request — `factory-review.py --refresh-stale-review`

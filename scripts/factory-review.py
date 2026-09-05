@@ -368,11 +368,23 @@ def count_daily_run_attempts(
     current_run_id: str,
     current_run_attempt: int = 1,
 ) -> int:
-    """Count raw execution attempts today, including retries and failures."""
+    """Count raw execution attempts today, including retries and failures.
+
+    A run whose jobs were all skipped by their `if:` is not an attempt. No
+    step ran, so it cannot be part of a crash loop and it spent nothing --
+    only a failure or a real execution is evidence of either. Counting them
+    matters since #1509: the signal lane filters title-only, base-branch and
+    draft-body `edited` events at the job level, and a `workflow_run` run
+    record is created for the filtered signal whatever its conclusion, so
+    ordinary title edits would otherwise walk this ceiling and refuse the
+    lane's real reviews for the rest of the UTC day.
+    """
     attempts_by_run = {
         str(run["id"]): max(1, int(run.get("run_attempt") or 1))
         for run in runs
-        if isinstance(run, dict) and run.get("id") is not None
+        if isinstance(run, dict)
+        and run.get("id") is not None
+        and str(run.get("conclusion") or "").casefold() != "skipped"
     }
     if current_run_id:
         attempts_by_run[current_run_id] = max(

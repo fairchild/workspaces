@@ -19,11 +19,14 @@ permissions:
 jobs:
   # `signal` is the only job, and that is load-bearing for `edited`: when its
   # `if:` is false the whole run concludes `skipped`, not `success`, so the
-  # executor's `conclusion == 'success'` admission never fires and a filtered
-  # edit costs no trusted run and no artifact download. An `edited` event that
-  # changed only the title or the base branch is filtered here for that reason,
-  # and so is a draft -- a draft with a standing rejection is skipped by
-  # evaluate_review whatever its body now says.
+  # executor's `conclusion == 'success'` admission never fires -- no reviewer
+  # token, no artifact download, no step run at all. The executor is still
+  # handed a `workflow_run` record for the filtered run, which is why
+  # count_daily_run_attempts stopped counting skipped runs: otherwise ordinary
+  # title edits would walk the runaway ceiling. An `edited` event that changed
+  # only the title or the base branch is filtered here, and so is a draft -- a
+  # draft with a standing rejection is skipped by evaluate_review whatever its
+  # body now says.
   signal:
     if: >-
       (github.event_name == 'workflow_dispatch' ||

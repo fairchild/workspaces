@@ -792,13 +792,21 @@ class FactoryReviewTests(unittest.TestCase):
         # behaviour observed in this repository.
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         self.assertIn("types: [opened, ready_for_review, synchronize, edited]", workflow)
-        # `edited` also fires on title and base-branch changes, and a draft is
-        # skipped downstream whatever its body says (the draft case in
+        # The whole condition, normalized -- not substrings, which survive
+        # broken grouping and text that has been commented out. `edited` also
+        # fires on title and base-branch changes, and a draft is skipped
+        # downstream whatever its body says (the draft case in
         # test_refresh_only_bypasses_the_already_reviewed_skip), so neither
         # reaches the executor at all.
-        self.assertIn("github.event.action != 'edited' ||", workflow)
-        self.assertIn("github.event.changes.body != null &&", workflow)
-        self.assertIn("github.event.pull_request.draft == false", workflow)
+        self.assertEqual(
+            self.signal_job_condition(),
+            "(github.event_name == 'workflow_dispatch' || "
+            "(vars.AGENT_AUTOMATIONS_ENABLED == 'true' && "
+            "vars.FACTORY_REVIEW_ENABLED == 'true')) && "
+            "(github.event.action != 'edited' || "
+            "(github.event.changes.body != null && "
+            "github.event.pull_request.draft == false))",
+        )
         # Still secret-free, still no review-event subscription of its own.
         self.assertNotIn("secrets.", workflow)
         self.assertNotIn("pull_request_review:", workflow)
@@ -896,35 +904,97 @@ class FactoryReviewTests(unittest.TestCase):
             "skip",
         )
 
-    def test_the_body_edit_requirement_reaches_the_decision_through_main(self) -> None:
-        # A flag that parses but never reaches evaluate_review would satisfy
-        # every assertion above and still review on any body edit in
-        # production, so the wiring is asserted end to end.
+    def signal_job_condition(self) -> str:
+        """The signal job's `if:` expression, whitespace-normalized."""
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        block = workflow.split("    if: >-\n", 1)[1].split("    runs-on:", 1)[0]
+        return " ".join(block.split())
+
+    def main_decision(self, client, *argv: str) -> str:
+        buffer = io.StringIO()
+        with (
+            mock.patch.object(factory_review, "GitHubClient", return_value=client),
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "GITHUB_REPOSITORY": self.REPOSITORY,
+                    "GH_TOKEN": "token",
+                    "GITHUB_OUTPUT": "",
+                },
+            ),
+            mock.patch.object(sys, "argv", ["factory-review.py", *argv]),
+            contextlib.redirect_stdout(buffer),
+        ):
+            self.assertEqual(factory_review.main(), 0)
+        return buffer.getvalue()
+
+    def review_client(self, reviews):
         client = mock.Mock()
         client.pull_request.return_value = self.ready_pull_request()
         client.pull_request_files.return_value = []
-        client.pull_request_reviews.return_value = []
+        client.pull_request_reviews.return_value = list(reviews)
+        return client
 
-        def decide(*argv: str) -> str:
-            buffer = io.StringIO()
-            with (
-                mock.patch.object(factory_review, "GitHubClient", return_value=client),
-                mock.patch.dict(
-                    "os.environ",
-                    {
-                        "GITHUB_REPOSITORY": self.REPOSITORY,
-                        "GH_TOKEN": "token",
-                        "GITHUB_OUTPUT": "",
-                    },
-                ),
-                mock.patch.object(sys, "argv", ["factory-review.py", *argv]),
-                contextlib.redirect_stdout(buffer),
-            ):
-                self.assertEqual(factory_review.main(), 0)
-            return buffer.getvalue()
+    def test_the_body_edit_requirement_reaches_the_decision_through_main(self) -> None:
+        # A flag that parses but never reaches evaluate_review would satisfy
+        # every assertion above and still review on any body edit in
+        # production, so the wiring is asserted end to end -- in both
+        # directions, because a flag wired only to the requirement (and not to
+        # the derivation that lifts it) would decline every real body edit and
+        # still pass a negative-only test.
+        nothing_standing = self.review_client([])
+        self.assertIn("matched=true", self.main_decision(nothing_standing, "--pr", "1509"))
+        self.assertIn(
+            "matched=false",
+            self.main_decision(nothing_standing, "--pr", "1509", "--body-edit-review"),
+        )
 
-        self.assertIn("matched=true", decide("--pr", "1509"))
-        self.assertIn("matched=false", decide("--pr", "1509", "--body-edit-review"))
+        # The #1491 case end to end: a rejection standing on this exact head,
+        # a body that now passes readiness. Without the flag the dedup skips
+        # it, which is the bug; with the flag it reviews.
+        standing = self.review_client(self.stale_reviews())
+        self.assertIn("matched=false", self.main_decision(standing, "--pr", "1509"))
+        self.assertIn(
+            "matched=true",
+            self.main_decision(standing, "--pr", "1509", "--body-edit-review"),
+        )
+
+    def test_a_skipped_run_is_not_an_attempt(self) -> None:
+        # A run whose jobs were all skipped by `if:` ran no step, so it is
+        # neither crash-loop evidence nor spend. #1509 makes these ordinary:
+        # the signal lane filters title-only, base-branch and draft-body edits
+        # at the job level, and the executor still gets a run record for the
+        # filtered signal run. Counting those would let ordinary title edits
+        # walk the ceiling and refuse the lane's real reviews for the day.
+        runs = [
+            {"id": 1, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+            {"id": 2, "run_attempt": 1, "status": "completed", "conclusion": "skipped"},
+            {"id": 3, "run_attempt": 2, "status": "completed", "conclusion": "failure"},
+            {"id": 4, "status": "in_progress", "conclusion": None},
+        ]
+        # 1 (success) + 2 (a failure's retries) + 1 (in flight) + 1 (current).
+        self.assertEqual(factory_review.count_daily_run_attempts(runs, "5"), 5)
+        self.assertEqual(factory_review.count_daily_run_attempts([runs[1]], ""), 0)
+        # A failure still counts: that is the crash loop the ceiling exists for.
+        self.assertEqual(factory_review.count_daily_run_attempts([runs[2]], ""), 2)
+
+    def test_the_body_edit_bypass_is_bound_to_the_signal_runs_own_pull_request(self) -> None:
+        # The context artifact names its own pull request, and the lane that
+        # wrote it is pull-request-controlled. The bypass is the one request
+        # that can reach a head already reviewed, so it is granted only when
+        # that claim matches the pull request GitHub associates with the signal
+        # run. A missing association withdraws the bypass instead of failing
+        # the run, since `workflow_run.pull_requests` is empty for a fork and
+        # an admitted fork must still get its ordinary review.
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}",
+            executor,
+        )
+        guarded = executor.split('if [ "$RUN_EVENT" = "pull_request" ]; then', 1)[1]
+        guarded = guarded.split("fi\n", 1)[0]
+        self.assertIn('if [ "$RUN_PR_NUMBER" != "$PR_NUMBER" ]; then', guarded)
+        self.assertIn("BODY_EDIT=false", guarded)
 
     def test_only_the_owner_or_the_factory_may_dispatch_a_review(self) -> None:
         executor = EXECUTOR_PATH.read_text(encoding="utf-8")

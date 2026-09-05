@@ -57,6 +57,7 @@ jobs:
           REPOSITORY_OWNER: ${{ github.repository_owner }}
           RUN_ACTOR: ${{ github.event.workflow_run.actor.login }}
           RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
           PR_NUMBER="$(jq -er '.pr_number | select(type == "number")' context/factory-review-context.json)"
@@ -90,6 +91,16 @@ jobs:
           BODY_EDIT=false
           if [ "$RUN_EVENT" = "pull_request" ]; then
             BODY_EDIT="$(jq -r '.body_edited == true' context/factory-review-context.json)"
+            # The pull request number in the context is a claim by the same
+            # untrusted lane, and the bypass is the one request that can reach
+            # a head already reviewed. Grant it only for the pull request
+            # GitHub itself associates with the signal run. An absent
+            # association withdraws the bypass rather than failing the run:
+            # `workflow_run.pull_requests` is empty for a fork, and an admitted
+            # fork must still get its ordinary review.
+            if [ "$RUN_PR_NUMBER" != "$PR_NUMBER" ]; then
+              BODY_EDIT=false
+            fi
           fi
           {
             echo "pr_number=$PR_NUMBER"
