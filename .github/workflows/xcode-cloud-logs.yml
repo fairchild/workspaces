@@ -15,7 +15,6 @@ on:
       - ci/xcode-cloud-logs
 
 permissions:
-  actions: read
   contents: read
 
 concurrency:
@@ -77,8 +76,15 @@ jobs:
             exit 0
           fi
           validated_url="$(uv run --script scripts/fetch-xcode-cloud-logs.py --validate-callback-url "$OPS_DIAGNOSTIC_URL")"
-          echo "::add-mask::$OPS_DIAGNOSTIC_TOKEN"
           set +x
+          case "$OPS_DIAGNOSTIC_TOKEN" in
+            *[!A-Za-z0-9_-]*) echo "error: OPS_DIAGNOSTIC_TOKEN has an unsupported format" >&2; exit 1 ;;
+          esac
+          if test "${#OPS_DIAGNOSTIC_TOKEN}" -lt 32; then
+            echo "error: OPS_DIAGNOSTIC_TOKEN must contain at least 32 URL-safe characters" >&2
+            exit 1
+          fi
+          echo "::add-mask::$OPS_DIAGNOSTIC_TOKEN"
           auth_config="$(mktemp)"
           chmod 600 "$auth_config"
           trap 'rm -f "$auth_config"' EXIT
