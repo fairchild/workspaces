@@ -61,6 +61,27 @@ struct PrepareReleaseScriptTests {
         #expect(result.exitCode == 1)
         #expect(result.stderr.contains("performance-benchmark gate would block v0.3.0"))
     }
+
+    @Test("missing uv is a runtime prerequisite failure, not a benchmark failure")
+    func missingUVIsNotReportedAsStaleBenchmarks() throws {
+        let fixture = try ReleasePreparationFixture.create()
+        defer { fixture.cleanup() }
+
+        try fixture.commitSeed(message: "chore: bootstrap fixture")
+        try fixture.createTag("v0.1.0")
+        try fixture.commitChange(path: "feature.txt", content: "feature\n", message: "feat: first")
+        try fixture.configureOrigin()
+
+        let result = try fixture.runPrepareRelease(
+            version: "0.2.0",
+            dryRun: true,
+            expectedStatus: 1,
+            environment: ["PATH": "/usr/bin:/bin"]
+        )
+
+        #expect(result.stderr.contains("Required command not found: uv"))
+        #expect(!result.stderr.contains("performance-benchmark gate would block"))
+    }
 }
 
 private struct ReleasePreparationFixture {
@@ -185,12 +206,22 @@ private struct ReleasePreparationFixture {
         try Self.run(["git", "remote", "add", "origin", remoteURL.path], in: rootURL)
     }
 
-    func runPrepareRelease(version: String, dryRun: Bool, expectedStatus: Int32 = 0) throws -> ProcessResult {
+    func runPrepareRelease(
+        version: String,
+        dryRun: Bool,
+        expectedStatus: Int32 = 0,
+        environment: [String: String] = [:]
+    ) throws -> ProcessResult {
         var arguments = [scriptURL.path, "--version", version]
         if dryRun {
             arguments.append("--dry-run")
         }
-        return try Self.run(["/bin/bash"] + arguments, in: rootURL, expectedStatus: expectedStatus)
+        return try Self.run(
+            ["/bin/bash"] + arguments,
+            in: rootURL,
+            expectedStatus: expectedStatus,
+            environment: environment
+        )
     }
 
     func cleanup() {
@@ -203,11 +234,17 @@ private struct ReleasePreparationFixture {
     }
 
     @discardableResult
-    private static func run(_ args: [String], in directory: URL, expectedStatus: Int32 = 0) throws -> ProcessResult {
+    private static func run(
+        _ args: [String],
+        in directory: URL,
+        expectedStatus: Int32 = 0,
+        environment: [String: String] = [:]
+    ) throws -> ProcessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = args
         process.currentDirectoryURL = directory
+        process.environment = ProcessInfo.processInfo.environment.merging(environment) { _, replacement in replacement }
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()

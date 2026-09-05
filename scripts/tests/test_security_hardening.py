@@ -320,6 +320,13 @@ class SecurityHardeningTests(unittest.TestCase):
         xcode_cloud_post_clone = (REPO_ROOT / "ci_scripts/ci_post_clone.sh").read_text()
         self.assertIn("brew install zig@0.15", xcode_cloud_post_clone)
         self.assertIn('homebrew_zig_bin="/opt/homebrew/opt/zig@0.15/bin/zig"', xcode_cloud_post_clone)
+        self.assertIn("brew install uv", xcode_cloud_post_clone)
+        self.assertIn("uv python install 3.11", xcode_cloud_post_clone)
+        self.assertLess(
+            xcode_cloud_post_clone.index('echo "stage=release-perf-runtime-probe"'),
+            xcode_cloud_post_clone.index("./scripts/build-ghosttykit.sh"),
+            "Xcode Cloud must prove the UV benchmark runtime before the expensive GhosttyKit build",
+        )
 
         setup = (REPO_ROOT / "scripts/setup").read_text()
         self.assertIn('"$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml"', setup)

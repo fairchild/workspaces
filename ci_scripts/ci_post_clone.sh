@@ -1,7 +1,7 @@
 #!/bin/sh
 # Xcode Cloud surfaces only "exited with code 1" in notifications, so this
-# script runs with xtrace and an environment survey: the failing command is
-# the xtrace line just above the trap's own "status=" line in the build
+# script labels each expensive stage, runs with xtrace and an environment
+# survey: the failing command is the xtrace line just above the trap's own "status=" line in the build
 # report log. (The trap disables xtrace for itself so it doesn't add more
 # `+` noise after that point.)
 set -eux
@@ -39,6 +39,26 @@ fi
 if ! command -v swift-format >/dev/null 2>&1; then
   brew install swift-format
 fi
+
+# The release benchmark gate is a UV script. Xcode Cloud images do not
+# guarantee either uv or a Python version that satisfies its PEP 723 metadata.
+# Install and prove both before the GhosttyKit build consumes several minutes.
+if ! command -v uv >/dev/null 2>&1; then
+  brew install uv
+fi
+
+uv --version
+uv python install 3.11
+uv python find 3.11
+
+echo "stage=release-perf-runtime-probe"
+perf_probe_csv="$(mktemp "${TMPDIR:-/tmp}/workspaces-perf-probe.XXXXXX")"
+head -n 1 docs/performance_benchmarks.csv > "$perf_probe_csv"
+echo "v0.0.0-probe,0000000,2026-01-01T00:00:00Z,probe,installed,probe,,,,,,,,,runnability probe" >> "$perf_probe_csv"
+uv run --python 3.11 --script ./scripts/check-perf-benchmarks.py --tag v0.0.0-probe --csv "$perf_probe_csv"
+rm -f "$perf_probe_csv"
+
+echo "stage=ghosttykit-build"
 
 homebrew_zig_bin="/opt/homebrew/opt/zig@0.15/bin/zig"
 if [ ! -x "$homebrew_zig_bin" ]; then
