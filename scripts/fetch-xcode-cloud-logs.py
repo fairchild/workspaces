@@ -36,6 +36,11 @@ INTERESTING_LOG = re.compile(r"post[_-]?clone|pre[_-]?xcodebuild|RunScript|ghost
 FAILURE_LINE = re.compile(r"error|failed|fatal|No such file|command not found|sudo", re.I)
 TAIL_LINES = 200
 MAX_LINE_CHARS = 400
+FAILURE_CONTEXT_LINES = 3
+MAX_FAILURE_CONTEXTS = 20
+SENSITIVE_VALUE = re.compile(
+    r"(?i)\b(authorization\s*:\s*bearer|(?:api[_-]?key|token|password|secret)\s*[=:])\s*\S+"
+)
 
 
 def require_env(name: str) -> str:
@@ -117,7 +122,33 @@ def print_issues(token: str, action_id: str) -> None:
 
 
 def clip(line: str) -> str:
+    line = SENSITIVE_VALUE.sub(r"\1 <redacted>", line)
     return line if len(line) <= MAX_LINE_CHARS else line[:MAX_LINE_CHARS] + " …[truncated]"
+
+
+def failure_contexts(lines: list[str], *, before: int = 0) -> list[tuple[int, list[str]]]:
+    """Return bounded context for failure lines outside a trailing excerpt."""
+    contexts = []
+    for index, line in enumerate(lines[:before] if before else lines):
+        if not FAILURE_LINE.search(line):
+            continue
+        start = max(0, index - FAILURE_CONTEXT_LINES)
+        end = min(len(lines), index + FAILURE_CONTEXT_LINES + 1)
+        contexts.append((index, lines[start:end]))
+        if len(contexts) == MAX_FAILURE_CONTEXTS:
+            break
+    return contexts
+
+
+def print_failure_contexts(path: Path, lines: list[str], *, before: int = 0) -> None:
+    contexts = failure_contexts(lines, before=before)
+    if not contexts:
+        return
+    print(f"    ---- failure context (up to {MAX_FAILURE_CONTEXTS}) {path.name} ----")
+    for index, context in contexts:
+        start = max(0, index - FAILURE_CONTEXT_LINES)
+        for line_number, line in enumerate(context, start=start + 1):
+            print(f"    {path.name}:{line_number}: {clip(line)}")
 
 
 def excerpt(path: Path) -> None:
@@ -132,6 +163,10 @@ def excerpt(path: Path) -> None:
     lines = raw.decode("utf-8", "replace").splitlines()
     interesting = path.name and INTERESTING_LOG.search(str(path))
     if interesting:
+        # Xcode script logs can emit a decisive failure long before their final
+        # diagnostic footer. Preserve a bounded context for those earlier hits
+        # without duplicating the final tail or dumping the entire log.
+        print_failure_contexts(path, lines, before=max(0, len(lines) - TAIL_LINES))
         print(f"    ---- tail -{TAIL_LINES} {path.name} ----")
         for line in lines[-TAIL_LINES:]:
             print(f"    {clip(line)}")
