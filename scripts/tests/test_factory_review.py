@@ -36,18 +36,28 @@ factory_review = load_module("factory_review", SCRIPT_PATH)
 
 
 class FactoryReviewTests(unittest.TestCase):
+    REPOSITORY = "fairchild/workspaces"
+
     def pull_request(
         self,
         *,
-        label: str = "author:codex",
+        label: str | None = "author:codex",
+        labels: tuple[str, ...] | None = None,
         draft: bool = False,
         head_sha: str = "abc123",
+        head_repository: str | None = None,
     ):
+        if labels is None:
+            labels = () if label is None else (label,)
         return {
             "state": "open",
             "draft": draft,
-            "labels": [{"name": label}],
-            "head": {"sha": head_sha},
+            "labels": [{"name": name} for name in labels],
+            "head": {
+                "sha": head_sha,
+                "repo": {"full_name": head_repository or self.REPOSITORY},
+            },
+            "base": {"repo": {"full_name": self.REPOSITORY}},
         }
 
     def test_fixed_persona_pairs_route_to_counterpart(self) -> None:
@@ -67,14 +77,15 @@ class FactoryReviewTests(unittest.TestCase):
             {"filename": "scripts/helper.py"},
         ]
 
-        for label in ("author:claude-code", "author:codex", "author:fable-orchestrator"):
+        for label in ("author:claude-code", "author:codex", "author:fable-orchestrator", None):
             with self.subTest(label=label):
+                pull_request = self.pull_request(label=label)
                 self.assertEqual(
-                    factory_review.counterpart_reviewer(label, application_files),
+                    factory_review.route_reviewer(pull_request, application_files),
                     "april",
                 )
                 self.assertEqual(
-                    factory_review.counterpart_reviewer(label, platform_files),
+                    factory_review.route_reviewer(pull_request, platform_files),
                     "plat",
                 )
 
@@ -518,19 +529,106 @@ class FactoryReviewTests(unittest.TestCase):
         with self.assertRaisesRegex(factory_review.FactoryReviewError, "positive integer"):
             factory_review.parse_runaway_cap("0", 12)
 
-    def test_human_or_draft_pull_request_does_not_enter_review_lane(self) -> None:
-        files = [{"filename": "Sources/Feature.swift"}]
-        human = self.pull_request(label="quality")
-        draft = self.pull_request(draft=True)
+    FILES = [{"filename": "Sources/Feature.swift"}]
 
+    def decide(self, pull_request, reviews=(), *, force=False):
+        return factory_review.evaluate_review(
+            pull_request, self.FILES, list(reviews), force=force
+        )
+
+    def april_review(self, *, head: str = "abc123", state: str = "APPROVED"):
+        return {
+            "user": {"login": "april-clearwater[bot]"},
+            "commit_id": head,
+            "state": state,
+        }
+
+    def test_an_unlabelled_pull_request_is_reviewed(self) -> None:
+        """The failure this default reverses: no author label used to mean no review,
+        and nothing on the pull request said so."""
+        decision = self.decide(self.pull_request(label=None))
+
+        self.assertEqual(decision.action, "review")
+        self.assertEqual(decision.reviewer, "april")
+
+    def test_a_label_that_is_not_an_author_label_does_not_suppress_review(self) -> None:
+        self.assertEqual(self.decide(self.pull_request(label="quality")).action, "review")
+
+    def test_the_skip_review_label_suppresses_review(self) -> None:
+        decision = self.decide(self.pull_request(labels=("author:codex", "skip-review")))
+
+        self.assertEqual(decision.action, "skip")
+        self.assertIn("skip-review", decision.reason)
+
+    def test_a_fork_pull_request_is_not_reviewed(self) -> None:
+        """A review reads the diff and writes under a reviewer app's token, so an
+        unvouched fork is refused rather than admitted by default."""
+        decision = self.decide(self.pull_request(head_repository="stranger/workspaces"))
+
+        self.assertEqual(decision.action, "skip")
+        self.assertIn("not on this repository", decision.reason)
+
+    def test_a_vouched_fork_pull_request_is_reviewed(self) -> None:
+        decision = self.decide(
+            self.pull_request(
+                labels=("author:codex", "safe-to-review-fork"),
+                head_repository="stranger/workspaces",
+            )
+        )
+
+        self.assertEqual(decision.action, "review")
+
+    def test_an_author_label_cannot_vouch_for_a_fork(self) -> None:
+        """The label a stranger cannot apply is the one that admits them."""
         self.assertEqual(
-            factory_review.evaluate_review(human, files, [], force=False).action,
+            self.decide(
+                self.pull_request(label="author:claude-code", head_repository="stranger/workspaces")
+            ).action,
             "skip",
         )
+
+    def test_the_sweep_and_the_lane_share_one_admission_definition(self) -> None:
+        """Both ask `admitted_for_review`; a gate written twice is a gate that drifts."""
+        fork = self.pull_request(head_repository="stranger/workspaces")
+        vouched = self.pull_request(
+            labels=("safe-to-review-fork",), head_repository="stranger/workspaces"
+        )
+
+        self.assertFalse(factory_review.admitted_for_review(fork))
+        self.assertTrue(factory_review.admitted_for_review(vouched))
+        self.assertTrue(factory_review.admitted_for_review(self.pull_request()))
+        self.assertEqual(self.decide(fork).action, "skip")
+
+    def test_a_pull_request_with_no_known_provenance_is_refused(self) -> None:
+        self.assertEqual(self.decide({"state": "open", "labels": []}).action, "skip")
+
+    def test_a_draft_is_reviewed_once_and_then_left_alone(self) -> None:
+        draft = self.pull_request(draft=True)
+        first = self.decide(draft)
+
+        self.assertEqual(first.action, "review")
+
+        pushed = self.pull_request(draft=True, head_sha="def456")
         self.assertEqual(
-            factory_review.evaluate_review(draft, files, [], force=False).action,
+            self.decide(pushed, [self.april_review()]).action,
             "skip",
         )
+
+    def test_marking_a_draft_ready_restores_the_per_push_cadence(self) -> None:
+        ready = self.pull_request(draft=False, head_sha="def456")
+
+        self.assertEqual(self.decide(ready, [self.april_review()]).action, "review")
+
+    def test_a_comment_only_review_does_not_quiet_a_draft(self) -> None:
+        pushed = self.pull_request(draft=True, head_sha="def456")
+        commented = [self.april_review(state="COMMENTED")]
+
+        self.assertEqual(self.decide(pushed, commented).action, "review")
+
+    def test_a_closed_pull_request_is_never_reviewed(self) -> None:
+        closed = {**self.pull_request(), "state": "closed"}
+
+        self.assertEqual(self.decide(closed).action, "skip")
 
     READY_BODY = (
         "## Summary\n\nA change.\n\n"
@@ -548,7 +646,8 @@ class FactoryReviewTests(unittest.TestCase):
             "state": "open",
             "labels": [{"name": name} for name in labels],
             "user": {"login": "april-clearwater[bot]"},
-            "head": {"sha": "headsha"},
+            "head": {"sha": "headsha", "repo": {"full_name": self.REPOSITORY}},
+            "base": {"repo": {"full_name": self.REPOSITORY}},
             "body": self.READY_BODY if body is None else body,
         }
 

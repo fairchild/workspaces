@@ -42,15 +42,24 @@ def _load_pr_readiness():
 pr_readiness = _load_pr_readiness()
 
 
+# Recusal, and the only thing an author label still decides. A persona must not
+# review its own work, and when that work lands under a login other than the
+# persona's own app the label is the only signal that says whose it is.
 AUTHOR_REVIEWERS = {
     "author:april": "plat",
     "author:plat": "april",
 }
-APPLICATION_DEFAULT_AUTHORS = {
-    "author:claude-code",
-    "author:codex",
-    "author:fable-orchestrator",
-}
+# Suppresses review on a pull request that does not want one. An opt-out, because
+# an opt-in is a gate someone forgets: an unlabelled pull request used to be
+# skipped silently, which is the failure this default reverses.
+SKIP_REVIEW_LABEL = "skip-review"
+# Admits a fork pull request into the review lane. Applying it takes write access,
+# which is the point: it is a person with commit rights vouching for the diff.
+#
+# Deliberately not `safe-to-run-agent`: that one fires the mention executor on
+# `pull_request: labeled` and is deleted once consumed, so a fork admitted with it
+# would trigger an unrelated lane and lose its admission on the next push.
+FORK_ADMISSION_LABEL = "safe-to-review-fork"
 REVIEWER_BOTS = {
     "april": "april-clearwater[bot]",
     "plat": "workspace-agents[bot]",
@@ -189,11 +198,65 @@ def mostly_platform_files(files: list[dict[str, Any]]) -> bool:
 
 
 def counterpart_reviewer(author: str, files: list[dict[str, Any]]) -> str | None:
-    if author in AUTHOR_REVIEWERS:
-        return AUTHOR_REVIEWERS[author]
-    if author in APPLICATION_DEFAULT_AUTHORS:
-        return "plat" if mostly_platform_files(files) else "april"
-    return None
+    """The reviewer a persona's own author label demands, or `None` for every
+    other label. Recusal only; `route_reviewer` is what callers want."""
+    return AUTHOR_REVIEWERS.get(author)
+
+
+def route_reviewer(pull_request: dict[str, Any], files: list[dict[str, Any]]) -> str:
+    """Who reviews this pull request. Always someone.
+
+    The surface decides it — platform diffs to plat, everything else to april —
+    and an `author:april`/`author:plat` label overrides that to keep a persona
+    off its own work. No other label participates. Routing by label was the same
+    answer the diff already gave for every generalist author, and its one real
+    effect was that a pull request nobody had labelled got no review at all.
+    """
+    author = author_label(pull_request)
+    if author is not None:
+        counterpart = counterpart_reviewer(author, files)
+        if counterpart is not None:
+            return counterpart
+    return "plat" if mostly_platform_files(files) else "april"
+
+
+def head_is_on_this_repository(pull_request: dict[str, Any]) -> bool:
+    """Whether the head branch lives in the repository being reviewed.
+
+    Pushing a branch here takes write access, so a same-repository head is
+    evidence the author had commit rights when they pushed it. A fork head is
+    evidence of nothing — this repository is public and anyone may open one.
+
+    `author_association` is deliberately not consulted: apps that legitimately
+    push branches here report `NONE` or `CONTRIBUTOR`, so requiring an
+    association would refuse the factory's own pull requests.
+    """
+    head_repository = str(((pull_request.get("head") or {}).get("repo") or {}).get("full_name") or "")
+    base_repository = str(((pull_request.get("base") or {}).get("repo") or {}).get("full_name") or "")
+    if not head_repository or not base_repository:
+        return False
+    return head_repository.casefold() == base_repository.casefold()
+
+
+def admitted_for_review(pull_request: dict[str, Any]) -> bool:
+    """Whether this pull request may enter the review lane at all.
+
+    One definition, because both the event-driven lane and the daily reconcile
+    sweep ask it and a security gate written twice is a security gate that drifts.
+    """
+    if not head_is_on_this_repository(pull_request):
+        return FORK_ADMISSION_LABEL in label_names(pull_request)
+    return True
+
+
+def reviewed_any_head(reviews: list[dict[str, Any]], *, reviewer: str) -> bool:
+    """Whether this reviewer has ever submitted a verdict on this pull request."""
+    expected_login = REVIEWER_BOTS[reviewer].casefold()
+    return any(
+        str((review.get("user") or {}).get("login") or "").casefold() == expected_login
+        and str(review.get("state") or "").upper() != "COMMENTED"
+        for review in reviews
+    )
 
 
 def latest_review_by(
@@ -500,27 +563,39 @@ def evaluate_review(
 ) -> ReviewDecision:
     if str(pull_request.get("state") or "").casefold() != "open":
         return ReviewDecision("skip", "pull request is not open")
-    if bool(pull_request.get("draft")):
-        return ReviewDecision("skip", "pull request is a draft")
-    author = author_label(pull_request)
-    if author is None:
-        return ReviewDecision("skip", "pull request does not carry exactly one author label")
-    reviewer = counterpart_reviewer(author, files)
-    if reviewer is None:
-        return ReviewDecision("skip", f"author label {author} has no counterpart route")
+    labels = label_names(pull_request)
+    if SKIP_REVIEW_LABEL in labels:
+        return ReviewDecision("skip", f"review suppressed by the {SKIP_REVIEW_LABEL} label")
+    # The trust boundary, and the reason this is not simply "review everything".
+    # A review reads the diff and writes to the pull request under a reviewer app's
+    # token, so admitting an arbitrary fork would spend the review budget on anyone
+    # who asks and would put text a stranger wrote in front of an agent that can
+    # post. A fork enters only when someone with write access vouches for it.
+    if not admitted_for_review(pull_request):
+        return ReviewDecision(
+            "skip",
+            f"pull request head is not on this repository; apply {FORK_ADMISSION_LABEL} to admit it",
+        )
+    reviewer = route_reviewer(pull_request, files)
     pull_request_author = str((pull_request.get("user") or {}).get("login") or "").casefold()
     if pull_request_author == REVIEWER_BOTS[reviewer].casefold():
         return ReviewDecision("skip", f"{reviewer} cannot review its own pull request")
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
     if not head_sha:
         return ReviewDecision("skip", "pull request has no head SHA")
+    # A draft gets the first read and then goes quiet. The point of drafting is to
+    # keep working, and a review per push while the shape is still moving spends
+    # budget on code the author has not finished arguing with. Marking it ready
+    # fires `ready_for_review`, which brings the per-push cadence back.
+    if bool(pull_request.get("draft")) and not force and reviewed_any_head(reviews, reviewer=reviewer):
+        return ReviewDecision("skip", f"{reviewer} already reviewed this draft")
     if (
         not force
         and not stale_refresh
         and reviewed_head(reviews, reviewer=reviewer, head_sha=head_sha)
     ):
         return ReviewDecision("skip", f"{reviewer} already reviewed head {head_sha}")
-    return ReviewDecision("review", f"route {author} to {reviewer}", reviewer)
+    return ReviewDecision("review", f"route to {reviewer}", reviewer)
 
 
 def write_output(name: str, value: str) -> None:
@@ -588,18 +663,16 @@ def main() -> int:
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
     stale_refresh = False
     if args.refresh_stale_review and head_sha:
-        author = author_label(pull_request)
-        reviewer = counterpart_reviewer(author, files) if author else None
-        if reviewer is not None:
-            stale_refresh = stale_review_refreshable(
-                pull_request,
-                files,
-                reviews,
-                reviewer=reviewer,
-                head_sha=head_sha,
-            )
-            if not stale_refresh:
-                print(
+        reviewer = route_reviewer(pull_request, files)
+        stale_refresh = stale_review_refreshable(
+            pull_request,
+            files,
+            reviews,
+            reviewer=reviewer,
+            head_sha=head_sha,
+        )
+        if not stale_refresh:
+            print(
                     f"Factory review stale-refresh for #{args.pr}: declined "
                     "(no standing changes-requested verdict on this head, or the "
                     "readiness gate still fails)"

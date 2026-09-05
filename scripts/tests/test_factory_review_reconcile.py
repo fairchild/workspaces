@@ -47,6 +47,7 @@ def pull_request(
     draft: bool = False,
     head_sha: str = "sha1",
     author_label: str = "author:claude-code",
+    head_repository: str = "fairchild/workspaces",
 ) -> dict[str, object]:
     return {
         "number": number,
@@ -54,7 +55,8 @@ def pull_request(
         "draft": draft,
         "labels": [{"name": author_label}],
         "user": {"login": "fairchild"},
-        "head": {"sha": head_sha},
+        "head": {"sha": head_sha, "repo": {"full_name": head_repository}},
+        "base": {"repo": {"full_name": "fairchild/workspaces"}},
         "body": "",
     }
 
@@ -179,9 +181,10 @@ class EvaluatePullRequestTests(unittest.TestCase):
 
         self.assertIsNone(finding)
 
-    def test_does_not_flag_a_draft(self) -> None:
+    def test_flags_a_draft_that_has_not_had_its_first_read(self) -> None:
         # Reused from evaluate_review, not reimplemented — proves the reuse
-        # actually engages rather than silently falling through.
+        # actually engages rather than silently falling through. A draft is
+        # reviewable exactly once, so an unreviewed one is still due.
         finding = factory_review_reconcile.evaluate_pull_request(
             pull_request(1496, draft=True),
             files=[],
@@ -191,11 +194,43 @@ class EvaluatePullRequestTests(unittest.TestCase):
             threshold_hours=3,
         )
 
+        self.assertIsNotNone(finding)
+
+    def test_does_not_flag_a_draft_that_has_already_been_read(self) -> None:
+        finding = factory_review_reconcile.evaluate_pull_request(
+            pull_request(1496, draft=True),
+            files=[],
+            reviews=[
+                {
+                    "user": {"login": "april-clearwater[bot]"},
+                    "commit_id": "an-older-head",
+                    "state": "APPROVED",
+                }
+            ],
+            signal_runs=[successful_run("2026-08-31T09:00:00Z")],
+            now=NOW,
+            threshold_hours=3,
+        )
+
         self.assertIsNone(finding)
 
-    def test_does_not_flag_an_author_with_no_counterpart_route(self) -> None:
+    def test_flags_an_author_label_with_no_counterpart_route(self) -> None:
+        """An unrecognised author label routes by surface like any other. It used
+        to mean no review, which is the miss this lane stopped having."""
         finding = factory_review_reconcile.evaluate_pull_request(
             pull_request(1498, author_label="author:someone-else"),
+            files=[],
+            reviews=[],
+            signal_runs=[successful_run("2026-08-31T09:00:00Z")],
+            now=NOW,
+            threshold_hours=3,
+        )
+
+        self.assertIsNotNone(finding)
+
+    def test_does_not_flag_a_fork(self) -> None:
+        finding = factory_review_reconcile.evaluate_pull_request(
+            pull_request(1499, head_repository="stranger/workspaces"),
             files=[],
             reviews=[],
             signal_runs=[successful_run("2026-08-31T09:00:00Z")],
@@ -266,25 +301,32 @@ class FindStaleReviewsTests(unittest.TestCase):
             [mock.call("factory-review.yml", "sha-a"), mock.call("factory-review.yml", "sha-b")]
         )
 
-    def test_never_fetches_anything_for_a_pr_with_no_author_label(self) -> None:
+    def test_never_fetches_anything_for_a_fork_pull_request(self) -> None:
         client = mock.Mock()
-        unlabeled = {
-            "number": 1500,
-            "state": "open",
-            "draft": False,
-            "labels": [],
-            "user": {"login": "fairchild"},
-            "head": {"sha": "sha-unlabeled"},
-            "body": "",
-        }
+        fork = pull_request(1500, head_repository="stranger/workspaces")
 
         findings = factory_review_reconcile.find_stale_reviews(
-            client, [unlabeled], now=NOW, threshold_hours=3
+            client, [fork], now=NOW, threshold_hours=3
         )
 
         self.assertEqual(findings, [])
         client.pull_request_files.assert_not_called()
         client.workflow_runs_for_head.assert_not_called()
+
+    def test_an_unlabelled_pull_request_is_still_swept(self) -> None:
+        """The sweep used to skip these, which is the same silent miss the
+        review lane stopped having."""
+        client = mock.Mock()
+        client.pull_request_files.return_value = [{"filename": "Sources/Feature.swift"}]
+        client.pull_request_reviews.return_value = []
+        client.workflow_runs_for_head.return_value = []
+        unlabelled = pull_request(1500, author_label="quality")
+
+        factory_review_reconcile.find_stale_reviews(
+            client, [unlabelled], now=NOW, threshold_hours=3
+        )
+
+        client.pull_request_files.assert_called_once()
 
     def test_never_calls_workflow_runs_for_head_when_already_reviewed(self) -> None:
         # The runs lookup is the one call this sweep exists to make sparing use
@@ -688,7 +730,7 @@ class GitHubClientTests(unittest.TestCase):
 
 
 class CliFixtureTests(unittest.TestCase):
-    def test_basic_fixture_flags_only_the_stale_pr(self) -> None:
+    def test_basic_fixture_flags_the_stale_pr_and_the_unread_draft(self) -> None:
         result = subprocess.run(
             [sys.executable, str(SCRIPT_PATH), "--fixtures-dir", str(FIXTURES_DIR)],
             cwd=REPO_ROOT,
@@ -701,8 +743,10 @@ class CliFixtureTests(unittest.TestCase):
         self.assertNotIn("#1490", result.stdout)
         self.assertNotIn("#1492", result.stdout)
         self.assertNotIn("#1494", result.stdout)
-        self.assertNotIn("#1496", result.stdout)
-        self.assertIn("Dry run: 1 finding(s); no writes.", result.stdout)
+        # #1496 is a draft nobody has read yet, which is due its one review.
+        # It used to be skipped for being a draft at all.
+        self.assertIn("[stale] #1496: due for april", result.stdout)
+        self.assertIn("Dry run: 2 finding(s); no writes.", result.stdout)
 
     def test_threshold_hours_override_changes_what_counts_as_stale(self) -> None:
         result = subprocess.run(

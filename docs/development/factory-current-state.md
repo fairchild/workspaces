@@ -23,6 +23,30 @@ What is actually wired and running today, verified against the workflow YAML and
 | Codespaces Claude Worker | — | — | — | **Deleted this PR.** Manual break-glass dispatch; zero runs since it shipped. |
 | App Review Smoke | — | — | — | **Deleted this PR.** Manual dispatch; dormant since 2026-05-26. |
 
+### What enters the review lane
+
+Every open pull request whose head branch is on this repository, on open and on
+every push, and again when a draft is marked ready. Two exceptions and one
+narrowing:
+
+- A **fork** head is refused unless someone with write access applies
+  `safe-to-review-fork`. Review reads the diff and posts under a reviewer app's
+  token, so admitting an arbitrary fork would spend the review budget on anyone
+  who asks and would put a stranger's text in front of an agent that can write.
+  A same-repository head needs push access, which is the trust this relies on.
+- `skip-review` suppresses review on a pull request that does not want one.
+- A **draft** gets the first read and then goes quiet until it is marked ready.
+
+The reviewer is chosen by surface — platform diffs (`.github/`, `infra/`) to
+plat, everything else to april — and an `author:april` / `author:plat` label
+overrides that to keep a persona off its own work. No other label participates.
+
+Routing used to require exactly one `author:*` label and skip silently without
+one, so a pull request nobody had labelled got no review and nothing on the pull
+request said so (#1538 shipped that way). For every generalist author the label
+selected the same reviewer the diff already implied, so dropping it as a gate
+cost no routing and closed the silent miss.
+
 ### Clearing a stale rejection
 
 A counterpart review can object to the PR *body* — a missing `## Mergeability`

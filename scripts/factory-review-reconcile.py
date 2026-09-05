@@ -328,15 +328,19 @@ def find_stale_reviews(
     now: datetime,
     threshold_hours: float,
 ) -> list[StaleReview]:
-    """Fetches per-PR state cheapest-check-first: a PR without exactly one
-    `author:*` label, or one `evaluate_review` already calls settled (no
-    route, already reviewed, self-review, draft), never reaches the
-    `workflow_runs_for_head` call — most open PRs at any moment fall into one
-    of those buckets, and each is an Actions API request this sweep would
-    otherwise make once a day for every open PR regardless of relevance."""
+    """Fetches per-PR state cheapest-check-first: a PR whose head is on a fork,
+    or one `evaluate_review` already calls settled (already reviewed,
+    self-review, a draft that has had its read, review suppressed), never
+    reaches the `workflow_runs_for_head` call — each is an Actions API request
+    this sweep would otherwise make once a day for every open PR regardless of
+    relevance.
+
+    The pre-filter is the fork check rather than the author label it used to be.
+    An unlabelled PR is now reviewable, so skipping it here would reinstate, in
+    the daily sweep, exactly the silent miss the review lane stopped having."""
     findings: list[StaleReview] = []
     for pull_request in pull_requests:
-        if factory_review.author_label(pull_request) is None:
+        if not factory_review.admitted_for_review(pull_request):
             continue
         number = int(pull_request["number"])
         try:
