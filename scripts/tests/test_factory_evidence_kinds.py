@@ -433,5 +433,101 @@ class ClassifierBlastRadiusTests(unittest.TestCase):
         self.assertIn("diff", run_contributor.EVENT_COMPLETED_KINDS)
 
 
+class EvidenceItemReadabilityTests(unittest.TestCase):
+    """A correctly authored item must survive the round trip (#1523).
+
+    An item is authored once in the issue and copied into the PR body as a
+    status line. Both defects here break that copy: a bullet that wraps loses
+    everything after its first physical line, and an item whose own text
+    carries an em-dash separator ends at the first one.
+    """
+
+    WRAPPED_BODY = """## Requested Evidence
+
+- `ps -Eww` on a late-created surface — not the first one — showing `command`,
+  `initial_input` and `env_vars` all applied, compared against a hand-opened control
+- A test at the seam that fails if any one of the three is dropped again.
+  Asserting only `command` is what let `env_vars` go unnoticed
+
+Scope note: an unindented paragraph is a new block, not part of the bullet.
+"""
+
+    EM_DASH_ITEM = (
+        "`swift test` passes on the **full** suite, run three times "
+        "consecutively — `--filter` runs do not count, since every flake in "
+        "this sweep passes in isolation and fails under load. Paste the three "
+        "results"
+    )
+
+    def test_a_wrapped_bullet_yields_the_whole_item(self) -> None:
+        items = run_contributor.extract_requested_evidence(self.WRAPPED_BODY)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(
+            items[0],
+            "`ps -Eww` on a late-created surface — not the first one — showing "
+            "`command`, `initial_input` and `env_vars` all applied, compared "
+            "against a hand-opened control",
+        )
+        self.assertTrue(items[1].endswith("go unnoticed"))
+
+    def test_an_unindented_paragraph_does_not_join_the_bullet_above(self) -> None:
+        items = run_contributor.extract_requested_evidence(self.WRAPPED_BODY)
+        self.assertNotIn("Scope note", " ".join(items))
+
+    def test_an_item_with_an_internal_em_dash_round_trips(self) -> None:
+        # Authored in the issue, written as a markdown status line in the PR
+        # body, matched by the gate -- the whole path, not just the regex.
+        body = f"## Requested Evidence\n\n- {self.EM_DASH_ITEM}\n"
+        requested = run_contributor.extract_requested_evidence(body)
+        self.assertEqual(requested, [self.EM_DASH_ITEM])
+
+        pr_body = (
+            "## Evidence Status\n"
+            f"- [complete] {self.EM_DASH_ITEM} -- three green runs pasted below\n"
+        )
+        parsed = run_contributor.extract_evidence_status_entries(pr_body)
+        self.assertEqual(parsed["invalid_lines"], [])
+        self.assertIn(self.EM_DASH_ITEM, parsed["entries"])
+        self.assertEqual(
+            parsed["entries"][self.EM_DASH_ITEM]["detail"],
+            "three green runs pasted below",
+        )
+
+        accounting = run_contributor.evaluate_evidence_accounting(pr_body, requested)
+        self.assertEqual(accounting["missing_items"], [])
+        self.assertEqual(accounting["complete_items"], requested)
+
+    def test_an_em_dash_separator_splits_at_the_last_one(self) -> None:
+        line = (
+            "- [complete] the metric — measured under load — is below 5% "
+            "— number in PR body"
+        )
+        match = run_contributor.match_evidence_status_line(line)
+        assert match is not None
+        self.assertEqual(
+            match.group("item"),
+            "the metric — measured under load — is below 5%",
+        )
+        self.assertEqual(match.group("detail"), "number in PR body")
+
+    def test_a_rendered_line_splits_on_the_ascii_separator_it_was_written_with(
+        self,
+    ) -> None:
+        # Both halves carry em-dashes; only the `--` this module renders is
+        # the separator, so neither half may be cut at a dash.
+        line = "- [complete] the item — as authored -- the proof — as measured"
+        match = run_contributor.match_evidence_status_line(line)
+        assert match is not None
+        self.assertEqual(match.group("item"), "the item — as authored")
+        self.assertEqual(match.group("detail"), "the proof — as measured")
+
+    def test_a_numeric_only_item_is_a_parse_failure_not_an_item_name(self) -> None:
+        line = "- [complete] 1 — CI build-and-test succeeds"
+        parsed = run_contributor.extract_evidence_status_entries(
+            f"## Evidence Status\n{line}\n"
+        )
+        self.assertEqual(parsed["entries"], {})
+        self.assertEqual(parsed["invalid_lines"], [line])
+
 if __name__ == "__main__":
     unittest.main()

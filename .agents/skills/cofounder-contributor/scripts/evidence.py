@@ -18,9 +18,21 @@ from _helpers import (
     strip_markdown_section,
 )
 
-EVIDENCE_STATUS_LINE_RE = re.compile(
-    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?)\s+(?:--|—|–)\s+(?P<detail>.+)$"
+# An item's own text carries em-dashes as a matter of house style, so the
+# separator is the LAST one on the line rather than the first (a non-greedy
+# item group ends the item at its first internal em-dash, which makes a
+# correctly authored item impossible to write). Where both forms appear, the
+# ASCII `--` this module renders outranks a dash character, so a rendered line
+# still splits correctly when item and detail both carry em-dashes.
+EVIDENCE_STATUS_RENDERED_LINE_RE = re.compile(
+    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+)\s+--\s+(?P<detail>.+)$"
 )
+EVIDENCE_STATUS_LINE_RE = re.compile(
+    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+)\s+(?:--|—|–)\s+(?P<detail>.+)$"
+)
+# A bare index is the structured-update key, not an item name. Parsed as one it
+# silently becomes an entry no requested item can match.
+NUMERIC_EVIDENCE_ITEM_RE = re.compile(r"#?\d+\.?")
 EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -118,15 +130,49 @@ SAFE_CANDIDATE_ENV_KEYS = {
 }
 
 
+def match_evidence_status_line(line: str) -> re.Match[str] | None:
+    return EVIDENCE_STATUS_RENDERED_LINE_RE.match(line) or EVIDENCE_STATUS_LINE_RE.match(line)
+
+
+def is_numeric_evidence_item(item: str) -> bool:
+    return NUMERIC_EVIDENCE_ITEM_RE.fullmatch(item.strip()) is not None
+
+
+def _wrapped_bullets(section: str) -> list[str]:
+    """One string per markdown bullet, with wrapped lines folded back in.
+
+    A continuation line is indented and is not itself a bullet: markdown reads
+    it as part of the bullet above, so the contract reads it that way too. A
+    blank line, a fence, or a line at column zero ends the bullet, which keeps
+    a following paragraph or code block out of the item text.
+    """
+    bullets: list[str] = []
+    open_bullet = False
+    for line in section.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("- "):
+            bullets.append(line[2:].strip())
+            open_bullet = True
+            continue
+        if (
+            open_bullet
+            and stripped
+            and not stripped.startswith("```")
+            and line[:1].isspace()
+        ):
+            bullets[-1] = f"{bullets[-1]} {stripped}"
+            continue
+        open_bullet = False
+    return bullets
+
+
 def extract_requested_evidence(body: str) -> list[str]:
     evidence_section = markdown_section(body, "Requested Evidence")
     fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
     return [
-        line[2:].strip()
-        for line in evidence_section.splitlines()
-        if line.strip().startswith("- ")
-        and line[2:].strip().lower() != "none"
-        and line[2:].strip().casefold() != fallback_sentence
+        item
+        for item in _wrapped_bullets(evidence_section)
+        if item.lower() != "none" and item.casefold() != fallback_sentence
     ]
 
 
@@ -292,11 +338,14 @@ def extract_evidence_status_entries(body: str) -> dict[str, object]:
         if not line.startswith("- "):
             invalid_lines.append(line)
             continue
-        match = EVIDENCE_STATUS_LINE_RE.match(line)
+        match = match_evidence_status_line(line)
         if not match:
             invalid_lines.append(line)
             continue
         item = match.group("item").strip()
+        if is_numeric_evidence_item(item):
+            invalid_lines.append(line)
+            continue
         if item in entries:
             duplicate_items.append(item)
             continue
@@ -1186,10 +1235,11 @@ def reconcile_pending_ci_evidence(
             updated.append(line)
             continue
         if in_evidence_status:
-            match = EVIDENCE_STATUS_LINE_RE.match(line)
+            match = match_evidence_status_line(line)
             if (
                 match
                 and match.group("status") == "pending-ci"
+                and not is_numeric_evidence_item(match.group("item"))
                 and _evidence_item_kind(match.group("item").strip()) not in EVENT_COMPLETED_KINDS
             ):
                 item = match.group("item").strip()
