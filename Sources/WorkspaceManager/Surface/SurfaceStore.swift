@@ -203,7 +203,13 @@ final class SurfaceStore {
             }
 
             guard let initialCommand = session.initialCommand else { return }
-            self?.deliverInitialCommand(initialCommand, to: terminal, session: session)
+            self?.deliverInitialCommand(
+                initialCommand,
+                to: terminal,
+                session: session,
+                delivery: self?.deliveryForLaunch(session: session, isTmuxBacked: tmuxLaunchScript != nil)
+                    ?? session.initialCommandDelivery
+            )
         }
     }
 
@@ -327,16 +333,35 @@ final class SurfaceStore {
         )
     }
 
-    /// Type `initialCommand` into the surface, pressing Return only when the session
-    /// asked to execute it. Restore asks for `.prefill`, so the command waits at the
-    /// prompt: reconnecting to a live process is free, but starting an agent spends
-    /// memory and tokens the user may not want spent on a restart.
+    /// The delivery this launch may use, which is not always the one the session asked
+    /// for. A tmux-backed surface whose `new-session -A` adopted a session is attached to
+    /// a shell this launch did not start, so its command waits at the prompt for a person
+    /// rather than running there (#1267). Only a positive `.adopted` finding downgrades:
+    /// no record means tmux never answered, which is not evidence of adoption.
+    func deliveryForLaunch(
+        session: HostTerminalSession,
+        isTmuxBacked: Bool
+    ) -> HostTerminalSession.InitialCommandDelivery {
+        let asked = session.initialCommandDelivery
+        guard asked == .execute, isTmuxBacked else { return asked }
+        guard tmuxOwnershipLedger?.ownership(forHostSessionID: session.id)?.provenance == .adopted
+        else { return asked }
+        log.notice(
+            "[SurfaceStore] prefilling instead of executing for session \(session.id.uuidString, privacy: .public): its tmux session was adopted, not created by this launch"
+        )
+        return .prefill
+    }
+
+    /// Type `initialCommand` into the surface, pressing Return only when `delivery` is
+    /// `.execute`. Restore asks for `.prefill`, so the command waits at the prompt:
+    /// reconnecting to a live process is free, but starting an agent spends memory and
+    /// tokens the user may not want spent on a restart.
     private func deliverInitialCommand(
         _ initialCommand: String,
         to terminal: TerminalSurface,
-        session: HostTerminalSession
+        session: HostTerminalSession,
+        delivery: HostTerminalSession.InitialCommandDelivery
     ) {
-        let delivery = session.initialCommandDelivery
         // The command reached no shell unless every bridge call succeeds. On any
         // failure (dead surface, dropped write), un-mark the session so a recreated
         // surface retries — nothing ran, so a retry cannot double-run the agent.

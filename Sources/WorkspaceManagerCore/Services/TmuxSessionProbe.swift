@@ -330,22 +330,6 @@ public struct TmuxSessionProbe: Sendable {
         return exitCode == 0
     }
 
-    /// Kill an exactly-named session (`=` prefix, as in `isSessionAlive`) so a
-    /// relaunch that carries an initial command cannot `new-session -A`-attach
-    /// to a same-name survivor and silently drop the command. Restore uses this
-    /// just before a resume launch: the planner only picks resume when the prior
-    /// session is gone, so a live session with that name can only be an artifact
-    /// of the current launch's seeding. Returns true when a session was killed.
-    @discardableResult
-    public func killSession(_ tmuxSessionName: String) async -> Bool {
-        let exitCode = await run(
-            "/usr/bin/env",
-            ["tmux", "-L", Self.socketLabel, "kill-session", "-t", "=\(tmuxSessionName)"],
-            environment
-        )
-        return exitCode == 0
-    }
-
     /// First release whose `new-session` accepts `-e KEY=VALUE`. Older tmux rejects
     /// the flag outright, so a launch that emits it there loses the whole pane.
     public static let sessionEnvironmentFlagVersion = (major: 3, minor: 2)
