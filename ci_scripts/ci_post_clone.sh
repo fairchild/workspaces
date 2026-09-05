@@ -1,7 +1,8 @@
 #!/bin/sh
 # Xcode Cloud surfaces only "exited with code 1" in notifications, so this
 # script labels each expensive stage, runs with xtrace and an environment
-# survey: the failing command is the xtrace line just above the trap's own "status=" line in the build
+# survey: the failing command is the xtrace line just above the trap's own
+# "status=" line in the build
 # report log. (The trap disables xtrace for itself so it doesn't add more
 # `+` noise after that point.)
 set -eux
