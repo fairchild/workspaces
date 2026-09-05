@@ -545,8 +545,9 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         )
         self.assertEqual(
             run_contributor.split_evidence_status_line(line),
-            ("complete", "the item -- proof captured", "see the log"),
-            "without the contract the last separator is still the fallback",
+            ("complete", "the item", "proof captured -- see the log"),
+            "without the contract, a rendered line's one `--` is the boundary "
+            "and a second is detail prose",
         )
 
     def test_an_em_dash_in_both_halves_still_finds_the_requested_item(self) -> None:
@@ -593,16 +594,31 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             ["the item, which wraps"],
         )
 
-    def test_a_threshold_is_continuation_prose_not_a_quote(self) -> None:
-        # `>` opens a quote only when a space or the line end follows it.
-        # `>= 95%` is the kind of sentence an evidence bar is written in.
+    def test_a_code_span_opening_a_continuation_line_is_not_a_fence(self) -> None:
+        # A backtick fence's info string cannot contain a backtick, which is
+        # what tells an opening fence from a line that starts with a span.
         body = """## Requested Evidence
 
-- the pass rate holds at
-  >= 95% of runs
+- the first item
+  ```inline``` proves it
+- the second item
 """
         self.assertEqual(
             run_contributor.extract_requested_evidence(body),
+            ["the first item ```inline``` proves it", "the second item"],
+        )
+
+    def test_a_quote_marker_needs_no_space_but_a_threshold_is_not_one(self) -> None:
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(
+                "## Requested Evidence\n\n- the item\n  >nested quote\n"
+            ),
+            ["the item"],
+        )
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(
+                "## Requested Evidence\n\n- the pass rate holds at\n  >= 95% of runs\n"
+            ),
             ["the pass rate holds at >= 95% of runs"],
         )
 
@@ -651,12 +667,13 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             ("complete", "item", "-- the detail"),
         )
 
-    def test_the_reconciler_leaves_a_line_alone_when_any_reading_is_event_completed(
+    def test_a_diff_item_whose_detail_carries_a_separator_stays_a_diff_item(
         self,
     ) -> None:
-        # The reconciler has no contract, so where the item ends is a guess.
-        # `diff` and `ci` complete through the review lane and the verifier, so
-        # guessing wrong here would resolve one on the macOS lane's behalf.
+        # The reconciler runs without the contract. Taking the second `--` as
+        # the boundary would read `owner confirms later` as part of the item,
+        # reclassify it as owner-attested, and resolve on the macOS lane's
+        # behalf a line that completes through the review lane.
         body = (
             "## Evidence Status\n"
             "- [pending-ci] The PR diff shows the setting -- owner confirms later "
@@ -672,14 +689,36 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             body,
         )
 
+    def test_a_screenshot_item_carrying_an_em_dash_still_resolves(self) -> None:
+        # The mirror case: an earlier reading of this line is a `diff` item,
+        # but the item really does end at the `--`. Refusing to resolve on the
+        # strength of that reading would wedge a capture that did happen.
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] The PR diff shows the launch state — final screenshot "
+            "after setup -- evidence job will upload it\n"
+        )
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            screenshot_upload_succeeded=True,
+            screenshot_urls=[("shot", "https://example.test/shot.png")],
+        )
+        self.assertIn("- [complete] The PR diff shows the launch state — final "
+                      "screenshot after setup -- ", reconciled)
+        self.assertIn("https://example.test/shot.png", reconciled)
+
 
     def test_padding_around_the_line_does_not_move_the_separator(self) -> None:
         # The ASCII-outranks-dash rule reads the separator each candidate was
         # cut at. Deriving it from the item and detail lengths instead would
         # be off by whatever stripping removed.
         for line, expected in (
+            ("- [complete]  item -- proof — measured", ("complete", "item", "proof — measured")),
+            ("- [complete] item -- proof — measured   ", ("complete", "item", "proof — measured")),
             ("- [complete]  item — a -- the detail", ("complete", "item — a", "the detail")),
-            ("- [complete] item — a -- the detail   ", ("complete", "item — a", "the detail")),
             ("- [complete] item  --  the detail", ("complete", "item", "the detail")),
             ("- [complete] item\t--\tthe detail", ("complete", "item", "the detail")),
         ):

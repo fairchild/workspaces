@@ -40,7 +40,10 @@ EVIDENCE_STATUS_LINE_RE = re.compile(
 NUMERIC_EVIDENCE_ITEM_RE = re.compile(r"#?\d+\.?")
 # An indented line under a bullet continues it, unless it opens a block of its
 # own: another bullet, an ordered item, a quote, or a fence.
-MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?:\s|$)|```|~~~)")
+MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?!=))")
+# A backtick fence's info string cannot itself contain a backtick, which is
+# what separates an opening fence from a line starting with a code span.
+MARKDOWN_FENCE_RE = re.compile(r"(?:`{3,}[^`]*|~{3,}.*)$")
 EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -154,16 +157,6 @@ def _evidence_status_readings(line: str) -> list[tuple[str, str, str, str]]:
     return readings
 
 
-def evidence_status_candidate_splits(line: str) -> list[tuple[str, str, str]]:
-    """Every `(status, item, detail)` reading of a status line, leftmost first.
-
-    A separator is an ASCII `--` or a dash character with whitespace on each
-    side. Which one ends the item is not decidable from the line alone, so the
-    readings are enumerated and the caller picks.
-    """
-    return [reading[:3] for reading in _evidence_status_readings(line)]
-
-
 def split_evidence_status_line(
     line: str,
     requested_evidence: list[str] | None = None,
@@ -171,9 +164,13 @@ def split_evidence_status_line(
     """The one reading of a status line to act on, or None.
 
     The reading that wins is the one whose item IS a requested item, so an
-    em-dash inside either half cannot terminate the item. Absent the contract
-    the last separator wins, and an ASCII `--` -- the form this module renders
-    -- outranks a dash character.
+    em-dash inside either half cannot terminate the item.
+
+    Absent the contract, the ASCII `--` this module renders outranks a dash
+    character, and the FIRST of them wins: a rendered line carries exactly one,
+    so a second is detail prose rather than a boundary. With no ASCII separator
+    the line is hand-written in the house style, where the item is what carries
+    em-dashes, so the last one wins.
     """
     readings = _evidence_status_readings(line)
     if not readings:
@@ -184,7 +181,7 @@ def split_evidence_status_line(
             if _normalize_evidence_key(item) in wanted:
                 return status, item, detail
     ascii_readings = [reading for reading in readings if reading[3] == "--"]
-    status, item, detail, _ = (ascii_readings or readings)[-1]
+    status, item, detail, _ = ascii_readings[0] if ascii_readings else readings[-1]
     return status, item, detail
 
 
@@ -214,7 +211,7 @@ def _wrapped_bullets(section: str) -> list[str]:
     fenced = False
     for line in section.splitlines():
         stripped = line.strip()
-        if stripped.startswith("```") or stripped.startswith("~~~"):
+        if MARKDOWN_FENCE_RE.fullmatch(stripped):
             fenced = not fenced
             open_bullet = False
             continue
@@ -1313,19 +1310,12 @@ def reconcile_pending_ci_evidence(
             updated.append(line)
             continue
         if in_evidence_status:
-            # No contract here, so where the item ends is a guess. `ci` and
-            # `diff` complete elsewhere, so a line that reads as either under
-            # ANY split is left alone rather than resolved on the guess.
-            candidates = evidence_status_candidate_splits(line)
             split = split_evidence_status_line(line)
             if (
                 split
                 and split[0] == "pending-ci"
                 and not is_numeric_evidence_item(split[1])
-                and not any(
-                    _evidence_item_kind(candidate[1]) in EVENT_COMPLETED_KINDS
-                    for candidate in candidates
-                )
+                and _evidence_item_kind(split[1]) not in EVENT_COMPLETED_KINDS
             ):
                 item = split[1]
                 status, detail = _pending_ci_resolution(
