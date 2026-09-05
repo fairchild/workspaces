@@ -689,26 +689,73 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             body,
         )
 
-    def test_a_screenshot_item_carrying_an_em_dash_still_resolves(self) -> None:
-        # The mirror case: an earlier reading of this line is a `diff` item,
-        # but the item really does end at the `--`. Refusing to resolve on the
-        # strength of that reading would wedge a capture that did happen.
+    def test_an_ambiguous_line_is_left_pending_rather_than_completed(self) -> None:
+        # The mirror case: this line reads as a `diff` item at the em-dash and
+        # as a screenshot at the `--`, and without the contract nothing here
+        # can say which. Leaving it pending fails the readiness gate, which is
+        # visible and recoverable; resolving it would complete, on the macOS
+        # lane's word, an item that completes through the review lane.
         body = (
             "## Evidence Status\n"
             "- [pending-ci] The PR diff shows the launch state — final screenshot "
             "after setup -- evidence job will upload it\n"
         )
-        reconciled = run_contributor.reconcile_pending_ci_evidence(
+        self.assertEqual(
+            run_contributor.reconcile_pending_ci_evidence(
+                body,
+                build_succeeded=True,
+                tests_succeeded=True,
+                smoke_succeeded=True,
+                screenshot_upload_succeeded=True,
+                screenshot_urls=[("shot", "https://example.test/shot.png")],
+            ),
             body,
-            build_succeeded=True,
-            tests_succeeded=True,
-            smoke_succeeded=True,
-            screenshot_upload_succeeded=True,
-            screenshot_urls=[("shot", "https://example.test/shot.png")],
         )
-        self.assertIn("- [complete] The PR diff shows the launch state — final "
-                      "screenshot after setup -- ", reconciled)
-        self.assertIn("https://example.test/shot.png", reconciled)
+
+    def test_a_separator_inside_a_code_span_is_an_argument(self) -> None:
+        # `resolve_persona.py -- mara` is one name, and this shape is real:
+        # #1410 and #1550 both write an argument that way.
+        line = "- [complete] Screenshot of `tool -- mode` after launch -- the proof"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line),
+            ("complete", "Screenshot of `tool -- mode` after launch", "the proof"),
+        )
+
+    def test_a_longer_fence_is_not_closed_by_a_shorter_one(self) -> None:
+        body = """## Requested Evidence
+
+- the real item
+
+````markdown
+```
+- sample bullet
+```
+````
+
+- the second item
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the real item", "the second item"],
+        )
+
+    def test_a_tilde_fence_is_not_closed_by_backticks(self) -> None:
+        body = """## Requested Evidence
+
+- the real item
+
+~~~
+```
+- sample bullet
+```
+~~~
+
+- the second item
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the real item", "the second item"],
+        )
 
 
     def test_padding_around_the_line_does_not_move_the_separator(self) -> None:

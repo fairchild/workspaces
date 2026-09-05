@@ -23,27 +23,29 @@ from _helpers import (
 # correctly authored item impossible to write. Splitting is anchored on the
 # contract wherever the requested items are in hand: the candidate split whose
 # item IS a requested item wins, so neither half's internal punctuation can
-# terminate the item. Without that anchor the last separator wins, and the
-# ASCII `--` this module renders outranks a dash character.
+# terminate the item. Where the contract is absent the boundary is a guess, and
+# the guess is documented on `split_evidence_status_line`.
 EVIDENCE_STATUS_PREFIX_RE = re.compile(
     r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<rest>.+)$"
 )
 # Zero-width on both sides, so two separators sharing one space still yield
 # two candidate splits rather than one.
 EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
-EVIDENCE_STATUS_LINE_RE = re.compile(
-    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+)\s+(?:--|—|–)\s+(?P<detail>.+)$"
-)
+# A `--` inside a code span is an argument, not a boundary: `resolve_persona.py
+# -- mara` is one name.
+EVIDENCE_CODE_SPAN_RE = re.compile(r"`[^`]*`")
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
 NUMERIC_EVIDENCE_ITEM_RE = re.compile(r"#?\d+\.?")
 # An indented line under a bullet continues it, unless it opens a block of its
-# own: another bullet, an ordered item, a quote, or a fence.
+# own: another bullet, an ordered item, or a quote. `>=` is a threshold, not a
+# quote marker.
 MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?!=))")
-# A backtick fence's info string cannot itself contain a backtick, which is
-# what separates an opening fence from a line starting with a code span.
-MARKDOWN_FENCE_RE = re.compile(r"(?:`{3,}[^`]*|~{3,}.*)$")
+# A fence opens with three or more backticks or tildes. A backtick fence's info
+# string cannot itself contain a backtick, which is what separates an opening
+# fence from a line starting with a code span.
+MARKDOWN_FENCE_RE = re.compile(r"(?P<run>`{3,}|~{3,})(?P<info>.*)$")
 EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -148,8 +150,13 @@ def _evidence_status_readings(line: str) -> list[tuple[str, str, str, str]]:
         return []
     rest = prefix.group("rest")
     status = prefix.group("status")
+    spans = [
+        span.span() for span in EVIDENCE_CODE_SPAN_RE.finditer(rest)
+    ]
     readings = []
     for separator in EVIDENCE_SEPARATOR_RE.finditer(rest):
+        if any(start < separator.start() < end for start, end in spans):
+            continue
         item = rest[: separator.start()].strip()
         detail = rest[separator.end() :].strip()
         if item and detail:
@@ -166,11 +173,15 @@ def split_evidence_status_line(
     The reading that wins is the one whose item IS a requested item, so an
     em-dash inside either half cannot terminate the item.
 
-    Absent the contract, the ASCII `--` this module renders outranks a dash
-    character, and the FIRST of them wins: a rendered line carries exactly one,
-    so a second is detail prose rather than a boundary. With no ASCII separator
-    the line is hand-written in the house style, where the item is what carries
-    em-dashes, so the last one wins.
+    Absent the contract the boundary is a guess. The ASCII `--` this module
+    renders outranks a dash character and the FIRST of them wins, because a
+    rendered line carries exactly one and a second is detail prose. With no
+    ASCII separator the line is hand-written in the house style, where the item
+    is what carries em-dashes, so the last one wins. A separator inside a code
+    span is an argument rather than a boundary and is not a candidate at all.
+
+    Only `reconcile_pending_ci_evidence` reads a line without the contract, and
+    it refuses to act whenever the guess is load-bearing.
     """
     readings = _evidence_status_readings(line)
     if not readings:
@@ -196,6 +207,23 @@ def is_numeric_evidence_item(item: str) -> bool:
     return NUMERIC_EVIDENCE_ITEM_RE.fullmatch(item.strip()) is not None
 
 
+def _fence_transition(fence: re.Match[str], fenced: str | None) -> bool:
+    """Does this line open or close a fenced block?
+
+    A backtick fence's info string cannot itself contain a backtick, which is
+    what separates an opening fence from a line that starts with a code span.
+    A closer is the same character as its opener, at least as long, and carries
+    no info string, so a shorter run or a different character cannot end a
+    block it did not start.
+    """
+    run, info = fence.group("run"), fence.group("info")
+    if run.startswith("`") and "`" in info:
+        return False
+    if fenced is None:
+        return True
+    return run[0] == fenced[0] and len(run) >= len(fenced) and not info.strip()
+
+
 def _wrapped_bullets(section: str) -> list[str]:
     """One string per markdown bullet, with wrapped lines folded back in.
 
@@ -208,11 +236,12 @@ def _wrapped_bullets(section: str) -> list[str]:
     """
     bullets: list[str] = []
     open_bullet = False
-    fenced = False
+    fenced: str | None = None
     for line in section.splitlines():
         stripped = line.strip()
-        if MARKDOWN_FENCE_RE.fullmatch(stripped):
-            fenced = not fenced
+        fence = MARKDOWN_FENCE_RE.fullmatch(stripped)
+        if fence and _fence_transition(fence, fenced):
+            fenced = None if fenced else fence.group("run")
             open_bullet = False
             continue
         if fenced:
@@ -1310,12 +1339,20 @@ def reconcile_pending_ci_evidence(
             updated.append(line)
             continue
         if in_evidence_status:
+            # No contract here, so where the item ends is a guess. `ci` and
+            # `diff` complete through the verifier and the review lane, so a
+            # line that reads as either under ANY split is left alone. That
+            # leaves an ambiguous line pending, which fails the readiness gate
+            # and is visible; resolving it on the guess would complete it.
             split = split_evidence_status_line(line)
             if (
                 split
                 and split[0] == "pending-ci"
                 and not is_numeric_evidence_item(split[1])
-                and _evidence_item_kind(split[1]) not in EVENT_COMPLETED_KINDS
+                and not any(
+                    _evidence_item_kind(reading[1]) in EVENT_COMPLETED_KINDS
+                    for reading in _evidence_status_readings(line)
+                )
             ):
                 item = split[1]
                 status, detail = _pending_ci_resolution(
