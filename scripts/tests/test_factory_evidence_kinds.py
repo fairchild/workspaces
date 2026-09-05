@@ -844,6 +844,20 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         self.assertEqual(
             run_contributor.extract_requested_evidence(body), ["the item", "second"]
         )
+    def test_an_escape_hides_a_backtick_in_prose_but_not_inside_a_span(self) -> None:
+        # CommonMark's asymmetry, and both halves matter here: masking escapes
+        # before pairing gets the first line right and erases the second's
+        # closer, which would cut the item at a `--` that is span content.
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(
+                "- [complete] a literal \\` token -- proof shows a \\` token"
+            ),
+            ("complete", "a literal \\` token", "proof shows a \\` token"),
+        )
+        self.assertEqual(
+            run_contributor.split_evidence_status_line("- [complete] `a -- \\` -- proof"),
+            ("complete", "`a -- \\`", "proof"),
+        )
 
 if __name__ == "__main__":
     unittest.main()

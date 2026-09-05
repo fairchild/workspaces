@@ -32,11 +32,7 @@ EVIDENCE_STATUS_PREFIX_RE = re.compile(
 # two candidate splits rather than one.
 EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
 # A `--` inside a code span is an argument, not a boundary: `resolve_persona.py
-# -- mara` is one name. A span opens on a run of backticks and closes on the
-# next run of the SAME length, so a double-backtick span may hold a lone
-# backtick, and an escaped backtick opens nothing.
-EVIDENCE_BACKTICK_RUN_RE = re.compile(r"`+")
-MARKDOWN_ESCAPE_RE = re.compile(r"\\.")
+# -- mara` is one name.
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
@@ -147,26 +143,39 @@ SAFE_CANDIDATE_ENV_KEYS = {
 
 
 def _code_span_ranges(text: str) -> list[tuple[int, int]]:
-    """Half-open ranges covering each code span, by CommonMark's own rule.
+    """Half-open ranges covering each code span, by CommonMark's own rules.
 
     A backtick run opens a span and the next run of equal length closes it; a
-    run that never finds its match is literal text. Escapes are blanked to the
-    same width first, so `\\`` neither opens a span nor shifts an offset.
+    run that finds no match is literal text. Backslash escapes hide a backtick
+    in ordinary prose but do nothing inside a span, which is why this reads
+    left to right rather than masking escapes up front: `\\`` opens nothing,
+    while the same sequence inside a span still closes it.
     """
-    masked = MARKDOWN_ESCAPE_RE.sub("  ", text)
-    runs = [run.span() for run in EVIDENCE_BACKTICK_RUN_RE.finditer(masked)]
     ranges: list[tuple[int, int]] = []
-    index = 0
-    while index < len(runs):
-        start, opened = runs[index]
-        width = opened - start
-        for closer in range(index + 1, len(runs)):
-            if runs[closer][1] - runs[closer][0] == width:
-                ranges.append((start, runs[closer][1]))
-                index = closer + 1
-                break
-        else:
+    index, length = 0, len(text)
+    while index < length:
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] != "`":
             index += 1
+            continue
+        opened = index
+        while index < length and text[index] == "`":
+            index += 1
+        width = index - opened
+        probe = index
+        while probe < length:
+            if text[probe] != "`":
+                probe += 1
+                continue
+            run = probe
+            while probe < length and text[probe] == "`":
+                probe += 1
+            if probe - run == width:
+                ranges.append((opened, probe))
+                index = probe
+                break
     return ranges
 
 
