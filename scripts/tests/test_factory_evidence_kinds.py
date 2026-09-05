@@ -502,13 +502,15 @@ Scope note: an unindented paragraph is a new block, not part of the bullet.
             "- [complete] the metric — measured under load — is below 5% "
             "— number in PR body"
         )
-        match = run_contributor.match_evidence_status_line(line)
-        assert match is not None
+        split = run_contributor.split_evidence_status_line(line)
         self.assertEqual(
-            match.group("item"),
-            "the metric — measured under load — is below 5%",
+            split,
+            (
+                "complete",
+                "the metric — measured under load — is below 5%",
+                "number in PR body",
+            ),
         )
-        self.assertEqual(match.group("detail"), "number in PR body")
 
     def test_a_rendered_line_splits_on_the_ascii_separator_it_was_written_with(
         self,
@@ -516,10 +518,10 @@ Scope note: an unindented paragraph is a new block, not part of the bullet.
         # Both halves carry em-dashes; only the `--` this module renders is
         # the separator, so neither half may be cut at a dash.
         line = "- [complete] the item — as authored -- the proof — as measured"
-        match = run_contributor.match_evidence_status_line(line)
-        assert match is not None
-        self.assertEqual(match.group("item"), "the item — as authored")
-        self.assertEqual(match.group("detail"), "the proof — as measured")
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line),
+            ("complete", "the item — as authored", "the proof — as measured"),
+        )
 
     def test_a_numeric_only_item_is_a_parse_failure_not_an_item_name(self) -> None:
         line = "- [complete] 1 — CI build-and-test succeeds"
@@ -528,6 +530,88 @@ Scope note: an unindented paragraph is a new block, not part of the bullet.
         )
         self.assertEqual(parsed["entries"], {})
         self.assertEqual(parsed["invalid_lines"], [line])
+
+class EvidenceSplitAnchoringTests(unittest.TestCase):
+    """The contract, not a guess, decides where an item ends (#1523 review)."""
+
+    def test_a_detail_carrying_a_separator_does_not_bleed_into_the_item(self) -> None:
+        # Taking the LAST separator is only a guess. With the contract in hand
+        # the split that reproduces a requested item wins, so a detail written
+        # with its own ` -- ` cannot eat the item's boundary.
+        line = "- [complete] the item -- proof captured -- see the log"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, ["the item"]),
+            ("complete", "the item", "proof captured -- see the log"),
+        )
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line),
+            ("complete", "the item -- proof captured", "see the log"),
+            "without the contract the last separator is still the fallback",
+        )
+
+    def test_an_em_dash_in_both_halves_still_finds_the_requested_item(self) -> None:
+        item = "the metric — measured under load — is below 5%"
+        line = f"- [complete] {item} — the run — logged at 12:00"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, [item]),
+            ("complete", item, "the run — logged at 12:00"),
+        )
+
+    def test_a_numeric_item_the_contract_asks_for_is_not_a_parse_failure(self) -> None:
+        # `1` is the structured-update key, so a bare index is normally a parse
+        # failure. It stops being one when the contract really does name it.
+        body = "## Evidence Status\n- [complete] 404 — the page 404s as designed\n"
+        self.assertEqual(
+            run_contributor.extract_evidence_status_entries(body, ["404"])["entries"],
+            {"404": {"status": "complete", "detail": "the page 404s as designed"}},
+        )
+        self.assertEqual(
+            run_contributor.extract_evidence_status_entries(body, ["something else"])["entries"],
+            {},
+        )
+
+    def test_an_indented_nested_block_is_not_folded_into_the_item(self) -> None:
+        body = """## Requested Evidence
+
+- the item, which wraps
+  onto a continuation line
+  1. a nested ordered step
+  > a nested quote
+"""
+        items = run_contributor.extract_requested_evidence(body)
+        self.assertEqual(items, ["the item, which wraps onto a continuation line"])
+
+    def test_metadata_written_before_the_join_still_describes_its_item(self) -> None:
+        # A PR opened before wrapped bullets were joined stored the item's
+        # first physical line. Rejecting it would invalidate every entry on an
+        # in-flight PR at once, which is worse than the truncation it records.
+        requested = ["the item, which wraps onto a continuation line"]
+        body = (
+            "## Evidence Status\n\n"
+            "<!-- evidence-status:v1\n"
+            '{"entries": [{"index": 1, "item": "the item, which wraps", '
+            '"status": "complete", "detail": "proof"}]}\n'
+            "-->\n"
+        )
+        parsed = run_contributor._structured_evidence_entries(body, requested)
+        assert parsed is not None
+        self.assertEqual(parsed["invalid_lines"], [])
+        self.assertEqual(parsed["source"], "structured")
+        self.assertEqual(parsed["entries"], {requested[0]: {"status": "complete", "detail": "proof"}})
+
+    def test_metadata_naming_a_different_item_is_still_rejected(self) -> None:
+        requested = ["the item, which wraps onto a continuation line"]
+        body = (
+            "## Evidence Status\n\n"
+            "<!-- evidence-status:v1\n"
+            '{"entries": [{"index": 1, "item": "an unrelated item", '
+            '"status": "complete", "detail": "proof"}]}\n'
+            "-->\n"
+        )
+        parsed = run_contributor._structured_evidence_entries(body, requested)
+        assert parsed is not None
+        self.assertEqual(parsed["source"], "structured-invalid")
+        self.assertEqual(parsed["entries"], {})
 
 if __name__ == "__main__":
     unittest.main()
