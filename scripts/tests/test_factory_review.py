@@ -1033,6 +1033,72 @@ class FactoryReviewTests(unittest.TestCase):
             self.main_decision(client, "--pr", "1509", "--body-edit-review"),
         )
 
+    def test_only_the_paths_that_answer_a_rejection_bind_to_one(self) -> None:
+        # The owner's force is unconditional by definition. Binding it would
+        # let a verdict that moved between admission and preflight cancel the
+        # dispatch the owner made precisely to override such things -- and an
+        # ordinary synchronize has no objection to answer, so it has nothing to
+        # bind to either. Both must publish an empty id.
+        client = self.review_client(self.stale_reviews(review_id=77))
+        self.assertIn(
+            "standing_review=77",
+            self.main_decision(client, "--pr", "1509", "--body-edit-review"),
+        )
+        self.assertIn(
+            "standing_review=77",
+            self.main_decision(client, "--pr", "1509", "--refresh-stale-review"),
+        )
+        self.assertIn(
+            "standing_review=\n",
+            self.main_decision(client, "--pr", "1509", "--force"),
+        )
+        self.assertIn(
+            "standing_review=\n",
+            self.main_decision(self.review_client([]), "--pr", "1509"),
+        )
+
+    def test_a_standing_rejection_with_no_readable_id_stops_the_run(self) -> None:
+        # None means "nothing standing to bind to", which omits the guard.
+        # A standing rejection whose id cannot be read is the one case where
+        # that silence would permit a second review of the same objection, so
+        # it fails closed instead.
+        for unusable in (None, "4242", 0, -1):
+            with self.subTest(id=unusable):
+                reviews = self.stale_reviews()
+                reviews[0]["id"] = unusable
+                with self.assertRaisesRegex(
+                    factory_review.FactoryReviewError, "no usable id"
+                ):
+                    factory_review.standing_rejection_id(
+                        reviews, reviewer="plat", head_sha="headsha"
+                    )
+        # Nothing standing at all stays None -- that is not the failing case.
+        self.assertIsNone(
+            factory_review.standing_rejection_id(
+                self.stale_reviews(state="APPROVED"), reviewer="plat", head_sha="headsha"
+            )
+        )
+
+    def test_verdicts_sharing_a_timestamp_resolve_to_the_later_one(self) -> None:
+        # `submitted_at` has one-second resolution and the API returns reviews
+        # chronologically, so on a tie the list order is the only thing that
+        # still knows which came second. `max` alone answers with the first.
+        same_time = "2026-08-27T02:00:00Z"
+        rejected_then_approved = self.stale_reviews(
+            submitted_at=same_time, review_id=1
+        ) + self.stale_reviews(state="APPROVED", submitted_at=same_time, review_id=2)
+        self.assertEqual(
+            factory_review.latest_review_by(
+                rejected_then_approved, reviewer="plat", head_sha="headsha"
+            )["id"],
+            2,
+        )
+        self.assertIsNone(
+            factory_review.standing_rejection_id(
+                rejected_then_approved, reviewer="plat", head_sha="headsha"
+            )
+        )
+
     def test_the_executor_binds_each_reviewer_preflight_to_that_verdict(self) -> None:
         executor = EXECUTOR_PATH.read_text(encoding="utf-8")
         self.assertIn("standing_review: ${{ steps.admit.outputs.standing_review }}", executor)

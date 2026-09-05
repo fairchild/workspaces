@@ -269,6 +269,11 @@ def latest_review_by(
 
     `COMMENTED` reviews are skipped: on GitHub they never replace a reviewer's
     standing verdict, so they must not replace it here either.
+
+    Ties break towards the later element. `submitted_at` has one-second
+    resolution and the API returns reviews chronologically, so on a tie the
+    list order is the only thing that still knows which came second -- and
+    `max` alone would answer with the first.
     """
     expected_login = REVIEWER_BOTS[reviewer].casefold()
     mine = [
@@ -280,7 +285,10 @@ def latest_review_by(
     ]
     if not mine:
         return None
-    return max(mine, key=lambda review: str(review.get("submitted_at") or ""))
+    return max(
+        enumerate(mine),
+        key=lambda pair: (str(pair[1].get("submitted_at") or ""), pair[0]),
+    )[1]
 
 
 def standing_rejection_id(
@@ -303,7 +311,17 @@ def standing_rejection_id(
     if standing is None or str(standing.get("state") or "").upper() != "CHANGES_REQUESTED":
         return None
     identifier = standing.get("id")
-    return int(identifier) if isinstance(identifier, int) else None
+    if not isinstance(identifier, int) or identifier <= 0:
+        # Fail closed rather than returning None: None means "nothing standing
+        # to bind to", which omits the guard entirely. A standing rejection
+        # whose id we cannot read is the one case where that silence would be
+        # wrong, so it stops the run instead of quietly permitting a second
+        # review of the same objection.
+        raise FactoryReviewError(
+            "the standing changes-requested review has no usable id, so this "
+            "review cannot be bound to the verdict it answers"
+        )
+    return identifier
 
 
 def stale_review_refreshable(
@@ -396,8 +414,8 @@ def count_daily_run_attempts(
     A first-attempt run whose jobs were all skipped by their `if:` is not an
     attempt. No step ran, so it cannot be part of a crash loop and it spent
     nothing -- only a failure or a real execution is evidence of either. This
-    matters since #1509: the signal lane filters title-only, base-branch,
-    draft-body and bot-authored `edited` events at the job level, and a
+    matters since #1509: the signal lane filters title-only, base-branch and
+    draft-body `edited` events at the job level, and a
     `workflow_run` record is created for the filtered signal whatever its
     conclusion, so ordinary title edits would otherwise walk this ceiling and
     refuse the lane's real reviews for the rest of the UTC day.
@@ -783,8 +801,17 @@ def main() -> int:
                 "skip", "the standing review this answers was already answered"
             )
     print(f"Factory review decision for #{args.pr}: {decision.action} ({decision.reason})")
+    # Only the two paths that answer a rejection bind to one. The owner's
+    # force is unconditional by definition: binding it would let a verdict
+    # that moved between admission and preflight cancel the dispatch the
+    # owner made precisely to override such things.
     standing_review = ""
-    if decision.action == "review" and decision.reviewer:
+    if (
+        decision.action == "review"
+        and decision.reviewer
+        and not args.force
+        and (args.body_edit_review or args.refresh_stale_review)
+    ):
         standing_review = str(
             standing_rejection_id(
                 reviews, reviewer=decision.reviewer, head_sha=head_sha
