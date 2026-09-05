@@ -259,8 +259,14 @@ done
 
 require_cmd git
 require_cmd date
+require_cmd uv
 [[ -x "$RELEASE_VERSION_SCRIPT" ]] || fail "Missing release-version helper at $RELEASE_VERSION_SCRIPT"
 [[ -f "$INFO_PLIST_PATH" ]] || fail "Info.plist not found at $INFO_PLIST_PATH"
+
+# Keep runtime failures separate from the benchmark-policy result below. A
+# missing uv or Python must never look like stale benchmark evidence.
+uv python find '>=3.11' >/dev/null 2>&1 \
+    || fail "Required Python runtime not found: Python >=3.11 for check-perf-benchmarks.py; run 'uv python install 3.11'"
 
 VERSION="$(normalize_version "$VERSION")"
 TAG_NAME="v$VERSION"
@@ -311,7 +317,7 @@ echo "Computed changelog preview"
 cat "$TMP_DIR/changelog-entry.txt"
 
 echo ""
-"$SCRIPT_DIR/check-perf-benchmarks.py" --tag "$TAG_NAME" \
+uv run --python '>=3.11' --script "$SCRIPT_DIR/check-perf-benchmarks.py" --tag "$TAG_NAME" \
     || fail "performance-benchmark gate would block $TAG_NAME — record a row per docs/performance_benchmarks.md before releasing"
 
 if [[ "$DRY_RUN" == true ]]; then
