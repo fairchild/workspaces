@@ -98,28 +98,18 @@ struct SidebarRowRebuildTests {
     /// a loaded CI runner it did not, and every row read one rebuild high — including in the two
     /// tests that predate this change. Waiting for the counter to hold still measures the thing
     /// the assertions actually depend on.
-    /// Quiesced means the rows have rendered *and* the count has then held still across
-    /// `stillPumpsRequired` consecutive pumps. Requiring the first half matters: before the
-    /// initial render the count is zero and would otherwise read as "already still".
-    ///
-    /// Requiring the second half in quantity is what a single still pump got wrong. On a loaded
-    /// runner the display cycle can pause for longer than one 20ms slice, so a pass deferred past
-    /// that slice lands after the baseline read and every row reads one rebuild high — the same
-    /// signature the fixed 150ms pump produced, which is what this loop replaced it to prevent.
-    /// A window of pumps rather than one measures a pause the machine, not the clock, decides the
-    /// length of. The exit condition still ends this: ~160ms of quiet in the common case, and the
-    /// cap bounds the pathological one at 3s.
+    /// Quiesced means the rows have rendered *and* a further pump added nothing. Requiring the
+    /// first half matters: before the initial render the count is zero and would otherwise read
+    /// as "already still". Short slices because the exit condition, not the clock, is what ends
+    /// this — two 20ms pumps is the common case, well under the fixed 150ms it replaces.
     private func settle(_ host: NSHostingView<some View>, _ counter: BodyCounter) {
-        let stillPumpsRequired = 8
         var previous = -1
-        var stillPumps = 0
-        for _ in 0..<150 {
+        for _ in 0..<100 {
             host.layoutSubtreeIfNeeded()
             RunLoop.current.run(until: Date().addingTimeInterval(0.02))
             host.layoutSubtreeIfNeeded()
             let total = counter.total
-            stillPumps = (total > 0 && total == previous) ? stillPumps + 1 : 0
-            if stillPumps >= stillPumpsRequired { return }
+            if total > 0, total == previous { return }
             previous = total
         }
     }
