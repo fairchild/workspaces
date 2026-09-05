@@ -27,7 +27,7 @@ import zipfile
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import jwt
@@ -52,7 +52,8 @@ DIAGNOSTIC_SCHEMA = 1
 DIAGNOSTIC_REPOSITORY = "fairchild/workspaces"
 DIAGNOSTIC_REPORT_NAME = "diagnostic-handoff.json"
 MAX_DIAGNOSTIC_BYTES = 8 * 1024
-MAX_DIAGNOSTIC_OBSERVATIONS = 32
+MAX_DIAGNOSTIC_OBSERVATIONS = 20
+MAX_GITHUB_RUN_ID = (1 << 53) - 1
 MISSING_UV = re.compile(
     r"(?:env:\s*)?uv:\s*(?:No such file or directory|command not found)|"
     r"Required command not found:\s*uv",
@@ -116,11 +117,35 @@ def commit_sha(run: dict[str, Any]) -> str:
     return source.get("commitSha") or source.get("sha") or ""
 
 
-def diagnostic_run_id() -> int:
-    raw = os.environ.get("GITHUB_RUN_ID", "")
-    if not raw.isdecimal():
-        sys.exit("error: GITHUB_RUN_ID must be a numeric GitHub Actions run ID for diagnostic handoff")
-    return int(raw)
+def diagnostic_run_id(raw: str | None = None) -> int | None:
+    """Return a safe Actions run ID, or None for ordinary local retrieval."""
+    value = raw if raw is not None else os.environ.get("GITHUB_RUN_ID")
+    if value is None or not value:
+        return None
+    if not value.isdecimal() or not 0 < int(value) <= MAX_GITHUB_RUN_ID:
+        raise ValueError("diagnostic run ID must be a positive integer no larger than 2^53-1")
+    return int(value)
+
+
+def validate_callback_url(value: str) -> str:
+    """Accept only a configured HTTPS origin with the fixed diagnostics path."""
+    parsed = urlsplit(value)
+    try:
+        port = parsed.port
+    except ValueError as err:
+        raise ValueError("callback URL must not use an invalid port") from err
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path != "/api/diagnostics"
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError("callback URL must be HTTPS without credentials, port, query, or fragment at /api/diagnostics")
+    return value
 
 
 def diagnostic_observation(build_id: str, action_id: str, sha: str, log: Path) -> dict[str, str] | None:
@@ -128,28 +153,28 @@ def diagnostic_observation(build_id: str, action_id: str, sha: str, log: Path) -
     if log.name != "ci_pre_xcodebuild.log":
         return None
     try:
-        uuid.UUID(build_id)
-        uuid.UUID(action_id)
+        canonical_build_id = str(uuid.UUID(build_id))
+        canonical_action_id = str(uuid.UUID(action_id))
         contents = log.read_text(errors="replace")
     except (OSError, ValueError):
         return None
     if not re.fullmatch(r"[0-9a-f]{40}", sha, re.I) or not MISSING_UV.search(contents):
         return None
     return {
-        "buildId": build_id,
-        "actionId": action_id,
+        "buildId": canonical_build_id,
+        "actionId": canonical_action_id,
         "sha": sha.lower(),
         "signature": "missing-uv",
         "stage": "ci_pre_xcodebuild",
     }
 
 
-def write_diagnostic_report(output_dir: Path, observations: list[dict[str, str]]) -> Path:
+def write_diagnostic_report(output_dir: Path, observations: list[dict[str, str]], run_id: int) -> Path:
     """Write the bounded, raw-log-free handoff used by a trusted collector."""
     report = {
         "schema": DIAGNOSTIC_SCHEMA,
         "repository": DIAGNOSTIC_REPOSITORY,
-        "runId": diagnostic_run_id(),
+        "runId": run_id,
         "observations": observations[:MAX_DIAGNOSTIC_OBSERVATIONS],
     }
     encoded = json.dumps(report, sort_keys=True, separators=(",", ":")).encode()
@@ -295,9 +320,20 @@ def download_artifacts(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch Xcode Cloud logs for a commit")
-    parser.add_argument("--sha", required=True, help="Commit SHA (prefix ok) to look up")
+    parser.add_argument("--sha", help="Commit SHA (prefix ok) to look up")
     parser.add_argument("--out", type=Path, default=Path("xcode-cloud-logs"), help="Download directory")
+    parser.add_argument("--diagnostic-run-id", help="Positive GitHub Actions run ID for local diagnostic handoff")
+    parser.add_argument("--validate-callback-url", help="Validate a configured diagnostics callback URL and exit")
     args = parser.parse_args()
+
+    if args.validate_callback_url:
+        try:
+            print(validate_callback_url(args.validate_callback_url))
+        except ValueError as err:
+            parser.error(str(err))
+        return 0
+    if not args.sha:
+        parser.error("--sha is required unless --validate-callback-url is used")
 
     token = mint_token()
     runs = find_build_runs(token, args.sha)
@@ -326,7 +362,14 @@ def main() -> int:
                 sha=commit_sha(run),
                 observations=observations,
             )
-    report_path = write_diagnostic_report(args.out, observations)
+    try:
+        run_id = diagnostic_run_id(args.diagnostic_run_id)
+    except ValueError as err:
+        parser.error(str(err))
+    if run_id is None:
+        print("note: no GITHUB_RUN_ID or --diagnostic-run-id; diagnostic handoff not emitted", file=sys.stderr)
+        return 0
+    report_path = write_diagnostic_report(args.out, observations, run_id)
     print(f"diagnostic handoff: {report_path} ({len(observations)} observations)")
     return 0
 

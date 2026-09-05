@@ -38,7 +38,7 @@ class DiagnosticHandoffTests(unittest.TestCase):
             log.write_text("before\nenv: uv: No such file or directory\nsecret=do-not-export\n")
 
             observation = logs.diagnostic_observation(BUILD_ID, ACTION_ID, SHA, log)
-            report_path = logs.write_diagnostic_report(root, [observation] if observation else [])
+            report_path = logs.write_diagnostic_report(root, [observation] if observation else [], 123456)
             serialized = report_path.read_text()
             report = json.loads(serialized)
 
@@ -65,11 +65,36 @@ class DiagnosticHandoffTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory, patch.dict(
             os.environ, {"GITHUB_RUN_ID": "123456"}, clear=False
         ):
-            report_path = logs.write_diagnostic_report(Path(temporary_directory), [observation] * 100)
+            report_path = logs.write_diagnostic_report(Path(temporary_directory), [observation] * 100, 123456)
             serialized = report_path.read_bytes()
 
         self.assertLessEqual(len(serialized), logs.MAX_DIAGNOSTIC_BYTES)
         self.assertEqual(len(json.loads(serialized)["observations"]), logs.MAX_DIAGNOSTIC_OBSERVATIONS)
+
+    def test_identifiers_are_canonicalized(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            log = Path(temporary_directory) / "ci_pre_xcodebuild.log"
+            log.write_text("env: uv: No such file or directory\n")
+            observation = logs.diagnostic_observation(
+                "{11111111-1111-4111-8111-111111111111}", ACTION_ID.upper(), SHA, log
+            )
+
+        self.assertEqual(observation and observation["buildId"], BUILD_ID)
+        self.assertEqual(observation and observation["actionId"], ACTION_ID)
+
+    def test_local_retrieval_can_skip_handoff_and_callback_urls_are_strict(self) -> None:
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": ""}, clear=False):
+            self.assertIsNone(logs.diagnostic_run_id())
+        self.assertEqual(logs.validate_callback_url("https://ops.example/api/diagnostics"), "https://ops.example/api/diagnostics")
+        for invalid in (
+            "http://ops.example/api/diagnostics",
+            "https://token@ops.example/api/diagnostics",
+            "https://ops.example:8443/api/diagnostics",
+            "https://ops.example/api//diagnostics",
+            "https://ops.example/api/diagnostics?next=x",
+        ):
+            with self.assertRaises(ValueError):
+                logs.validate_callback_url(invalid)
 
 
 if __name__ == "__main__":

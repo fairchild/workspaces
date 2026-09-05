@@ -59,7 +59,9 @@ jobs:
       # use GitHub's Actions API to verify this workflow path, workflow_dispatch
       # event, main head branch, and completed successful run before confirming
       # an incident. A running workflow cannot truthfully confirm its own final
-      # conclusion, so that verification belongs to the trusted collector.
+      # conclusion, so that verification belongs to the trusted collector. No
+      # observation means diagnosis is unknown and requires agent triage; it is
+      # not an empty callback the collector might mistake for confirmation.
       - name: Optionally hand off trusted diagnosis
         if: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && vars.OPS_DIAGNOSTIC_URL != '' }}
         env:
@@ -70,14 +72,18 @@ jobs:
           set -euo pipefail
           test -n "${OPS_DIAGNOSTIC_TOKEN:-}" || exit 0
           test -s "$DIAGNOSTIC_REPORT"
-          test "$(jq '.observations | length' "$DIAGNOSTIC_REPORT")" -gt 0 || exit 0
-          case "$OPS_DIAGNOSTIC_URL" in
-            https://*/api/diagnostics) ;;
-            *) echo "error: OPS_DIAGNOSTIC_URL must be a configured HTTPS /api/diagnostics endpoint" >&2; exit 1 ;;
-          esac
+          if test "$(jq '.observations | length' "$DIAGNOSTIC_REPORT")" -eq 0; then
+            echo "note: diagnosis unknown; no callback sent and agent triage is required" >&2
+            exit 0
+          fi
+          validated_url="$(uv run --script scripts/fetch-xcode-cloud-logs.py --validate-callback-url "$OPS_DIAGNOSTIC_URL")"
           echo "::add-mask::$OPS_DIAGNOSTIC_TOKEN"
-          curl --fail --silent --show-error --request POST \
-            --header "Authorization: Bearer $OPS_DIAGNOSTIC_TOKEN" \
+          set +x
+          auth_config="$(mktemp)"
+          chmod 600 "$auth_config"
+          trap 'rm -f "$auth_config"' EXIT
+          printf 'header = "Authorization: Bearer %s"\n' "$OPS_DIAGNOSTIC_TOKEN" > "$auth_config"
+          curl --config "$auth_config" --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST \
             --header "Content-Type: application/json" \
             --data-binary "@$DIAGNOSTIC_REPORT" \
-            "$OPS_DIAGNOSTIC_URL" >/dev/null
+            "$validated_url" >/dev/null
