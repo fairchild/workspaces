@@ -560,6 +560,7 @@ def evaluate_review(
     *,
     force: bool,
     stale_refresh: bool = False,
+    require_stale_refresh: bool = False,
 ) -> ReviewDecision:
     if str(pull_request.get("state") or "").casefold() != "open":
         return ReviewDecision("skip", "pull request is not open")
@@ -589,6 +590,16 @@ def evaluate_review(
     # fires `ready_for_review`, which brings the per-push cadence back.
     if bool(pull_request.get("draft")) and not force and reviewed_any_head(reviews, reviewer=reviewer):
         return ReviewDecision("skip", f"{reviewer} already reviewed this draft")
+    # A body edit is admitted for one reason only: it answers a rejection that
+    # is still standing (#1509). Without the requirement the edit would fall
+    # through to the dedup below, which passes whenever nothing was reviewed on
+    # this head -- so every body edit on every open pull request would buy a
+    # review. `stale_refresh` is the same live re-derivation the Evidence
+    # Verify lane's request goes through; this only makes it mandatory.
+    if require_stale_refresh and not stale_refresh:
+        return ReviewDecision(
+            "skip", "body edit answers no standing changes-requested verdict"
+        )
     if (
         not force
         and not stale_refresh
@@ -621,6 +632,17 @@ def parse_args() -> argparse.Namespace:
             "their standing verdict is CHANGES_REQUESTED and the readiness gate "
             "now passes. Requested by the Evidence Verify lane; re-derived here "
             "from live PR state."
+        ),
+    )
+    parser.add_argument(
+        "--body-edit-review",
+        action="store_true",
+        help=(
+            "This run was triggered by a pull request body edit. Consider "
+            "re-reviewing a head this reviewer already reviewed, exactly as "
+            "--refresh-stale-review does, and review only if that same "
+            "derivation holds: an edit answering nothing standing is a skip, "
+            "not a fresh review."
         ),
     )
     parser.add_argument("--expected-head", default="")
@@ -662,7 +684,10 @@ def main() -> int:
     reviews = client.pull_request_reviews(args.pr)
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
     stale_refresh = False
-    if args.refresh_stale_review and head_sha:
+    # Two callers ask the same question of live state. The Evidence Verify
+    # lane asks permissively (#1379); a body edit asks and is bound by the
+    # answer (#1509).
+    if (args.refresh_stale_review or args.body_edit_review) and head_sha:
         reviewer = route_reviewer(pull_request, files)
         stale_refresh = stale_review_refreshable(
             pull_request,
@@ -678,7 +703,12 @@ def main() -> int:
                     "readiness gate still fails)"
                 )
     decision = evaluate_review(
-        pull_request, files, reviews, force=args.force, stale_refresh=stale_refresh
+        pull_request,
+        files,
+        reviews,
+        force=args.force,
+        stale_refresh=stale_refresh,
+        require_stale_refresh=args.body_edit_review,
     )
     if args.expected_head and args.expected_head != head_sha:
         decision = ReviewDecision("skip", "pull request head changed after admission")

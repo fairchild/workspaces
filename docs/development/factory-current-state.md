@@ -7,7 +7,7 @@ What is actually wired and running today, verified against the workflow YAML and
 | Lane | Workflow | Trigger | Guard | Status |
 |---|---|---|---|---|
 | Implement | `factory-implement.yml` | issue labeled `ready` (owner-applied, or a factory rollback restoring an owner-applied one — see below); or owner `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_IMPLEMENT_ENABLED`, both branches — capped by `FACTORY_IMPLEMENT_DAILY_CAP` | **Live** |
-| Review (signal) | `factory-review.yml` | PR opened / `ready_for_review` / synchronize; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_ENABLED` on the PR-event path only — **`workflow_dispatch` bypasses both switches** (the `if:` uses boolean OR, not AND) | **Live** — untrusted, writes a context artifact only |
+| Review (signal) | `factory-review.yml` | PR opened / `ready_for_review` / synchronize / `edited`; or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_ENABLED` on the PR-event path only — **`workflow_dispatch` bypasses both switches** (the `if:` uses boolean OR, not AND). `edited` is narrowed on top of the switches to a body change on a non-draft, since it also fires on title and base-branch edits | **Live** — untrusted, writes a context artifact only. `signal` is the only job, so a filtered-out event leaves the run `skipped` and the Executor's `conclusion == 'success'` admission never fires |
 | Review (execute) | `factory-review-execute.yml` | `workflow_run` of Factory Review completing | same switches, same bypass — if the upstream Review run's triggering event was `workflow_dispatch`, this job runs regardless of either switch; otherwise gated, plus `FACTORY_REVIEW_DAILY_CAP` | **Live** — trusted, runs from default-branch code Manual dispatch has two actors: the owner's forces an unconditional re-review and bypasses the switches; the Actions identity's is the Evidence Verify lane's request, honours the switches, and only ever asks — `factory-review.py` re-derives from live PR state, using the merge gate's own `pr-readiness.py`, whether a standing rejection is refreshable. |
 | Monitor | `factory-monitor.yml` | daily cron (13:30 UTC); or `workflow_dispatch` | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_MONITOR_ENABLED` on the cron path only — **`workflow_dispatch` bypasses both switches** (same OR-not-AND pattern) | **Live** — telemetry, Digest, reconciliation janitor, stale-review reconciler |
 | Review Reconcile | `factory-review-reconcile.py`, a step inside `factory-monitor.yml` | same trigger as Monitor | `AGENT_AUTOMATIONS_ENABLED` + `FACTORY_REVIEW_RECONCILE_ENABLED`, both required, no dispatch bypass | **Merged, ships dark** (`FACTORY_REVIEW_RECONCILE_ENABLED` set `false` at merge, #1507). Detects a PR still due for a counterpart review `FACTORY_REVIEW_RECONCILE_THRESHOLD_HOURS` (default 3) after Factory Review's signal last succeeded on its head — the symptom that surfaced when the Executor produced zero runs for ~7.5 hours on 2026-08-31 while the signal kept succeeding. Reuses `factory-review.py`'s own `evaluate_review` for routing rather than a second opinion; flags with `agent`+`needs-human` and one idempotent per-head comment, never dispatches a review. |
@@ -51,24 +51,32 @@ cost no routing and closed the silent miss.
 
 A counterpart review can object to the PR *body* — a missing `## Mergeability`
 block, an evidence line still `[pending-ci]`, a `blocked:` label. Fixing that
-moves no commit, so GitHub's `dismiss_stale_reviews_on_push` never fires and the
-Review lane (opened / ready_for_review / synchronize) never re-runs. The
-rejection stays blocking after it has been satisfied — hit live on #1102 and
-again on #1377.
+moves no commit, so GitHub's `dismiss_stale_reviews_on_push` never fires — hit
+live on #1102, again on #1377, and once more on #1491 where the objection was a
+missing evidence citation and the owner dispatched the re-review by hand.
 
-Two paths clear it, and neither dismisses the review: the reviewer supersedes
-their own verdict, which keeps the review lane the thing that decides.
+Three paths clear it, and none dismisses the review: the reviewer supersedes
+their own verdict, which keeps the review lane the thing that decides. All three
+converge on the same derivation, so none of them is a second opinion about when
+a rejection is answered.
 
-- **Automatic.** When Evidence Verify completes the last blocking evidence entry
-  and no `blocked:` label remains, it dispatches Factory Review for that PR. The
+- **The edit itself.** A body edit is a Review-lane trigger (`edited`, #1509).
+  It carries `--body-edit-review`, which asks the same question
+  `--refresh-stale-review` asks *and* is bound by the answer: an edit with no
+  standing rejection to answer reviews nothing, so an ordinary body edit on an
+  ordinary PR spends no review. Title and base-branch edits, and edits to
+  drafts, are filtered at the signal job, where a skipped run costs nothing.
+- **Evidence Verify.** When it completes the last blocking evidence entry and no
+  `blocked:` label remains, it dispatches Factory Review for that PR. The
   request is only a request — `factory-review.py --refresh-stale-review`
   re-derives, from live PR state and using the merge gate's own
   `scripts/pr-readiness.py`, whether the standing rejection is refreshable. It
   refuses unless the reviewer's latest verdict on this exact head is still
   `CHANGES_REQUESTED` *and* readiness now passes.
-- **By hand.** For a body fix the factory did not make — the owner filling in
-  Mergeability, attesting evidence, removing a label — run Factory Review by
-  hand for the PR number. The owner's dispatch forces the review outright.
+- **By hand.** For a fix that changes neither the diff nor the body — removing a
+  `blocked:` label, say — run Factory Review by hand for the PR number. The
+  owner's dispatch forces the review outright, and is still the way to get a
+  review the derivation would otherwise refuse.
 
 ### Revision loop
 

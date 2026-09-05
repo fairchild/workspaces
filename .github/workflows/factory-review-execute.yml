@@ -31,6 +31,7 @@ jobs:
     outputs:
       force_review: ${{ steps.context.outputs.force_review }}
       refresh_stale: ${{ steps.context.outputs.refresh_stale }}
+      body_edit: ${{ steps.context.outputs.body_edit }}
       matched: ${{ steps.admit.outputs.matched }}
       pr_number: ${{ steps.admit.outputs.pr_number }}
       reviewer: ${{ steps.admit.outputs.reviewer }}
@@ -79,9 +80,23 @@ jobs:
               exit 1
             fi
           fi
-          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "force_review=$FORCE_REVIEW" >> "$GITHUB_OUTPUT"
-          echo "refresh_stale=$REFRESH_STALE" >> "$GITHUB_OUTPUT"
+          # A body edit answering a standing rejection (#1509). The signal lane
+          # that set this flag runs the pull request's own workflow file, so it
+          # is a third request rather than a fact -- and the narrowest of the
+          # three: --body-edit-review both permits the already-reviewed bypass
+          # and requires it, so a body edit with nothing standing to answer
+          # reviews nothing. Only a pull_request run may ask; a dispatch has
+          # its own two authorities above.
+          BODY_EDIT=false
+          if [ "$RUN_EVENT" = "pull_request" ]; then
+            BODY_EDIT="$(jq -r '.body_edited == true' context/factory-review-context.json)"
+          fi
+          {
+            echo "pr_number=$PR_NUMBER"
+            echo "force_review=$FORCE_REVIEW"
+            echo "refresh_stale=$REFRESH_STALE"
+            echo "body_edit=$BODY_EDIT"
+          } >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9 # v7
       - name: Enforce review daily cap and runaway guard
         working-directory: source
@@ -94,6 +109,7 @@ jobs:
         id: admit
         working-directory: source
         env:
+          BODY_EDIT: ${{ steps.context.outputs.body_edit }}
           FORCE_REVIEW: ${{ steps.context.outputs.force_review }}
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ steps.context.outputs.pr_number }}
@@ -106,6 +122,9 @@ jobs:
           fi
           if [ "$REFRESH_STALE" = "true" ]; then
             ARGS+=(--refresh-stale-review)
+          fi
+          if [ "$BODY_EDIT" = "true" ]; then
+            ARGS+=(--body-edit-review)
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
 
@@ -144,6 +163,7 @@ jobs:
         id: preflight
         working-directory: source
         env:
+          BODY_EDIT: ${{ needs.admit.outputs.body_edit }}
           FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REFRESH_STALE: ${{ needs.admit.outputs.refresh_stale }}
@@ -156,6 +176,9 @@ jobs:
           fi
           if [ "$REFRESH_STALE" = "true" ]; then
             ARGS+=(--refresh-stale-review)
+          fi
+          if [ "$BODY_EDIT" = "true" ]; then
+            ARGS+=(--body-edit-review)
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
       - name: Checkout admitted pull request head
@@ -237,6 +260,7 @@ jobs:
         id: preflight
         working-directory: source
         env:
+          BODY_EDIT: ${{ needs.admit.outputs.body_edit }}
           FORCE_REVIEW: ${{ needs.admit.outputs.force_review }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REFRESH_STALE: ${{ needs.admit.outputs.refresh_stale }}
@@ -249,6 +273,9 @@ jobs:
           fi
           if [ "$REFRESH_STALE" = "true" ]; then
             ARGS+=(--refresh-stale-review)
+          fi
+          if [ "$BODY_EDIT" = "true" ]; then
+            ARGS+=(--body-edit-review)
           fi
           uv run --script scripts/factory-review.py "${ARGS[@]}"
       - name: Checkout admitted pull request head

@@ -775,15 +775,140 @@ class FactoryReviewTests(unittest.TestCase):
                     "skip",
                 )
 
-    def test_the_review_signal_workflow_is_unchanged_by_this_lane(self) -> None:
-        # The re-review request comes from the trusted Evidence Verify lane, not
-        # from a global `pull_request: edited` subscription: a job skipped by
-        # `if:` still reports success, so subscribing would start a trusted
-        # executor run -- and a failed artifact download -- on every body edit
-        # in the repository, poisoning the runaway cap.
+    def test_the_signal_workflow_subscribes_to_body_edits(self) -> None:
+        # #1509: a rejection answered by a body edit moves no commit, so
+        # `synchronize` never fires, and the standing CHANGES_REQUESTED holds
+        # `owner-action` until a human dispatches a review by hand (#1491).
+        #
+        # This lane refused an `edited` subscription at #1379, on the reading
+        # that "a job skipped by `if:` still reports success" -- which would
+        # start a trusted executor run, and a failed artifact download, on
+        # every body edit in the repository. That is not what GitHub does to a
+        # single-job workflow: when `signal` is the only job and its `if:` is
+        # false, the run concludes `skipped`, and the executor's
+        # `conclusion == 'success'` admission never fires. Factory Evidence
+        # Verify -- also one job behind an `if:` -- concludes `skipped` on the
+        # check_suite events its own gate filters out, which is that same
+        # behaviour observed in this repository.
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        self.assertIn("types: [opened, ready_for_review, synchronize]", workflow)
-        self.assertNotIn("edited", workflow)
+        self.assertIn("types: [opened, ready_for_review, synchronize, edited]", workflow)
+        # `edited` also fires on title and base-branch changes, and a draft is
+        # skipped downstream whatever its body says (the draft case in
+        # test_refresh_only_bypasses_the_already_reviewed_skip), so neither
+        # reaches the executor at all.
+        self.assertIn("github.event.action != 'edited' ||", workflow)
+        self.assertIn("github.event.changes.body != null &&", workflow)
+        self.assertIn("github.event.pull_request.draft == false", workflow)
+        # Still secret-free, still no review-event subscription of its own.
+        self.assertNotIn("secrets.", workflow)
+        self.assertNotIn("pull_request_review:", workflow)
+        # Option 2 in #1509 -- a second dispatch out of the Evidence Verify
+        # lane -- was not also wired: that lane keeps its one supersede path.
+        verify = (
+            REPO_ROOT / ".github" / "workflows" / "factory-evidence-verify.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("actions: write", verify)
+        self.assertNotIn("pull_request:", verify)
+
+    def test_a_body_edit_carries_a_request_the_executor_re_derives(self) -> None:
+        # The signal lane runs pull-request-controlled workflow code, so the
+        # flag it writes is a request and not a fact. The executor honours it
+        # only for a pull_request-triggered run, and factory-review.py
+        # re-derives the standing rejection from live pull request state before
+        # any reviewer token is minted -- the same shape, and the same trust,
+        # as the Evidence Verify lane's --refresh-stale-review.
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("BODY_EDITED: ${{ github.event.action == 'edited' }}", workflow)
+        self.assertIn('"body_edited"', workflow)
+
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn('if [ "$RUN_EVENT" = "pull_request" ]; then', executor)
+        self.assertIn("BODY_EDIT=false", executor)
+        # Re-derived in admission and again in each reviewer's preflight.
+        self.assertEqual(executor.count("ARGS+=(--body-edit-review)"), 3)
+        self.assertEqual(executor.count("BODY_EDIT: ${{"), 3)
+
+    def test_a_body_edit_reviews_only_when_it_answers_a_standing_rejection(self) -> None:
+        pull_request = self.ready_pull_request()
+        standing = self.stale_reviews()
+        # The #1491 case: the rejection stands on this head and the edited body
+        # now passes readiness, so the edit earns exactly one fresh review.
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request,
+                [],
+                standing,
+                force=False,
+                stale_refresh=True,
+                require_stale_refresh=True,
+            ).action,
+            "review",
+        )
+        # Nothing standing to answer, so the edit spends nothing.
+        declined = factory_review.evaluate_review(
+            pull_request,
+            [],
+            standing,
+            force=False,
+            stale_refresh=False,
+            require_stale_refresh=True,
+        )
+        self.assertEqual(declined.action, "skip")
+        self.assertIn("no standing", declined.reason)
+
+    def test_a_body_edit_on_a_never_reviewed_pull_request_spends_nothing(self) -> None:
+        # The already-reviewed dedup cannot carry this case: with no verdict on
+        # the head there is nothing to deduplicate, so without the requirement
+        # an ordinary body edit would buy a full review on any open pull
+        # request in the repository.
+        pull_request = self.ready_pull_request()
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request, [], [], force=False, stale_refresh=False
+            ).action,
+            "review",
+        )
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request,
+                [],
+                [],
+                force=False,
+                stale_refresh=False,
+                require_stale_refresh=True,
+            ).action,
+            "skip",
+        )
+
+    def test_the_body_edit_requirement_reaches_the_decision_through_main(self) -> None:
+        # A flag that parses but never reaches evaluate_review would satisfy
+        # every assertion above and still review on any body edit in
+        # production, so the wiring is asserted end to end.
+        client = mock.Mock()
+        client.pull_request.return_value = self.ready_pull_request()
+        client.pull_request_files.return_value = []
+        client.pull_request_reviews.return_value = []
+
+        def decide(*argv: str) -> str:
+            buffer = io.StringIO()
+            with (
+                mock.patch.object(factory_review, "GitHubClient", return_value=client),
+                mock.patch.dict(
+                    "os.environ",
+                    {
+                        "GITHUB_REPOSITORY": self.REPOSITORY,
+                        "GH_TOKEN": "token",
+                        "GITHUB_OUTPUT": "",
+                    },
+                ),
+                mock.patch.object(sys, "argv", ["factory-review.py", *argv]),
+                contextlib.redirect_stdout(buffer),
+            ):
+                self.assertEqual(factory_review.main(), 0)
+            return buffer.getvalue()
+
+        self.assertIn("matched=true", decide("--pr", "1509"))
+        self.assertIn("matched=false", decide("--pr", "1509", "--body-edit-review"))
 
     def test_only_the_owner_or_the_factory_may_dispatch_a_review(self) -> None:
         executor = EXECUTOR_PATH.read_text(encoding="utf-8")
@@ -814,7 +939,7 @@ class FactoryReviewTests(unittest.TestCase):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         executor = EXECUTOR_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("types: [opened, ready_for_review, synchronize]", workflow)
+        self.assertIn("types: [opened, ready_for_review, synchronize, edited]", workflow)
         self.assertNotIn("pull_request_review:", workflow)
         self.assertIn("vars.AGENT_AUTOMATIONS_ENABLED == 'true'", workflow)
         self.assertIn("vars.FACTORY_REVIEW_ENABLED == 'true'", workflow)

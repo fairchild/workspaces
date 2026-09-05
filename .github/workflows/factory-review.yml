@@ -5,7 +5,7 @@ name: Factory Review
 
 on:
   pull_request:
-    types: [opened, ready_for_review, synchronize]
+    types: [opened, ready_for_review, synchronize, edited]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -17,21 +17,38 @@ permissions:
   contents: read
 
 jobs:
+  # `signal` is the only job, and that is load-bearing for `edited`: when its
+  # `if:` is false the whole run concludes `skipped`, not `success`, so the
+  # executor's `conclusion == 'success'` admission never fires and a filtered
+  # edit costs no trusted run and no artifact download. An `edited` event that
+  # changed only the title or the base branch is filtered here for that reason,
+  # and so is a draft -- a draft with a standing rejection is skipped by
+  # evaluate_review whatever its body now says.
   signal:
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' ||
       (vars.AGENT_AUTOMATIONS_ENABLED == 'true' &&
-      vars.FACTORY_REVIEW_ENABLED == 'true')
+      vars.FACTORY_REVIEW_ENABLED == 'true')) &&
+      (github.event.action != 'edited' ||
+      (github.event.changes.body != null &&
+      github.event.pull_request.draft == false))
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
+      # BODY_EDITED is a request, not a fact: this workflow file is the pull
+      # request's own copy. The executor honours it only for a pull_request
+      # run and re-derives the standing rejection from live state, so the worst
+      # a forged flag can ask for is a re-review the script then declines.
       - name: Write untrusted review context
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          BODY_EDITED: ${{ github.event.action == 'edited' }}
         run: |
           set -euo pipefail
           [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
-          printf '{"pr_number":%s}\n' "$PR_NUMBER" > "$RUNNER_TEMP/factory-review-context.json"
+          [[ "$BODY_EDITED" =~ ^(true|false)$ ]]
+          printf '{"pr_number":%s,"body_edited":%s}\n' "$PR_NUMBER" "$BODY_EDITED" \
+            > "$RUNNER_TEMP/factory-review-context.json"
       - name: Upload review context
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
