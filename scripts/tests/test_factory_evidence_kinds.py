@@ -777,6 +777,37 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # the contract holds what a reader can actually see as a bullet.
         body = "## Requested Evidence\n\n- first\n\n```\n- sample\n\n- never rendered\n"
         self.assertEqual(run_contributor.extract_requested_evidence(body), ["first"])
+    def test_the_guard_only_fires_where_the_lane_is_ambiguous(self) -> None:
+        # The guard leaves a line alone when a reading is `ci` or `diff`. It
+        # must not leave alone a line whose readings all belong to the macOS
+        # lane, or a detail carrying its own separator would wedge every
+        # ordinary test and screenshot item.
+        for item, kwargs in (
+            ("`swift test` passes -- some note -- more", {"test_output": "ok"}),
+            (
+                "a screenshot of the panel -- captured later -- see it",
+                {
+                    "screenshot_upload_succeeded": True,
+                    "screenshot_urls": [("s", "https://example.test/s.png")],
+                },
+            ),
+        ):
+            with self.subTest(item=item):
+                body = f"## Evidence Status\n- [pending-ci] {item}\n"
+                reconciled = run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                    **kwargs,
+                )
+                self.assertNotEqual(reconciled, body)
+                self.assertIn("- [complete] ", reconciled)
+
+    def test_a_line_whose_only_separator_is_inside_a_span_does_not_parse(self) -> None:
+        # Splitting it would name the item "`a" and the detail "b`". Reporting
+        # the line as unreadable is what the gate can act on.
+        self.assertIsNone(run_contributor.split_evidence_status_line("- [complete] `a -- b`"))
 
 if __name__ == "__main__":
     unittest.main()
