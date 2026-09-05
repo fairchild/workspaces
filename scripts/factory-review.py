@@ -595,8 +595,10 @@ def evaluate_review(
     # through to the dedup below, which passes whenever nothing was reviewed on
     # this head -- so every body edit on every open pull request would buy a
     # review. `stale_refresh` is the same live re-derivation the Evidence
-    # Verify lane's request goes through; this only makes it mandatory.
-    if require_stale_refresh and not stale_refresh:
+    # Verify lane's request goes through; this only makes it mandatory. `force`
+    # still overrides, as it does the draft and dedup skips below: the owner's
+    # dispatch reviews outright, whatever else is asking.
+    if require_stale_refresh and not force and not stale_refresh:
         return ReviewDecision(
             "skip", "body edit answers no standing changes-requested verdict"
         )

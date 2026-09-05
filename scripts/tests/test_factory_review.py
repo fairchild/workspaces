@@ -855,6 +855,22 @@ class FactoryReviewTests(unittest.TestCase):
         )
         self.assertEqual(declined.action, "skip")
         self.assertIn("no standing", declined.reason)
+        # The owner's dispatch still forces, as it does over the draft and
+        # dedup skips. The workflows never combine these two -- BODY_EDIT is
+        # set only for a pull_request run and FORCE_REVIEW only for a
+        # dispatch -- but the flags compose the way the rest of the function
+        # composes rather than making force conditional on a newer gate.
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request,
+                [],
+                standing,
+                force=True,
+                stale_refresh=False,
+                require_stale_refresh=True,
+            ).action,
+            "review",
+        )
 
     def test_a_body_edit_on_a_never_reviewed_pull_request_spends_nothing(self) -> None:
         # The already-reviewed dedup cannot carry this case: with no verdict on
