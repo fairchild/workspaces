@@ -570,48 +570,109 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             {},
         )
 
-    def test_an_indented_nested_block_is_not_folded_into_the_item(self) -> None:
+    def test_an_indented_ordered_step_is_not_folded_into_the_item(self) -> None:
         body = """## Requested Evidence
 
 - the item, which wraps
   onto a continuation line
   1. a nested ordered step
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the item, which wraps onto a continuation line"],
+        )
+
+    def test_an_indented_quote_is_not_folded_into_the_item(self) -> None:
+        body = """## Requested Evidence
+
+- the item, which wraps
   > a nested quote
 """
-        items = run_contributor.extract_requested_evidence(body)
-        self.assertEqual(items, ["the item, which wraps onto a continuation line"])
-
-    def test_metadata_written_before_the_join_still_describes_its_item(self) -> None:
-        # A PR opened before wrapped bullets were joined stored the item's
-        # first physical line. Rejecting it would invalidate every entry on an
-        # in-flight PR at once, which is worse than the truncation it records.
-        requested = ["the item, which wraps onto a continuation line"]
-        body = (
-            "## Evidence Status\n\n"
-            "<!-- evidence-status:v1\n"
-            '{"entries": [{"index": 1, "item": "the item, which wraps", '
-            '"status": "complete", "detail": "proof"}]}\n'
-            "-->\n"
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the item, which wraps"],
         )
-        parsed = run_contributor._structured_evidence_entries(body, requested)
-        assert parsed is not None
-        self.assertEqual(parsed["invalid_lines"], [])
-        self.assertEqual(parsed["source"], "structured")
-        self.assertEqual(parsed["entries"], {requested[0]: {"status": "complete", "detail": "proof"}})
 
-    def test_metadata_naming_a_different_item_is_still_rejected(self) -> None:
-        requested = ["the item, which wraps onto a continuation line"]
-        body = (
-            "## Evidence Status\n\n"
-            "<!-- evidence-status:v1\n"
-            '{"entries": [{"index": 1, "item": "an unrelated item", '
-            '"status": "complete", "detail": "proof"}]}\n'
-            "-->\n"
+    def test_a_threshold_is_continuation_prose_not_a_quote(self) -> None:
+        # `>` opens a quote only when a space or the line end follows it.
+        # `>= 95%` is the kind of sentence an evidence bar is written in.
+        body = """## Requested Evidence
+
+- the pass rate holds at
+  >= 95% of runs
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the pass rate holds at >= 95% of runs"],
         )
-        parsed = run_contributor._structured_evidence_entries(body, requested)
-        assert parsed is not None
-        self.assertEqual(parsed["source"], "structured-invalid")
-        self.assertEqual(parsed["entries"], {})
+
+    def test_a_bullet_quoted_as_sample_code_is_not_a_requested_item(self) -> None:
+        body = """## Requested Evidence
+
+- the real item
+- an item showing the shape:
+
+  ```markdown
+  - sample bullet
+  ```
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the real item", "an item showing the shape:"],
+        )
+
+    def test_metadata_naming_a_different_item_is_rejected(self) -> None:
+        # Including the item cut at a fold. Metadata is machine-written and
+        # cheap to re-render; accepting a prefix would let an entry written
+        # for a narrower item complete the wider one the issue now asks for.
+        requested = ["the item, which wraps onto a continuation line"]
+        for stored in ("an unrelated item", "the item, which wraps"):
+            with self.subTest(stored=stored):
+                body = (
+                    "## Evidence Status\n\n"
+                    "<!-- evidence-status:v1\n"
+                    '{"entries": [{"index": 1, "item": "' + stored + '", '
+                    '"status": "complete", "detail": "proof"}]}\n'
+                    "-->\n"
+                )
+                parsed = run_contributor._structured_evidence_entries(body, requested)
+                assert parsed is not None
+                self.assertEqual(parsed["source"], "structured-invalid")
+                self.assertEqual(parsed["entries"], {})
+
+    def test_two_separators_sharing_one_space_are_both_candidates(self) -> None:
+        line = "- [complete] item — -- the detail"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, ["item —"]),
+            ("complete", "item —", "the detail"),
+        )
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, ["item"]),
+            ("complete", "item", "-- the detail"),
+        )
+
+    def test_the_reconciler_leaves_a_line_alone_when_any_reading_is_event_completed(
+        self,
+    ) -> None:
+        # The reconciler has no contract, so where the item ends is a guess.
+        # `diff` and `ci` complete through the review lane and the verifier, so
+        # guessing wrong here would resolve one on the macOS lane's behalf.
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] The PR diff shows the setting -- owner confirms later "
+            "-- see the review\n"
+        )
+        self.assertEqual(
+            run_contributor.reconcile_pending_ci_evidence(
+                body,
+                build_succeeded=True,
+                tests_succeeded=True,
+                smoke_succeeded=True,
+            ),
+            body,
+        )
+
+
 
 if __name__ == "__main__":
     unittest.main()

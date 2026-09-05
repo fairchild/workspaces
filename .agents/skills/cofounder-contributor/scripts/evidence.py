@@ -28,8 +28,9 @@ from _helpers import (
 EVIDENCE_STATUS_PREFIX_RE = re.compile(
     r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<rest>.+)$"
 )
-EVIDENCE_SEPARATOR_RE = re.compile(r"\s+(?:--|—|–)\s+")
-EVIDENCE_ASCII_SEPARATOR_RE = re.compile(r"\s+--\s+")
+# Zero-width on both sides, so two separators sharing one space still yield
+# two candidate splits rather than one.
+EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
 EVIDENCE_STATUS_LINE_RE = re.compile(
     r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+)\s+(?:--|—|–)\s+(?P<detail>.+)$"
 )
@@ -39,7 +40,7 @@ EVIDENCE_STATUS_LINE_RE = re.compile(
 NUMERIC_EVIDENCE_ITEM_RE = re.compile(r"#?\d+\.?")
 # An indented line under a bullet continues it, unless it opens a block of its
 # own: another bullet, an ordered item, a quote, or a fence.
-MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>|```|~~~)")
+MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?:\s|$)|```|~~~)")
 EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -137,37 +138,54 @@ SAFE_CANDIDATE_ENV_KEYS = {
 }
 
 
+def evidence_status_candidate_splits(line: str) -> list[tuple[str, str, str]]:
+    """Every `(status, item, detail)` reading of a status line, leftmost first.
+
+    A separator is an ASCII `--` or a dash character with whitespace on each
+    side. Which one ends the item is not decidable from the line alone, so the
+    readings are enumerated and the caller picks.
+    """
+    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
+    if not prefix:
+        return []
+    rest = prefix.group("rest")
+    status = prefix.group("status")
+    return [
+        (status, item, detail)
+        for item, detail in (
+            (rest[: separator.start()].strip(), rest[separator.end() :].strip())
+            for separator in EVIDENCE_SEPARATOR_RE.finditer(rest)
+        )
+        if item and detail
+    ]
+
+
 def split_evidence_status_line(
     line: str,
     requested_evidence: list[str] | None = None,
 ) -> tuple[str, str, str] | None:
-    """`(status, item, detail)` for one `## Evidence Status` line, or None.
+    """The one reading of a status line to act on, or None.
 
-    Every separator on the line is a candidate split. The one that wins is the
-    one whose item IS a requested item, so an em-dash inside either half cannot
-    terminate the item. Absent the contract the last separator wins, and an
-    ASCII `--` -- the form this module renders -- outranks a dash character.
+    The reading that wins is the one whose item IS a requested item, so an
+    em-dash inside either half cannot terminate the item. Absent the contract
+    the last separator wins, and an ASCII `--` -- the form this module renders
+    -- outranks a dash character.
     """
-    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
-    if not prefix:
-        return None
-    rest = prefix.group("rest")
-    status = prefix.group("status")
-    candidates = [
-        (rest[: separator.start()].strip(), rest[separator.end() :].strip(), separator.group())
-        for separator in EVIDENCE_SEPARATOR_RE.finditer(rest)
-    ]
-    candidates = [row for row in candidates if row[0] and row[1]]
+    candidates = evidence_status_candidate_splits(line)
     if not candidates:
         return None
     if requested_evidence:
         wanted = {_normalize_evidence_key(item) for item in requested_evidence}
-        for item, detail, _ in reversed(candidates):
-            if _normalize_evidence_key(item) in wanted:
-                return status, item, detail
-    ascii_split = [row for row in candidates if "--" in row[2]]
-    item, detail, _ = (ascii_split or candidates)[-1]
-    return status, item, detail
+        for candidate in reversed(candidates):
+            if _normalize_evidence_key(candidate[1]) in wanted:
+                return candidate
+    rest = EVIDENCE_STATUS_PREFIX_RE.match(line).group("rest")
+    ascii_split = [
+        candidate
+        for candidate in candidates
+        if rest[len(candidate[1]) : len(rest) - len(candidate[2])].strip() == "--"
+    ]
+    return (ascii_split or candidates)[-1]
 
 
 def _is_requested_item(item: str, requested_evidence: list[str] | None) -> bool:
@@ -188,12 +206,20 @@ def _wrapped_bullets(section: str) -> list[str]:
     reads it as part of the bullet above, so the contract reads it that way
     too. A blank line, a line at column zero, or an indented line that starts
     its own block ends the bullet, which keeps a following paragraph, nested
-    list, quote, or fenced block out of the item text.
+    list, or quote out of the item text. A fenced block is skipped whole, so a
+    bullet quoted as sample code is not read as a requested item.
     """
     bullets: list[str] = []
     open_bullet = False
+    fenced = False
     for line in section.splitlines():
         stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            fenced = not fenced
+            open_bullet = False
+            continue
+        if fenced:
+            continue
         if stripped.startswith("- "):
             bullets.append(line[2:].strip())
             open_bullet = True
@@ -264,17 +290,6 @@ def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
     if cleaned:
         return f"{cleaned}\n\n{metadata}"
     return metadata
-
-
-def _stored_item_matches(stored_item: str, item: str) -> bool:
-    """Does metadata written for this index still describe this requested item?
-
-    A body rendered before wrapped bullets were joined stored the item's first
-    physical line, which is the joined item cut at a fold. Accepting that keeps
-    an in-flight PR's metadata valid instead of invalidating every entry on it.
-    """
-    stored = stored_item.strip()
-    return stored == item or (bool(stored) and item.startswith(f"{stored} "))
 
 
 def _explicit_evidence_contract(requested_evidence: list[str]) -> bool:
@@ -357,7 +372,7 @@ def _structured_evidence_entries(
             continue
         item = requested_evidence[index - 1]
         stored_item = raw_entry.get("item")
-        if stored_item is not None and not _stored_item_matches(str(stored_item), item):
+        if stored_item is not None and str(stored_item).strip() != item:
             invalid_lines.append(
                 f"entry {position} item does not match requested evidence index {index}"
             )
@@ -1298,12 +1313,19 @@ def reconcile_pending_ci_evidence(
             updated.append(line)
             continue
         if in_evidence_status:
+            # No contract here, so where the item ends is a guess. `ci` and
+            # `diff` complete elsewhere, so a line that reads as either under
+            # ANY split is left alone rather than resolved on the guess.
+            candidates = evidence_status_candidate_splits(line)
             split = split_evidence_status_line(line)
             if (
                 split
                 and split[0] == "pending-ci"
                 and not is_numeric_evidence_item(split[1])
-                and _evidence_item_kind(split[1]) not in EVENT_COMPLETED_KINDS
+                and not any(
+                    _evidence_item_kind(candidate[1]) in EVENT_COMPLETED_KINDS
+                    for candidate in candidates
+                )
             ):
                 item = split[1]
                 status, detail = _pending_ci_resolution(

@@ -122,6 +122,7 @@ from evidence import (  # noqa: E402, F401
     is_numeric_evidence_item,
     latest_completed_check_run,
     parse_structured_evidence_updates,
+    evidence_status_candidate_splits,
     reconcile_pending_ci_evidence,
     split_evidence_status_line,
     render_execution_summary_body,
