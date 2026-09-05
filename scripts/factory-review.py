@@ -370,21 +370,31 @@ def count_daily_run_attempts(
 ) -> int:
     """Count raw execution attempts today, including retries and failures.
 
-    A run whose jobs were all skipped by their `if:` is not an attempt. No
-    step ran, so it cannot be part of a crash loop and it spent nothing --
-    only a failure or a real execution is evidence of either. Counting them
-    matters since #1509: the signal lane filters title-only, base-branch and
-    draft-body `edited` events at the job level, and a `workflow_run` run
-    record is created for the filtered signal whatever its conclusion, so
-    ordinary title edits would otherwise walk this ceiling and refuse the
-    lane's real reviews for the rest of the UTC day.
+    A first-attempt run whose jobs were all skipped by their `if:` is not an
+    attempt. No step ran, so it cannot be part of a crash loop and it spent
+    nothing -- only a failure or a real execution is evidence of either. This
+    matters since #1509: the signal lane filters title-only, base-branch,
+    draft-body and bot-authored `edited` events at the job level, and a
+    `workflow_run` record is created for the filtered signal whatever its
+    conclusion, so ordinary title edits would otherwise walk this ceiling and
+    refuse the lane's real reviews for the rest of the UTC day.
+
+    Only the first attempt, because `conclusion` and `run_attempt` describe
+    different things: the conclusion is the latest attempt's, the count is
+    cumulative. A rerun that skips everything -- the kill switch flipped
+    between attempts, say -- would otherwise erase an earlier attempt that
+    really did run. A rerun is deliberate, so counting the whole run is the
+    safe direction, and nobody reruns a signal that was filtered.
     """
     attempts_by_run = {
         str(run["id"]): max(1, int(run.get("run_attempt") or 1))
         for run in runs
         if isinstance(run, dict)
         and run.get("id") is not None
-        and str(run.get("conclusion") or "").casefold() != "skipped"
+        and not (
+            str(run.get("conclusion") or "").casefold() == "skipped"
+            and max(1, int(run.get("run_attempt") or 1)) == 1
+        )
     }
     if current_run_id:
         attempts_by_run[current_run_id] = max(

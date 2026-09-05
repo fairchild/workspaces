@@ -27,6 +27,15 @@ jobs:
   # only the title or the base branch is filtered here, and so is a draft -- a
   # draft with a standing rejection is skipped by evaluate_review whatever its
   # body now says.
+  #
+  # A bot sender is filtered for a different reason: this trigger exists for an
+  # edit that carries no review request of its own. The factory's own lanes
+  # carry one. Factory Revise answers a body-only objection under April's app
+  # token -- an app token, unlike GITHUB_TOKEN, does raise events -- and then
+  # dispatches Factory Review itself (`request_fresh_review` in
+  # scripts/factory-revise.py). Subscribing to that edit as well would admit
+  # the same answer twice, and re-review a head the first pass had just
+  # rejected again.
   signal:
     if: >-
       (github.event_name == 'workflow_dispatch' ||
@@ -34,7 +43,8 @@ jobs:
       vars.FACTORY_REVIEW_ENABLED == 'true')) &&
       (github.event.action != 'edited' ||
       (github.event.changes.body != null &&
-      github.event.pull_request.draft == false))
+      github.event.pull_request.draft == false &&
+      github.event.sender.type != 'Bot'))
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

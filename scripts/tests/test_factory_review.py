@@ -805,8 +805,18 @@ class FactoryReviewTests(unittest.TestCase):
             "vars.FACTORY_REVIEW_ENABLED == 'true')) && "
             "(github.event.action != 'edited' || "
             "(github.event.changes.body != null && "
-            "github.event.pull_request.draft == false))",
+            "github.event.pull_request.draft == false && "
+            "github.event.sender.type != 'Bot'))",
         )
+        # The bot clause is not cosmetic. Factory Revise answers a body-only
+        # objection under April's app token -- app tokens raise events where
+        # GITHUB_TOKEN does not -- and then dispatches Factory Review itself.
+        # Subscribing to that edit as well admits the same answer twice, and
+        # re-reviews a head the first pass had just rejected again.
+        revise = (
+            REPO_ROOT / "scripts" / "factory-revise.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("request_fresh_review(", revise)
         # Still secret-free, still no review-event subscription of its own.
         self.assertNotIn("secrets.", workflow)
         self.assertNotIn("pull_request_review:", workflow)
@@ -977,6 +987,13 @@ class FactoryReviewTests(unittest.TestCase):
         self.assertEqual(factory_review.count_daily_run_attempts([runs[1]], ""), 0)
         # A failure still counts: that is the crash loop the ceiling exists for.
         self.assertEqual(factory_review.count_daily_run_attempts([runs[2]], ""), 2)
+        # `conclusion` is the latest attempt's; `run_attempt` is cumulative. A
+        # rerun that skipped everything -- the kill switch flipped between
+        # attempts -- must not erase the attempt before it that really ran.
+        skipped_rerun = {
+            "id": 6, "run_attempt": 2, "status": "completed", "conclusion": "skipped"
+        }
+        self.assertEqual(factory_review.count_daily_run_attempts([skipped_rerun], ""), 2)
 
     def test_the_body_edit_bypass_is_bound_to_the_signal_runs_own_pull_request(self) -> None:
         # The context artifact names its own pull request, and the lane that
