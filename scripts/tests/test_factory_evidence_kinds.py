@@ -673,6 +673,24 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         )
 
 
+    def test_padding_around_the_line_does_not_move_the_separator(self) -> None:
+        # The ASCII-outranks-dash rule reads the separator each candidate was
+        # cut at. Deriving it from the item and detail lengths instead would
+        # be off by whatever stripping removed.
+        for line, expected in (
+            ("- [complete]  item — a -- the detail", ("complete", "item — a", "the detail")),
+            ("- [complete] item — a -- the detail   ", ("complete", "item — a", "the detail")),
+            ("- [complete] item  --  the detail", ("complete", "item", "the detail")),
+            ("- [complete] item\t--\tthe detail", ("complete", "item", "the detail")),
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(run_contributor.split_evidence_status_line(line), expected)
+
+    def test_an_unterminated_fence_hides_what_follows_it(self) -> None:
+        # GitHub renders everything after an unterminated fence as code, so
+        # the contract holds what a reader can actually see as a bullet.
+        body = "## Requested Evidence\n\n- first\n\n```\n- sample\n\n- never rendered\n"
+        self.assertEqual(run_contributor.extract_requested_evidence(body), ["first"])
 
 if __name__ == "__main__":
     unittest.main()

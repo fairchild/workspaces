@@ -138,6 +138,22 @@ SAFE_CANDIDATE_ENV_KEYS = {
 }
 
 
+def _evidence_status_readings(line: str) -> list[tuple[str, str, str, str]]:
+    """`(status, item, detail, separator)` for every reading, leftmost first."""
+    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
+    if not prefix:
+        return []
+    rest = prefix.group("rest")
+    status = prefix.group("status")
+    readings = []
+    for separator in EVIDENCE_SEPARATOR_RE.finditer(rest):
+        item = rest[: separator.start()].strip()
+        detail = rest[separator.end() :].strip()
+        if item and detail:
+            readings.append((status, item, detail, separator.group()))
+    return readings
+
+
 def evidence_status_candidate_splits(line: str) -> list[tuple[str, str, str]]:
     """Every `(status, item, detail)` reading of a status line, leftmost first.
 
@@ -145,19 +161,7 @@ def evidence_status_candidate_splits(line: str) -> list[tuple[str, str, str]]:
     side. Which one ends the item is not decidable from the line alone, so the
     readings are enumerated and the caller picks.
     """
-    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
-    if not prefix:
-        return []
-    rest = prefix.group("rest")
-    status = prefix.group("status")
-    return [
-        (status, item, detail)
-        for item, detail in (
-            (rest[: separator.start()].strip(), rest[separator.end() :].strip())
-            for separator in EVIDENCE_SEPARATOR_RE.finditer(rest)
-        )
-        if item and detail
-    ]
+    return [reading[:3] for reading in _evidence_status_readings(line)]
 
 
 def split_evidence_status_line(
@@ -171,21 +175,17 @@ def split_evidence_status_line(
     the last separator wins, and an ASCII `--` -- the form this module renders
     -- outranks a dash character.
     """
-    candidates = evidence_status_candidate_splits(line)
-    if not candidates:
+    readings = _evidence_status_readings(line)
+    if not readings:
         return None
     if requested_evidence:
         wanted = {_normalize_evidence_key(item) for item in requested_evidence}
-        for candidate in reversed(candidates):
-            if _normalize_evidence_key(candidate[1]) in wanted:
-                return candidate
-    rest = EVIDENCE_STATUS_PREFIX_RE.match(line).group("rest")
-    ascii_split = [
-        candidate
-        for candidate in candidates
-        if rest[len(candidate[1]) : len(rest) - len(candidate[2])].strip() == "--"
-    ]
-    return (ascii_split or candidates)[-1]
+        for status, item, detail, _ in reversed(readings):
+            if _normalize_evidence_key(item) in wanted:
+                return status, item, detail
+    ascii_readings = [reading for reading in readings if reading[3] == "--"]
+    status, item, detail, _ = (ascii_readings or readings)[-1]
+    return status, item, detail
 
 
 def _is_requested_item(item: str, requested_evidence: list[str] | None) -> bool:
