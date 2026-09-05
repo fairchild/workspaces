@@ -52,3 +52,44 @@ jobs:
           path: ${{ runner.temp }}/xcode-cloud-logs
           retention-days: 5
           if-no-files-found: ignore
+
+      # This is deliberately inert until both environment-scoped values exist.
+      # The configured endpoint receives a raw-log-free manifest only; it must
+      # use GitHub's Actions API to verify this workflow path, workflow_dispatch
+      # event, main head branch, and completed successful run before confirming
+      # an incident. A running workflow cannot truthfully confirm its own final
+      # conclusion, so that verification belongs to the trusted collector. No
+      # observation means diagnosis is unknown and requires agent triage; it is
+      # not an empty callback the collector might mistake for confirmation.
+      - name: Optionally hand off trusted diagnosis
+        if: ${{ github.event_name == 'workflow_dispatch' && github.ref_name == 'main' && vars.OPS_DIAGNOSTIC_URL != '' }}
+        env:
+          OPS_DIAGNOSTIC_URL: ${{ vars.OPS_DIAGNOSTIC_URL }}
+          OPS_DIAGNOSTIC_TOKEN: ${{ secrets.OPS_DIAGNOSTIC_TOKEN }}
+          DIAGNOSTIC_REPORT: ${{ runner.temp }}/xcode-cloud-logs/diagnostic-handoff.json
+        run: |
+          set -euo pipefail
+          test -n "${OPS_DIAGNOSTIC_TOKEN:-}" || exit 0
+          test -s "$DIAGNOSTIC_REPORT"
+          if test "$(jq '.observations | length' "$DIAGNOSTIC_REPORT")" -eq 0; then
+            echo "note: diagnosis unknown; no callback sent and agent triage is required" >&2
+            exit 0
+          fi
+          validated_url="$(uv run --script scripts/fetch-xcode-cloud-logs.py --validate-callback-url "$OPS_DIAGNOSTIC_URL")"
+          set +x
+          case "$OPS_DIAGNOSTIC_TOKEN" in
+            *[!A-Za-z0-9_-]*) echo "error: OPS_DIAGNOSTIC_TOKEN has an unsupported format" >&2; exit 1 ;;
+          esac
+          if test "${#OPS_DIAGNOSTIC_TOKEN}" -lt 32; then
+            echo "error: OPS_DIAGNOSTIC_TOKEN must contain at least 32 URL-safe characters" >&2
+            exit 1
+          fi
+          echo "::add-mask::$OPS_DIAGNOSTIC_TOKEN"
+          auth_config="$(mktemp)"
+          chmod 600 "$auth_config"
+          trap 'rm -f "$auth_config"' EXIT
+          printf 'header = "Authorization: Bearer %s"\n' "$OPS_DIAGNOSTIC_TOKEN" > "$auth_config"
+          curl --config "$auth_config" --fail --silent --show-error --connect-timeout 5 --max-time 15 --request POST \
+            --header "Content-Type: application/json" \
+            --data-binary "@$DIAGNOSTIC_REPORT" \
+            "$validated_url" >/dev/null
