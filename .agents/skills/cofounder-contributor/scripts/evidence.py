@@ -232,20 +232,25 @@ def is_numeric_evidence_item(item: str) -> bool:
     return NUMERIC_EVIDENCE_ITEM_RE.fullmatch(item.strip()) is not None
 
 
-def _fence_transition(fence: re.Match[str], fenced: str | None) -> bool:
-    """Does this line open or close a fenced block?
+def _is_fence_line(fence: re.Match[str]) -> bool:
+    """Is this a fence at all, rather than a line starting with a code span?
 
     A backtick fence's info string cannot itself contain a backtick, which is
-    what separates an opening fence from a line that starts with a code span.
+    exactly what separates the two.
+    """
+    return not (fence.group("run").startswith("`") and "`" in fence.group("info"))
+
+
+def _fence_toggles(fence: re.Match[str], fenced: str | None) -> bool:
+    """Does this fence open a block, or close the one that is open?
+
     A closer is the same character as its opener, at least as long, and carries
     no info string, so a shorter run or a different character cannot end a
     block it did not start.
     """
-    run, info = fence.group("run"), fence.group("info")
-    if run.startswith("`") and "`" in info:
-        return False
     if fenced is None:
         return True
+    run, info = fence.group("run"), fence.group("info")
     return run[0] == fenced[0] and len(run) >= len(fenced) and not info.strip()
 
 
@@ -266,8 +271,12 @@ def _wrapped_bullets(section: str) -> list[str]:
     for line in section.splitlines():
         stripped = line.strip()
         fence = MARKDOWN_FENCE_RE.fullmatch(stripped)
-        if fence and len(line) - len(line.lstrip()) <= 3 and _fence_transition(fence, fenced):
-            fenced = None if fenced else fence.group("run")
+        if fence and _is_fence_line(fence):
+            # Over-indented, this is code rather than a fence, so it toggles
+            # nothing -- but it is still not prose, and folding it into the
+            # bullet above would put a row of backticks in the item text.
+            if len(line) - len(line.lstrip()) <= 3 and _fence_toggles(fence, fenced):
+                fenced = None if fenced else fence.group("run")
             open_bullet = False
             continue
         if fenced:

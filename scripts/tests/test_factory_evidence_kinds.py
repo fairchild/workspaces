@@ -837,6 +837,13 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         self.assertEqual(
             run_contributor.extract_requested_evidence(body), ["first", "second"]
         )
+    def test_an_over_indented_fence_does_not_join_the_bullet_above(self) -> None:
+        # It toggles nothing, but it is not prose either: folding it in would
+        # put a row of backticks in the item text.
+        body = "## Requested Evidence\n\n- the item\n    ```\n- second\n"
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body), ["the item", "second"]
+        )
 
 if __name__ == "__main__":
     unittest.main()
