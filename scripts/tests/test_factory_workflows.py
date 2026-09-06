@@ -1446,7 +1446,24 @@ class EvidenceReconcileContractTests(unittest.TestCase):
         step = self.reconcile_step()
         self.assertIn("closingIssuesReferences", step)
         self.assertIn('gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"', step)
-        self.assertIn("requested_evidence=module.extract_requested_evidence(", step)
+        # The contract comes from the issue, not from the PR body the
+        # reconciler is about to rewrite. Naming both halves, because
+        # `extract_requested_evidence(body_path.read_text())` reads as
+        # plausible code and would take the contract from the wrong file
+        # (codex review finding).
+        self.assertIn('issue_body_path = Path("issue-body.md")', step)
+        self.assertRegex(
+            step,
+            r"requested_evidence=module\.extract_requested_evidence\(\s*\n\s*issue_body_path\.read_text\(\)",
+        )
+
+    def test_the_reconcile_step_runs_on_the_path_that_succeeds(self) -> None:
+        # `steps.pr.outcome == 'failure'` reads as a guard and disables
+        # reconciliation on every normal run, which no assertion about the
+        # step's body would catch.
+        self.assertIn(
+            "if: always() && steps.pr.outcome == 'success'", self.reconcile_step()
+        )
 
     def closing_issue_jq(self) -> str:
         """The jq program the step selects the linked issue with.
