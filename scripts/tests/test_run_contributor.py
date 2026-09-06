@@ -922,18 +922,28 @@ class EvidenceValidationTests(unittest.TestCase):
             self.assertEqual(classified[i]["message"], errors[i])
 
     def test_fuzzy_matching_edge_cases(self) -> None:
-        # Exact 70% word overlap should match
+        # Overlap is measured over the union of the two word sets (#1550), so
+        # words the entry carries and the item does not cost score. Seven of
+        # the item's ten words, and nothing else, is exactly the floor.
         requested = ["swift test filter FooTests BarTests BazTests QuuxTests FiveTests SixTests TenWord"]
-        # 7 of 10 words match = 70%
-        entry_text = "swift test filter FooTests BarTests BazTests QuuxTests different words here"
+        entry_text = "swift test filter FooTests BarTests BazTests QuuxTests"
         body = self._make_body([
             f"- [complete] {entry_text} -- proof",
         ])
         accounting = run_contributor.evaluate_evidence_accounting(body, requested)
-        # With 70% overlap the item should be matched (not missing)
         self.assertEqual(accounting["missing_items"], [])
 
-        # Below 70% should NOT match
+        # The same seven shared words, now with three the item never asked
+        # for. Normalized by the item alone this scored 0.7 and completed a
+        # requirement the entry does not make; over the union it is 7/13.
+        entry_wider = "swift test filter FooTests BarTests BazTests QuuxTests different words here"
+        body_wider = self._make_body([
+            f"- [complete] {entry_wider} -- proof",
+        ])
+        accounting_wider = run_contributor.evaluate_evidence_accounting(body_wider, requested)
+        self.assertEqual(accounting_wider["missing_items"], requested)
+
+        # Below the floor on shared words alone, unchanged by #1550.
         requested_low = ["alpha bravo charlie delta echo foxtrot golf hotel india juliet"]
         entry_low = "alpha bravo charlie completely different words everywhere now ok done"
         body_low = self._make_body([

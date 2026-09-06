@@ -7,7 +7,7 @@ import json
 import re
 import shlex
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from itertools import islice
 
 from _helpers import (
@@ -48,6 +48,11 @@ EVIDENCE_STRIPPABLE_CHARS = frozenset("`.,;:)")
 # act on a guess -- which also stops it classifying a reading per separator on
 # a line dense in them.
 EVIDENCE_STATUS_READING_LIMIT = 32
+# How much of the two word sets an item and an entry key must share before
+# the fallback reads them as the same requirement. Measured over their union,
+# so the floor tightens as the item shortens -- which is the direction that
+# matters, a short item being the one a longer entry can swallow whole.
+EVIDENCE_WORD_OVERLAP_FLOOR = 0.7
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
@@ -622,24 +627,125 @@ def _normalize_evidence_key(text: str) -> str:
     return t
 
 
-def _match_evidence_entry(
-    requested_item: str,
+def _indistinguishable(texts: list[str]) -> list[str]:
+    """Which of these the gate cannot tell apart, second occurrence onward.
+
+    One entry answers one requirement, which needs both sides to be
+    distinguishable. Two requested items that normalize to one key are the
+    same requirement to everything downstream -- `matched` is keyed by item
+    text, so byte-identical items are literally one key. Two entries that
+    normalize to one key are two answers the gate cannot choose between, and
+    which one a requirement takes decides its status. Either is reported as
+    malformed, where the author can still fix it, rather than resolved.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for text in texts:
+        key = _normalize_evidence_key(text)
+        if key and key in seen and text not in duplicates:
+            duplicates.append(text)
+        seen.add(key)
+    return duplicates
+
+
+def _match_evidence_entries(
+    requested_evidence: list[str],
     entries: dict[str, dict[str, str]],
-) -> str | None:
-    if requested_item in entries:
-        return requested_item
-    norm_req = _normalize_evidence_key(requested_item)
-    for entry_key in entries:
-        if _normalize_evidence_key(entry_key) == norm_req:
-            return entry_key
-    req_words = set(norm_req.split())
-    for entry_key in entries:
-        entry_words = set(_normalize_evidence_key(entry_key).split())
-        if req_words and entry_words:
-            overlap = len(req_words & entry_words) / len(req_words)
-            if overlap >= 0.7:
-                return entry_key
-    return None
+) -> tuple[dict[str, str], list[str]]:
+    """Which entry proves each requested item, and which items were outbid.
+
+    An entry proves one requirement. Matching many-to-one is how a requirement
+    nobody proved reports complete: one `- [complete] alpha -- beta -- proof`
+    line answered both `alpha` and `alpha -- beta`, and `proof` and `proof.`
+    normalize to one key and so to one entry. `unexpected_items` sees nothing
+    either, being computed from the entries claimed rather than the claims.
+
+    Three tiers, strongest first: exact text, the same normalized key, then
+    word overlap over the union of the two word sets. A tier is reached only
+    by what the one above it left over, so a contract written back exactly
+    normalizes nothing. Each item takes the first entry still free at its
+    tier, and both sides are walked in a canonical order derived from their
+    text -- what is proved depends on the contract and the body, not on the
+    order either was written in. An entry's status decides the review gate,
+    so which item takes which entry cannot turn on where a bullet sits.
+
+    The assignment is deliberately not a maximum matching. Where two items
+    could both be proved by swapping which entry each takes, the second is
+    reported unproved instead. An earlier revision searched for that swap,
+    and the augmenting walk, the per-tier re-placement rule and the candidate
+    cap it needed changed nothing across every live and cross-product pair in
+    the repository. Failing here costs an author one restated status line;
+    the machinery cost three review rounds of its own defects.
+
+    An item left unmatched is contested rather than merely missing when an
+    entry another requirement took would have proved it: it meets the floor
+    against that entry, or the entry carries all of its words -- the
+    containment the rule this replaces scored 1.0 and completed on.
+    """
+    matched: dict[str, str] = {}
+    claimed: set[str] = set()
+    ordered_items = sorted(
+        dict.fromkeys(requested_evidence),
+        key=lambda item: (_normalize_evidence_key(item), item),
+    )
+    ordered_entries = sorted(entries, key=lambda key: (_normalize_evidence_key(key), key))
+
+    def take(item: str, candidates: Iterable[str]) -> None:
+        free = next((key for key in candidates if key not in claimed), None)
+        if free is not None:
+            matched[item] = free
+            claimed.add(free)
+
+    for item in ordered_items:
+        if item in entries:
+            take(item, (item,))
+    unmatched = [item for item in ordered_items if item not in matched]
+    if not unmatched:
+        return matched, []
+
+    # An item made only of backticks and trailing punctuation normalizes to
+    # nothing, and two such strings are not the same requirement -- they are
+    # two strings the gate cannot read. An empty key matches nothing, on
+    # either side.
+    entries_by_key: dict[str, list[str]] = {}
+    for entry_key in ordered_entries:
+        if normalized := _normalize_evidence_key(entry_key):
+            entries_by_key.setdefault(normalized, []).append(entry_key)
+    for item in unmatched:
+        if normalized := _normalize_evidence_key(item):
+            take(item, entries_by_key.get(normalized, ()))
+    unmatched = [item for item in unmatched if item not in matched]
+    if not unmatched:
+        return matched, []
+
+    # Overlap is measured over the union of the two word sets, so text the
+    # entry carries and the item does not costs score. Normalized by the
+    # item's own words a short item scores 1.0 against any entry containing
+    # it, which is how `alpha` claimed `alpha -- beta`'s entry.
+    entry_words = {key: set(_normalize_evidence_key(key).split()) for key in ordered_entries}
+    item_words = {item: set(_normalize_evidence_key(item).split()) for item in unmatched}
+
+    def overlapping(words: set[str], other: set[str]) -> bool:
+        if not words or not other:
+            return False
+        return len(words & other) / len(words | other) >= EVIDENCE_WORD_OVERLAP_FLOOR
+
+    for item in unmatched:
+        words = item_words[item]
+        if words:
+            take(item, (key for key in ordered_entries if overlapping(words, entry_words[key])))
+
+    contested = [
+        item
+        for item in requested_evidence
+        if item not in matched
+        and (words := item_words.get(item))
+        and any(
+            words <= entry_words[key] or overlapping(words, entry_words[key])
+            for key in claimed
+        )
+    ]
+    return matched, contested
 
 
 def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> dict[str, object]:
@@ -651,6 +757,9 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
             "duplicate_items": [],
             "source": "none",
             "missing_items": [],
+            "contested_items": [],
+            "duplicate_requested_items": [],
+            "indistinguishable_entries": [],
             "blocked_items": [],
             "pending_ci_items": [],
             "complete_items": [],
@@ -667,7 +776,8 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     ) or extract_evidence_status_entries(body, requested_evidence)
     entries = parsed["entries"]
 
-    matched: dict[str, str] = {}
+    matched: dict[str, str]
+    contested_items: list[str] = []
     if parsed["source"] == "structured":
         matched = {
             item: item
@@ -675,10 +785,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
             if item in entries
         }
     else:
-        for item in requested_evidence:
-            match = _match_evidence_entry(item, entries)
-            if match is not None:
-                matched[item] = match
+        matched, contested_items = _match_evidence_entries(requested_evidence, entries)
 
     missing_items = [item for item in requested_evidence if item not in matched]
     blocked_items = [
@@ -701,6 +808,9 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     return {
         **parsed,
         "missing_items": missing_items,
+        "contested_items": contested_items,
+        "duplicate_requested_items": _indistinguishable(requested_evidence),
+        "indistinguishable_entries": _indistinguishable(list(entries)),
         "blocked_items": blocked_items,
         "pending_ci_items": pending_ci_items,
         "complete_items": complete_items,
@@ -770,6 +880,33 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
             parts.append(f"{remaining} more")
         preview = "; ".join(parts)
         errors.append(f"duplicate Evidence Status entries for: {preview}")
+    duplicate_requested_items = accounting["duplicate_requested_items"]
+    if duplicate_requested_items:
+        preview = _format_missing_preview(duplicate_requested_items, requested_evidence)
+        errors.append(
+            "requested evidence asks for the same item more than once, and one "
+            f"entry cannot prove it twice; make each item distinct: {preview}"
+        )
+    indistinguishable_entries = accounting["indistinguishable_entries"]
+    if indistinguishable_entries:
+        parts = [f'"{_truncate(str(item))}"' for item in indistinguishable_entries[:3]]
+        remaining = len(indistinguishable_entries) - 3
+        if remaining > 0:
+            parts.append(f"{remaining} more")
+        errors.append(
+            "two Evidence Status entries read as the same item, so which one "
+            "proves a requirement is arbitrary; make each entry distinct: "
+            + "; ".join(parts)
+        )
+    contested_items = accounting["contested_items"]
+    if contested_items:
+        preview = _format_missing_preview(contested_items, requested_evidence)
+        errors.append(
+            "these requested items have no Evidence Status entry of their own: "
+            "each is outbid for the entries it matches, reads as too many of "
+            "them to name one, or is wholly contained in an entry that already "
+            f"accounts for another item; give each item its own entry: {preview}"
+        )
     missing_items = accounting["missing_items"]
     if missing_items:
         preview = _format_missing_preview(missing_items, requested_evidence)
@@ -796,6 +933,12 @@ def classify_evidence_error(error: str) -> str:
     if error.startswith("malformed hidden evidence metadata"):
         return "evidence_metadata"
     if error.startswith("duplicate Evidence Status entries"):
+        return "evidence_duplicate"
+    if error.startswith("these requested items have no Evidence Status entry"):
+        return "evidence_contested"
+    if error.startswith("requested evidence asks for the same item"):
+        return "evidence_contract_duplicate"
+    if error.startswith("two Evidence Status entries read as the same item"):
         return "evidence_duplicate"
     if "missing:" in error:
         return "evidence_missing"
