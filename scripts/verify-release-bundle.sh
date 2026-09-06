@@ -22,6 +22,10 @@
 set -euo pipefail
 
 APP_BUNDLE=""
+# Whether the argument loop has taken a positional yet. Emptiness cannot answer
+# that: an assigned empty string reads as "not set", which let a second path
+# claim the slot and be verified in place of the one named (#1534).
+APP_BUNDLE_SEEN=false
 STRUCTURE_ONLY=false
 EXPECTED_BUNDLE_NAME="WorkSpaces.app"
 EXPECTED_DISPLAY_NAME="WorkSpaces"
@@ -50,6 +54,12 @@ EOF
 
 fail() {
     echo "[verify-release-bundle] ERROR: $*" >&2
+    exit 1
+}
+
+usage_error() {
+    echo "[verify-release-bundle] ERROR: $*" >&2
+    usage >&2
     exit 1
 }
 
@@ -159,20 +169,26 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
-            [[ -z "$APP_BUNDLE" ]] || {
-                usage
-                exit 1
-            }
+            [[ "$APP_BUNDLE_SEEN" == false ]] \
+                || usage_error "Expected one app bundle path, got a second: $1"
             APP_BUNDLE="$1"
+            APP_BUNDLE_SEEN=true
             shift
             ;;
     esac
 done
 
-[[ -n "$APP_BUNDLE" ]] || {
+[[ "$APP_BUNDLE_SEEN" == true ]] || {
     usage
     exit 1
 }
+
+# Emptiness is judged after the loop rather than where the positional is taken, so
+# `--help` still answers from any position: `verify-release-bundle.sh "" --help`
+# printed help and exited 0 before this change and still does. Nothing can be
+# verified with an empty path either way, and the second path was already rejected
+# above, so deferring the check costs nothing.
+[[ -n "$APP_BUNDLE" ]] || usage_error "App bundle path is empty"
 
 [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
 
