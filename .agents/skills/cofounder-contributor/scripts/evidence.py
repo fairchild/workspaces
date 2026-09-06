@@ -51,6 +51,11 @@ MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?!=))")
 # string cannot itself contain a backtick, which is what separates an opening
 # fence from a line starting with a code span.
 MARKDOWN_FENCE_RE = re.compile(r"(?P<run>`{3,}|~{3,})(?P<info>.*)$")
+# The three line endings markdown has. `str.splitlines` also breaks on a
+# vertical tab, a form feed and four other separators, which markdown renders
+# as ordinary characters -- and a fence pushed onto its own line that way is
+# read as unindented, opening a block that hides every bullet below it.
+MARKDOWN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -273,14 +278,19 @@ def is_numeric_evidence_item(item: str) -> bool:
     return NUMERIC_EVIDENCE_ITEM_RE.fullmatch(item.strip()) is not None
 
 
-def _indent_columns(line: str) -> int:
-    """Leading indentation in columns, where a tab advances to the next stop.
+def _fence_indent_columns(line: str) -> int | None:
+    """Columns of indentation before a fence, or None if this is not one.
 
-    CommonMark states the three-space fence rule in columns, and a tab is
-    worth up to four of them. Counted in characters instead, a tab-indented
-    row reads as a fence, and an opener with no closer takes every bullet
-    below it out of the contract -- the direction where the gate passes
-    without evidence a reader can plainly see was asked for.
+    CommonMark states the three-space rule in columns and counts a tab as
+    advancing to the next multiple of four, so counting characters instead
+    reads a tab-indented row as a fence. It also counts only spaces and tabs
+    as indentation, so a row of backticks behind any other whitespace -- a
+    non-breaking space is the one that turns up in pasted prose -- is a
+    paragraph rendered as literal text, whatever it looks like.
+
+    Both mistakes fail the same way: an opener with no closer takes every
+    bullet below it out of the contract, and the gate then passes without
+    evidence a reader can plainly see was asked for.
     """
     columns = 0
     for char in line:
@@ -288,9 +298,11 @@ def _indent_columns(line: str) -> int:
             columns += 1
         elif char == "\t":
             columns += 4 - columns % 4
+        elif char in "`~":
+            return columns
         else:
-            break
-    return columns
+            return None
+    return None
 
 
 def _is_fence_line(fence: re.Match[str]) -> bool:
@@ -329,14 +341,16 @@ def _wrapped_bullets(section: str) -> list[str]:
     bullets: list[str] = []
     open_bullet = False
     fenced: str | None = None
-    for line in section.splitlines():
+    for line in MARKDOWN_LINE_ENDING_RE.split(section):
         stripped = line.strip()
         fence = MARKDOWN_FENCE_RE.fullmatch(stripped)
         if fence and _is_fence_line(fence):
-            # Over-indented, this is code rather than a fence, so it toggles
-            # nothing -- but it is still not prose, and folding it into the
-            # bullet above would put a row of backticks in the item text.
-            if _indent_columns(line) <= 3 and _fence_toggles(fence, fenced):
+            # Over-indented it is code, and behind other whitespace it is
+            # prose, so either way it toggles nothing -- but neither is it
+            # part of the bullet above, and folding it in would put a row of
+            # backticks in the item text.
+            indent = _fence_indent_columns(line)
+            if indent is not None and indent <= 3 and _fence_toggles(fence, fenced):
                 fenced = None if fenced else fence.group("run")
             open_bullet = False
             continue
@@ -526,7 +540,7 @@ def extract_evidence_status_entries(
     invalid_lines: list[str] = []
     duplicate_items: list[str] = []
 
-    for raw_line in evidence_section.splitlines():
+    for raw_line in MARKDOWN_LINE_ENDING_RE.split(evidence_section):
         line = raw_line.strip()
         if not line:
             continue

@@ -532,6 +532,7 @@ Scope note: an unindented paragraph is a new block, not part of the bullet.
         self.assertEqual(parsed["entries"], {})
         self.assertEqual(parsed["invalid_lines"], [line])
 
+
 class EvidenceSplitAnchoringTests(unittest.TestCase):
     """The contract, not a guess, decides where an item ends (#1523 review)."""
 
@@ -809,6 +810,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # Splitting it would name the item "`a" and the detail "b`". Reporting
         # the line as unreadable is what the gate can act on.
         self.assertIsNone(run_contributor.split_evidence_status_line("- [complete] `a -- b`"))
+
     def test_a_code_span_is_delimited_by_matching_backtick_runs(self) -> None:
         # A span closes on a run of the SAME length, so a double-backtick span
         # holds its own `--` and a lone backtick, and an escaped backtick opens
@@ -874,6 +876,19 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
                 self.assertEqual(
                     run_contributor.extract_requested_evidence(body),
                     ["first"] if opens_a_block else ["first", "second"],
+                )
+
+    def test_only_spaces_and_tabs_can_indent_a_fence(self) -> None:
+        # CommonMark counts spaces and tabs as indentation and nothing else.
+        # A row of backticks behind other whitespace is a paragraph GitHub
+        # renders as literal text, so reading it as a fence opens a block that
+        # takes every bullet below it out of the contract -- the same unsafe
+        # direction the tab rule closed, reached through a different character.
+        for space in ("\u00a0", "\u2003", "\u3000", "\x0b", "\x0c"):
+            body = f"## Requested Evidence\n\n- first\n{space * 4}```\n- second\n"
+            with self.subTest(space=repr(space)):
+                self.assertEqual(
+                    run_contributor.extract_requested_evidence(body), ["first", "second"]
                 )
 
     def test_an_escape_hides_a_backtick_in_prose_but_not_inside_a_span(self) -> None:
