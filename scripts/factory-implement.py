@@ -38,9 +38,12 @@ if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
 
 from evidence import extract_requested_evidence  # noqa: E402
 from patch_policy import (  # noqa: E402
+    RepoEnumerationError,
     issue_body_path_candidates,
     issue_scope_digest,
+    resolve_workflow_filenames,
     sensitive_agent_patch_paths,
+    tracked_repo_files,
 )
 
 
@@ -111,6 +114,19 @@ BUDGET_COMMENT_MARKER = "<!-- factory-implement-budget-skip -->"
 # owner re-release gets its own comment instead of being deduped against an
 # earlier, now-superseded warning.
 STALE_SCOPE_COMMENT_MARKER = "<!-- factory-implement-stale-scope"
+
+# The contributor's apply-time scope guard refuses a finished patch that
+# touches privileged paths, and the run dies inside the implement job. Without
+# this hand-off the issue learns only that a run failed, which is the one
+# sentence that does not tell the owner what to do next (#1548). The implement
+# job exports the refused paths; the rollback job passes them here.
+REFUSED_PATHS_ENV = "FACTORY_REFUSED_PRIVILEGED_PATHS"
+REFUSED_PATHS_DISPLAY_CAP = 20
+REFUSED_PATH_LENGTH_CAP = 200
+# A refused path comes out of an agent-authored diff, so it is untrusted text
+# on its way into an issue comment. Legitimate paths use exactly this alphabet;
+# anything else becomes "?" rather than markdown, a mention, or a fence.
+UNSAFE_PATH_CHARS_RE = re.compile(r"[^A-Za-z0-9._/-]+")
 
 
 class FactoryImplementError(RuntimeError):
@@ -388,13 +404,38 @@ def label_names(issue: dict[str, Any]) -> set[str]:
     }
 
 
-def privileged_scope(issue: dict[str, Any]) -> bool:
+def privileged_scope(
+    issue: dict[str, Any],
+    *,
+    tracked_files: tuple[str, ...] | None = None,
+) -> bool:
+    """Whether this issue's fix can only land somewhere the lane may not write.
+
+    Workflow filenames are resolved against the checkout before the privilege
+    test, because issue prose names a workflow `factory-review.yml` far more
+    often than `.github/workflows/factory-review.yml`, and only the second
+    form matches a prefix (#1509).
+    """
+
     if PRIVILEGED_PATCH_LABEL in label_names(issue):
         return True
     issue_text = "\n".join(
         (str(issue.get("title") or ""), str(issue.get("body") or ""))
     )
-    candidates = issue_body_path_candidates(issue_text)
+    if tracked_files is None:
+        try:
+            tracked_files = tracked_repo_files()
+        except RepoEnumerationError as error:
+            # Admitting on an unreadable tree is the failure this gate exists
+            # to prevent, so refuse the run instead. Nothing has been claimed
+            # at this point, so the issue keeps `ready` and the log says why.
+            raise FactoryImplementError(
+                f"cannot read the checkout to judge issue scope: {error}"
+            ) from error
+    candidates = resolve_workflow_filenames(
+        issue_body_path_candidates(issue_text),
+        tracked_files,
+    )
     return bool(sensitive_agent_patch_paths(candidates))
 
 
@@ -404,6 +445,7 @@ def evaluate_claim(
     *,
     daily_run_count: int = 0,
     daily_cap: int = DEFAULT_DAILY_IMPLEMENT_CAP,
+    tracked_files: tuple[str, ...] | None = None,
 ) -> ClaimDecision:
     labels = label_names(issue)
     if str(issue.get("state", "")).casefold() != "open":
@@ -417,7 +459,7 @@ def evaluate_claim(
             "skip",
             f"issue has conflicting labels: {', '.join(sorted(conflicting))}",
         )
-    if privileged_scope(issue):
+    if privileged_scope(issue, tracked_files=tracked_files):
         return ClaimDecision("privileged", "issue indicates privileged-path scope")
     if not extract_requested_evidence(str(issue.get("body") or "")):
         # The contributor runtime refuses to execute without an explicit
@@ -514,6 +556,55 @@ def stale_scope_comment(editor: str, ready_created_at: str) -> str:
         + f"by @{editor} after the owner's most recent `ready` release; leaving "
         + "this issue ready pending a fresh review. Re-apply `ready` after "
         + "confirming the current content is still what should ship."
+    )
+
+
+def parse_refused_paths(raw: str) -> list[str]:
+    """Paths the scope guard refused, as the contributor lane emitted them.
+
+    One producer, one shape: emit_refused_privileged_paths in
+    run-contributor.py writes a JSON array. Anything else — an empty output
+    because no refusal happened, a skipped implement job, a truncated value —
+    is read as no refusal, so the comment stays the plain failed-run text
+    instead of naming a path nobody refused.
+    """
+
+    text = raw.strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [str(entry).strip() for entry in decoded if str(entry).strip()]
+
+
+def display_refused_path(path: str) -> str:
+    return UNSAFE_PATH_CHARS_RE.sub("?", path)[:REFUSED_PATH_LENGTH_CAP]
+
+
+def rollback_comment(run_url: str, refused_paths: list[str]) -> str:
+    if not refused_paths:
+        return (
+            APRIL_ATTRIBUTION
+            + f"Factory implementation run failed and restored ready: {run_url}"
+        )
+    shown = [display_refused_path(path) for path in refused_paths[:REFUSED_PATHS_DISPLAY_CAP]]
+    remainder = len(refused_paths) - len(shown)
+    listing = "\n".join(f"- {path}" for path in shown)
+    if remainder > 0:
+        listing += f"\n- ... and {remainder} more"
+    return (
+        APRIL_ATTRIBUTION
+        + "Factory implementation produced a patch the scope guard refused: it "
+        + "touches privileged paths this lane may not apply. Restoring `ready`; "
+        + "the change needs the orchestrator lane, or the "
+        + f"`{PRIVILEGED_PATCH_LABEL}` label if it should run here after all.\n\n"
+        + "Refused paths:\n\n"
+        + f"```\n{listing}\n```\n\n"
+        + f"Run: {run_url}"
     )
 
 
@@ -899,8 +990,10 @@ def rollback(
     comment_once(
         client,
         issue_number,
-        APRIL_ATTRIBUTION
-        + f"Factory implementation run failed and restored ready: {run_url}",
+        rollback_comment(
+            run_url,
+            parse_refused_paths(os.environ.get(REFUSED_PATHS_ENV, "")),
+        ),
     )
 
 

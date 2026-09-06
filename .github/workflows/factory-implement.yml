@@ -94,6 +94,10 @@ jobs:
       pr_number: ${{ steps.contributor.outputs.pr_number }}
       pr_head_sha: ${{ steps.contributor.outputs.pr_head_sha }}
       test_commands_json: ${{ steps.contributor.outputs.test_commands_json }}
+      # Empty unless the apply-time scope guard refused the finished patch.
+      # The rollback job reads it to name those paths on the issue (#1548);
+      # this job has always failed by the time that happens.
+      refused_privileged_paths: ${{ steps.contributor.outputs.refused_privileged_paths }}
     steps:
       - name: Checkout safety gate
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -178,6 +182,7 @@ jobs:
       - name: Restore ready after failed implementation
         env:
           FACTORY_CLAIM_ASSIGNEE: april-clearwater[bot]
+          FACTORY_REFUSED_PRIVILEGED_PATHS: ${{ needs.implement.outputs.refused_privileged_paths }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           ISSUE_NUMBER: ${{ needs.claim.outputs.issue_number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

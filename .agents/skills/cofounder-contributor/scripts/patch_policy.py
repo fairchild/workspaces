@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
+import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from pathlib import PurePosixPath
 
@@ -107,6 +110,79 @@ def issue_body_path_candidates(body: str) -> list[str]:
             if normalized is not None and normalized not in candidates:
                 candidates.append(normalized)
     return candidates
+
+
+GIT_LS_FILES_TIMEOUT = 30
+WORKFLOW_DIR_PREFIX = ".github/workflows/"
+
+
+class RepoEnumerationError(RuntimeError):
+    """Raised when the checkout's tracked files cannot be listed."""
+
+
+@functools.lru_cache(maxsize=1)
+def tracked_repo_files(root: str = str(REPO_ROOT)) -> tuple[str, ...]:
+    """Every path git tracks in the checkout.
+
+    Raises rather than returning () on failure. Reading "cannot list" as
+    "nothing here is privileged" is indistinguishable from a genuinely empty
+    index, and it fails in the direction this gate exists to prevent: the lane
+    admits the issue, spends a slot, and the apply-time guard refuses the
+    finished patch. A caller that can tolerate not knowing passes its own list.
+    """
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", root, "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=GIT_LS_FILES_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RepoEnumerationError(f"git ls-files failed in {root}: {error}") from error
+    listing = completed.stdout.decode("utf-8", errors="replace")
+    return tuple(entry for entry in listing.split("\0") if entry)
+
+
+def resolve_workflow_filenames(
+    candidates: Iterable[str],
+    tracked_files: Iterable[str],
+) -> list[str]:
+    """Expand a bare workflow filename to the workflow path it names.
+
+    Issue prose names a workflow the way people say it — `factory-review.yml`,
+    not `.github/workflows/factory-review.yml` — so a prefix-based privilege
+    test never fires on the form the writer used, and the lane admits work
+    whose only possible fix is one it may not apply (#1509).
+
+    Resolution stops at `.github/workflows/` deliberately. Candidates come from
+    every backticked token in the body, not only path-shaped ones, so a wider
+    rule reads an ordinary noun as a repository path: `app.js` is a web asset
+    in prose and also the only tracked file with that name, and declining on it
+    strips `ready` from an issue whose fix touches nothing privileged. This
+    tree holds 170 such names. A workflow filename carries no such second
+    reading — a `.yml` under `.github/workflows/` has one purpose — so naming
+    one is evidence of scope in a way that naming `settings.json` is not.
+
+    A basename carried by more than one tracked file identifies none of them
+    and stays unresolved, so an ambiguous name cannot decline an issue either.
+    """
+
+    by_basename: dict[str, list[str]] = {}
+    for path in tracked_files:
+        by_basename.setdefault(PurePosixPath(path).name, []).append(path)
+    resolved = list(candidates)
+    for candidate in list(resolved):
+        # A suffix is what separates a filename from a word.
+        if "/" in candidate or not PurePosixPath(candidate).suffix:
+            continue
+        matches = by_basename.get(candidate, ())
+        if len(matches) != 1:
+            continue
+        target = matches[0]
+        if target.startswith(WORKFLOW_DIR_PREFIX) and target not in resolved:
+            resolved.append(target)
+    return resolved
 
 
 def issue_scope_digest(issue: dict[str, object]) -> str:

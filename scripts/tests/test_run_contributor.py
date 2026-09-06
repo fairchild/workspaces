@@ -156,6 +156,65 @@ class RunContributorEvidenceTests(unittest.TestCase):
                 cli_override=True,
             )
 
+    def test_refused_privileged_paths_reach_the_workflow(self) -> None:
+        # The refusal happens inside the implement job; the job that comments
+        # on the issue is a different one and sees no stderr. Without this
+        # output the issue can only be told that a run failed (#1548).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_file = root / "github-output"
+            output_file.touch()
+            artifact = run_contributor.ScratchPatchArtifact(
+                temp_root=root,
+                baseline_dir=root / "baseline",
+                scratch_dir=root / "scratch",
+                changed_files=[
+                    ".github/workflows/factory-review.yml",
+                    "Sources/App/Fine.swift",
+                ],
+                patch_text="diff --git a/.github/workflows/factory-review.yml b/.github/workflows/factory-review.yml\n",
+            )
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output_file)}, clear=False):
+                with io.StringIO() as stderr, contextlib.redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit):
+                        run_contributor.enforce_agent_patch_policy(
+                            artifact,
+                            {},
+                            selection_item={"labels": ["agent", "task"]},
+                            cli_override=False,
+                        )
+            written = output_file.read_text(encoding="utf-8")
+
+        self.assertTrue(
+            written.startswith(f"{run_contributor.REFUSED_PATHS_OUTPUT}="),
+            f"unexpected $GITHUB_OUTPUT content: {written!r}",
+        )
+        payload = json.loads(written.split("=", 1)[1])
+        self.assertEqual(payload, [".github/workflows/factory-review.yml"])
+        # One line, or the value would spill into a second output key.
+        self.assertEqual(written.count("\n"), 1)
+
+    def test_an_allowed_privileged_patch_emits_no_refusal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_file = root / "github-output"
+            output_file.touch()
+            artifact = run_contributor.ScratchPatchArtifact(
+                temp_root=root,
+                baseline_dir=root / "baseline",
+                scratch_dir=root / "scratch",
+                changed_files=[".github/workflows/factory-review.yml"],
+                patch_text="",
+            )
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output_file)}, clear=False):
+                run_contributor.enforce_agent_patch_policy(
+                    artifact,
+                    {},
+                    selection_item={"labels": [run_contributor.PRIVILEGED_PATCH_LABEL]},
+                    cli_override=False,
+                )
+            self.assertEqual(output_file.read_text(encoding="utf-8"), "")
+
     def test_directed_action_is_bound_to_selected_number(self) -> None:
         directed = run_contributor.parse_directed_message(
             "@fairchild mentioned you in issue #42"
