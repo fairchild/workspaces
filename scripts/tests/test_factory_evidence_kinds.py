@@ -13,6 +13,7 @@ flip entries without hand-editing markdown.
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import itertools
 import random
@@ -912,6 +913,24 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
 class EvidenceEntryExclusivityTests(unittest.TestCase):
     """One status entry proves one requirement (#1550)."""
 
+    def test_no_test_in_this_file_shadows_another(self) -> None:
+        # Python keeps the last definition of a name, so a copy-pasted method
+        # name silently drops the earlier test and the file still reports OK.
+        # Nothing in CI lints these files, and this collision reached two
+        # review rounds before a reader caught it.
+        source = Path(__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            names = [
+                child.name
+                for child in node.body
+                if isinstance(child, ast.FunctionDef) and child.name.startswith("test_")
+            ]
+            with self.subTest(test_class=node.name):
+                self.assertEqual(sorted(names), sorted(set(names)))
+
     def test_one_entry_cannot_complete_two_requested_items(self) -> None:
         # The worked case. `alpha` is a prefix of `alpha -- beta`, so the one
         # line the author wrote reads as proof of both: the longer item takes
@@ -1063,47 +1082,23 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
             if run_contributor._match_evidence_entries([item], {key: entries[key]})[0]
         }
 
-    def test_within_one_tier_the_assignment_is_maximum(self) -> None:
-        # The property the augmenting walk exists for, checked against a
-        # brute-force maximum rather than against itself: no item is reported
-        # unproved while an assignment of distinct entries covering every
-        # matchable item exists. Taking the first free entry fails this.
-        for items, entries in self.near_duplicate_contracts(20260906, one_tier=True):
-            matched, _ = run_contributor._match_evidence_entries(items, entries)
-            with self.subTest(items=items, entries=list(entries)):
-                self.assertEqual(
-                    len(matched),
-                    self.largest_assignment(
-                        self.edges_of(items, entries), min(len(items), len(entries))
-                    ),
-                )
-
-    def test_the_assignment_does_not_depend_on_the_order_of_the_contract(self) -> None:
-        # Reordering the issue's bullets is not a change to what was proved.
-        for items, entries in self.near_duplicate_contracts(20260906, one_tier=False):
-            forwards, _ = run_contributor._match_evidence_entries(items, entries)
-            backwards, _ = run_contributor._match_evidence_entries(items[::-1], entries)
-            with self.subTest(items=items, entries=list(entries)):
-                self.assertEqual(len(forwards), len(backwards))
-
-    def test_a_broad_item_does_not_take_the_entry_a_narrow_one_needs(self) -> None:
-        # The concrete shape behind the fuzz: the broad item matches both
-        # entries, the narrow one matches only the first. First-come lets the
-        # broad item take it and reports the narrow one missing; augmenting
-        # re-places the holder, so both are proved in either order.
-        broad = "capture parser timing with long contracts across dense status lines"
-        narrow = "capture parser timing with long contracts across locally"
-        body = (
-            "## Evidence Status\n\n"
-            "- [complete] capture parser timing with long contracts across -- one\n"
-            "- [complete] capture parser timing across dense status lines -- two\n"
-        )
-        for requested in ([broad, narrow], [narrow, broad]):
-            with self.subTest(first=requested[0][-16:]):
-                accounting = run_contributor.evaluate_evidence_accounting(body, requested)
-                self.assertCountEqual(accounting["complete_items"], requested)
-                self.assertEqual(accounting["missing_items"], [])
-                self.assertEqual(accounting["contested_items"], [])
+    def test_an_available_swap_is_not_searched_for(self) -> None:
+        # The assignment is deliberately not maximum. Both items could be
+        # proved by moving the first onto the second entry, which it also
+        # overlaps; the gate reports the second unproved instead. Failing here
+        # costs the author one restated status line, and searching for the
+        # swap cost an augmenting walk, a per-tier re-placement rule and a
+        # candidate cap that changed nothing on any live or cross-product
+        # pair in the repository.
+        stem = "alpha bravo charlie delta echo foxtrot golf"
+        items = [f"{stem} aa", f"{stem} bb"]
+        entries = {
+            f"{stem} aa bb": {"status": "complete", "detail": "one"},
+            f"{stem} aa zz yy": {"status": "complete", "detail": "two"},
+        }
+        matched, contested = run_contributor._match_evidence_entries(items, entries)
+        self.assertEqual(list(matched), [f"{stem} aa"])
+        self.assertEqual(contested, [f"{stem} bb"])
 
     def test_reordering_the_contract_changes_nothing_it_proved(self) -> None:
         # Equal cardinality is not enough. Which entry each item takes decides
@@ -1138,53 +1133,6 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
                         run_contributor._match_evidence_entries(items, permuted)[0],
                         forwards,
                     )
-
-    def test_the_candidate_limit_counts_entries_still_available(self) -> None:
-        # Eight requirements answered exactly, and a ninth loosely worded one
-        # against the one entry left. Counting the eight taken entries toward
-        # the limit read the ninth as too crowded to name one, when only one
-        # entry was ever available to it.
-        limit = run_contributor.EVIDENCE_OVERLAP_CANDIDATE_LIMIT
-        exact = [f"requirement number {index} proving a distinct thing" for index in range(limit)]
-        loose = "requirement number proving a distinct thing"
-        keys = exact + ["requirement number nine proving a distinct thing"]
-        entries = {key: {"status": "complete", "detail": "p"} for key in keys}
-        matched, contested = run_contributor._match_evidence_entries(exact + [loose], entries)
-        self.assertEqual(len(matched), limit + 1)
-        self.assertEqual(contested, [])
-
-    def test_an_item_reading_as_many_entries_names_none_of_them(self) -> None:
-        # A body can be written so every entry overlaps every item, which is
-        # both a guess and the shape that makes the augmenting walk expensive.
-        # Past the limit the item matches nothing and is reported contested,
-        # which fails the gate rather than picking one of them.
-        limit = run_contributor.EVIDENCE_OVERLAP_CANDIDATE_LIMIT
-        shared = "alpha bravo charlie delta echo foxtrot golf"
-        for count, matches in ((limit, True), (limit + 1, False)):
-            entries = {
-                f"{shared} number{index}": {"status": "complete", "detail": "p"}
-                for index in range(count)
-            }
-            item = f"{shared} hotel"
-            matched, contested = run_contributor._match_evidence_entries([item], entries)
-            with self.subTest(entries=count):
-                self.assertEqual(bool(matched), matches)
-                self.assertEqual(contested, [] if matches else [item])
-
-    def test_a_dense_overlap_body_does_not_cost_the_square_of_the_contract(self) -> None:
-        # Every one of a million pairs reaching the overlap tier is what makes
-        # augmenting expensive; the candidate limit is what stops it. Two
-        # orders of magnitude of headroom over the measured cost.
-        shared = "alpha bravo charlie delta echo foxtrot golf"
-        items = [f"{shared} item{index}" for index in range(300)]
-        entries = {
-            f"{shared} entry{index}": {"status": "complete", "detail": "p"}
-            for index in range(300)
-        }
-        started = time.perf_counter()
-        matched, _ = run_contributor._match_evidence_entries(items, entries)
-        self.assertEqual(matched, {})
-        self.assertLess(time.perf_counter() - started, 5.0)
 
     def test_a_stronger_match_outranks_a_larger_assignment(self) -> None:
         # Across tiers the assignment is deliberately NOT maximum. An item may
@@ -1248,6 +1196,30 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
         self.assertTrue(
             any(error.startswith("requested evidence asks for the same item") for error in punctuated),
             punctuated,
+        )
+
+    def test_two_entries_the_gate_cannot_tell_apart_are_malformed(self) -> None:
+        # One entry answers one requirement, which needs both sides to be
+        # distinguishable. Two entries normalizing to one key are two answers
+        # the gate cannot choose between, and which one a requirement takes
+        # decides its status -- here, whether a `pending-ci` lands on the
+        # `diff` item, which does not block approval, or on the other one,
+        # which does.
+        requested = [
+            "`Diff: alpha beta gamma delta echo foxtrot`",
+            "alpha beta gamma delta echo foxtrot",
+        ]
+        body = (
+            "## Evidence Status\n\n"
+            "- [pending-ci] DIFF: ALPHA BETA GAMMA DELTA ECHO FOXTROT -- a\n"
+            "- [complete] Diff: alpha beta gamma delta echo foxtrot. -- b\n"
+        )
+        accounting, errors = run_contributor.validate_evidence_accounting(body, requested)
+        self.assertEqual(len(accounting["indistinguishable_entries"]), 1)
+        self.assertTrue(
+            any(error.startswith("two Evidence Status entries read as the same item")
+                for error in errors),
+            errors,
         )
 
     def test_a_repeated_requested_item_claims_one_entry_not_two(self) -> None:
