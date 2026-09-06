@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import re
 import shlex
 import sys
+from collections.abc import Iterator
 
 from _helpers import (
     GITHUB_API_TIMEOUT,
@@ -31,6 +33,12 @@ EVIDENCE_STATUS_PREFIX_RE = re.compile(
 # Zero-width on both sides, so two separators sharing one space still yield
 # two candidate splits rather than one.
 EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
+# Reading every candidate split is worth doing for a line a person wrote and
+# pointless for one no person wrote. A GitHub body runs to 65,536 characters,
+# so without a bound a single bullet decides how long the gate takes; past
+# this length the line is unreadable rather than slow, which puts it in
+# `invalid_lines` where the gate reports it.
+EVIDENCE_STATUS_LINE_LIMIT = 4_000
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
@@ -180,23 +188,39 @@ def _code_span_ranges(text: str) -> list[tuple[int, int]]:
     return ranges
 
 
-def _evidence_status_readings(line: str) -> list[tuple[str, str, str, str]]:
-    """`(status, item, detail, separator)` for every reading, leftmost first."""
-    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
-    if not prefix:
-        return []
-    rest = prefix.group("rest")
-    status = prefix.group("status")
+def _evidence_status_boundaries(rest: str) -> list[tuple[int, int, str]]:
+    """`(item_end, detail_start, separator)` for every reading, leftmost first.
+
+    Offsets rather than text, because at most one reading is ever acted on and
+    cutting both halves of every candidate is what made a long line quadratic.
+    Span membership is a binary search over ranges the scan already returns
+    ordered and disjoint, and "both halves carry something" is read off the
+    line's first and last non-blank character instead of stripping two fresh
+    slices per candidate. Both leave the same readings the loop always had.
+    """
     spans = _code_span_ranges(rest)
-    readings = []
+    span_starts = [start for start, _ in spans]
+    first_visible = len(rest) - len(rest.lstrip())
+    last_visible = len(rest.rstrip())
+    boundaries: list[tuple[int, int, str]] = []
     for separator in EVIDENCE_SEPARATOR_RE.finditer(rest):
-        if any(start < separator.start() < end for start, end in spans):
+        cut = separator.start()
+        enclosing = bisect.bisect_right(span_starts, cut) - 1
+        if enclosing >= 0 and spans[enclosing][0] < cut < spans[enclosing][1]:
             continue
-        item = rest[: separator.start()].strip()
-        detail = rest[separator.end() :].strip()
-        if item and detail:
-            readings.append((status, item, detail, separator.group()))
-    return readings
+        if first_visible < cut and separator.end() < last_visible:
+            boundaries.append((cut, separator.end(), separator.group()))
+    return boundaries
+
+
+def _evidence_status_items(line: str) -> Iterator[str]:
+    """Every item the line could be read as, leftmost first."""
+    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
+    if not prefix or len(line) > EVIDENCE_STATUS_LINE_LIMIT:
+        return
+    rest = prefix.group("rest")
+    for item_end, _, _ in _evidence_status_boundaries(rest):
+        yield rest[:item_end].strip()
 
 
 def split_evidence_status_line(
@@ -218,17 +242,24 @@ def split_evidence_status_line(
     Only `reconcile_pending_ci_evidence` reads a line without the contract, and
     it refuses to act whenever the guess is load-bearing.
     """
-    readings = _evidence_status_readings(line)
-    if not readings:
+    if len(line) > EVIDENCE_STATUS_LINE_LIMIT:
+        return None
+    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
+    if not prefix:
+        return None
+    rest, status = prefix.group("rest"), prefix.group("status")
+    boundaries = _evidence_status_boundaries(rest)
+    if not boundaries:
         return None
     if requested_evidence:
         wanted = {_normalize_evidence_key(item) for item in requested_evidence}
-        for status, item, detail, _ in reversed(readings):
+        for item_end, detail_start, _ in reversed(boundaries):
+            item = rest[:item_end].strip()
             if _normalize_evidence_key(item) in wanted:
-                return status, item, detail
-    ascii_readings = [reading for reading in readings if reading[3] == "--"]
-    status, item, detail, _ = ascii_readings[0] if ascii_readings else readings[-1]
-    return status, item, detail
+                return status, item, rest[detail_start:].strip()
+    ascii_cuts = [cut for cut in boundaries if cut[2] == "--"]
+    item_end, detail_start, _ = ascii_cuts[0] if ascii_cuts else boundaries[-1]
+    return status, rest[:item_end].strip(), rest[detail_start:].strip()
 
 
 def _is_requested_item(item: str, requested_evidence: list[str] | None) -> bool:
@@ -1415,8 +1446,8 @@ def reconcile_pending_ci_evidence(
                 and split[0] == "pending-ci"
                 and not is_numeric_evidence_item(split[1])
                 and not any(
-                    _evidence_item_kind(reading[1]) in EVENT_COMPLETED_KINDS
-                    for reading in _evidence_status_readings(line)
+                    _evidence_item_kind(item) in EVENT_COMPLETED_KINDS
+                    for item in _evidence_status_items(line)
                 )
             ):
                 item = split[1]

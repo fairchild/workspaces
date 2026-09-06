@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -889,6 +890,56 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             run_contributor.split_evidence_status_line("- [complete] `a -- \\` -- proof"),
             ("complete", "`a -- \\`", "proof"),
         )
+
+
+class EvidenceStatusLineCostTests(unittest.TestCase):
+    """The parser reads a body an author controls, so its cost is bounded."""
+
+    # A separator every twelve characters, half of them inside a code span:
+    # the densest candidate field a status line can carry.
+    FRAGMENT = "`x -- y` -- "
+
+    def status_line(self, length: int) -> str:
+        prefix, tail = "- [complete] ", " tail"
+        fill = self.FRAGMENT * (1 + length // len(self.FRAGMENT))
+        line = prefix + fill[: length - len(prefix) - len(tail)] + tail
+        self.assertEqual(len(line), length)
+        return line
+
+    def test_a_status_line_past_the_limit_is_unreadable_not_slow(self) -> None:
+        # Reading every candidate split is worth doing for a line a person
+        # wrote and pointless for one no person wrote. Past the limit the line
+        # is not split at all, so it lands in `invalid_lines` where the gate
+        # reports it -- visible, and the direction that fails closed.
+        limit = run_contributor.EVIDENCE_STATUS_LINE_LIMIT
+        self.assertIsNone(
+            run_contributor.split_evidence_status_line(self.status_line(limit + 1))
+        )
+        self.assertIsNotNone(
+            run_contributor.split_evidence_status_line(self.status_line(limit))
+        )
+
+    def test_an_overlong_status_line_is_reported_rather_than_dropped(self) -> None:
+        overlong = self.status_line(run_contributor.EVIDENCE_STATUS_LINE_LIMIT + 1)
+        body = f"## Evidence Status\n\n{overlong}\n"
+        accounting = run_contributor.evaluate_evidence_accounting(body, ["an item"])
+        self.assertEqual(accounting["invalid_lines"], [overlong])
+
+    def test_a_full_size_body_parses_within_a_fixed_budget(self) -> None:
+        # GitHub bodies run to 65,536 characters, and this is the densest
+        # candidate field one can hold: every line at the limit, no candidate
+        # matching, so no loop exits early. It measures 0.22s where a single
+        # unbounded line of the same shape measured 6.25s, and the budget sits
+        # an order of magnitude above the measurement rather than beside it.
+        limit = run_contributor.EVIDENCE_STATUS_LINE_LIMIT
+        line = self.status_line(limit)
+        lines = [line] * (65_536 // (len(line) + 1))
+        body = "## Evidence Status\n\n" + "\n".join(lines) + "\n"
+        self.assertGreater(len(body), 60_000)
+        started = time.perf_counter()
+        run_contributor.evaluate_evidence_accounting(body, ["an item"])
+        self.assertLess(time.perf_counter() - started, 2.0)
+
 
 if __name__ == "__main__":
     unittest.main()
