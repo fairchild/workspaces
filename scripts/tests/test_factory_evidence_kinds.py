@@ -996,6 +996,109 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
         self.assertEqual(accounting["contested_items"], ["the state"])
         self.assertEqual(accounting["missing_items"], ["the state"])
 
+    def test_the_assignment_does_not_depend_on_the_order_of_the_contract(self) -> None:
+        # Taking the first free entry is order-dependent: the broad item
+        # matches both entries, the narrow one matches only the first, and
+        # first-come lets the broad item take the entry the narrow one needs.
+        # Augmenting re-places the holder, so both are proved either way.
+        broad = "capture parser timing with long contracts across dense status lines"
+        narrow = "capture parser timing with long contracts across locally"
+        body = (
+            "## Evidence Status\n\n"
+            "- [complete] capture parser timing with long contracts across -- one\n"
+            "- [complete] capture parser timing across dense status lines -- two\n"
+        )
+        for requested in ([broad, narrow], [narrow, broad]):
+            with self.subTest(order=requested[0][-16:]):
+                accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+                self.assertCountEqual(accounting["complete_items"], requested)
+                self.assertEqual(accounting["missing_items"], [])
+                self.assertEqual(accounting["contested_items"], [])
+
+    def test_a_loose_match_never_takes_the_entry_an_item_names(self) -> None:
+        # Re-placement is bounded by the tier the holder matched at, so
+        # augmenting cannot move an item off the entry it names exactly onto
+        # a weaker one to make room for someone else.
+        requested = ["alpha beta gamma delta", "alpha beta gamma"]
+        body = "## Evidence Status\n\n- [complete] alpha beta gamma -- one\n"
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["complete_items"], ["alpha beta gamma"])
+        self.assertEqual(accounting["contested_items"], ["alpha beta gamma delta"])
+
+    def test_an_item_outbid_at_the_overlap_tier_reads_as_contested(self) -> None:
+        # Two requirements differing by one word, one entry naming one of
+        # them. The other genuinely competed for that entry and lost, which
+        # is what the author needs told -- not that they wrote nothing.
+        hosted = "the hosted runner build passes on macos fifteen with signing enabled"
+        local = "the local runner build passes on macos fifteen with signing enabled"
+        body = f"## Evidence Status\n\n- [complete] {local} -- proof\n"
+        accounting = run_contributor.evaluate_evidence_accounting(body, [hosted, local])
+        self.assertEqual(accounting["complete_items"], [local])
+        self.assertEqual(accounting["contested_items"], [hosted])
+
+    def test_a_contract_asking_twice_is_malformed_rather_than_proved_twice(self) -> None:
+        # `matched` is keyed by item text, so two byte-identical items are one
+        # key to it and one entry answered both with no error at all. They are
+        # the same requirement to everything downstream, so the contract is
+        # what is wrong, and the gate says so where the author can fix it.
+        requested = ["same requirement", "same requirement"]
+        body = "## Evidence Status\n\n- [complete] same requirement -- proof\n"
+        accounting, errors = run_contributor.validate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["duplicate_requested_items"], ["same requirement"])
+        self.assertIn(
+            "evidence_contract_duplicate",
+            {entry["category"] for entry in run_contributor.classify_evidence_errors(errors)},
+        )
+        # `proof` and `proof.` are the same requirement for the same reason:
+        # the gate cannot tell one key from the other.
+        _, punctuated = run_contributor.validate_evidence_accounting(
+            "## Evidence Status\n\n- [complete] proof -- the log\n", ["proof", "proof."]
+        )
+        self.assertTrue(
+            any(error.startswith("requested evidence asks for the same item") for error in punctuated),
+            punctuated,
+        )
+
+    def test_a_repeated_requested_item_claims_one_entry_not_two(self) -> None:
+        # Two byte-identical requested items are one key in the match table,
+        # so they are one requirement to it -- an admission-time duplicate
+        # check, not a matcher fix. What the matcher must not do is let the
+        # second copy consume a second entry: the leftover line is reported
+        # `unexpected`, which is what a stray entry should read as.
+        requested = ["alpha beta gamma", "alpha beta gamma"]
+        body = (
+            "## Evidence Status\n\n"
+            "- [complete] alpha beta gamma -- one\n"
+            "- [complete] alpha beta gamma delta -- two\n"
+        )
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["complete_items"], requested)
+        self.assertEqual(accounting["unexpected_items"], ["alpha beta gamma delta"])
+
+    def test_an_item_that_normalizes_to_nothing_proves_nothing(self) -> None:
+        # `_normalize_evidence_key` strips backticks and trailing punctuation,
+        # so an item that is only those normalizes to the empty string. It has
+        # no words to overlap and no key to look up, so it matches nothing and
+        # is reported missing rather than dividing by zero or matching all.
+        body = (
+            "## Evidence Status\n\n"
+            "- [complete] alpha beta gamma -- one\n"
+            "- [complete] alpha beta gamma delta -- two\n"
+        )
+        accounting = run_contributor.evaluate_evidence_accounting(body, ["`.`"])
+        self.assertEqual(accounting["missing_items"], ["`.`"])
+        self.assertEqual(accounting["contested_items"], [])
+        self.assertEqual(len(accounting["unexpected_items"]), 2)
+
+        # And an entry that normalizes to nothing is not the same requirement
+        # as an item that normalizes to nothing: two unreadable strings are
+        # two unreadable strings, not a match.
+        empty = run_contributor.evaluate_evidence_accounting(
+            "## Evidence Status\n\n- [complete] ;;; -- proof\n", ["..."]
+        )
+        self.assertEqual(empty["missing_items"], ["..."])
+        self.assertEqual(empty["unexpected_items"], [";;;"])
+
     def test_a_contested_item_never_reads_as_an_unexpected_entry(self) -> None:
         # `unexpected_items` is what the gate reports as an entry answering
         # nothing. The contested item's entry does answer something, so the

@@ -7,7 +7,7 @@ import json
 import re
 import shlex
 import sys
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from itertools import islice
 
 from _helpers import (
@@ -627,55 +627,24 @@ def _normalize_evidence_key(text: str) -> str:
     return t
 
 
-def _evidence_match_tiers(
-    requested_evidence: list[str],
-    entries: dict[str, dict[str, str]],
-) -> list[dict[str, list[str]]]:
-    """The entries each requested item could take, by tier, strongest first.
+def _duplicate_requested_items(requested_evidence: list[str]) -> list[str]:
+    """Requested items the gate cannot tell apart, second occurrence onward.
 
-    Exact text, then the same normalized key, then word overlap. The tiers are
-    kept apart so assignment can walk them across the whole contract: an entry
-    one item merely overlaps has to still be free for the item that names it.
-
-    Overlap is measured over the union of the two word sets, so text the entry
-    carries and the item does not costs score. Normalized by the item's own
-    words a short item scores 1.0 against any entry containing it, which is
-    how `alpha` claimed `alpha -- beta`'s entry.
+    The matcher answers a requirement with an entry; it cannot answer the same
+    requirement twice from one line, and two items that normalize to one key
+    are the same requirement to everything downstream -- `matched` is keyed by
+    item text, so byte-identical items are literally one key. Reported as a
+    malformed contract rather than silently satisfied twice, which is where
+    the author can still fix it.
     """
-    normalized = [(key, _normalize_evidence_key(key)) for key in entries]
-    exact: dict[str, list[str]] = {}
-    same_key: dict[str, list[str]] = {}
-    overlapping: dict[str, list[str]] = {}
+    seen: set[str] = set()
+    duplicates: list[str] = []
     for item in requested_evidence:
-        if item in exact:
-            continue
-        norm_item = _normalize_evidence_key(item)
-        item_words = set(norm_item.split())
-        exact[item] = [item] if item in entries else []
-        same_key[item] = [key for key, norm in normalized if norm == norm_item]
-        overlapping[item] = [
-            key
-            for key, norm in normalized
-            if item_words
-            and (entry_words := set(norm.split()))
-            and len(item_words & entry_words) / len(item_words | entry_words)
-            >= EVIDENCE_WORD_OVERLAP_FLOOR
-        ]
-    return [exact, same_key, overlapping]
-
-
-def _evidence_key_carries(entry_key: str, requested_item: str) -> bool:
-    """Whether the entry's key holds every word the requested item does.
-
-    Not a match -- matching is `_evidence_match_tiers`. This is what the error
-    message is for. An item whose every word sits inside a line another
-    requirement already took was written for that line or is a duplicate of
-    it, and naming the collision tells the author more than reporting the item
-    absent does. It is exactly the reading that used to complete both.
-    """
-    item_words = set(_normalize_evidence_key(requested_item).split())
-    entry_words = set(_normalize_evidence_key(entry_key).split())
-    return bool(item_words) and item_words <= entry_words
+        key = _normalize_evidence_key(item)
+        if key in seen and item not in duplicates:
+            duplicates.append(item)
+        seen.add(key)
+    return duplicates
 
 
 def _match_evidence_entries(
@@ -690,27 +659,124 @@ def _match_evidence_entries(
     normalize to one key and so to one entry. `unexpected_items` sees nothing
     either, being computed from the entries claimed rather than the claims.
 
-    So the tiers are walked strongest first across the whole contract, and an
-    entry another item already took is not available at any of them. An item
-    left holding only taken entries is contested rather than merely missing:
-    the author did write a line for it, and the gate can say which line two
-    requirements are reaching for.
+    Three tiers, strongest first: exact text, the same normalized key, then
+    word overlap over the union of the two word sets. A tier is reached only
+    by what the one above it left over, and each builds what it needs and no
+    more -- a contract written back exactly normalizes nothing.
+
+    Within a tier the assignment is a MAXIMUM matching, not a first-come one.
+    Taking the first free entry is order-dependent: a broadly-worded item can
+    claim the only entry a narrower one could ever match, and the narrower
+    item then reports missing though an assignment covering both exists.
+    Augmenting instead re-places the holder first, and an item may only be
+    re-placed within the tier it matched at, so a loose match can never take
+    an entry away from the item that names it.
+
+    An item left unmatched is contested rather than merely missing when an
+    entry another requirement took would have proved it: either every entry it
+    could match is claimed, or a claimed entry carries all of its words, which
+    is the containment the old rule scored 1.0 and completed on. The gate then
+    names the line two requirements are reaching for instead of reporting the
+    item absent.
     """
-    matched: dict[str, str] = {}
-    claimed: set[str] = set()
-    for tier in _evidence_match_tiers(requested_evidence, entries):
-        for item in requested_evidence:
-            if item in matched:
+    tiers: list[dict[str, list[str]]] = []
+    holder: dict[str, str] = {}
+    entered: dict[str, int] = {}
+
+    def candidates(item: str, upto: int) -> Iterator[str]:
+        for tier in range(upto + 1):
+            yield from tiers[tier][item]
+
+    def assign(item: str, tier: int) -> bool:
+        """One augmenting path, walked with an explicit stack.
+
+        Each frame is an item and the entry it is currently reaching for; the
+        item holding that entry becomes the next frame. A free entry ends the
+        path and every frame takes what it was reaching for. Iterative because
+        the path is as long as the contract, and a recursive walk over a few
+        hundred items would exhaust the interpreter stack rather than fail the
+        gate.
+        """
+        seen: set[str] = set()
+        path: list[list[object]] = [[item, candidates(item, tier), ""]]
+        while path:
+            current_item, remaining, _ = path[-1]
+            entry = next((key for key in remaining if key not in seen), None)
+            if entry is None:
+                path.pop()
                 continue
-            free = next((key for key in tier[item] if key not in claimed), None)
-            if free is not None:
-                matched[item] = free
-                claimed.add(free)
+            seen.add(entry)
+            path[-1][2] = entry
+            held = holder.get(entry)
+            if held is None:
+                for frame_item, _, frame_entry in path:
+                    holder[frame_entry] = frame_item
+                return True
+            path.append([held, candidates(held, entered[held]), ""])
+        return False
+
+    def unmatched() -> list[str]:
+        return [item for item in requested_evidence if item not in entered]
+
+    def round_of(tier: int) -> None:
+        for item in requested_evidence:
+            if item not in entered and assign(item, tier):
+                entered[item] = tier
+
+    tiers.append({item: [item] if item in entries else [] for item in requested_evidence})
+    round_of(0)
+    remaining_items = unmatched()
+
+    entries_by_key: dict[str, list[str]] = {}
+    if remaining_items:
+        for entry_key in entries:
+            # An item made only of backticks and trailing punctuation
+            # normalizes to nothing, and two such strings are not the same
+            # requirement -- they are two strings the gate cannot read. An
+            # empty key matches nothing, on either side.
+            if normalized := _normalize_evidence_key(entry_key):
+                entries_by_key.setdefault(normalized, []).append(entry_key)
+        tiers.append({
+            item: entries_by_key.get(_normalize_evidence_key(item), [])
+            if _normalize_evidence_key(item)
+            else []
+            for item in requested_evidence
+        })
+        round_of(1)
+        remaining_items = unmatched()
+
+    entry_words: dict[str, set[str]] = {}
+    item_words: dict[str, set[str]] = {}
+    if remaining_items:
+        entry_words = {
+            entry_key: set(key.split())
+            for key, entry_keys in entries_by_key.items()
+            for entry_key in entry_keys
+        }
+        item_words = {
+            item: set(_normalize_evidence_key(item).split()) for item in requested_evidence
+        }
+        tiers.append({
+            item: [
+                entry_key
+                for entry_key, other in entry_words.items()
+                if item_words[item]
+                and other
+                and len(item_words[item] & other) / len(item_words[item] | other)
+                >= EVIDENCE_WORD_OVERLAP_FLOOR
+            ]
+            for item in requested_evidence
+        })
+        round_of(2)
+        remaining_items = unmatched()
+
+    matched = {item: entry_key for entry_key, item in holder.items()}
+    claimed = set(holder)
     contested = [
         item
-        for item in requested_evidence
-        if item not in matched
-        and any(_evidence_key_carries(key, item) for key in claimed)
+        for item in remaining_items
+        if any(tier[item] for tier in tiers)
+        or (item_words.get(item) and any(item_words[item] <= entry_words[key] for key in claimed))
     ]
     return matched, contested
 
@@ -725,6 +791,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
             "source": "none",
             "missing_items": [],
             "contested_items": [],
+            "duplicate_requested_items": [],
             "blocked_items": [],
             "pending_ci_items": [],
             "complete_items": [],
@@ -774,6 +841,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
         **parsed,
         "missing_items": missing_items,
         "contested_items": contested_items,
+        "duplicate_requested_items": _duplicate_requested_items(requested_evidence),
         "blocked_items": blocked_items,
         "pending_ci_items": pending_ci_items,
         "complete_items": complete_items,
@@ -843,6 +911,13 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
             parts.append(f"{remaining} more")
         preview = "; ".join(parts)
         errors.append(f"duplicate Evidence Status entries for: {preview}")
+    duplicate_requested_items = accounting["duplicate_requested_items"]
+    if duplicate_requested_items:
+        preview = _format_missing_preview(duplicate_requested_items, requested_evidence)
+        errors.append(
+            "requested evidence asks for the same item more than once, and one "
+            f"entry cannot prove it twice; make each item distinct: {preview}"
+        )
     contested_items = accounting["contested_items"]
     if contested_items:
         preview = _format_missing_preview(contested_items, requested_evidence)
@@ -879,6 +954,8 @@ def classify_evidence_error(error: str) -> str:
         return "evidence_duplicate"
     if error.startswith("one Evidence Status entry cannot prove"):
         return "evidence_contested"
+    if error.startswith("requested evidence asks for the same item"):
+        return "evidence_contract_duplicate"
     if "missing:" in error:
         return "evidence_missing"
     return "evidence_format"
