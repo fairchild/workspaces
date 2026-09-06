@@ -303,6 +303,20 @@ jobs:
         run: |
           set -euo pipefail
           gh pr view "$PR_NUMBER" --json body --jq '.body' > pr-body.md
+          # The contract the authoritative gate reads. Without it the
+          # reconciler has to guess where a status item ends, and it refuses
+          # to act whenever the guess decides which lane owns the item (#1551).
+          # Exactly one linked issue or none: two contracts cannot both be
+          # this PR's, and applying the wrong one would anchor on the wrong
+          # reading, so the ambiguous case falls back to refusing.
+          ISSUE_NUMBER=$(gh pr view "$PR_NUMBER" --json closingIssuesReferences \
+            --jq 'if (.closingIssuesReferences | length) == 1 then .closingIssuesReferences[0].number else empty end')
+          : > issue-body.md
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue view "$ISSUE_NUMBER" --json body --jq '.body' > issue-body.md
+          else
+            echo "::warning title=Evidence reconcile has no contract::the PR closes no single issue; ambiguous status lines will be left pending"
+          fi
           python3 - <<'PY'
           import importlib.util
           import os
@@ -315,8 +329,12 @@ jobs:
           spec.loader.exec_module(module)
 
           body_path = Path("pr-body.md")
+          issue_body_path = Path("issue-body.md")
           test_output_path = Path("evidence-artifacts/test-output.txt")
           kwargs = dict(
+              requested_evidence=module.extract_requested_evidence(
+                  issue_body_path.read_text()
+              ),
               build_succeeded=os.environ["BUILD_SUCCEEDED"] == "true",
               tests_succeeded=os.environ["TESTS_SUCCEEDED"] == "true",
               smoke_succeeded=os.environ["SMOKE_SUCCEEDED"] == "true",

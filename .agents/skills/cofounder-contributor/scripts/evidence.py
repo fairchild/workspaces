@@ -1574,9 +1574,38 @@ def latest_completed_check_run(
     return max(completed, key=lambda run: str(run.get("completed_at", "")))
 
 
+def _macos_lane_resolves(line: str, item: str, requested_evidence: list[str] | None) -> bool:
+    """Whether the macOS evidence lane may rewrite this status line.
+
+    With the contract in hand the item is not a guess: the reading whose item
+    IS a requested item won the split, and that item's own kind says which
+    lane completes it. `ci` and `diff` items complete through the evidence
+    verifier and the review lane, so the macOS lane leaves them alone; a bare
+    index is the structured-update key unless the contract asks for it, the
+    same rule `extract_evidence_status_entries` follows.
+
+    Absent an anchored reading the boundary is a guess again, and the guess is
+    not acted on where it is load-bearing. A line reading as `ci` or `diff`
+    under ANY split is left alone, and so is one carrying more readings than a
+    person writes -- the same refusal for the same reason, and also what keeps
+    classifying every reading from costing the square of the line. Either way
+    the line stays `pending-ci`, which fails the readiness gate and is visible;
+    resolving it on the guess would complete it.
+    """
+    if _is_requested_item(item, requested_evidence):
+        return _evidence_item_kind(item) not in EVENT_COMPLETED_KINDS
+    if is_numeric_evidence_item(item):
+        return False
+    readings = list(islice(_evidence_status_items(line), EVIDENCE_STATUS_READING_LIMIT + 1))
+    return len(readings) <= EVIDENCE_STATUS_READING_LIMIT and not any(
+        _evidence_item_kind(reading) in EVENT_COMPLETED_KINDS for reading in readings
+    )
+
+
 def reconcile_pending_ci_evidence(
     body: str,
     *,
+    requested_evidence: list[str] | None = None,
     build_succeeded: bool,
     tests_succeeded: bool,
     smoke_succeeded: bool,
@@ -1591,6 +1620,12 @@ def reconcile_pending_ci_evidence(
 
     `ci` and `diff` kind entries are left untouched: they complete through the
     evidence verifier workflow and the review lane, not the macOS lane.
+
+    `requested_evidence` is the contract the authoritative gate reads, and it
+    anchors the markdown path the same way: where a reading of a status line
+    IS a requested item, that reading is the item and its kind alone decides
+    the lane. `_evidence.yml` reads it from the issue the PR closes. Absent it
+    the boundary is a guess -- see `_macos_lane_resolves` for what is refused.
     """
     metadata = _extract_evidence_metadata(body)
     if isinstance(metadata, dict) and isinstance(metadata.get("entries"), list):
@@ -1632,27 +1667,11 @@ def reconcile_pending_ci_evidence(
             updated.append(line)
             continue
         if in_evidence_status:
-            # No contract here, so where the item ends is a guess. `ci` and
-            # `diff` complete through the verifier and the review lane, so a
-            # line that reads as either under ANY split is left alone. So is a
-            # line carrying more readings than a person writes, which is the
-            # same refusal for the same reason and also what keeps classifying
-            # every reading from costing the square of the line. Either way an
-            # ambiguous line stays pending, which fails the readiness gate and
-            # is visible; resolving it on the guess would complete it.
-            split = split_evidence_status_line(line)
-            readings = list(
-                islice(_evidence_status_items(line), EVIDENCE_STATUS_READING_LIMIT + 1)
-            )
+            split = split_evidence_status_line(line, requested_evidence)
             if (
                 split
                 and split[0] == "pending-ci"
-                and not is_numeric_evidence_item(split[1])
-                and len(readings) <= EVIDENCE_STATUS_READING_LIMIT
-                and not any(
-                    _evidence_item_kind(item) in EVENT_COMPLETED_KINDS
-                    for item in readings
-                )
+                and _macos_lane_resolves(line, split[1], requested_evidence)
             ):
                 item = split[1]
                 status, detail = _pending_ci_resolution(

@@ -1409,6 +1409,60 @@ class ParsePermissionsTests(unittest.TestCase):
                 self.assertEqual(match.group(1), "_evidence.yml")
 
 
+class EvidenceReconcileContractTests(unittest.TestCase):
+    """The reconcile job hands the macOS lane the contract the gate reads.
+
+    `reconcile_pending_ci_evidence` is the one caller that reads an
+    `## Evidence Status` line without the requested-evidence contract, so it
+    has to guess where an item ends and the guess decides which lane owns the
+    item (#1551). The job already holds the PR number and a token with issue
+    read access, so this is plumbing rather than new capability -- and it is
+    plumbing a static check can hold in place."""
+
+    EVIDENCE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
+
+    def reconcile_step(self) -> str:
+        workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("- name: Reconcile pending-ci evidence", workflow)
+        step = workflow.split("- name: Reconcile pending-ci evidence", 1)[1]
+        return step.split("\n      - name: ", 1)[0]
+
+    def test_the_reconcile_step_reads_the_linked_issue_contract(self) -> None:
+        step = self.reconcile_step()
+        self.assertIn("closingIssuesReferences", step)
+        self.assertIn("gh issue view \"$ISSUE_NUMBER\" --json body", step)
+        self.assertIn("extract_requested_evidence", step)
+        self.assertIn("requested_evidence=module.extract_requested_evidence(", step)
+
+    def test_more_than_one_linked_issue_yields_no_contract(self) -> None:
+        # Two contracts cannot both be this PR's, and anchoring on the wrong
+        # one would resolve a line the other lane owns. The `length == 1`
+        # form is the same one the PR-number resolution step uses.
+        step = self.reconcile_step()
+        self.assertIn(
+            "if (.closingIssuesReferences | length) == 1 "
+            "then .closingIssuesReferences[0].number else empty end",
+            step,
+        )
+        self.assertIn("Evidence reconcile has no contract", step)
+
+    def test_a_missing_contract_leaves_an_empty_file_rather_than_no_file(self) -> None:
+        # The python heredoc reads `issue-body.md` unconditionally, so the
+        # step truncates it first: a stale file from a previous run in the
+        # same workspace would otherwise be read as this PR's contract.
+        step = self.reconcile_step()
+        self.assertIn(": > issue-body.md", step)
+        self.assertLess(step.index(": > issue-body.md"), step.index("gh issue view"))
+
+    def test_the_reconcile_job_can_read_the_issue_it_resolves(self) -> None:
+        # The grant predates #1551 -- the job already wrote issue labels. It
+        # is pinned here because the reconcile step now depends on it for a
+        # read, and dropping it would fail at run time rather than at lint.
+        workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
+        reconcile_job = parse_jobs(workflow)["reconcile"]
+        self.assertIn("permission-issues: write", reconcile_job)
+
+
 class ReusableWorkflowPermissionTests(unittest.TestCase):
     """A job calling a local reusable workflow must hold every permission the
     callee declares. GitHub validates that at run creation: a shortfall fails
