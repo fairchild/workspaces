@@ -41,9 +41,9 @@ enum GhosttyClipboardBridge {
     }
 
     /// Serves a Ghostty clipboard read. `requestedMIMEs` lists exactly the
-    /// representations Ghostty can use, and this bridge serves only text, so a
-    /// request without `text/plain` has nothing to answer. A `started` result
-    /// promises the request is completed or denied with the same state pointer.
+    /// representations Ghostty can use, and this bridge serves only text. A
+    /// `started` result promises the request is completed or denied with the
+    /// same state pointer.
     static func read(
         userdata: UnsafeMutableRawPointer?,
         location: ghostty_clipboard_e,
@@ -74,15 +74,46 @@ enum GhosttyClipboardBridge {
 
             return pasteboard.string(forType: .string)
         }
-        guard let value else { return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE }
 
-        complete(
-            surface: surface,
-            state: state,
-            text: value,
-            includeAvailableMIMEs: includeAvailableMIMEs
-        )
+        switch plan(
+            requestedMIMEs: requestedMIMEs,
+            count: requestedMIMECount,
+            includeAvailableMIMEs: includeAvailableMIMEs,
+            hasText: value != nil
+        ) {
+        case .unavailable:
+            return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE
+        case .listOnly:
+            complete(surface: surface, state: state, text: nil, listAvailable: value != nil)
+        case .serveText:
+            complete(surface: surface, state: state, text: value, listAvailable: includeAvailableMIMEs)
+        }
+
         return GHOSTTY_CLIPBOARD_READ_STARTED
+    }
+
+    /// What a read can answer. An empty MIME request asks only which
+    /// representations the clipboard can serve and reads none of them —
+    /// the shape an ordinary paste takes while the program has Kitty paste
+    /// events (mode 5522) enabled.
+    enum ReadPlan: Equatable {
+        case serveText
+        case listOnly
+        case unavailable
+    }
+
+    static func plan(
+        requestedMIMEs: UnsafePointer<UnsafePointer<CChar>?>?,
+        count: Int,
+        includeAvailableMIMEs: Bool,
+        hasText: Bool
+    ) -> ReadPlan {
+        if count == 0 {
+            return includeAvailableMIMEs ? .listOnly : .unavailable
+        }
+
+        guard requestsText(requestedMIMEs, count: count), hasText else { return .unavailable }
+        return .serveText
     }
 
     static func requestsText(
@@ -102,20 +133,34 @@ enum GhosttyClipboardBridge {
     private static func complete(
         surface: ghostty_surface_t,
         state: UnsafeMutableRawPointer?,
-        text: String,
-        includeAvailableMIMEs: Bool
+        text: String?,
+        listAvailable: Bool
     ) {
         textMIME.withCString { mimePointer in
-            text.withCString { dataPointer in
-                let content = ghostty_clipboard_content_s(
-                    mime: mimePointer,
-                    data: dataPointer,
-                    len: strlen(dataPointer)
-                )
-                let available: [UnsafePointer<CChar>?] = includeAvailableMIMEs ? [mimePointer] : []
+            let available: [UnsafePointer<CChar>?] = listAvailable ? [mimePointer] : []
 
-                withUnsafePointer(to: content) { contentPointer in
-                    available.withUnsafeBufferPointer { availableBuffer in
+            available.withUnsafeBufferPointer { availableBuffer in
+                guard let text else {
+                    var request = ghostty_clipboard_complete_s(
+                        contents: nil,
+                        contents_len: 0,
+                        available: availableBuffer.baseAddress,
+                        available_len: availableBuffer.count,
+                        confirmed: false,
+                        remember: false
+                    )
+                    ghostty_surface_complete_clipboard_request(surface, &request, state)
+                    return
+                }
+
+                text.withCString { dataPointer in
+                    let content = ghostty_clipboard_content_s(
+                        mime: mimePointer,
+                        data: dataPointer,
+                        len: text.utf8.count
+                    )
+
+                    withUnsafePointer(to: content) { contentPointer in
                         var request = ghostty_clipboard_complete_s(
                             contents: contentPointer,
                             contents_len: 1,
