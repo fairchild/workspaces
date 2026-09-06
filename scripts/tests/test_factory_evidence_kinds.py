@@ -928,7 +928,7 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
         self.assertEqual(accounting["missing_items"], ["alpha"])
         _, errors = run_contributor.validate_evidence_accounting(body, requested)
         self.assertTrue(
-            any("cannot prove two requested items" in error for error in errors),
+            any("no Evidence Status entry of their own" in error for error in errors),
             errors,
         )
 
@@ -944,7 +944,7 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
         self.assertEqual(accounting["missing_items"], ["proof."])
         _, errors = run_contributor.validate_evidence_accounting(body, requested)
         self.assertTrue(
-            any("cannot prove two requested items" in error for error in errors),
+            any("no Evidence Status entry of their own" in error for error in errors),
             errors,
         )
 
@@ -1104,6 +1104,57 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
                 self.assertCountEqual(accounting["complete_items"], requested)
                 self.assertEqual(accounting["missing_items"], [])
                 self.assertEqual(accounting["contested_items"], [])
+
+    def test_reordering_the_contract_changes_nothing_it_proved(self) -> None:
+        # Equal cardinality is not enough. Which entry each item takes decides
+        # its status, and statuses decide the review gate -- a `[pending-ci]`
+        # landing on a `diff` item does not block approval while the same line
+        # on any other kind does. Shuffling an issue's bullets must not move
+        # that, so assignment walks a canonical order rather than the
+        # contract's.
+        for items, entries in self.near_duplicate_contracts(4242, one_tier=False):
+            if len(items) < 2:
+                continue
+            forwards, _ = run_contributor._match_evidence_entries(items, entries)
+            with self.subTest(items=items, entries=list(entries)):
+                for permuted in (items[::-1], sorted(items), sorted(items, reverse=True)):
+                    self.assertEqual(
+                        run_contributor._match_evidence_entries(permuted, entries)[0],
+                        forwards,
+                    )
+
+    def test_an_item_reading_as_many_entries_names_none_of_them(self) -> None:
+        # A body can be written so every entry overlaps every item, which is
+        # both a guess and the shape that makes the augmenting walk expensive.
+        # Past the limit the item matches nothing and is reported contested,
+        # which fails the gate rather than picking one of them.
+        limit = run_contributor.EVIDENCE_OVERLAP_CANDIDATE_LIMIT
+        shared = "alpha bravo charlie delta echo foxtrot golf"
+        for count, matches in ((limit, True), (limit + 1, False)):
+            entries = {
+                f"{shared} number{index}": {"status": "complete", "detail": "p"}
+                for index in range(count)
+            }
+            item = f"{shared} hotel"
+            matched, contested = run_contributor._match_evidence_entries([item], entries)
+            with self.subTest(entries=count):
+                self.assertEqual(bool(matched), matches)
+                self.assertEqual(contested, [] if matches else [item])
+
+    def test_a_dense_overlap_body_does_not_cost_the_square_of_the_contract(self) -> None:
+        # Every one of a million pairs reaching the overlap tier is what makes
+        # augmenting expensive; the candidate limit is what stops it. Two
+        # orders of magnitude of headroom over the measured cost.
+        shared = "alpha bravo charlie delta echo foxtrot golf"
+        items = [f"{shared} item{index}" for index in range(300)]
+        entries = {
+            f"{shared} entry{index}": {"status": "complete", "detail": "p"}
+            for index in range(300)
+        }
+        started = time.perf_counter()
+        matched, _ = run_contributor._match_evidence_entries(items, entries)
+        self.assertEqual(matched, {})
+        self.assertLess(time.perf_counter() - started, 5.0)
 
     def test_a_stronger_match_outranks_a_larger_assignment(self) -> None:
         # Across tiers the assignment is deliberately NOT maximum. An item may
