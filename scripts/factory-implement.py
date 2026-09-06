@@ -38,9 +38,10 @@ if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
 
 from evidence import extract_requested_evidence  # noqa: E402
 from patch_policy import (  # noqa: E402
+    RepoEnumerationError,
     issue_body_path_candidates,
     issue_scope_digest,
-    resolve_bare_filenames,
+    resolve_workflow_filenames,
     sensitive_agent_patch_paths,
     tracked_repo_files,
 )
@@ -410,7 +411,7 @@ def privileged_scope(
 ) -> bool:
     """Whether this issue's fix can only land somewhere the lane may not write.
 
-    Path candidates are resolved against the checkout before the privilege
+    Workflow filenames are resolved against the checkout before the privilege
     test, because issue prose names a workflow `factory-review.yml` far more
     often than `.github/workflows/factory-review.yml`, and only the second
     form matches a prefix (#1509).
@@ -421,9 +422,19 @@ def privileged_scope(
     issue_text = "\n".join(
         (str(issue.get("title") or ""), str(issue.get("body") or ""))
     )
-    candidates = resolve_bare_filenames(
+    if tracked_files is None:
+        try:
+            tracked_files = tracked_repo_files()
+        except RepoEnumerationError as error:
+            # Admitting on an unreadable tree is the failure this gate exists
+            # to prevent, so refuse the run instead. Nothing has been claimed
+            # at this point, so the issue keeps `ready` and the log says why.
+            raise FactoryImplementError(
+                f"cannot read the checkout to judge issue scope: {error}"
+            ) from error
+    candidates = resolve_workflow_filenames(
         issue_body_path_candidates(issue_text),
-        tracked_repo_files() if tracked_files is None else tracked_files,
+        tracked_files,
     )
     return bool(sensitive_agent_patch_paths(candidates))
 

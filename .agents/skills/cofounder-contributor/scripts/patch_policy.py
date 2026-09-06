@@ -113,16 +113,22 @@ def issue_body_path_candidates(body: str) -> list[str]:
 
 
 GIT_LS_FILES_TIMEOUT = 30
+WORKFLOW_DIR_PREFIX = ".github/workflows/"
+
+
+class RepoEnumerationError(RuntimeError):
+    """Raised when the checkout's tracked files cannot be listed."""
 
 
 @functools.lru_cache(maxsize=1)
 def tracked_repo_files(root: str = str(REPO_ROOT)) -> tuple[str, ...]:
-    """Every path git tracks in the checkout, or () when it cannot be listed.
+    """Every path git tracks in the checkout.
 
-    Admission runs inside a checkout, so this is normally the working index.
-    Where it is not — no git binary, no repository — resolution falls back to
-    the literal-path reading that shipped before, and the apply-time guard in
-    run-contributor.py stays the enforcing gate either way.
+    Raises rather than returning () on failure. Reading "cannot list" as
+    "nothing here is privileged" is indistinguishable from a genuinely empty
+    index, and it fails in the direction this gate exists to prevent: the lane
+    admits the issue, spends a slot, and the apply-time guard refuses the
+    finished patch. A caller that can tolerate not knowing passes its own list.
     """
 
     try:
@@ -132,25 +138,34 @@ def tracked_repo_files(root: str = str(REPO_ROOT)) -> tuple[str, ...]:
             check=True,
             timeout=GIT_LS_FILES_TIMEOUT,
         )
-    except (OSError, subprocess.SubprocessError):
-        return ()
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RepoEnumerationError(f"git ls-files failed in {root}: {error}") from error
     listing = completed.stdout.decode("utf-8", errors="replace")
     return tuple(entry for entry in listing.split("\0") if entry)
 
 
-def resolve_bare_filenames(
+def resolve_workflow_filenames(
     candidates: Iterable[str],
     tracked_files: Iterable[str],
 ) -> list[str]:
-    """Expand a bare filename to the one tracked path it can only mean.
+    """Expand a bare workflow filename to the workflow path it names.
 
-    Issue prose names files the way people say them — `factory-review.yml`,
+    Issue prose names a workflow the way people say it — `factory-review.yml`,
     not `.github/workflows/factory-review.yml` — so a prefix-based privilege
     test never fires on the form the writer used, and the lane admits work
-    whose only possible fix is one it may not apply (#1509). A basename
-    carried by exactly one tracked file identifies that file; one carried by
-    several, like `AGENTS.md`, identifies none and stays unresolved, which is
-    what keeps the resolution from widening the decline.
+    whose only possible fix is one it may not apply (#1509).
+
+    Resolution stops at `.github/workflows/` deliberately. Candidates come from
+    every backticked token in the body, not only path-shaped ones, so a wider
+    rule reads an ordinary noun as a repository path: `app.js` is a web asset
+    in prose and also the only tracked file with that name, and declining on it
+    strips `ready` from an issue whose fix touches nothing privileged. This
+    tree holds 170 such names. A workflow filename carries no such second
+    reading — a `.yml` under `.github/workflows/` has one purpose — so naming
+    one is evidence of scope in a way that naming `settings.json` is not.
+
+    A basename carried by more than one tracked file identifies none of them
+    and stays unresolved, so an ambiguous name cannot decline an issue either.
     """
 
     by_basename: dict[str, list[str]] = {}
@@ -158,15 +173,15 @@ def resolve_bare_filenames(
         by_basename.setdefault(PurePosixPath(path).name, []).append(path)
     resolved = list(candidates)
     for candidate in list(resolved):
-        # A suffix is what separates a filename from a word. Candidates come
-        # from backticked prose as well as paths, so resolving extensionless
-        # tokens would let any future extensionless tracked file turn a common
-        # word into a terminal decline.
+        # A suffix is what separates a filename from a word.
         if "/" in candidate or not PurePosixPath(candidate).suffix:
             continue
         matches = by_basename.get(candidate, ())
-        if len(matches) == 1 and matches[0] not in resolved:
-            resolved.append(matches[0])
+        if len(matches) != 1:
+            continue
+        target = matches[0]
+        if target.startswith(WORKFLOW_DIR_PREFIX) and target not in resolved:
+            resolved.append(target)
     return resolved
 
 

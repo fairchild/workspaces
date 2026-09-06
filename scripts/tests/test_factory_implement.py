@@ -8,9 +8,11 @@
 Intent: protect the two moments where the lane can spend a contributor slot on
 a patch it will never be allowed to apply. Admission must recognise privileged
 scope in the words a person actually writes — `factory-review.yml`, not
-`.github/workflows/factory-review.yml` (#1509) — and must not widen to ordinary
-source paths. Rollback must name the paths the scope guard refused instead of
-reporting a bare failed run (#1548).
+`.github/workflows/factory-review.yml` (#1509) — without reading an ordinary
+noun as a filename. A terminal decline strips `ready`, so the cases that must
+stay admissible are as load-bearing as the case that must decline. Rollback
+must name the paths the scope guard refused instead of reporting a bare failed
+run (#1548).
 
 Safe to run offline: no network, no secrets, no GitHub mutations. The only
 external process is `git ls-files` against this checkout.
@@ -88,14 +90,26 @@ class TrackedRepoFilesTests(unittest.TestCase):
         self.assertIn("scripts/factory-implement.py", tracked)
         self.assertIn(".github/workflows/factory-implement.yml", tracked)
 
-    def test_unlistable_tree_degrades_to_no_resolution(self) -> None:
-        # Admission normally runs inside a checkout. When it does not, the
-        # apply-time guard in run-contributor.py is still the enforcing gate,
-        # so an empty listing must be an empty listing and not an exception.
+    def test_unlistable_tree_is_an_error_not_an_empty_tree(self) -> None:
+        # Silently reading "cannot list" as "nothing is privileged" reverts to
+        # the exact wasted run this gate exists to prevent, and looks identical
+        # to a genuinely empty index. Fail loudly instead.
         with mock.patch(
             "patch_policy.subprocess.run", side_effect=OSError("no git here")
         ):
-            self.assertEqual(factory_implement.tracked_repo_files.__wrapped__(), ())
+            with self.assertRaises(factory_implement.RepoEnumerationError):
+                factory_implement.tracked_repo_files.__wrapped__()
+
+    def test_admission_refuses_rather_than_guessing_when_the_tree_is_unlistable(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            factory_implement,
+            "tracked_repo_files",
+            side_effect=factory_implement.RepoEnumerationError("git exploded"),
+        ):
+            with self.assertRaises(factory_implement.FactoryImplementError):
+                factory_implement.privileged_scope(issue("`factory-review.yml` is stale."))
 
 
 class PrivilegedScopeTests(unittest.TestCase):
@@ -175,6 +189,28 @@ class PrivilegedScopeTests(unittest.TestCase):
             )
         )
 
+    def test_a_generic_filename_in_prose_is_not_a_repo_path(self) -> None:
+        # A bare name unique in this tree is still not evidence the issue means
+        # that file. `app.js` names a web asset here and happens to match one
+        # tracked file under .agents/; declining on it strips `ready` from an
+        # issue whose fix is nowhere near a privileged path.
+        for prose, tracked in (
+            ("The preview should name its asset `app.js`.", ".agents/workspaces/app.js"),
+            ("Persist the theme in `settings.json`.", ".claude/settings.json"),
+            ("Rename the `_helpers.py` shim.", ".agents/skills/cofounder-contributor/scripts/_helpers.py"),
+        ):
+            with self.subTest(prose=prose):
+                self.assertFalse(
+                    factory_implement.privileged_scope(issue(prose), tracked_files=(tracked,))
+                )
+
+    def test_generic_filenames_stay_admissible_against_the_real_checkout(self) -> None:
+        for name in ("app.js", "settings.json", "evidence.py", "fork.ts", "doctor.md"):
+            with self.subTest(name=name):
+                self.assertFalse(
+                    factory_implement.privileged_scope(issue(f"Something about `{name}`."))
+                )
+
     def test_privileged_label_still_short_circuits(self) -> None:
         self.assertTrue(
             factory_implement.privileged_scope(
@@ -202,6 +238,14 @@ class EvaluateClaimTests(unittest.TestCase):
             issue("The sidebar drops focus; fix `Sources/App/Sidebar.swift`." + EVIDENCE_CONTRACT),
             0,
             tracked_files=("Sources/App/Sidebar.swift", ".github/workflows/factory-review.yml"),
+        )
+        self.assertEqual(decision.action, "claim")
+
+    def test_a_generic_filename_in_prose_is_still_admitted(self) -> None:
+        decision = factory_implement.evaluate_claim(
+            issue("The preview should name its asset `app.js`." + EVIDENCE_CONTRACT),
+            0,
+            tracked_files=(".agents/workspaces/app.js",),
         )
         self.assertEqual(decision.action, "claim")
 
