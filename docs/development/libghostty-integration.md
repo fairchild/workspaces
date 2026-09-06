@@ -21,7 +21,10 @@ semantics aligned.
 - Build script: `scripts/build-ghosttykit.sh`
 - Output path consumed by SPM: `Frameworks/GhosttyKit.xcframework`
 - Pin source of truth: `GHOSTTY_COMMIT` inside the build script
-- Toolchain source of truth: `.mise.toml` (`zig = "0.15.2"`)
+- Toolchain source of truth: `.mise.toml` (`zig = "0.16.0"`), which tracks
+  `minimum_zig_version` in the pinned Ghostty checkout's `build.zig.zon`
+- The pin is a trunk commit; Ghostty's newest release tag (`v1.3.1`, March
+  2026) predates the API this integration compiles against
 
 Behavior:
 - If `GHOSTTY_DIR` is set, script verifies that checkout is exactly at pinned commit.
@@ -215,25 +218,30 @@ Link step may warn about missing `_ImFontConfig_ImFontConfig` /
 
 Treat both as watch items for future Ghostty pin updates.
 
-### Zig 0.15.2 with newer macOS SDKs
+### Zig toolchain resolution
 
-Ghostty `v1.3.1` requires Zig `0.15.2`. The upstream Zig 0.15.2 binary can fail
-with Xcode 26.4 while linking its build runner with unresolved libSystem symbols
-(confirmed against Xcode 26.4.1: `undefined symbol: __availability_version_check`
-plus a long list of missing libSystem symbols). Homebrew's `zig@0.15` formula
-carries the Darwin linker patch needed on Tahoe hosts, so
-`scripts/build-ghosttykit.sh` prefers, in order:
+The pinned Ghostty commit requires Zig `0.16.0`, and Homebrew carries that
+release as the unversioned `zig` formula — which floats to the next Zig
+release. `scripts/build-ghosttykit.sh` therefore version-checks every Homebrew
+candidate against its own `ZIG_VERSION` and prefers, in order:
 - `GHOSTTY_ZIG_BIN`, if set
-- `/opt/homebrew/opt/zig@0.15/bin/zig`, if installed and its architecture
-  matches the host (`uname -m`)
-- `$(brew --prefix zig@0.15)/bin/zig`, matching or not — covers Xcode Cloud
-  macOS images that run Homebrew from `/usr/local` instead of the standard
-  Apple Silicon `/opt/homebrew` prefix
-- `mise exec zig@0.15.2` as a final fallback
+- `/opt/homebrew/opt/zig/bin/zig`, if installed and both its architecture
+  (`uname -m`) and its version match
+- `$(brew --prefix zig)/bin/zig`, arch-matching or not but version-matching —
+  covers Xcode Cloud macOS images that run Homebrew from `/usr/local` instead
+  of the standard Apple Silicon `/opt/homebrew` prefix
+- `mise exec --locked zig@<ZIG_VERSION>` as a final fallback, the lane CI and a
+  laptop without a Homebrew zig both take
+
+Homebrew's formula matters most on hosts where the upstream ziglang.org build
+fails to link its own build runner against the installed Xcode SDK — observed
+with Zig 0.15.2 against Xcode 26.4.1 (`undefined symbol:
+__availability_version_check` plus missing libSystem symbols). Zig 0.16.0 from
+ziglang.org, via the locked mise runner, links cleanly on Tahoe with Xcode 26.4.
 
 A wrong-arch Homebrew zig (or `GHOSTTY_ZIG_BIN`) is accepted and asked to
 cross-compile. Confirmed on one Xcode Cloud macOS image whose only available
-`zig@0.15` bottle was itself Rosetta-translated x86_64 even though the host
+zig bottle was itself Rosetta-translated x86_64 even though the host
 reports arm64 — Ghostty's `build.zig` resolves `-Dxcframework-target=native`
 via the zig compiler binary's own baked-in architecture, not the actual host
 CPU, so a wrong-arch zig silently produces a GhosttyKit slice that doesn't
@@ -253,9 +261,6 @@ sudo the Xcode Cloud user does not have (confirmed via build 574's log).
 `file` output and the built xcframework's `Info.plist` slice list, so a
 regression in this resolution is visible in the build log rather than silent.
 
-Do not bump Ghostty to Zig `0.16.0` for this release line: Ghostty `v1.3.1`
-explicitly rejects that compiler and uses Zig APIs removed in `0.16.0`.
-
 The script passes `-Demit-macos-app=false` because Workspaces only needs
 `GhosttyKit.xcframework`; building Ghostty's full app bundle adds an unrelated
 `xcodebuild` step that can fail after the xcframework has already been produced.
@@ -265,7 +270,7 @@ The script passes `-Demit-macos-app=false` because Workspaces only needs
 The per-commit Zig cache (`~/.cache/workspacemanager/zig-cache/<commit>/`) is
 shared by every build of the pinned Ghostty commit on the host. When the
 emitted archive lacks `ghostty_init` (a recurring quirk of cached xcframework
-emits), the script's repair sweep rebuilds `libghostty-fat.a` from every thin
+emits), the script's repair sweep rebuilds `libghostty-internal.a` from every thin
 `.a` in that cache — so anything another build wrote there ends up candidate
 material. A universal/iOS xcframework build sharing the cache leaves thin
 arm64 archives for other platforms and macOS objects pinned to the host's own
@@ -288,7 +293,13 @@ cache is a purge via the named entrypoint:
 
 ## Upgrade Procedure (when bumping Ghostty)
 
-1. Edit `GHOSTTY_COMMIT` in `scripts/build-ghosttykit.sh`.
+1. Edit `GHOSTTY_COMMIT` in `scripts/build-ghosttykit.sh`. Two upstream values
+   move with it and are worth reading at the target commit before building:
+   `minimum_zig_version` in `build.zig.zon` (drives `ZIG_VERSION` here,
+   `zig` in `.mise.toml`, `mise.lock`, and `ZIG_VERSION` in
+   `scripts/verify-mise-security.sh`), and the archive name Ghostty emits inside
+   the xcframework (`GHOSTTY_ARCHIVE_NAME`; a rename surfaces as
+   `assert_host_arch_slice` finding no archive).
 2. Rebuild framework:
    `./scripts/build-ghosttykit.sh`
 3. Run validation:

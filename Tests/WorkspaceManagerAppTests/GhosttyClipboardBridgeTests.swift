@@ -60,12 +60,67 @@ struct GhosttyClipboardBridgeSelectWriteTextTests {
             #expect(GhosttyClipboardBridge.selectWriteText(from: buffer, count: count) == nil)
         }
     }
+
+    @Test("Reads exactly the declared length, not to the next null byte")
+    func honorsDeclaredLength() {
+        withContent([(mime: "text/plain", data: "visible")], truncatedTo: 3) { buffer, count in
+            #expect(GhosttyClipboardBridge.selectWriteText(from: buffer, count: count) == "vis")
+        }
+    }
+}
+
+@Suite("GhosttyClipboardBridge.requestsText")
+struct GhosttyClipboardBridgeRequestsTextTests {
+    @Test("Accepts a request listing text/plain among other types")
+    func acceptsTextPlain() {
+        withMIMEs(["image/png", "text/plain"]) { buffer, count in
+            #expect(GhosttyClipboardBridge.requestsText(buffer, count: count))
+        }
+    }
+
+    @Test("Rejects a request for types this bridge cannot serve")
+    func rejectsUnservableTypes() {
+        withMIMEs(["image/png", "text/html"]) { buffer, count in
+            #expect(!GhosttyClipboardBridge.requestsText(buffer, count: count))
+        }
+    }
+
+    @Test("Rejects an empty request")
+    func rejectsEmptyRequest() {
+        withMIMEs([]) { buffer, count in
+            #expect(!GhosttyClipboardBridge.requestsText(buffer, count: count))
+        }
+    }
+
+    @Test("Rejects a null request list")
+    func rejectsNullList() {
+        #expect(!GhosttyClipboardBridge.requestsText(nil, count: 3))
+    }
+}
+
+private func withMIMEs(
+    _ mimes: [String],
+    body: (UnsafePointer<UnsafePointer<CChar>?>?, Int) -> Void
+) {
+    var buffers: [UnsafeMutablePointer<CChar>?] = []
+    defer { for pointer in buffers { pointer?.deallocate() } }
+
+    let pointers: [UnsafePointer<CChar>?] = mimes.map { mime in
+        let buffer = copyCString(mime)
+        buffers.append(buffer)
+        return UnsafePointer(buffer)
+    }
+
+    pointers.withUnsafeBufferPointer { buffer in
+        body(buffer.baseAddress, mimes.count)
+    }
 }
 
 private typealias ClipboardItem = (mime: String?, data: String?)
 
 private func withContent(
     _ items: [ClipboardItem],
+    truncatedTo length: Int? = nil,
     body: (UnsafePointer<ghostty_clipboard_content_s>, Int) -> Void
 ) {
     var mimeBuffers: [UnsafeMutablePointer<CChar>?] = []
@@ -89,9 +144,11 @@ private func withContent(
             let buffer = copyCString(data)
             dataBuffers.append(buffer)
             value.data = UnsafePointer(buffer)
+            value.len = length ?? data.utf8.count
         } else {
             dataBuffers.append(nil)
             value.data = nil
+            value.len = 0
         }
         return value
     }

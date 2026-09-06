@@ -29,7 +29,7 @@ Do not rename the SwiftPM targets as part of Xcode Cloud setup. Do not use the r
 `ci_post_clone.sh` installs the host tools that are not guaranteed by the Xcode
 Cloud image:
 - `mise` for the pinned Zig toolchain
-- Homebrew `zig@0.15` for GhosttyKit's patched Darwin linker path on newer macOS SDKs
+- Homebrew `zig` for GhosttyKit's patched Darwin linker path on newer macOS SDKs
 - `swift-format` for the SwiftPM validation gate
 - `gettext` for Ghostty's `msgfmt` translation compilation step
 
@@ -105,8 +105,8 @@ requires the App Store Connect web UI.
   `no such module 'GhosttyKit'`. `build-ghosttykit.sh` detects the mismatch,
   patches the pinned checkout to cross-compile the host-arch slice, and
   hard-asserts the result (lipo + Info.plist). Details and ruled-out
-  alternatives: `docs/development/libghostty-integration.md` § "Zig 0.15.2
-  with newer macOS SDKs".
+  alternatives: `docs/development/libghostty-integration.md` § "Zig toolchain
+  resolution".
 - **The CI user has no sudo** (build 574): anything needing `/opt/homebrew`
   creation, installer scripts, or privileged paths fails. Do not reintroduce a
   bootstrap.

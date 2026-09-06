@@ -7,7 +7,7 @@ cd "$REPO_ROOT"
 
 MISE_EXPECTED_VERSION="v2026.8.16"
 MISE_EXPECTED_LINUX_X64_SHA256="cff4832ded79af2951e800bddcb5a22acac58630d765a2d062c1180680a0bb35"
-ZIG_VERSION="0.15.2"
+ZIG_VERSION="0.16.0"
 
 fail() {
   echo "error: $*" >&2
@@ -60,13 +60,17 @@ verify_mise_configs() {
 }
 
 verify_mise_lock() {
-  python3 - <<'PY'
+  ZIG_VERSION="$ZIG_VERSION" python3 - <<'PY'
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 root = Path.cwd()
+
+zig_version = os.environ["ZIG_VERSION"]
+
 
 def require(condition: bool, message: str) -> None:
     if not condition:
@@ -78,13 +82,19 @@ tools = re.search(r"(?ms)^\[tools\]\s*(.*?)(?=^\[|\Z)", root_mise)
 require(settings is not None, ".mise.toml missing [settings]")
 require(tools is not None, ".mise.toml missing [tools]")
 require(re.search(r"(?m)^lockfile\s*=\s*true\s*$", settings.group(1)) is not None, ".mise.toml must enable lockfile")
-require(re.search(r'(?m)^zig\s*=\s*"0\.15\.2"\s*$', tools.group(1)) is not None, ".mise.toml must pin zig 0.15.2")
+require(
+    re.search(rf'(?m)^zig\s*=\s*"{re.escape(zig_version)}"\s*$', tools.group(1)) is not None,
+    f".mise.toml must pin zig {zig_version}",
+)
 
 lock = (root / "mise.lock").read_text()
 zig_entries = re.findall(r"(?ms)^\[\[tools\.zig\]\]\s*(.*?)(?=^\[\[|\Z)", lock)
 require(len(zig_entries) == 1, "mise.lock must contain exactly one zig entry")
 zig = zig_entries[0]
-require(re.search(r'(?m)^version\s*=\s*"0\.15\.2"\s*$', zig) is not None, "mise.lock must pin zig 0.15.2")
+require(
+    re.search(rf'(?m)^version\s*=\s*"{re.escape(zig_version)}"\s*$', zig) is not None,
+    f"mise.lock must pin zig {zig_version}",
+)
 require(re.search(r'(?m)^backend\s*=\s*"core:zig"\s*$', zig) is not None, "mise.lock must use core:zig")
 for platform in ("linux-x64", "macos-arm64"):
     platform_match = re.search(rf'(?m)^"platforms\.{platform}"\s*=\s*\{{(?P<body>[^}}]+)\}}\s*$', zig)
@@ -112,7 +122,7 @@ verify_repo_invocations() {
     || fail "build-ghosttykit must pin the repo mise config root"
   grep -Fq 'MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise' scripts/build-ghosttykit.sh \
     || fail "build-ghosttykit must ignore global mise config"
-  grep -Fq 'mise install --locked zig@0.15.2' scripts/setup \
+  grep -Fq "mise install --locked zig@$ZIG_VERSION" scripts/setup \
     || fail "setup must install Zig through locked mise"
   grep -Fq 'path "*/.pnpm-store" -prune' scripts/setup \
     || fail "setup must ignore generated pnpm store directories"
