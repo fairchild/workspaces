@@ -14,6 +14,8 @@ flip entries without hand-editing markdown.
 from __future__ import annotations
 
 import importlib.util
+import itertools
+import random
 import sys
 import time
 import unittest
@@ -1014,6 +1016,114 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
                 self.assertCountEqual(accounting["complete_items"], requested)
                 self.assertEqual(accounting["missing_items"], [])
                 self.assertEqual(accounting["contested_items"], [])
+
+    STEM = ["capture", "parser", "timing", "with", "long", "contracts", "across"]
+    EXTRA = ["dense", "status", "lines", "locally", "hosted", "nightly", "again"]
+
+    def near_duplicate_contracts(self, seed: int, *, one_tier: bool):
+        """Contracts and bodies worded closely enough to compete for entries.
+
+        Words drawn at random almost never reach the overlap floor, so a fuzz
+        over them proves nothing. These share a stem and differ by a word or
+        two, which is what two requirements in one issue actually look like.
+        `one_tier` marks the two sides apart so no text and no normalized key
+        can coincide, leaving every edge an overlap edge.
+        """
+        rng = random.Random(seed)
+        for _ in range(300):
+            stem = self.STEM[: rng.randint(3, 7)]
+
+            def phrase(mark: str) -> str:
+                return " ".join(stem + rng.sample(self.EXTRA, rng.randint(0, 2)) + mark.split())
+
+            items = list(dict.fromkeys(
+                phrase("itemside" if one_tier else "") for _ in range(rng.randint(2, 4))
+            ))
+            keys = list(dict.fromkeys(
+                phrase("entryside" if one_tier else "") for _ in range(rng.randint(2, 4))
+            ))
+            if not items or not keys:
+                continue
+            yield items, {key: {"status": "complete", "detail": "p"} for key in keys}
+
+    def largest_assignment(self, edges: set[tuple[str, str]], width: int) -> int:
+        for size in range(width, 0, -1):
+            for chosen in itertools.combinations(sorted(edges), size):
+                if len({item for item, _ in chosen}) == size == len({key for _, key in chosen}):
+                    return size
+        return 0
+
+    def edges_of(self, items: list[str], entries: dict[str, dict[str, str]]):
+        # One item against one entry answers "could this pair ever match"
+        # without restating the tier rules here.
+        return {
+            (item, key)
+            for item in items
+            for key in entries
+            if run_contributor._match_evidence_entries([item], {key: entries[key]})[0]
+        }
+
+    def test_within_one_tier_the_assignment_is_maximum(self) -> None:
+        # The property the augmenting walk exists for, checked against a
+        # brute-force maximum rather than against itself: no item is reported
+        # unproved while an assignment of distinct entries covering every
+        # matchable item exists. Taking the first free entry fails this.
+        for items, entries in self.near_duplicate_contracts(20260906, one_tier=True):
+            matched, _ = run_contributor._match_evidence_entries(items, entries)
+            with self.subTest(items=items, entries=list(entries)):
+                self.assertEqual(
+                    len(matched),
+                    self.largest_assignment(
+                        self.edges_of(items, entries), min(len(items), len(entries))
+                    ),
+                )
+
+    def test_the_assignment_does_not_depend_on_the_order_of_the_contract(self) -> None:
+        # Reordering the issue's bullets is not a change to what was proved.
+        for items, entries in self.near_duplicate_contracts(20260906, one_tier=False):
+            forwards, _ = run_contributor._match_evidence_entries(items, entries)
+            backwards, _ = run_contributor._match_evidence_entries(items[::-1], entries)
+            with self.subTest(items=items, entries=list(entries)):
+                self.assertEqual(len(forwards), len(backwards))
+
+    def test_a_broad_item_does_not_take_the_entry_a_narrow_one_needs(self) -> None:
+        # The concrete shape behind the fuzz: the broad item matches both
+        # entries, the narrow one matches only the first. First-come lets the
+        # broad item take it and reports the narrow one missing; augmenting
+        # re-places the holder, so both are proved in either order.
+        broad = "capture parser timing with long contracts across dense status lines"
+        narrow = "capture parser timing with long contracts across locally"
+        body = (
+            "## Evidence Status\n\n"
+            "- [complete] capture parser timing with long contracts across -- one\n"
+            "- [complete] capture parser timing across dense status lines -- two\n"
+        )
+        for requested in ([broad, narrow], [narrow, broad]):
+            with self.subTest(first=requested[0][-16:]):
+                accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+                self.assertCountEqual(accounting["complete_items"], requested)
+                self.assertEqual(accounting["missing_items"], [])
+                self.assertEqual(accounting["contested_items"], [])
+
+    def test_a_stronger_match_outranks_a_larger_assignment(self) -> None:
+        # Across tiers the assignment is deliberately NOT maximum. An item may
+        # only be re-placed within the tier it matched at, so proving one more
+        # requirement never costs an item the entry it names exactly -- the
+        # collision is reported instead, which is the whole point of #1550.
+        named = "alpha bravo charlie delta"
+        other = "alpha bravo charlie delta foxtrot"
+        body = (
+            "## Evidence Status\n\n"
+            f"- [complete] {named} -- one\n"
+            "- [complete] alpha bravo charlie delta echo -- two\n"
+        )
+        # Both items could be proved at once by moving the first onto the
+        # second entry, which it overlaps. That is a larger assignment and the
+        # wrong one: the first item names its entry, and taking that away to
+        # prove the second is exactly the swap #1550 is about.
+        accounting = run_contributor.evaluate_evidence_accounting(body, [named, other])
+        self.assertEqual(accounting["complete_items"], [named])
+        self.assertEqual(accounting["contested_items"], [other])
 
     def test_a_loose_match_never_takes_the_entry_an_item_names(self) -> None:
         # Re-placement is bounded by the tier the holder matched at, so
