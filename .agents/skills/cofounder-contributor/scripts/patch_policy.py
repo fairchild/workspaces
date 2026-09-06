@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import re
+import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from pathlib import PurePosixPath
 
@@ -107,6 +110,64 @@ def issue_body_path_candidates(body: str) -> list[str]:
             if normalized is not None and normalized not in candidates:
                 candidates.append(normalized)
     return candidates
+
+
+GIT_LS_FILES_TIMEOUT = 30
+
+
+@functools.lru_cache(maxsize=1)
+def tracked_repo_files(root: str = str(REPO_ROOT)) -> tuple[str, ...]:
+    """Every path git tracks in the checkout, or () when it cannot be listed.
+
+    Admission runs inside a checkout, so this is normally the working index.
+    Where it is not — no git binary, no repository — resolution falls back to
+    the literal-path reading that shipped before, and the apply-time guard in
+    run-contributor.py stays the enforcing gate either way.
+    """
+
+    try:
+        completed = subprocess.run(
+            ["git", "-C", root, "ls-files", "-z"],
+            capture_output=True,
+            check=True,
+            timeout=GIT_LS_FILES_TIMEOUT,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ()
+    listing = completed.stdout.decode("utf-8", errors="replace")
+    return tuple(entry for entry in listing.split("\0") if entry)
+
+
+def resolve_bare_filenames(
+    candidates: Iterable[str],
+    tracked_files: Iterable[str],
+) -> list[str]:
+    """Expand a bare filename to the one tracked path it can only mean.
+
+    Issue prose names files the way people say them — `factory-review.yml`,
+    not `.github/workflows/factory-review.yml` — so a prefix-based privilege
+    test never fires on the form the writer used, and the lane admits work
+    whose only possible fix is one it may not apply (#1509). A basename
+    carried by exactly one tracked file identifies that file; one carried by
+    several, like `AGENTS.md`, identifies none and stays unresolved, which is
+    what keeps the resolution from widening the decline.
+    """
+
+    by_basename: dict[str, list[str]] = {}
+    for path in tracked_files:
+        by_basename.setdefault(PurePosixPath(path).name, []).append(path)
+    resolved = list(candidates)
+    for candidate in list(resolved):
+        # A suffix is what separates a filename from a word. Candidates come
+        # from backticked prose as well as paths, so resolving extensionless
+        # tokens would let any future extensionless tracked file turn a common
+        # word into a terminal decline.
+        if "/" in candidate or not PurePosixPath(candidate).suffix:
+            continue
+        matches = by_basename.get(candidate, ())
+        if len(matches) == 1 and matches[0] not in resolved:
+            resolved.append(matches[0])
+    return resolved
 
 
 def issue_scope_digest(issue: dict[str, object]) -> str:
