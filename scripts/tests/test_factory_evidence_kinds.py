@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -431,6 +432,591 @@ class ClassifierBlastRadiusTests(unittest.TestCase):
         )
         self.assertIn("ci", run_contributor.EVENT_COMPLETED_KINDS)
         self.assertIn("diff", run_contributor.EVENT_COMPLETED_KINDS)
+
+
+class EvidenceItemReadabilityTests(unittest.TestCase):
+    """A correctly authored item must survive the round trip (#1523).
+
+    An item is authored once in the issue and copied into the PR body as a
+    status line. Both defects here break that copy: a bullet that wraps loses
+    everything after its first physical line, and an item whose own text
+    carries an em-dash separator ends at the first one.
+    """
+
+    WRAPPED_BODY = """## Requested Evidence
+
+- `ps -Eww` on a late-created surface — not the first one — showing `command`,
+  `initial_input` and `env_vars` all applied, compared against a hand-opened control
+- A test at the seam that fails if any one of the three is dropped again.
+  Asserting only `command` is what let `env_vars` go unnoticed
+
+Scope note: an unindented paragraph is a new block, not part of the bullet.
+"""
+
+    EM_DASH_ITEM = (
+        "`swift test` passes on the **full** suite, run three times "
+        "consecutively — `--filter` runs do not count, since every flake in "
+        "this sweep passes in isolation and fails under load. Paste the three "
+        "results"
+    )
+
+    def test_a_wrapped_bullet_yields_the_whole_item(self) -> None:
+        items = run_contributor.extract_requested_evidence(self.WRAPPED_BODY)
+        self.assertEqual(len(items), 2)
+        self.assertEqual(
+            items[0],
+            "`ps -Eww` on a late-created surface — not the first one — showing "
+            "`command`, `initial_input` and `env_vars` all applied, compared "
+            "against a hand-opened control",
+        )
+        self.assertTrue(items[1].endswith("go unnoticed"))
+
+    def test_an_unindented_paragraph_does_not_join_the_bullet_above(self) -> None:
+        items = run_contributor.extract_requested_evidence(self.WRAPPED_BODY)
+        self.assertNotIn("Scope note", " ".join(items))
+
+    def test_an_item_with_an_internal_em_dash_round_trips(self) -> None:
+        # Authored in the issue, written as a markdown status line in the PR
+        # body, matched by the gate -- the whole path, not just the regex.
+        body = f"## Requested Evidence\n\n- {self.EM_DASH_ITEM}\n"
+        requested = run_contributor.extract_requested_evidence(body)
+        self.assertEqual(requested, [self.EM_DASH_ITEM])
+
+        pr_body = (
+            "## Evidence Status\n"
+            f"- [complete] {self.EM_DASH_ITEM} -- three green runs pasted below\n"
+        )
+        parsed = run_contributor.extract_evidence_status_entries(pr_body)
+        self.assertEqual(parsed["invalid_lines"], [])
+        self.assertIn(self.EM_DASH_ITEM, parsed["entries"])
+        self.assertEqual(
+            parsed["entries"][self.EM_DASH_ITEM]["detail"],
+            "three green runs pasted below",
+        )
+
+        accounting = run_contributor.evaluate_evidence_accounting(pr_body, requested)
+        self.assertEqual(accounting["missing_items"], [])
+        self.assertEqual(accounting["complete_items"], requested)
+
+    def test_an_em_dash_separator_splits_at_the_last_one(self) -> None:
+        line = (
+            "- [complete] the metric — measured under load — is below 5% "
+            "— number in PR body"
+        )
+        split = run_contributor.split_evidence_status_line(line)
+        self.assertEqual(
+            split,
+            (
+                "complete",
+                "the metric — measured under load — is below 5%",
+                "number in PR body",
+            ),
+        )
+
+    def test_a_rendered_line_splits_on_the_ascii_separator_it_was_written_with(
+        self,
+    ) -> None:
+        # Both halves carry em-dashes; only the `--` this module renders is
+        # the separator, so neither half may be cut at a dash.
+        line = "- [complete] the item — as authored -- the proof — as measured"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line),
+            ("complete", "the item — as authored", "the proof — as measured"),
+        )
+
+    def test_a_numeric_only_item_is_a_parse_failure_not_an_item_name(self) -> None:
+        line = "- [complete] 1 — CI build-and-test succeeds"
+        parsed = run_contributor.extract_evidence_status_entries(
+            f"## Evidence Status\n{line}\n"
+        )
+        self.assertEqual(parsed["entries"], {})
+        self.assertEqual(parsed["invalid_lines"], [line])
+
+
+class EvidenceSplitAnchoringTests(unittest.TestCase):
+    """The contract, not a guess, decides where an item ends (#1523 review)."""
+
+    def test_a_detail_carrying_a_separator_does_not_bleed_into_the_item(self) -> None:
+        # Taking the LAST separator is only a guess. With the contract in hand
+        # the split that reproduces a requested item wins, so a detail written
+        # with its own ` -- ` cannot eat the item's boundary.
+        line = "- [complete] the item -- proof captured -- see the log"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, ["the item"]),
+            ("complete", "the item", "proof captured -- see the log"),
+        )
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line),
+            ("complete", "the item", "proof captured -- see the log"),
+            "without the contract, a rendered line's one `--` is the boundary "
+            "and a second is detail prose",
+        )
+
+    def test_an_em_dash_in_both_halves_still_finds_the_requested_item(self) -> None:
+        item = "the metric — measured under load — is below 5%"
+        line = f"- [complete] {item} — the run — logged at 12:00"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, [item]),
+            ("complete", item, "the run — logged at 12:00"),
+        )
+
+    def test_a_numeric_item_the_contract_asks_for_is_not_a_parse_failure(self) -> None:
+        # `1` is the structured-update key, so a bare index is normally a parse
+        # failure. It stops being one when the contract really does name it.
+        body = "## Evidence Status\n- [complete] 404 — the page 404s as designed\n"
+        self.assertEqual(
+            run_contributor.extract_evidence_status_entries(body, ["404"])["entries"],
+            {"404": {"status": "complete", "detail": "the page 404s as designed"}},
+        )
+        self.assertEqual(
+            run_contributor.extract_evidence_status_entries(body, ["something else"])["entries"],
+            {},
+        )
+
+    def test_an_indented_ordered_step_is_not_folded_into_the_item(self) -> None:
+        body = """## Requested Evidence
+
+- the item, which wraps
+  onto a continuation line
+  1. a nested ordered step
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the item, which wraps onto a continuation line"],
+        )
+
+    def test_an_indented_quote_is_not_folded_into_the_item(self) -> None:
+        body = """## Requested Evidence
+
+- the item, which wraps
+  > a nested quote
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the item, which wraps"],
+        )
+
+    def test_a_code_span_opening_a_continuation_line_is_not_a_fence(self) -> None:
+        # A backtick fence's info string cannot contain a backtick, which is
+        # what tells an opening fence from a line that starts with a span.
+        body = """## Requested Evidence
+
+- the first item
+  ```inline``` proves it
+- the second item
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the first item ```inline``` proves it", "the second item"],
+        )
+
+    def test_a_quote_marker_needs_no_space_but_a_threshold_is_not_one(self) -> None:
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(
+                "## Requested Evidence\n\n- the item\n  >nested quote\n"
+            ),
+            ["the item"],
+        )
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(
+                "## Requested Evidence\n\n- the pass rate holds at\n  >= 95% of runs\n"
+            ),
+            ["the pass rate holds at >= 95% of runs"],
+        )
+
+    def test_a_bullet_quoted_as_sample_code_is_not_a_requested_item(self) -> None:
+        body = """## Requested Evidence
+
+- the real item
+- an item showing the shape:
+
+  ```markdown
+  - sample bullet
+  ```
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the real item", "an item showing the shape:"],
+        )
+
+    def test_metadata_naming_a_different_item_is_rejected(self) -> None:
+        # Including the item cut at a fold. Metadata is machine-written and
+        # cheap to re-render; accepting a prefix would let an entry written
+        # for a narrower item complete the wider one the issue now asks for.
+        requested = ["the item, which wraps onto a continuation line"]
+        for stored in ("an unrelated item", "the item, which wraps"):
+            with self.subTest(stored=stored):
+                body = (
+                    "## Evidence Status\n\n"
+                    "<!-- evidence-status:v1\n"
+                    '{"entries": [{"index": 1, "item": "' + stored + '", '
+                    '"status": "complete", "detail": "proof"}]}\n'
+                    "-->\n"
+                )
+                parsed = run_contributor._structured_evidence_entries(body, requested)
+                assert parsed is not None
+                self.assertEqual(parsed["source"], "structured-invalid")
+                self.assertEqual(parsed["entries"], {})
+
+    def test_two_separators_sharing_one_space_are_both_candidates(self) -> None:
+        line = "- [complete] item — -- the detail"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, ["item —"]),
+            ("complete", "item —", "the detail"),
+        )
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line, ["item"]),
+            ("complete", "item", "-- the detail"),
+        )
+
+    def test_a_diff_item_whose_detail_carries_a_separator_stays_a_diff_item(
+        self,
+    ) -> None:
+        # The reconciler runs without the contract. Taking the second `--` as
+        # the boundary would read `owner confirms later` as part of the item,
+        # reclassify it as owner-attested, and resolve on the macOS lane's
+        # behalf a line that completes through the review lane.
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] The PR diff shows the setting -- owner confirms later "
+            "-- see the review\n"
+        )
+        self.assertEqual(
+            run_contributor.reconcile_pending_ci_evidence(
+                body,
+                build_succeeded=True,
+                tests_succeeded=True,
+                smoke_succeeded=True,
+            ),
+            body,
+        )
+
+    def test_an_ambiguous_line_is_left_pending_rather_than_completed(self) -> None:
+        # The mirror case: this line reads as a `diff` item at the em-dash and
+        # as a screenshot at the `--`, and without the contract nothing here
+        # can say which. Leaving it pending fails the readiness gate, which is
+        # visible and recoverable; resolving it would complete, on the macOS
+        # lane's word, an item that completes through the review lane.
+        body = (
+            "## Evidence Status\n"
+            "- [pending-ci] The PR diff shows the launch state — final screenshot "
+            "after setup -- evidence job will upload it\n"
+        )
+        self.assertEqual(
+            run_contributor.reconcile_pending_ci_evidence(
+                body,
+                build_succeeded=True,
+                tests_succeeded=True,
+                smoke_succeeded=True,
+                screenshot_upload_succeeded=True,
+                screenshot_urls=[("shot", "https://example.test/shot.png")],
+            ),
+            body,
+        )
+
+    def test_a_separator_inside_a_code_span_is_an_argument(self) -> None:
+        # `resolve_persona.py -- mara` is one name, and this shape is real:
+        # #1410 and #1550 both write an argument that way.
+        line = "- [complete] Screenshot of `tool -- mode` after launch -- the proof"
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(line),
+            ("complete", "Screenshot of `tool -- mode` after launch", "the proof"),
+        )
+
+    def test_a_longer_fence_is_not_closed_by_a_shorter_one(self) -> None:
+        body = """## Requested Evidence
+
+- the real item
+
+````markdown
+```
+- sample bullet
+```
+````
+
+- the second item
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the real item", "the second item"],
+        )
+
+    def test_a_tilde_fence_is_not_closed_by_backticks(self) -> None:
+        body = """## Requested Evidence
+
+- the real item
+
+~~~
+```
+- sample bullet
+```
+~~~
+
+- the second item
+"""
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body),
+            ["the real item", "the second item"],
+        )
+
+    def test_padding_around_the_line_does_not_move_the_separator(self) -> None:
+        # The ASCII-outranks-dash rule reads the separator each candidate was
+        # cut at. Deriving it from the item and detail lengths instead would
+        # be off by whatever stripping removed.
+        for line, expected in (
+            ("- [complete]  item -- proof — measured", ("complete", "item", "proof — measured")),
+            ("- [complete] item -- proof — measured   ", ("complete", "item", "proof — measured")),
+            ("- [complete]  item — a -- the detail", ("complete", "item — a", "the detail")),
+            ("- [complete] item  --  the detail", ("complete", "item", "the detail")),
+            ("- [complete] item\t--\tthe detail", ("complete", "item", "the detail")),
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(run_contributor.split_evidence_status_line(line), expected)
+
+    def test_an_unterminated_fence_hides_what_follows_it(self) -> None:
+        # GitHub renders everything after an unterminated fence as code, so
+        # the contract holds what a reader can actually see as a bullet.
+        body = "## Requested Evidence\n\n- first\n\n```\n- sample\n\n- never rendered\n"
+        self.assertEqual(run_contributor.extract_requested_evidence(body), ["first"])
+
+    def test_the_guard_only_fires_where_the_lane_is_ambiguous(self) -> None:
+        # The guard leaves a line alone when a reading is `ci` or `diff`. It
+        # must not leave alone a line whose readings all belong to the macOS
+        # lane, or a detail carrying its own separator would wedge every
+        # ordinary test and screenshot item.
+        for item, kwargs in (
+            ("`swift test` passes -- some note -- more", {"test_output": "ok"}),
+            (
+                "a screenshot of the panel -- captured later -- see it",
+                {
+                    "screenshot_upload_succeeded": True,
+                    "screenshot_urls": [("s", "https://example.test/s.png")],
+                },
+            ),
+        ):
+            with self.subTest(item=item):
+                body = f"## Evidence Status\n- [pending-ci] {item}\n"
+                reconciled = run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                    **kwargs,
+                )
+                self.assertNotEqual(reconciled, body)
+                self.assertIn("- [complete] ", reconciled)
+
+    def test_a_line_whose_only_separator_is_inside_a_span_does_not_parse(self) -> None:
+        # Splitting it would name the item "`a" and the detail "b`". Reporting
+        # the line as unreadable is what the gate can act on.
+        self.assertIsNone(run_contributor.split_evidence_status_line("- [complete] `a -- b`"))
+
+    def test_a_code_span_is_delimited_by_matching_backtick_runs(self) -> None:
+        # A span closes on a run of the SAME length, so a double-backtick span
+        # holds its own `--` and a lone backtick, and an escaped backtick opens
+        # nothing. Pairing backticks left to right instead gets all three wrong.
+        for line, expected in (
+            (
+                "- [complete] ``alpha -- beta`` holds -- proof",
+                ("complete", "``alpha -- beta`` holds", "proof"),
+            ),
+            (
+                "- [complete] ``a ` b`` -- proof",
+                ("complete", "``a ` b``", "proof"),
+            ),
+            (
+                "- [complete] a literal \\` token -- proof shows a \\` token",
+                ("complete", "a literal \\` token", "proof shows a \\` token"),
+            ),
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(run_contributor.split_evidence_status_line(line), expected)
+
+    def test_an_over_indented_fence_is_code_not_a_fence(self) -> None:
+        # CommonMark allows a fence at most three spaces of indentation. Past
+        # that GitHub renders indented code, so treating it as a fence would
+        # open a block that swallows every later requested item.
+        body = "## Requested Evidence\n\n- first\n\n    ```\n\n- second\n"
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body), ["first", "second"]
+        )
+
+    def test_an_over_indented_fence_does_not_join_the_bullet_above(self) -> None:
+        # It toggles nothing, but it is not prose either: folding it in would
+        # put a row of backticks in the item text.
+        body = "## Requested Evidence\n\n- the item\n    ```\n- second\n"
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body), ["the item", "second"]
+        )
+
+    def test_a_tab_indented_fence_is_indented_code_not_a_fence(self) -> None:
+        # A tab advances to column four, so this row is indented code by the
+        # same rule four spaces are. Counting characters made it a fence, and
+        # an opener with no closer takes every later item out of the contract
+        # -- the direction that lets the gate pass without evidence a reader
+        # can see was asked for.
+        body = "## Requested Evidence\n\n- first\n\t```\n- second\n"
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body), ["first", "second"]
+        )
+
+    def test_indentation_before_a_fence_is_counted_in_columns(self) -> None:
+        # The boundary is three columns, whichever characters spend them.
+        for indent, opens_a_block in (
+            ("", True),
+            ("   ", True),
+            ("    ", False),
+            ("\t", False),
+            (" \t", False),
+            ("  \t", False),
+            ("   \t", False),
+        ):
+            body = f"## Requested Evidence\n\n- first\n{indent}```\n- second\n"
+            with self.subTest(indent=repr(indent)):
+                self.assertEqual(
+                    run_contributor.extract_requested_evidence(body),
+                    ["first"] if opens_a_block else ["first", "second"],
+                )
+
+    def test_only_spaces_and_tabs_can_indent_a_fence(self) -> None:
+        # CommonMark counts spaces and tabs as indentation and nothing else.
+        # A row of backticks behind other whitespace is a paragraph GitHub
+        # renders as literal text, so reading it as a fence opens a block that
+        # takes every bullet below it out of the contract -- the same unsafe
+        # direction the tab rule closed, reached through a different character.
+        for space in ("\u00a0", "\u2003", "\u3000", "\x0b", "\x0c"):
+            body = f"## Requested Evidence\n\n- first\n{space * 4}```\n- second\n"
+            with self.subTest(space=repr(space)):
+                self.assertEqual(
+                    run_contributor.extract_requested_evidence(body), ["first", "second"]
+                )
+
+    def test_an_escape_hides_a_backtick_in_prose_but_not_inside_a_span(self) -> None:
+        # CommonMark's asymmetry, and both halves matter here: masking escapes
+        # before pairing gets the first line right and erases the second's
+        # closer, which would cut the item at a `--` that is span content.
+        self.assertEqual(
+            run_contributor.split_evidence_status_line(
+                "- [complete] a literal \\` token -- proof shows a \\` token"
+            ),
+            ("complete", "a literal \\` token", "proof shows a \\` token"),
+        )
+        self.assertEqual(
+            run_contributor.split_evidence_status_line("- [complete] `a -- \\` -- proof"),
+            ("complete", "`a -- \\`", "proof"),
+        )
+
+
+class EvidenceStatusLineCostTests(unittest.TestCase):
+    """The parser reads a body an author controls, so its cost is bounded."""
+
+    # The separator match is zero-width on both sides, so consecutive
+    # separators share the space between them and a boundary lands every two
+    # characters. This is the densest candidate field a status line can carry;
+    # `` `x -- y` -- `` looks denser and is six times sparser.
+    FRAGMENT = " —"
+    # A separator every twelve characters, half of them inside a code span.
+    SPAN_FRAGMENT = "`x -- y` -- "
+
+    def status_line(self, length: int, fragment: str | None = None) -> str:
+        prefix, tail = "- [complete] ", " tail"
+        fragment = fragment or self.FRAGMENT
+        fill = fragment * (1 + length // len(fragment))
+        line = prefix + fill[: length - len(prefix) - len(tail)] + tail
+        self.assertEqual(len(line), length)
+        return line
+
+    def test_the_dense_fixture_is_the_dense_one(self) -> None:
+        # The claim the budget rests on. If a denser shape exists the budget
+        # is measuring the wrong input, which is how the first version of
+        # these tests passed while a real body took ten times as long.
+        limit = run_contributor.EVIDENCE_STATUS_LINE_LIMIT
+        counts = {
+            name: len(
+                run_contributor._evidence_status_boundaries(
+                    self.status_line(limit, fragment)[len("- [complete] "):]
+                )
+            )
+            for name, fragment in (("dash", self.FRAGMENT), ("span", self.SPAN_FRAGMENT))
+        }
+        self.assertGreater(counts["dash"], 5 * counts["span"])
+
+    def test_a_status_line_past_the_limit_is_unreadable_not_slow(self) -> None:
+        # Reading every candidate split is worth doing for a line a person
+        # wrote and pointless for one no person wrote. Past the limit the line
+        # is not split at all, so it lands in `invalid_lines` where the gate
+        # reports it -- visible, and the direction that fails closed.
+        limit = run_contributor.EVIDENCE_STATUS_LINE_LIMIT
+        self.assertIsNone(
+            run_contributor.split_evidence_status_line(self.status_line(limit + 1))
+        )
+        self.assertIsNotNone(
+            run_contributor.split_evidence_status_line(self.status_line(limit))
+        )
+
+    def test_an_overlong_status_line_is_reported_rather_than_dropped(self) -> None:
+        overlong = self.status_line(run_contributor.EVIDENCE_STATUS_LINE_LIMIT + 1)
+        body = f"## Evidence Status\n\n{overlong}\n"
+        accounting = run_contributor.evaluate_evidence_accounting(body, ["an item"])
+        self.assertEqual(accounting["invalid_lines"], [overlong])
+
+    def test_a_full_size_body_parses_within_a_fixed_budget(self) -> None:
+        # GitHub bodies run to 65,536 characters. Every line sits at the limit
+        # and carries the densest candidate field, and the contract matches
+        # none of them, so no loop exits early. Two orders of magnitude of
+        # headroom, which only a return to per-candidate work can spend.
+        for name, fragment in (("dash", self.FRAGMENT), ("span", self.SPAN_FRAGMENT)):
+            line = self.status_line(run_contributor.EVIDENCE_STATUS_LINE_LIMIT, fragment)
+            lines = [line] * (65_536 // (len(line) + 1))
+            body = "## Evidence Status\n\n" + "\n".join(lines) + "\n"
+            with self.subTest(fragment=name):
+                self.assertGreater(len(body), 60_000)
+                started = time.perf_counter()
+                run_contributor.evaluate_evidence_accounting(body, ["an item"])
+                self.assertLess(time.perf_counter() - started, 2.0)
+
+    def test_the_reconciler_refuses_a_line_of_too_many_readings(self) -> None:
+        # It already refuses whenever the boundary guess is load-bearing, and
+        # a line carrying more readings than a person writes is that. Refusing
+        # leaves it `pending-ci`, which fails the readiness gate and is seen.
+        limit = run_contributor.EVIDENCE_STATUS_READING_LIMIT
+        for dashes, resolves in ((limit - 1, True), (limit, False)):
+            item = "`swift test` passes" + " — a" * dashes
+            rest = f"{item} -- upload pending"
+            body = f"## Evidence Status\n\n- [pending-ci] {rest}\n"
+            with self.subTest(readings=dashes + 1):
+                self.assertEqual(
+                    len(run_contributor._evidence_status_boundaries(rest)), dashes + 1
+                )
+                out = run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                    test_output="ok",
+                    screenshot_upload_succeeded=False,
+                    screenshot_urls=[],
+                    text_upload_required=False,
+                    text_upload_succeeded=False,
+                    text_urls=[],
+                )
+                self.assertEqual("[pending-ci]" not in out, resolves)
+
+    def test_the_floor_never_skips_the_candidate_the_contract_wants(self) -> None:
+        # Skipping a candidate before normalizing it is only safe if the floor
+        # can never exceed the key it stands in for. The tight case is a long
+        # item that IS the requested one, at the far end of a dense line: its
+        # floor sits exactly at the longest requested key's length.
+        for item in (
+            "a — b — c — d — e — f — g — h — i — j — k — l — m — n — o — p",
+            "`a run of words — with a span — and trailing punctuation`.",
+            "x" * 300 + " — tail words here",
+        ):
+            line = f"- [complete] {item} -- {'a — b — ' * 30}done"
+            with self.subTest(item=item[:32]):
+                split = run_contributor.split_evidence_status_line(line, [item])
+                self.assertIsNotNone(split)
+                self.assertEqual(split[1], item)
 
 
 if __name__ == "__main__":

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import bisect
 import json
 import re
 import shlex
 import sys
+from collections.abc import Iterator
+from itertools import islice
 
 from _helpers import (
     GITHUB_API_TIMEOUT,
@@ -18,9 +21,50 @@ from _helpers import (
     strip_markdown_section,
 )
 
-EVIDENCE_STATUS_LINE_RE = re.compile(
-    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<item>.+?)\s+(?:--|—|–)\s+(?P<detail>.+)$"
+# An item's own text carries em-dashes as a matter of house style, so a
+# non-greedy item group ends the item at its first internal em-dash and makes a
+# correctly authored item impossible to write. Splitting is anchored on the
+# contract wherever the requested items are in hand: the candidate split whose
+# item IS a requested item wins, so neither half's internal punctuation can
+# terminate the item. Where the contract is absent the boundary is a guess, and
+# the guess is documented on `split_evidence_status_line`.
+EVIDENCE_STATUS_PREFIX_RE = re.compile(
+    r"^- \[(?P<status>complete|blocked|pending-ci)\] (?P<rest>.+)$"
 )
+# Zero-width on both sides, so two separators sharing one space still yield
+# two candidate splits rather than one.
+EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
+# Reading every candidate split is worth doing for a line a person wrote and
+# pointless for one no person wrote. A GitHub body runs to 65,536 characters,
+# so without a bound a single bullet decides how long the gate takes; past
+# this length the line is unreadable rather than slow, which puts it in
+# `invalid_lines` where the gate reports it.
+EVIDENCE_STATUS_LINE_LIMIT = 4_000
+# What `_normalize_evidence_key` can take off an item's ends, and so the only
+# characters a candidate's key may be shorter by than the text it came from.
+EVIDENCE_STRIPPABLE_CHARS = frozenset("`.,;:)")
+# A status line a person wrote carries one or two candidate readings. Past
+# this many the reconciler is guessing rather than reading, and it refuses to
+# act on a guess -- which also stops it classifying a reading per separator on
+# a line dense in them.
+EVIDENCE_STATUS_READING_LIMIT = 32
+# A bare index is the structured-update key, not an item name. Parsed as one it
+# silently becomes an entry no requested item can match -- unless the contract
+# really does ask for it, which the requested items settle.
+NUMERIC_EVIDENCE_ITEM_RE = re.compile(r"#?\d+\.?")
+# An indented line under a bullet continues it, unless it opens a block of its
+# own: another bullet, an ordered item, or a quote. `>=` is a threshold, not a
+# quote marker.
+MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?!=))")
+# A fence opens with three or more backticks or tildes. A backtick fence's info
+# string cannot itself contain a backtick, which is what separates an opening
+# fence from a line starting with a code span.
+MARKDOWN_FENCE_RE = re.compile(r"(?P<run>`{3,}|~{3,})(?P<info>.*)$")
+# The three line endings markdown has. `str.splitlines` also breaks on a
+# vertical tab, a form feed and four other separators, which markdown renders
+# as ordinary characters -- and a fence pushed onto its own line that way is
+# read as unindented, opening a block that hides every bullet below it.
+MARKDOWN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
 EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -94,7 +138,7 @@ DIFF_EVIDENCE_RE = re.compile(
     r"|the (?:pr )?diff (?:shows|proves|demonstrates|contains|includes)"
     r"|\b(?:shows?|contains?|includes?|appears?)\b[^\n]{0,60}?\bin the (?:pr )?diff\b"
 )
-# Kinds the self-hosted macOS evidence lane can gather; `ci` and `diff`
+# Kinds the hosted `macos-15` evidence lane can gather; `ci` and `diff`
 # complete through the verifier workflow and review lane instead (#1120).
 MACOS_EVIDENCE_KINDS = frozenset({"test", "build", "screenshot"})
 EVENT_COMPLETED_KINDS = frozenset({"ci", "diff"})
@@ -118,15 +162,263 @@ SAFE_CANDIDATE_ENV_KEYS = {
 }
 
 
+def _code_span_ranges(text: str) -> list[tuple[int, int]]:
+    """Half-open ranges covering each code span, by CommonMark's own rules.
+
+    A `--` inside one is an argument rather than a boundary: `resolve_persona.py
+    -- mara` is one name.
+
+    A backtick run opens a span and the next run of equal length closes it; a
+    run that finds no match is literal text. Backslash escapes hide a backtick
+    in ordinary prose but do nothing inside a span, which is why this reads
+    left to right rather than masking escapes up front: `\\`` opens nothing,
+    while the same sequence inside a span still closes it.
+    """
+    ranges: list[tuple[int, int]] = []
+    index, length = 0, len(text)
+    while index < length:
+        if text[index] == "\\":
+            index += 2
+            continue
+        if text[index] != "`":
+            index += 1
+            continue
+        opened = index
+        while index < length and text[index] == "`":
+            index += 1
+        width = index - opened
+        probe = index
+        while probe < length:
+            if text[probe] != "`":
+                probe += 1
+                continue
+            run = probe
+            while probe < length and text[probe] == "`":
+                probe += 1
+            if probe - run == width:
+                ranges.append((opened, probe))
+                index = probe
+                break
+    return ranges
+
+
+def _evidence_status_boundaries(rest: str) -> list[tuple[int, int, str]]:
+    """`(item_end, detail_start, separator)` for every reading, leftmost first.
+
+    Offsets rather than text, because at most one reading is ever acted on and
+    cutting both halves of every candidate is what made a long line quadratic.
+    Span membership is a binary search over ranges the scan already returns
+    ordered and disjoint, and "both halves carry something" is read off the
+    line's first and last non-blank character instead of stripping two fresh
+    slices per candidate. Both leave the same readings the loop always had.
+    """
+    spans = _code_span_ranges(rest)
+    span_starts = [start for start, _ in spans]
+    first_visible = len(rest) - len(rest.lstrip())
+    last_visible = len(rest.rstrip())
+    boundaries: list[tuple[int, int, str]] = []
+    for separator in EVIDENCE_SEPARATOR_RE.finditer(rest):
+        cut = separator.start()
+        enclosing = bisect.bisect_right(span_starts, cut) - 1
+        if enclosing >= 0 and spans[enclosing][0] < cut < spans[enclosing][1]:
+            continue
+        if first_visible < cut and separator.end() < last_visible:
+            boundaries.append((cut, separator.end(), separator.group()))
+    return boundaries
+
+
+def _evidence_key_floors(rest: str, cuts: list[int]) -> list[int]:
+    """The shortest key `_normalize_evidence_key` could give each prefix.
+
+    Normalizing drops whitespace, backticks at the two ends and trailing
+    `.,;:)`; nothing else leaves, and case folding only ever adds. So a prefix
+    already holding more characters than the longest requested item is long
+    cannot BE a requested item, whatever the rest of it says.
+
+    Which matters because separators are matched zero-width on both sides, so
+    consecutive ones share a space and a line can carry a candidate every two
+    characters. Normalizing a fresh slice at each of them is quadratic in the
+    line, and this reads the answer off one forward pass instead.
+    """
+    floors: list[int] = []
+    floor, index = 0, 0
+    for cut in cuts:
+        while index < cut:
+            char = rest[index]
+            if not char.isspace() and char not in EVIDENCE_STRIPPABLE_CHARS:
+                floor += 1
+            index += 1
+        floors.append(floor)
+    return floors
+
+
+def _evidence_status_items(line: str) -> Iterator[str]:
+    """Every item the line could be read as, leftmost first."""
+    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
+    if not prefix or len(line) > EVIDENCE_STATUS_LINE_LIMIT:
+        return
+    rest = prefix.group("rest")
+    for item_end, _, _ in _evidence_status_boundaries(rest):
+        yield rest[:item_end].strip()
+
+
+def split_evidence_status_line(
+    line: str,
+    requested_evidence: list[str] | None = None,
+) -> tuple[str, str, str] | None:
+    """The one reading of a status line to act on, or None.
+
+    The reading that wins is the one whose item IS a requested item, so an
+    em-dash inside either half cannot terminate the item.
+
+    Absent the contract the boundary is a guess. The ASCII `--` this module
+    renders outranks a dash character and the FIRST of them wins, because a
+    rendered line carries exactly one and a second is detail prose. With no
+    ASCII separator the line is hand-written in the house style, where the item
+    is what carries em-dashes, so the last one wins. A separator inside a code
+    span is an argument rather than a boundary and is not a candidate at all.
+
+    Only `reconcile_pending_ci_evidence` reads a line without the contract, and
+    it refuses to act whenever the guess is load-bearing.
+    """
+    if len(line) > EVIDENCE_STATUS_LINE_LIMIT:
+        return None
+    prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
+    if not prefix:
+        return None
+    rest, status = prefix.group("rest"), prefix.group("status")
+    boundaries = _evidence_status_boundaries(rest)
+    if not boundaries:
+        return None
+    if requested_evidence:
+        wanted = {_normalize_evidence_key(item) for item in requested_evidence}
+        longest = max(len(key) for key in wanted)
+        floors = _evidence_key_floors(rest, [cut for cut, _, _ in boundaries])
+        for (item_end, detail_start, _), floor in zip(
+            reversed(boundaries), reversed(floors)
+        ):
+            if floor > longest:
+                continue
+            item = rest[:item_end].strip()
+            if _normalize_evidence_key(item) in wanted:
+                return status, item, rest[detail_start:].strip()
+    ascii_cuts = [cut for cut in boundaries if cut[2] == "--"]
+    item_end, detail_start, _ = ascii_cuts[0] if ascii_cuts else boundaries[-1]
+    return status, rest[:item_end].strip(), rest[detail_start:].strip()
+
+
+def _is_requested_item(item: str, requested_evidence: list[str] | None) -> bool:
+    if not requested_evidence:
+        return False
+    key = _normalize_evidence_key(item)
+    return any(_normalize_evidence_key(other) == key for other in requested_evidence)
+
+
+def is_numeric_evidence_item(item: str) -> bool:
+    return NUMERIC_EVIDENCE_ITEM_RE.fullmatch(item.strip()) is not None
+
+
+def _fence_indent_columns(line: str) -> int | None:
+    """Columns of indentation before a fence, or None if this is not one.
+
+    CommonMark states the three-space rule in columns and counts a tab as
+    advancing to the next multiple of four, so counting characters instead
+    reads a tab-indented row as a fence. It also counts only spaces and tabs
+    as indentation, so a row of backticks behind any other whitespace -- a
+    non-breaking space is the one that turns up in pasted prose -- is a
+    paragraph rendered as literal text, whatever it looks like.
+
+    Both mistakes fail the same way: an opener with no closer takes every
+    bullet below it out of the contract, and the gate then passes without
+    evidence a reader can plainly see was asked for.
+    """
+    columns = 0
+    for char in line:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - columns % 4
+        elif char in "`~":
+            return columns
+        else:
+            return None
+    return None
+
+
+def _is_fence_line(fence: re.Match[str]) -> bool:
+    """Is this a fence at all, rather than a line starting with a code span?
+
+    A backtick fence's info string cannot itself contain a backtick, which is
+    exactly what separates the two.
+    """
+    return not (fence.group("run").startswith("`") and "`" in fence.group("info"))
+
+
+def _fence_toggles(fence: re.Match[str], fenced: str | None) -> bool:
+    """Does this fence open a block, or close the one that is open?
+
+    A closer is the same character as its opener, at least as long, and carries
+    no info string, so a shorter run or a different character cannot end a
+    block it did not start.
+    """
+    if fenced is None:
+        return True
+    run, info = fence.group("run"), fence.group("info")
+    return run[0] == fenced[0] and len(run) >= len(fenced) and not info.strip()
+
+
+def _wrapped_bullets(section: str) -> list[str]:
+    """One string per markdown bullet, with wrapped lines folded back in.
+
+    A continuation line is indented and opens no block of its own: markdown
+    reads it as part of the bullet above, so the contract reads it that way
+    too. A blank line, a line at column zero, or an indented line that starts
+    its own block ends the bullet, which keeps a following paragraph, nested
+    list, or quote out of the item text. A fenced block -- opened at three
+    columns of indentation or fewer, as CommonMark asks -- is skipped whole,
+    so a bullet quoted as sample code is not read as a requested item.
+    """
+    bullets: list[str] = []
+    open_bullet = False
+    fenced: str | None = None
+    for line in MARKDOWN_LINE_ENDING_RE.split(section):
+        stripped = line.strip()
+        fence = MARKDOWN_FENCE_RE.fullmatch(stripped)
+        if fence and _is_fence_line(fence):
+            # Over-indented it is code, and behind other whitespace it is
+            # prose, so either way it toggles nothing -- but neither is it
+            # part of the bullet above, and folding it in would put a row of
+            # backticks in the item text.
+            indent = _fence_indent_columns(line)
+            if indent is not None and indent <= 3 and _fence_toggles(fence, fenced):
+                fenced = None if fenced else fence.group("run")
+            open_bullet = False
+            continue
+        if fenced:
+            continue
+        if stripped.startswith("- "):
+            bullets.append(line[2:].strip())
+            open_bullet = True
+            continue
+        if (
+            open_bullet
+            and stripped
+            and line[:1].isspace()
+            and not MARKDOWN_BLOCK_OPENER_RE.match(stripped)
+        ):
+            bullets[-1] = f"{bullets[-1]} {stripped}"
+            continue
+        open_bullet = False
+    return bullets
+
+
 def extract_requested_evidence(body: str) -> list[str]:
     evidence_section = markdown_section(body, "Requested Evidence")
     fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
     return [
-        line[2:].strip()
-        for line in evidence_section.splitlines()
-        if line.strip().startswith("- ")
-        and line[2:].strip().lower() != "none"
-        and line[2:].strip().casefold() != fallback_sentence
+        item
+        for item in _wrapped_bullets(evidence_section)
+        if item.lower() != "none" and item.casefold() != fallback_sentence
     ]
 
 
@@ -278,31 +570,40 @@ def _structured_evidence_entries(
     }
 
 
-def extract_evidence_status_entries(body: str) -> dict[str, object]:
+def extract_evidence_status_entries(
+    body: str,
+    requested_evidence: list[str] | None = None,
+) -> dict[str, object]:
     section_present = has_markdown_section(body, "Evidence Status")
     evidence_section = markdown_section(body, "Evidence Status")
     entries: dict[str, dict[str, str]] = {}
     invalid_lines: list[str] = []
     duplicate_items: list[str] = []
 
-    for raw_line in evidence_section.splitlines():
+    for raw_line in MARKDOWN_LINE_ENDING_RE.split(evidence_section):
         line = raw_line.strip()
         if not line:
             continue
         if not line.startswith("- "):
             invalid_lines.append(line)
             continue
-        match = EVIDENCE_STATUS_LINE_RE.match(line)
-        if not match:
+        split = split_evidence_status_line(line, requested_evidence)
+        if not split:
             invalid_lines.append(line)
             continue
-        item = match.group("item").strip()
+        status, item, detail = split
+        # A bare index is the structured-update key. Read as an item name it
+        # becomes an entry nothing can match -- unless the contract asks for
+        # exactly that, which only the requested items can say.
+        if is_numeric_evidence_item(item) and not _is_requested_item(item, requested_evidence):
+            invalid_lines.append(line)
+            continue
         if item in entries:
             duplicate_items.append(item)
             continue
         entries[item] = {
-            "status": match.group("status"),
-            "detail": match.group("detail").strip(),
+            "status": status,
+            "detail": detail,
         }
 
     return {
@@ -361,7 +662,9 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     # _structured_evidence_entries returns a non-None dict even when metadata is malformed
     # (source="structured-invalid"). The `or` only triggers when there is no hidden metadata
     # at all, falling back to markdown parsing.
-    parsed = _structured_evidence_entries(body, requested_evidence) or extract_evidence_status_entries(body)
+    parsed = _structured_evidence_entries(
+        body, requested_evidence
+    ) or extract_evidence_status_entries(body, requested_evidence)
     entries = parsed["entries"]
 
     matched: dict[str, str] = {}
@@ -1186,13 +1489,29 @@ def reconcile_pending_ci_evidence(
             updated.append(line)
             continue
         if in_evidence_status:
-            match = EVIDENCE_STATUS_LINE_RE.match(line)
+            # No contract here, so where the item ends is a guess. `ci` and
+            # `diff` complete through the verifier and the review lane, so a
+            # line that reads as either under ANY split is left alone. So is a
+            # line carrying more readings than a person writes, which is the
+            # same refusal for the same reason and also what keeps classifying
+            # every reading from costing the square of the line. Either way an
+            # ambiguous line stays pending, which fails the readiness gate and
+            # is visible; resolving it on the guess would complete it.
+            split = split_evidence_status_line(line)
+            readings = list(
+                islice(_evidence_status_items(line), EVIDENCE_STATUS_READING_LIMIT + 1)
+            )
             if (
-                match
-                and match.group("status") == "pending-ci"
-                and _evidence_item_kind(match.group("item").strip()) not in EVENT_COMPLETED_KINDS
+                split
+                and split[0] == "pending-ci"
+                and not is_numeric_evidence_item(split[1])
+                and len(readings) <= EVIDENCE_STATUS_READING_LIMIT
+                and not any(
+                    _evidence_item_kind(item) in EVENT_COMPLETED_KINDS
+                    for item in readings
+                )
             ):
-                item = match.group("item").strip()
+                item = split[1]
                 status, detail = _pending_ci_resolution(
                     item,
                     build_succeeded=build_succeeded,
