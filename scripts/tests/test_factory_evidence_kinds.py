@@ -1123,6 +1123,36 @@ class EvidenceEntryExclusivityTests(unittest.TestCase):
                         forwards,
                     )
 
+    def test_reordering_the_status_lines_changes_nothing_they_proved(self) -> None:
+        # The other side of the same property. The order the author happened
+        # to write the status lines in decides which entry an item takes
+        # otherwise, and an entry's status decides the review gate.
+        for items, entries in self.near_duplicate_contracts(777, one_tier=False):
+            if len(entries) < 2:
+                continue
+            forwards, _ = run_contributor._match_evidence_entries(items, entries)
+            with self.subTest(items=items, entries=list(entries)):
+                for keys in (list(entries)[::-1], sorted(entries)):
+                    permuted = {key: entries[key] for key in keys}
+                    self.assertEqual(
+                        run_contributor._match_evidence_entries(items, permuted)[0],
+                        forwards,
+                    )
+
+    def test_the_candidate_limit_counts_entries_still_available(self) -> None:
+        # Eight requirements answered exactly, and a ninth loosely worded one
+        # against the one entry left. Counting the eight taken entries toward
+        # the limit read the ninth as too crowded to name one, when only one
+        # entry was ever available to it.
+        limit = run_contributor.EVIDENCE_OVERLAP_CANDIDATE_LIMIT
+        exact = [f"requirement number {index} proving a distinct thing" for index in range(limit)]
+        loose = "requirement number proving a distinct thing"
+        keys = exact + ["requirement number nine proving a distinct thing"]
+        entries = {key: {"status": "complete", "detail": "p"} for key in keys}
+        matched, contested = run_contributor._match_evidence_entries(exact + [loose], entries)
+        self.assertEqual(len(matched), limit + 1)
+        self.assertEqual(contested, [])
+
     def test_an_item_reading_as_many_entries_names_none_of_them(self) -> None:
         # A body can be written so every entry overlaps every item, which is
         # both a guess and the shape that makes the augmenting walk expensive.

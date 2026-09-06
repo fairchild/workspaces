@@ -740,8 +740,12 @@ def _match_evidence_entries(
     remaining_items = unmatched()
 
     entries_by_key: dict[str, list[str]] = {}
+    # Canonical on this side too: the order the author happened to write the
+    # status lines in decides which entry an item takes otherwise, and an
+    # entry's status decides the review gate.
+    ordered_entries = sorted(entries, key=lambda key: (_normalize_evidence_key(key), key))
     if remaining_items:
-        for entry_key in entries:
+        for entry_key in ordered_entries:
             # An item made only of backticks and trailing punctuation
             # normalizes to nothing, and two such strings are not the same
             # requirement -- they are two strings the gate cannot read. An
@@ -771,20 +775,29 @@ def _match_evidence_entries(
             for entry_key in entry_keys
         }
         item_words = {item: set(_normalize_evidence_key(item).split()) for item in ordered}
+        # Only entries no stronger tier has taken. An entry claimed by exact
+        # text cannot be freed by an overlap claimant anyway -- re-placement
+        # is bounded to the holder's own tier -- and counting it toward the
+        # limit is what made nine requirements against nine entries, eight of
+        # them already exactly matched, read as too crowded to name one.
+        free_entries = [
+            (entry_key, entry_words[entry_key])
+            for entry_key in ordered_entries
+            if entry_key in entry_words and entry_key not in holder
+        ]
         overlapping: dict[str, list[str]] = {}
         for item in ordered:
             words = item_words[item]
-            reachable = islice(
+            found = list(islice(
                 (
                     entry_key
-                    for entry_key, other in entry_words.items()
+                    for entry_key, other in free_entries
                     if words
                     and other
                     and len(words & other) / len(words | other) >= EVIDENCE_WORD_OVERLAP_FLOOR
                 ),
                 EVIDENCE_OVERLAP_CANDIDATE_LIMIT + 1,
-            )
-            found = list(reachable)
+            ))
             if len(found) > EVIDENCE_OVERLAP_CANDIDATE_LIMIT:
                 crowded.add(item)
                 found = []
@@ -794,13 +807,33 @@ def _match_evidence_entries(
         remaining_items = unmatched()
 
     matched = {item: entry_key for entry_key, item in holder.items()}
-    claimed = set(holder)
+
+    def outbid(item: str) -> bool:
+        """Whether an entry another requirement took would have proved this.
+
+        The overlap tier only ever offers unclaimed entries, so an item that
+        competed for a taken one has no candidate left to show for it. This
+        asks the question directly, of the few items still unmatched: does a
+        claimed entry meet the floor, or carry all of this item's words -- the
+        containment the rule this replaces scored 1.0 and completed on.
+        """
+        words = item_words.get(item)
+        if not words:
+            return False
+        for entry_key in holder:
+            other = entry_words.get(entry_key)
+            if not other:
+                continue
+            if words <= other:
+                return True
+            if len(words & other) / len(words | other) >= EVIDENCE_WORD_OVERLAP_FLOOR:
+                return True
+        return False
+
     contested = [
         item
         for item in remaining_items
-        if item in crowded
-        or any(tier[item] for tier in tiers)
-        or (item_words.get(item) and any(item_words[item] <= entry_words[key] for key in claimed))
+        if item in crowded or any(tier[item] for tier in tiers) or outbid(item)
     ]
     return matched, contested
 
