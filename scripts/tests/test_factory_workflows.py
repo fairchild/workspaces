@@ -1421,30 +1421,74 @@ class EvidenceReconcileContractTests(unittest.TestCase):
 
     EVIDENCE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
 
+    RECONCILE_MARKER = "\n      - name: Reconcile pending-ci evidence\n"
+    FAIL_MARKER = "\n      - name: Fail on evidence errors\n"
+
     def reconcile_step(self) -> str:
+        """The reconcile step's executable lines, comments removed.
+
+        Anchored on the step's own indentation and required to appear exactly
+        once, so a commented-out step is not found at all; comment lines are
+        dropped so an assertion cannot be satisfied by prose that describes
+        what the step no longer does (codex review finding)."""
         workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("- name: Reconcile pending-ci evidence", workflow)
-        step = workflow.split("- name: Reconcile pending-ci evidence", 1)[1]
-        return step.split("\n      - name: ", 1)[0]
+        self.assertEqual(
+            workflow.count(self.RECONCILE_MARKER),
+            1,
+            "the reconcile step must appear exactly once, uncommented",
+        )
+        step = workflow.split(self.RECONCILE_MARKER, 1)[1].split("\n      - name: ", 1)[0]
+        return "\n".join(
+            line for line in step.split("\n") if not line.lstrip().startswith("#")
+        )
 
     def test_the_reconcile_step_reads_the_linked_issue_contract(self) -> None:
         step = self.reconcile_step()
         self.assertIn("closingIssuesReferences", step)
-        self.assertIn("gh issue view \"$ISSUE_NUMBER\" --json body", step)
-        self.assertIn("extract_requested_evidence", step)
+        self.assertIn('gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"', step)
         self.assertIn("requested_evidence=module.extract_requested_evidence(", step)
+
+    def closing_issue_jq(self) -> str:
+        """The jq program the step selects the linked issue with.
+
+        Read out of the `--jq '...'` argument rather than matched anywhere in
+        the step, so an expression left behind in a trailing comment cannot
+        satisfy an assertion about what the step runs (codex review finding)."""
+        step = self.reconcile_step()
+        marker = "--json closingIssuesReferences --jq '"
+        self.assertIn(marker, step)
+        return step.split(marker, 1)[1].split("'", 1)[0]
+
+    def test_the_contract_is_read_before_the_job_judges_the_evidence(self) -> None:
+        # Reconciliation has to run before the job decides whether evidence
+        # failed. A step that still exists but has moved past that point would
+        # otherwise satisfy every assertion about its text.
+        workflow = self.EVIDENCE_WORKFLOW.read_text(encoding="utf-8")
+        self.assertLess(
+            workflow.index(self.RECONCILE_MARKER), workflow.index(self.FAIL_MARKER)
+        )
+        step = self.reconcile_step()
+        self.assertLess(step.index("closingIssuesReferences"), step.index("python3 - <<"))
+
+    def test_a_linked_issue_in_another_repository_is_not_this_contract(self) -> None:
+        # A closing reference carries its own repository. Taking the number
+        # alone reads this repo's issue of that number, which is a different
+        # contract and can complete a line the other lane owns.
+        self.assertIn(
+            '(.repository.owner.login + "/" + .repository.name) == env.GITHUB_REPOSITORY',
+            self.closing_issue_jq(),
+        )
+        self.assertIn(
+            'gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY"',
+            self.reconcile_step(),
+        )
 
     def test_more_than_one_linked_issue_yields_no_contract(self) -> None:
         # Two contracts cannot both be this PR's, and anchoring on the wrong
         # one would resolve a line the other lane owns. The `length == 1`
         # form is the same one the PR-number resolution step uses.
-        step = self.reconcile_step()
-        self.assertIn(
-            "if (.closingIssuesReferences | length) == 1 "
-            "then .closingIssuesReferences[0].number else empty end",
-            step,
-        )
-        self.assertIn("Evidence reconcile has no contract", step)
+        self.assertIn("if length == 1 then .[0] else empty end", self.closing_issue_jq())
+        self.assertIn("Evidence reconcile has no contract", self.reconcile_step())
 
     def test_a_missing_contract_leaves_an_empty_file_rather_than_no_file(self) -> None:
         # The python heredoc reads `issue-body.md` unconditionally, so the
