@@ -757,7 +757,6 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
             ["the real item", "the second item"],
         )
 
-
     def test_padding_around_the_line_does_not_move_the_separator(self) -> None:
         # The ASCII-outranks-dash rule reads the separator each candidate was
         # cut at. Deriving it from the item and detail lengths instead would
@@ -777,6 +776,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         # the contract holds what a reader can actually see as a bullet.
         body = "## Requested Evidence\n\n- first\n\n```\n- sample\n\n- never rendered\n"
         self.assertEqual(run_contributor.extract_requested_evidence(body), ["first"])
+
     def test_the_guard_only_fires_where_the_lane_is_ambiguous(self) -> None:
         # The guard leaves a line alone when a reading is `ci` or `diff`. It
         # must not leave alone a line whose readings all belong to the macOS
@@ -837,6 +837,7 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         self.assertEqual(
             run_contributor.extract_requested_evidence(body), ["first", "second"]
         )
+
     def test_an_over_indented_fence_does_not_join_the_bullet_above(self) -> None:
         # It toggles nothing, but it is not prose either: folding it in would
         # put a row of backticks in the item text.
@@ -844,6 +845,36 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         self.assertEqual(
             run_contributor.extract_requested_evidence(body), ["the item", "second"]
         )
+
+    def test_a_tab_indented_fence_is_indented_code_not_a_fence(self) -> None:
+        # A tab advances to column four, so this row is indented code by the
+        # same rule four spaces are. Counting characters made it a fence, and
+        # an opener with no closer takes every later item out of the contract
+        # -- the direction that lets the gate pass without evidence a reader
+        # can see was asked for.
+        body = "## Requested Evidence\n\n- first\n\t```\n- second\n"
+        self.assertEqual(
+            run_contributor.extract_requested_evidence(body), ["first", "second"]
+        )
+
+    def test_indentation_before_a_fence_is_counted_in_columns(self) -> None:
+        # The boundary is three columns, whichever characters spend them.
+        for indent, opens_a_block in (
+            ("", True),
+            ("   ", True),
+            ("    ", False),
+            ("\t", False),
+            (" \t", False),
+            ("  \t", False),
+            ("   \t", False),
+        ):
+            body = f"## Requested Evidence\n\n- first\n{indent}```\n- second\n"
+            with self.subTest(indent=repr(indent)):
+                self.assertEqual(
+                    run_contributor.extract_requested_evidence(body),
+                    ["first"] if opens_a_block else ["first", "second"],
+                )
+
     def test_an_escape_hides_a_backtick_in_prose_but_not_inside_a_span(self) -> None:
         # CommonMark's asymmetry, and both halves matter here: masking escapes
         # before pairing gets the first line right and erases the second's

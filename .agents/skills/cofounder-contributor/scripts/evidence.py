@@ -116,7 +116,7 @@ DIFF_EVIDENCE_RE = re.compile(
     r"|the (?:pr )?diff (?:shows|proves|demonstrates|contains|includes)"
     r"|\b(?:shows?|contains?|includes?|appears?)\b[^\n]{0,60}?\bin the (?:pr )?diff\b"
 )
-# Kinds the self-hosted macOS evidence lane can gather; `ci` and `diff`
+# Kinds the hosted `macos-15` evidence lane can gather; `ci` and `diff`
 # complete through the verifier workflow and review lane instead (#1120).
 MACOS_EVIDENCE_KINDS = frozenset({"test", "build", "screenshot"})
 EVENT_COMPLETED_KINDS = frozenset({"ci", "diff"})
@@ -242,6 +242,26 @@ def is_numeric_evidence_item(item: str) -> bool:
     return NUMERIC_EVIDENCE_ITEM_RE.fullmatch(item.strip()) is not None
 
 
+def _indent_columns(line: str) -> int:
+    """Leading indentation in columns, where a tab advances to the next stop.
+
+    CommonMark states the three-space fence rule in columns, and a tab is
+    worth up to four of them. Counted in characters instead, a tab-indented
+    row reads as a fence, and an opener with no closer takes every bullet
+    below it out of the contract -- the direction where the gate passes
+    without evidence a reader can plainly see was asked for.
+    """
+    columns = 0
+    for char in line:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - columns % 4
+        else:
+            break
+    return columns
+
+
 def _is_fence_line(fence: re.Match[str]) -> bool:
     """Is this a fence at all, rather than a line starting with a code span?
 
@@ -271,9 +291,9 @@ def _wrapped_bullets(section: str) -> list[str]:
     reads it as part of the bullet above, so the contract reads it that way
     too. A blank line, a line at column zero, or an indented line that starts
     its own block ends the bullet, which keeps a following paragraph, nested
-    list, or quote out of the item text. A fenced block -- opened with at most
-    three spaces of indentation, as CommonMark asks -- is skipped whole, so a
-    bullet quoted as sample code is not read as a requested item.
+    list, or quote out of the item text. A fenced block -- opened at three
+    columns of indentation or fewer, as CommonMark asks -- is skipped whole,
+    so a bullet quoted as sample code is not read as a requested item.
     """
     bullets: list[str] = []
     open_bullet = False
@@ -285,7 +305,7 @@ def _wrapped_bullets(section: str) -> list[str]:
             # Over-indented, this is code rather than a fence, so it toggles
             # nothing -- but it is still not prose, and folding it into the
             # bullet above would put a row of backticks in the item text.
-            if len(line) - len(line.lstrip()) <= 3 and _fence_toggles(fence, fenced):
+            if _indent_columns(line) <= 3 and _fence_toggles(fence, fenced):
                 fenced = None if fenced else fence.group("run")
             open_bullet = False
             continue
