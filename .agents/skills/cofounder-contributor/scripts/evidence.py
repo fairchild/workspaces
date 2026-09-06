@@ -48,6 +48,11 @@ EVIDENCE_STRIPPABLE_CHARS = frozenset("`.,;:)")
 # act on a guess -- which also stops it classifying a reading per separator on
 # a line dense in them.
 EVIDENCE_STATUS_READING_LIMIT = 32
+# How much of the two word sets an item and an entry key must share before
+# the fallback reads them as the same requirement. Measured over their union,
+# so the floor tightens as the item shortens -- which is the direction that
+# matters, a short item being the one a longer entry can swallow whole.
+EVIDENCE_WORD_OVERLAP_FLOOR = 0.7
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
@@ -622,24 +627,92 @@ def _normalize_evidence_key(text: str) -> str:
     return t
 
 
-def _match_evidence_entry(
-    requested_item: str,
+def _evidence_match_tiers(
+    requested_evidence: list[str],
     entries: dict[str, dict[str, str]],
-) -> str | None:
-    if requested_item in entries:
-        return requested_item
-    norm_req = _normalize_evidence_key(requested_item)
-    for entry_key in entries:
-        if _normalize_evidence_key(entry_key) == norm_req:
-            return entry_key
-    req_words = set(norm_req.split())
-    for entry_key in entries:
-        entry_words = set(_normalize_evidence_key(entry_key).split())
-        if req_words and entry_words:
-            overlap = len(req_words & entry_words) / len(req_words)
-            if overlap >= 0.7:
-                return entry_key
-    return None
+) -> list[dict[str, list[str]]]:
+    """The entries each requested item could take, by tier, strongest first.
+
+    Exact text, then the same normalized key, then word overlap. The tiers are
+    kept apart so assignment can walk them across the whole contract: an entry
+    one item merely overlaps has to still be free for the item that names it.
+
+    Overlap is measured over the union of the two word sets, so text the entry
+    carries and the item does not costs score. Normalized by the item's own
+    words a short item scores 1.0 against any entry containing it, which is
+    how `alpha` claimed `alpha -- beta`'s entry.
+    """
+    normalized = [(key, _normalize_evidence_key(key)) for key in entries]
+    exact: dict[str, list[str]] = {}
+    same_key: dict[str, list[str]] = {}
+    overlapping: dict[str, list[str]] = {}
+    for item in requested_evidence:
+        if item in exact:
+            continue
+        norm_item = _normalize_evidence_key(item)
+        item_words = set(norm_item.split())
+        exact[item] = [item] if item in entries else []
+        same_key[item] = [key for key, norm in normalized if norm == norm_item]
+        overlapping[item] = [
+            key
+            for key, norm in normalized
+            if item_words
+            and (entry_words := set(norm.split()))
+            and len(item_words & entry_words) / len(item_words | entry_words)
+            >= EVIDENCE_WORD_OVERLAP_FLOOR
+        ]
+    return [exact, same_key, overlapping]
+
+
+def _evidence_key_carries(entry_key: str, requested_item: str) -> bool:
+    """Whether the entry's key holds every word the requested item does.
+
+    Not a match -- matching is `_evidence_match_tiers`. This is what the error
+    message is for. An item whose every word sits inside a line another
+    requirement already took was written for that line or is a duplicate of
+    it, and naming the collision tells the author more than reporting the item
+    absent does. It is exactly the reading that used to complete both.
+    """
+    item_words = set(_normalize_evidence_key(requested_item).split())
+    entry_words = set(_normalize_evidence_key(entry_key).split())
+    return bool(item_words) and item_words <= entry_words
+
+
+def _match_evidence_entries(
+    requested_evidence: list[str],
+    entries: dict[str, dict[str, str]],
+) -> tuple[dict[str, str], list[str]]:
+    """Which entry proves each requested item, and which items were outbid.
+
+    An entry proves one requirement. Matching many-to-one is how a requirement
+    nobody proved reports complete: one `- [complete] alpha -- beta -- proof`
+    line answered both `alpha` and `alpha -- beta`, and `proof` and `proof.`
+    normalize to one key and so to one entry. `unexpected_items` sees nothing
+    either, being computed from the entries claimed rather than the claims.
+
+    So the tiers are walked strongest first across the whole contract, and an
+    entry another item already took is not available at any of them. An item
+    left holding only taken entries is contested rather than merely missing:
+    the author did write a line for it, and the gate can say which line two
+    requirements are reaching for.
+    """
+    matched: dict[str, str] = {}
+    claimed: set[str] = set()
+    for tier in _evidence_match_tiers(requested_evidence, entries):
+        for item in requested_evidence:
+            if item in matched:
+                continue
+            free = next((key for key in tier[item] if key not in claimed), None)
+            if free is not None:
+                matched[item] = free
+                claimed.add(free)
+    contested = [
+        item
+        for item in requested_evidence
+        if item not in matched
+        and any(_evidence_key_carries(key, item) for key in claimed)
+    ]
+    return matched, contested
 
 
 def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> dict[str, object]:
@@ -651,6 +724,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
             "duplicate_items": [],
             "source": "none",
             "missing_items": [],
+            "contested_items": [],
             "blocked_items": [],
             "pending_ci_items": [],
             "complete_items": [],
@@ -667,7 +741,8 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     ) or extract_evidence_status_entries(body, requested_evidence)
     entries = parsed["entries"]
 
-    matched: dict[str, str] = {}
+    matched: dict[str, str]
+    contested_items: list[str] = []
     if parsed["source"] == "structured":
         matched = {
             item: item
@@ -675,10 +750,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
             if item in entries
         }
     else:
-        for item in requested_evidence:
-            match = _match_evidence_entry(item, entries)
-            if match is not None:
-                matched[item] = match
+        matched, contested_items = _match_evidence_entries(requested_evidence, entries)
 
     missing_items = [item for item in requested_evidence if item not in matched]
     blocked_items = [
@@ -701,6 +773,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     return {
         **parsed,
         "missing_items": missing_items,
+        "contested_items": contested_items,
         "blocked_items": blocked_items,
         "pending_ci_items": pending_ci_items,
         "complete_items": complete_items,
@@ -770,6 +843,13 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
             parts.append(f"{remaining} more")
         preview = "; ".join(parts)
         errors.append(f"duplicate Evidence Status entries for: {preview}")
+    contested_items = accounting["contested_items"]
+    if contested_items:
+        preview = _format_missing_preview(contested_items, requested_evidence)
+        errors.append(
+            "one Evidence Status entry cannot prove two requested items; "
+            f"give each item its own entry, or make the items distinct: {preview}"
+        )
     missing_items = accounting["missing_items"]
     if missing_items:
         preview = _format_missing_preview(missing_items, requested_evidence)
@@ -797,6 +877,8 @@ def classify_evidence_error(error: str) -> str:
         return "evidence_metadata"
     if error.startswith("duplicate Evidence Status entries"):
         return "evidence_duplicate"
+    if error.startswith("one Evidence Status entry cannot prove"):
+        return "evidence_contested"
     if "missing:" in error:
         return "evidence_missing"
     return "evidence_format"

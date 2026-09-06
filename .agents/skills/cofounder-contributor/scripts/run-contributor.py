@@ -103,7 +103,7 @@ from evidence import (  # noqa: E402, F401
     _is_diff_evidence,
     _latest_evidence_metadata_match,
     _listed_swift_tests,
-    _match_evidence_entry,
+    _match_evidence_entries,
     _needs_macos_evidence,
     _needs_screenshot_evidence,
     _normalize_evidence_item,

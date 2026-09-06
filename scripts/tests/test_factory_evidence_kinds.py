@@ -907,6 +907,112 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         )
 
 
+class EvidenceEntryExclusivityTests(unittest.TestCase):
+    """One status entry proves one requirement (#1550)."""
+
+    def test_one_entry_cannot_complete_two_requested_items(self) -> None:
+        # The worked case. `alpha` is a prefix of `alpha -- beta`, so the one
+        # line the author wrote reads as proof of both: the longer item takes
+        # it by exact text, and the shorter one scored 1.0 against it because
+        # the overlap was normalized by its own two words. Nothing proved
+        # `alpha` on its own, so nothing should report it complete.
+        requested = ["alpha", "alpha -- beta"]
+        body = "## Evidence Status\n\n- [complete] alpha -- beta -- proof\n"
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["complete_items"], ["alpha -- beta"])
+        self.assertEqual(accounting["contested_items"], ["alpha"])
+        # A contested item is also unproved, so every count that reads
+        # `missing_items` keeps reading it as unaccounted for.
+        self.assertEqual(accounting["missing_items"], ["alpha"])
+        _, errors = run_contributor.validate_evidence_accounting(body, requested)
+        self.assertTrue(
+            any("cannot prove two requested items" in error for error in errors),
+            errors,
+        )
+
+    def test_an_item_and_its_punctuated_twin_are_not_both_proved(self) -> None:
+        # `_normalize_evidence_key` strips trailing `.,;:)`, so two requested
+        # items that differ only there normalize to one key and one entry
+        # answered both. They are two requirements while the contract says so.
+        requested = ["proof", "proof."]
+        body = "## Evidence Status\n\n- [complete] proof -- the log\n"
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["complete_items"], ["proof"])
+        self.assertEqual(accounting["contested_items"], ["proof."])
+        self.assertEqual(accounting["missing_items"], ["proof."])
+        _, errors = run_contributor.validate_evidence_accounting(body, requested)
+        self.assertTrue(
+            any("cannot prove two requested items" in error for error in errors),
+            errors,
+        )
+
+    def test_the_fallback_still_matches_the_wording_it_exists_for(self) -> None:
+        # An author writes the item back in their own hand: a code span the
+        # issue did not have, a sentence-final period, a different case, a
+        # trailing word. Each of these is one requirement with one entry, and
+        # each still matches.
+        requested = ["The launch state is captured"]
+        for entry in (
+            "The launch state is captured",
+            "the launch state is captured.",
+            "`The launch state is captured`",
+            "THE LAUNCH STATE IS CAPTURED",
+            "The launch state is captured on macOS",
+        ):
+            body = f"## Evidence Status\n\n- [complete] {entry} -- the shot\n"
+            with self.subTest(entry=entry):
+                accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+                self.assertEqual(accounting["complete_items"], requested)
+                self.assertEqual(accounting["contested_items"], [])
+                self.assertEqual(accounting["unexpected_items"], [])
+
+    def test_two_items_with_their_own_entries_are_both_proved(self) -> None:
+        # Exclusivity is about one entry answering two requirements, not about
+        # two requirements that overlap in wording. Both are proved here.
+        requested = ["alpha", "alpha -- beta"]
+        body = (
+            "## Evidence Status\n\n"
+            "- [complete] alpha -- the first proof\n"
+            "- [complete] alpha -- beta -- the second proof\n"
+        )
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["complete_items"], requested)
+        self.assertEqual(accounting["contested_items"], [])
+        self.assertEqual(accounting["missing_items"], [])
+
+    def test_an_exact_entry_outranks_another_item_reaching_for_it(self) -> None:
+        # Assignment walks the tiers across the whole contract, not the
+        # contract item by item. Were it item by item, the first item's loose
+        # match would take the entry the second item names exactly.
+        requested = ["the state", "the state after setup is captured"]
+        body = (
+            "## Evidence Status\n\n"
+            "- [complete] the state after setup is captured -- the shot\n"
+        )
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(
+            accounting["complete_items"], ["the state after setup is captured"]
+        )
+        self.assertEqual(accounting["contested_items"], ["the state"])
+        self.assertEqual(accounting["missing_items"], ["the state"])
+
+    def test_a_contested_item_never_reads_as_an_unexpected_entry(self) -> None:
+        # `unexpected_items` is what the gate reports as an entry answering
+        # nothing. The contested item's entry does answer something, so the
+        # error the author sees names the collision rather than a stray line.
+        requested = ["alpha", "alpha -- beta"]
+        body = "## Evidence Status\n\n- [complete] alpha -- beta -- proof\n"
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["unexpected_items"], [])
+        categories = {
+            entry["category"]
+            for entry in run_contributor.classify_evidence_errors(
+                run_contributor.validate_evidence_accounting(body, requested)[1]
+            )
+        }
+        self.assertIn("evidence_contested", categories)
+
+
 class EvidenceStatusLineCostTests(unittest.TestCase):
     """The parser reads a body an author controls, so its cost is bounded."""
 
