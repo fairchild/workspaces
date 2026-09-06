@@ -630,6 +630,31 @@ def privileged_patch_allowed(selection_item: dict[str, object] | None, env: dict
     return bool(selection_item.get("privileged_patch_approved"))
 
 
+REFUSED_PATHS_OUTPUT = "refused_privileged_paths"
+
+
+def emit_refused_privileged_paths(sensitive: list[str]) -> None:
+    """Hand the refused paths to the workflow so the issue can name them.
+
+    The run dies here, inside the implement job, and the rollback job that
+    comments on the issue is a different job with no view of this stderr. It
+    reads `steps.contributor.outputs.refused_privileged_paths` instead, so the
+    issue says which paths were refused rather than only that a run failed
+    (#1548). JSON keeps agent-authored path text on one line, which is what
+    the $GITHUB_OUTPUT format requires.
+    """
+
+    output_file = os.environ.get("GITHUB_OUTPUT", "")
+    if not output_file:
+        return
+    encoded = json.dumps(sensitive, separators=(",", ":"))
+    try:
+        with open(output_file, "a", encoding="utf-8") as handle:
+            handle.write(f"{REFUSED_PATHS_OUTPUT}={encoded}\n")
+    except OSError as error:
+        print(f"warning: could not emit refused paths: {error}", file=sys.stderr)
+
+
 def enforce_agent_patch_policy(
     artifact: ScratchPatchArtifact,
     env: dict[str, str],
@@ -640,6 +665,7 @@ def enforce_agent_patch_policy(
     sensitive = sensitive_agent_patch_paths(artifact.changed_files)
     if not sensitive or privileged_patch_allowed(selection_item, env, cli_override=cli_override):
         return
+    emit_refused_privileged_paths(sensitive)
     print(
         "error: agent-generated patch touches privileged paths without explicit approval.",
         file=sys.stderr,

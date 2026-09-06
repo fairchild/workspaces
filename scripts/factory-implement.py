@@ -114,6 +114,19 @@ BUDGET_COMMENT_MARKER = "<!-- factory-implement-budget-skip -->"
 # earlier, now-superseded warning.
 STALE_SCOPE_COMMENT_MARKER = "<!-- factory-implement-stale-scope"
 
+# The contributor's apply-time scope guard refuses a finished patch that
+# touches privileged paths, and the run dies inside the implement job. Without
+# this hand-off the issue learns only that a run failed, which is the one
+# sentence that does not tell the owner what to do next (#1548). The implement
+# job exports the refused paths; the rollback job passes them here.
+REFUSED_PATHS_ENV = "FACTORY_REFUSED_PRIVILEGED_PATHS"
+REFUSED_PATHS_DISPLAY_CAP = 20
+REFUSED_PATH_LENGTH_CAP = 200
+# A refused path comes out of an agent-authored diff, so it is untrusted text
+# on its way into an issue comment. Legitimate paths use exactly this alphabet;
+# anything else becomes "?" rather than markdown, a mention, or a fence.
+UNSAFE_PATH_CHARS_RE = re.compile(r"[^A-Za-z0-9._/-]+")
+
 
 class FactoryImplementError(RuntimeError):
     """Raised when a dispatch cannot be evaluated or mutated safely."""
@@ -535,6 +548,55 @@ def stale_scope_comment(editor: str, ready_created_at: str) -> str:
     )
 
 
+def parse_refused_paths(raw: str) -> list[str]:
+    """Paths the scope guard refused, as the contributor lane emitted them.
+
+    One producer, one shape: emit_refused_privileged_paths in
+    run-contributor.py writes a JSON array. Anything else — an empty output
+    because no refusal happened, a skipped implement job, a truncated value —
+    is read as no refusal, so the comment stays the plain failed-run text
+    instead of naming a path nobody refused.
+    """
+
+    text = raw.strip()
+    if not text:
+        return []
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(decoded, list):
+        return []
+    return [str(entry).strip() for entry in decoded if str(entry).strip()]
+
+
+def display_refused_path(path: str) -> str:
+    return UNSAFE_PATH_CHARS_RE.sub("?", path)[:REFUSED_PATH_LENGTH_CAP]
+
+
+def rollback_comment(run_url: str, refused_paths: list[str]) -> str:
+    if not refused_paths:
+        return (
+            APRIL_ATTRIBUTION
+            + f"Factory implementation run failed and restored ready: {run_url}"
+        )
+    shown = [display_refused_path(path) for path in refused_paths[:REFUSED_PATHS_DISPLAY_CAP]]
+    remainder = len(refused_paths) - len(shown)
+    listing = "\n".join(f"- {path}" for path in shown)
+    if remainder > 0:
+        listing += f"\n- ... and {remainder} more"
+    return (
+        APRIL_ATTRIBUTION
+        + "Factory implementation produced a patch the scope guard refused: it "
+        + "touches privileged paths this lane may not apply. Restoring `ready`; "
+        + "the change needs the orchestrator lane, or the "
+        + f"`{PRIVILEGED_PATCH_LABEL}` label if it should run here after all.\n\n"
+        + "Refused paths:\n\n"
+        + f"```\n{listing}\n```\n\n"
+        + f"Run: {run_url}"
+    )
+
+
 def parse_daily_cap(value: str | None) -> int:
     raw = (value or str(DEFAULT_DAILY_IMPLEMENT_CAP)).strip()
     try:
@@ -917,8 +979,10 @@ def rollback(
     comment_once(
         client,
         issue_number,
-        APRIL_ATTRIBUTION
-        + f"Factory implementation run failed and restored ready: {run_url}",
+        rollback_comment(
+            run_url,
+            parse_refused_paths(os.environ.get(REFUSED_PATHS_ENV, "")),
+        ),
     )
 
 
