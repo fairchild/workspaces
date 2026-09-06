@@ -22,6 +22,10 @@
 set -euo pipefail
 
 APP_BUNDLE=""
+# Whether the argument loop has taken a positional yet. Emptiness cannot answer
+# that: an assigned empty string reads as "not set", which let a second path
+# claim the slot and be verified in place of the one named (#1534).
+APP_BUNDLE_SEEN=false
 STRUCTURE_ONLY=false
 EXPECTED_BUNDLE_NAME="WorkSpaces.app"
 EXPECTED_DISPLAY_NAME="WorkSpaces"
@@ -50,6 +54,12 @@ EOF
 
 fail() {
     echo "[verify-release-bundle] ERROR: $*" >&2
+    exit 1
+}
+
+usage_error() {
+    echo "[verify-release-bundle] ERROR: $*" >&2
+    usage >&2
     exit 1
 }
 
@@ -159,17 +169,17 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
-            [[ -z "$APP_BUNDLE" ]] || {
-                usage
-                exit 1
-            }
+            [[ "$APP_BUNDLE_SEEN" == false ]] \
+                || usage_error "Expected one app bundle path, got a second: $1"
+            [[ -n "$1" ]] || usage_error "App bundle path is empty"
             APP_BUNDLE="$1"
+            APP_BUNDLE_SEEN=true
             shift
             ;;
     esac
 done
 
-[[ -n "$APP_BUNDLE" ]] || {
+[[ "$APP_BUNDLE_SEEN" == true ]] || {
     usage
     exit 1
 }
