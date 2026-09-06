@@ -92,8 +92,13 @@ class EmptyPositionalTests(VerifierArgumentTestCase):
     `[[ -z "$APP_BUNDLE" ]]` treats an assigned empty string as "no path yet",
     so an empty first positional leaves the slot open and a second path takes
     it. The `[[ $# -eq 1 ]]` check that #1498 replaced rejected any two
-    arguments, which is the behaviour these pin back down. The reachable
-    caller is a wrapper expanding an unset variable.
+    arguments, which is the behaviour these pin back down.
+
+    No caller in this repository can produce the shape today: `ci.yml` and
+    `release.yml` pass a literal path, and `build-release.sh` assigns
+    `APP_BUNDLE` unconditionally at line 40 to a value ending in `.app`. So
+    this restores a guarantee to a release gate rather than closing a live
+    bug, and these are what keep it restored.
     """
 
     def test_an_empty_first_positional_does_not_let_a_second_path_through(self) -> None:
@@ -129,6 +134,19 @@ class AcceptedArgumentTests(VerifierArgumentTestCase):
 
     def test_structure_only_after_the_path_still_parses(self) -> None:
         self.assert_reached_verification(run_verifier(ABSENT_BUNDLE, "--structure-only"))
+
+    def test_help_after_an_empty_positional_still_answers(self) -> None:
+        """`"" --help` printed help and exited 0 before the fix.
+
+        Rejecting the empty path where the loop takes it would have made this
+        exit 1, which is why emptiness is judged after the loop instead. Found
+        by review, not by design.
+        """
+        for args in (("", "--help"), ("--structure-only", "", "--help")):
+            with self.subTest(args=args):
+                result = run_verifier(*args)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn("Usage:", result.stdout)
 
     def test_help_prints_usage_and_exits_zero(self) -> None:
         result = run_verifier("--help")

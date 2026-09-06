@@ -171,7 +171,6 @@ while [[ $# -gt 0 ]]; do
         *)
             [[ "$APP_BUNDLE_SEEN" == false ]] \
                 || usage_error "Expected one app bundle path, got a second: $1"
-            [[ -n "$1" ]] || usage_error "App bundle path is empty"
             APP_BUNDLE="$1"
             APP_BUNDLE_SEEN=true
             shift
@@ -183,6 +182,13 @@ done
     usage
     exit 1
 }
+
+# Emptiness is judged after the loop rather than where the positional is taken, so
+# `--help` still answers from any position: `verify-release-bundle.sh "" --help`
+# printed help and exited 0 before this change and still does. Nothing can be
+# verified with an empty path either way, and the second path was already rejected
+# above, so deferring the check costs nothing.
+[[ -n "$APP_BUNDLE" ]] || usage_error "App bundle path is empty"
 
 [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
 
