@@ -910,6 +910,92 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
         )
 
 
+class ReconcilerContractTests(unittest.TestCase):
+    """The macOS lane reads the contract the gate reads (#1551)."""
+
+    # Reads as a `diff` item at the em-dash and a screenshot item at the
+    # `--`. Which one it is decides which lane completes it, and nothing in
+    # the line itself can say.
+    AMBIGUOUS_LINE = (
+        "- [pending-ci] The PR diff shows the launch state — final screenshot "
+        "after setup -- evidence job will upload it"
+    )
+    DIFF_READING = "The PR diff shows the launch state"
+    SCREENSHOT_READING = (
+        "The PR diff shows the launch state — final screenshot after setup"
+    )
+
+    def reconcile(self, body: str, requested: list[str] | None):
+        return run_contributor.reconcile_pending_ci_evidence(
+            body,
+            requested_evidence=requested,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            screenshot_upload_succeeded=True,
+            screenshot_urls=[("shot", "https://example.test/shot.png")],
+        )
+
+    def test_the_contract_decides_which_reading_the_macos_lane_owns(self) -> None:
+        body = f"## Evidence Status\n{self.AMBIGUOUS_LINE}\n"
+
+        resolved = self.reconcile(body, [self.SCREENSHOT_READING])
+        self.assertIn(f"- [complete] {self.SCREENSHOT_READING} -- ", resolved)
+        self.assertIn("https://example.test/shot.png", resolved)
+
+        # The same line, same capture, same successful upload. The contract
+        # asks for the diff reading, which completes through the review lane,
+        # so the macOS lane leaves it where it found it.
+        self.assertEqual(self.reconcile(body, [self.DIFF_READING]), body)
+
+    def test_a_line_no_reading_of_which_is_requested_is_still_refused(self) -> None:
+        # The contract in hand does not anchor this line, so the boundary is a
+        # guess again and the guess is load-bearing: one reading is a `diff`
+        # item. It stays pending, which fails the readiness gate and is seen.
+        body = f"## Evidence Status\n{self.AMBIGUOUS_LINE}\n"
+        for requested in ([], ["something else entirely"], None):
+            with self.subTest(requested=requested):
+                self.assertEqual(self.reconcile(body, requested), body)
+
+    def test_the_contract_reaches_past_the_reading_limit(self) -> None:
+        # The reading limit refuses a line the reconciler would be guessing
+        # at. An anchored line is not a guess, so the limit does not apply to
+        # it -- and the walk that counts readings is skipped entirely.
+        item = "final screenshot after setup" + " — a" * (
+            run_contributor.EVIDENCE_STATUS_READING_LIMIT + 4
+        )
+        body = f"## Evidence Status\n- [pending-ci] {item} -- upload pending\n"
+        self.assertEqual(self.reconcile(body, None), body)
+        self.assertIn("- [complete] ", self.reconcile(body, [item]))
+
+    def test_an_anchored_numeric_item_is_the_item_the_contract_named(self) -> None:
+        # A bare index is the structured-update key, so the reconciler skips
+        # it -- unless the contract really does ask for it, which is the same
+        # rule `extract_evidence_status_entries` follows. `404` is an `other`
+        # kind, so the lane says it cannot reconcile it rather than leaving
+        # the line unexplained; both states fail the readiness gate.
+        body = "## Evidence Status\n- [pending-ci] 404 -- capture pending\n"
+        self.assertEqual(self.reconcile(body, None), body)
+        self.assertIn(
+            "- [blocked] 404 -- self-hosted macOS CI cannot reconcile",
+            self.reconcile(body, ["404"]),
+        )
+
+    def test_the_contract_changes_nothing_the_lane_already_read_right(self) -> None:
+        # An unambiguous line resolves the same way with the contract and
+        # without it, and a `ci` item is left to the verifier either way.
+        body = (
+            "## Evidence Status\n"
+            f"- [pending-ci] {CI_ITEM} -- waiting for checks\n"
+            "- [pending-ci] swift build -- macOS lane will build\n"
+        )
+        for requested in (None, [CI_ITEM, "swift build"]):
+            with self.subTest(requested=requested):
+                reconciled = self.reconcile(body, requested)
+                self.assertIn(f"- [pending-ci] {CI_ITEM} -- waiting for checks", reconciled)
+                self.assertIn("- [complete] swift build", reconciled)
+
+
 class EvidenceEntryExclusivityTests(unittest.TestCase):
     """One status entry proves one requirement (#1550)."""
 

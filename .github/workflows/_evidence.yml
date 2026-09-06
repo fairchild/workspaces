@@ -303,6 +303,26 @@ jobs:
         run: |
           set -euo pipefail
           gh pr view "$PR_NUMBER" --json body --jq '.body' > pr-body.md
+          # The contract the authoritative gate reads. Without it the
+          # reconciler has to guess where a status item ends, and it refuses
+          # to act whenever the guess decides which lane owns the item (#1551).
+          # Exactly one linked issue IN THIS REPOSITORY, or none: a closing
+          # reference carries its own repository, and a number alone would
+          # read this repo's issue of that number -- a different contract
+          # entirely, which is how the wrong lane completes a line. Two
+          # contracts cannot both be this PR's either, so the ambiguous case
+          # falls back to reconciling with none, which is the prior behavior.
+          ISSUE_NUMBER=$(gh pr view "$PR_NUMBER" --json closingIssuesReferences --jq '
+            [.closingIssuesReferences[]
+             | select((.repository.owner.login + "/" + .repository.name) == env.GITHUB_REPOSITORY)
+             | .number]
+            | if length == 1 then .[0] else empty end')
+          : > issue-body.md
+          if [ -n "$ISSUE_NUMBER" ]; then
+            gh issue view "$ISSUE_NUMBER" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' > issue-body.md
+          else
+            echo "::warning title=Evidence reconcile has no contract::the PR closes no single issue in this repository; ambiguous status lines will be left pending"
+          fi
           python3 - <<'PY'
           import importlib.util
           import os
@@ -315,8 +335,12 @@ jobs:
           spec.loader.exec_module(module)
 
           body_path = Path("pr-body.md")
+          issue_body_path = Path("issue-body.md")
           test_output_path = Path("evidence-artifacts/test-output.txt")
           kwargs = dict(
+              requested_evidence=module.extract_requested_evidence(
+                  issue_body_path.read_text()
+              ),
               build_succeeded=os.environ["BUILD_SUCCEEDED"] == "true",
               tests_succeeded=os.environ["TESTS_SUCCEEDED"] == "true",
               smoke_succeeded=os.environ["SMOKE_SUCCEEDED"] == "true",
