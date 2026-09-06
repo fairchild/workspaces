@@ -190,7 +190,7 @@ fi
 if [[ -f .mise.toml ]]; then
   MISE_IGNORED_CONFIG_PATHS="${HOME}/.config/mise${MISE_IGNORED_CONFIG_PATHS:+:$MISE_IGNORED_CONFIG_PATHS}" \
     MISE_PARANOID=1 \
-    mise install --locked zig@0.15.2
+    mise install --locked zig@0.16.0
 fi
 
 # Install dependencies per lockfile

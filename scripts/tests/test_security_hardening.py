@@ -291,7 +291,7 @@ class SecurityHardeningTests(unittest.TestCase):
         zig_entries = lock["tools"]["zig"]
         self.assertEqual(len(zig_entries), 1)
         zig = zig_entries[0]
-        self.assertEqual(zig["version"], "0.15.2")
+        self.assertEqual(zig["version"], "0.16.0")
         self.assertEqual(zig["backend"], "core:zig")
         for platform in ("linux-x64", "macos-arm64"):
             entry = zig[f"platforms.{platform}"]
@@ -310,7 +310,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertLess(
             build_ghosttykit.index('[[ -x "$HOMEBREW_ZIG_BIN" ]]'),
             build_ghosttykit.index('command -v mise >/dev/null 2>&1'),
-            "build-ghosttykit must prefer Homebrew zig@0.15 before the upstream mise Zig fallback",
+            "build-ghosttykit must prefer Homebrew zig before the upstream mise Zig fallback",
         )
         self.assertIn('mise exec --locked "zig@$ZIG_VERSION" -- zig', build_ghosttykit)
         self.assertIn("MISE_CONFIG_FILE=$PROJECT_DIR/.mise.toml", build_ghosttykit)
@@ -318,8 +318,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise", build_ghosttykit)
 
         xcode_cloud_post_clone = (REPO_ROOT / "ci_scripts/ci_post_clone.sh").read_text()
-        self.assertIn("brew install zig@0.15", xcode_cloud_post_clone)
-        self.assertIn('homebrew_zig_bin="/opt/homebrew/opt/zig@0.15/bin/zig"', xcode_cloud_post_clone)
+        self.assertIn("brew install zig", xcode_cloud_post_clone)
+        self.assertIn('homebrew_zig_bin="/opt/homebrew/opt/zig/bin/zig"', xcode_cloud_post_clone)
         self.assertIn("brew install uv", xcode_cloud_post_clone)
         self.assertIn("uv python install 3.11", xcode_cloud_post_clone)
         self.assertLess(
@@ -331,7 +331,7 @@ class SecurityHardeningTests(unittest.TestCase):
         setup = (REPO_ROOT / "scripts/setup").read_text()
         self.assertIn('"$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml"', setup)
         self.assertIn('if [[ "$FAST" == "1" ]]', setup)
-        self.assertIn("mise install --locked zig@0.15.2", setup)
+        self.assertIn("mise install --locked zig@0.16.0", setup)
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=", setup)
         self.assertIn('-path "*/.pnpm-store" -prune', setup)
         self.assertNotIn("trust every checked-in project config", setup)

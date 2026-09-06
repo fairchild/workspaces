@@ -18,8 +18,15 @@ enum GhosttyRuntimeConfigFactory {
                 guard let app else { return false }
                 return GhosttyAppManager.action(app, target: target, action: action)
             },
-            read_clipboard_cb: { userdata, location, state in
-                GhosttyClipboardBridge.read(userdata: userdata, location: location, state: state)
+            read_clipboard_cb: { userdata, location, state, mimes, mimeCount, wantsAvailable in
+                GhosttyClipboardBridge.read(
+                    userdata: userdata,
+                    location: location,
+                    state: state,
+                    requestedMIMEs: mimes,
+                    requestedMIMECount: mimeCount,
+                    includeAvailableMIMEs: wantsAvailable
+                )
             },
             confirm_read_clipboard_cb: { userdata, _, state, _ in
                 GhosttyClipboardBridge.confirmRead(userdata: userdata, state: state)
