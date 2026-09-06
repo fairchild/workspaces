@@ -14,9 +14,10 @@ Nothing covered the loop before this file.
 
 The tests drive the real script through `bash` and read only the argument
 boundary, so they need no network, no secrets, no UI access, no live GitHub
-mutation, and no built app bundle. One test needs a macOS host because it
-builds a complete unsigned bundle and runs the structure assertions over it;
-it skips where PlistBuddy is absent, which is the Linux CI runner.
+mutation, and no built app bundle. Two of them need a macOS host because they
+build a complete unsigned bundle and run the structure assertions over it;
+both skip where PlistBuddy is absent, which is the Linux CI runner — where
+this file reports 16 tests with 2 skipped.
 """
 
 from __future__ import annotations
@@ -148,6 +149,19 @@ class AcceptedArgumentTests(VerifierArgumentTestCase):
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertIn("Usage:", result.stdout)
 
+    def test_help_does_not_rescue_a_call_that_already_named_two_paths(self) -> None:
+        """The one shape where `--help` stops answering, and deliberately.
+
+        `"" <path> --help` exits 0 on `main` — the empty positional leaves the
+        slot open, the real path fills it, and `--help` is reached. That is the
+        defect wearing a help flag. The second positional is rejected where it
+        is seen, so `--help` behind it is never read. Rejecting a call that
+        named two paths outranks answering a help flag buried after them.
+        """
+        for args in (("", ABSENT_BUNDLE, "--help"), ("--structure-only", "", ABSENT_BUNDLE, "-h")):
+            with self.subTest(args=args):
+                self.assert_rejected_while_parsing(run_verifier(*args))
+
     def test_help_prints_usage_and_exits_zero(self) -> None:
         result = run_verifier("--help")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -161,15 +175,15 @@ class AcceptedArgumentTests(VerifierArgumentTestCase):
     PLIST_BUDDY.is_file(), f"{PLIST_BUDDY} is macOS-only; the structure assertions need it"
 )
 class StructureOnlyOverARealBundleTests(unittest.TestCase):
-    """The parser boundary read from the other side, on a bundle that passes.
+    """The defect read from the other side, on a bundle that passes.
 
-    Every assertion above stops at a failure, which cannot distinguish "the
-    second path was rejected" from "the second path was verified and found
-    wanting". Against a bundle the structure lane accepts, the pre-fix script
-    exits **zero** on a call naming two paths — it verified the one it was
-    never given cleanly. That is the failure in its plainest form, and it is
-    also the only test here that proves `--structure-only` still does its job
-    rather than merely parsing.
+    The marker assertions above do separate rejection from verification, and
+    they are red against `main` on their own. What they cannot show is the
+    shape of the failure: against a bundle the structure lane accepts, the
+    pre-fix script exits **zero** on a call naming two paths, having verified
+    the one it was never given and said so. A gate that passes while looking
+    at the wrong thing is the reason this issue is worth fixing, and only a
+    bundle that passes can demonstrate it.
     """
 
     def setUp(self) -> None:
