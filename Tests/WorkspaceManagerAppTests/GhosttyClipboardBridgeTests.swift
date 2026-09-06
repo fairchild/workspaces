@@ -98,6 +98,93 @@ struct GhosttyClipboardBridgeRequestsTextTests {
     }
 }
 
+@Suite("GhosttyClipboardBridge.plan")
+struct GhosttyClipboardBridgePlanTests {
+    @Test("A listing-only request is answered with the listing, not rejected")
+    func listingRequestIsAnswered() {
+        withMIMEs([]) { buffer, count in
+            #expect(
+                GhosttyClipboardBridge.plan(
+                    requestedMIMEs: buffer,
+                    count: count,
+                    includeAvailableMIMEs: true,
+                    hasText: true
+                ) == .listOnly
+            )
+        }
+    }
+
+    @Test("A listing-only request is still answered when the pasteboard holds no text")
+    func listingRequestWithEmptyPasteboard() {
+        withMIMEs([]) { buffer, count in
+            #expect(
+                GhosttyClipboardBridge.plan(
+                    requestedMIMEs: buffer,
+                    count: count,
+                    includeAvailableMIMEs: true,
+                    hasText: false
+                ) == .listOnly
+            )
+        }
+    }
+
+    @Test("An empty request that wants no listing has nothing to answer")
+    func emptyRequestWithoutListing() {
+        withMIMEs([]) { buffer, count in
+            #expect(
+                GhosttyClipboardBridge.plan(
+                    requestedMIMEs: buffer,
+                    count: count,
+                    includeAvailableMIMEs: false,
+                    hasText: true
+                ) == .unavailable
+            )
+        }
+    }
+
+    @Test("A text request with text on the pasteboard serves it")
+    func textRequestServesText() {
+        withMIMEs(["text/plain"]) { buffer, count in
+            #expect(
+                GhosttyClipboardBridge.plan(
+                    requestedMIMEs: buffer,
+                    count: count,
+                    includeAvailableMIMEs: false,
+                    hasText: true
+                ) == .serveText
+            )
+        }
+    }
+
+    @Test("A text request with an empty pasteboard is unavailable")
+    func textRequestWithEmptyPasteboard() {
+        withMIMEs(["text/plain"]) { buffer, count in
+            #expect(
+                GhosttyClipboardBridge.plan(
+                    requestedMIMEs: buffer,
+                    count: count,
+                    includeAvailableMIMEs: false,
+                    hasText: false
+                ) == .unavailable
+            )
+        }
+    }
+
+    @Test("A request for types this bridge cannot serve is unavailable")
+    func unservableRequest() {
+        withMIMEs(["image/png"]) { buffer, count in
+            #expect(
+                GhosttyClipboardBridge.plan(
+                    requestedMIMEs: buffer,
+                    count: count,
+                    includeAvailableMIMEs: true,
+                    hasText: true
+                ) == .unavailable
+            )
+        }
+    }
+}
+
 private func withMIMEs(
     _ mimes: [String],
     body: (UnsafePointer<UnsafePointer<CChar>?>?, Int) -> Void
