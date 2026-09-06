@@ -8,6 +8,7 @@ import re
 import shlex
 import sys
 from collections.abc import Iterator
+from itertools import islice
 
 from _helpers import (
     GITHUB_API_TIMEOUT,
@@ -39,6 +40,14 @@ EVIDENCE_SEPARATOR_RE = re.compile(r"(?<=\s)(?:--|—|–)(?=\s)")
 # this length the line is unreadable rather than slow, which puts it in
 # `invalid_lines` where the gate reports it.
 EVIDENCE_STATUS_LINE_LIMIT = 4_000
+# What `_normalize_evidence_key` can take off an item's ends, and so the only
+# characters a candidate's key may be shorter by than the text it came from.
+EVIDENCE_STRIPPABLE_CHARS = frozenset("`.,;:)")
+# A status line a person wrote carries one or two candidate readings. Past
+# this many the reconciler is guessing rather than reading, and it refuses to
+# act on a guess -- which also stops it classifying a reading per separator on
+# a line dense in them.
+EVIDENCE_STATUS_READING_LIMIT = 32
 # A bare index is the structured-update key, not an item name. Parsed as one it
 # silently becomes an entry no requested item can match -- unless the contract
 # really does ask for it, which the requested items settle.
@@ -218,6 +227,31 @@ def _evidence_status_boundaries(rest: str) -> list[tuple[int, int, str]]:
     return boundaries
 
 
+def _evidence_key_floors(rest: str, cuts: list[int]) -> list[int]:
+    """The shortest key `_normalize_evidence_key` could give each prefix.
+
+    Normalizing drops whitespace, backticks at the two ends and trailing
+    `.,;:)`; nothing else leaves, and case folding only ever adds. So a prefix
+    already holding more characters than the longest requested item is long
+    cannot BE a requested item, whatever the rest of it says.
+
+    Which matters because separators are matched zero-width on both sides, so
+    consecutive ones share a space and a line can carry a candidate every two
+    characters. Normalizing a fresh slice at each of them is quadratic in the
+    line, and this reads the answer off one forward pass instead.
+    """
+    floors: list[int] = []
+    floor, index = 0, 0
+    for cut in cuts:
+        while index < cut:
+            char = rest[index]
+            if not char.isspace() and char not in EVIDENCE_STRIPPABLE_CHARS:
+                floor += 1
+            index += 1
+        floors.append(floor)
+    return floors
+
+
 def _evidence_status_items(line: str) -> Iterator[str]:
     """Every item the line could be read as, leftmost first."""
     prefix = EVIDENCE_STATUS_PREFIX_RE.match(line)
@@ -258,7 +292,13 @@ def split_evidence_status_line(
         return None
     if requested_evidence:
         wanted = {_normalize_evidence_key(item) for item in requested_evidence}
-        for item_end, detail_start, _ in reversed(boundaries):
+        longest = max(len(key) for key in wanted)
+        floors = _evidence_key_floors(rest, [cut for cut, _, _ in boundaries])
+        for (item_end, detail_start, _), floor in zip(
+            reversed(boundaries), reversed(floors)
+        ):
+            if floor > longest:
+                continue
             item = rest[:item_end].strip()
             if _normalize_evidence_key(item) in wanted:
                 return status, item, rest[detail_start:].strip()
@@ -1451,17 +1491,24 @@ def reconcile_pending_ci_evidence(
         if in_evidence_status:
             # No contract here, so where the item ends is a guess. `ci` and
             # `diff` complete through the verifier and the review lane, so a
-            # line that reads as either under ANY split is left alone. That
-            # leaves an ambiguous line pending, which fails the readiness gate
-            # and is visible; resolving it on the guess would complete it.
+            # line that reads as either under ANY split is left alone. So is a
+            # line carrying more readings than a person writes, which is the
+            # same refusal for the same reason and also what keeps classifying
+            # every reading from costing the square of the line. Either way an
+            # ambiguous line stays pending, which fails the readiness gate and
+            # is visible; resolving it on the guess would complete it.
             split = split_evidence_status_line(line)
+            readings = list(
+                islice(_evidence_status_items(line), EVIDENCE_STATUS_READING_LIMIT + 1)
+            )
             if (
                 split
                 and split[0] == "pending-ci"
                 and not is_numeric_evidence_item(split[1])
+                and len(readings) <= EVIDENCE_STATUS_READING_LIMIT
                 and not any(
                     _evidence_item_kind(item) in EVENT_COMPLETED_KINDS
-                    for item in _evidence_status_items(line)
+                    for item in readings
                 )
             ):
                 item = split[1]

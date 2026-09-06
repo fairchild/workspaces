@@ -910,16 +910,36 @@ class EvidenceSplitAnchoringTests(unittest.TestCase):
 class EvidenceStatusLineCostTests(unittest.TestCase):
     """The parser reads a body an author controls, so its cost is bounded."""
 
-    # A separator every twelve characters, half of them inside a code span:
-    # the densest candidate field a status line can carry.
-    FRAGMENT = "`x -- y` -- "
+    # The separator match is zero-width on both sides, so consecutive
+    # separators share the space between them and a boundary lands every two
+    # characters. This is the densest candidate field a status line can carry;
+    # `` `x -- y` -- `` looks denser and is six times sparser.
+    FRAGMENT = " —"
+    # A separator every twelve characters, half of them inside a code span.
+    SPAN_FRAGMENT = "`x -- y` -- "
 
-    def status_line(self, length: int) -> str:
+    def status_line(self, length: int, fragment: str | None = None) -> str:
         prefix, tail = "- [complete] ", " tail"
-        fill = self.FRAGMENT * (1 + length // len(self.FRAGMENT))
+        fragment = fragment or self.FRAGMENT
+        fill = fragment * (1 + length // len(fragment))
         line = prefix + fill[: length - len(prefix) - len(tail)] + tail
         self.assertEqual(len(line), length)
         return line
+
+    def test_the_dense_fixture_is_the_dense_one(self) -> None:
+        # The claim the budget rests on. If a denser shape exists the budget
+        # is measuring the wrong input, which is how the first version of
+        # these tests passed while a real body took ten times as long.
+        limit = run_contributor.EVIDENCE_STATUS_LINE_LIMIT
+        counts = {
+            name: len(
+                run_contributor._evidence_status_boundaries(
+                    self.status_line(limit, fragment)[len("- [complete] "):]
+                )
+            )
+            for name, fragment in (("dash", self.FRAGMENT), ("span", self.SPAN_FRAGMENT))
+        }
+        self.assertGreater(counts["dash"], 5 * counts["span"])
 
     def test_a_status_line_past_the_limit_is_unreadable_not_slow(self) -> None:
         # Reading every candidate split is worth doing for a line a person
@@ -941,19 +961,62 @@ class EvidenceStatusLineCostTests(unittest.TestCase):
         self.assertEqual(accounting["invalid_lines"], [overlong])
 
     def test_a_full_size_body_parses_within_a_fixed_budget(self) -> None:
-        # GitHub bodies run to 65,536 characters, and this is the densest
-        # candidate field one can hold: every line at the limit, no candidate
-        # matching, so no loop exits early. It measures 0.22s where a single
-        # unbounded line of the same shape measured 6.25s, and the budget sits
-        # an order of magnitude above the measurement rather than beside it.
-        limit = run_contributor.EVIDENCE_STATUS_LINE_LIMIT
-        line = self.status_line(limit)
-        lines = [line] * (65_536 // (len(line) + 1))
-        body = "## Evidence Status\n\n" + "\n".join(lines) + "\n"
-        self.assertGreater(len(body), 60_000)
-        started = time.perf_counter()
-        run_contributor.evaluate_evidence_accounting(body, ["an item"])
-        self.assertLess(time.perf_counter() - started, 2.0)
+        # GitHub bodies run to 65,536 characters. Every line sits at the limit
+        # and carries the densest candidate field, and the contract matches
+        # none of them, so no loop exits early. Two orders of magnitude of
+        # headroom, which only a return to per-candidate work can spend.
+        for name, fragment in (("dash", self.FRAGMENT), ("span", self.SPAN_FRAGMENT)):
+            line = self.status_line(run_contributor.EVIDENCE_STATUS_LINE_LIMIT, fragment)
+            lines = [line] * (65_536 // (len(line) + 1))
+            body = "## Evidence Status\n\n" + "\n".join(lines) + "\n"
+            with self.subTest(fragment=name):
+                self.assertGreater(len(body), 60_000)
+                started = time.perf_counter()
+                run_contributor.evaluate_evidence_accounting(body, ["an item"])
+                self.assertLess(time.perf_counter() - started, 2.0)
+
+    def test_the_reconciler_refuses_a_line_of_too_many_readings(self) -> None:
+        # It already refuses whenever the boundary guess is load-bearing, and
+        # a line carrying more readings than a person writes is that. Refusing
+        # leaves it `pending-ci`, which fails the readiness gate and is seen.
+        limit = run_contributor.EVIDENCE_STATUS_READING_LIMIT
+        for dashes, resolves in ((limit - 1, True), (limit, False)):
+            item = "`swift test` passes" + " — a" * dashes
+            rest = f"{item} -- upload pending"
+            body = f"## Evidence Status\n\n- [pending-ci] {rest}\n"
+            with self.subTest(readings=dashes + 1):
+                self.assertEqual(
+                    len(run_contributor._evidence_status_boundaries(rest)), dashes + 1
+                )
+                out = run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                    test_output="ok",
+                    screenshot_upload_succeeded=False,
+                    screenshot_urls=[],
+                    text_upload_required=False,
+                    text_upload_succeeded=False,
+                    text_urls=[],
+                )
+                self.assertEqual("[pending-ci]" not in out, resolves)
+
+    def test_the_floor_never_skips_the_candidate_the_contract_wants(self) -> None:
+        # Skipping a candidate before normalizing it is only safe if the floor
+        # can never exceed the key it stands in for. The tight case is a long
+        # item that IS the requested one, at the far end of a dense line: its
+        # floor sits exactly at the longest requested key's length.
+        for item in (
+            "a — b — c — d — e — f — g — h — i — j — k — l — m — n — o — p",
+            "`a run of words — with a span — and trailing punctuation`.",
+            "x" * 300 + " — tail words here",
+        ):
+            line = f"- [complete] {item} -- {'a — b — ' * 30}done"
+            with self.subTest(item=item[:32]):
+                split = run_contributor.split_evidence_status_line(line, [item])
+                self.assertIsNotNone(split)
+                self.assertEqual(split[1], item)
 
 
 if __name__ == "__main__":
