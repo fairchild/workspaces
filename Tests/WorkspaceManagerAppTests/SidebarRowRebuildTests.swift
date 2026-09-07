@@ -114,25 +114,122 @@ struct SidebarRowRebuildTests {
         }
     }
 
+    /// What each row rebuilt between two reads, indexed by row.
+    private func deltas(
+        _ counter: BodyCounter,
+        since baseline: [Int: Int],
+        rowCount: Int
+    ) -> [Int] {
+        (0..<rowCount).map { (counter.counts[$0] ?? 0) - (baseline[$0] ?? 0) }
+    }
+
+    /// Asserts the changed row separated from its neighbours by exactly one rebuild.
+    ///
+    /// The comparison is relative because an absolute one cannot state the property. A render
+    /// pass driven from outside this test lands on every row alike, so it adds the same count
+    /// everywhere and cancels here — while a leaking equality boundary rebuilds the neighbours
+    /// *with* the changed row, closing the gap this asserts. Absolute counts read those two as
+    /// the same failure (#1542).
+    private func expectOnlyChangedRowRebuilt(
+        _ rowDeltas: [Int],
+        changedIndex: Int,
+        sourceLocation: SourceLocation = #_sourceLocation
+    ) {
+        let changed = rowDeltas[changedIndex]
+        let untouched = rowDeltas.enumerated().filter { $0.offset != changedIndex }.map(\.element)
+        guard let neighbour = untouched.first else { return }
+
+        #expect(
+            Set(untouched).count == 1,
+            "rows other than \(changedIndex) rebuilt unevenly, so no pass explains it: \(rowDeltas)",
+            sourceLocation: sourceLocation
+        )
+        #expect(
+            changed == neighbour + 1,
+            "row \(changedIndex) should rebuild exactly once more than its neighbours: \(rowDeltas)",
+            sourceLocation: sourceLocation
+        )
+    }
+
+    /// Absorbs the render pass a freshly mounted tree still owes before any measurement starts.
+    ///
+    /// `settle` returns once a pump adds no further body calls, which is not the same as the
+    /// tree having nothing left to do: on a loaded runner a pass can still land after that, and
+    /// it lands *inside* the measured window, where a row rebuilding is indistinguishable from
+    /// the boundary leaking. Waiting longer does not drain it — an idle pump has nothing to
+    /// flush, which is why widening quiescence to eight consecutive pumps changed nothing on
+    /// #1542. A state change does: it gives SwiftUI something to render, and settling on it
+    /// leaves the next window quiescent.
+    ///
+    /// CI is where this is visible. A diagnostic run on `macos-26` measured two successive
+    /// changes and an idle window: `first=[0,0,0,1,0…] second=[0,0,0,1,0…] idle=[0…]` — a
+    /// window opened after one change cycle reads clean there, while the suite's first
+    /// measurement did not.
+    private func warmUp(
+        _ host: NSHostingView<some View>,
+        _ counter: BodyCounter,
+        _ model: RowStateModel,
+        row: Int
+    ) {
+        model.values[row] += 1
+        settle(host, counter)
+    }
+
     @Test("Changing one row's state rebuilds that row alone")
     func oneRowChangeRebuildsOneRow() {
         let rowCount = 12
+        let changedIndex = 3
         let counter = BodyCounter()
         let model = RowStateModel(values: Array(repeating: 0, count: rowCount))
         let host = NSHostingView(rootView: EquatableRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
         settle(host, counter)
+        #expect(counter.counts.count == rowCount, "every row should have rendered once to start")
+        warmUp(host, counter, model, row: rowCount - 1)
 
         let baseline = counter.counts
-        #expect(baseline.count == rowCount, "every row should have rendered once to start")
 
-        model.values[3] += 1
+        model.values[changedIndex] += 1
         settle(host, counter)
 
-        for index in 0..<rowCount {
-            let delta = (counter.counts[index] ?? 0) - (baseline[index] ?? 0)
-            #expect(delta == (index == 3 ? 1 : 0), "row \(index) rebuilt \(delta) times")
+        expectOnlyChangedRowRebuilt(
+            deltas(counter, since: baseline, rowCount: rowCount),
+            changedIndex: changedIndex
+        )
+    }
+
+    /// The #1542 hazard, injected instead of raced: every row picks up one rebuild between the
+    /// two reads, which is what a display cycle driven by another suite does to a tree this one
+    /// still has mounted. Injecting the observable rather than the mechanism is deliberate —
+    /// the race has never reproduced off a loaded CI runner, and a test that waits for one is
+    /// the quiet-window fix that already failed.
+    ///
+    /// Under the absolute assertion this replaces, this scenario failed on every row.
+    @Test("A render pass that hits every row does not read as a boundary failure")
+    func fullTreePassBetweenReadsCancels() {
+        let rowCount = 12
+        let changedIndex = 3
+        let counter = BodyCounter()
+        let model = RowStateModel(values: Array(repeating: 0, count: rowCount))
+        let host = NSHostingView(rootView: EquatableRowList(model: model, counter: counter))
+        host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
+        settle(host, counter)
+        warmUp(host, counter, model, row: rowCount - 1)
+
+        let baseline = counter.counts
+
+        for index in model.values.indices {
+            model.values[index] += 1
         }
+        settle(host, counter)
+
+        model.values[changedIndex] += 1
+        settle(host, counter)
+
+        expectOnlyChangedRowRebuilt(
+            deltas(counter, since: baseline, rowCount: rowCount),
+            changedIndex: changedIndex
+        )
     }
 
     /// The control: without the boundary, the same single-value change rebuilds everything. This
@@ -145,6 +242,7 @@ struct SidebarRowRebuildTests {
         let host = NSHostingView(rootView: PlainRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
         settle(host, counter)
+        warmUp(host, counter, model, row: rowCount - 1)
 
         let baseline = counter.counts
         model.values[3] += 1
