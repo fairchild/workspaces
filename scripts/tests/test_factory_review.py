@@ -657,9 +657,11 @@ class FactoryReviewTests(unittest.TestCase):
         state: str = "CHANGES_REQUESTED",
         head: str = "headsha",
         submitted_at: str = "2026-08-27T02:00:00Z",
+        review_id: int = 1,
     ) -> list[dict[str, object]]:
         return [
             {
+                "id": review_id,
                 "user": {"login": "workspace-agents[bot]"},
                 "commit_id": head,
                 "state": state,
@@ -775,15 +777,383 @@ class FactoryReviewTests(unittest.TestCase):
                     "skip",
                 )
 
-    def test_the_review_signal_workflow_is_unchanged_by_this_lane(self) -> None:
-        # The re-review request comes from the trusted Evidence Verify lane, not
-        # from a global `pull_request: edited` subscription: a job skipped by
-        # `if:` still reports success, so subscribing would start a trusted
-        # executor run -- and a failed artifact download -- on every body edit
-        # in the repository, poisoning the runaway cap.
+    def test_the_signal_workflow_subscribes_to_body_edits(self) -> None:
+        # #1509: a rejection answered by a body edit moves no commit, so
+        # `synchronize` never fires, and the standing CHANGES_REQUESTED holds
+        # `owner-action` until a human dispatches a review by hand (#1491).
+        #
+        # This lane refused an `edited` subscription at #1379, on the reading
+        # that "a job skipped by `if:` still reports success" -- which would
+        # start a trusted executor run, and a failed artifact download, on
+        # every body edit in the repository. That is not what GitHub does to a
+        # single-job workflow: when `signal` is the only job and its `if:` is
+        # false, the run concludes `skipped`, and the executor's
+        # `conclusion == 'success'` admission never fires. Factory Evidence
+        # Verify -- also one job behind an `if:` -- concludes `skipped` on the
+        # check_suite events its own gate filters out, which is that same
+        # behaviour observed in this repository.
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-        self.assertIn("types: [opened, ready_for_review, synchronize]", workflow)
-        self.assertNotIn("edited", workflow)
+        self.assertIn("types: [opened, ready_for_review, synchronize, edited]", workflow)
+        # The whole condition, normalized -- not substrings, which survive
+        # broken grouping and text that has been commented out. `edited` also
+        # fires on title and base-branch changes, and a draft is skipped
+        # downstream whatever its body says (the draft case in
+        # test_refresh_only_bypasses_the_already_reviewed_skip), so neither
+        # reaches the executor at all.
+        self.assertEqual(
+            self.signal_job_condition(),
+            "(github.event_name == 'workflow_dispatch' || "
+            "(vars.AGENT_AUTOMATIONS_ENABLED == 'true' && "
+            "vars.FACTORY_REVIEW_ENABLED == 'true')) && "
+            "(github.event.action != 'edited' || "
+            "(github.event.changes.body != null && "
+            "github.event.pull_request.draft == false))",
+        )
+        # No filter on the sender, deliberately. Factory Revise answers a
+        # body-only objection under April's app token -- app tokens raise
+        # events where GITHUB_TOKEN does not -- and then dispatches Factory
+        # Review itself, so its revisions do arrive twice. But `_evidence.yml`
+        # reconciles `[pending-ci]` entries under the same kind of token and
+        # dispatches nothing, and that edit is exactly the objection #1509
+        # exists to re-fire. Author cannot separate them; the standing-review
+        # binding below does.
+        self.assertNotIn("github.event.sender", WORKFLOW_PATH.read_text(encoding="utf-8"))
+        revise = (REPO_ROOT / "scripts" / "factory-revise.py").read_text(encoding="utf-8")
+        self.assertIn("request_fresh_review(", revise)
+        evidence = (
+            REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("gh pr edit \"$PR_NUMBER\" --body-file pr-body.md", evidence)
+        self.assertNotIn("factory-review.yml", evidence)
+        # Still secret-free, still no review-event subscription of its own.
+        self.assertNotIn("secrets.", workflow)
+        self.assertNotIn("pull_request_review:", workflow)
+        # Option 2 in #1509 -- a second dispatch out of the Evidence Verify
+        # lane -- was not also wired: that lane keeps its one supersede path.
+        verify = (
+            REPO_ROOT / ".github" / "workflows" / "factory-evidence-verify.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("actions: write", verify)
+        self.assertNotIn("pull_request:", verify)
+
+    def test_a_body_edit_carries_a_request_the_executor_re_derives(self) -> None:
+        # The signal lane runs pull-request-controlled workflow code, so the
+        # flag it writes is a request and not a fact. The executor honours it
+        # only for a pull_request-triggered run, and factory-review.py
+        # re-derives the standing rejection from live pull request state before
+        # any reviewer token is minted -- the same shape, and the same trust,
+        # as the Evidence Verify lane's --refresh-stale-review.
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        self.assertIn("BODY_EDITED: ${{ github.event.action == 'edited' }}", workflow)
+        self.assertIn('"body_edited"', workflow)
+
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn('if [ "$RUN_EVENT" = "pull_request" ]; then', executor)
+        self.assertIn("BODY_EDIT=false", executor)
+        # Re-derived in admission and again in each reviewer's preflight.
+        self.assertEqual(executor.count("ARGS+=(--body-edit-review)"), 3)
+        self.assertEqual(executor.count("BODY_EDIT: ${{"), 3)
+
+    def test_a_body_edit_reviews_only_when_it_answers_a_standing_rejection(self) -> None:
+        pull_request = self.ready_pull_request()
+        standing = self.stale_reviews()
+        # The #1491 case: the rejection stands on this head and the edited body
+        # now passes readiness, so the edit earns exactly one fresh review.
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request,
+                [],
+                standing,
+                force=False,
+                stale_refresh=True,
+                require_stale_refresh=True,
+            ).action,
+            "review",
+        )
+        # Nothing standing to answer, so the edit spends nothing.
+        declined = factory_review.evaluate_review(
+            pull_request,
+            [],
+            standing,
+            force=False,
+            stale_refresh=False,
+            require_stale_refresh=True,
+        )
+        self.assertEqual(declined.action, "skip")
+        self.assertIn("no standing", declined.reason)
+        # The owner's dispatch still forces, as it does over the draft and
+        # dedup skips. The workflows never combine these two -- BODY_EDIT is
+        # set only for a pull_request run and FORCE_REVIEW only for a
+        # dispatch -- but the flags compose the way the rest of the function
+        # composes rather than making force conditional on a newer gate.
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request,
+                [],
+                standing,
+                force=True,
+                stale_refresh=False,
+                require_stale_refresh=True,
+            ).action,
+            "review",
+        )
+
+    def test_a_body_edit_on_a_never_reviewed_pull_request_spends_nothing(self) -> None:
+        # The already-reviewed dedup cannot carry this case: with no verdict on
+        # the head there is nothing to deduplicate, so without the requirement
+        # an ordinary body edit would buy a full review on any open pull
+        # request in the repository.
+        pull_request = self.ready_pull_request()
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request, [], [], force=False, stale_refresh=False
+            ).action,
+            "review",
+        )
+        self.assertEqual(
+            factory_review.evaluate_review(
+                pull_request,
+                [],
+                [],
+                force=False,
+                stale_refresh=False,
+                require_stale_refresh=True,
+            ).action,
+            "skip",
+        )
+
+    def signal_job_condition(self) -> str:
+        """The signal job's `if:` expression, whitespace-normalized."""
+        workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+        block = workflow.split("    if: >-\n", 1)[1].split("    runs-on:", 1)[0]
+        return " ".join(block.split())
+
+    def main_decision(self, client, *argv: str) -> str:
+        buffer = io.StringIO()
+        with (
+            mock.patch.object(factory_review, "GitHubClient", return_value=client),
+            mock.patch.dict(
+                "os.environ",
+                {
+                    "GITHUB_REPOSITORY": self.REPOSITORY,
+                    "GH_TOKEN": "token",
+                    "GITHUB_OUTPUT": "",
+                },
+            ),
+            mock.patch.object(sys, "argv", ["factory-review.py", *argv]),
+            contextlib.redirect_stdout(buffer),
+        ):
+            self.assertEqual(factory_review.main(), 0)
+        return buffer.getvalue()
+
+    def review_client(self, reviews):
+        client = mock.Mock()
+        client.pull_request.return_value = self.ready_pull_request()
+        client.pull_request_files.return_value = []
+        client.pull_request_reviews.return_value = list(reviews)
+        return client
+
+    def test_the_body_edit_requirement_reaches_the_decision_through_main(self) -> None:
+        # A flag that parses but never reaches evaluate_review would satisfy
+        # every assertion above and still review on any body edit in
+        # production, so the wiring is asserted end to end -- in both
+        # directions, because a flag wired only to the requirement (and not to
+        # the derivation that lifts it) would decline every real body edit and
+        # still pass a negative-only test.
+        nothing_standing = self.review_client([])
+        self.assertIn("matched=true", self.main_decision(nothing_standing, "--pr", "1509"))
+        self.assertIn(
+            "matched=false",
+            self.main_decision(nothing_standing, "--pr", "1509", "--body-edit-review"),
+        )
+
+        # The #1491 case end to end: a rejection standing on this exact head,
+        # a body that now passes readiness. Without the flag the dedup skips
+        # it, which is the bug; with the flag it reviews.
+        standing = self.review_client(self.stale_reviews())
+        self.assertIn("matched=false", self.main_decision(standing, "--pr", "1509"))
+        self.assertIn(
+            "matched=true",
+            self.main_decision(standing, "--pr", "1509", "--body-edit-review"),
+        )
+
+    def test_one_objection_is_answered_once_however_many_admissions_arrive(self) -> None:
+        # A body-only revision arrives twice by design: Factory Revise edits
+        # the PR under an app token, which raises `edited`, and then dispatches
+        # Factory Review itself. Both admissions bind to the verdict they set
+        # out to answer, so the second one stands down instead of reviewing a
+        # head the first pass just reviewed.
+        reviews = self.stale_reviews(review_id=4242)
+        self.assertEqual(
+            factory_review.standing_rejection_id(
+                reviews, reviewer="plat", head_sha="headsha"
+            ),
+            4242,
+        )
+        # Answered: the reviewer's standing verdict on this head is no longer
+        # the one that was admitted, so there is nothing left to bind to.
+        answered = reviews + self.stale_reviews(
+            state="APPROVED", submitted_at="2026-08-27T03:00:00Z", review_id=4243
+        )
+        self.assertIsNone(
+            factory_review.standing_rejection_id(
+                answered, reviewer="plat", head_sha="headsha"
+            )
+        )
+        # Answered with a fresh rejection is equally "not mine any more".
+        rejected_again = reviews + self.stale_reviews(
+            submitted_at="2026-08-27T03:00:00Z", review_id=4244
+        )
+        self.assertEqual(
+            factory_review.standing_rejection_id(
+                rejected_again, reviewer="plat", head_sha="headsha"
+            ),
+            4244,
+        )
+
+        # End to end: the second admission skips.
+        client = self.review_client(reviews)
+        self.assertIn(
+            "matched=true",
+            self.main_decision(
+                client, "--pr", "1509", "--body-edit-review",
+                "--expected-standing-review", "4242",
+            ),
+        )
+        self.assertIn(
+            "matched=false",
+            self.main_decision(
+                self.review_client(rejected_again), "--pr", "1509",
+                "--body-edit-review", "--expected-standing-review", "4242",
+            ),
+        )
+        # And admission publishes the id for the preflight to bind to.
+        self.assertIn(
+            "standing_review=4242",
+            self.main_decision(client, "--pr", "1509", "--body-edit-review"),
+        )
+
+    def test_only_the_paths_that_answer_a_rejection_bind_to_one(self) -> None:
+        # The owner's force is unconditional by definition. Binding it would
+        # let a verdict that moved between admission and preflight cancel the
+        # dispatch the owner made precisely to override such things -- and an
+        # ordinary synchronize has no objection to answer, so it has nothing to
+        # bind to either. Both must publish an empty id.
+        client = self.review_client(self.stale_reviews(review_id=77))
+        self.assertIn(
+            "standing_review=77",
+            self.main_decision(client, "--pr", "1509", "--body-edit-review"),
+        )
+        self.assertIn(
+            "standing_review=77",
+            self.main_decision(client, "--pr", "1509", "--refresh-stale-review"),
+        )
+        self.assertIn(
+            "standing_review=\n",
+            self.main_decision(client, "--pr", "1509", "--force"),
+        )
+        self.assertIn(
+            "standing_review=\n",
+            self.main_decision(self.review_client([]), "--pr", "1509"),
+        )
+
+    def test_a_standing_rejection_with_no_readable_id_stops_the_run(self) -> None:
+        # None means "nothing standing to bind to", which omits the guard.
+        # A standing rejection whose id cannot be read is the one case where
+        # that silence would permit a second review of the same objection, so
+        # it fails closed instead.
+        for unusable in (None, "4242", 0, -1):
+            with self.subTest(id=unusable):
+                reviews = self.stale_reviews()
+                reviews[0]["id"] = unusable
+                with self.assertRaisesRegex(
+                    factory_review.FactoryReviewError, "no usable id"
+                ):
+                    factory_review.standing_rejection_id(
+                        reviews, reviewer="plat", head_sha="headsha"
+                    )
+        # Nothing standing at all stays None -- that is not the failing case.
+        self.assertIsNone(
+            factory_review.standing_rejection_id(
+                self.stale_reviews(state="APPROVED"), reviewer="plat", head_sha="headsha"
+            )
+        )
+
+    def test_verdicts_sharing_a_timestamp_resolve_to_the_later_one(self) -> None:
+        # `submitted_at` has one-second resolution and the API returns reviews
+        # chronologically, so on a tie the list order is the only thing that
+        # still knows which came second. `max` alone answers with the first.
+        same_time = "2026-08-27T02:00:00Z"
+        rejected_then_approved = self.stale_reviews(
+            submitted_at=same_time, review_id=1
+        ) + self.stale_reviews(state="APPROVED", submitted_at=same_time, review_id=2)
+        self.assertEqual(
+            factory_review.latest_review_by(
+                rejected_then_approved, reviewer="plat", head_sha="headsha"
+            )["id"],
+            2,
+        )
+        self.assertIsNone(
+            factory_review.standing_rejection_id(
+                rejected_then_approved, reviewer="plat", head_sha="headsha"
+            )
+        )
+
+    def test_the_executor_binds_each_reviewer_preflight_to_that_verdict(self) -> None:
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn("standing_review: ${{ steps.admit.outputs.standing_review }}", executor)
+        # Both reviewers, and only in the serialized preflight -- admission is
+        # what records the id, so it has nothing to bind to yet.
+        self.assertEqual(executor.count("ARGS+=(--expected-standing-review "), 2)
+        self.assertEqual(
+            executor.count("STANDING_REVIEW: ${{ needs.admit.outputs.standing_review }}"), 2
+        )
+        admit = executor.split("  april:", 1)[0]
+        self.assertNotIn("--expected-standing-review", admit)
+
+    def test_a_skipped_run_is_not_an_attempt(self) -> None:
+        # A run whose jobs were all skipped by `if:` ran no step, so it is
+        # neither crash-loop evidence nor spend. #1509 makes these ordinary:
+        # the signal lane filters title-only, base-branch and draft-body edits
+        # at the job level, and the executor still gets a run record for the
+        # filtered signal run. Counting those would let ordinary title edits
+        # walk the ceiling and refuse the lane's real reviews for the day.
+        runs = [
+            {"id": 1, "run_attempt": 1, "status": "completed", "conclusion": "success"},
+            {"id": 2, "run_attempt": 1, "status": "completed", "conclusion": "skipped"},
+            {"id": 3, "run_attempt": 2, "status": "completed", "conclusion": "failure"},
+            {"id": 4, "status": "in_progress", "conclusion": None},
+        ]
+        # 1 (success) + 2 (a failure's retries) + 1 (in flight) + 1 (current).
+        self.assertEqual(factory_review.count_daily_run_attempts(runs, "5"), 5)
+        self.assertEqual(factory_review.count_daily_run_attempts([runs[1]], ""), 0)
+        # A failure still counts: that is the crash loop the ceiling exists for.
+        self.assertEqual(factory_review.count_daily_run_attempts([runs[2]], ""), 2)
+        # `conclusion` is the latest attempt's; `run_attempt` is cumulative. A
+        # rerun that skipped everything -- the kill switch flipped between
+        # attempts -- must not erase the attempt before it that really ran.
+        skipped_rerun = {
+            "id": 6, "run_attempt": 2, "status": "completed", "conclusion": "skipped"
+        }
+        self.assertEqual(factory_review.count_daily_run_attempts([skipped_rerun], ""), 2)
+
+    def test_the_body_edit_bypass_is_bound_to_the_signal_runs_own_pull_request(self) -> None:
+        # The context artifact names its own pull request, and the lane that
+        # wrote it is pull-request-controlled. The bypass is the one request
+        # that can reach a head already reviewed, so it is granted only when
+        # that claim matches the pull request GitHub associates with the signal
+        # run. A missing association withdraws the bypass instead of failing
+        # the run, since `workflow_run.pull_requests` is empty for a fork and
+        # an admitted fork must still get its ordinary review.
+        executor = EXECUTOR_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}",
+            executor,
+        )
+        guarded = executor.split('if [ "$RUN_EVENT" = "pull_request" ]; then', 1)[1]
+        guarded = guarded.split("fi\n", 1)[0]
+        self.assertIn('if [ "$RUN_PR_NUMBER" != "$PR_NUMBER" ]; then', guarded)
+        self.assertIn("BODY_EDIT=false", guarded)
 
     def test_only_the_owner_or_the_factory_may_dispatch_a_review(self) -> None:
         executor = EXECUTOR_PATH.read_text(encoding="utf-8")
@@ -814,7 +1184,7 @@ class FactoryReviewTests(unittest.TestCase):
         workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
         executor = EXECUTOR_PATH.read_text(encoding="utf-8")
 
-        self.assertIn("types: [opened, ready_for_review, synchronize]", workflow)
+        self.assertIn("types: [opened, ready_for_review, synchronize, edited]", workflow)
         self.assertNotIn("pull_request_review:", workflow)
         self.assertIn("vars.AGENT_AUTOMATIONS_ENABLED == 'true'", workflow)
         self.assertIn("vars.FACTORY_REVIEW_ENABLED == 'true'", workflow)
