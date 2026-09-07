@@ -25,9 +25,9 @@ The tests drive the real script and read either the argument boundary or the
 exit status, so they need no network, no secrets, no UI access, no live GitHub
 mutation, and no built app bundle. Four need a macOS host because they build a
 complete unsigned bundle and run the structure assertions over it, and one
-reads an error message that only a macOS host reaches; all nine skip where
+reads an error message that only a macOS host reaches; all ten skip where
 PlistBuddy is absent, which is the Linux CI runner — where this file reports
-30 tests with 9 skipped.
+31 tests with 10 skipped.
 """
 
 from __future__ import annotations
@@ -68,6 +68,9 @@ ABSENT_BUNDLE = "/nonexistent/verify-release-bundle-test/WorkSpaces.app"
 # a helper ignoring its statement still prints it, so each case also asserts
 # the signature of the abort it means to exercise.
 ABORT_MARKER = "VERIFY_RELEASE_BUNDLE_INJECTION_REACHED"
+
+# Enough of a Mach-O header for `file` to classify, and for a stub not to have to.
+MACH_O_MAGIC = b"\xcf\xfa\xed\xfe"
 
 
 def system_bash_zeroes_a_set_u_abort() -> bool:
@@ -505,7 +508,7 @@ class SigningEnumerationTests(unittest.TestCase):
         helper and reported a signed bundle.
         """
         helper = self.bundle / "Contents" / "MacOS" / "UnsignedHelper"
-        helper.write_bytes(b"\xcf\xfa\xed\xfe")
+        helper.write_bytes(MACH_O_MAGIC)
         helper.chmod(0o755)
         write_stub(
             self.stubs / "file",
@@ -519,6 +522,27 @@ class SigningEnumerationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, f"an uninspectable object passed\n{output}")
         self.assertNotIn("Verified Developer ID signing", result.stdout, output)
         self.assertIn("Failed to inspect", output, output)
+
+    def test_an_unreadable_code_object_is_not_assumed_safe(self) -> None:
+        """The real tool's contract, not a stub's.
+
+        macOS `/usr/bin/file` prints `cannot open: Permission denied` and exits
+        **0**, so checking its status is not enough — the case above forces a
+        non-zero exit and would miss this entirely. Nothing is stubbed here but
+        `codesign`, so it reads the behaviour the release lane would meet.
+        """
+        helper = self.bundle / "Contents" / "MacOS" / "UnreadableHelper"
+        helper.write_bytes(MACH_O_MAGIC)
+        helper.chmod(0o000)
+        self.addCleanup(helper.chmod, 0o644)
+        if os.access(helper, os.R_OK):
+            self.skipTest("this user can read a mode-000 file, so the case cannot be set up")
+
+        result = self.run_signing_lane()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, f"an unreadable object passed\n{output}")
+        self.assertNotIn("Verified Developer ID signing", result.stdout, output)
+        self.assertIn("Cannot read", output, output)
 
     def test_a_newline_in_a_code_object_name_does_not_skip_a_signature(self) -> None:
         """The list was newline-delimited, so one object became two wrong ones.
@@ -539,7 +563,7 @@ class SigningEnumerationTests(unittest.TestCase):
         names = ("Helper", "Helper\nExtra")
         for name in names:
             target = macos / name
-            target.write_bytes(b"\xcf\xfa\xed\xfe")
+            target.write_bytes(MACH_O_MAGIC)
             target.chmod(0o755)
         write_stub(self.stubs / "file", 'echo "Mach-O 64-bit executable arm64"\n')
 

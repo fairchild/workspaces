@@ -136,8 +136,18 @@ is_mach_o() {
     # object this script could not inspect was silently dropped from the signing
     # set and the run still passed. Not being able to tell is not the same answer
     # as no (#1562).
+    #
+    # Readability is asserted here rather than inferred from `file`, because
+    # macOS `/usr/bin/file` prints `cannot open: Permission denied` and exits
+    # **0** — so its status alone cannot be trusted to report that it failed.
+    [[ -r "$candidate" ]] \
+        || fail "Cannot read $candidate to decide whether it needs a signature"
+
     description="$(file -b "$candidate" 2>/dev/null)" \
         || fail "Failed to inspect $candidate to decide whether it needs a signature"
+
+    [[ -n "$description" ]] \
+        || fail "Could not classify $candidate; refusing to assume it needs no signature"
 
     [[ "$description" == *Mach-O* ]]
 }
