@@ -64,7 +64,7 @@ EVIDENCE_UPLOAD_TOKEN=<token> uv run scripts/upload-evidence.py /tmp/evidence.pn
   --repo workspaces --pr <number> --name <slug> --breadcrumb
 ```
 
-The upload script returns a URL like `https://evidence.cloudcompute.com/workspaces/pr-142/20260318-sidebar-toggle.png` that renders inline in GitHub markdown. The `--breadcrumb` flag leaves a copy on `~/Desktop` and appends to `~/Desktop/april-runs.log`.
+The upload script prints the stored URL, which looks like `https://evidence.cloudcompute.com/workspaces/pr-142/PRF-zMRuZN3Ih0j14u_o3g/20260318-sidebar-toggle.png` and renders inline in GitHub markdown. The store mints that unguessable segment itself, so use the URL the script prints rather than building one from the arguments you passed. The `--breadcrumb` flag leaves a copy on `~/Desktop` and appends to `~/Desktop/april-runs.log`.
 
 See `docs/development/lume-runner-setup.md` for full details on the R2 evidence store architecture.
 

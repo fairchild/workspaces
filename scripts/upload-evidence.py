@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -31,6 +32,16 @@ CONTENT_TYPES = {
     "mp4": "video/mp4",
     "txt": "text/plain; charset=utf-8",
 }
+
+
+def _uploaded_url(body: bytes) -> str | None:
+    """Read the stored object's URL out of the store's 201 response."""
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    url = payload.get("url") if isinstance(payload, dict) else None
+    return url if isinstance(url, str) and url else None
 
 
 def main() -> int:
@@ -93,11 +104,18 @@ def main() -> int:
             if resp.status not in (200, 201):
                 print(f"error: upload failed with status {resp.status}", file=sys.stderr)
                 return 1
+            body = resp.read()
     except HTTPError as e:
         print(f"error: upload failed: {e.code} {e.reason}", file=sys.stderr)
         return 1
 
-    public_url = f"{base_url.rstrip('/')}/{key}"
+    # The store mints an unguessable segment into the key, so the object does
+    # not live at the path we asked for. The response is the only authority on
+    # where it landed.
+    public_url = _uploaded_url(body)
+    if public_url is None:
+        print("error: upload succeeded but the store returned no URL", file=sys.stderr)
+        return 1
     print(public_url)
 
     breadcrumb = args.breadcrumb or os.environ.get("EVIDENCE_BREADCRUMB") == "1"
