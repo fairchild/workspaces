@@ -26,7 +26,23 @@ import WorkspaceManagerCore
 /// `.serialized` because every test here mounts a view and pumps the main run loop, and a run
 /// loop pumped by one test drives the display cycle of any view another test still has mounted.
 @MainActor
-@Suite("Sidebar row rebuild scoping", .serialized)
+@Suite(
+    "Sidebar row rebuild scoping",
+    .serialized,
+    .enabled(
+        if: RenderSuiteIsolation.isSatisfied,
+        """
+        Needs a process where nothing else is pumping the main run loop. Every assertion here \
+        compares a rebuild count taken before a change against one taken after, and a display \
+        cycle driven by another suite lands inside that window — where it either adds a \
+        rebuild to every row or, worse, renders in the same pass as the change, which makes \
+        the changed row indistinguishable from its neighbours. `.serialized` orders this \
+        suite against itself; nothing orders it against the other suites in this target that \
+        mount views. So CI runs it in its own `swift test` invocation (see the "Render tests \
+        (isolated)" step in ci.yml), and the parallel run skips it. It always runs locally.
+        """
+    )
+)
 struct SidebarRowRebuildTests {
     private final class BodyCounter {
         private(set) var counts: [Int: Int] = [:]

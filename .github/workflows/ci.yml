@@ -196,3 +196,13 @@ jobs:
 
       - name: Test
         run: swift test
+
+      # Suites that measure SwiftUI render passes need the main run loop to
+      # themselves: a display cycle driven by another suite lands between the
+      # two rebuild counts they compare, and can render in the same pass as the
+      # change under test, which no assertion can separate (#1542). They skip
+      # the parallel run above and get this process instead.
+      - name: Render tests (isolated)
+        env:
+          WORKSPACES_RENDER_TESTS: "1"
+        run: swift test --filter SidebarRowRebuildTests
