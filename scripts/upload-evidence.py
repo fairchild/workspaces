@@ -14,7 +14,8 @@ import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 ALLOWED_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp", "svg", "webm", "mp4", "txt"}
@@ -35,13 +36,52 @@ CONTENT_TYPES = {
 
 
 def _uploaded_key(body: bytes) -> str | None:
-    """Read the stored object's key out of the store's 201 response."""
+    """The stored object's key from the store's 201 response, if it is usable.
+
+    Usable means addressable: a key is a path under the store's authority, so a
+    blank one addresses the store itself and a `.` or `..` segment addresses
+    something else entirely once a client collapses it. A control character
+    would break the single line this script prints. None of the three is a key
+    the store should ever mint, so each is a malfunction to report, not to
+    paper over.
+    """
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     key = payload.get("key") if isinstance(payload, dict) else None
-    return key if isinstance(key, str) and key else None
+    if not isinstance(key, str) or not key.strip():
+        return None
+    if any(segment in {".", ".."} for segment in key.split("/")):
+        return None
+    if any(character < " " or character == "\x7f" for character in key):
+        return None
+    return key
+
+
+def _authority(netloc: str) -> str:
+    """Host and port, without whatever authorized the upload.
+
+    Credentials in a URL are a write concern and reads here are public, so they
+    belong in neither a URL we print nor an error we log.
+    """
+    return netloc.rpartition("@")[2]
+
+
+def _public_url(sent_url: str, stored_key: str) -> str:
+    """Where the object landed: our address for the store, its key.
+
+    The key is the whole path the store answers on, so it already carries any
+    path prefix the caller dialed through, and everything but scheme and
+    authority comes off the URL we sent.
+    """
+    sent = urlsplit(sent_url)
+    return urlunsplit((sent.scheme, _authority(sent.netloc), f"/{stored_key}", "", ""))
+
+
+def _for_display(url: str) -> str:
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(netloc=_authority(parts.netloc)))
 
 
 def main() -> int:
@@ -108,17 +148,22 @@ def main() -> int:
     except HTTPError as e:
         print(f"error: upload failed: {e.code} {e.reason}", file=sys.stderr)
         return 1
+    except URLError as e:
+        # A store that cannot be dialed at all — down, misspelled, or carrying
+        # credentials in the URL, which urllib passes to the resolver whole.
+        print(f"error: could not reach {_for_display(base_url)}: {e.reason}", file=sys.stderr)
+        return 1
 
     # The store mints an unguessable segment into the key, so the object does
     # not live at the path we asked for, and only the store knows where it
     # landed. Only we know how to reach the store: its own `url` field hardcodes
-    # https and drops the port, which is wrong for anything but a custom domain
-    # on 443. So take the key from the store and the address from the dial.
+    # https and drops the port, which is right only for a custom domain on 443.
+    # So take the key from the store and the address from the dial.
     stored_key = _uploaded_key(body)
     if stored_key is None:
-        print("error: upload succeeded but the store returned no key", file=sys.stderr)
+        print("error: upload succeeded but the store returned no usable key", file=sys.stderr)
         return 1
-    public_url = f"{base_url.rstrip('/')}/{stored_key.lstrip('/')}"
+    public_url = _public_url(url, stored_key)
     print(public_url)
 
     breadcrumb = args.breadcrumb or os.environ.get("EVIDENCE_BREADCRUMB") == "1"

@@ -22,7 +22,9 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from socket import gaierror
 from unittest.mock import patch
+from urllib.error import URLError
 from urllib.parse import urlsplit
 
 
@@ -54,17 +56,30 @@ class FakeResponse:
 
 
 def minting_store(request: object, *_args: object, **_kwargs: object) -> FakeResponse:
-    """Stand in for the worker, which stores under a key it mints itself.
+    """Stand in for the worker, transcribed from `src/index.ts` and `evidence.ts`.
 
-    The `url` field is built the way the worker builds it — `https://` hardcoded
-    and `hostname` in place of `host` — so it is wrong for any store not reached
-    over HTTPS on 443, and a client that trusts it is caught here.
+    Both halves matter. The key comes from `url.pathname.slice(1)` through
+    `mintKey`, which keeps a leading slash the caller sent rather than trimming
+    it. The `url` field is built as `https://` plus `hostname`, hardcoding the
+    scheme and dropping the port, so it is wrong for any store not reached over
+    HTTPS on 443 — and a client that trusts it is caught here.
     """
     parts = urlsplit(request.full_url)  # type: ignore[attr-defined]
-    head, _, filename = parts.path.rpartition("/")
-    key = f"{head}/{MINTED_SEGMENT}/{filename}".lstrip("/")
+    path = parts.path[1:]
+    cut = path.rfind("/")
+    key = (
+        f"{MINTED_SEGMENT}/{path}"
+        if cut == -1
+        else f"{path[:cut]}/{MINTED_SEGMENT}/{path[cut + 1:]}"
+    )
     body = {"url": f"https://{parts.hostname}/{key}", "key": key}
     return FakeResponse(json.dumps(body).encode())
+
+
+def minted_url(base_url: str, requested_url: str) -> str:
+    """The one URL the object is readable at, given what we asked the store for."""
+    head, _, filename = urlsplit(requested_url).path.rpartition("/")
+    return f"{base_url.rstrip('/')}{head}/{MINTED_SEGMENT}/{filename}"
 
 
 class UploadEvidenceTests(unittest.TestCase):
@@ -172,26 +187,79 @@ class UploadEvidenceTests(unittest.TestCase):
             requested = urlopen.call_args.args[0].full_url
             printed = stdout.strip()
             self.assertNotEqual(printed, requested)
-            self.assertIn(MINTED_SEGMENT, printed)
-            self.assertTrue(printed.endswith("sidebar.png"), printed)
+            self.assertEqual(
+                printed, minted_url("https://evidence.example", requested)
+            )
 
     def test_keeps_the_scheme_and_port_of_a_local_worker(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             shot = Path(tmp) / "sidebar.png"
             shot.write_bytes(b"png-bytes")
 
-            with patch.object(upload_evidence, "urlopen", side_effect=minting_store):
+            with patch.object(
+                upload_evidence, "urlopen", side_effect=minting_store
+            ) as urlopen:
                 result, stdout, stderr = self.run_main(
                     shot, base_url="http://127.0.0.1:8799"
                 )
 
             self.assertEqual(result, 0, stderr)
-            printed = stdout.strip()
-            self.assertTrue(printed.startswith("http://127.0.0.1:8799/"), printed)
-            self.assertIn(MINTED_SEGMENT, printed)
-            self.assertTrue(printed.endswith("sidebar.png"), printed)
+            requested = urlopen.call_args.args[0].full_url
+            self.assertEqual(
+                stdout.strip(), minted_url("http://127.0.0.1:8799", requested)
+            )
 
-    def test_fails_when_the_store_reports_no_key(self) -> None:
+    def test_reaches_a_store_mounted_under_a_path_prefix(self) -> None:
+        """The key already carries the prefix, so the join must not repeat it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            shot = Path(tmp) / "sidebar.png"
+            shot.write_bytes(b"png-bytes")
+
+            with patch.object(
+                upload_evidence, "urlopen", side_effect=minting_store
+            ) as urlopen:
+                result, stdout, stderr = self.run_main(
+                    shot, base_url="http://127.0.0.1:8799/evidence"
+                )
+
+            self.assertEqual(result, 0, stderr)
+            requested = urlopen.call_args.args[0].full_url
+            printed = stdout.strip()
+            self.assertEqual(printed, minted_url("http://127.0.0.1:8799", requested))
+            self.assertEqual(printed.count("/evidence/"), 1, printed)
+
+    def test_composed_url_carries_no_upload_credentials(self) -> None:
+        """Reads are public, so whatever authorized the write stays out of it."""
+        self.assertEqual(
+            upload_evidence._public_url(
+                "http://uploader:s3cret@127.0.0.1:8799/workspaces/shot.png",
+                "workspaces/SEG/shot.png",
+            ),
+            "http://127.0.0.1:8799/workspaces/SEG/shot.png",
+        )
+
+    def test_reports_one_clear_line_when_the_store_cannot_be_dialed(self) -> None:
+        """urllib hands the whole authority to the resolver, credentials included."""
+        with tempfile.TemporaryDirectory() as tmp:
+            shot = Path(tmp) / "sidebar.png"
+            shot.write_bytes(b"png-bytes")
+
+            with patch.object(
+                upload_evidence,
+                "urlopen",
+                side_effect=URLError(gaierror(8, "nodename nor servname provided")),
+            ):
+                result, stdout, stderr = self.run_main(
+                    shot, base_url="http://uploader:s3cret@127.0.0.1:8799"
+                )
+
+            self.assertEqual(result, 1)
+            self.assertEqual(stdout, "")
+            self.assertIn("could not reach", stderr)
+            self.assertNotIn("s3cret", stderr)
+            self.assertNotIn("Traceback", stderr)
+
+    def test_fails_when_the_store_reports_no_usable_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             shot = Path(tmp) / "sidebar.png"
             shot.write_bytes(b"png-bytes")
@@ -201,6 +269,11 @@ class UploadEvidenceTests(unittest.TestCase):
                 b"not json",
                 b"{}",
                 b'{"key": ""}',
+                b'{"key": "   "}',
+                b'{"key": "."}',
+                b'{"key": "../escape.png"}',
+                b'{"key": "workspaces/../../escape.png"}',
+                b'{"key": "workspaces/sidebar.png\\nhttps://spoofed.example/x"}',
                 b'{"url": "https://evidence.example/sidebar.png"}',
             )
             for body in bodies:
@@ -212,7 +285,7 @@ class UploadEvidenceTests(unittest.TestCase):
 
                     self.assertEqual(result, 1)
                     self.assertEqual(stdout, "")
-                    self.assertIn("returned no key", stderr)
+                    self.assertIn("returned no usable key", stderr)
 
 
 if __name__ == "__main__":

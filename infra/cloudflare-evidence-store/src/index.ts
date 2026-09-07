@@ -59,8 +59,12 @@ export default {
         httpMetadata: { contentType },
       });
 
-      // The stored key is not the requested path, so callers must read the URL
+      // The stored key is not the requested path, so callers must read `key`
       // from this response rather than reconstructing it from what they sent.
+      // Address the object as `<the base URL you dialed>/<key>`. The `url`
+      // below is a convenience for the common case and nothing more: it
+      // hardcodes https, drops the port, and under `wrangler dev` reports the
+      // routed custom domain, so it is right only for production and preview.
       return Response.json({ url: `https://${url.hostname}/${key}`, key }, { status: 201 });
     }
 
