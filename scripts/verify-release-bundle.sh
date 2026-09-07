@@ -44,13 +44,17 @@ COMPLETED=false
 
 cleanup() {
     local status=$?
-    rm -rf "$TMP_DIR"
+    # `|| true` so a cleanup failure cannot overwrite the status being carried
+    # out, and `exit` rather than `return` so the verdict does not depend on
+    # ambient `errexit` reacting to the return value.
+    rm -rf "$TMP_DIR" || true
     if [[ $status -eq 0 && "$COMPLETED" != true ]]; then
         echo "[verify-release-bundle] ERROR: exited before completing verification;" \
             "refusing to report success" >&2
-        return 1
+        status=1
     fi
-    return "$status"
+    trap - EXIT
+    exit "$status"
 }
 trap cleanup EXIT
 
@@ -160,8 +164,16 @@ verify_codesign_identity() {
 collect_code_objects() {
     local root="$1"
     local candidate=""
+    # Process substitution discards the producer's status: a `find` that failed
+    # part-way delivered a short list, the loop read it happily, and the run went
+    # on to report a signed bundle having enumerated less than it was asked to.
+    # Landing the list first makes the failure a failure (#1562).
+    local listing="$TMP_DIR/find-listing"
 
     [[ -d "$root" ]] || return 0
+
+    find "$root" -type f -print0 >"$listing" \
+        || fail "Failed to enumerate files under $root"
 
     while IFS= read -r -d '' candidate; do
         [[ -f "$candidate" ]] || continue
@@ -172,7 +184,7 @@ collect_code_objects() {
             continue
         fi
         printf '%s\n' "$candidate" >>"$CODE_OBJECTS_FILE"
-    done < <(find "$root" -type f -print0)
+    done <"$listing"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -215,9 +227,13 @@ done
 
 # The replacement reads `$HOME` for every path, not only a tilde-prefixed one,
 # so expanding unconditionally aborted a `HOME`-less run that never needed it —
-# and CI, `release.yml`, and `build-release.sh` all pass an absolute path.
-# Expanding only when there is a tilde to expand keeps those working and turns
-# the one case that genuinely needs `HOME` into a named failure.
+# and every caller here passes a path with no leading tilde (`ci.yml` and
+# `release.yml` pass the relative `build/WorkSpaces.app`). Expanding only when
+# there is a tilde to expand keeps those working and turns the one case that
+# genuinely needs `HOME` into a named failure. The guard is `-n`, so an empty
+# `HOME` is refused too: expanding `~user/x` against it yields the relative
+# `user/x`, which is precisely the verify-the-wrong-thing shape this script
+# exists to refuse.
 if [[ "$APP_BUNDLE" == "~"* ]]; then
     [[ -n "${HOME:-}" ]] || fail "HOME is not set; cannot expand the leading ~ in $APP_BUNDLE"
     APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
