@@ -3,25 +3,35 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Argument-parser tests for `scripts/verify-release-bundle.sh`.
+"""Tests that `scripts/verify-release-bundle.sh` cannot report an unearned pass.
 
-The verifier takes exactly one app bundle path, and its argument loop has to
-decide "do I already hold one?". A wrong answer there is not a usability bug:
-this script is the last assertion between a mis-built bundle and a signed
-release, so accepting a second path means verifying something other than the
-bundle the caller named while still reporting success (#1534, out of #1498).
-Nothing covered the loop before this file.
+This script is the last assertion between a mis-built bundle and a signed
+release, so the failure that matters is not a crash — it is exit 0 without
+having looked at the thing it was asked to verify. Two routes to that shape
+are covered here.
 
-The tests drive the real script through `bash` and read only the argument
-boundary, so they need no network, no secrets, no UI access, no live GitHub
-mutation, and no built app bundle. Two of them need a macOS host because they
-build a complete unsigned bundle and run the structure assertions over it;
-both skip where PlistBuddy is absent, which is the Linux CI runner — where
-this file reports 16 tests with 2 skipped.
+The first is its argument loop, which has to decide "do I already hold a
+path?". Answering with `[[ -z "$APP_BUNDLE" ]]` read an assigned empty string
+as "not set", so a second path claimed the slot and was verified in place of
+the one named (#1534, out of #1498).
+
+The second is the exit status itself (#1562). `/bin/bash` on macOS is 3.2.57,
+and on its `set -u` fatal path the status reaching the EXIT trap is already
+zero, so an abort is indistinguishable from a clean run — the script exited 0
+having run no assertion at all. These tests therefore run the script under
+`/bin/bash` specifically; under bash 5 the same aborts already exit 1.
+
+The tests drive the real script and read either the argument boundary or the
+exit status, so they need no network, no secrets, no UI access, no live GitHub
+mutation, and no built app bundle. Four need a macOS host because they build a
+complete unsigned bundle and run the structure assertions over it; all four
+skip where PlistBuddy is absent, which is the Linux CI runner — where this
+file reports 24 tests with 4 skipped.
 """
 
 from __future__ import annotations
 
+import os
 import plistlib
 import shutil
 import subprocess
@@ -51,16 +61,33 @@ POST_PARSE_MARKERS = (
 ABSENT_BUNDLE = "/nonexistent/verify-release-bundle-test/WorkSpaces.app"
 
 
-def run_verifier(*args: str) -> subprocess.CompletedProcess[str]:
+def run_verifier(
+    *args: str,
+    env: dict[str, str] | None = None,
+    script: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the verifier under `/bin/bash` — the shell the defect needs.
+
+    macOS ships bash 3.2.57 there, and the release lane and every local run
+    reach the script through it. Running these under a modern bash would pass
+    for the wrong reason.
+    """
     return subprocess.run(
-        ["/bin/bash", str(SCRIPT_PATH), *args],
+        ["/bin/bash", str(script or SCRIPT_PATH), *args],
         check=False,
         cwd=REPO_ROOT,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         timeout=60,
+        env=env,
     )
+
+
+def environment_without_home() -> dict[str, str]:
+    env = dict(os.environ)
+    env.pop("HOME", None)
+    return env
 
 
 class VerifierArgumentTestCase(unittest.TestCase):
@@ -171,6 +198,105 @@ class AcceptedArgumentTests(VerifierArgumentTestCase):
         self.assert_rejected_while_parsing(run_verifier("--no-such-flag", ABSENT_BUNDLE))
 
 
+class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
+    """#1562: an abort under macOS bash 3.2 read as a clean pass.
+
+    Measured rather than inferred. An unbound-variable abort under
+    `/bin/bash` exits 1 with no EXIT trap installed, but the status handed to
+    an EXIT trap on that path is already 0, and bash keeps that 0 unless the
+    trap says otherwise. Bash 5 hands the trap 1. So preserving `$?` in
+    `cleanup` preserves a zero and changes nothing; a zero exit has to be
+    earned instead, by reaching one of the three places that mean success.
+
+    `${APP_BUNDLE/#\~/$HOME}` at line 195 was one such abort, and it read
+    `$HOME` for every path rather than only a tilde-prefixed one, so any
+    invocation without `HOME` exited 0 without reaching `-d`,
+    `verify_bundle_identity`, or a single signing assertion.
+    """
+
+    def test_an_unset_home_does_not_pass_a_tilde_path_unverified(self) -> None:
+        result = run_verifier(
+            "--structure-only",
+            "~/nonexistent/WorkSpaces.app",
+            env=environment_without_home(),
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, f"the verifier reported success\n{output}")
+        self.assertIn("HOME", output, output)
+
+    def test_an_unset_home_no_longer_stops_an_absolute_path(self) -> None:
+        """The guard is on the tilde branch, not on the whole run.
+
+        `ci.yml`, `release.yml`, and `build-release.sh` all pass an absolute
+        path, which needs no `HOME` at all. Before the fix they aborted anyway,
+        because the replacement expanded `$HOME` unconditionally.
+        """
+        result = run_verifier(
+            "--structure-only", ABSENT_BUNDLE, env=environment_without_home()
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_reached_verification(result)
+
+    def test_help_still_exits_zero_without_home(self) -> None:
+        """The control: a deliberate exit 0 is still an exit 0."""
+        result = run_verifier("--help", env=environment_without_home())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Usage:", result.stdout)
+
+    def test_a_normal_invocation_with_home_set_is_unchanged(self) -> None:
+        result = run_verifier("--structure-only", ABSENT_BUNDLE)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assert_reached_verification(result)
+
+    def test_a_set_u_abort_in_the_body_is_not_reported_as_success(self) -> None:
+        """The class, not the instance.
+
+        Guarding `$HOME` closes today's abort. This asserts the next one is
+        closed too: an unbound variable injected into the body must not reach
+        exit 0, whoever adds it.
+        """
+        with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleAbort-") as root:
+            script = script_with_injected_abort(
+                Path(root), 'echo "${VERIFY_RELEASE_BUNDLE_UNSET_PROBE}"'
+            )
+            result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, f"an abort exited 0\n{output}")
+        self.assertIn("refusing to report success", output, output)
+
+    def test_a_set_e_abort_in_the_body_is_not_reported_as_success(self) -> None:
+        """The other abort path, which was already sound.
+
+        The issue read the trap as losing the status for `set -e` too. It does
+        not: bash 3.2 carries a `set -e` abort out as 1 whether or not
+        `cleanup` preserves `$?`. This pins that, so a later change to the
+        trap cannot quietly break the half that worked.
+        """
+        with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleAbort-") as root:
+            script = script_with_injected_abort(Path(root), "false")
+            result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
+        self.assertNotEqual(
+            result.returncode, 0, f"an abort exited 0\n{result.stdout}{result.stderr}"
+        )
+
+
+def script_with_injected_abort(root: Path, statement: str) -> Path:
+    """A copy of the verifier that aborts right after its EXIT trap is armed.
+
+    Injecting into a copy rather than asserting on today's one abort is what
+    makes the test about the failure class. The statement lands after the trap
+    so the trap is what has to carry the status out.
+    """
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    anchor = "trap cleanup EXIT\n"
+    if anchor not in source:
+        raise AssertionError(f"{SCRIPT_PATH} no longer arms its EXIT trap as expected")
+    script = root / "verify-release-bundle.sh"
+    script.write_text(source.replace(anchor, f"{anchor}{statement}\n", 1), encoding="utf-8")
+    script.chmod(0o755)
+    return script
+
+
 @unittest.skipUnless(
     PLIST_BUDDY.is_file(), f"{PLIST_BUDDY} is macOS-only; the structure assertions need it"
 )
@@ -195,6 +321,26 @@ class StructureOnlyOverARealBundleTests(unittest.TestCase):
         result = run_verifier("--structure-only", str(self.bundle))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Verified release bundle structure", result.stdout)
+
+    def test_a_complete_unsigned_bundle_passes_structure_only_without_home(self) -> None:
+        """A `HOME`-less environment verifies for real now, instead of exiting 0 blind.
+
+        Same bundle, same assertions, same exit 0 — but reached by running
+        them. Before the fix this exit 0 meant the opposite of what it says.
+        """
+        result = run_verifier(
+            "--structure-only", str(self.bundle), env=environment_without_home()
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Verified release bundle structure", result.stdout)
+
+    def test_a_tilde_path_still_expands_against_home(self) -> None:
+        """The expansion the guard wraps still expands."""
+        env = dict(os.environ)
+        env["HOME"] = str(self.root)
+        result = run_verifier("--structure-only", "~/WorkSpaces.app", env=env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(str(self.bundle), result.stdout)
 
     def test_an_empty_first_positional_never_verifies_the_bundle(self) -> None:
         result = run_verifier("--structure-only", "", str(self.bundle))
