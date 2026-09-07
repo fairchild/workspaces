@@ -24,9 +24,10 @@ having run no assertion at all. These tests therefore run the script under
 The tests drive the real script and read either the argument boundary or the
 exit status, so they need no network, no secrets, no UI access, no live GitHub
 mutation, and no built app bundle. Four need a macOS host because they build a
-complete unsigned bundle and run the structure assertions over it; all four
-skip where PlistBuddy is absent, which is the Linux CI runner — where this
-file reports 24 tests with 4 skipped.
+complete unsigned bundle and run the structure assertions over it, and a
+fifth reads an error message that only a macOS host reaches; all five skip
+where PlistBuddy is absent, which is the Linux CI runner — where this file
+reports 25 tests with 5 skipped.
 """
 
 from __future__ import annotations
@@ -59,6 +60,32 @@ POST_PARSE_MARKERS = (
 # A path that does not exist, so an accepted parse stops at the first
 # post-parse assertion instead of reading anything on disk.
 ABSENT_BUNDLE = "/nonexistent/verify-release-bundle-test/WorkSpaces.app"
+
+
+def system_bash_zeroes_a_set_u_abort() -> bool:
+    """Does `/bin/bash` hand its EXIT trap a zero after a `set -u` abort?
+
+    True on macOS 3.2.57, false on bash 5 — measured here rather than
+    branched on `sys.platform`, because it is the shell's behaviour that
+    decides whether the script's sentinel has anything to do. Where this is
+    false the abort already carries its own non-zero status out and the
+    sentinel stays quiet, which is why the tests below assert the message
+    only when it is true.
+    """
+    probe = 'cleanup() { :; }; trap cleanup EXIT; echo "${VERIFY_RELEASE_BUNDLE_PROBE}"'
+    return (
+        subprocess.run(
+            ["/bin/bash", "-uc", probe],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+        ).returncode
+        == 0
+    )
+
+
+SYSTEM_BASH_ZEROES_A_SET_U_ABORT = system_bash_zeroes_a_set_u_abort()
 
 
 def run_verifier(
@@ -215,6 +242,13 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
     """
 
     def test_an_unset_home_does_not_pass_a_tilde_path_unverified(self) -> None:
+        """Runs everywhere; only red against `main` where bash 3.2 is `/bin/bash`.
+
+        On a host without PlistBuddy the run stops earlier, at the tool check,
+        which is a non-zero exit for a different reason. That still holds the
+        line this test is about — the verifier must not report success — so
+        the exit status is asserted here and the cause below.
+        """
         result = run_verifier(
             "--structure-only",
             "~/nonexistent/WorkSpaces.app",
@@ -222,7 +256,19 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         )
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, f"the verifier reported success\n{output}")
-        self.assertIn("HOME", output, output)
+
+    @unittest.skipUnless(
+        PLIST_BUDDY.is_file(), f"{PLIST_BUDDY} is macOS-only; the HOME guard sits after it"
+    )
+    def test_an_unset_home_names_home_as_the_cause(self) -> None:
+        result = run_verifier(
+            "--structure-only",
+            "~/nonexistent/WorkSpaces.app",
+            env=environment_without_home(),
+        )
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, output)
+        self.assertIn("HOME is not set", output, output)
 
     def test_an_unset_home_no_longer_stops_an_absolute_path(self) -> None:
         """The guard is on the tilde branch, not on the whole run.
@@ -254,6 +300,11 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         Guarding `$HOME` closes today's abort. This asserts the next one is
         closed too: an unbound variable injected into the body must not reach
         exit 0, whoever adds it.
+
+        Where `/bin/bash` is 3.2 the sentinel is the only thing holding this,
+        so its message is asserted as well; where `/bin/bash` is 5 the abort
+        carries its own status out and the sentinel correctly says nothing.
+        The probe decides which, so this reads the same defect on both.
         """
         with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleAbort-") as root:
             script = script_with_injected_abort(
@@ -262,7 +313,8 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
             result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, f"an abort exited 0\n{output}")
-        self.assertIn("refusing to report success", output, output)
+        if SYSTEM_BASH_ZEROES_A_SET_U_ABORT:
+            self.assertIn("refusing to report success", output, output)
 
     def test_a_set_e_abort_in_the_body_is_not_reported_as_success(self) -> None:
         """The other abort path, which was already sound.
