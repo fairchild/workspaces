@@ -59,10 +59,6 @@ enum GhosttyClipboardBridge {
         let surface = GhosttyCallbackUserdata.pointer(from: surfaceAddress)
         guard let surface else { return GHOSTTY_CLIPBOARD_READ_UNSUPPORTED }
 
-        guard requestsText(requestedMIMEs, count: requestedMIMECount) else {
-            return GHOSTTY_CLIPBOARD_READ_UNAVAILABLE
-        }
-
         let value = GhosttyThreadingBridge.runOnMainSync {
             let pasteboard: NSPasteboard =
                 switch location {
@@ -96,6 +92,11 @@ enum GhosttyClipboardBridge {
     /// representations the clipboard can serve and reads none of them —
     /// the shape an ordinary paste takes while the program has Kitty paste
     /// events (mode 5522) enabled.
+    ///
+    /// Every decision a read makes past resolving its surface lives here, so
+    /// the tests below cover the path `read` actually takes. A second gate in
+    /// `read` is how the listing case got rejected before this function was
+    /// consulted at all, while these tests stayed green.
     enum ReadPlan: Equatable {
         case serveText
         case listOnly
