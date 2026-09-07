@@ -6,8 +6,8 @@
 """Evidence upload contract tests.
 
 Intent: protect video MIME handling, the local upload-size guard, and the rule
-that the printed URL comes from the store rather than from the path we asked
-for — without network access, secrets, UI access, or live evidence-store
+that the printed URL pairs the address we dialed with the key the store minted
+— without network access, secrets, UI access, or live evidence-store
 mutations.
 """
 
@@ -23,7 +23,7 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -54,16 +54,23 @@ class FakeResponse:
 
 
 def minting_store(request: object, *_args: object, **_kwargs: object) -> FakeResponse:
-    """Stand in for the worker, which stores under a key it mints itself."""
+    """Stand in for the worker, which stores under a key it mints itself.
+
+    The `url` field is built the way the worker builds it — `https://` hardcoded
+    and `hostname` in place of `host` — so it is wrong for any store not reached
+    over HTTPS on 443, and a client that trusts it is caught here.
+    """
     parts = urlsplit(request.full_url)  # type: ignore[attr-defined]
     head, _, filename = parts.path.rpartition("/")
     key = f"{head}/{MINTED_SEGMENT}/{filename}".lstrip("/")
-    url = urlunsplit((parts.scheme, parts.netloc, f"/{key}", "", ""))
-    return FakeResponse(json.dumps({"url": url, "key": key}).encode())
+    body = {"url": f"https://{parts.hostname}/{key}", "key": key}
+    return FakeResponse(json.dumps(body).encode())
 
 
 class UploadEvidenceTests(unittest.TestCase):
-    def run_main(self, file: Path) -> tuple[int, str, str]:
+    def run_main(
+        self, file: Path, base_url: str = "https://evidence.example"
+    ) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
         argv = [
@@ -74,7 +81,7 @@ class UploadEvidenceTests(unittest.TestCase):
             "--pr",
             "1027",
             "--base-url",
-            "https://evidence.example",
+            base_url,
         ]
         with (
             patch.object(sys, "argv", argv),
@@ -165,6 +172,22 @@ class UploadEvidenceTests(unittest.TestCase):
             requested = urlopen.call_args.args[0].full_url
             printed = stdout.strip()
             self.assertNotEqual(printed, requested)
+            self.assertIn(MINTED_SEGMENT, printed)
+            self.assertTrue(printed.endswith("sidebar.png"), printed)
+
+    def test_keeps_the_scheme_and_port_of_a_local_worker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            shot = Path(tmp) / "sidebar.png"
+            shot.write_bytes(b"png-bytes")
+
+            with patch.object(upload_evidence, "urlopen", side_effect=minting_store):
+                result, stdout, stderr = self.run_main(
+                    shot, base_url="http://127.0.0.1:8799"
+                )
+
+            self.assertEqual(result, 0, stderr)
+            printed = stdout.strip()
+            self.assertTrue(printed.startswith("http://127.0.0.1:8799/"), printed)
             self.assertIn(MINTED_SEGMENT, printed)
             self.assertTrue(printed.endswith("sidebar.png"), printed)
 
