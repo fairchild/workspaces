@@ -199,7 +199,7 @@ class AcceptedArgumentTests(VerifierArgumentTestCase):
 
 
 class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
-    """#1562: an abort under macOS bash 3.2 read as a clean pass.
+    r"""#1562: an abort under macOS bash 3.2 read as a clean pass.
 
     Measured rather than inferred. An unbound-variable abort under
     `/bin/bash` exits 1 with no EXIT trap installed, but the status handed to

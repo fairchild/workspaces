@@ -33,10 +33,31 @@ EXPECTED_EXECUTABLE_NAME="WorkspaceManager"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-release-bundle.XXXXXX")"
 
+# A zero exit has to be earned. On macOS `/bin/bash` — 3.2.57, the shell the
+# release lane and every local run reach this script through — the status a
+# `set -u` abort hands the EXIT trap is already 0, so the shell's own status
+# cannot distinguish "verified" from "died on line 1". Preserving `$?` in
+# `cleanup` would preserve that 0; the sentinel is what closes it. Every
+# deliberate success goes through `succeed`, and `cleanup` refuses any other
+# zero (#1562, the failure class behind #1534).
+COMPLETED=false
+
 cleanup() {
+    local status=$?
     rm -rf "$TMP_DIR"
+    if [[ $status -eq 0 && "$COMPLETED" != true ]]; then
+        echo "[verify-release-bundle] ERROR: exited before completing verification;" \
+            "refusing to report success" >&2
+        return 1
+    fi
+    return "$status"
 }
 trap cleanup EXIT
+
+succeed() {
+    COMPLETED=true
+    exit 0
+}
 
 usage() {
     cat <<'EOF'
@@ -162,7 +183,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h | --help)
             usage
-            exit 0
+            succeed
             ;;
         -*)
             usage
@@ -192,7 +213,15 @@ done
 
 [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
 
-APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
+# The replacement reads `$HOME` for every path, not only a tilde-prefixed one,
+# so expanding unconditionally aborted a `HOME`-less run that never needed it —
+# and CI, `release.yml`, and `build-release.sh` all pass an absolute path.
+# Expanding only when there is a tilde to expand keeps those working and turns
+# the one case that genuinely needs `HOME` into a named failure.
+if [[ "$APP_BUNDLE" == "~"* ]]; then
+    [[ -n "${HOME:-}" ]] || fail "HOME is not set; cannot expand the leading ~ in $APP_BUNDLE"
+    APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
+fi
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle not found: $APP_BUNDLE"
 
 # Structure: naming, Info.plist identity, and the resources the app reads at runtime.
@@ -214,7 +243,7 @@ verify_bundle_identity "$APP_BUNDLE"
 
 if [[ "$STRUCTURE_ONLY" == true ]]; then
     echo "Verified release bundle structure for $APP_BUNDLE (signing not checked)"
-    exit 0
+    succeed
 fi
 
 # Signing. Required commands are checked here rather than up top so a structure-only
@@ -248,3 +277,4 @@ while IFS= read -r code_object; do
 done <"$CODE_OBJECTS_FILE"
 
 echo "Verified Developer ID signing for $APP_BUNDLE ($CODE_OBJECT_COUNT nested code object(s))"
+succeed
