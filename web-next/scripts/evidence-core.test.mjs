@@ -187,6 +187,61 @@ describe("run deadline", () => {
 		deadline.cancel();
 		expect(clearTimeoutSpy).toHaveBeenCalledWith("timer-handle");
 	});
+
+	test("escalates a SIGTERM-resistant server group before reporting the run as timed out", async () => {
+		vi.useFakeTimers();
+		try {
+			// Stands in for a detached `next start` process group that ignores
+			// SIGTERM (as a hung or blocked child can) and only exits on SIGKILL.
+			const signals = [];
+			let exited = false;
+			const group = {
+				kill(signal) {
+					signals.push(signal);
+					if (signal === "SIGKILL") exited = true;
+				},
+			};
+
+			// Mirrors harness.mjs's startProductionServer#stop escalation: SIGTERM,
+			// then SIGKILL after a grace period if the group is still alive.
+			const onExpire = vi.fn(async () => {
+				group.kill("SIGTERM");
+				await new Promise((resolve) => globalThis.setTimeout(resolve, 5_000));
+				if (!exited) group.kill("SIGKILL");
+			});
+
+			const deadline = createRunDeadline(1_000, { onExpire });
+			const settled = expect(deadline.expired).rejects.toThrow(/exceeded 1000ms/);
+
+			await vi.advanceTimersByTimeAsync(1_000);
+			// The deadline fired and onExpire started, but its grace period
+			// hasn't elapsed — the run must not be reported as timed out yet, or
+			// a resistant group could outlive it.
+			expect(onExpire).toHaveBeenCalledOnce();
+			expect(signals).toEqual(["SIGTERM"]);
+			expect(exited).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(5_000);
+			await settled;
+
+			expect(signals).toEqual(["SIGTERM", "SIGKILL"]);
+			expect(exited).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test("without onExpire, the run still times out as before", async () => {
+		vi.useFakeTimers();
+		try {
+			const deadline = createRunDeadline(1_000);
+			const settled = expect(deadline.expired).rejects.toThrow(/exceeded 1000ms/);
+			await vi.advanceTimersByTimeAsync(1_000);
+			await settled;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
 
 describe("completion latch", () => {
