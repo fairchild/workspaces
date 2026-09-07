@@ -34,14 +34,14 @@ CONTENT_TYPES = {
 }
 
 
-def _uploaded_url(body: bytes) -> str | None:
-    """Read the stored object's URL out of the store's 201 response."""
+def _uploaded_key(body: bytes) -> str | None:
+    """Read the stored object's key out of the store's 201 response."""
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
-    url = payload.get("url") if isinstance(payload, dict) else None
-    return url if isinstance(url, str) and url else None
+    key = payload.get("key") if isinstance(payload, dict) else None
+    return key if isinstance(key, str) and key else None
 
 
 def main() -> int:
@@ -110,12 +110,15 @@ def main() -> int:
         return 1
 
     # The store mints an unguessable segment into the key, so the object does
-    # not live at the path we asked for. The response is the only authority on
-    # where it landed.
-    public_url = _uploaded_url(body)
-    if public_url is None:
-        print("error: upload succeeded but the store returned no URL", file=sys.stderr)
+    # not live at the path we asked for, and only the store knows where it
+    # landed. Only we know how to reach the store: its own `url` field hardcodes
+    # https and drops the port, which is wrong for anything but a custom domain
+    # on 443. So take the key from the store and the address from the dial.
+    stored_key = _uploaded_key(body)
+    if stored_key is None:
+        print("error: upload succeeded but the store returned no key", file=sys.stderr)
         return 1
+    public_url = f"{base_url.rstrip('/')}/{stored_key.lstrip('/')}"
     print(public_url)
 
     breadcrumb = args.breadcrumb or os.environ.get("EVIDENCE_BREADCRUMB") == "1"

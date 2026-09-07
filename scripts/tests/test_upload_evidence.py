@@ -158,7 +158,7 @@ class UploadEvidenceTests(unittest.TestCase):
             self.assertIn("file grew to 5 bytes", stderr)
             urlopen.assert_not_called()
 
-    def test_prints_the_url_the_store_returned_not_the_one_we_asked_for(self) -> None:
+    def test_prints_the_minted_path_not_the_one_we_asked_for(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             shot = Path(tmp) / "sidebar.png"
             shot.write_bytes(b"png-bytes")
@@ -191,12 +191,19 @@ class UploadEvidenceTests(unittest.TestCase):
             self.assertIn(MINTED_SEGMENT, printed)
             self.assertTrue(printed.endswith("sidebar.png"), printed)
 
-    def test_fails_when_the_store_reports_no_url(self) -> None:
+    def test_fails_when_the_store_reports_no_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             shot = Path(tmp) / "sidebar.png"
             shot.write_bytes(b"png-bytes")
 
-            for body in (b"", b"not json", b"{}", b'{"url": ""}'):
+            bodies = (
+                b"",
+                b"not json",
+                b"{}",
+                b'{"key": ""}',
+                b'{"url": "https://evidence.example/sidebar.png"}',
+            )
+            for body in bodies:
                 with self.subTest(body=body):
                     with patch.object(
                         upload_evidence, "urlopen", return_value=FakeResponse(body)
@@ -205,7 +212,7 @@ class UploadEvidenceTests(unittest.TestCase):
 
                     self.assertEqual(result, 1)
                     self.assertEqual(stdout, "")
-                    self.assertIn("returned no URL", stderr)
+                    self.assertIn("returned no key", stderr)
 
 
 if __name__ == "__main__":
