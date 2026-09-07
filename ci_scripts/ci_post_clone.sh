@@ -61,14 +61,14 @@ rm -f "$perf_probe_csv"
 
 echo "stage=ghosttykit-build"
 
-homebrew_zig_bin="/opt/homebrew/opt/zig@0.15/bin/zig"
+homebrew_zig_bin="/opt/homebrew/opt/zig/bin/zig"
 if [ ! -x "$homebrew_zig_bin" ]; then
-  brew install zig@0.15
+  brew install zig
 
   # Some Xcode Cloud macOS images run Homebrew from /usr/local instead of the
   # standard Apple Silicon /opt/homebrew prefix; only resolve dynamically when
   # the standard path isn't already there.
-  zig_prefix="$(brew --prefix zig@0.15 2>/dev/null || true)"
+  zig_prefix="$(brew --prefix zig 2>/dev/null || true)"
   if [ -n "$zig_prefix" ] && [ -x "$zig_prefix/bin/zig" ]; then
     homebrew_zig_bin="$zig_prefix/bin/zig"
   fi

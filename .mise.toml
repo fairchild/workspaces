@@ -2,7 +2,7 @@
 lockfile = true
 
 [tools]
-zig = "0.15.2"
+zig = "0.16.0"
 
 [tasks.setup]
 description = "Bootstrap this checkout with tools, dependencies, env links, and prek hooks."

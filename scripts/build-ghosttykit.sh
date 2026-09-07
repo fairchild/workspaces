@@ -43,10 +43,21 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUT_DIR="$PROJECT_DIR/Frameworks"
 
 # Pinned versions for reproducible builds.
-GHOSTTY_COMMIT="332b2aefc6e72d363aa93ab6ecfc86eeeeb5ed28"
-ZIG_VERSION="0.15.2"
+GHOSTTY_COMMIT="492300cad104195411d12217dd22f1cd05f31376"
+ZIG_VERSION="0.16.0"
 ARM64_HOMEBREW_PREFIX="/opt/homebrew"
-HOMEBREW_ZIG_BIN="$ARM64_HOMEBREW_PREFIX/opt/zig@0.15/bin/zig"
+# Homebrew carries 0.16 as the unversioned `zig` formula; no `zig@0.16` keg
+# exists. That formula floats to the next Zig release, so every Homebrew
+# candidate is version-checked against ZIG_VERSION before it is accepted —
+# a floated formula falls through to the version-locked mise runner instead
+# of silently building the pin with a different compiler.
+# The static archive Ghostty emits inside the xcframework. Upstream names it
+# after the "libghostty-internal" embedding API the macOS app consumes; the
+# post-build repair, strip, and verification steps all locate it by this name,
+# and a rename upstream surfaces as assert_host_arch_slice finding no archive.
+GHOSTTY_ARCHIVE_NAME="libghostty-internal.a"
+HOMEBREW_ZIG_FORMULA="zig"
+HOMEBREW_ZIG_BIN="$ARM64_HOMEBREW_PREFIX/opt/$HOMEBREW_ZIG_FORMULA/bin/zig"
 GHOSTTY_ARCH_DIAGNOSTICS="${GHOSTTY_ARCH_DIAGNOSTICS:-1}"
 # The app's minimum macOS (Package.swift `.macOS(.v14)`). Objects built for a
 # newer minimum, or for another platform entirely, cannot link into the app.
@@ -88,16 +99,22 @@ zig_binary_matches_host_arch() {
   file "$zig_bin" 2>/dev/null | grep -q "$(uname -m)"
 }
 
-# Confirmed on an Xcode Cloud macOS image: its only available zig@0.15 bottle
-# was Rosetta-translated x86_64 even though the host (and its own `uname -m`)
-# is arm64. Neither replacement compiler works there: upstream ziglang.org's
-# arm64 build fails to link its own build runner against this repo's supported
-# Xcode SDKs ("undefined symbol: __availability_version_check" plus missing
-# libSystem symbols; only Homebrew's zig@0.15 formula carries the needed
-# Darwin linker patch), and bootstrapping a native /opt/homebrew needs sudo
-# the Xcode Cloud user does not have (confirmed via build 574's log). So a
-# wrong-arch Homebrew zig is accepted and asked to CROSS-COMPILE the host-arch
-# slice: Ghostty's native xcframework slice hardcodes the zig compiler
+zig_binary_matches_pinned_version() {
+  local zig_bin="$1"
+  [[ "$("$zig_bin" version 2>/dev/null)" == "$ZIG_VERSION" ]]
+}
+
+# Confirmed on an Xcode Cloud macOS image: its only available Homebrew zig
+# bottle was Rosetta-translated x86_64 even though the host (and its own
+# `uname -m`) is arm64. Neither replacement compiler works there: the
+# ziglang.org arm64 build of the Zig that image needed (0.15.2) fails to link
+# its own build runner against this repo's supported Xcode SDKs ("undefined
+# symbol: __availability_version_check" plus missing libSystem symbols; the
+# Homebrew formula carries the Darwin linker patch), and bootstrapping a
+# native /opt/homebrew needs sudo the Xcode Cloud user does not have
+# (confirmed via build 574's log). So a wrong-arch Homebrew zig is accepted
+# and asked to CROSS-COMPILE the host-arch slice: Ghostty's native
+# xcframework slice hardcodes the zig compiler
 # binary's own arch (`Config.genericMacOSTarget(b, null)`), so the pinned
 # checkout gets a one-token patch replacing that `null` with the real host
 # arch. zig is a native cross-compiler; the compiler binary's arch stops
@@ -166,21 +183,24 @@ resolve_zig_runner() {
     return
   fi
 
-  if [[ -x "$HOMEBREW_ZIG_BIN" ]] && zig_binary_matches_host_arch "$HOMEBREW_ZIG_BIN"; then
+  if [[ -x "$HOMEBREW_ZIG_BIN" ]] \
+    && zig_binary_matches_host_arch "$HOMEBREW_ZIG_BIN" \
+    && zig_binary_matches_pinned_version "$HOMEBREW_ZIG_BIN"; then
     ZIG_RUNNER=("$HOMEBREW_ZIG_BIN")
     return
   fi
 
   # Some Xcode Cloud macOS images run Homebrew from /usr/local instead of the
   # standard Apple Silicon /opt/homebrew prefix. Only used as a fallback here
-  # so a host with a real /opt/homebrew zig@0.15 (checked above) never gets
+  # so a host with a real /opt/homebrew zig (checked above) never gets
   # overridden by a different-prefix (and potentially different-arch) one.
   # A wrong-arch brew zig is still usable — it cross-compiles the host-arch
   # slice via the pinned-source patch (see prepare_slice_arch_patch).
   if command -v brew >/dev/null 2>&1; then
     local brew_zig_prefix
-    brew_zig_prefix="$(brew --prefix zig@0.15 2>/dev/null || true)"
-    if [[ -n "$brew_zig_prefix" && -x "$brew_zig_prefix/bin/zig" ]]; then
+    brew_zig_prefix="$(brew --prefix "$HOMEBREW_ZIG_FORMULA" 2>/dev/null || true)"
+    if [[ -n "$brew_zig_prefix" && -x "$brew_zig_prefix/bin/zig" ]] \
+      && zig_binary_matches_pinned_version "$brew_zig_prefix/bin/zig"; then
       if ! zig_binary_matches_host_arch "$brew_zig_prefix/bin/zig"; then
         NEEDS_SLICE_ARCH_PATCH=1
       fi
@@ -381,8 +401,8 @@ repair_ghostty_archive_if_needed() {
   fi
 
   find "$tmp_dir/objects" -type f -name "*.o" -print0 \
-    | xargs -0 libtool -static -o "$tmp_dir/libghostty-fat.a"
-  mv "$tmp_dir/libghostty-fat.a" "$archive"
+    | xargs -0 libtool -static -o "$tmp_dir/$GHOSTTY_ARCHIVE_NAME"
+  mv "$tmp_dir/$GHOSTTY_ARCHIVE_NAME" "$archive"
   rm -rf "$tmp_dir"
   trap - RETURN
 
@@ -401,7 +421,7 @@ postprocess_xcframework() {
   while IFS= read -r archive; do
     repair_ghostty_archive_if_needed "$archive"
     xcrun strip -S -x "$archive"
-  done < <(find "$framework_dir" -type f -name "libghostty-fat.a")
+  done < <(find "$framework_dir" -type f -name "$GHOSTTY_ARCHIVE_NAME")
 }
 
 # The failure mode this whole arch dance guards against is a silently
@@ -418,10 +438,10 @@ assert_host_arch_slice() {
     if ! lipo -info "$archive" 2>/dev/null | grep -q "$host_arch"; then
       die "built GhosttyKit slice does not contain host arch $host_arch: $(lipo -info "$archive" 2>&1)"
     fi
-  done < <(find "$framework_dir" -type f -name "libghostty-fat.a" 2>/dev/null)
+  done < <(find "$framework_dir" -type f -name "$GHOSTTY_ARCHIVE_NAME" 2>/dev/null)
 
   if [[ "$found" == "0" ]]; then
-    die "no libghostty-fat.a found in $framework_dir to verify architecture"
+    die "no $GHOSTTY_ARCHIVE_NAME found in $framework_dir to verify architecture"
   fi
 
   # SwiftPM selects the slice from Info.plist metadata, not the archive, so a
@@ -486,7 +506,7 @@ The shared Zig cache is likely polluted by a build for another platform or
 macOS version (e.g. a universal/iOS xcframework build). Purge and rebuild:
   ./scripts/build-ghosttykit.sh --purge-cache"
     fi
-  done < <(find "$framework_dir" -type f -name "libghostty-fat.a" 2>/dev/null)
+  done < <(find "$framework_dir" -type f -name "$GHOSTTY_ARCHIVE_NAME" 2>/dev/null)
 }
 
 log_arch_diagnostics() {
@@ -518,7 +538,7 @@ log_arch_diagnostics() {
     echo "xcframework archive: $archive"
     file "$archive" 2>&1 || true
     lipo -info "$archive" 2>&1 || true
-  done < <(find "$framework_dir" -type f -name "libghostty-fat.a" 2>/dev/null)
+  done < <(find "$framework_dir" -type f -name "$GHOSTTY_ARCHIVE_NAME" 2>/dev/null)
 
   echo "--- end GhosttyKit architecture diagnostics ---"
 }
