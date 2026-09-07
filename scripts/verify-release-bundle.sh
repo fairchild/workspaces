@@ -130,7 +130,16 @@ verify_bundle_identity() {
 
 is_mach_o() {
     local candidate="$1"
-    file -b "$candidate" 2>/dev/null | grep -q 'Mach-O'
+    local description=""
+
+    # `file … | grep -q` reported a *failing* `file` as "not Mach-O", so a code
+    # object this script could not inspect was silently dropped from the signing
+    # set and the run still passed. Not being able to tell is not the same answer
+    # as no (#1562).
+    description="$(file -b "$candidate" 2>/dev/null)" \
+        || fail "Failed to inspect $candidate to decide whether it needs a signature"
+
+    [[ "$description" == *Mach-O* ]]
 }
 
 verify_codesign_identity() {
@@ -180,10 +189,7 @@ collect_code_objects() {
         if ! is_mach_o "$candidate"; then
             continue
         fi
-        if grep -Fqx "$candidate" "$CODE_OBJECTS_FILE" 2>/dev/null; then
-            continue
-        fi
-        printf '%s\n' "$candidate" >>"$CODE_OBJECTS_FILE"
+        printf '%s\0' "$candidate" >>"$CODE_OBJECTS_FILE"
     done <"$listing"
 }
 
@@ -285,8 +291,14 @@ done
 
 verify_codesign_identity "$APP_BUNDLE" "$APP_BUNDLE"
 
+# NUL-delimited end to end. The list was newline-delimited and deduplicated with
+# `grep -Fqx`, which reads a path containing a newline as two patterns: a second
+# object whose name began with the first object's name matched, was skipped, and
+# never reached `codesign` — while the run reported success. The six search roots
+# are disjoint subtrees and `find -type f` yields each file once, so nothing was
+# being deduplicated in the first place (#1562).
 CODE_OBJECT_COUNT=0
-while IFS= read -r code_object; do
+while IFS= read -r -d '' code_object; do
     [[ -n "$code_object" ]] || continue
     CODE_OBJECT_COUNT=$((CODE_OBJECT_COUNT + 1))
     verify_codesign_identity "$code_object" "$code_object"

@@ -25,9 +25,9 @@ The tests drive the real script and read either the argument boundary or the
 exit status, so they need no network, no secrets, no UI access, no live GitHub
 mutation, and no built app bundle. Four need a macOS host because they build a
 complete unsigned bundle and run the structure assertions over it, and one
-reads an error message that only a macOS host reaches; all seven skip where
+reads an error message that only a macOS host reaches; all nine skip where
 PlistBuddy is absent, which is the Linux CI runner — where this file reports
-28 tests with 7 skipped.
+30 tests with 9 skipped.
 """
 
 from __future__ import annotations
@@ -61,9 +61,12 @@ POST_PARSE_MARKERS = (
 # post-parse assertion instead of reading anything on disk.
 ABSENT_BUNDLE = "/nonexistent/verify-release-bundle-test/WorkSpaces.app"
 
-# Printed by an injected abort just before it fires. Without it a test could
-# pass on the exit code the argument alone produces, having never run the
-# injection at all — which is what review found the `set -e` case doing.
+# Stem of the marker an injected abort prints just before it fires; each case
+# appends its own suffix. Without it a test could pass on the exit code the
+# argument alone produces, having never run the injection — which is what
+# review found the `set -e` case doing. The marker alone is not enough either:
+# a helper ignoring its statement still prints it, so each case also asserts
+# the signature of the abort it means to exercise.
 ABORT_MARKER = "VERIFY_RELEASE_BUNDLE_INJECTION_REACHED"
 
 
@@ -246,7 +249,9 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
     `verify_bundle_identity`, or a single signing assertion.
     """
 
-    def run_with_injected_abort(self, statement: str) -> subprocess.CompletedProcess[str]:
+    def run_with_injected_abort(
+        self, statement: str, marker: str
+    ) -> subprocess.CompletedProcess[str]:
         """Run a copy of the verifier that aborts, and prove the abort is why.
 
         `ABSENT_BUNDLE` exits non-zero on its own, so a bare status assertion
@@ -255,10 +260,10 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         proves it stopped the script rather than merely printing.
         """
         with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleAbort-") as root:
-            script = script_with_injected_abort(Path(root), statement)
+            script = script_with_injected_abort(Path(root), statement, marker)
             result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
         output = result.stdout + result.stderr
-        self.assertIn(ABORT_MARKER, output, f"the injection never ran\n{output}")
+        self.assertIn(marker, output, f"the injection never ran\n{output}")
         reached = [marker for marker in POST_PARSE_MARKERS if marker in output]
         self.assertEqual(reached, [], f"the abort did not stop the run: {reached}\n{output}")
         return result
@@ -345,9 +350,12 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         carries its own status out and the sentinel correctly says nothing.
         The probe decides which, so this reads the same defect on both.
         """
-        result = self.run_with_injected_abort('echo "${VERIFY_RELEASE_BUNDLE_UNSET_PROBE}"')
+        result = self.run_with_injected_abort(
+            'echo "${VERIFY_RELEASE_BUNDLE_UNSET_PROBE}"', f"{ABORT_MARKER}_SET_U"
+        )
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, f"an abort exited 0\n{output}")
+        self.assertIn("unbound variable", output, f"this was not a `set -u` abort\n{output}")
         if SYSTEM_BASH_ZEROES_A_SET_U_ABORT:
             self.assertIn("refusing to report success", output, output)
 
@@ -359,13 +367,16 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         `cleanup` preserves `$?`. This pins that, so a later change to the
         trap cannot quietly break the half that worked.
         """
-        result = self.run_with_injected_abort("false")
-        self.assertNotEqual(
-            result.returncode, 0, f"an abort exited 0\n{result.stdout}{result.stderr}"
-        )
+        result = self.run_with_injected_abort("false", f"{ABORT_MARKER}_SET_E")
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, f"an abort exited 0\n{output}")
+        # Review's attack: a helper that ignored its statement and always
+        # injected an unbound variable passed both cases. The marker cannot
+        # catch that, because the marker is not the statement. This can.
+        self.assertNotIn("unbound variable", output, f"this was not a `set -e` abort\n{output}")
 
 
-def script_with_injected_abort(root: Path, statement: str) -> Path:
+def script_with_injected_abort(root: Path, statement: str, marker: str) -> Path:
     """A copy of the verifier that aborts right after its EXIT trap is armed.
 
     Injecting into a copy rather than asserting on today's one abort is what
@@ -377,7 +388,7 @@ def script_with_injected_abort(root: Path, statement: str) -> Path:
     anchor = "trap cleanup EXIT\n"
     if anchor not in source:
         raise AssertionError(f"{SCRIPT_PATH} no longer arms its EXIT trap as expected")
-    injection = f'echo "{ABORT_MARKER}" >&2\n{statement}\n'
+    injection = f'echo "{marker}" >&2\n{statement}\n'
     script = root / "verify-release-bundle.sh"
     script.write_text(source.replace(anchor, f"{anchor}{injection}", 1), encoding="utf-8")
     script.chmod(0o755)
@@ -485,6 +496,75 @@ class SigningEnumerationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, f"enumeration failed and it passed\n{output}")
         self.assertNotIn("Verified Developer ID signing", result.stdout, output)
         self.assertIn("Failed to enumerate", output, output)
+
+    def test_a_file_that_cannot_be_inspected_is_not_assumed_safe(self) -> None:
+        """`file` failing meant "not Mach-O", so the object was dropped silently.
+
+        Not being able to tell whether something needs a signature is not the
+        same answer as deciding it does not. Before the fix the run skipped the
+        helper and reported a signed bundle.
+        """
+        helper = self.bundle / "Contents" / "MacOS" / "UnsignedHelper"
+        helper.write_bytes(b"\xcf\xfa\xed\xfe")
+        helper.chmod(0o755)
+        write_stub(
+            self.stubs / "file",
+            'for arg in "$@"; do\n'
+            '  case "$arg" in *UnsignedHelper) exit 42 ;; esac\n'
+            "done\n"
+            'exec /usr/bin/file "$@"\n',
+        )
+        result = self.run_signing_lane()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, f"an uninspectable object passed\n{output}")
+        self.assertNotIn("Verified Developer ID signing", result.stdout, output)
+        self.assertIn("Failed to inspect", output, output)
+
+    def test_a_newline_in_a_code_object_name_does_not_skip_a_signature(self) -> None:
+        """The list was newline-delimited, so one object became two wrong ones.
+
+        `grep -Fqx` reads a pattern containing a newline as two patterns, so
+        `…/Helper` matched the first line of `…/Helper\nExtra` and was dropped
+        as a duplicate. The consumer then split the surviving entry back into
+        two, and ran `codesign` on `…/Helper` and on a bare `Extra` — neither
+        of which is the object that was found. The count came out plausible
+        either way, which is why this asserts *what* was verified.
+
+        The shape is remote: it needs a Mach-O inside the bundle whose name
+        carries a newline. It is here because it is the same failure the rest
+        of this file is about — a signature reported over something other than
+        what was enumerated.
+        """
+        macos = self.bundle / "Contents" / "MacOS"
+        names = ("Helper", "Helper\nExtra")
+        for name in names:
+            target = macos / name
+            target.write_bytes(b"\xcf\xfa\xed\xfe")
+            target.chmod(0o755)
+        write_stub(self.stubs / "file", 'echo "Mach-O 64-bit executable arm64"\n')
+
+        log = self.root / "codesign-targets"
+        write_stub(
+            self.stubs / "codesign",
+            f'printf "%s\\0" "${{@: -1}}" >> "{log}"\n'
+            "cat <<'REPORT'\n"
+            "TeamIdentifier=ABCDE12345\n"
+            "Authority=Developer ID Application: Example (ABCDE12345)\n"
+            "REPORT\n",
+        )
+
+        result = self.run_signing_lane()
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+
+        verified = {entry for entry in log.read_bytes().split(b"\0") if entry}
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIn(
+                    str(macos / name).encode(),
+                    verified,
+                    f"{name!r} was enumerated but never signed\n{output}",
+                )
 
     def test_the_signing_lane_still_passes_when_find_works(self) -> None:
         """The control, without which the case above proves nothing."""
