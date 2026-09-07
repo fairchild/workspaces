@@ -151,6 +151,23 @@ jobs:
       - name: Verify unsigned bundle structure
         run: ./scripts/verify-release-bundle.sh --structure-only build/WorkSpaces.app
 
+      # This file's cases run in `ci-agents.yml` too, on Linux — where they
+      # cannot fail. The defect they exist for is a macOS `/bin/bash` 3.2
+      # behaviour: a `set -u` abort reaches the EXIT trap with `$?` already
+      # zeroed, so the verifier exited 0 having asserted nothing (#1562).
+      # Under bash 5 the same script already fails closed, so the Linux lane
+      # proves no regression and this one is the only place the bug is
+      # visible. Seven of the cases also need PlistBuddy and skip there.
+      #
+      # The test file is deliberately not added to this workflow's path filter:
+      # `release-preflight.sh` hand-duplicates that filter and its parity test
+      # reads it with a regex that stops at the first `/` after `scripts`, so a
+      # nested path would silently half-register in the gate that keeps the two
+      # lists honest. The filter already lists the script these tests guard,
+      # which is the trigger that matters; a test-only change reaches Linux only.
+      - name: Run verifier script tests (macOS shell)
+        run: uv run --script scripts/tests/test_verify_release_bundle.py
+
       # Proves the release perf gate can execute on this runner. Absent uv made
       # it exit 127 during v0.24.0, and a release rather than a PR is where that
       # surfaced.

@@ -33,10 +33,35 @@ EXPECTED_EXECUTABLE_NAME="WorkspaceManager"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-release-bundle.XXXXXX")"
 
+# A zero exit has to be earned. On macOS `/bin/bash` — 3.2.57, the shell the
+# release lane and every local run reach this script through — the status a
+# `set -u` abort hands the EXIT trap is already 0, so the shell's own status
+# cannot distinguish "verified" from "died on line 1". Preserving `$?` in
+# `cleanup` would preserve that 0; the sentinel is what closes it. Every
+# deliberate success goes through `succeed`, and `cleanup` refuses any other
+# zero (#1562, the failure class behind #1534).
+COMPLETED=false
+
 cleanup() {
-    rm -rf "$TMP_DIR"
+    local status=$?
+    # `|| true` so a cleanup failure cannot overwrite the status being carried
+    # out, and `exit` rather than `return` so the verdict does not depend on
+    # ambient `errexit` reacting to the return value.
+    rm -rf "$TMP_DIR" || true
+    if [[ $status -eq 0 && "$COMPLETED" != true ]]; then
+        echo "[verify-release-bundle] ERROR: exited before completing verification;" \
+            "refusing to report success" >&2
+        status=1
+    fi
+    trap - EXIT
+    exit "$status"
 }
 trap cleanup EXIT
+
+succeed() {
+    COMPLETED=true
+    exit 0
+}
 
 usage() {
     cat <<'EOF'
@@ -105,7 +130,26 @@ verify_bundle_identity() {
 
 is_mach_o() {
     local candidate="$1"
-    file -b "$candidate" 2>/dev/null | grep -q 'Mach-O'
+    local description=""
+
+    # `file … | grep -q` reported a *failing* `file` as "not Mach-O", so a code
+    # object this script could not inspect was silently dropped from the signing
+    # set and the run still passed. Not being able to tell is not the same answer
+    # as no (#1562).
+    #
+    # Readability is asserted here rather than inferred from `file`, because
+    # macOS `/usr/bin/file` prints `cannot open: Permission denied` and exits
+    # **0** — so its status alone cannot be trusted to report that it failed.
+    [[ -r "$candidate" ]] \
+        || fail "Cannot read $candidate to decide whether it needs a signature"
+
+    description="$(file -b "$candidate" 2>/dev/null)" \
+        || fail "Failed to inspect $candidate to decide whether it needs a signature"
+
+    [[ -n "$description" ]] \
+        || fail "Could not classify $candidate; refusing to assume it needs no signature"
+
+    [[ "$description" == *Mach-O* ]]
 }
 
 verify_codesign_identity() {
@@ -139,19 +183,24 @@ verify_codesign_identity() {
 collect_code_objects() {
     local root="$1"
     local candidate=""
+    # Process substitution discards the producer's status: a `find` that failed
+    # part-way delivered a short list, the loop read it happily, and the run went
+    # on to report a signed bundle having enumerated less than it was asked to.
+    # Landing the list first makes the failure a failure (#1562).
+    local listing="$TMP_DIR/find-listing"
 
     [[ -d "$root" ]] || return 0
+
+    find "$root" -type f -print0 >"$listing" \
+        || fail "Failed to enumerate files under $root"
 
     while IFS= read -r -d '' candidate; do
         [[ -f "$candidate" ]] || continue
         if ! is_mach_o "$candidate"; then
             continue
         fi
-        if grep -Fqx "$candidate" "$CODE_OBJECTS_FILE" 2>/dev/null; then
-            continue
-        fi
-        printf '%s\n' "$candidate" >>"$CODE_OBJECTS_FILE"
-    done < <(find "$root" -type f -print0)
+        printf '%s\0' "$candidate" >>"$CODE_OBJECTS_FILE"
+    done <"$listing"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -162,7 +211,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -h | --help)
             usage
-            exit 0
+            succeed
             ;;
         -*)
             usage
@@ -192,7 +241,19 @@ done
 
 [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
 
-APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
+# The replacement reads `$HOME` for every path, not only a tilde-prefixed one,
+# so expanding unconditionally aborted a `HOME`-less run that never needed it —
+# and every caller here passes a path with no leading tilde (`ci.yml` and
+# `release.yml` pass the relative `build/WorkSpaces.app`). Expanding only when
+# there is a tilde to expand keeps those working and turns the one case that
+# genuinely needs `HOME` into a named failure. The guard is `-n`, so an empty
+# `HOME` is refused too: expanding `~user/x` against it yields the relative
+# `user/x`, which is precisely the verify-the-wrong-thing shape this script
+# exists to refuse.
+if [[ "$APP_BUNDLE" == "~"* ]]; then
+    [[ -n "${HOME:-}" ]] || fail "HOME is not set; cannot expand the leading ~ in $APP_BUNDLE"
+    APP_BUNDLE="${APP_BUNDLE/#\~/$HOME}"
+fi
 [[ -d "$APP_BUNDLE" ]] || fail "App bundle not found: $APP_BUNDLE"
 
 # Structure: naming, Info.plist identity, and the resources the app reads at runtime.
@@ -214,7 +275,7 @@ verify_bundle_identity "$APP_BUNDLE"
 
 if [[ "$STRUCTURE_ONLY" == true ]]; then
     echo "Verified release bundle structure for $APP_BUNDLE (signing not checked)"
-    exit 0
+    succeed
 fi
 
 # Signing. Required commands are checked here rather than up top so a structure-only
@@ -240,11 +301,18 @@ done
 
 verify_codesign_identity "$APP_BUNDLE" "$APP_BUNDLE"
 
+# NUL-delimited end to end. The list was newline-delimited and deduplicated with
+# `grep -Fqx`, which reads a path containing a newline as two patterns: a second
+# object whose name began with the first object's name matched, was skipped, and
+# never reached `codesign` — while the run reported success. The six search roots
+# are disjoint subtrees and `find -type f` yields each file once, so nothing was
+# being deduplicated in the first place (#1562).
 CODE_OBJECT_COUNT=0
-while IFS= read -r code_object; do
+while IFS= read -r -d '' code_object; do
     [[ -n "$code_object" ]] || continue
     CODE_OBJECT_COUNT=$((CODE_OBJECT_COUNT + 1))
     verify_codesign_identity "$code_object" "$code_object"
 done <"$CODE_OBJECTS_FILE"
 
 echo "Verified Developer ID signing for $APP_BUNDLE ($CODE_OBJECT_COUNT nested code object(s))"
+succeed
