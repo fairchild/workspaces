@@ -250,14 +250,16 @@ class UploadEvidenceTests(unittest.TestCase):
                 side_effect=URLError(gaierror(8, "nodename nor servname provided")),
             ):
                 result, stdout, stderr = self.run_main(
-                    shot, base_url="http://uploader:s3cret@127.0.0.1:8799"
+                    shot, base_url="http://uploader:s3cret@127.0.0.1:8799/evidence?token=t0ken"
                 )
 
             self.assertEqual(result, 1)
             self.assertEqual(stdout, "")
-            self.assertIn("could not reach", stderr)
-            self.assertNotIn("s3cret", stderr)
-            self.assertNotIn("Traceback", stderr)
+            self.assertEqual(
+                stderr,
+                "error: could not reach http://127.0.0.1:8799/evidence: "
+                "[Errno 8] nodename nor servname provided\n",
+            )
 
     def test_fails_when_the_store_reports_no_usable_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

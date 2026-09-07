@@ -80,8 +80,9 @@ def _public_url(sent_url: str, stored_key: str) -> str:
 
 
 def _for_display(url: str) -> str:
+    """Enough of a URL to say which store this was, and nothing that authorizes."""
     parts = urlsplit(url)
-    return urlunsplit(parts._replace(netloc=_authority(parts.netloc)))
+    return urlunsplit((parts.scheme, _authority(parts.netloc), parts.path, "", ""))
 
 
 def main() -> int:
