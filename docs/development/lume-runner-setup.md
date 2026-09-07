@@ -425,7 +425,11 @@ EVIDENCE_UPLOAD_TOKEN=<token> uv run scripts/upload-evidence.py screenshot.png \
   --breadcrumb
 ```
 
-Output: `https://evidence.cloudcompute.com/workspaces/pr-142/20260318-153022-sidebar-toggle.png`
+Output: `https://evidence.cloudcompute.com/workspaces/pr-142/PRF-zMRuZN3Ih0j14u_o3g/20260318-153022-sidebar-toggle.png`
+
+The store mints that 22-character segment above the filename, so the object does not
+live at the path the script asked for. Paste the URL the script prints; one rebuilt
+from the arguments you passed will 404.
 
 The `--breadcrumb` flag copies the file to `~/Desktop/` and appends to `~/Desktop/april-runs.log`.
 
