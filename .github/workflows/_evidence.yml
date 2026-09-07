@@ -60,7 +60,7 @@ jobs:
     # are already proven on this image by ci-fallback.yml. The screenshot step
     # below has not run on a hosted session before — it stays continue-on-error
     # so evidence degrades to build+test rather than failing the job.
-    runs-on: macos-15
+    runs-on: macos-26
     # Sized for a cold hosted image, not a warm local runner. ci-fallback.yml
     # budgets 90 for the same build; 60 covers gather's narrower step list.
     timeout-minutes: 60

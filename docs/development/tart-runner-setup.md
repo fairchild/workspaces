@@ -3,7 +3,7 @@
 > **Status: archival.** The `[self-hosted, tart-ui]` lane is retired and no
 > workflow targets it — see
 > [../decisions/perf-measurement-laptop-optin.md](../decisions/perf-measurement-laptop-optin.md).
-> UI smoke moved to GitHub-hosted `macos-15` (`ui-smoke-advisory.yml`); perf
+> UI smoke moved to GitHub-hosted `macos-26` (`ui-smoke-advisory.yml`); perf
 > benchmarks moved to the owner's laptop, opt-in per run. This runbook is kept
 > because the provisioning mechanics are still correct if a Tart lane is ever
 > stood up again — but nothing consumes it today, and none of it has been
