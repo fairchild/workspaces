@@ -3,7 +3,7 @@
 # setup-release-secrets.sh - Configure GitHub release secrets from a verified p12
 # ============================================================================
 #
-# This script configures required repository secrets/variables for release.yml.
+# This script configures signing-environment secrets and repository variables for release.yml.
 #
 # Secrets (sensitive):
 #   - APPLE_DEVELOPER_ID_CERT_BASE64
@@ -82,7 +82,7 @@ Options:
   --p12-password PASS     Export password used to protect the .p12
   --non-interactive       Do not prompt; fail if required values are missing
   --force                 Overwrite existing secrets/variables
-  --run-release           Trigger GitHub "Release" workflow after setting secrets
+  --run-release           Prepare a tester candidate after setting secrets (requires main CI)
   --watch                 If --run-release is set, watch run until completion
   --ref BRANCH            Ref for workflow dispatch (default: main)
   --help                  Show this help
@@ -159,13 +159,13 @@ have_secret() {
     local name="$1"
     local names=""
 
-    if names="$(gh secret list --json name --jq '.[].name' 2>/dev/null)"; then
+    if names="$(gh secret list --env release --json name --jq '.[].name' 2>/dev/null)"; then
         printf '%s\n' "$names" | grep -Fxq "$name"
         return
     fi
 
     # Fallback for older gh versions without JSON support.
-    names="$(gh secret list 2>/dev/null | awk '{print $1}' || true)"
+    names="$(gh secret list --env release 2>/dev/null | awk '{print $1}' || true)"
     printf '%s\n' "$names" | grep -Fxq "$name"
 }
 
@@ -449,21 +449,21 @@ fi
 log "Applying GitHub configuration (idempotent mode: force=$FORCE)"
 
 if [[ "$NEED_CERT_B64" == true ]]; then
-    gh secret set APPLE_DEVELOPER_ID_CERT_BASE64 < "$TMP_B64"
+    gh secret set --env release APPLE_DEVELOPER_ID_CERT_BASE64 < "$TMP_B64"
     log "Set secret APPLE_DEVELOPER_ID_CERT_BASE64"
 else
     log "Skip secret APPLE_DEVELOPER_ID_CERT_BASE64 (already set)"
 fi
 
 if [[ "$NEED_CERT_PASSWORD" == true ]]; then
-    gh secret set APPLE_DEVELOPER_ID_CERT_PASSWORD -b "$P12_PASSWORD_VALUE"
+    gh secret set --env release APPLE_DEVELOPER_ID_CERT_PASSWORD -b "$P12_PASSWORD_VALUE"
     log "Set secret APPLE_DEVELOPER_ID_CERT_PASSWORD"
 else
     log "Skip secret APPLE_DEVELOPER_ID_CERT_PASSWORD (already set)"
 fi
 
 if [[ "$NEED_PROFILE_B64" == true ]]; then
-    gh secret set APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 < "$TMP_PROFILE_B64"
+    gh secret set --env release APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 < "$TMP_PROFILE_B64"
     log "Set secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64"
 else
     log "Skip secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 (already set)"
@@ -471,9 +471,9 @@ fi
 
 if [[ "$NEED_API_KEY_B64" == true ]]; then
     if [[ -n "$APPLE_API_KEY_BASE64_VALUE" ]]; then
-        gh secret set APPLE_API_KEY_BASE64 -b "$APPLE_API_KEY_BASE64_VALUE"
+        gh secret set --env release APPLE_API_KEY_BASE64 -b "$APPLE_API_KEY_BASE64_VALUE"
     else
-        gh secret set APPLE_API_KEY_BASE64 < "$TMP_API_KEY_B64"
+        gh secret set --env release APPLE_API_KEY_BASE64 < "$TMP_API_KEY_B64"
     fi
     log "Set secret APPLE_API_KEY_BASE64"
 else
@@ -481,14 +481,14 @@ else
 fi
 
 if [[ "$NEED_API_KEY_ID" == true ]]; then
-    gh secret set APPLE_API_KEY_ID -b "$APPLE_API_KEY_ID_VALUE"
+    gh secret set --env release APPLE_API_KEY_ID -b "$APPLE_API_KEY_ID_VALUE"
     log "Set secret APPLE_API_KEY_ID"
 else
     log "Skip secret APPLE_API_KEY_ID (already set)"
 fi
 
 if [[ "$NEED_API_ISSUER_ID" == true ]]; then
-    gh secret set APPLE_API_ISSUER_ID -b "$APPLE_API_ISSUER_ID_VALUE"
+    gh secret set --env release APPLE_API_ISSUER_ID -b "$APPLE_API_ISSUER_ID_VALUE"
     log "Set secret APPLE_API_ISSUER_ID"
 else
     log "Skip secret APPLE_API_ISSUER_ID (already set)"
@@ -502,13 +502,14 @@ else
 fi
 
 log "Configured APPLE_* secrets:"
-gh secret list | grep -E '^APPLE_' || true
+gh secret list --env release | grep -E '^APPLE_' || true
 log "Configured APPLE_* variables:"
 gh variable list | grep -E '^APPLE_' || true
 
 if [[ "$RUN_RELEASE" == true ]]; then
-    log "Triggering Release workflow on ref '$RELEASE_REF'"
-    gh workflow run Release --ref "$RELEASE_REF"
+    [[ "$RELEASE_REF" == main ]] || fail "Release candidates may only be prepared from main."
+    log "Preparing tester candidate on main; publication remains human-gated"
+    gh workflow run Release --ref main -f channel=tester
 
     if [[ "$WATCH_RELEASE" == true ]]; then
         log "Resolving latest Release run id"

@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pyyaml"]
 # ///
 """Security policy tests for workflows, setup, and local runner surfaces.
 
@@ -25,6 +25,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -266,8 +267,15 @@ class SecurityHardeningTests(unittest.TestCase):
         """
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
 
-        for unpinned in ("brew install mise", "curl", "| sh", "| bash"):
+        # Reading the public Sparkle feed with curl is a release check, not a
+        # tool bootstrap. Only reject curl inside commands that provision mise.
+        for unpinned in ("brew install mise", "mise.run", "| sh", "| bash"):
             self.assertNotIn(unpinned, workflow, f"unpinned mise bootstrap: {unpinned}")
+        for job in yaml.safe_load(workflow)["jobs"].values():
+            for step in job.get("steps", []):
+                command = step.get("run", "")
+                if "mise" in command:
+                    self.assertNotIn("curl", command, "mise bootstrap must use its pinned action")
 
         self.assertRegex(
             workflow,
