@@ -54,7 +54,28 @@ struct CLIDetachedSessionTests {
             kill.standardError = FileHandle.nullDevice
             try? kill.run()
             kill.waitUntilExit()
+            removeSocketFileIfPresent()
             try? FileManager.default.removeItem(at: root)
+        }
+
+        /// `kill-server` unlinks its socket as tmux's own server exits cleanly, but a
+        /// server this fixture never actually started (a test that stopped short of
+        /// `ws launch`) leaves nothing to kill, and one killed by signal or wedged past
+        /// the command's own timeout can leave the file behind regardless. Sweeping
+        /// every `tmux-*` directory under `/tmp` for this fixture's own unique label —
+        /// the same lookup #1443's reproduce command uses — makes socket cleanup a
+        /// property of teardown rather than of `kill-server` happening to succeed.
+        private func removeSocketFileIfPresent() {
+            let tmp = URL(fileURLWithPath: "/tmp")
+            guard
+                let entries = try? FileManager.default.contentsOfDirectory(
+                    at: tmp,
+                    includingPropertiesForKeys: nil
+                )
+            else { return }
+            for entry in entries where entry.lastPathComponent.hasPrefix("tmux-") {
+                try? FileManager.default.removeItem(at: entry.appendingPathComponent(socketLabel))
+            }
         }
     }
 
