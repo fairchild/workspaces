@@ -41,13 +41,16 @@ class CandidateTests(unittest.TestCase):
         self.output = contextlib.redirect_stdout(io.StringIO())
         self.output.__enter__()
         self.addCleanup(self.output.__exit__, None, None, None)
+        command = patch.object(candidate, "run", return_value="")
+        command.start()
+        self.addCleanup(command.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
         self.env = patch.dict(os.environ, {"GITHUB_REPOSITORY": "fairchild/workspaces", "GITHUB_RUN_ID": "42", "GITHUB_RUN_ATTEMPT": "1"})
         self.env.start()
         self.addCleanup(self.env.stop)
-        self.args = SimpleNamespace(directory=self.directory, source=SOURCE, tag="v0.28.0", version="0.28.0", build="36", channel="stable", ci_run_id="12", previous_stable_tag="v0.27.0")
+        self.args = SimpleNamespace(directory=self.directory, source=SOURCE, tag="v0.28.0", version="0.28.0", build="36", channel="stable", ci_run_id="12", previous_stable_tag="v0.27.0", reviewed_prs="1,2")
         manifest = {**candidate.expected(self.args), "assets": {}}
         for key, name, content in (("dmg", "WorkSpaces-0.28.0.dmg", b"signed-dmg"), ("latestDmg", "WorkSpaces-latest.dmg", b"signed-dmg"), ("appcast", "appcast.xml", b"signed-appcast")):
             path = self.directory / name
@@ -119,7 +122,7 @@ class CandidateTests(unittest.TestCase):
 
     def test_publication_resumes_only_its_own_draft_and_verifies_before_publish(self):
         marker = f"<!-- candidate:{self.args.candidate_sha256} source:{SOURCE} -->"
-        release = {"id": 7, "tag_name": self.args.tag, "draft": True, "body": marker, "assets": [{"name": "appcast.xml"}]}
+        release = {"id": 7, "tag_name": self.args.tag, "draft": True, "body": candidate.publication_notes(self.args), "prerelease": False, "name": f"WorkSpaces {self.args.tag}", "target_commitish": SOURCE, "assets": [{"name": "appcast.xml"}]}
         calls = []
         def lookup(path):
             return {"tag_name": "v0.27.0"} if path.endswith("latest") else {"object": {"type": "commit", "sha": SOURCE}}
@@ -153,7 +156,7 @@ class CandidateTests(unittest.TestCase):
     def test_corrupted_remote_asset_blocks_final_publication(self):
         marker = f"<!-- candidate:{self.args.candidate_sha256} source:{SOURCE} -->"
         assets = ["WorkSpaces-0.28.0.dmg", "WorkSpaces-latest.dmg", "appcast.xml", "release-manifest.json"]
-        release = {"id": 7, "tag_name": self.args.tag, "draft": True, "body": marker, "assets": [{"name": n} for n in assets]}
+        release = {"id": 7, "tag_name": self.args.tag, "draft": True, "body": candidate.publication_notes(self.args), "prerelease": False, "name": f"WorkSpaces {self.args.tag}", "target_commitish": SOURCE, "assets": [{"name": n} for n in assets]}
         def execute(*args, **kwargs):
             if args[:2] == ("gh", "api"):
                 return json.dumps([[release]])
@@ -179,8 +182,95 @@ class CandidateTests(unittest.TestCase):
             self.assertEqual(publish.call_count, 1)
             sleep.assert_not_called()
 
+    def test_publication_metadata_cannot_change_under_an_intact_marker(self):
+        release = {"id": 7, "body": candidate.publication_notes(self.args), "prerelease": False,
+                   "name": f"WorkSpaces {self.args.tag}", "target_commitish": SOURCE}
+        for field, value in (("body", "Changed notes\n" + release["body"]), ("prerelease", True),
+                             ("name", "Different title"), ("target_commitish", "b" * 40)):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, "metadata differs"):
+                candidate.check_publication_metadata(self.args, {**release, field: value}, {"id": 6})
+
+    def test_downstream_only_retry_rejects_tester_promoted_to_stable(self):
+        self.args.channel = "tester"
+        self.args.tag = "workspaces-v0.28.0-main.42"
+        manifest_path = self.directory / "release-manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["tag"] = self.args.tag
+        manifest_path.write_text(json.dumps(manifest))
+        with patch.object(candidate, "release_notes", return_value="Reviewed notes\n"):
+            candidate.seal(self.args)
+        self.args.candidate_sha256 = candidate.digest(self.directory / "candidate.json")
+        self.args.published_directory = self.directory
+        names = ("WorkSpaces-0.28.0.dmg", "WorkSpaces-latest.dmg", "appcast.xml", "release-manifest.json")
+        release = {"id": 7, "body": candidate.publication_notes(self.args), "prerelease": True,
+                   "name": f"WorkSpaces {self.args.tag}", "target_commitish": SOURCE, "draft": False,
+                   "assets": [{"name": n} for n in names]}
+        with patch.object(candidate, "api", return_value=release), patch.object(candidate, "optional_api", return_value={"id": 6}):
+            candidate.verify_publication(self.args)
+            release["prerelease"] = False
+            with self.assertRaisesRegex(ValueError, "metadata differs"):
+                candidate.verify_publication(self.args)
+            release["prerelease"] = True
+        with patch.object(candidate, "api", return_value=release), patch.object(candidate, "optional_api", return_value={"id": 7}):
+            with self.assertRaisesRegex(ValueError, "latest stable"):
+                candidate.verify_publication(self.args)
+
 
 class TrustTests(unittest.TestCase):
+    def test_newer_release_tooling_blocks_older_source(self):
+        with patch.object(candidate, "run", return_value="scripts/notarize.sh\n"), self.assertRaisesRegex(ValueError, "tooling changed"):
+            candidate.check_control_source(SOURCE)
+
+    def test_notes_base_must_match_actual_metadata_merge_parent(self):
+        parent = "b" * 40
+        pr = {"merge_commit_sha": SOURCE, "merged_at": "2026-09-07T00:00:00Z", "base": {"ref": "main", "repo": {"full_name": "fairchild/workspaces"}},
+              "body": f"<!-- release-entrypoint:0.28.0 -->\n<!-- release-base:{parent} -->"}
+        with patch.object(candidate, "api", return_value=[pr]), patch.object(candidate, "run", return_value=parent):
+            candidate.check_release_base("fairchild/workspaces", SOURCE, "0.28.0")
+            pr["body"] = pr["body"].replace(parent, "c" * 40)
+            with self.assertRaisesRegex(ValueError, "Main advanced"):
+                candidate.check_release_base("fairchild/workspaces", SOURCE, "0.28.0")
+
+    def test_actual_reviewed_range_rejects_bypassed_or_stale_approvals(self):
+        pr = {"number": 1, "merge_commit_sha": SOURCE, "merged_at": "2026-09-07T00:02:00Z", "base": {"ref": "main", "repo": {"full_name": "fairchild/workspaces"}}, "head": {"sha": "b" * 40}, "user": {"login": "author"}}
+        reviews = [{"state": "APPROVED", "commit_id": "b" * 40, "submitted_at": "2026-09-07T00:01:00Z", "user": {"login": "reviewer"}}]
+        def execute(*args, **kwargs):
+            if args[:2] == ("git", "rev-list"):
+                return SOURCE
+            if args[:2] == ("gh", "api"):
+                return json.dumps([reviews])
+            return ""
+        with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[pr]):
+            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}), [1])
+            for field, value in (("state", "DISMISSED"), ("commit_id", "c" * 40), ("submitted_at", "2026-09-07T00:03:00Z"), ("user", {"login": "author"})):
+                original = copy.deepcopy(reviews[0])
+                reviews[0][field] = value
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, "approving review"):
+                    candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"})
+                reviews[0] = original
+            reviews.append({**reviews[0], "state": "CHANGES_REQUESTED", "submitted_at": "2026-09-07T00:01:30Z"})
+            with self.assertRaisesRegex(ValueError, "approving review"):
+                candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"})
+        with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[]):
+            with self.assertRaisesRegex(ValueError, "no unambiguous merged main PR"):
+                candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"})
+
+    def test_rebase_merged_pr_covers_all_introduced_commits_once(self):
+        pr = {"number": 1, "merge_commit_sha": SOURCE, "merged_at": "2026-09-07T00:02:00Z", "base": {"ref": "main", "repo": {"full_name": "fairchild/workspaces"}}, "head": {"sha": "b" * 40}, "user": {"login": "author"}}
+        reviews = [{"state": "APPROVED", "commit_id": "b" * 40, "submitted_at": "2026-09-07T00:01:00Z", "user": {"login": "reviewer"}}]
+        review_reads = 0
+        def execute(*args, **kwargs):
+            nonlocal review_reads
+            if args[:2] == ("git", "rev-list"):
+                return SOURCE + "\n" + "c" * 40
+            if args[:2] == ("gh", "api"):
+                review_reads += 1
+                return json.dumps([reviews])
+            return ""
+        with patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", return_value=[pr]):
+            self.assertEqual(candidate.check_reviewed_range("fairchild/workspaces", SOURCE, {"tag_name": "v0.27.0"}), [1])
+        self.assertEqual(review_reads, 1)
+
     def test_only_metadata_commit_after_successful_main_ci_automatically_qualifies(self):
         ci = {"id": 12, "workflow_id": 9, "head_sha": SOURCE, "head_branch": "main", "event": "push", "head_repository": {"full_name": "fairchild/workspaces"}, "status": "completed", "conclusion": "success", "html_url": "https://github.com/fairchild/workspaces/actions/runs/12"}
         metadata = plistlib.dumps({"CFBundleShortVersionString": "0.28.0", "CFBundleVersion": "36", "CFBundleIdentifier": "com.cloudcompute.workspaces", "SUPublicEDKey": "public"}).decode()
@@ -200,7 +290,7 @@ class TrustTests(unittest.TestCase):
             event = Path(temp) / "event.json"
             event.write_text(json.dumps({"workflow_run": ci}))
             env = {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": "fairchild/workspaces", "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_run"}
-            with patch.dict(os.environ, env), patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", side_effect=read), patch.object(candidate, "optional_api", return_value=None), patch.object(candidate, "emit") as emit:
+            with patch.dict(os.environ, env), patch.object(candidate, "run", side_effect=execute), patch.object(candidate, "api", side_effect=read), patch.object(candidate, "optional_api", return_value=None), patch.object(candidate, "check_reviewed_range", return_value=[1]), patch.object(candidate, "check_release_base"), patch.object(candidate, "emit") as emit:
                 candidate.source(SimpleNamespace(channel="stable"))
                 self.assertEqual(emit.call_args.args[0]["source"], SOURCE)
                 self.assertEqual(emit.call_args.args[0]["eligible"], "true")
@@ -230,7 +320,7 @@ class TrustTests(unittest.TestCase):
         def read(path):
             if path.endswith("deployment-branch-policies"):
                 return {"branch_policies": [{"name": "main", "type": "branch"}]}
-            return publication if path.endswith("release-publication") else signing
+            return ({**publication, "protection_rules": [human]} if path.endswith("/release") else publication if path.endswith("release-publication") else signing)
         with patch.object(environments, "api", side_effect=read):
             environments.check("fairchild/workspaces")
             publication["protection_rules"] = []
@@ -254,8 +344,9 @@ class TrustTests(unittest.TestCase):
 class MigrationTests(unittest.TestCase):
     def setUp(self):
         self.calls = []
-        self.active = False
         self.fail_publication_policy = False
+        self.publication_secrets = set()
+        self.candidate_secrets = environments.SIGNING_SECRETS.copy()
         self.human = {"type": "User", "reviewer": {"type": "User", "id": 2037}}
         self.values = {"release": {"protection_rules": [{"type": "required_reviewers", "reviewers": [self.human]}], "deployment_branch_policy": environments.POLICY, "can_admins_bypass": False}}
         self.policies = {"release": [{"name": "main", "type": "branch", "id": 1}, {"name": "v*", "type": "tag", "id": 2}]}
@@ -266,9 +357,10 @@ class MigrationTests(unittest.TestCase):
             return {"content": base64.b64encode((ROOT / ".github/workflows/release.yml").read_bytes()).decode()}
         if "/rules/branches/" in path:
             return [{"type": "pull_request", "parameters": {"required_approving_review_count": 1}}]
-        if "/actions/" in path:
-            return {"workflow_runs": [{"id": 33707091732}] if self.active else []}
         name = path.split("/environments/")[1].split("/")[0]
+        if "/secrets?" in path:
+            names = self.publication_secrets if name == "release-publication" else self.candidate_secrets
+            return {"secrets": [{"name": n} for n in names]}
         if "deployment-branch-policies" in path:
             if method == "POST":
                 if self.fail_publication_policy and name == "release-publication":
@@ -278,9 +370,12 @@ class MigrationTests(unittest.TestCase):
                 self.policies[name] = [p for p in self.policies[name] if p["id"] != int(path.split("/")[-1])]
             return {"branch_policies": copy.deepcopy(self.policies[name])}
         if method == "PUT":
-            if name == "release" and not data["reviewers"]:
+            self.assertNotEqual(name, "release", "legacy environment must never be mutated")
+            if name == "release-candidate" and not data["reviewers"]:
                 self.assertTrue(environments.reviewers(self.values["release-publication"]))
-                for gate in ("release", "release-publication"):
+                self.assertFalse(self.publication_secrets)
+                self.assertEqual(self.candidate_secrets, environments.SIGNING_SECRETS)
+                for gate in ("release-candidate", "release-publication"):
                     self.assertEqual([(p["name"], p["type"]) for p in self.policies[gate]], [("main", "branch")])
             self.values[name] = {**data, "protection_rules": [{"type": "required_reviewers", "reviewers": [self.human]}] if data["reviewers"] else []}
             self.policies.setdefault(name, [])
@@ -288,24 +383,33 @@ class MigrationTests(unittest.TestCase):
             raise RuntimeError("HTTP 404")
         return copy.deepcopy(self.values[name])
 
-    def test_new_gate_and_ref_restrictions_precede_old_gate_removal_and_resume(self):
+    def test_legacy_gate_survives_initial_setup_and_idempotent_resume(self):
+        before = copy.deepcopy(self.values["release"])
         with patch.object(environments, "api", side_effect=self.api):
             environments.apply("fairchild/workspaces")
             environments.apply("fairchild/workspaces")
-        self.assertFalse(environments.reviewers(self.values["release"]))
+        self.assertEqual(self.values["release"], before)
+        self.assertFalse(environments.reviewers(self.values["release-candidate"]))
         self.assertTrue(environments.reviewers(self.values["release-publication"]))
 
-    def test_older_active_run_prevents_all_settings_writes(self):
-        self.active = True
-        with patch.object(environments, "api", side_effect=self.api), self.assertRaisesRegex(ValueError, "33707091732"):
+    def test_missing_credentials_leave_new_signing_gate_approved_only(self):
+        self.candidate_secrets.remove("SPARKLE_PRIVATE_KEY")
+        with patch.object(environments, "api", side_effect=self.api), self.assertRaisesRegex(ValueError, "SPARKLE_PRIVATE_KEY"):
             environments.apply("fairchild/workspaces")
-        self.assertTrue(all(method == "GET" for _, method, _ in self.calls))
+        self.assertTrue(environments.reviewers(self.values["release-candidate"]))
+        self.assertTrue(environments.reviewers(self.values["release"]))
 
-    def test_failed_new_gate_leaves_signing_gate_untouched(self):
+    def test_publication_secrets_block_signing_configuration(self):
+        self.publication_secrets.add("SPARKLE_PRIVATE_KEY")
+        with patch.object(environments, "api", side_effect=self.api), self.assertRaisesRegex(ValueError, "Publication environment contains secrets"):
+            environments.apply("fairchild/workspaces")
+        self.assertNotIn("release-candidate", self.values)
+
+    def test_failed_new_gate_leaves_legacy_and_candidate_untouched(self):
         self.fail_publication_policy = True
         with patch.object(environments, "api", side_effect=self.api), self.assertRaisesRegex(RuntimeError, "policy creation"):
             environments.apply("fairchild/workspaces")
-        self.assertFalse(any(path.endswith("/release") and method != "GET" for path, method, _ in self.calls))
+        self.assertNotIn("release-candidate", self.values)
         self.assertTrue(environments.reviewers(self.values["release"]))
 
 

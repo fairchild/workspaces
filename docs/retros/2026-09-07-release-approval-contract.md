@@ -110,15 +110,25 @@ flowchart LR
 ## The necessary credential-policy decision
 
 A signed, notarized candidate cannot exist before approval while all signing
-credentials remain behind that same approval. The accepted implementation keeps
-credentials in the existing `release` environment, restricts it to reviewed main,
-and moves the human reviewer gate to `release-publication`. No secret values
-need to be copied. `scripts/release-environments.py apply` checks that the
-reviewed workflow is on main, refuses active older runs, creates and verifies
-the new gate, restricts signing refs, and removes the old approval last.
+credentials remain behind that same approval. Candidate signing now uses a new
+`release-candidate` environment on main. `release-publication` carries the human
+gate and no secrets. The legacy `release` gate remains protected: review showed
+that a completed historical main workflow could otherwise rerun and publish
+without the new gate, even after all currently waiting runs were canceled.
 
-This is a one-time reviewed workflow/settings migration. Signing becomes
-automatic only on protected main; publication still needs the owner's decision.
+The one-time setup checks the new publication policy and empty secret scope,
+restricts candidate signing to main, and leaves candidate approval required
+until its credentials are configured. Only that new environment becomes
+automatic. Existing encrypted GitHub secret values cannot be read back or
+copied by the API; setup loads the existing protected signing files into the
+new environment. No old environment gate is removed.
+
+Candidate qualification checks actual approving reviews over the full commit
+range since the last stable release, rather than inferring review from a main
+ref or a bypassable ruleset. A release-base marker detects main changes absent
+from the notes, and a tooling comparison rejects old release code after a newer
+hardening fix. Publication and downstream retries check the approved release
+metadata and public asset bytes, including tester/latest semantics.
 
 Performance measurements have a separate constraint:
 [`perf-measurement-laptop-optin.md`](../decisions/perf-measurement-laptop-optin.md)
@@ -149,7 +159,7 @@ manifest, and benchmark validators:
 - `RELEASING.md` replaces rehearsal-then-rebuild instructions with candidate
   download, one approval, continuation, and recovery instructions.
 - Existing script/workflow tests cover trust, ordering, substitution, expiry,
-  migration protection, and resuming a partial draft without overwriting assets.
+  legacy-gate protection, review proof, main movement, and resuming a partial draft without overwriting assets.
 
 Live acceptance is complete when one ordinary request reaches one approval with a
 downloadable, signed, validated candidate; accepting that approval publishes

@@ -12,6 +12,7 @@
 #   - APPLE_API_KEY_BASE64
 #   - APPLE_API_KEY_ID
 #   - APPLE_API_ISSUER_ID
+#   - SPARKLE_PRIVATE_KEY (the existing update-signing key)
 #
 # Variables (non-sensitive):
 #   - APPLE_TEAM_ID
@@ -27,7 +28,8 @@
 #   ./scripts/setup-release-secrets.sh \
 #     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
 #     --profile-path ~/.config/apple/workspaces.provisionprofile \
-#     --api-key-path ~/.config/apple/AuthKey_XXXXXXXXXX.p8
+#     --api-key-path ~/.config/apple/AuthKey_XXXXXXXXXX.p8 \
+#     --sparkle-key-file /protected/path/sparkle-private-key.txt
 #
 # Usage (non-interactive):
 #   P12_PASSWORD='...' APPLE_API_KEY_PATH='...' APPLE_API_KEY_ID='...' APPLE_API_ISSUER_ID='...' \
@@ -35,6 +37,7 @@
 #     --p12-path ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12 \
 #     --profile-path ~/.config/apple/workspaces.provisionprofile \
 #     --team-id LKVN4J3C6C \
+#     --sparkle-key-file /protected/path/sparkle-private-key.txt \
 #     --non-interactive \
 #     --run-release \
 #     --watch
@@ -60,6 +63,7 @@ APPLE_API_KEY_BASE64_VALUE="${APPLE_API_KEY_BASE64:-}"
 APPLE_API_KEY_ID_VALUE="${APPLE_API_KEY_ID:-}"
 APPLE_API_ISSUER_ID_VALUE="${APPLE_API_ISSUER_ID:-}"
 P12_PASSWORD_VALUE="${P12_PASSWORD:-}"
+SPARKLE_KEY_PATH="${SPARKLE_KEY_FILE:-}"
 
 NON_INTERACTIVE=false
 RUN_RELEASE=false
@@ -79,6 +83,7 @@ Options:
   --api-key-base64 VALUE  Base64-encoded App Store Connect notarization .p8 key
   --api-key-id ID         App Store Connect API key ID
   --api-issuer-id UUID    App Store Connect issuer ID
+  --sparkle-key-file PATH Path to the existing exported Sparkle private key
   --p12-password PASS     Export password used to protect the .p12
   --non-interactive       Do not prompt; fail if required values are missing
   --force                 Overwrite existing secrets/variables
@@ -89,7 +94,7 @@ Options:
 
 Env alternatives:
   P12, P12_PASSWORD, PROVISIONING_PROFILE_PATH, APPLE_API_KEY_PATH,
-  APPLE_API_KEY_BASE64, APPLE_API_KEY_ID, APPLE_API_ISSUER_ID, APPLE_TEAM_ID
+  APPLE_API_KEY_BASE64, APPLE_API_KEY_ID, APPLE_API_ISSUER_ID, APPLE_TEAM_ID, SPARKLE_KEY_FILE
 
 Defaults:
   p12 path: ~/.config/apple/Developer_ID_Application_LKVN4J3C6C.p12
@@ -159,13 +164,13 @@ have_secret() {
     local name="$1"
     local names=""
 
-    if names="$(gh secret list --env release --json name --jq '.[].name' 2>/dev/null)"; then
+    if names="$(gh secret list --env release-candidate --json name --jq '.[].name' 2>/dev/null)"; then
         printf '%s\n' "$names" | grep -Fxq "$name"
         return
     fi
 
     # Fallback for older gh versions without JSON support.
-    names="$(gh secret list --env release 2>/dev/null | awk '{print $1}' || true)"
+    names="$(gh secret list --env release-candidate 2>/dev/null | awk '{print $1}' || true)"
     printf '%s\n' "$names" | grep -Fxq "$name"
 }
 
@@ -218,6 +223,11 @@ while [[ $# -gt 0 ]]; do
         --api-issuer-id)
             [[ $# -ge 2 ]] || fail "--api-issuer-id requires a value"
             APPLE_API_ISSUER_ID_VALUE="$2"
+            shift 2
+            ;;
+        --sparkle-key-file)
+            [[ $# -ge 2 ]] || fail "--sparkle-key-file requires a value"
+            SPARKLE_KEY_PATH="$2"
             shift 2
             ;;
         --p12-password)
@@ -293,6 +303,13 @@ if [[ "$FORCE" == true ]] || ! have_secret "APPLE_API_ISSUER_ID"; then
 fi
 if [[ "$FORCE" == true ]] || ! have_variable "APPLE_TEAM_ID"; then
     NEED_TEAM_ID_VAR=true
+fi
+
+NEED_SPARKLE_KEY=false
+if [[ "$FORCE" == true ]] || ! have_secret "SPARKLE_PRIVATE_KEY"; then
+    NEED_SPARKLE_KEY=true
+    [[ -n "$SPARKLE_KEY_PATH" && -s "$SPARKLE_KEY_PATH" ]] \
+        || fail "Existing Sparkle private key required: --sparkle-key-file <protected-file>. Do not generate a replacement key."
 fi
 
 NEED_CERT_SETUP=false
@@ -449,21 +466,21 @@ fi
 log "Applying GitHub configuration (idempotent mode: force=$FORCE)"
 
 if [[ "$NEED_CERT_B64" == true ]]; then
-    gh secret set --env release APPLE_DEVELOPER_ID_CERT_BASE64 < "$TMP_B64"
+    gh secret set --env release-candidate APPLE_DEVELOPER_ID_CERT_BASE64 < "$TMP_B64"
     log "Set secret APPLE_DEVELOPER_ID_CERT_BASE64"
 else
     log "Skip secret APPLE_DEVELOPER_ID_CERT_BASE64 (already set)"
 fi
 
 if [[ "$NEED_CERT_PASSWORD" == true ]]; then
-    gh secret set --env release APPLE_DEVELOPER_ID_CERT_PASSWORD -b "$P12_PASSWORD_VALUE"
+    printf '%s' "$P12_PASSWORD_VALUE" | gh secret set --env release-candidate APPLE_DEVELOPER_ID_CERT_PASSWORD
     log "Set secret APPLE_DEVELOPER_ID_CERT_PASSWORD"
 else
     log "Skip secret APPLE_DEVELOPER_ID_CERT_PASSWORD (already set)"
 fi
 
 if [[ "$NEED_PROFILE_B64" == true ]]; then
-    gh secret set --env release APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 < "$TMP_PROFILE_B64"
+    gh secret set --env release-candidate APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 < "$TMP_PROFILE_B64"
     log "Set secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64"
 else
     log "Skip secret APPLE_DEVELOPER_ID_PROVISIONING_PROFILE_BASE64 (already set)"
@@ -471,9 +488,9 @@ fi
 
 if [[ "$NEED_API_KEY_B64" == true ]]; then
     if [[ -n "$APPLE_API_KEY_BASE64_VALUE" ]]; then
-        gh secret set --env release APPLE_API_KEY_BASE64 -b "$APPLE_API_KEY_BASE64_VALUE"
+        printf '%s' "$APPLE_API_KEY_BASE64_VALUE" | gh secret set --env release-candidate APPLE_API_KEY_BASE64
     else
-        gh secret set --env release APPLE_API_KEY_BASE64 < "$TMP_API_KEY_B64"
+        gh secret set --env release-candidate APPLE_API_KEY_BASE64 < "$TMP_API_KEY_B64"
     fi
     log "Set secret APPLE_API_KEY_BASE64"
 else
@@ -481,14 +498,14 @@ else
 fi
 
 if [[ "$NEED_API_KEY_ID" == true ]]; then
-    gh secret set --env release APPLE_API_KEY_ID -b "$APPLE_API_KEY_ID_VALUE"
+    printf '%s' "$APPLE_API_KEY_ID_VALUE" | gh secret set --env release-candidate APPLE_API_KEY_ID
     log "Set secret APPLE_API_KEY_ID"
 else
     log "Skip secret APPLE_API_KEY_ID (already set)"
 fi
 
 if [[ "$NEED_API_ISSUER_ID" == true ]]; then
-    gh secret set --env release APPLE_API_ISSUER_ID -b "$APPLE_API_ISSUER_ID_VALUE"
+    printf '%s' "$APPLE_API_ISSUER_ID_VALUE" | gh secret set --env release-candidate APPLE_API_ISSUER_ID
     log "Set secret APPLE_API_ISSUER_ID"
 else
     log "Skip secret APPLE_API_ISSUER_ID (already set)"
@@ -501,8 +518,13 @@ else
     log "Skip variable APPLE_TEAM_ID (already set)"
 fi
 
+if [[ "$NEED_SPARKLE_KEY" == true ]]; then
+    gh secret set --env release-candidate SPARKLE_PRIVATE_KEY < "$SPARKLE_KEY_PATH"
+    log "Set secret SPARKLE_PRIVATE_KEY"
+fi
+
 log "Configured APPLE_* secrets:"
-gh secret list --env release | grep -E '^APPLE_' || true
+gh secret list --env release-candidate | grep -E '^APPLE_' || true
 log "Configured APPLE_* variables:"
 gh variable list | grep -E '^APPLE_' || true
 

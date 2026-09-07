@@ -39,7 +39,7 @@ RETIRED_RUNNER_LABELS = {"lume-macos", "signing-host", "tart-ui"}
 # OS and architecture qualifiers, not lanes: they narrow which self-hosted
 # machine takes the job, they do not name a purpose.
 RUNNER_QUALIFIER_LABELS = {"self-hosted", "macos", "linux", "windows", "arm64", "x64", "x86"}
-EXPECTED_ENVIRONMENTS = {"release", "release-publication", "xcode-cloud-logs"}
+EXPECTED_ENVIRONMENTS = {"release", "release-candidate", "release-publication", "xcode-cloud-logs"}
 EXPECTED_REPO_SECRETS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLOUDFLARE_ACCOUNT_ID",
@@ -50,9 +50,9 @@ EXPECTED_REPO_SECRETS = {
     "VERCEL_TOKEN",
 }
 LEGACY_REPO_SECRETS = {"APPLE_APP_PASSWORD"}
-# Signing credentials live only on the release environment, so a job must declare
-# `environment: release` on reviewed main to read them. The sole human gate is
-# release-publication, which carries no signing credentials.
+# Candidate signing credentials live on release-candidate. The old release
+# environment stays human-gated for historical reruns; publication carries no
+# signing credentials. The operator audit checks all three scopes.
 EXPECTED_ENVIRONMENT_SECRETS = {
     # Both environments hold the App Store Connect triple. They are separate
     # copies, not a shared one. Both environments enforce branch policies.
@@ -71,6 +71,8 @@ EXPECTED_ENVIRONMENT_SECRETS = {
         "SPARKLE_PRIVATE_KEY",
     },
 }
+EXPECTED_ENVIRONMENT_SECRETS["release-candidate"] = set(EXPECTED_ENVIRONMENT_SECRETS["release"])
+
 # An environment secret shadows the repository secret of the same name, including
 # when the environment copy is empty — that is how two empty values hid two
 # working ones during the v0.24.0 arc. Emptiness is invisible from outside (the
@@ -310,7 +312,7 @@ def local_workflow_checks() -> list[Check]:
     signing = jobs.get("build-sign-notarize-release", {})
     publishing = jobs.get("publish-github-release", {})
     protected = (
-        signing.get("environment") == "release"
+        signing.get("environment") == "release-candidate"
         and publishing.get("environment", {}).get("name") == "release-publication"
         and "validate-candidate" in publishing.get("needs", [])
     )
@@ -388,7 +390,7 @@ def remote_environment_checks(repo: str) -> list[Check]:
     checks: list[Check] = []
     # Reuse the migration's policy verifier rather than maintain a second
     # interpretation of the signing/publication boundary in this audit.
-    result = run([sys.executable, str(REPO_ROOT / "scripts/release-environments.py"), "check", "--repo", repo])
+    result = run([sys.executable, str(REPO_ROOT / "scripts/release-environments.py"), "check", "--repo", repo, "--settings"])
     checks.append(Check("pass" if result.returncode == 0 else "fail", "single release approval policy", (result.stdout + result.stderr).strip()))
     for environment in sorted(EXPECTED_ENVIRONMENTS):
         try:

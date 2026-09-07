@@ -13,9 +13,11 @@ after the metadata merge, and only its publication asks for human approval.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 from pathlib import Path
 import re
+import plistlib
 import subprocess
 import tempfile
 import sys
@@ -23,6 +25,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 METADATA = {"CHANGELOG.md", "Sources/WorkspaceManager/Resources/Info.plist"}
+PR_FIELDS = "number,url,state,headRefOid,headRefName,mergeCommit,baseRefName,headRepository,isCrossRepository,title,files,body"
 
 
 def run(*args: str, cwd: Path = ROOT, check=True) -> str:
@@ -30,6 +33,20 @@ def run(*args: str, cwd: Path = ROOT, check=True) -> str:
     if check and result.returncode:
         raise RuntimeError(result.stderr.strip() or result.stdout.strip())
     return result.stdout.strip()
+
+
+def validate_pr(pr: dict, repo: str, branch: str, version: str) -> None:
+    if (pr.get("baseRefName") != "main" or pr.get("headRefName") != branch
+        or pr.get("isCrossRepository") is not False
+        or (pr.get("headRepository") or {}).get("nameWithOwner") != repo
+        or pr.get("title") != f"release: v{version}"
+        or {f["path"] for f in pr.get("files", [])} != METADATA
+        or f"<!-- release-entrypoint:{version} -->" not in pr.get("body", "")
+        or not re.search(r"<!-- release-base:[0-9a-f]{40} -->", pr.get("body", ""))):
+        raise ValueError("Existing PR is not the expected main-targeted metadata-only release request")
+    raw = run("gh", "api", f"repos/{repo}/contents/Sources/WorkspaceManager/Resources/Info.plist?ref={pr['headRefOid']}", "--jq", ".content")
+    if plistlib.loads(base64.b64decode(raw))["CFBundleShortVersionString"] != version:
+        raise ValueError("Existing PR version differs from the requested release")
 
 
 def main() -> None:
@@ -41,6 +58,7 @@ def main() -> None:
     args = parser.parse_args()
     repo = run("gh", "repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner")
     run("git", "fetch", "origin", "main", "--tags")
+    base_sha = run("git", "rev-parse", "origin/main")
     latest = json.loads(run("gh", "api", f"repos/{repo}/releases/latest"))
     last = latest["tag_name"]
     if not re.fullmatch(r"v\d+\.\d+\.\d+", last):
@@ -64,9 +82,13 @@ def main() -> None:
     if args.dry_run:
         print(f"Version: {version}\nBase: {run('git', 'rev-parse', 'origin/main')}\nChanges since {last}:\n{commits}")
         return
-    if prs and prs[0]["state"] == "MERGED":
-        print(f"Metadata already merged: {prs[0]['url']}\nCandidate preparation follows successful main CI. Use --status to inspect progress.")
-        return
+    if prs:
+        pr = json.loads(run("gh", "pr", "view", str(prs[0]["number"]), "--repo", repo, "--json", PR_FIELDS))
+        validate_pr(pr, repo, branch, version)
+        if pr["state"] == "MERGED":
+            run("git", "merge-base", "--is-ancestor", pr["mergeCommit"]["oid"], "origin/main")
+            print(f"Metadata already merged into main: {pr['url']}\nCandidate preparation follows successful main CI. Use --status to inspect progress.")
+            return
     if prs and prs[0]["state"] != "OPEN":
         raise ValueError("This version's metadata PR was closed; choose an unused version")
     if tuple(map(int, version.split("."))) <= (major, minor, patch):
@@ -96,10 +118,11 @@ def main() -> None:
         changed = set(run("git", "diff", "--name-only", cwd=directory).splitlines())
         if changed != METADATA:
             raise ValueError("Release preparation changed files beyond version metadata and changelog")
+        run("git", "fetch", "origin", "main", cwd=directory)
+        if run("git", "rev-parse", "origin/main", cwd=directory) != base_sha:
+            raise ValueError(f"Main advanced during release preparation. Regenerate version/notes from current main; existing work is preserved at {directory}")
         run("git", "add", *sorted(METADATA), cwd=directory)
         run("git", "commit", "-m", f"release: v{version}", cwd=directory)
-        run("git", "fetch", "origin", "main", cwd=directory)
-        run("git", "rebase", "origin/main", cwd=directory)
         run("git", "push", "-u", "origin", branch, cwd=directory)
         body = f"""## Summary
 
@@ -128,18 +151,18 @@ Prepare WorkSpaces v{version}. Candidate CI builds and validates the signed inst
 - [x] Not a testable change (metadata/config only). Runtime changes were reviewed in their implementing PRs. Release-note validation ran before submission; signed artifact evidence is produced by candidate CI.
 
 <!-- release-entrypoint:{version} -->
+<!-- release-base:{base_sha} -->
 """
         with tempfile.NamedTemporaryFile(mode="w", suffix=".md") as file:
             file.write(body); file.flush()
             run("uv", "run", "--script", "scripts/pr-readiness.py", "--body-file", file.name, "--title", f"release: v{version}", cwd=directory)
             print(run("gh", "pr", "create", "--repo", repo, "--base", "main", "--head", branch, "--title", f"release: v{version}", "--body-file", file.name, "--label", "author:codex", cwd=directory))
         run("git", "worktree", "remove", str(directory))
-    pr = json.loads(run("gh", "pr", "view", branch, "--repo", repo, "--json", "number,url,headRefOid,files,body"))
-    if {f["path"] for f in pr["files"]} != METADATA or f"<!-- release-entrypoint:{version} -->" not in pr["body"]:
-        raise ValueError("Existing PR is not the expected metadata-only release request")
+    pr = json.loads(run("gh", "pr", "view", branch, "--repo", repo, "--json", PR_FIELDS))
+    validate_pr(pr, repo, branch, version)
     # Auto-merge preserves repository review/check requirements. No admin
     # override and no final environment approval are performed by this tool.
-    run("gh", "pr", "merge", str(pr["number"]), "--repo", repo, "--auto", "--squash", "--match-head-commit", pr["headRefOid"])
+    run("gh", "pr", "merge", str(pr["number"]), "--repo", repo, "--auto", "--squash", "--subject", f"release: v{version}", "--match-head-commit", pr["headRefOid"])
     print(f"{pr['url']}\nAuto-merge enabled after required review and checks. Candidate CI then prepares the publication approval.")
 
 

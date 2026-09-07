@@ -176,31 +176,43 @@ Then test signing:
 
 ### GitHub Actions Setup (for CI/CD)
 
-The signing environment is `release`; the human publication environment is
-`release-publication`. Both allow only the `main` branch, with no tags or
-wildcards. Signing has no required reviewer; publication names the human owner
-and has no signing secrets. Main must require at least one approving PR review.
+Candidate signing uses `release-candidate`; human publication uses
+`release-publication`. Both allow only `main`, with no tags or wildcards.
+The legacy `release` environment keeps its existing human reviewer protection.
+Never make it automatic: completed historical main workflows can still rerun
+using their old code and would otherwise bypass the new publication gate.
 
-For an existing installation, merge the reviewed workflow change first, then
-perform this one-time settings migration from that same checkout:
+Merge the reviewed workflow first, then configure the new environments from
+that exact checkout:
 
 ```bash
 uv run --script scripts/release-environments.py apply
-uv run --script scripts/release-environments.py check
+# Initial setup stops here, listing missing candidate signing credentials.
+./scripts/setup-release-secrets.sh <signing-file options below>
+uv run --script scripts/release-environments.py apply
+uv run --script scripts/release-environments.py check --settings
 ```
 
-`apply` compares the local workflow with remote main, verifies main's review
-rule, and refuses active release runs. Finish or explicitly cancel obsolete
-runs before retrying; the script never cancels them for you. It creates and
-verifies the new human gate, restricts signing to main while retaining its old
-reviewer protection, then removes the old signing approval last. Existing
-credentials stay in `release`; no secret values are read or copied. The workflow
-fails before signing until the environment check passes. A failed migration can
-be rerun after its reported blocker is resolved.
+`apply` verifies remote main's workflow, preserves the legacy gate, and creates
+and fully checks the new publication gate before configuring candidate signing.
+It requires publication to contain no environment secrets. Candidate signing
+remains gated until its main-only policy and all required secret names are in
+place; only then does `apply` make that new environment automatic. Partial
+setup can be rerun. No step changes legacy reviewers or copies secret values.
+GitHub does not return stored secret values, so candidate credentials must be
+loaded from the operator's existing protected signing files.
 
-For a new repository setup, first create `release` with a required human
-reviewer, add credentials below, and run the same migration after the reviewed
-workflow is on main. Never remove the old gate while an older workflow can run.
+`check` is the read-only policy check used by CI. `check --settings` additionally
+checks secret scopes with operator permissions and is reused by the host
+security audit. The signing job validates resolved values before building.
+
+Main retains the repository's existing review rules and administrator authority.
+Before signing, candidate qualification independently verifies that every commit
+since the previous stable release belongs to a merged main PR with an independent
+approval on its final head before merge. A bypassed or unreviewed commit fails
+this proof; CI success alone is insufficient. Release tooling must still match
+current main during qualification and publication, so a newer hardening fix
+cannot be paired with an older source copy of its scripts.
 
 The workflow jobs are:
 
@@ -225,17 +237,18 @@ Preferred setup path:
     --profile-path ~/.config/apple/workspaces.provisionprofile \
     --api-key-path ~/.config/apple/AuthKey_<KEY_ID>.p8 \
     --api-key-id <KEY_ID> \
-    --api-issuer-id <ISSUER_ID>
+    --api-issuer-id <ISSUER_ID> \
+    --sparkle-key-file /protected/path/sparkle-private-key.txt
 ```
 
 Notes:
-- The script is idempotent by default and only fills missing secrets/variables.
+- The script is idempotent by default and only fills missing candidate secrets/variables. Supply the existing Sparkle private key; generating a new key would break existing installations' update trust.
 - Add `--force` to overwrite existing values.
 - Add `--non-interactive` for CI-friendly usage.
 - Add `--run-release` only to request a tester candidate after successful main CI. It still waits for publication approval; `--watch` waits through that gate.
 
-If you prefer to configure GitHub manually, add these to the **`release` environment**, not to
-repository secrets (Settings > Environments > release > Environment secrets):
+If you prefer to configure GitHub manually, add these to the **`release-candidate` environment**, not to
+repository secrets (Settings > Environments > release-candidate > Environment secrets):
 
 | Secret | Description |
 |--------|-------------|
@@ -248,7 +261,7 @@ repository secrets (Settings > Environments > release > Environment secrets):
 | `SPARKLE_PRIVATE_KEY` | Sparkle EdDSA private key, matching `SUPublicEDKey` |
 
 **Why the environment and not repository scope.** A repository secret is readable by any workflow
-on any branch. Scoping these to `release` means a job must declare `environment: release` and pass
+on any branch. Scoping these to `release-candidate` means a job must declare `environment: release-candidate` and pass
 its main-only branch policy before it can read them — so the credentials are protected by
 construction rather than by everyone remembering not to reference them. This will surprise anyone
 adding a workflow that needs signing: the secret resolves empty until the job declares the
@@ -302,7 +315,12 @@ Successful `CI` completion on a release metadata commit starts candidate
 preparation automatically. Ordinary main changes do not sign an installer. The
 metadata PR must change only `CHANGELOG.md` and `Info.plist`, and its squash
 commit title must start with `release: v`. `scripts/release.py` prepares that PR
-and enables auto-merge under the repository's existing review/check rules.
+and enables auto-merge under the repository's existing review/check rules. Its
+`release-base` marker binds notes/version selection to the prepared main commit.
+If main advances during preparation, the command preserves the worktree and
+requires regenerated notes. If it advances before the metadata merge, candidate
+qualification rejects a merge parent that differs from that marker. Refresh the
+metadata PR rather than silently shipping additional changes.
 
 ```bash
 uv run --script scripts/release.py --version <X.Y.Z> --status
@@ -321,7 +339,9 @@ CI on that exact commit, then explicitly dispatch from main:
 gh workflow run release.yml --ref main -f channel=stable
 ```
 
-This requires an unpublished version newer than latest. An intentional tester
+This requires an unpublished version newer than latest and a valid release
+metadata commit. A tooling fix after the metadata merge requires refreshed
+metadata and successful CI on that new source. An intentional tester
 candidate uses the current version without moving latest or the stable feed:
 
 ```bash
@@ -336,7 +356,9 @@ version/build, release notes, benchmark result and installer hash; the job
 outputs bind its immutable artifact ID and identity hash. Changed or expired
 assets fail closed. A publication retry may resume only its own draft and
 upload missing assets, with no clobber. It re-downloads and checks every asset
-before making the release public. Re-running failed jobs preserves candidate
+before making the release public. Downstream-only retries also check notes,
+channel/latest status, title, target, and public bytes against the original
+candidate, so an externally edited tester cannot be accepted as stable. Re-running failed jobs preserves candidate
 identity; re-running the build creates a new candidate requiring new approval.
 GitHub can request approval again when retrying a failed gated job.
 
@@ -536,7 +558,7 @@ security find-identity -v -p codesigning
 | Script | Purpose |
 |--------|---------|
 | `scripts/release.py` | Prepare/resume metadata PR and enable reviewed auto-merge |
-| `scripts/release-environments.py` | Check or migrate main-only signing and human publication environments |
+| `scripts/release-environments.py` | Prepare and audit new candidate/publication environments while preserving legacy approval |
 | `scripts/release-candidate.py` | Qualify source, seal candidate identity, summarize readiness and promote verified assets |
 | `scripts/verify-release-candidate.sh` | Validate the downloaded DMG and launch its packaged CLI before approval |
 | `scripts/build-release.sh` | Build app bundle from SPM |

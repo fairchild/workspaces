@@ -31,7 +31,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(WORKFLOW["concurrency"]["cancel-in-progress"], "false")
 
     def test_validation_precedes_the_only_publication_gate(self):
-        self.assertEqual(JOBS["build-sign-notarize-release"]["environment"], "release")
+        self.assertEqual(JOBS["build-sign-notarize-release"]["environment"], "release-candidate")
         self.assertNotIn("environment", JOBS["validate-candidate"])
         publish = JOBS["publish-github-release"]
         self.assertEqual(publish["environment"]["name"], "release-publication")

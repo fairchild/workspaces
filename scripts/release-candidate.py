@@ -26,10 +26,17 @@ import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from release_policy import RELEASE_PATHS
+
 PLIST = "Sources/WorkspaceManager/Resources/Info.plist"
 SHA = re.compile(r"[0-9a-f]{40}")
 VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?")
 MAX_AGE = dt.timedelta(days=7)
+CONTROL_PATHS = sorted({p for p in RELEASE_PATHS if not p.endswith(".md")} | {
+    ".github/workflows/ci.yml", "scripts/release_policy.py",
+    ".mise.toml", "mise.lock", "Package.swift", "Package.resolved",
+})
 
 
 def run(*args: str, cwd: Path = ROOT, stdin: str | None = None) -> str:
@@ -101,6 +108,60 @@ def check_ci(repo: str, sha: str, ci_run: dict) -> None:
         raise ValueError("A successful trusted main CI run on the exact source commit is required")
 
 
+def check_control_source(sha: str) -> None:
+    changed = run("git", "diff", "--name-only", sha, "origin/main", "--", *CONTROL_PATHS)
+    if changed:
+        raise ValueError("Release tooling changed on main; prepare from the updated reviewed source: " + ", ".join(changed.splitlines()))
+
+
+def check_reviewed_range(repo: str, sha: str, latest: dict | None) -> list[int]:
+    # An administrator can bypass this repository's normal review rule. The
+    # signing boundary therefore verifies actual reviews, rather than assuming
+    # a main ref or the mere presence of a ruleset means the code was reviewed.
+    if not latest:
+        raise ValueError("A previously approved stable release is required as the review baseline")
+    baseline = latest["tag_name"]
+    stable_version(baseline)
+    run("git", "merge-base", "--is-ancestor", baseline, sha)
+    commits = run("git", "rev-list", "--first-parent", f"{baseline}..{sha}").splitlines()
+    reviewed = []
+    for commit in commits:
+        prs = api(f"repos/{repo}/commits/{commit}/pulls?per_page=100")
+        # For a default-branch commit this API returns the PR that introduced
+        # it. Rebase merges introduce several commits with one merge_commit_sha.
+        merged = [p for p in prs if p.get("merged_at") and p.get("merge_commit_sha")
+                  and p["base"]["ref"] == "main" and p["base"]["repo"]["full_name"] == repo]
+        if len(merged) != 1:
+            raise ValueError(f"Commit {commit} has no unambiguous merged main PR; signing requires reviewed changes")
+        pr = merged[0]
+        run("git", "merge-base", "--is-ancestor", pr["merge_commit_sha"], sha)
+        if pr["number"] in reviewed:
+            continue
+        pages = json.loads(run("gh", "api", "--paginate", "--slurp", f"repos/{repo}/pulls/{pr['number']}/reviews?per_page=100"))
+        decisions = {}
+        for review in sorted((r for page in pages for r in page), key=lambda r: r.get("submitted_at") or ""):
+            if review["state"] in ("APPROVED", "CHANGES_REQUESTED", "DISMISSED") and review.get("submitted_at") and review["submitted_at"] <= pr["merged_at"]:
+                decisions[review["user"]["login"]] = review
+        approved = any(r["state"] == "APPROVED" and r["commit_id"] == pr["head"]["sha"]
+                       and user != pr["user"]["login"] for user, r in decisions.items())
+        if not approved or any(r["state"] == "CHANGES_REQUESTED" for r in decisions.values()):
+            raise ValueError(f"PR #{pr['number']} lacks an independent approving review on its merged head")
+        reviewed.append(pr["number"])
+    return reviewed
+
+
+def check_release_base(repo: str, sha: str, version: str) -> None:
+    prs = api(f"repos/{repo}/commits/{sha}/pulls?per_page=100")
+    parent = run("git", "rev-parse", f"{sha}^")
+    expected_marker = f"<!-- release-base:{parent} -->"
+    matches = [p for p in prs if p.get("merge_commit_sha") == sha and p.get("merged_at")
+               and p["base"]["ref"] == "main" and p["base"]["repo"]["full_name"] == repo
+               and f"<!-- release-entrypoint:{version} -->" in (p.get("body") or "")
+               and expected_marker in (p.get("body") or "")]
+    if len(matches) != 1:
+        raise ValueError("Main advanced beyond the reviewed release notes, or release intent is missing; refresh metadata before signing")
+
+
 def source(args) -> None:
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     repo = os.environ["GITHUB_REPOSITORY"]
@@ -128,11 +189,13 @@ def source(args) -> None:
     check_ci(repo, sha, ci_run)
     # An ordinary main push must not turn into a release. Automatic candidates
     # require the version metadata commit produced by prepare-release.sh.
-    if automatic:
+    if automatic or args.channel == "stable":
         changed = set(run("git", "diff-tree", "--no-commit-id", "--name-only", "-r", sha).splitlines())
         if changed != {PLIST, "CHANGELOG.md"} or not run("git", "show", "-s", "--format=%s", sha).startswith("release: v"):
-            emit({"eligible": "false"})
-            return
+            if automatic:
+                emit({"eligible": "false"})
+                return
+            raise ValueError("Stable preparation requires a release metadata commit; use tester for other main commits")
     metadata = plistlib.loads(run("git", "show", f"{sha}:{PLIST}").encode())
     version = metadata["CFBundleShortVersionString"]
     if not VERSION.fullmatch(version) or not str(metadata["CFBundleVersion"]).isdigit():
@@ -152,12 +215,17 @@ def source(args) -> None:
     existing = optional_api(f"repos/{repo}/git/ref/tags/{tag}")
     if existing and (existing["object"]["type"] != "commit" or existing["object"]["sha"] != sha):
         raise ValueError("Existing tag does not identify this exact source commit")
+    check_control_source(sha)
+    reviewed = check_reviewed_range(repo, sha, latest)
+    if channel == "stable":
+        check_release_base(repo, sha, version)
     values = {
         "eligible": "true", "source": sha, "tag": tag, "channel": channel,
         "version": version, "build": str(metadata["CFBundleVersion"]),
         "bundle_id": metadata["CFBundleIdentifier"], "public_key": metadata["SUPublicEDKey"],
         "ci_url": ci_run["html_url"], "ci_run_id": str(ci_run["id"]),
         "previous_stable_tag": latest["tag_name"] if latest else "",
+        "reviewed_prs": ",".join(map(str, reviewed)),
     }
     emit(values)
 
@@ -209,6 +277,7 @@ def seal(args) -> None:
         "repository": os.environ["GITHUB_REPOSITORY"], "runId": os.environ["GITHUB_RUN_ID"],
         "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"], "createdAt": now().isoformat(),
         "ciRunId": args.ci_run_id, "previousStableTag": args.previous_stable_tag,
+        "reviewedPullRequests": args.reviewed_prs,
         "files": {name: digest(directory / name) for name in files},
     }
     (directory / "candidate.json").write_text(json.dumps(candidate, indent=2) + "\n")
@@ -261,6 +330,7 @@ updated installations. A corrective update needs a higher build number.
 ### Completed checks
 
 - [Exact-commit main CI](https://github.com/{repo}/actions/runs/{candidate['ciRunId']}) passed.
+- Changes since the previous stable release have independent PR approvals on their merged heads.
 - Developer ID bundle signature, provisioning profile, and notarization passed.
 - Downloaded candidate: manifest, asset hashes, Sparkle signature, DMG ticket,
   Gatekeeper, and packaged CLI launch passed.
@@ -282,9 +352,42 @@ updated installations. A corrective update needs a higher build number.
         handle.write(body)
 
 
+def publication_notes(args) -> str:
+    return (args.directory / "release-notes.md").read_text() + f"\n<!-- candidate:{args.candidate_sha256} source:{args.source} -->\n"
+
+
+def check_publication_metadata(args, release: dict, latest: dict | None) -> None:
+    marker = f"<!-- candidate:{args.candidate_sha256} source:{args.source} -->"
+    if marker not in (release.get("body") or ""):
+        raise ValueError("Existing release belongs to another candidate; it will not be overwritten")
+    if (release.get("body") or "").replace("\r\n", "\n") != publication_notes(args) or release.get("prerelease") != (args.channel == "tester") or release.get("name") != f"WorkSpaces {args.tag}" or release.get("target_commitish") != args.source:
+        raise ValueError("Existing release metadata differs from the approved candidate")
+    if args.channel == "tester" and latest and latest["id"] == release["id"]:
+        raise ValueError("Tester candidate must not be the latest stable release")
+
+
+def verify_publication(args) -> None:
+    candidate = verify(args)
+    repo = os.environ["GITHUB_REPOSITORY"]
+    release = api(f"repos/{repo}/releases/tags/{args.tag}")
+    latest = optional_api(f"repos/{repo}/releases/latest")
+    check_publication_metadata(args, release, latest)
+    if release["draft"] or (args.channel == "stable" and (not latest or latest["id"] != release["id"])):
+        raise ValueError("Approved stable publication is not live as latest")
+    names = {f"WorkSpaces-{args.version}.dmg", "WorkSpaces-latest.dmg", "appcast.xml", "release-manifest.json"}
+    if {a["name"] for a in release["assets"]} != names:
+        raise ValueError("Published release has an unexpected asset set")
+    for name in names:
+        if digest(args.published_directory / name) != candidate["files"][name]:
+            raise ValueError(f"Published asset differs from the approved candidate: {name}")
+    print("Published identity, channel, release notes, and exact approved asset bytes verified.")
+
+
 def publish(args) -> None:
     candidate = verify(args)
     repo = os.environ["GITHUB_REPOSITORY"]
+    run("git", "fetch", "origin", "main")
+    check_control_source(args.source)
     latest = optional_api(f"repos/{repo}/releases/latest")
     if args.channel == "stable" and latest and stable_version(latest["tag_name"]) > stable_version(args.version):
         raise ValueError("Refusing to replace a newer stable release")
@@ -300,14 +403,12 @@ def publish(args) -> None:
     matching = [r for page in releases for r in page if r["tag_name"] == args.tag]
     if len(matching) > 1:
         raise ValueError("Ambiguous release identity")
-    marker = f"<!-- candidate:{args.candidate_sha256} source:{args.source} -->"
-    notes = (args.directory / "release-notes.md").read_text() + "\n" + marker + "\n"
+    notes = publication_notes(args)
     release = matching[0] if matching else api(f"repos/{repo}/releases", method="POST", data={
         "tag_name": args.tag, "target_commitish": args.source, "name": f"WorkSpaces {args.tag}",
         "body": notes, "draft": True, "prerelease": args.channel == "tester",
     })
-    if marker not in (release.get("body") or ""):
-        raise ValueError("Existing release belongs to another candidate; it will not be overwritten")
+    check_publication_metadata(args, release, latest)
     asset_names = {f"WorkSpaces-{args.version}.dmg", "WorkSpaces-latest.dmg", "appcast.xml", "release-manifest.json"}
     remote_assets = {a["name"] for a in release["assets"]}
     if remote_assets - asset_names:
@@ -350,10 +451,12 @@ def publish_with_retry(args) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("source", "seal", "verify", "summary", "publish"))
+    parser.add_argument("command", choices=("source", "seal", "verify", "summary", "publish", "verify_publication"))
     parser.add_argument("--channel", choices=("stable", "tester"), default="stable")
     parser.add_argument("--directory", type=Path, default=Path("release-assets"))
+    parser.add_argument("--published-directory", type=Path, default=Path("release-downloads"))
     parser.add_argument("--previous-stable-tag", default="")
+    parser.add_argument("--reviewed-prs", default="")
     for name in ("source", "tag", "version", "build", "candidate-sha256", "ci-run-id", "artifact-url"):
         parser.add_argument(f"--{name}")
     args = parser.parse_args()

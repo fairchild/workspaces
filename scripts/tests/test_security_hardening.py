@@ -225,7 +225,7 @@ class SecurityHardeningTests(unittest.TestCase):
         """Generated and notarization secrets must not be written into GITHUB_ENV."""
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn("::add-mask::$KEYCHAIN_PASSWORD", workflow)
-        self.assertIn("environment: release", workflow)
+        self.assertIn("environment: release-candidate", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("publish-github-release:", workflow)
         self.assertIn("validate-published-release-assets:", workflow)
