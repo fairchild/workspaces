@@ -72,7 +72,7 @@ mise run lint                  # swift-format lint --strict (CI fails without it
 | `web-next/` (active web app) | `web-next/AGENTS.md`, then `web-next/CONTRIBUTING.md` |
 | Issue lifecycle / backlog | `backlog/AGENTS.md` |
 | Lume VMs | `mise run dev-lume-ensure` first; `docs/development/lume-integration.md` |
-| Release / signing / notarization | `RELEASING.md`; runner lanes: `CONTRIBUTING.md` § "CI Runner Lanes" |
+| Release / signing / notarization | `RELEASING.md`; normal release entry point: `uv run --script scripts/release.py` (one human CI publication approval) |
 | Milestone delivery / subagent fan-out | `.agents/skills/drive/SKILL.md` / `.agents/skills/subagent-delegation/SKILL.md` |
 | Symbol/task → file lookup | `docs/agents/code-map.md` |
 | Lessons ledger | `docs/agents/lessons.md` |

@@ -156,6 +156,10 @@ is_ci_relevant_path() {
             scripts/prepare-prerelease.sh | \
             scripts/prepare-release.sh | \
             scripts/release-preflight.sh | \
+            scripts/release-candidate.py | \
+            scripts/release-environments.py | \
+            scripts/release.py | \
+            scripts/verify-release-candidate.sh | \
             scripts/release-version.sh | \
             scripts/setup-release-secrets.sh | \
             scripts/verify-app-keychain-signing.sh | \

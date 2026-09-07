@@ -39,7 +39,7 @@ RETIRED_RUNNER_LABELS = {"lume-macos", "signing-host", "tart-ui"}
 # OS and architecture qualifiers, not lanes: they narrow which self-hosted
 # machine takes the job, they do not name a purpose.
 RUNNER_QUALIFIER_LABELS = {"self-hosted", "macos", "linux", "windows", "arm64", "x64", "x86"}
-EXPECTED_ENVIRONMENTS = {"release", "xcode-cloud-logs"}
+EXPECTED_ENVIRONMENTS = {"release", "release-candidate", "release-publication", "xcode-cloud-logs"}
 EXPECTED_REPO_SECRETS = {
     "CLAUDE_CODE_OAUTH_TOKEN",
     "CLOUDFLARE_ACCOUNT_ID",
@@ -50,13 +50,12 @@ EXPECTED_REPO_SECRETS = {
     "VERCEL_TOKEN",
 }
 LEGACY_REPO_SECRETS = {"APPLE_APP_PASSWORD"}
-# Signing credentials live only on the release environment, so a job must declare
-# `environment: release` — and clear its human approval — to read them at all.
+# Candidate signing credentials live on release-candidate. The old release
+# environment stays human-gated for historical reruns; publication carries no
+# signing credentials. The operator audit checks all three scopes.
 EXPECTED_ENVIRONMENT_SECRETS = {
     # Both environments hold the App Store Connect triple. They are separate
-    # copies, not a shared one: release gates on human approval, while
-    # xcode-cloud-logs gates only on a branch policy, because fetching build
-    # logs should not need an approval.
+    # copies, not a shared one. Both environments enforce branch policies.
     "xcode-cloud-logs": {
         "APPLE_API_ISSUER_ID",
         "APPLE_API_KEY_BASE64",
@@ -72,6 +71,8 @@ EXPECTED_ENVIRONMENT_SECRETS = {
         "SPARKLE_PRIVATE_KEY",
     },
 }
+EXPECTED_ENVIRONMENT_SECRETS["release-candidate"] = set(EXPECTED_ENVIRONMENT_SECRETS["release"])
+
 # An environment secret shadows the repository secret of the same name, including
 # when the environment copy is empty — that is how two empty values hid two
 # working ones during the v0.24.0 arc. Emptiness is invisible from outside (the
@@ -307,11 +308,19 @@ def local_workflow_checks() -> list[Check]:
     )
 
     release = (workflow_dir / "release.yml").read_text(encoding="utf-8")
+    jobs = yaml.safe_load(release).get("jobs", {})
+    signing = jobs.get("build-sign-notarize-release", {})
+    publishing = jobs.get("publish-github-release", {})
+    protected = (
+        signing.get("environment") == "release-candidate"
+        and publishing.get("environment", {}).get("name") == "release-publication"
+        and "validate-candidate" in publishing.get("needs", [])
+    )
     checks.append(
         Check(
-            "pass" if "environment: release" in release else "fail",
-            "release workflow uses protected environment",
-            "release environment referenced" if "environment: release" in release else "missing",
+            "pass" if protected else "fail",
+            "release workflow gates publication after candidate validation",
+            "separate signing and publication environments" if protected else "missing candidate publication boundary",
         )
     )
     targets = job_targets(workflow_dir)
@@ -379,6 +388,10 @@ def resolve_repo(explicit: str | None) -> str:
 
 def remote_environment_checks(repo: str) -> list[Check]:
     checks: list[Check] = []
+    # Reuse the migration's policy verifier rather than maintain a second
+    # interpretation of the signing/publication boundary in this audit.
+    result = run([sys.executable, str(REPO_ROOT / "scripts/release-environments.py"), "check", "--repo", repo, "--settings"])
+    checks.append(Check("pass" if result.returncode == 0 else "fail", "single release approval policy", (result.stdout + result.stderr).strip()))
     for environment in sorted(EXPECTED_ENVIRONMENTS):
         try:
             data = gh_json(["api", f"repos/{repo}/environments/{environment}"])
