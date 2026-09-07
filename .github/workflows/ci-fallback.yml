@@ -18,7 +18,7 @@ jobs:
       github.event.workflow_run.conclusion == 'timed_out'
     # Transitional fallback while we move toward an explicit Xcode build
     # trigger. Do not run failed PR heads on persistent self-hosted runners.
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     permissions:
       contents: read
