@@ -233,7 +233,7 @@ is the protocol of record.
   off-host run of the four channel scenarios is advisory at best.
 - Every scenario except the four channel ones launches the real GUI app through
   `launch-dev.sh`'s visible-window gate, which needs a real WindowServer session.
-- Behavioral CI coverage is `ui-smoke-advisory.yml` on hosted `macos-15`. It
+- Behavioral CI coverage is `ui-smoke-advisory.yml` on hosted `macos-26`. It
   answers "did the app still work", not "how fast was it".
 - Staleness is read from `docs/performance/dashboard.md`'s `Last updated`
   timestamp. "The last recorded measurement is from `<date>`" is the honest

@@ -27,7 +27,7 @@ not a broad public security stance.
 
 ## Release And Update Chain
 
-- Release signing runs on hosted `macos-15` behind the protected `release`
+- Release signing runs on hosted `macos-26` behind the protected `release`
   environment. Every credential is scoped to that environment rather than to the
   repository, so a job must declare `environment: release` and clear its human
   approval to read any of them — the gate covers what a job can read, not only

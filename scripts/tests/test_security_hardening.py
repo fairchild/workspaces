@@ -189,19 +189,35 @@ class SecurityHardeningTests(unittest.TestCase):
             "Actions with floating (non-SHA) refs found:\n" + "\n".join(floating_refs),
         )
 
+    def assert_macos_targets_are_hosted(self, workflow: str, name: str) -> None:
+        """Every macOS target in the workflow names a GitHub-hosted image.
+
+        The property is hosted-vs-self-hosted, so the image version is not
+        asserted: pinning it here would fail every runner-image bump while
+        defending nothing.
+        """
+        targets = re.findall(r"(?m)^\s*runs-on:\s*(.+?)\s*$", workflow)
+        self.assertTrue(targets, f"{name} declares no runs-on")
+        macos_targets = [t for t in targets if "macos" in t.lower()]
+        self.assertTrue(macos_targets, f"{name} declares no macOS runner")
+        for target in macos_targets:
+            self.assertRegex(
+                target,
+                r"^macos-(latest|\d+)(-(large|xlarge|intel))?$",
+                f"{name} must run macOS work on a GitHub-hosted image, got {target!r}",
+            )
+
     def test_pull_request_ci_uses_github_hosted_runner(self) -> None:
         """Untrusted PR code must not run on persistent self-hosted macOS runners."""
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
         self.assertIn("pull_request:", workflow)
-        self.assertIn("runs-on: macos-15", workflow)
-        self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
+        self.assert_macos_targets_are_hosted(workflow, "ci.yml")
 
     def test_ci_fallback_uses_github_hosted_runner(self) -> None:
         """Failed PR fallback must not execute untrusted commits on self-hosted runners."""
         workflow = (REPO_ROOT / ".github/workflows/ci-fallback.yml").read_text()
         self.assertIn("workflow_run:", workflow)
-        self.assertIn("runs-on: macos-15", workflow)
-        self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
+        self.assert_macos_targets_are_hosted(workflow, "ci-fallback.yml")
         self.assertNotIn("runs-on: [self-hosted, signing-host]", workflow)
 
     def test_release_workflow_does_not_export_secrets_job_wide(self) -> None:

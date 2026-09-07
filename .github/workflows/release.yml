@@ -20,7 +20,7 @@ jobs:
     # secrets — the certificate is imported into a temporary keychain created
     # and destroyed by this job — so nothing here depends on a particular
     # machine's login keychain.
-    runs-on: macos-15
+    runs-on: macos-26
     environment: release
     timeout-minutes: 120
     permissions:
@@ -558,7 +558,7 @@ jobs:
     needs:
       - build-sign-notarize-release
       - publish-github-release
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     permissions:
       contents: read

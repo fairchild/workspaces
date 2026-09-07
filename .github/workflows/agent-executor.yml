@@ -49,7 +49,7 @@ jobs:
     needs: claim
     if: needs.claim.outputs.matched == 'true' && needs.claim.outputs.requested_agent == 'april-clearwater'
     # Linux. April writes code and prose; anything needing a Mac is macOS
-    # evidence, and that is `april-evidence` below on hosted macos-15.
+    # evidence, and that is `april-evidence` below on hosted macos-26.
     runs-on: ubuntu-latest
     timeout-minutes: 30
     concurrency:

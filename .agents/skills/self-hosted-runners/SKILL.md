@@ -12,7 +12,7 @@ description: >
 Use this skill when the problem is runner health, scheduling, or lane ownership rather than repo code.
 
 **No workflow in this repo dispatches to a self-hosted runner, and none is
-registered.** Release signing and notarization moved to hosted `macos-15` in
+registered.** Release signing and notarization moved to hosted macOS in
 #1293, and `blue-workspaces` — the last runner, carrying `signing-host` — was
 deregistered and removed from the host on 2026-08-13.
 
@@ -21,8 +21,8 @@ failed release job is a workflow, CI, or credential problem; check
 `scripts/release-preflight.sh`'s output before looking at any runner.
 
 Behavioral UI smoke runs on
-GitHub-hosted `macos-15` (`ui-smoke-advisory.yml`). Agent evidence — the
-`gather` job in `_evidence.yml` — runs on hosted `macos-15` too; the
+GitHub-hosted `macos-26` (`ui-smoke-advisory.yml`). Agent evidence — the
+`gather` job in `_evidence.yml` — runs on hosted `macos-26` too; the
 `lume-macos` VM lane that once carried it is retired. Perf benchmarks run on the
 owner's laptop, opt-in per approved session
 (`docs/decisions/perf-measurement-laptop-optin.md`) — the `tart-ui` lane that
