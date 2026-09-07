@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.27.0] - 2026-09-06
+
+WorkSpaces adds QR pairing for mobile access over your tailnet and distinct
+repository glyphs with actions in each sidebar header. Session recovery now
+repairs missing launch identity and preserves saved terminals when a tmux query
+is inconclusive. Cleanup only terminates tmux sessions whose creation belongs
+to WorkSpaces, and reconnecting to an adopted session no longer types into it.
+
+### Added
+- Pair Mobile Device QR flow for tailnet access, with recovery after a pairing token rotates. [#1465](https://github.com/fairchild/workspaces/pull/1465), [#1486](https://github.com/fairchild/workspaces/pull/1486)
+- Distinct repository identity glyphs and inline sidebar header actions. [#1426](https://github.com/fairchild/workspaces/pull/1426)
+- Continuous process diagnostics without spawning a subprocess for each sample. [#1532](https://github.com/fairchild/workspaces/pull/1532)
+
+### Fixed
+- Repair terminal launch metadata and recover lost identity during restore; keep saved terminals when a query returns an inconclusive empty result. [#1485](https://github.com/fairchild/workspaces/pull/1485), [#1531](https://github.com/fairchild/workspaces/pull/1531)
+- Authorize tmux cleanup from recorded session creation, and avoid sending initialization commands to adopted sessions. [#1526](https://github.com/fairchild/workspaces/pull/1526), [#1538](https://github.com/fairchild/workspaces/pull/1538)
+- Allow archiving a workspace after its directory has gone, restore access to dismissed cleanup results, and report partial orphan scans. [#1452](https://github.com/fairchild/workspaces/pull/1452), [#1451](https://github.com/fairchild/workspaces/pull/1451), [#1499](https://github.com/fairchild/workspaces/pull/1499)
+- Count only successfully reattached terminal surfaces and build automation health information for each request. [#1490](https://github.com/fairchild/workspaces/pull/1490), [#1496](https://github.com/fairchild/workspaces/pull/1496)
+- Render formatting and links correctly in Sparkle update notes. [#1494](https://github.com/fairchild/workspaces/pull/1494)
+- Clear local web sessions on sign-out and enforce access checks on dotted paths. [#1489](https://github.com/fairchild/workspaces/pull/1489), [#1469](https://github.com/fairchild/workspaces/pull/1469)
+
+### Changed
+- Redraw only the sidebar row whose terminal session changed. [#1504](https://github.com/fairchild/workspaces/pull/1504)
+- Strengthen release bundle checks, Xcode build diagnostics, and automated review evidence validation.
+
 ## [0.26.0] - 2026-08-28
 
 WorkSpaces now reopens the workspaces you had open when you quit, so a restart
