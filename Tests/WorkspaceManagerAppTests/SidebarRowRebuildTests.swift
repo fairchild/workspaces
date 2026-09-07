@@ -151,6 +151,30 @@ struct SidebarRowRebuildTests {
         )
     }
 
+    /// Absorbs the render pass a freshly mounted tree still owes before any measurement starts.
+    ///
+    /// `settle` returns once a pump adds no further body calls, which is not the same as the
+    /// tree having nothing left to do: on a loaded runner a pass can still land after that, and
+    /// it lands *inside* the measured window, where a row rebuilding is indistinguishable from
+    /// the boundary leaking. Waiting longer does not drain it — an idle pump has nothing to
+    /// flush, which is why widening quiescence to eight consecutive pumps changed nothing on
+    /// #1542. A state change does: it gives SwiftUI something to render, and settling on it
+    /// leaves the next window quiescent.
+    ///
+    /// CI is where this is visible. A diagnostic run on `macos-26` measured two successive
+    /// changes and an idle window: `first=[0,0,0,1,0…] second=[0,0,0,1,0…] idle=[0…]` — a
+    /// window opened after one change cycle reads clean there, while the suite's first
+    /// measurement did not.
+    private func warmUp(
+        _ host: NSHostingView<some View>,
+        _ counter: BodyCounter,
+        _ model: RowStateModel,
+        row: Int
+    ) {
+        model.values[row] += 1
+        settle(host, counter)
+    }
+
     @Test("Changing one row's state rebuilds that row alone")
     func oneRowChangeRebuildsOneRow() {
         let rowCount = 12
@@ -160,9 +184,10 @@ struct SidebarRowRebuildTests {
         let host = NSHostingView(rootView: EquatableRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
         settle(host, counter)
+        #expect(counter.counts.count == rowCount, "every row should have rendered once to start")
+        warmUp(host, counter, model, row: rowCount - 1)
 
         let baseline = counter.counts
-        #expect(baseline.count == rowCount, "every row should have rendered once to start")
 
         model.values[changedIndex] += 1
         settle(host, counter)
@@ -189,6 +214,7 @@ struct SidebarRowRebuildTests {
         let host = NSHostingView(rootView: EquatableRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
         settle(host, counter)
+        warmUp(host, counter, model, row: rowCount - 1)
 
         let baseline = counter.counts
 
@@ -216,6 +242,7 @@ struct SidebarRowRebuildTests {
         let host = NSHostingView(rootView: PlainRowList(model: model, counter: counter))
         host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
         settle(host, counter)
+        warmUp(host, counter, model, row: rowCount - 1)
 
         let baseline = counter.counts
         model.values[3] += 1
