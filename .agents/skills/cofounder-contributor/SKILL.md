@@ -53,7 +53,7 @@ uv run .agents/skills/cofounder-contributor/scripts/run-contributor.py \
 
 ## Evidence upload
 
-When running on a macOS runner with a GUI session — the `gather` job in `_evidence.yml` on hosted `macos-15` — agents can capture and upload screenshots as PR evidence:
+When running on a macOS runner with a GUI session — the `gather` job in `_evidence.yml` on hosted `macos-26` — agents can capture and upload screenshots as PR evidence:
 
 ```bash
 # Capture a screenshot

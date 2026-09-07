@@ -167,7 +167,7 @@ This note exists because the raw SwiftPM output has behaved differently from the
 
 ## Daemon Reliability
 
-The Lume daemon (`com.trycua.lume_daemon`) must be running for the app's VM features to work. Without a keepalive mechanism, daemon outages are silent. CI no longer depends on it: the `lume-macos` runner lane is retired and agent evidence runs on hosted `macos-15`.
+The Lume daemon (`com.trycua.lume_daemon`) must be running for the app's VM features to work. Without a keepalive mechanism, daemon outages are silent. CI no longer depends on it: the `lume-macos` runner lane is retired and agent evidence runs on hosted `macos-26`.
 
 ### LaunchAgent with KeepAlive
 

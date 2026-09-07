@@ -7,7 +7,7 @@ is for rules that outlive the incident that taught them.
 
 ## CI and Runner Isolation
 
-- Every lane needing macOS runs on GitHub-hosted `macos-15` — build/test, the UI smoke lane, agent evidence, and release/signing/notarization alike. Agent and metadata jobs run `ubuntu-latest`.
+- Every lane needing macOS runs on GitHub-hosted `macos-26` — build/test, the UI smoke lane, agent evidence, and release/signing/notarization alike. Agent and metadata jobs run `ubuntu-latest`.
 - **No self-hosted runner is registered for this repo**, and `.github/actionlint.yaml` allows no self-hosted label, so a `runs-on` naming one fails lint rather than queueing forever. Re-provisioning a lane means adding its label back there first.
 - Treat the interactive laptop host as unsuitable for intrusive UI/perf automation by default. Perf benchmarks are the sanctioned exception: laptop-local and opt-in per run (`docs/decisions/perf-measurement-laptop-optin.md`), never a CI lane.
 

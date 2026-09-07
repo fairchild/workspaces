@@ -158,7 +158,7 @@ Developer ID, notarization, and Sparkle release secrets.
 
 The workflow is split into three jobs:
 
-- `build-sign-notarize-release` runs on GitHub-hosted `macos-15` with read-only
+- `build-sign-notarize-release` runs on GitHub-hosted `macos-26` with read-only
   repository permissions. It imports the Developer ID certificate into a
   temporary keychain, builds and signs the app, notarizes the DMG, generates
   the Sparkle appcast, uploads release assets as workflow artifacts, then
@@ -287,7 +287,7 @@ the workflow never installed (#1298), and a red `main`.
 The rehearsal was routine through v0.23.0 — dispatched 2026-06-26, 06-28, 06-30,
 and 07-07, green every time — and was skipped ahead of v0.24.0. It also covers
 more ground now than it did then: #1293 moved signing and notarization from the
-self-hosted `signing-host` runner to a hosted `macos-15` image, and the hosted
+self-hosted `signing-host` runner to a hosted macOS image, and the hosted
 lane has since run green end to end — a manual `main` dispatch on 2026-08-22
 (run #78) and the v0.25.0 release on 2026-08-23 (run #80).
 
@@ -373,7 +373,7 @@ users. Rehearse first (above) when the release lane itself changed.
 
    - Workflow: `.github/workflows/release.yml`
    - Trigger: `push` tag `v*`
-   - Runner: GitHub-hosted `macos-15`
+   - Runner: GitHub-hosted `macos-26`
    - Protected environment: `release`
 
    The environment requires the owner's approval and waits silently until it

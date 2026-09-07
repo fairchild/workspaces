@@ -1,4 +1,4 @@
-We're building a team of AI agents that contribute to this codebase autonomously. April is our first agent — she picks up issues, writes code, produces evidence, and opens PRs. She runs on GitHub-hosted `macos-15`; the `lume-macos` VM lane she used to run on is retired.
+We're building a team of AI agents that contribute to this codebase autonomously. April is our first agent — she picks up issues, writes code, produces evidence, and opens PRs. She runs on GitHub-hosted `macos-26`; the `lume-macos` VM lane she used to run on is retired.
 
 Start by getting oriented:
 
