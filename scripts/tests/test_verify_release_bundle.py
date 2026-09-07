@@ -24,10 +24,10 @@ having run no assertion at all. These tests therefore run the script under
 The tests drive the real script and read either the argument boundary or the
 exit status, so they need no network, no secrets, no UI access, no live GitHub
 mutation, and no built app bundle. Four need a macOS host because they build a
-complete unsigned bundle and run the structure assertions over it, and a
-fifth reads an error message that only a macOS host reaches; all five skip
-where PlistBuddy is absent, which is the Linux CI runner — where this file
-reports 25 tests with 5 skipped.
+complete unsigned bundle and run the structure assertions over it, and one
+reads an error message that only a macOS host reaches; all seven skip where
+PlistBuddy is absent, which is the Linux CI runner — where this file reports
+28 tests with 7 skipped.
 """
 
 from __future__ import annotations
@@ -60,6 +60,11 @@ POST_PARSE_MARKERS = (
 # A path that does not exist, so an accepted parse stops at the first
 # post-parse assertion instead of reading anything on disk.
 ABSENT_BUNDLE = "/nonexistent/verify-release-bundle-test/WorkSpaces.app"
+
+# Printed by an injected abort just before it fires. Without it a test could
+# pass on the exit code the argument alone produces, having never run the
+# injection at all — which is what review found the `set -e` case doing.
+ABORT_MARKER = "VERIFY_RELEASE_BUNDLE_INJECTION_REACHED"
 
 
 def system_bash_zeroes_a_set_u_abort() -> bool:
@@ -241,6 +246,38 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
     `verify_bundle_identity`, or a single signing assertion.
     """
 
+    def run_with_injected_abort(self, statement: str) -> subprocess.CompletedProcess[str]:
+        """Run a copy of the verifier that aborts, and prove the abort is why.
+
+        `ABSENT_BUNDLE` exits non-zero on its own, so a bare status assertion
+        would pass whether or not the injection ran. Requiring the marker
+        proves it ran, and requiring that no post-parse assertion was reached
+        proves it stopped the script rather than merely printing.
+        """
+        with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleAbort-") as root:
+            script = script_with_injected_abort(Path(root), statement)
+            result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
+        output = result.stdout + result.stderr
+        self.assertIn(ABORT_MARKER, output, f"the injection never ran\n{output}")
+        reached = [marker for marker in POST_PARSE_MARKERS if marker in output]
+        self.assertEqual(reached, [], f"the abort did not stop the run: {reached}\n{output}")
+        return result
+
+    def test_an_empty_home_is_refused_rather_than_expanded(self) -> None:
+        """`HOME=""` is refused, which `main` did not do — deliberately.
+
+        The guard is `-n`, not `${HOME+x}`, so an assigned-but-empty `HOME` is
+        rejected as well. On `main` it expanded: `~user/WorkSpaces.app` became
+        the *relative* `user/WorkSpaces.app`, which resolved against the
+        working directory and verified whatever it found there. Naming the
+        wrong bundle and passing is the shape this script exists to refuse, so
+        the difference is the point rather than a cost.
+        """
+        env = dict(os.environ)
+        env["HOME"] = ""
+        result = run_verifier("--structure-only", "~user/WorkSpaces.app", env=env)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_an_unset_home_does_not_pass_a_tilde_path_unverified(self) -> None:
         """Runs everywhere; only red against `main` where bash 3.2 is `/bin/bash`.
 
@@ -261,14 +298,16 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         PLIST_BUDDY.is_file(), f"{PLIST_BUDDY} is macOS-only; the HOME guard sits after it"
     )
     def test_an_unset_home_names_home_as_the_cause(self) -> None:
-        result = run_verifier(
-            "--structure-only",
-            "~/nonexistent/WorkSpaces.app",
-            env=environment_without_home(),
-        )
-        output = result.stdout + result.stderr
-        self.assertNotEqual(result.returncode, 0, output)
-        self.assertIn("HOME is not set", output, output)
+        empty_home = dict(os.environ)
+        empty_home["HOME"] = ""
+        for label, env in (("unset", environment_without_home()), ("empty", empty_home)):
+            with self.subTest(home=label):
+                result = run_verifier(
+                    "--structure-only", "~/nonexistent/WorkSpaces.app", env=env
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(result.returncode, 0, output)
+                self.assertIn("HOME is not set", output, output)
 
     def test_an_unset_home_no_longer_stops_an_absolute_path(self) -> None:
         """The guard is on the tilde branch, not on the whole run.
@@ -306,11 +345,7 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         carries its own status out and the sentinel correctly says nothing.
         The probe decides which, so this reads the same defect on both.
         """
-        with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleAbort-") as root:
-            script = script_with_injected_abort(
-                Path(root), 'echo "${VERIFY_RELEASE_BUNDLE_UNSET_PROBE}"'
-            )
-            result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
+        result = self.run_with_injected_abort('echo "${VERIFY_RELEASE_BUNDLE_UNSET_PROBE}"')
         output = result.stdout + result.stderr
         self.assertNotEqual(result.returncode, 0, f"an abort exited 0\n{output}")
         if SYSTEM_BASH_ZEROES_A_SET_U_ABORT:
@@ -324,9 +359,7 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         `cleanup` preserves `$?`. This pins that, so a later change to the
         trap cannot quietly break the half that worked.
         """
-        with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleAbort-") as root:
-            script = script_with_injected_abort(Path(root), "false")
-            result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
+        result = self.run_with_injected_abort("false")
         self.assertNotEqual(
             result.returncode, 0, f"an abort exited 0\n{result.stdout}{result.stderr}"
         )
@@ -337,14 +370,16 @@ def script_with_injected_abort(root: Path, statement: str) -> Path:
 
     Injecting into a copy rather than asserting on today's one abort is what
     makes the test about the failure class. The statement lands after the trap
-    so the trap is what has to carry the status out.
+    so the trap is what has to carry the status out, and a marker goes in ahead
+    of it so a test cannot pass on an exit code the injection never caused.
     """
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     anchor = "trap cleanup EXIT\n"
     if anchor not in source:
         raise AssertionError(f"{SCRIPT_PATH} no longer arms its EXIT trap as expected")
+    injection = f'echo "{ABORT_MARKER}" >&2\n{statement}\n'
     script = root / "verify-release-bundle.sh"
-    script.write_text(source.replace(anchor, f"{anchor}{statement}\n", 1), encoding="utf-8")
+    script.write_text(source.replace(anchor, f"{anchor}{injection}", 1), encoding="utf-8")
     script.chmod(0o755)
     return script
 
@@ -403,6 +438,65 @@ class StructureOnlyOverARealBundleTests(unittest.TestCase):
             f"verified clean\n{result.stdout}{result.stderr}",
         )
         self.assertNotIn("Verified release bundle structure", result.stdout)
+
+
+@unittest.skipUnless(
+    PLIST_BUDDY.is_file(), f"{PLIST_BUDDY} is macOS-only; the structure assertions run first"
+)
+class SigningEnumerationTests(unittest.TestCase):
+    """The one place left where the sentinel could still be told a lie.
+
+    `collect_code_objects` read `find` through a process substitution, which
+    discards the producer's status. A `find` that failed handed the loop a
+    short list, the loop consumed it without complaint, and the run reported a
+    signed bundle having enumerated nothing — `COMPLETED=true` on a
+    verification that did not happen. Found in review, not by the issue.
+
+    `codesign` is stubbed to a passing Developer ID report so the run reaches
+    the end on a bundle no one signed; that is what lets the failing case be
+    about enumeration rather than about signing.
+    """
+
+    def setUp(self) -> None:
+        self.root = Path(tempfile.mkdtemp(prefix="VerifyReleaseBundleSigning-"))
+        self.addCleanup(shutil.rmtree, self.root, True)
+        self.bundle = build_structurally_valid_bundle(self.root)
+        self.stubs = self.root / "stubs"
+        self.stubs.mkdir()
+        write_stub(
+            self.stubs / "codesign",
+            "cat <<'REPORT'\n"
+            "Executable=stub\n"
+            "Identifier=com.example.stub\n"
+            "TeamIdentifier=ABCDE12345\n"
+            "Authority=Developer ID Application: Example (ABCDE12345)\n"
+            "REPORT\n",
+        )
+
+    def run_signing_lane(self) -> subprocess.CompletedProcess[str]:
+        env = dict(os.environ)
+        env["PATH"] = f"{self.stubs}:{env['PATH']}"
+        return run_verifier(str(self.bundle), env=env)
+
+    def test_a_failing_find_does_not_report_a_signed_bundle(self) -> None:
+        write_stub(self.stubs / "find", 'echo "synthetic find failure" >&2\nexit 42\n')
+        result = self.run_signing_lane()
+        output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0, f"enumeration failed and it passed\n{output}")
+        self.assertNotIn("Verified Developer ID signing", result.stdout, output)
+        self.assertIn("Failed to enumerate", output, output)
+
+    def test_the_signing_lane_still_passes_when_find_works(self) -> None:
+        """The control, without which the case above proves nothing."""
+        result = self.run_signing_lane()
+        output = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, output)
+        self.assertIn("Verified Developer ID signing", result.stdout, output)
+
+
+def write_stub(path: Path, body: str) -> None:
+    path.write_text(f"#!/bin/bash\n{body}", encoding="utf-8")
+    path.chmod(0o755)
 
 
 def build_structurally_valid_bundle(root: Path) -> Path:
