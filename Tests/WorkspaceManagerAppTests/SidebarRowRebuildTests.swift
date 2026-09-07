@@ -206,47 +206,6 @@ struct SidebarRowRebuildTests {
         )
     }
 
-    /// TEMPORARY DIAGNOSTIC for #1542 — remove before merge.
-    ///
-    /// Two candidate causes produce the same CI signature (`deltas = [1,1,1,…]`), and they need
-    /// different fixes:
-    ///
-    ///   (i)  a render pass pending at baseline lands later and coalesces with the change, so
-    ///        row 3's own rebuild hides inside a pass that hit every row; or
-    ///   (ii) the equality boundary does not hold in this environment at all, so changing one
-    ///        row rebuilds every row.
-    ///
-    /// A second change, measured after the first has settled, separates them. Under (i) the
-    /// first change absorbs the pending pass and the second window is clean — `second` reads
-    /// `[0,0,0,1,0,…]`. Under (ii) both windows rebuild everything and `second` reads all ones.
-    @Test("DIAGNOSTIC two successive changes")
-    func diagnosticTwoSuccessiveChanges() {
-        let rowCount = 12
-        let changedIndex = 3
-        let counter = BodyCounter()
-        let model = RowStateModel(values: Array(repeating: 0, count: rowCount))
-        let host = NSHostingView(rootView: EquatableRowList(model: model, counter: counter))
-        host.frame = NSRect(x: 0, y: 0, width: 260, height: 400)
-        settle(host, counter)
-
-        let baselineOne = counter.counts
-        model.values[changedIndex] += 1
-        settle(host, counter)
-        let first = deltas(counter, since: baselineOne, rowCount: rowCount)
-
-        let baselineTwo = counter.counts
-        model.values[changedIndex] += 1
-        settle(host, counter)
-        let second = deltas(counter, since: baselineTwo, rowCount: rowCount)
-
-        // A no-op window, to show whether anything rebuilds with no state change at all.
-        let baselineThree = counter.counts
-        settle(host, counter)
-        let idle = deltas(counter, since: baselineThree, rowCount: rowCount)
-
-        Issue.record("DIAGNOSTIC #1542 first=\(first) second=\(second) idle=\(idle)")
-    }
-
     /// The control: without the boundary, the same single-value change rebuilds everything. This
     /// is what the sidebar did on every coalescing window before this slice.
     @Test("Without the equality boundary the same change rebuilds every row")
