@@ -184,10 +184,17 @@ ATTESTED_TEST_STATEMENT_RE = re.compile(
 # a place tests live. Requiring a separator or an extension is what tells them
 # apart, and getting it wrong would send a check name down the attested lane
 # where no check is ever polled.
-TEST_PATH_TOKEN = r"(?:\btests?\b|[_./-]test|\btest[_-])"
+# What makes a path a test path. The last alternative is deliberately
+# case-sensitive inside a case-insensitive pattern: `FooTests.swift` names
+# tests and `docs/latest.md` does not, and only the capital tells them apart.
+TEST_PATH_TOKEN = r"(?:\btests?\b|[_./-]tests?|\btest[_-]|(?-i:[a-z0-9]Tests?)[./])"
 TEST_PATH_SPAN_RE = re.compile(
     rf"`[^`\n]*/[^`\n]*{TEST_PATH_TOKEN}[^`\n]*`"
-    rf"|`[^`\n]*{TEST_PATH_TOKEN}[^`\n]*\.[a-z]{{1,4}}`"
+    rf"|`[^`\n]*{TEST_PATH_TOKEN}[^`\n]*\.[a-z]{{1,4}}`",
+    # Case-insensitive like its neighbours: `Tests/FooTests.swift` is a test
+    # path, and reading only the lowercase spelling would undercount every
+    # Swift one, which is where the capital lives.
+    re.IGNORECASE,
 )
 EVIDENCE_PASS_WORD_RE = re.compile(
     r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|clean)\b"
@@ -1309,12 +1316,16 @@ def review_evidence_gate_error(verdict: str, accounting: dict[str, object], erro
             and _named_tests_are_green(accounting)
         )
         if not weighable:
-            preview = "; ".join(str(item) for item in blocked_items[:3])
             if needs_a_person:
+                # The items the message is about, not the whole blocked set:
+                # naming a mechanical item in a sentence about needing a
+                # person sends the reader to the wrong line.
+                preview = "; ".join(str(item) for item in needs_a_person[:3])
                 return (
                     "requested evidence still needs a person to look at it and review must "
                     f"stay in request_changes; blocked: {preview}"
                 )
+            preview = "; ".join(str(item) for item in blocked_items[:3])
             return (
                 "requested evidence is still blocked; approve_with_followups needs at least "
                 "one named test complete on this head, otherwise review must stay in "

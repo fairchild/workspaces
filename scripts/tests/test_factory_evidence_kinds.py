@@ -1547,6 +1547,22 @@ class AttestedTestKindTests(unittest.TestCase):
             with self.subTest(item=item):
                 self.assertEqual(run_contributor._evidence_item_kind(item), "other")
 
+    def test_a_capitalised_test_path_reads_the_same_as_a_lowercase_one(self) -> None:
+        # `Tests/` is where the Swift ones live, and reading only the
+        # lowercase spelling would undercount every one of them.
+        self.assertEqual(
+            run_contributor._evidence_item_kind(
+                "Every `Tests/WorkspaceManagerTests/FooTests.swift` case passes"
+            ),
+            "test-attested",
+        )
+
+    def test_a_path_that_merely_contains_the_letters_is_not_a_test_path(self) -> None:
+        self.assertEqual(
+            run_contributor._evidence_item_kind("The `docs/latest.md` entry passes review"),
+            "other",
+        )
+
     def test_a_ci_check_name_is_not_a_test_path(self) -> None:
         # `build-and-test` is a check; `scripts/tests/*.py` is where tests
         # live. Reading the first as the second would send it down a lane that
@@ -1798,6 +1814,20 @@ class BlockedItemVerdictTests(unittest.TestCase):
                     )
                     self.assertIsNotNone(error)
                     self.assertIn("needs a person", error)
+
+    def test_the_message_names_the_item_it_is_about(self) -> None:
+        # Previewing the whole blocked set in a sentence about needing a
+        # person sends the reader to the wrong line.
+        error = run_contributor.review_evidence_gate_error(
+            "approve_with_followups",
+            self.accounting(
+                [self.WEIGHABLE, "Screenshots of the new sidebar"], [self.GREEN]
+            ),
+            [],
+        )
+        self.assertIsNotNone(error)
+        self.assertIn("Screenshots of the new sidebar", error)
+        self.assertNotIn(self.WEIGHABLE, error)
 
     def test_a_weighable_gap_with_green_tests_can_be_approved_with_followups(self) -> None:
         self.assertIsNone(
