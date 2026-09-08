@@ -150,7 +150,8 @@ exist afterwards.
 ### Web UI evidence
 
 The app lane is macOS-app only. Web dashboard evidence still uses
-`mise run web:evidence` / Playwright report screenshots (see the web table
+`mise run web:evidence` / Playwright reports and screenshots of the rendered
+page (see the web table
 below and `web/docs/local-dev.md`).
 
 ## Setup
@@ -229,7 +230,7 @@ Minimum is the floor for that change type, not the ceiling.
 |-------------|-----------------|--------|
 | Swift UI | Running-app screenshot via the [app evidence lane](#app-evidence-lane-first-choice-ui-capture) (`--fixture`) | Before/after when the visual correction is the point |
 | Swift non-UI | The named tests that ran, with the command and its result line | Uploaded `test-output.txt` |
-| Web | `pnpm test` output | Playwright report screenshot |
+| Web | `pnpm test` output, with the command and its result line | Playwright report for a UI change; the HTML report as an artifact, not a picture of it |
 | API-only | The named tests that ran, with the command | — |
 | Docs/config | Check "Not a testable change" in PR template | — |
 | Performance | Before/after/delta numbers in the PR body — the numbers are the artifact | Metric source and commands |

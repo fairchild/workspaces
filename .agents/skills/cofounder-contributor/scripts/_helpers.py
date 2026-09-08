@@ -105,13 +105,6 @@ def run_optional(
         )
     except subprocess.TimeoutExpired:
         return default
-    except OSError:
-        # A tool that is not installed is the same answer as a tool that said
-        # nothing: this call is optional. The agent lanes run `ubuntu-latest`
-        # with no Swift toolchain, so `swift test list` raises FileNotFoundError
-        # there -- and an unhandled one aborted the whole run rather than
-        # skipping a preflight that cannot apply.
-        return default
     if result.returncode != 0:
         return default
     return result.stdout

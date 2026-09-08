@@ -421,7 +421,8 @@ def _recognition_label(entry: dict[str, Any]) -> str:
     """
     text = _quotable(str(entry.get("item") or ""))
     if not text:
-        return f"item {entry.get('index')}"
+        index = _entry_index(entry)
+        return f"item {index}" if index is not None else "an unnamed item"
     clause = text.find(",")
     if ITEM_RECOGNITION_FLOOR <= clause <= ITEM_RECOGNITION_LIMIT:
         return _inert(text[:clause])
@@ -438,11 +439,29 @@ def _count_word(count: int) -> str:
 
 def _index_phrase(entries: list[dict[str, Any]]) -> str:
     """`Item 3` / `Items 3 and 4` / `Items 3, 4 and 7`."""
-    indexes = [str(entry.get("index")) for entry in entries]
+    indexes = [str(index) for entry in entries if (index := _entry_index(entry)) is not None]
+    if not indexes:
+        return "Those items" if len(entries) != 1 else "That item"
     noun = "Item" if len(indexes) == 1 else "Items"
     if len(indexes) == 1:
         return f"{noun} {indexes[0]}"
     return f"{noun} {', '.join(indexes[:-1])} and {indexes[-1]}"
+
+
+def _entry_index(entry: dict[str, Any]) -> int | None:
+    """The entry's index, or None if it is not one.
+
+    `index` comes from the same PR-editable metadata the item text does, and
+    it reaches the comment through two paths that never touched `_quotable`.
+    An index of `"1\n<!--"` opens an HTML comment inside a comment the owner
+    is meant to trust, hiding the instructions under it while the real
+    trailing marker still counts the review as answered.
+    """
+    try:
+        value = int(entry.get("index"))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:

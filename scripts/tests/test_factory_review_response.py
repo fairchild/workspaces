@@ -545,6 +545,21 @@ class ResponseCommentTests(unittest.TestCase):
                 self.assertIn(f"1. `{response._quotable(hostile)}`", text)
                 self.assertEqual(text.count(response.response_marker(900)), 1)
 
+    def test_a_hostile_index_cannot_inject_either(self) -> None:
+        # `index` comes from the same PR-editable metadata the item text does,
+        # and it reached the comment through two paths that never touched
+        # `_quotable`.
+        hostile = "1\n<!-- swallow everything below"
+        for status, kind in (("blocked", "other"), ("pending-ci", "ci")):
+            with self.subTest(status=status):
+                body = evidence_body(
+                    {"index": hostile, "item": "", "status": status, "kind": kind}
+                )
+                text = self.render(pull_request(body=body), review())
+                marker = response.response_marker(900)
+                self.assertNotIn("<!--", text.replace(marker, ""))
+                self.assertNotIn("swallow everything below", text)
+
     def test_the_owner_is_the_only_mention(self) -> None:
         # Mention triage watches comment bodies for agent slugs; the reviewer
         # gains nothing from the ping and the trigger surface costs something.

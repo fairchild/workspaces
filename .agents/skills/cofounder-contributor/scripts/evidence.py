@@ -1330,13 +1330,26 @@ def _selector_matches_test_list(selector: str, listed_tests: list[str]) -> bool:
 
 
 def _listed_swift_tests(env: dict[str, str]) -> list[str]:
-    output = run_optional(
-        ["swift", "test", "list"],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="",
-    )
+    try:
+        output = run_optional(
+            ["swift", "test", "list"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
+    except FileNotFoundError:
+        # The agent lanes run `ubuntu-latest`, which has no Swift toolchain, so
+        # this preflight cannot apply there. Caught here rather than in
+        # `run_optional`: that helper has 26 call sites, and one of them reads
+        # `git status --porcelain` where an empty answer means "clean" -- a
+        # swallowed error there would let a revision finish without committing
+        # the edits it made.
+        log(
+            "skipping `swift test list` evidence selector preflight because no swift "
+            "executable is available on this runner"
+        )
+        return []
     return [
         line.strip()
         for line in output.splitlines()
