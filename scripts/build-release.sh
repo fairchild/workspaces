@@ -120,7 +120,9 @@ copy_tree_or_fail() {
     [[ -d "$src" ]] || fail "$label: source directory not found: $src (needed for $dst)"
     [[ -n "$(ls -A "$src")" ]] || fail "$label: source directory is empty: $src (nothing to copy into $dst)"
     [[ -d "$dst" ]] || fail "$label: destination directory not found: $dst (copying from $src)"
-    cp -R "$src"/* "$dst"/ || fail "$label: copy failed: $src -> $dst"
+    # `$src/.` rather than `$src/*`: the glob omits dotfiles, which would let the
+    # emptiness check above pass on a tree the copy then only partly moves.
+    cp -R "$src/." "$dst/" || fail "$label: copy failed: $src -> $dst"
     log_success "$label"
 }
 

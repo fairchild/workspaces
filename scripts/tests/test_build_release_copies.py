@@ -114,6 +114,20 @@ class CopyTreeOrFailTests(unittest.TestCase):
         self.assertTrue((self.dst / "PrivacyInfo.xcprivacy").is_file())
         self.assertIn("Copied test resources", result.stdout)
 
+    def test_dotfiles_at_the_top_of_the_source_are_copied_too(self) -> None:
+        """The emptiness guard counts dotfiles, so the copy has to move them:
+        a `$src/*` glob would pass the guard on a mixed tree and then leave the
+        dotfiles behind, reporting success for a partial copy."""
+        (self.src / ".resource-manifest").write_text("v1\n", encoding="utf-8")
+        (self.src / "ghostty").mkdir()
+        (self.src / "ghostty" / "shell-integration").write_text("# integration\n", encoding="utf-8")
+
+        result = self.run_copy(self.src, self.dst)
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.dst / "ghostty" / "shell-integration").is_file())
+        self.assertTrue((self.dst / ".resource-manifest").is_file())
+
     def test_a_copy_that_cannot_write_fails_the_build(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root writes through the permission bits this case depends on")
@@ -154,6 +168,18 @@ class ResourceCopyCallSiteTests(unittest.TestCase):
         self.assertEqual(len(calls), 2, f"expected the SPM and Ghostty copies, found: {calls}")
         self.assertTrue(any("SPM_RESOURCES" in call for call in calls), calls)
         self.assertTrue(any("GHOSTTY_SHARE_DIR_RESOLVED" in call for call in calls), calls)
+
+    def test_the_spm_copy_is_unconditional(self) -> None:
+        """Routing through the helper is not enough on its own: wrapping the call
+        in `if [[ -d "$SPM_RESOURCES" ]]` restores the original skip while every
+        other assertion here still passes. The SPM copy therefore has to sit at
+        column zero, outside any branch, and nothing may test that path for
+        existence."""
+        lines = SCRIPT_SOURCE.splitlines()
+        spm_calls = [line for line in lines if line.startswith("copy_tree_or_fail \"$SPM_RESOURCES\"")]
+        self.assertEqual(len(spm_calls), 1, f"the SPM copy is indented, so it sits inside a branch: {spm_calls}")
+        guards = [line.strip() for line in lines if "-d" in line and "SPM_RESOURCES" in line]
+        self.assertEqual(guards, [], f"the SPM bundle is guarded by an existence test again: {guards}")
 
     def test_no_tree_copy_forces_success(self) -> None:
         offenders = [
