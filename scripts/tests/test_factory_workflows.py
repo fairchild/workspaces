@@ -785,6 +785,27 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("matched=false", outputs)
         self.assertNotIn("matched=true", outputs)
 
+    def test_conflicting_claim_state_outranks_a_missing_required_label(self) -> None:
+        # An in-flight claim that also lacks `task` is still bookkeeping, not a
+        # stranded release: speaking here would comment on an issue a run is
+        # working, and withdrawing `ready` would fight the rollback that
+        # restores it. Conflicting state is read before label completeness.
+        for conflicting in ("claimed", "review"):
+            with self.subTest(conflicting=conflicting):
+                client = self.claim_client(
+                    self.issue(labels=("agent", "ready", conflicting))
+                )
+                actions_client = mock.Mock()
+                actions_client.workflow_runs_on.return_value = []
+
+                outputs = self.run_claim(client, actions_client)
+
+                client.comment.assert_not_called()
+                client.update_issue.assert_not_called()
+                client.add_assignees.assert_not_called()
+                self.assertIn("matched=false", outputs)
+                self.assertNotIn("matched=true", outputs)
+
     def test_claim_defers_and_never_touches_labels_when_content_edited_after_release(
         self,
     ) -> None:

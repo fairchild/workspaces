@@ -276,6 +276,10 @@ class EvaluateClaimTests(unittest.TestCase):
         for silent, labels, state in (
             ("unreleased", ("agent", "task"), "open"),
             ("conflicting", ("agent", "task", "ready", "claimed"), "open"),
+            # Conflicting state outranks label completeness: an in-flight claim
+            # missing `task` is bookkeeping, not a stranded release.
+            ("conflicting-and-incomplete", ("agent", "ready", "claimed"), "open"),
+            ("in-review-and-incomplete", ("task", "ready", "review"), "open"),
             ("closed", ("agent", "ready"), "closed"),
         ):
             with self.subTest(silent=silent):

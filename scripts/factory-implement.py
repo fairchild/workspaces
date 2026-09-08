@@ -471,6 +471,16 @@ def evaluate_claim(
     labels = label_names(issue)
     if str(issue.get("state", "")).casefold() != "open":
         return ClaimDecision("skip", "issue is not open")
+    # Conflicting state is read before label completeness. An issue a run is
+    # already working can also be missing `task`, and that is bookkeeping, not
+    # a stranded release: speaking would comment on live work, and withdrawing
+    # `ready` would fight the rollback that restores it.
+    conflicting = {"claimed", "review"} & labels
+    if conflicting:
+        return ClaimDecision(
+            "skip",
+            f"issue has conflicting labels: {', '.join(sorted(conflicting))}",
+        )
     missing = missing_required_labels(issue)
     if missing:
         # A released issue missing `agent` or `task` is stranded: nothing acts
@@ -480,12 +490,6 @@ def evaluate_claim(
         # and that stays silent, writing nothing the owner did not ask for.
         action = "skip" if "ready" in missing else "missing_labels"
         return ClaimDecision(action, f"issue is missing labels: {', '.join(missing)}")
-    conflicting = {"claimed", "review"} & labels
-    if conflicting:
-        return ClaimDecision(
-            "skip",
-            f"issue has conflicting labels: {', '.join(sorted(conflicting))}",
-        )
     if privileged_scope(issue, tracked_files=tracked_files):
         return ClaimDecision("privileged", "issue indicates privileged-path scope")
     if not extract_requested_evidence(str(issue.get("body") or "")):
