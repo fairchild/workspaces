@@ -818,6 +818,13 @@ struct SidebarView: View {
                     NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: repo.localPath)
                 }
 
+                // The Claude integration is opt-in and lives in Settings, which a new
+                // user has no reason to open (#517). One always-visible line points
+                // there; the pane, not this menu, owns the toggle.
+                Button("Claude Integration…") {
+                    openClaudeIntegrationSettings()
+                }
+
                 Divider()
 
                 Button("Remove from List", role: .destructive) {
@@ -1177,6 +1184,12 @@ struct SidebarView: View {
             message: message,
             recoveryActions: MainWindowErrorRecoveryAction.lumeRecoveryActions(forMessage: message)
         )
+    }
+
+    /// Opens Settings scrolled to the Agents pane — the integration's one home.
+    private func openClaudeIntegrationSettings() {
+        SettingsDestinationRouter.shared.request(.agents)
+        openSettingsWindow()
     }
 
     private func openSettingsWindow() {

@@ -17,6 +17,7 @@ struct SettingsView: View {
     @Environment(\.claudeSettingsInstaller) private var claudeSettingsInstaller
     @EnvironmentObject private var modelStoreStatusController: ModelStoreStatusController
     @ObservedObject private var terminalThemeStore = GhosttyThemeStore.shared
+    @ObservedObject private var settingsDestination = SettingsDestinationRouter.shared
 
     @AppStorage("workspacesRoot") private var workspacesRootPath: String = ""
     @AppStorage(TerminalMultiplexingMode.storageKey)
@@ -64,6 +65,22 @@ struct SettingsView: View {
     }
 
     var body: some View {
+        ScrollViewReader { proxy in
+            settingsForm
+                // Keyed on the request so it fires both ways: on this appearance
+                // when the window was just opened, and on a new request when
+                // Settings is already up. Reading the value rather than the
+                // `@Published` publisher also sidesteps willSet ordering.
+                .task(id: settingsDestination.pendingSection) {
+                    await SettingsSectionScroller { section in
+                        withAnimation { proxy.scrollTo(section.id, anchor: .top) }
+                    }
+                    .run(settingsDestination)
+                }
+        }
+    }
+
+    private var settingsForm: some View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
@@ -289,6 +306,7 @@ struct SettingsView: View {
                 AgentsSettingsView(installer: claudeSettingsInstaller)
             } header: {
                 Text("Agents")
+                    .id(SettingsSection.agents.id)
             }
 
             Section {
