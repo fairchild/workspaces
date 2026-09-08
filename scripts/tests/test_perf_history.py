@@ -19,6 +19,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -152,6 +153,58 @@ class PerfHistoryTests(unittest.TestCase):
                 after.startswith(before),
                 "appending a row rewrote the lines that preceded it",
             )
+
+    def test_append_leaves_the_previous_history_intact_when_the_write_fails(self) -> None:
+        """An interrupted append must lose the new row, not the recorded history.
+
+        The rewrite is the whole file, so a writer that dies part-way through leaves a
+        truncated history behind and the measurements it dropped are unrecoverable —
+        they only ever existed here. Failing mid-row is the shape that matters: the
+        header and some rows are already out, which is exactly when writing in place
+        has destroyed something.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            csv_path = tmp_path / "metrics-history.csv"
+            append_history_row(csv_path, history_row_from_summary(debug_summary(), "2026-08-07T10:00:00-0700"))
+            append_history_row(csv_path, history_row_from_summary(debug_summary(), "2026-08-08T10:00:00-0700"))
+            before = csv_path.read_bytes()
+            self.assertEqual([path.name for path in tmp_path.iterdir()], ["metrics-history.csv"])
+
+            real_writerow = csv.DictWriter.writerow
+            written = 0
+
+            def fail_after_the_header_and_one_row(self: csv.DictWriter, rowdict: dict) -> object:
+                nonlocal written
+                written += 1
+                if written > 2:
+                    raise OSError("simulated interrupted write")
+                return real_writerow(self, rowdict)
+
+            with mock.patch.object(csv.DictWriter, "writerow", fail_after_the_header_and_one_row):
+                with self.assertRaises(OSError):
+                    append_history_row(
+                        csv_path,
+                        history_row_from_summary(debug_summary(), "2026-08-09T10:00:00-0700"),
+                    )
+
+            self.assertEqual(csv_path.read_bytes(), before)
+            self.assertEqual(
+                [path.name for path in tmp_path.iterdir()],
+                ["metrics-history.csv"],
+                "a failed append left a temp file beside the history",
+            )
+
+    def test_append_keeps_the_permissions_the_history_had(self) -> None:
+        """The rewrite arrives through a temp file, which opens owner-only."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "metrics-history.csv"
+            append_history_row(csv_path, history_row_from_summary(debug_summary(), "2026-08-07T10:00:00-0700"))
+            csv_path.chmod(0o644)
+
+            append_history_row(csv_path, history_row_from_summary(debug_summary(), "2026-08-08T10:00:00-0700"))
+
+            self.assertEqual(csv_path.stat().st_mode & 0o777, 0o644)
 
     def test_record_summary_writes_history_dashboard_and_latest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

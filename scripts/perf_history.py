@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -108,13 +110,35 @@ def append_history_row(history_csv_path: Path, row: dict[str, Any]) -> list[dict
 
     existing_rows.append(row)
 
-    # csv defaults to CRLF, and this rewrites the whole file on every append — so one
-    # new row arrived as a diff touching every line that came before it.
-    with history_csv_path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES, lineterminator="\n")
-        writer.writeheader()
-        for existing in existing_rows:
-            writer.writerow({field: existing.get(field, "") for field in HISTORY_FIELDNAMES})
+    # Every append rewrites the whole file, because a row recorded under a narrower
+    # header has to be widened to the current one — a true append cannot do that. The
+    # rewrite therefore lands on a temp file in the same directory and is renamed over
+    # the original, so a write that dies part-way through loses the new row rather than
+    # the history, which exists nowhere else. lineterminator keeps the rewritten lines
+    # byte-identical to the ones on disk; csv defaults to CRLF (#1492).
+    mode = history_csv_path.stat().st_mode & 0o7777 if history_csv_path.exists() else 0o644
+    tmp = tempfile.NamedTemporaryFile(
+        "w",
+        newline="",
+        dir=history_csv_path.parent,
+        prefix=f".{history_csv_path.name}.",
+        suffix=".tmp",
+        delete=False,
+    )
+    try:
+        with tmp as f:
+            writer = csv.DictWriter(f, fieldnames=HISTORY_FIELDNAMES, lineterminator="\n")
+            writer.writeheader()
+            for existing in existing_rows:
+                writer.writerow({field: existing.get(field, "") for field in HISTORY_FIELDNAMES})
+            f.flush()
+            os.fsync(f.fileno())
+        # A temp file opens at 0600; the history it replaces is world-readable.
+        os.chmod(tmp.name, mode)
+        os.replace(tmp.name, history_csv_path)
+    except BaseException:
+        Path(tmp.name).unlink(missing_ok=True)
+        raise
 
     with history_csv_path.open(newline="") as f:
         return list(csv.DictReader(f))
