@@ -836,9 +836,9 @@ def _complete_diff_evidence_after_approval(pr_number: int, env: dict[str, str]) 
     for entry in pending_diff:
         try:
             index = int(entry["index"])
-        except (KeyError, TypeError, ValueError, OverflowError):
         # OverflowError too: `1e9999` in the PR-editable metadata parses as
         # infinity, and `int()` of that raises a class the others do not cover.
+        except (KeyError, TypeError, ValueError, OverflowError):
             continue
         updates[index] = {
             "status": "complete",

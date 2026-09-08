@@ -635,6 +635,26 @@ class ResponseCommentTests(unittest.TestCase):
                 self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
                 self.assertTrue(blockers[0].owner_required)
 
+    def test_a_falsy_item_with_a_lying_kind_is_still_the_owner_s(self) -> None:
+        # Falling back to the stored kind when the item is empty put every
+        # falsy item back under the lying label it carried.
+        for item in ("", None, False, 0, [], {}):
+            with self.subTest(item=repr(item)):
+                blockers = response.evidence_blockers(
+                    [{"index": 1, "item": item, "status": "pending-ci", "kind": "ci"}]
+                )
+                self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+
+    def test_a_lane_needs_an_index_to_write_back_through(self) -> None:
+        # The completers skip an entry whose index will not parse, so calling
+        # it self-clearing promised a write that never happens.
+        blockers = response.evidence_blockers(
+            [{"index": 1e9999, "item": "CI: `check-links` green on the PR head",
+              "status": "pending-ci", "kind": "ci"}]
+        )
+        self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+        self.assertTrue(blockers[0].owner_required)
+
     def test_the_ask_agrees_with_how_many_items_it_is_about(self) -> None:
         one = response.evidence_blockers(
             [{"index": 1, "item": "`pnpm test` in `web-next` passes",

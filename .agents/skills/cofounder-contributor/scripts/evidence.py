@@ -678,11 +678,13 @@ def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
 def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
     metadata = (
         f"<!-- evidence-status:v{EVIDENCE_METADATA_VERSION}\n"
-        # ASCII on the way out: a JSON-escaped lone surrogate parses fine and
-        # then re-emits as invalid UTF-8, and every writer of this body --
-        # `gh pr edit`, the evidence workflow -- raises UnicodeEncodeError on
-        # it. Escaped, it round-trips as the text it was.
-        f"{json.dumps(payload, indent=2, ensure_ascii=True)}\n"
+        # The payload is cleaned rather than escaped. A JSON-escaped lone
+        # surrogate re-emits as invalid UTF-8 and every writer of this body
+        # raises UnicodeEncodeError on it -- but escaping everything to ASCII
+        # to avoid that turns 6,000 emoji into 78,000 characters, past what
+        # GitHub will store. Dropping what cannot be encoded costs one
+        # character and leaves the rest as it was written.
+        f"{json.dumps(_encodable_payload(payload), indent=2, ensure_ascii=False)}\n"
         f"-->"
     )
     cleaned = _strip_evidence_metadata(body).strip()
@@ -2302,6 +2304,17 @@ def _pending_ci_resolution(
             return "blocked", "self-hosted macOS CI captured screenshots but R2 upload failed; see workflow artifacts"
         return "blocked", "self-hosted macOS CI screenshot capture failed; see dev-smoke-output.txt"
     return "blocked", "self-hosted macOS CI cannot reconcile this evidence item automatically"
+
+
+def _encodable_payload(value: object) -> object:
+    """The same payload with every string cleaned of what cannot be encoded."""
+    if isinstance(value, str):
+        return _encodable(value)
+    if isinstance(value, dict):
+        return {_encodable_payload(k): _encodable_payload(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_encodable_payload(item) for item in value]
+    return value
 
 
 def _encodable(text: str) -> str:

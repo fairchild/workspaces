@@ -477,10 +477,11 @@ def _entry_kind(entry: dict[str, Any]) -> str:
     the stored value let an `other` item labelled `"kind": "ci"` be described
     as clearing on its own, when the verifier would skip it.
     """
-    item = str(entry.get("item") or "").strip()
-    if item:
-        return _evidence_item_kind(item)
-    return str(entry.get("kind") or "").strip()
+    # Never the stored value, not even as a fallback. An entry whose item is
+    # empty, null, false, 0 or a container classifies `other`, which is the
+    # owner's -- and that is the same answer the lanes reach, because they
+    # classify the item text too.
+    return _evidence_item_kind(str(entry.get("item") or ""))
 
 
 def _entry_index(entry: dict[str, Any]) -> int | None:
@@ -524,8 +525,13 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
     # Allowlist, not blocklist. Everything unrecognised used to land in the
     # self-clearing group -- kind `other`, no kind at all, a kind added later
     # -- and be told a lane would finish it.
+    # A lane needs an index to write back through. An entry whose index is
+    # not a positive integer is skipped by the completers, so calling it
+    # self-clearing promises a write that never happens.
     self_clearing = [
-        entry for entry in pending if _entry_kind(entry) in PENDING_COMPLETERS
+        entry
+        for entry in pending
+        if _entry_kind(entry) in PENDING_COMPLETERS and _entry_index(entry) is not None
     ]
     waiting_on_author = [entry for entry in pending if entry not in self_clearing]
     if waiting_on_author:

@@ -2581,6 +2581,22 @@ class DocumentedTestFormTests(unittest.TestCase):
             with self.subTest(label=label):
                 rendered.encode("utf-8")
 
+    def test_cleaning_a_body_does_not_grow_it_past_what_github_stores(self) -> None:
+        # Escaping everything to ASCII kept a lone surrogate out, and turned
+        # 6,000 emoji into 78,000 characters -- past GitHub's 65,536 limit, so
+        # the body could not be written back at all.
+        emoji = "\U0001F600" * 6000
+        body = self.metadata_body(
+            json.dumps(
+                {"entries": [{"index": 1, "item": emoji, "status": "complete",
+                              "detail": "d"}]}
+            )
+        )
+        rendered = run_contributor.update_evidence_entries(
+            body, {1: {"status": "complete", "detail": "kept"}}
+        )
+        self.assertLess(len(rendered), len(body))
+
     def test_an_infinite_index_does_not_take_any_metadata_path_down(self) -> None:
         # `1e9999` parses as infinity and `int()` of that raises OverflowError,
         # which the three index reads did not catch.
