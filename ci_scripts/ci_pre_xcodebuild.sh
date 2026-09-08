@@ -25,8 +25,8 @@ case "$action" in
     ;;
 esac
 
-if [ ! -d Frameworks/GhosttyKit.xcframework ]; then
-  echo "GhosttyKit.xcframework is missing; rebuilding before validation."
+if ! ./scripts/verify-ghostty-pin.sh; then
+  echo "GhosttyKit.xcframework is missing or built at another pin; rebuilding before validation."
   ./scripts/build-ghosttykit.sh
 fi
 

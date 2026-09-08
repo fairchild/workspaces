@@ -128,7 +128,7 @@ build_if_requested() {
         return
     fi
 
-    if [[ ! -d "$GHOSTTYKIT_FRAMEWORK" ]]; then
+    if ! "$REPO_ROOT/scripts/verify-ghostty-pin.sh"; then
         log "Building GhosttyKit.xcframework..."
         (
             cd "$REPO_ROOT"

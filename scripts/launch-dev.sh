@@ -243,19 +243,32 @@ preflight_mise_trust() {
 }
 
 ensure_ghosttykit_framework() {
-    if [[ -d "$GHOSTTYKIT_FRAMEWORK" ]]; then
+    # Presence is not the question a dev loop needs answered. A framework built
+    # at a superseded pin is present and wrong: the incremental rebuild keeps
+    # objects compiled against the previous header and the binary gives wrong
+    # answers rather than failing (#1576).
+    if "$REPO_ROOT/scripts/verify-ghostty-pin.sh"; then
         return
     fi
 
     if [[ "$DO_BUILD" != true ]]; then
-        fail "GhosttyKit.xcframework is missing at $GHOSTTYKIT_FRAMEWORK. Run ./scripts/build-ghosttykit.sh first or rerun without --no-build."
+        fail "GhosttyKit.xcframework at $GHOSTTYKIT_FRAMEWORK does not match the pinned commit. Run ./scripts/build-ghosttykit.sh first or rerun without --no-build."
     fi
 
-    log "GhosttyKit.xcframework missing. Building pinned GhosttyKit first..."
+    log "Building pinned GhosttyKit first..."
     (
         cd "$REPO_ROOT"
         ./scripts/build-ghosttykit.sh
     )
+
+    # The framework changed underneath whatever was already compiled against it.
+    if [[ -d "$REPO_ROOT/.build" ]]; then
+        log "Framework changed under an existing .build; cleaning stale objects..."
+        (
+            cd "$REPO_ROOT"
+            swift package clean
+        )
+    fi
 }
 
 build_if_requested() {
