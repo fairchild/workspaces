@@ -466,9 +466,9 @@ private final class CLIApp {
 
         let control = tmuxControl()
         let handle = await resolveSessionHandle(token: token, control: control, state: &state)
-        let bytes: Int
+        let report: TmuxSessionControl.SendReport
         do {
-            bytes = try await control.send(handle: handle, text: text, submit: submit)
+            report = try await control.send(handle: handle, text: text, submit: submit)
         } catch let error as TmuxSessionControl.ControlError {
             throw CLIError(error.localizedDescription)
         }
@@ -476,14 +476,36 @@ private final class CLIApp {
         let result = WorkspaceSendResult(
             handle: handle,
             socketLabel: control.socketLabel,
-            bytes: bytes,
-            submitted: submit
+            bytes: report.bytesOffered,
+            chunks: report.chunks,
+            submitted: submit,
+            verification: report.verification
         )
+        // The warning goes to stderr in both modes, so a `--json` consumer keeps a
+        // parseable stdout and an interactive caller still cannot miss it. Every
+        // non-success answer names its cause, because "unverified" and "not checked"
+        // are each reached more than one way and the difference is what a caller acts
+        // on.
+        if let cause = report.cause {
+            let headline = report.verification == .notChecked ? "delivery not checked" : "delivery unverified"
+            writeStderr("\(headline): \(cause)")
+        }
         if json {
             print(try AutomationCLIResultPrinter.resultJSON(result))
             return 0
         }
-        print("Sent \(bytes) byte(s) to \(handle)\(submit ? " and submitted" : "")")
+        // "Handed", not "sent": the count is what tmux accepted. Only the trailing
+        // clause speaks to what the pane shows.
+        let handed = "Handed \(report.bytesOffered) byte(s) in \(report.chunks) chunk(s) to \(handle)"
+        let submitted = submit ? " and submitted" : ""
+        switch report.verification {
+        case .paneShowsText:
+            print("\(handed)\(submitted); the pane shows it")
+        case .paneMissingText, .canonicalOverrun:
+            print("\(handed)\(submitted); delivery unverified")
+        case .notChecked:
+            print("\(handed)\(submitted); delivery not checked")
+        }
         return 0
     }
 
