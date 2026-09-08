@@ -269,12 +269,20 @@ complete a `pytest` item beside it.
 A `perf` item completes on a filled-in `Before Summary` and `After Summary` in
 the body's Performance section, each carrying a measurement with a unit.
 
+Both complete as an attestation, and the status line says so: "attested by the
+PR author, not run by the factory". Nothing in the pipeline re-runs the command
+to check. That is deliberate — it is the bar for a change nobody has to look at
+— and it is why the reviewer is told to read the claim against the diff.
+
 Neither has an event-driven lane. They are read when the factory next writes
 the PR body — at PR open, and on each revise turn — so filling the body after
-the PR opens completes the entry on the next turn, or you can edit the status
-line yourself and it will be carried forward. Until then both sit `pending-ci`,
-which is visible and fails the readiness gate, rather than `blocked`, which
-puts the PR in front of the owner.
+the PR opens completes the entry on the next turn. A status line you edit by
+hand is carried forward by that same turn, marked `(carried forward from an
+earlier revision)` so a reader can tell it was written before the code under
+it. The CI verifier and the macOS lane write only through the hidden metadata,
+so a hand edit does not survive those two; edit the body again after them.
+Until the entry completes both sit `pending-ci`, which is visible and fails the
+readiness gate, rather than `blocked`, which puts the PR in front of the owner.
 
 Evidence a person has to produce — by looking, by following a protocol, by
 deciding — stays `other` however it is phrased. "A test protocol covering a

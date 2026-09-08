@@ -79,6 +79,9 @@ STRUCTURED_EVIDENCE_UPDATE_RE = re.compile(
 )
 EVIDENCE_METADATA_VERSION = 1
 EVIDENCE_FALLBACK_SENTENCE = "Follow the repo evidence bar for the touched surfaces."
+# What a preserved status line gains, so a reader can tell an attestation
+# written before this revision from one earned by it.
+CARRIED_FORWARD_NOTE = "(carried forward from an earlier revision)"
 SWIFT_TEST_NO_MATCH_TEXT = "No matching test cases were run"
 VISUAL_EVIDENCE_RE = re.compile(
     r"\b(?:screenshots?|screen recordings?|visual (?:proof|evidence)|"
@@ -221,9 +224,16 @@ PERF_EVIDENCE_RE = re.compile(
 # comparison of animation smoothness judged by eye" is a person watching. Both
 # stay `other`, where a person is asked for them.
 MANUAL_JUDGEMENT_RE = re.compile(
-    r"(?i)\b(?:manual(?:ly)?|by hand|by eye|hand-run|judged|judgement|judgment"
-    r"|eyeball\w*|someone|a person|a human|protocol|walkthrough|walk-through"
-    r"|dogfood\w*|play(?:ed|ing)? with)\b"
+    r"(?i)\bmanual(?:ly)?\s+(?:run|ran|test\w*|check\w*|verif\w+|inspect\w+|exercis\w+"
+    r"|step\w*|pass|walkthrough|qa)\b"
+    r"|\b(?:run|ran|verified|checked|tested|inspected|exercised|driven|confirmed"
+    r"|followed|performed|executed|walked|reproduced|observed|watched)"
+    r"\s+(?:it\s+)?(?:manually|by hand|by eye|interactively|live|in person)\b"
+    r"|\b(?:manual|test|verification|qa|acceptance|release)\s+protocol\b"
+    r"|\bby (?:hand|eye)\b|\bjudge(?:d|ment|s)?\b|\bjudgment\b|\beyeball\w*"
+    r"|\bsomeone\b|\ba person\b|\ba human\b|\bdogfood\w*"
+    r"|\bplay(?:ed|ing)? with\b|\bwalkthrough\b|\bwalk-through\b"
+    r"|\binteractively\b|\bhand-run\b"
 )
 # A statement in the PR body that names a test runner. Unanchored: the body is
 # prose about what was run, not a contract item.
@@ -1169,11 +1179,17 @@ def _owner_written_entries(
             entry.get("detail"),
         ):
             continue
+        detail = str(entry["detail"]).strip()
+        # Written before this turn, and this turn may change the code under
+        # it. Saying so is the difference between an attestation a reader can
+        # weigh and a green that looks freshly earned.
+        if CARRIED_FORWARD_NOTE not in detail:
+            detail = f"{detail} {CARRIED_FORWARD_NOTE}"
         preserved[position] = {
             "index": position,
             "item": requested,
             "status": entry["status"],
-            "detail": entry["detail"],
+            "detail": detail,
         }
     return preserved
 
@@ -1444,6 +1460,12 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
 # write -- a fenced block, a bullet, a sentence.
 ATTESTED_TEST_WINDOW_LINES = 4
 ATTESTED_TEST_QUOTE_LIMIT = 180
+# A line that says the run did not happen. Without this, "`pnpm test` was not
+# run" beside another runner's passing count reads as a pass.
+NOT_RUN_RE = re.compile(
+    r"(?i)\b(?:not|never|couldn't|could not|cannot|can't|unable to|failed to|"
+    r"didn't|did not|skipped?|skipping|pending|todo|to do)\b"
+)
 # The Performance section's own fields, as `.github/pull_request_template.md`
 # writes them and `pr-perf-evidence.yml` enforces them.
 PERF_FIELD_RE = re.compile(
@@ -1458,24 +1480,27 @@ PERF_MEASUREMENT_RE = re.compile(
 )
 
 
-def _item_evidence_tokens(item: str) -> list[str]:
+def _item_evidence_tokens(item: str) -> tuple[list[str], list[str]]:
     """What a body statement must name to be about *this* item.
 
-    Without this the check is body-global: one `pnpm test` sentence completes
-    a `pytest` requirement sitting beside it, which is not evidence of
-    anything. The runner the item names, and the paths it names, are what
-    make a statement the answer to this item rather than to its neighbour.
+    Two lists, because they bind with different strength. A path is specific:
+    an item naming `test_foo.py` is not answered by a run of `test_bar.py`,
+    even though both are pytest. A runner is weak: it only says the statement
+    is about the same tool. So where the item names paths, a path must match;
+    otherwise the runner does.
     """
     text = item.strip()
-    tokens = [
-        match.group(0).casefold()
-        for match in TEST_RUNNER_MENTION_RE.finditer(text)
+    runners = [
+        match.group(0).casefold() for match in TEST_RUNNER_MENTION_RE.finditer(text)
     ]
+    paths: list[str] = []
     for span in re.finditer(r"`([^`\n]+)`", text):
         candidate = span.group(1).strip().strip("*")
+        if TEST_RUNNER_MENTION_RE.search(candidate):
+            continue
         if "/" in candidate or "." in candidate:
-            tokens.append(candidate.rsplit("/", 1)[-1].casefold())
-    return [token for token in tokens if token]
+            paths.append(candidate.rsplit("/", 1)[-1].casefold())
+    return [runner for runner in runners if runner], [path for path in paths if path]
 
 
 def _attested_test_statement(body: str, item: str = "") -> str | None:
@@ -1489,18 +1514,23 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
     """
     if not body.strip():
         return None
-    tokens = _item_evidence_tokens(item) if item else []
+    runners, paths = _item_evidence_tokens(item) if item else ([], [])
+    required = paths or runners
     lines = MARKDOWN_LINE_ENDING_RE.split(body)
     for index, line in enumerate(lines):
         if not TEST_RUNNER_MENTION_RE.search(line):
             continue
-        if tokens and not any(token in line.casefold() for token in tokens):
+        if required and not any(token in line.casefold() for token in required):
             continue
-        # A heading ends the statement. Reading past one would quote the
-        # Performance section back as though it were a test result.
-        window = []
-        for follower in lines[index : index + ATTESTED_TEST_WINDOW_LINES]:
-            if window and follower.lstrip().startswith("#"):
+        if NOT_RUN_RE.search(line):
+            continue
+        # The result belongs to the run named on this line. A heading ends the
+        # statement, and so does another runner: "`pnpm test` was not run"
+        # followed by "`pytest` -> 214 tests passed" is two statements, and
+        # reading them as one completes the wrong item.
+        window = [line]
+        for follower in lines[index + 1 : index + ATTESTED_TEST_WINDOW_LINES]:
+            if follower.lstrip().startswith("#") or TEST_RUNNER_MENTION_RE.search(follower):
                 break
             window.append(follower)
         if not TEST_RESULT_RE.search(" ".join(window)):
@@ -1517,14 +1547,33 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
     return None
 
 
-def _perf_numbers(body: str) -> str | None:
+PERF_METRIC_RE = re.compile(
+    r"(?i)\b(?:p50|p95|p99|latency|duration|throughput|cpu|memory|footprint"
+    r"|allocation|fps|startup|launch|cold start|frame|render|load|size)\b"
+)
+
+
+def _perf_numbers(body: str, item: str = "") -> str | None:
     """The before and after the PR body's Performance section carries.
 
     Both, or nothing: one side of a comparison measures nothing. Delta rides
     along when it is there, since it is the line a reader actually reads.
+
+    The section also has to be about the item. A launch-latency contract is
+    not answered by a section that measured setup, and one Performance
+    section is not four different measurements -- so the metric or the
+    scenario the item names has to appear in it.
     """
     section = markdown_section(body, "Performance")
     if not section:
+        return None
+    wanted = {match.group(0).casefold() for match in PERF_METRIC_RE.finditer(item)}
+    wanted |= {
+        span.group(1).strip().casefold()
+        for span in re.finditer(r"`([^`\n]+)`", item)
+        if span.group(1).strip()
+    }
+    if wanted and not any(token in section.casefold() for token in wanted):
         return None
     found: dict[str, str] = {}
     for line in MARKDOWN_LINE_ENDING_RE.split(section):
@@ -1583,7 +1632,13 @@ def synthesize_initial_execution_evidence(
         elif kind == "test-attested":
             attested = _attested_test_statement(body, item)
             if attested:
-                evidence_complete.append(f"{index} -- named tests in the PR body: {attested}")
+                # Named as an attestation, not as a run the factory watched.
+                # The reviewer reads this line and the diff together, and the
+                # difference between "the lane ran it" and "the author says
+                # they ran it" is exactly what they are weighing.
+                evidence_complete.append(
+                    f"{index} -- attested by the PR author, not run by the factory: {attested}"
+                )
             else:
                 evidence_pending_ci.append(
                     f"{index} -- the hosted lane has no toolchain for this runner; state the "
@@ -1591,10 +1646,11 @@ def synthesize_initial_execution_evidence(
                     "turn completes this entry (or edit the line yourself)"
                 )
         elif kind == "perf":
-            numbers = _perf_numbers(body)
+            numbers = _perf_numbers(body, item)
             if numbers:
                 evidence_complete.append(
-                    f"{index} -- measured in the PR body's Performance section: {numbers}"
+                    f"{index} -- attested by the PR author in this body's Performance "
+                    f"section, not measured by the factory: {numbers}"
                 )
             else:
                 evidence_pending_ci.append(

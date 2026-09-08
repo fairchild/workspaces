@@ -1632,6 +1632,38 @@ class AttestedTestKindTests(unittest.TestCase):
             with self.subTest(item=item):
                 self.assertEqual(run_contributor._evidence_item_kind(item), "other")
 
+    def test_a_result_for_another_path_completes_nothing(self) -> None:
+        # A path is specific. A pytest run of `test_bar.py` is not evidence
+        # about `test_foo.py`, even though both are pytest.
+        body = "## Validation\n\n- `pytest scripts/tests/test_bar.py` -> 12 passed\n"
+        complete, _, pending = run_contributor.synthesize_initial_execution_evidence(
+            ["`pytest` over `scripts/tests/test_foo.py` passes"], body=body
+        )
+        self.assertEqual(complete, [])
+        self.assertEqual(len(pending), 1)
+
+    def test_a_run_that_did_not_happen_completes_nothing(self) -> None:
+        # "was not run" beside another runner's passing count read as a pass,
+        # because the window crossed from one statement into the next.
+        body = (
+            "## Validation\n\n"
+            "- `pnpm test` was not run in this environment\n"
+            "- `pytest` -> 214 tests passed\n"
+        )
+        complete, _, _ = run_contributor.synthesize_initial_execution_evidence(
+            ["`pnpm test` in `web-next` passes"], body=body
+        )
+        self.assertEqual(complete, [])
+
+    def test_a_completed_attestation_says_who_attested_it(self) -> None:
+        # The reviewer weighs "the lane ran it" against "the author says they
+        # ran it". The line has to say which one this is.
+        body = "## Validation\n\n- `cd web-next && pnpm test` -> 214 tests passed\n"
+        complete, _, _ = run_contributor.synthesize_initial_execution_evidence(
+            ["`pnpm test` in `web-next` passes"], body=body
+        )
+        self.assertIn("attested by the PR author, not run by the factory", complete[0])
+
     def test_a_statement_about_another_runner_completes_nothing(self) -> None:
         # Body-global matching let one `pnpm test` sentence complete a
         # `pytest` requirement sitting beside it, which evidences nothing.
@@ -1749,6 +1781,31 @@ class PerfEvidenceKindTests(unittest.TestCase):
             "- Scenario ID:\n- Before Summary:\n- After Summary:\n- Delta Summary:\n"
         )
         self.assertIsNone(run_contributor._perf_numbers(body))
+
+    def test_a_section_measuring_something_else_completes_nothing(self) -> None:
+        # A launch-latency contract is not answered by a section that
+        # measured setup, and one Performance section is not four different
+        # measurements.
+        body = (
+            "## Performance\n\n"
+            "- Before Summary: setup took 2.0s\n- After Summary: setup took 1.0s\n"
+        )
+        self.assertIsNone(
+            run_contributor._perf_numbers(
+                body, "p50 launch latency before and after, same workload"
+            )
+        )
+
+    def test_a_section_measuring_the_named_metric_completes_it(self) -> None:
+        body = (
+            "## Performance\n\n"
+            "- Before Summary: p50 launch 1.31s\n- After Summary: p50 launch 1.02s\n"
+        )
+        self.assertIsNotNone(
+            run_contributor._perf_numbers(
+                body, "p50 launch latency before and after, same workload"
+            )
+        )
 
     def test_a_number_without_a_unit_measures_nothing(self) -> None:
         # "Before Summary: issue #123" carries a digit and measures nothing;
@@ -1919,6 +1976,21 @@ class OwnerWrittenEvidenceTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertIn(owner_text, rendered)
         self.assertNotIn("waiting on the author's run", rendered)
+
+    def test_a_carried_line_says_it_was_written_before_this_revision(self) -> None:
+        # This turn may change the code under it. A green that looks freshly
+        # earned when it was attested against an earlier head is the whole
+        # hazard of carrying anything forward.
+        owner_text = "ran it locally: 214 tests passed"
+        rendered, _ = self.render(self.body(owner_text, "the factory's own words"))
+        self.assertIn(
+            f"{owner_text} {run_contributor.CARRIED_FORWARD_NOTE}", rendered
+        )
+
+    def test_the_note_is_not_added_twice(self) -> None:
+        carried = f"ran it locally {run_contributor.CARRIED_FORWARD_NOTE}"
+        rendered, _ = self.render(self.body(carried, "the factory's own words"))
+        self.assertEqual(rendered.count(run_contributor.CARRIED_FORWARD_NOTE), 2)
 
     def test_a_status_a_person_changed_survives_too(self) -> None:
         # `[blocked]` to `[complete]` with the same words after it is the
