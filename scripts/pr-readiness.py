@@ -220,7 +220,7 @@ TEST_COMMAND_RE = re.compile(
 )
 TEST_RESULT_RE = re.compile(
     r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean"
-    r"|\d+\s+(?:tests?|cases?|examples?|files?))\b"
+    r"|(?!0\b)\d+\s+(?:tests?|cases?|examples?|files?))\b"
     # A result is often reported as an absence -- "no lint errors", "zero
     # failures", "0 warnings" -- and those are what a linter prints when it
     # is happy.
@@ -229,8 +229,19 @@ TEST_RESULT_RE = re.compile(
 # A run that failed is not evidence that anything passed. "12 tests failed"
 # carries a count and a test noun and was read as a result.
 TEST_FAILURE_RE = re.compile(
-    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b|\berrors?\b|\berrored\b"
+    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b"
+    r"|\b\d+\s+errors?\b|\berrors?\s*[=:]\s*[1-9]|\berrored\b"
     r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
+    r"|\bexit(?:ed|s)?\s+(?:code\s+|status\s+)?[1-9]\b"
+    r"|\bexit\s+code\s+[1-9]\b|\bnon-?zero exit\b"
+    r"|\bprocess completed with exit code [1-9]\b"
+)
+# A line that says the run did not happen. Without this, "`swift test` was
+# not run" and a sentence several lines later mentioning a count read as a
+# report of a passing run.
+NOT_RUN_RE = re.compile(
+    r"(?i)\b(?:not|never|couldn't|could not|cannot|can't|unable to|failed to|"
+    r"didn't|did not|skipped?|skipping|pending|todo|to do)\b"
 )
 # Anything a person can see lives here. `WorkspaceManagerCore` and the CLI are
 # Swift that renders nothing, so an image proves nothing about them. An image
@@ -241,6 +252,10 @@ TEST_FAILURE_RE = re.compile(
 # is real evidence about a change there -- and refusing a genuine app capture is
 # a worse failure than accepting a picture of text on a Swift PR. The line this
 # draws is against the agent scripts, the workflows and the docs.
+# `WorkspaceManagerCLI` draws nothing, so an image proves nothing about it;
+# `WorkspaceManagerCore` defines the labels and colors the app draws, so a
+# real app capture is evidence about a change there.
+NON_VISUAL_SOURCE_PREFIXES = ("Sources/WorkspaceManagerCLI/",)
 VISUAL_SURFACE_PREFIXES = (
     "Sources/",
     "web/",
@@ -260,11 +275,16 @@ IMAGE_LINK_RE = re.compile(
 # The scheme has to start the URL, not sit inside one:
 # `https://evil.example/https://evidence.cloudcompute.com/x.txt` is somebody
 # else's host with ours written in its path.
+# Nothing that can carry a URL may precede the scheme:
+# `https://evil.example/?next=https://evidence.cloudcompute.com/x.txt` is
+# somebody else's host with ours in its query.
+_STORE_PREFIX = r"(?<![\w/.:=&?#~+-])"
 EVIDENCE_STORE_RE = re.compile(
-    r"(?i)(?<![\w/.:-])https://evidence\.cloudcompute\.com/\S+"
+    rf"(?i){_STORE_PREFIX}https://evidence\.cloudcompute\.com/\S+"
 )
 EVIDENCE_STORE_LOG_RE = re.compile(
-    r"(?i)(?<![\w/.:-])https://evidence\.cloudcompute\.com/[^\s)\]]+\.txt(?=[\s)\]]|$)"
+    rf"(?i){_STORE_PREFIX}https://evidence\.cloudcompute\.com/"
+    r"[^\s)\]]+\.txt(?=[\s)\]]|$)"
 )
 
 
@@ -274,7 +294,9 @@ EVIDENCE_STORE_LOG_RE = re.compile(
 # `TEST_RESULT_RE` accepts `no \w+ errors?`, and without this that branch was
 # dead the moment a failure guard existed.
 NEGATED_FAILURE_RE = re.compile(
-    r"(?i)\b(?:no|zero|0|without|free of)\s+(?:\w+\s+){0,2}"
+    r"(?i)\b(?:no|zero|0|without|free of)\s+"
+    r"(?:(?!errors?\b|failures?\b|fail(?:s|ed|ing)?\b|warnings?\b|regressions?\b)"
+    r"\w+\s+){0,2}"
     r"(?:errors?|failures?|fail(?:s|ed|ing)?|warnings?|regressions?)\b"
 )
 
@@ -305,6 +327,8 @@ def has_named_test_signal(body: str) -> bool:
         # command and its output is ordinary formatting, so the window skips
         # those rather than ending on them. It ends at a heading or at the
         # next command, which is where the next statement begins.
+        if NOT_RUN_RE.search(line):
+            continue
         window = [line]
         for follower in lines[index + 1 : index + NAMED_TEST_WINDOW_LINES]:
             stripped = follower.strip()
@@ -323,7 +347,11 @@ def has_image_evidence(body: str) -> bool:
 
 
 def touches_a_visual_surface(files: list[str]) -> bool:
-    return any(path.startswith(VISUAL_SURFACE_PREFIXES) for path in files)
+    return any(
+        path.startswith(VISUAL_SURFACE_PREFIXES)
+        and not path.startswith(NON_VISUAL_SOURCE_PREFIXES)
+        for path in files
+    )
 
 
 def has_any_evidence(body: str, files: list[str] | None = None) -> bool:

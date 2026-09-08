@@ -260,12 +260,17 @@ MANUAL_JUDGEMENT_RE = re.compile(
 # therefore has to go and do: a smoke against a deployed app, a live endpoint,
 # a restart on a real host. The test suite says nothing about any of it.
 EXTERNAL_VERIFICATION_RE = re.compile(
-    r"(?i)\b(?:in |on |against |from )?(?:production|prod|staging|canary|live"
-    r"|the deployed\b|deployed\b|real (?:device|host|hardware|machine)"
-    r"|the installed (?:app|build)|installed build)\b"
+    # The environment word alone is not enough: "unit coverage for the
+    # production config" and "release notes mention the live-migration flag"
+    # are mechanical. It has to be somewhere someone goes and does something.
+    r"(?i)\b(?:in|on|against|from)\s+(?:the\s+)?"
+    r"(?:production|prod|staging|canary|live|deployed)\b"
+    r"|\b(?:a|one|the)?\s*(?:real|live)\s+(?:restart|run|device|host|hardware"
+    r"|machine|session|install)\b"
+    r"|\bthe installed (?:app|build)\b|\binstalled build\b"
     r"|\bsmoke\s+(?:test\w*\s+)?(?:against|on|of)\b"
     r"|\b(?:verify|check|confirm)\b[^\n]{0,40}?"
-    r"\b(?:endpoint|url|deployment|deployed build|running service)\b"
+    r"\b(?:endpoint|deployment|deployed build|running service)\b"
 )
 # A statement in the PR body that names a test runner. Unanchored: the body is
 # prose about what was run, not a contract item.
@@ -293,9 +298,15 @@ TEST_RUNNER_MENTION_RE = re.compile(
 # followed by "FAILED (failures=2)" carries a count and a test noun, and read
 # without this it completed the item and quoted only the first line.
 TEST_FAILURE_RE = re.compile(
-    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b|\berrors?\b|\berrored\b"
+    # `errors?` and `red` are ordinary words in a passing report -- "12 tests
+    # passed, covering error handling" is not a failure -- so a failure noun
+    # counts only where it is reporting a count or a status.
+    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b"
+    r"|\b\d+\s+errors?\b|\berrors?\s*[=:]\s*[1-9]|\berrored\b"
     r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
-    r"|\bexit(?:ed|s)?\s+[1-9]\b|\bred\b|\bbroken\b"
+    r"|\bexit(?:ed|s)?\s+(?:code\s+|status\s+)?[1-9]\b"
+    r"|\bexit\s+code\s+[1-9]\b|\bnon-?zero exit\b"
+    r"|\bprocess completed with exit code [1-9]\b"
 )
 # "no lint errors" and "zero failures" are pass phrasings that contain the
 # words a failure is spelled with. Stripped before the failure search, they
@@ -303,7 +314,12 @@ TEST_FAILURE_RE = re.compile(
 # `TEST_RESULT_RE` accepts `no \w+ errors?`, and without this that branch was
 # dead the moment a failure guard existed.
 NEGATED_FAILURE_RE = re.compile(
-    r"(?i)\b(?:no|zero|0|without|free of)\s+(?:\w+\s+){0,2}"
+    # The words between the negation and the noun may not themselves be a
+    # failure noun: "no failures but errors=2" would otherwise be swallowed
+    # whole, leaving "=2" and reading a red run as clean.
+    r"(?i)\b(?:no|zero|0|without|free of)\s+"
+    r"(?:(?!errors?\b|failures?\b|fail(?:s|ed|ing)?\b|warnings?\b|regressions?\b)"
+    r"\w+\s+){0,2}"
     r"(?:errors?|failures?|fail(?:s|ed|ing)?|warnings?|regressions?)\b"
 )
 
@@ -314,7 +330,7 @@ def _reports_a_failure(text: str) -> bool:
 
 TEST_RESULT_RE = re.compile(
     r"(?i)\bran\s+\d+\s+tests?\b"
-    r"|\b\d+\s+(?:tests?|cases?|files?|examples?|assertions?|specs?|suites?)\s+"
+    r"|\b(?!0\b)\d+\s+(?:tests?|cases?|files?|examples?|assertions?|specs?|suites?)\s+"
     r"(?:pass(?:ed|ing|es)?|ok|green|succeeded)\b"
     r"|\b\d+\s+pass(?:ed|ing)\b"
     r"|\btest run with \d+ tests? passed\b"
@@ -959,18 +975,17 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
         body, requested_evidence
     ) or extract_evidence_status_entries(body, requested_evidence)
     entries = parsed["entries"]
-    # The documented owner gesture is to rewrite a status line by hand. Read
-    # only from the metadata, that edit changes nothing until some later lane
-    # re-renders the body -- so the line a person edited still reads blocked to
-    # the reviewer, and the gesture the factory asked for does not work.
-    if isinstance(entries, dict):
-        entries = dict(entries)
-        for entry in _owner_written_entries(body, requested_evidence).values():
-            entries[str(entry["item"])] = {
-                "status": str(entry["status"]),
-                "detail": str(entry["detail"]),
-            }
-        parsed = {**parsed, "entries": entries}
+    # No overlay of the visible lines onto the metadata here, deliberately.
+    # Reading a hand edit straight into the accounting sounds like honouring
+    # the documented owner gesture, and is instead an authorization hole: the
+    # only signal available is that the visible text differs from the
+    # metadata, which any PR author or bot with write access can produce. It
+    # would let them leave a `blocked` entry in the metadata, write
+    # `- [complete] <item> -- PASS` in the section, and clear the gate for an
+    # item the lane refused. Authority has to come from who wrote the edit,
+    # and nothing in a body string says that. The gesture is honoured where
+    # provenance is known instead: `render_execution_summary_body` carries a
+    # published line forward on the next factory turn.
 
     matched: dict[str, str]
     contested_items: list[str] = []
@@ -1044,7 +1059,8 @@ DETAIL_IMAGE_RE = re.compile(
     r"!\[[^\]\n]{0,300}\]\([^)\n]{0,600}\)"
     r"|!\[[^\]\n]{0,300}\](?:\[[^\]\n]{0,300}\])?"
     r"|<img\b[^>\n]{0,600}>"
-    r"|<?https?://[^\s)\]>]{0,600}\.(?:png|jpe?g|gif|webp|svg|webm|mp4)>?",
+    r"|<?https?://[^\s)\]>]{0,600}\.(?:png|jpe?g|gif|webp|svg|webm|mp4)"
+    r"(?:[?#][^\s)\]>]{0,300})?>?",
     re.IGNORECASE,
 )
 
@@ -1678,10 +1694,23 @@ def _item_evidence_tokens(item: str) -> tuple[list[str], list[str]]:
         # The whole span and its last segment both count, and a bare directory
         # counts too: `web-next` is what tells a `pnpm test` there apart from
         # a `pnpm test` in `web`, and dropping it made them the same claim.
-        if "/" in candidate or "." in candidate or "-" in candidate:
-            paths.append(candidate.casefold())
-            paths.append(candidate.rsplit("/", 1)[-1].casefold())
+        paths.append(candidate.casefold())
+        paths.append(candidate.rsplit("/", 1)[-1].casefold())
     return [runner for runner in runners if runner], sorted({path for path in paths if path})
+
+
+def _line_names(line: str, tokens: list[str]) -> bool:
+    """Whether the line names one of these tokens, as a token.
+
+    Substring matching made `web-next` answer an item about `web`, and
+    `not_test_foo.py` answer one about `test_foo.py`. A path sits between
+    separators, so the boundary is anything that is not a path character.
+    """
+    lowered = line.casefold()
+    return any(
+        re.search(rf"(?<![\w./-]){re.escape(token)}(?![\w./-])", lowered)
+        for token in tokens
+    )
 
 
 def _attested_test_statement(body: str, item: str = "") -> str | None:
@@ -1701,7 +1730,7 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
     for index, line in enumerate(lines):
         if not TEST_RUNNER_MENTION_RE.search(line):
             continue
-        if required and not any(token in line.casefold() for token in required):
+        if required and not _line_names(line, required):
             continue
         if NOT_RUN_RE.search(line):
             continue
@@ -1737,6 +1766,28 @@ PERF_METRIC_RE = re.compile(
 )
 
 
+def _measurement_units(value: str, metrics: set[str] | None) -> set[str]:
+    """The units measured beside the metric this item asked about.
+
+    Scoped to the clause naming the metric where there is one, because a value
+    listing several measurements otherwise matches on whichever unit happens
+    to be shared.
+    """
+    text = value
+    if metrics:
+        clauses = [
+            clause
+            for clause in re.split(r"[;,]", value)
+            if any(metric in clause.casefold() for metric in metrics)
+        ]
+        if clauses:
+            text = " ".join(clauses)
+    return {
+        match.group(0).casefold().lstrip("-+0123456789., ")
+        for match in PERF_MEASUREMENT_RE.finditer(text)
+    }
+
+
 def _perf_numbers(body: str, item: str = "") -> str | None:
     """The before and after the PR body's Performance section carries.
 
@@ -1763,10 +1814,6 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
         if span.group(1).strip()
     }
     lowered = section.casefold()
-    if wanted:
-        matched = {token for token in wanted if token in lowered}
-        if not matched - PERF_SUMMARY_TOKENS:
-            return None
     if scenarios and not any(token in lowered for token in scenarios):
         return None
     found: dict[str, str] = {}
@@ -1780,13 +1827,22 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
         found.setdefault(match.group("label").casefold(), value)
     if "before" not in found or "after" not in found:
         return None
-    # The two sides have to measure the same thing. "Before: launch 1s" beside
-    # "After: memory 4GB" is two measurements, not a comparison.
-    units = {
-        label: {
-            match.group(0).casefold().lstrip("-+0123456789., ")
-            for match in PERF_MEASUREMENT_RE.finditer(found[label])
+    # The metric has to be named in the values themselves, not anywhere in the
+    # section: a heading mentioning "launch latency" over a Before that
+    # measured setup is not an answer. And the two sides have to share a unit,
+    # measured on the part of each value that names the metric -- otherwise
+    # "Before: launch 1s, memory 4GB" and "After: deploy 20ms, memory 3GB"
+    # agree on GB and measure nothing in common.
+    if wanted:
+        named = {
+            label: {token for token in wanted if token in found[label].casefold()}
+            for label in ("before", "after")
         }
+        shared = named["before"] & named["after"]
+        if not shared - PERF_SUMMARY_TOKENS:
+            return None
+    units = {
+        label: _measurement_units(found[label], shared if wanted else None)
         for label in ("before", "after")
     }
     if not units["before"] & units["after"]:

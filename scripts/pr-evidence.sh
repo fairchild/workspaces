@@ -411,7 +411,7 @@ profile_performance() {
     # The measured values, not the paths to the files holding them. The
     # Performance section is where the numbers live and where the evidence
     # gate reads them, and a JSON path is not a measurement.
-    local first_metric metric_name metric_rest before_value after_value delta_value
+    local first_metric metric_name metric_rest before_value after_value delta_value metric_unit
     first_metric="$(grep -E '^- .+: .+ -> .+;' "$compare_output" | head -n 1 || true)"
     before_value="see the delta block below"
     after_value="see the delta block below"
@@ -425,6 +425,27 @@ profile_performance() {
         after_value="$metric_name ${metric_rest%%;*}"
         delta_value="${metric_rest#*; }"
         delta_value="${delta_value%%;*}"
+
+        # `perf-compare.py` prints the two sides as bare numbers and puts the
+        # unit only on the delta, so a Before of "1310.00" measures nothing to
+        # a reader or to the evidence gate. Carry the unit onto both sides.
+        metric_unit=""
+        case "$delta_value" in
+            *" ms"*) metric_unit="ms" ;;
+            *" s"*) metric_unit="s" ;;
+            *"%"*) metric_unit="%" ;;
+        esac
+        if [[ -z "$metric_unit" ]]; then
+            case "$metric_name" in
+                *_ms) metric_unit="ms" ;;
+                *_s) metric_unit="s" ;;
+                *_pct | *_percent) metric_unit="%" ;;
+            esac
+        fi
+        if [[ -n "$metric_unit" ]]; then
+            before_value="$before_value $metric_unit"
+            after_value="$after_value $metric_unit"
+        fi
     fi
 
     local markdown_path="$RUN_DIR/$NAME.md"

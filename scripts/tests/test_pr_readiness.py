@@ -224,6 +224,55 @@ class PRReadinessTests(unittest.TestCase):
                 result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
                 self.assertEqual(result.failures, [])
 
+    def test_a_nonzero_exit_is_not_an_evidence_signal(self) -> None:
+        for line in (
+            "- `pytest` -> Ran 12 tests; Process completed with exit code 1",
+            "- `swift test` -> 12 tests passed; exit status 1",
+            "- `pytest` -> 0 tests failed",
+            "- `pytest` -> Ran 12 tests, no failures but errors=2",
+        ):
+            with self.subTest(line=line):
+                body = GOOD_BODY.replace(
+                    "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+                    line,
+                ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+                result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+                self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_command_that_was_not_run_is_not_a_report(self) -> None:
+        # The widened window joined a "was not run" line to a count several
+        # lines below it and read the pair as a passing run.
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- `swift test` was not run in this environment\n\nThe change adds 12 tests.",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_trusted_host_inside_another_url_is_not_our_store(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- see https://evil.example/?next=https://evidence.cloudcompute.com/fake.txt",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_an_image_does_not_stand_in_for_a_cli_change(self) -> None:
+        # `WorkspaceManagerCLI` draws nothing, so widening the visual surfaces
+        # to all of `Sources/` restored the bypass there.
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- ![out](https://evidence.cloudcompute.com/workspaces/pr-1/out.png)",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(
+            pr(body), ["Sources/WorkspaceManagerCLI/main.swift"]
+        )
+        self.assertIn(
+            "The only evidence in the PR body is an image, and this change is not one "
+            "anyone looks at. State the command you ran and the line it printed.",
+            result.failures,
+        )
+
     def test_a_fenced_result_under_a_command_still_counts(self) -> None:
         # A blank line and a fence between the command and its output is
         # ordinary formatting, and a two-line window called it no evidence.
