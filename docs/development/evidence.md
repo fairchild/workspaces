@@ -257,12 +257,28 @@ Two rules worth knowing:
   diff or CI form instead.
 
 `test-attested` and `perf` are the kinds the factory cannot run for you and
-does not park on you either. A `test-attested` item completes the moment the PR
-body carries a test command and the line it printed — "`pnpm test` — 214 tests
-passed" is enough, and a command with no result is not. A `perf` item completes
-on a filled-in `Before Summary` and `After Summary` in the body's Performance
-section. Until then both sit `pending-ci`, which is visible and fails the
-readiness gate, rather than `blocked`, which puts the PR in front of the owner.
+does not park on you either.
+
+A `test-attested` item completes on a statement in the PR body naming the
+command and the line it printed — "`pnpm test` — 214 tests passed" is enough.
+Both halves are required and the result has to carry a count: a command with no
+result is a plan, and "if all tests pass, merge" says nothing ran. The statement
+also has to name *this* item's runner or path, so one `pnpm test` line does not
+complete a `pytest` item beside it.
+
+A `perf` item completes on a filled-in `Before Summary` and `After Summary` in
+the body's Performance section, each carrying a measurement with a unit.
+
+Neither has an event-driven lane. They are read when the factory next writes
+the PR body — at PR open, and on each revise turn — so filling the body after
+the PR opens completes the entry on the next turn, or you can edit the status
+line yourself and it will be carried forward. Until then both sit `pending-ci`,
+which is visible and fails the readiness gate, rather than `blocked`, which
+puts the PR in front of the owner.
+
+Evidence a person has to produce — by looking, by following a protocol, by
+deciding — stays `other` however it is phrased. "A test protocol covering a
+manual production restart" names a test and is still yours.
 
 The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what

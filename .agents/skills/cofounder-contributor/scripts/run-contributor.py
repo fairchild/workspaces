@@ -83,6 +83,7 @@ from _helpers import (  # noqa: E402, F401
 
 from evidence import (  # noqa: E402, F401
     EVENT_COMPLETED_KINDS,
+    LANE_EXEMPT_KINDS,
     EVIDENCE_FALLBACK_SENTENCE,
     EVIDENCE_METADATA_RE,
     EVIDENCE_METADATA_VERSION,

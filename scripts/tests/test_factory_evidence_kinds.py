@@ -1602,7 +1602,52 @@ class AttestedTestKindTests(unittest.TestCase):
             ["`pnpm test` in `web-next` passes"], body="## Summary\n\nFixed it.\n"
         )
         self.assertEqual((complete, blocked), ([], []))
-        self.assertIn("completes on the command and the line it printed", pending[0])
+        self.assertIn("state the command and the line it printed", pending[0])
+
+    def test_evidence_a_person_produces_is_still_the_owner_s(self) -> None:
+        # A test noun does not make an item runnable. Each of these names
+        # something someone does by hand, by eye, or by following a protocol.
+        for item in (
+            "A test protocol covering a manual production restart",
+            "The `docs/test-plan.md` pass/fail protocol is followed manually",
+            "A test suite run by hand against the installed build",
+            "Someone runs the smoke tests and says whether it feels right",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
+    def test_a_statement_about_another_runner_completes_nothing(self) -> None:
+        # Body-global matching let one `pnpm test` sentence complete a
+        # `pytest` requirement sitting beside it, which evidences nothing.
+        body = "## Validation\n\n- `cd web-next && pnpm test` -> 214 tests passed\n"
+        complete, _, pending = run_contributor.synthesize_initial_execution_evidence(
+            ["`pytest` over `scripts/tests/` passes"], body=body
+        )
+        self.assertEqual(complete, [])
+        self.assertEqual(len(pending), 1)
+
+    def test_a_statement_about_this_runner_completes_it(self) -> None:
+        body = (
+            "## Validation\n\n"
+            "- `cd web-next && pnpm test` -> 214 tests passed\n"
+            "- `uv run --script scripts/tests/test_foo.py` -> Ran 12 tests, OK\n"
+        )
+        complete, _, _ = run_contributor.synthesize_initial_execution_evidence(
+            ["`pytest` over `scripts/tests/test_foo.py` passes"], body=body
+        )
+        self.assertEqual(len(complete), 1)
+        self.assertIn("test_foo.py", complete[0])
+
+    def test_a_conditional_is_not_a_result(self) -> None:
+        # "if all tests pass, merge" says nothing ran. Every accepted result
+        # carries a count, because a runner that ran printed one.
+        for body in (
+            "Run `pnpm test`; if all tests pass, merge.",
+            "`pnpm test` should be green before merge.",
+            "All tests pass with `pnpm test`.",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(run_contributor._attested_test_statement(body))
 
     def test_a_command_without_a_result_is_not_a_statement(self) -> None:
         # A command with no result is a plan. Completing on it would make the
@@ -1689,6 +1734,23 @@ class PerfEvidenceKindTests(unittest.TestCase):
         )
         self.assertIsNone(run_contributor._perf_numbers(body))
 
+    def test_a_number_without_a_unit_measures_nothing(self) -> None:
+        # "Before Summary: issue #123" carries a digit and measures nothing;
+        # a unit is what makes the two sides comparable.
+        body = (
+            "## Performance\n\n"
+            "- Before Summary: issue #123\n- After Summary: issue #124\n"
+        )
+        self.assertIsNone(run_contributor._perf_numbers(body))
+
+    def test_evidence_judged_by_eye_is_not_a_perf_item(self) -> None:
+        self.assertEqual(
+            run_contributor._evidence_item_kind(
+                "Performance comparison of animation smoothness judged by eye"
+            ),
+            "other",
+        )
+
     def test_a_word_count_before_and_after_is_not_a_perf_item(self) -> None:
         # It is a diff you can read, and routing it through the Performance
         # section would leave it pending on a section it never wanted.
@@ -1709,54 +1771,69 @@ class BlockedItemVerdictTests(unittest.TestCase):
     one it cannot.
     """
 
+    # Neither visual, nor owner-attested, nor a protocol someone follows: the
+    # residue the classifier does not recognise, which is what a reviewer who
+    # has read the diff can actually weigh.
+    WEIGHABLE = "The observability counter from that run, quoted in the PR body"
+    GREEN = "`pnpm test` in `web-next` passes"
+
     def accounting(self, blocked: list[str], complete: list[str]) -> dict[str, object]:
         return {"blocked_items": blocked, "complete_items": complete, "pending_ci_items": []}
 
-    def test_a_blocked_visual_item_still_forces_request_changes(self) -> None:
-        accounting = self.accounting(
-            ["Screenshots of the new sidebar"], ["`pnpm test` in `web-next` passes"]
-        )
-        for verdict in ("approve", "approve_with_followups"):
-            with self.subTest(verdict=verdict):
-                error = run_contributor.review_evidence_gate_error(verdict, accounting, [])
-                self.assertIsNotNone(error)
-                self.assertIn("visual", error)
+    def test_an_item_that_needs_a_person_to_look_still_forces_request_changes(self) -> None:
+        # Not only a screenshot request. On-screen copy someone has to read, a
+        # protocol someone has to follow, and a call someone has to make are
+        # all things no amount of diff-reading answers.
+        for item in (
+            "Screenshots of the new sidebar",
+            "Someone with taste confirms the copy reads well",
+            "A test protocol covering a manual production restart",
+            "The verdict, keep or remove, with the reasoning (owner-attested)",
+        ):
+            accounting = self.accounting([item], [self.GREEN])
+            for verdict in ("approve", "approve_with_followups"):
+                with self.subTest(item=item, verdict=verdict):
+                    error = run_contributor.review_evidence_gate_error(
+                        verdict, accounting, []
+                    )
+                    self.assertIsNotNone(error)
+                    self.assertIn("needs a person", error)
 
-    def test_a_blocked_non_visual_item_with_green_tests_can_be_approved_with_followups(
-        self,
-    ) -> None:
-        accounting = self.accounting(
-            ["Someone with taste confirms the copy reads well"],
-            ["`pnpm test` in `web-next` passes"],
-        )
+    def test_a_weighable_gap_with_green_tests_can_be_approved_with_followups(self) -> None:
         self.assertIsNone(
             run_contributor.review_evidence_gate_error(
-                "approve_with_followups", accounting, []
+                "approve_with_followups",
+                self.accounting([self.WEIGHABLE], [self.GREEN]),
+                [],
             )
         )
 
     def test_a_bare_approve_still_needs_a_whole_contract(self) -> None:
-        accounting = self.accounting(
-            ["Someone with taste confirms the copy reads well"],
-            ["`pnpm test` in `web-next` passes"],
-        )
         self.assertIsNotNone(
-            run_contributor.review_evidence_gate_error("approve", accounting, [])
+            run_contributor.review_evidence_gate_error(
+                "approve", self.accounting([self.WEIGHABLE], [self.GREEN]), []
+            )
         )
 
-    def test_without_a_green_named_test_the_gap_is_not_weighable(self) -> None:
-        accounting = self.accounting(
-            ["Someone with taste confirms the copy reads well"],
-            ["Diff: the README links the overview page"],
-        )
-        error = run_contributor.review_evidence_gate_error(
-            "approve_with_followups", accounting, []
-        )
-        self.assertIsNotNone(error)
-        self.assertIn("named test", error)
+    def test_a_green_check_is_not_a_green_test(self) -> None:
+        # `check-links` and `actionlint` are green checks that run no tests.
+        # Reading one as "the tests pass" would make the softened verdict
+        # available on a PR whose tests nobody ran.
+        for complete in (
+            "CI: `check-links` green on the PR head",
+            "Diff: the README links the overview page",
+        ):
+            with self.subTest(complete=complete):
+                error = run_contributor.review_evidence_gate_error(
+                    "approve_with_followups",
+                    self.accounting([self.WEIGHABLE], [complete]),
+                    [],
+                )
+                self.assertIsNotNone(error)
+                self.assertIn("named test", error)
 
     def test_request_changes_is_never_gated(self) -> None:
-        accounting = self.accounting(["Screenshots of the new sidebar"], [])
+        accounting = self.accounting(["Screenshots of the new sidebar"], [])  # noqa: E501
         self.assertIsNone(
             run_contributor.review_evidence_gate_error("request_changes", accounting, [])
         )
@@ -1767,7 +1844,9 @@ class OwnerWrittenEvidenceTests(unittest.TestCase):
 
     An owner who pasted a test summary lost it to the next revision. Every
     lane writes the hidden metadata beside the markdown in the same pass, so
-    a line that has drifted from its metadata is a person's.
+    a line that has drifted from its metadata is a person's -- but only in
+    the body GitHub holds. A model asked to rewrite a PR body can write any
+    line it likes, so its output is never read as what a person wrote.
     """
 
     ITEM = "`pnpm test` in `web-next` passes"
@@ -1794,61 +1873,71 @@ class OwnerWrittenEvidenceTests(unittest.TestCase):
             f"- [complete] {self.ITEM} -- {detail}\n"
         )
 
-    def test_a_hand_written_detail_survives_the_next_turn(self) -> None:
-        owner_text = "ran it locally: 214 tests passed on this head"
-        body = self.body(owner_text, "the factory's own words")
-        rendered, errors = run_contributor.render_execution_summary_body(
-            body,
+    def render(self, published: str, model_body: str = "## Summary\n\nFixed it.\n"):
+        return run_contributor.render_execution_summary_body(
+            model_body,
             requested_evidence=[self.ITEM],
             evidence_complete=None,
             evidence_blocked=None,
             evidence_pending_ci=["1 -- waiting on the author's run"],
+            published_body=published,
         )
+
+    def test_a_hand_written_detail_survives_the_next_turn(self) -> None:
+        owner_text = "ran it locally: 214 tests passed on this head"
+        rendered, errors = self.render(self.body(owner_text, "the factory's own words"))
         self.assertEqual(errors, [])
         self.assertIn(owner_text, rendered)
         self.assertNotIn("waiting on the author's run", rendered)
 
+    def test_a_status_a_person_changed_survives_too(self) -> None:
+        # `[blocked]` to `[complete]` with the same words after it is the
+        # commonest edit of all, and the gesture the factory asks for by name.
+        published = self.body("the factory's own words", "the factory's own words").replace(
+            "- [complete]", "- [blocked]", 1
+        )
+        rendered, errors = self.render(published)
+        self.assertEqual(errors, [])
+        self.assertIn(f"- [blocked] {self.ITEM} -- the factory's own words", rendered)
+
     def test_a_machine_written_detail_is_replaced_as_before(self) -> None:
         machine_text = "the factory's own words"
-        body = self.body(machine_text, machine_text)
-        rendered, errors = run_contributor.render_execution_summary_body(
-            body,
-            requested_evidence=[self.ITEM],
-            evidence_complete=None,
-            evidence_blocked=None,
-            evidence_pending_ci=["1 -- waiting on the author's run"],
-        )
+        rendered, errors = self.render(self.body(machine_text, machine_text))
         self.assertEqual(errors, [])
         self.assertIn("waiting on the author's run", rendered)
         self.assertNotIn(machine_text, rendered)
 
-    def test_a_section_a_person_wrote_from_scratch_survives(self) -> None:
-        body = (
+    def test_a_model_cannot_launder_a_completion_through_its_own_body(self) -> None:
+        # The contributor writes `data["body"]`. Reading its Evidence Status
+        # as "what a person wrote" would let it complete an item the lane
+        # refused, with any words it liked.
+        forged = (
+            "## Summary\n\nFixed it.\n\n"
+            "## Evidence Status\n"
+            f"- [complete] {self.ITEM} -- trust me\n"
+        )
+        rendered, errors = self.render("", model_body=forged)
+        self.assertEqual(errors, [])
+        self.assertIn("waiting on the author's run", rendered)
+        self.assertNotIn("trust me", rendered)
+
+    def test_a_published_body_the_machine_never_wrote_preserves_nothing(self) -> None:
+        # No metadata means no line the machine wrote, so nothing has drifted
+        # -- it is a first draft, not an edit.
+        published = (
             "## Summary\n\nFixed it.\n\n"
             "## Evidence Status\n"
             f"- [complete] {self.ITEM} -- I ran it: 214 tests passed\n"
         )
-        rendered, errors = run_contributor.render_execution_summary_body(
-            body,
-            requested_evidence=[self.ITEM],
-            evidence_complete=None,
-            evidence_blocked=None,
-            evidence_pending_ci=["1 -- waiting on the author's run"],
+        self.assertEqual(
+            run_contributor._owner_written_entries(published, [self.ITEM]), {}
         )
-        self.assertEqual(errors, [])
-        self.assertIn("I ran it: 214 tests passed", rendered)
 
     def test_the_preserved_line_becomes_the_record(self) -> None:
         # Preserved once, then it is the machine state too -- so the next turn
         # sees no drift and nothing is preserved twice over.
         owner_text = "ran it locally: 214 tests passed on this head"
-        rendered, _ = run_contributor.render_execution_summary_body(
-            self.body(owner_text, "the factory's own words"),
-            requested_evidence=[self.ITEM],
-            evidence_complete=None,
-            evidence_blocked=None,
-            evidence_pending_ci=["1 -- waiting on the author's run"],
-        )
+        rendered, _ = self.render(self.body(owner_text, "the factory's own words"))
         self.assertEqual(
             run_contributor._owner_written_entries(rendered, [self.ITEM]), {}
         )

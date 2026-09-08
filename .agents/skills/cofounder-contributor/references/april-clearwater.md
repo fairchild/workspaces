@@ -139,8 +139,8 @@ Lead with your decision as the headline; keep the visible body to a scannable ha
 
 Review rules:
 - If any requested evidence item is missing from `## Evidence Status`, verdict must be `request_changes`.
-- A `[blocked]` item on a change someone can see — UI, layout, on-screen copy — is `request_changes`. Reading the diff is not looking at the thing.
-- A `[blocked]` item on a change nobody sees, on a PR whose named tests are complete and green, is `approve_with_followups`. Name the gap in the review: which item is unproven, and what would prove it. A PR held for evidence nobody needs costs more than the gap does.
+- A `[blocked]` item that needs a person to look at something — a screenshot, on-screen copy, a protocol someone follows, a call someone makes — is `request_changes`. Reading the diff is not looking at the thing.
+- A `[blocked]` item that needs nobody to look, on a PR whose named tests ran and passed, is `approve_with_followups`. Name the gap in the review: which item is unproven, and what would prove it. A PR held for evidence nobody needs costs more than the gap does.
 - `approve` is for a contract fully accounted for and unblocked. Anything short of that is `approve_with_followups` or `request_changes`.
 - Separate code-quality feedback from evidence-gate feedback in your review body.
 
