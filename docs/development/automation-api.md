@@ -114,10 +114,11 @@ WorkSpaces terminal tile. See
   against the fresh registry (`stale_handle`).
 - **Capture, read, and operator mutations.** The operator capability set is
   `window.read` (list windows), `window.snapshot` (composited PNG of a listed
-  window), `workspace.read` (list repos and workspaces), and `surface.read`
-  (bounded terminal text read-back for surfaces this same operator handle
-  created through `workspace.create` this launch), plus
-  `workspace.select` and `workspace.create`, reviewed exceptions that drive real
+  window), `workspace.read` (list repos and workspaces), `ui.read` (structural
+  UI-state read), and `surface.read` (bounded terminal text read-back for
+  surfaces this same operator handle created through `workspace.create` this
+  launch), plus `workspace.select`, `workspace.create`, `workspace.archive`,
+  `workspace.note`, and `repo.terminal` — reviewed exceptions that drive real
   UI gestures rather than data-layer writes
   (see [Verb contract](#verb-contract-verbs--clicks)). Operator handles still
   never carry tile mutation or `input.write`.
@@ -277,6 +278,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/wait` | **Operator scope, typed wait.** Evaluates a condition (`surface_attached`, `workspace_selected`, `surface_text_matches`, `prompt_ready`) server-side until satisfied, a bounded timeout elapses, or current state proves it unsatisfiable. Body is `{"for":"…","predicate":{…},"timeoutMS":n}`; the outcome is the typed enum `satisfied` / `timed_out` / `not_applicable`, never a bare boolean. Topology/selection conditions require `workspace.read`; content conditions require `surface.read`. See [Wait](#wait). |
 | `GET /v1/focus` | **Operator scope.** Truthful report of the app's live focus state: `{appIsActive, keyWindowID, firstResponderSurfaceID, focusPossible}`. `focusPossible: false` marks a no-activate (or CI) launch where the app cannot take focus — absent focus is then "unavailable", not a focus failure. Requires `window.read`. See [Focus](#focus). |
 | `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. `{"teardownTerminals":true}` kills the workspace's tmux sessions and retires its terminal tiles first, so a live terminal cannot fail the call. Returns `completed` with the archived workspace id, post-gesture selection state, and (after teardown) a teardown report, or `confirmation_required` if the UI path ever reaches a modal. A live terminal without teardown fails typed: `terminal_active` (`retryable: true`) on the exit-timeout, `close_blocked_by_confirmation` (`retryable: false`) when the close-confirmation blocks. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
+| `POST /v1/workspace/note` | **Operator scope, mutation.** Sets or clears the **Workspace Note** on the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same setter the row menu's "Add Note…" / "Edit Note…" / "Clear Note" items write through. Body is `{"workspaceID":"…","note":"…"}`; a `note` that is absent or `null` clears the line, so there is no second verb for "stop showing this". Returns the *stored* note — trimmed, interior whitespace collapsed, truncated at 120 characters — with `changed` reporting whether that differed from what was already there. A `note` present but neither string nor null fails `invalid_request`, as does a `workspaceID` that is missing, blank, non-UUID, or untracked; a body that is not JSON fails `malformed_json`; a live-window-less app fails `unsupported`; any method other than POST fails `method_not_allowed`. Requires `workspace.note`; tile handles fail `capability_denied`. See [Workspace note](#workspace-note). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -314,6 +316,7 @@ handle.
 | `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for any live terminal surface) and `POST /v1/wait` for the `surface_text_matches` / `prompt_ready` conditions; granted only to operator handles, never to tile handles |
 | `repo.terminal` | `POST /v1/repo/terminal` (drive the real repo-terminal selection for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.select` because its target is a repo, not a workspace |
 | `workspace.archive` | `POST /v1/workspace/archive` (drive the real sidebar archive action for a workspace); granted only to operator handles, never to tile handles |
+| `workspace.note` | `POST /v1/workspace/note` (set or clear a workspace's note through the real sidebar setter); granted only to operator handles, never to tile handles — a write, distinct from the read-only `workspace.read`, so a caller granted the inventory read cannot write the line the sidebar shows |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -727,6 +730,64 @@ is whatever the sidebar gesture left selected.
   `/v1/workspace/archive#teardown`) carrying retired-surface and killed-session
   counts — counts only, never session names.
 
+## Workspace note
+
+`POST /v1/workspace/note` (operator scope, `workspace.note`) sets or clears a
+workspace's **Workspace Note** — the one short line about where that work stream
+stands, which is what an agent updates at a checkpoint. It is neither the
+workspace's lifecycle status nor the sidebar's transient action message; a note
+outlives the action that wrote it ([`GLOSSARY.md`](../../GLOSSARY.md),
+"Workspace Note"). The body names the target by a `workspaceID` obtained from
+`workspace.read`:
+
+```json
+{ "workspaceID": "…", "note": "rebased on main, waiting on CI" }
+```
+
+`note` absent or `null` clears the line, so "stop showing this" needs no second
+verb. A `note` key that is present but neither a string nor `null` is a caller
+error (`invalid_request`), which keeps a mistyped body from silently clearing a
+note.
+
+The success envelope reports the note the app actually **stored**, so a caller
+that pasted a paragraph learns what the row will show:
+
+```json
+{ "workspaceID": "…", "workspaceName": "feature-a", "note": "rebased on main, waiting on CI",
+  "changed": true, "system": { "capabilities": [ … ] } }
+```
+
+- **What the setter normalizes.** Every writer goes through
+  `WorkspaceNote.normalized`. It splits the text on whitespace and newlines,
+  drops the empty pieces, and rejoins with single spaces — so leading and
+  trailing whitespace is gone and every interior run of spaces, tabs, or
+  newlines becomes exactly one space, which is what keeps a pasted paragraph to
+  the single line the row renders. Text that collapses to nothing (`""`, or
+  whitespace only) is stored as `null`: clearing a note and never setting one
+  are the same state rather than two. Anything longer than 120 characters is
+  truncated to its first 119 characters plus `…`, for a stored line of exactly
+  120. A caller with more to say has the Workspace Journal.
+- **What `changed` reports.** `changed` is whether the stored value moved —
+  the normalized note compared against what the workspace already held. Sending
+  the same text twice, sending text that normalizes to what is already stored,
+  or clearing an already-clear note all complete with `changed: false`. It is
+  not a report of whether the app wrote: the assignment and the SwiftData save
+  run either way.
+- **Same path as the UI.** The verb enters the window-bound note setter through
+  the gesture layer, the same `WorkspaceNote.normalized` write behind the
+  sidebar row menu's "Add Note…" / "Edit Note…" / "Clear Note" items. A note set
+  over the socket and one typed into the sidebar are the same write, so they
+  render identically.
+- **Failure mapping.** A `workspaceID` that is missing, non-string, blank
+  (empty or whitespace-only), non-UUID, or untracked fails `invalid_request`; a
+  body that is not JSON fails `malformed_json`; a live-window-less app fails
+  `unsupported` (never a data-layer fallback); any method other than POST on
+  this path fails `method_not_allowed`.
+- **Operator mutation.** Requires `workspace.note`, distinct from the read-only
+  `workspace.read` — a handle granted the inventory read cannot write the line
+  the sidebar shows. A tile handle lacks it and fails `capability_denied`. The
+  call is operator-tagged in `automation-audit.jsonl` like every operator route.
+
 ## UI state
 
 `GET /v1/ui-state` (`ui.read`, operator scope) answers "what is the window
@@ -906,9 +967,10 @@ workspaces automation input write 'echo hi'
 workspaces automation input write 'echo hi' --submit
 ```
 
-`automation window list`, `automation window snapshot`, `automation workspace
-list`, `automation wait`, and `automation focus` are the operator-scope
-commands. Unlike the tile-scoped commands, they read
+`automation window list`, `automation window snapshot`, every `automation
+workspace` subcommand (`list`, `select`, `create`, `archive`, `note`),
+`automation repo terminal`, `automation wait`, and `automation focus` are the
+operator-scope commands. Unlike the tile-scoped commands, they read
 the per-launch operator credential file (minted next to the socket by an opt-in
 launch) rather than the injected terminal environment, so they work from any
 same-user shell outside a WorkSpaces tile. Absent the credential they fail closed
@@ -929,6 +991,9 @@ workspaces automation workspace create <repo-id> feature-a --provider lume --gue
 workspaces automation workspace archive <id>                     # archive through the sidebar action path
 workspaces automation workspace archive <id> --teardown          # kill tmux + retire terminals first
 workspaces automation workspace archive <id> --json
+workspaces automation workspace note <id> --text "rebased on main, waiting on CI"
+workspaces automation workspace note <id> --clear                 # remove the line from the row
+workspaces automation workspace note <id> --text "handoff ready" --json
 workspaces automation repo terminal <repo-id>                     # open the repo terminal through the UI path
 workspaces automation repo terminal <repo-id> --json
 workspaces automation wait --for workspace_selected --workspace-id <id> --timeout-ms 10000 --json
@@ -972,6 +1037,17 @@ list`). It prints the repo, the directory, and the surface it attached;
 `--json` emits the raw result envelope. This is the verb the API parity lane
 uses for the repo step of the daily-driver walk.
 
+`automation workspace note <id> --text "<text>"` sets the short line the
+sidebar shows under the workspace with stable `<id>` (from `automation workspace
+list`); `--clear` removes it. The two are mutually exclusive — passing both is
+refused rather than resolved, so a caller never has to guess which one the app
+honored. It prints the workspace name and the note the app *stored*, which is
+the normalized form rather than the text sent (`<name>: <note>`, or `<name>:
+note cleared`); `--json` emits the raw result envelope, including `changed`.
+This is the verb an agent calls at a checkpoint, and it enters the app's own
+note setter, so a note set from a script and one typed into the sidebar are the
+same write.
+
 `automation wait` is the server-side typed wait: its exit code follows the
 outcome so `set -e` scripts branch without parsing JSON — 0 `satisfied`,
 2 `timed_out`, 3 `not_applicable`. `automation focus` prints the truthful focus
@@ -990,6 +1066,7 @@ inventory probe, which shortens it.
 | Focus wire models | `Sources/WorkspaceManagerCore/Services/Automation/AutomationFocus.swift` |
 | Focus enumeration (AppKit → state) | `Sources/WorkspaceManager/Views/MainWindow/AutomationFocusEnumerator.swift` |
 | Gesture-verb layer (verbs = clicks) | `Sources/WorkspaceManagerCore/Services/Automation/AutomationGestureVerbs.swift` |
+| Workspace-note normalization (pure) | `Sources/WorkspaceManagerCore/Models/WorkspaceNote.swift` |
 | Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
 | HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |
 | Web-surface snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WebSurfaceSnapshotEncoder.swift` |
