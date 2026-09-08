@@ -2541,7 +2541,9 @@ class DocumentedTestFormTests(unittest.TestCase):
         # escaped and aborted the run.
         for label, payload in (
             ("long integer", '{"entries": [{"index": ' + "1" * 4301 + "}]}"),
-            ("deep nesting", "[" * 1200 + "]" * 1200),
+            # An object, and deep enough that 3.13 recurses too: a list at
+            # 1200 parses there, so the case proved nothing on that runtime.
+            ("deep nesting", '{"a":' * 20000 + "1" + "}" * 20000),
         ):
             with self.subTest(label=label):
                 body = self.metadata_body(payload)
@@ -2550,6 +2552,34 @@ class DocumentedTestFormTests(unittest.TestCase):
                     body, ["an item"]
                 )
                 self.assertEqual(accounting["source"], "structured-invalid")
+
+    def test_a_lone_surrogate_does_not_break_the_writers(self) -> None:
+        # A JSON-escaped lone surrogate parses fine and then cannot be encoded
+        # as UTF-8, so every writer of the body it lands in raises
+        # UnicodeEncodeError -- `gh pr edit`, the evidence workflow.
+        body = self.metadata_body(
+            '{"entries": [{"index": 1, "item": "x", "status": "complete",'
+            ' "detail": "\\ud800"}]}'
+        )
+        for label, rendered in (
+            (
+                "update",
+                run_contributor.update_evidence_entries(
+                    body, {1: {"status": "complete", "detail": "y"}}
+                ),
+            ),
+            (
+                "reconcile",
+                run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                rendered.encode("utf-8")
 
     def test_an_infinite_index_does_not_take_any_metadata_path_down(self) -> None:
         # `1e9999` parses as infinity and `int()` of that raises OverflowError,

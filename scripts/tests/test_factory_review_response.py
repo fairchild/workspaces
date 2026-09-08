@@ -619,6 +619,38 @@ class ResponseCommentTests(unittest.TestCase):
                 self.assertTrue(blockers[0].owner_required)
                 self.assertNotIn("the lane that owns", blockers[0].detail)
 
+    def test_a_stored_kind_that_lies_does_not_promise_a_lane(self) -> None:
+        # `kind` sits in the same PR-editable metadata as everything else, and
+        # the lanes recompute it from the item text. Reading the stored value
+        # let an `other` item labelled `"kind": "ci"` be described as clearing
+        # on its own, when the verifier would skip it.
+        for item, claimed in (
+            ("Someone with taste confirms the copy reads well", "ci"),
+            ("`pnpm test` in `web-next` passes", "diff"),
+        ):
+            with self.subTest(claimed=claimed):
+                blockers = response.evidence_blockers(
+                    [{"index": 1, "item": item, "status": "pending-ci", "kind": claimed}]
+                )
+                self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+                self.assertTrue(blockers[0].owner_required)
+
+    def test_the_ask_agrees_with_how_many_items_it_is_about(self) -> None:
+        one = response.evidence_blockers(
+            [{"index": 1, "item": "`pnpm test` in `web-next` passes",
+              "status": "pending-ci", "kind": "test-attested"}]
+        )[0].detail
+        self.assertIn("the command you ran and the line it printed", one)
+        self.assertIn("Nothing runs this for you", one)
+        several = response.evidence_blockers(
+            [{"index": 1, "item": "`pnpm test` in `web-next` passes",
+              "status": "pending-ci", "kind": "test-attested"},
+             {"index": 2, "item": "`pytest` over `scripts/tests/` passes",
+              "status": "pending-ci", "kind": "test-attested"}]
+        )[0].detail
+        self.assertIn("each command you ran and the line it printed", several)
+        self.assertIn("Nothing runs these for you", several)
+
     def test_a_lane_backed_pending_item_still_clears_on_its_own(self) -> None:
         entries = [
             {"index": 3, "item": "CI: `Lint, Test, Build` green on the PR head",

@@ -42,7 +42,7 @@ CONTRIBUTOR_SCRIPTS = (
 if str(CONTRIBUTOR_SCRIPTS) not in sys.path:
     sys.path.insert(0, str(CONTRIBUTOR_SCRIPTS))
 
-from evidence import _extract_evidence_metadata  # noqa: E402
+from evidence import _evidence_item_kind, _extract_evidence_metadata  # noqa: E402
 
 
 def _load_sibling(name: str, filename: str):
@@ -133,14 +133,22 @@ PENDING_COMPLETERS = {
 # the owner's, which is the direction that fails safe.
 PENDING_UNCLAIMED_ASK = (
     "say in this PR body what would prove it, or mark the line complete with "
-    "what you checked"
+    "what you checked",
+    "say in this PR body what would prove them, or mark the lines complete "
+    "with what you checked",
 )
 # Kinds no lane completes. They were added after this table was written, so
 # they fell to the fallback and told the owner to wait for something that does
 # not exist -- when what they actually need to do is write a line in the body.
 AUTHOR_PENDING_ASKS = {
-    "test-attested": "state in this PR body the command you ran and the line it printed",
-    "perf": "fill this PR body's Performance section with Before and After measurements",
+    "test-attested": (
+        "state in this PR body the command you ran and the line it printed",
+        "state in this PR body each command you ran and the line it printed",
+    ),
+    "perf": (
+        "fill this PR body's Performance section with Before and After measurements",
+        "fill this PR body's Performance section with Before and After measurements",
+    ),
 }
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
 # States that neither block nor replace a reviewer's standing verdict.
@@ -461,6 +469,20 @@ def _index_phrase(entries: list[dict[str, Any]]) -> str:
     return f"{noun} {', '.join(indexes[:-1])} and {indexes[-1]}"
 
 
+def _entry_kind(entry: dict[str, Any]) -> str:
+    """The kind the lanes will compute, not the one the body claims.
+
+    `kind` is stored in the same PR-editable metadata as everything else, and
+    the lanes that complete an entry recompute it from the item text. Reading
+    the stored value let an `other` item labelled `"kind": "ci"` be described
+    as clearing on its own, when the verifier would skip it.
+    """
+    item = str(entry.get("item") or "").strip()
+    if item:
+        return _evidence_item_kind(item)
+    return str(entry.get("kind") or "").strip()
+
+
 def _entry_index(entry: dict[str, Any]) -> int | None:
     """The entry's index, or None if it is not one.
 
@@ -503,9 +525,7 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
     # self-clearing group -- kind `other`, no kind at all, a kind added later
     # -- and be told a lane would finish it.
     self_clearing = [
-        entry
-        for entry in pending
-        if str(entry.get("kind") or "").strip() in PENDING_COMPLETERS
+        entry for entry in pending if _entry_kind(entry) in PENDING_COMPLETERS
     ]
     waiting_on_author = [entry for entry in pending if entry not in self_clearing]
     if waiting_on_author:
@@ -529,15 +549,18 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
 
 def _author_pending_block(pending: list[dict[str, Any]]) -> str:
     """The ask for a pending entry no lane will ever complete."""
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for entry in pending:
-        kind = str(entry.get("kind") or "").strip()
-        grouped.setdefault(AUTHOR_PENDING_ASKS.get(kind, PENDING_UNCLAIMED_ASK), []).append(entry)
+        ask = AUTHOR_PENDING_ASKS.get(_entry_kind(entry), PENDING_UNCLAIMED_ASK)
+        grouped.setdefault(ask, []).append(entry)
     lines = []
+    total = 0
     for ask, entries in grouped.items():
-        lines.append(f"For {_index_phrase(entries).lower()}, {ask}.")
+        total += len(entries)
+        lines.append(f"For {_index_phrase(entries).lower()}, {ask[len(entries) != 1]}.")
     lines.append(
-        "Nothing runs these for you. The next review reads what you write."
+        f"Nothing runs {'these' if total != 1 else 'this'} for you. "
+        "The next review reads what you write."
     )
     return "\n".join(lines)
 
@@ -573,10 +596,9 @@ def _pending_block(pending: list[dict[str, Any]]) -> str:
     """One line per lane: which items it clears, and when."""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for entry in pending:
-        kind = str(entry.get("kind") or "").strip()
         # Only allowlisted kinds reach here; the caller sends the rest to the
         # author block, so there is no fallback lane to name.
-        grouped.setdefault(PENDING_COMPLETERS[kind], []).append(entry)
+        grouped.setdefault(PENDING_COMPLETERS[_entry_kind(entry)], []).append(entry)
     lines = []
     for completer, entries in grouped.items():
         plural = len(entries) != 1

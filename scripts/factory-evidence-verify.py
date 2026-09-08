@@ -135,7 +135,9 @@ def ci_entries_needing_verification(
             continue
         try:
             index = int(entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
+        # OverflowError too: `1e9999` in the PR-editable metadata parses as
+        # infinity, and `int()` of that raises a class the others do not cover.
             continue
         status = str(entry.get("status", "")).strip()
         recorded_sha = str(entry.get("verified_head_sha", "")).strip()
@@ -272,7 +274,9 @@ def _updates_targeting_unchanged_entries(
             continue
         try:
             index = int(entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
+        # OverflowError too: `1e9999` in the PR-editable metadata parses as
+        # infinity, and `int()` of that raises a class the others do not cover.
             continue
         current_check_names[index] = _ci_check_name(str(entry.get("item", "")).strip())
     return {

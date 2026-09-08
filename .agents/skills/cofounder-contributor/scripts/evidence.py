@@ -678,13 +678,21 @@ def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
 def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
     metadata = (
         f"<!-- evidence-status:v{EVIDENCE_METADATA_VERSION}\n"
-        f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n"
+        # ASCII on the way out: a JSON-escaped lone surrogate parses fine and
+        # then re-emits as invalid UTF-8, and every writer of this body --
+        # `gh pr edit`, the evidence workflow -- raises UnicodeEncodeError on
+        # it. Escaped, it round-trips as the text it was.
+        f"{json.dumps(payload, indent=2, ensure_ascii=True)}\n"
         f"-->"
     )
     cleaned = _strip_evidence_metadata(body).strip()
     pattern = r"(?m)^## Evidence Status\s*$"
     if re.search(pattern, cleaned):
-        return re.sub(pattern, f"{metadata}\n\n## Evidence Status", cleaned, count=1)
+        # A function replacement, not a string: the metadata carries `\uXXXX`
+        # escapes now, and `re.sub` reads a backslash in a replacement string
+        # as one of its own.
+        replacement = f"{metadata}\n\n## Evidence Status"
+        return re.sub(pattern, lambda _: replacement, cleaned, count=1)
     if cleaned:
         return f"{cleaned}\n\n{metadata}"
     return metadata
@@ -2296,6 +2304,16 @@ def _pending_ci_resolution(
     return "blocked", "self-hosted macOS CI cannot reconcile this evidence item automatically"
 
 
+def _encodable(text: str) -> str:
+    """Text that survives being written back to GitHub.
+
+    A JSON-escaped lone surrogate parses fine and then cannot be encoded as
+    UTF-8, so the body this text lands in raises `UnicodeEncodeError` in every
+    writer of it. Dropping it here keeps the rest of the line.
+    """
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
 def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
     """Re-render the Evidence Status section and hidden metadata from entries."""
     rendered_entries: list[dict[str, object]] = []
@@ -2306,9 +2324,9 @@ def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
             index = int(entry["index"])
         except (KeyError, TypeError, ValueError, OverflowError):
             continue
-        item = str(entry.get("item", "")).strip()
+        item = _encodable(str(entry.get("item", "")).strip())
         status = str(entry.get("status", "")).strip()
-        detail = str(entry.get("detail", "")).strip()
+        detail = _encodable(str(entry.get("detail", "")).strip())
         if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
             continue
         rendered_entries.append(
