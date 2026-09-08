@@ -260,7 +260,9 @@ struct TmuxSessionControlTests {
         _ = try await control.send(handle: "wm-a-1", text: "run it", submit: true)
         // has-session, the pane before, the text, the pane after, then the submit. Both
         // read-backs sit before Enter because after it the composer has consumed the text.
-        #expect(recorder.calls.count == 5)
+        // Required rather than expected: the assertions below index into this array, and
+        // a wrong count should read as a failed count, not as a trap that ends the run.
+        try #require(recorder.calls.count == 5)
         #expect(recorder.calls[1].contains("capture-pane"))
         #expect(recorder.calls[2].contains("-l"))
         #expect(recorder.calls[3].contains("capture-pane"))
@@ -369,7 +371,11 @@ struct TmuxSessionControlTests {
     func failedChunkNamesItself() async {
         let recorder = RecordingRunner(
             responses: [
-                RecordingRunner.ok, RecordingRunner.output("$ "), RecordingRunner.ok, RecordingRunner.failure,
+                RecordingRunner.ok,
+                RecordingRunner.output(""),
+                RecordingRunner.output("$ "),
+                RecordingRunner.ok,
+                RecordingRunner.failure,
             ]
         )
         let control = TmuxSessionControl(
@@ -399,6 +405,9 @@ struct TmuxSessionControlTests {
         let recorder = RecordingRunner(
             responses: [
                 RecordingRunner.ok,
+                // The payload is one long line, so the tty is asked what mode it is in;
+                // no answer leaves the send to the read-back, which is this test's path.
+                RecordingRunner.output(""),
                 RecordingRunner.output("$ "),
                 RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok,
                 RecordingRunner.output(Self.payload1200),
@@ -418,6 +427,41 @@ struct TmuxSessionControlTests {
         #expect(report.chunks == 5)
         #expect(report.verification == .paneShowsText)
         #expect(elapsed >= pause * 4)
+    }
+
+    // MARK: - Canonical line limit
+
+    /// `stty -a` spells a cleared flag `-icanon`, which contains `icanon`, so the
+    /// negation has to be read as its own token.
+    @Test("Canonical mode is read from stty's tokens, not from a substring")
+    func canonicalModeParsing() {
+        let canonical = "lflags: icanon isig iexten echo echoe -echok echoke -echonl echoctl"
+        let raw = "lflags: -icanon -isig -iexten -echo -echoe -echok echoke -echonl echoctl"
+
+        #expect(TmuxSessionControl.isCanonical(sttyOutput: canonical) == true)
+        #expect(TmuxSessionControl.isCanonical(sttyOutput: raw) == false)
+        // A terminal that did not say leaves the caller to decide, rather than being
+        // read as either answer.
+        #expect(TmuxSessionControl.isCanonical(sttyOutput: "speed 9600 baud; 50 rows;") == nil)
+    }
+
+    /// The limit counts the terminator, so a line's own bytes have to fit in one less
+    /// — and it counts the bytes that reach the terminal, which on this platform are
+    /// the decomposed ones.
+    @Test("A line overruns the canonical limit at the size the kernel discards")
+    func canonicalOverrunBoundary() {
+        let limit = TmuxSessionControl.canonicalLineLimit
+        #expect(limit == 1024)
+        #expect(TmuxSessionControl.overrunsCanonicalLine(String(repeating: "a", count: limit - 1)) == false)
+        #expect(TmuxSessionControl.overrunsCanonicalLine(String(repeating: "a", count: limit)))
+        // Short lines either side of a long one do not excuse it.
+        let mixed = "short\n" + String(repeating: "a", count: limit) + "\nshort"
+        #expect(TmuxSessionControl.overrunsCanonicalLine(mixed))
+        #expect(TmuxSessionControl.overrunsCanonicalLine("short\nlines\nonly") == false)
+        // 800 bytes composed, 1200 decomposed: it is the decomposed form that arrives.
+        let composed = String(repeating: "\u{00E9}", count: 400)
+        #expect(composed.utf8.count < limit)
+        #expect(TmuxSessionControl.overrunsCanonicalLine(composed))
     }
 
     // MARK: - Read-back
@@ -508,6 +552,26 @@ struct TmuxSessionControlTests {
         #expect(report.verification == .paneMissingText)
     }
 
+    /// Without a baseline there is no way to tell a copy this send put on the pane from
+    /// one that was already there, which is the whole point of taking one.
+    @Test("A failed baseline capture leaves the send unchecked, not compared against nothing")
+    func failedBaselineIsNotAnEmptyBaseline() async throws {
+        let recorder = RecordingRunner(
+            responses: [
+                RecordingRunner.ok,
+                RecordingRunner.failure,
+                RecordingRunner.ok,
+                // The pane does show the text — but it may have shown it before, too.
+                RecordingRunner.output("the whole brief goes here"),
+            ]
+        )
+        let control = TmuxSessionControl(socketLabel: "scratch", run: recorder.runner, environment: [:])
+
+        let report = try await control.send(handle: "wm-a-1", text: "the whole brief goes here", submit: false)
+
+        #expect(report.verification == .notChecked)
+    }
+
     /// A capture that failed carries no information, so it must not overwrite one that
     /// looked and came back empty-handed.
     @Test("A failed capture after a successful miss leaves the miss standing")
@@ -584,6 +648,10 @@ struct TmuxSessionControlTests {
     /// that still adds up.
     private static let payload1200: String =
         String(repeating: "abcdefghij", count: 100) + String(repeating: "\u{00E9}", count: 100)
+
+    /// 900 bytes on one line: under the kernel's canonical limit, so the same reader
+    /// that loses `payload1200` keeps this one.
+    private static let payload900 = String(repeating: "abcdefghij", count: 90)
 
     /// tmux is the whole substrate of these verbs, so a machine without it has nothing
     /// to prove and skips rather than fails.
@@ -705,11 +773,12 @@ struct TmuxSessionControlTests {
         #expect(report.verification == .paneMissingText)
     }
 
-    /// The bug's own shape: a canonical-mode reader discards a line longer than the
-    /// pty input queue, so nothing arrives. What changed is that the send says so
-    /// instead of reporting the byte count it was handed.
+    /// The bug's own shape, with the echo turned off so the loss is visible on its own:
+    /// a canonical-mode reader discards a line longer than the kernel will hold, and
+    /// nothing arrives. What changed is that the send names the cause instead of
+    /// reporting the byte count it was handed.
     @Test(
-        "A payload the pane never shows is reported unverified rather than as delivered",
+        "A canonical reader over the line limit loses the line, and the send says why",
         .enabled(if: tmuxIsInstalled, "tmux is not installed; only a real server can prove the send")
     )
     func lostPayloadIsReportedUnverified() async throws {
@@ -735,8 +804,64 @@ struct TmuxSessionControlTests {
         let received = await waitForText(at: out, deadline: negativeBudget) { !$0.isEmpty }
 
         #expect(report.bytesOffered == 1200)
-        #expect(report.verification == .paneMissingText)
+        #expect(report.verification == .canonicalOverrun)
         #expect(received.utf8.count < Self.payload1200.utf8.count)
+    }
+
+    /// The case the read-back cannot judge, and the reason the mode is asked from the
+    /// sender side: this is a pane's *default* state, echo and all. The line discipline
+    /// puts every byte on the screen and then throws the line away, so a check that
+    /// reads the pane back sees both ends of a payload its reader never got.
+    @Test(
+        "A default-mode reader that will discard the line is reported, not confirmed by its own echo",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; only a real server can prove the send")
+    )
+    func echoingCanonicalReaderIsNotProof() async throws {
+        let scratch = try ScratchTmux()
+        defer { scratch.teardown() }
+        let control = scratch.control
+        let ready = scratch.path("ready")
+        let out = scratch.path("received")
+
+        // No `stty` at all: the pane's own default, which is canonical with echo on.
+        try await control.launch(
+            handle: scratch.handle,
+            directory: scratch.root,
+            command: ": > '\(ready.path)'; exec cat > '\(out.path)'"
+        )
+        let budget = await LaunchBudget.deadline(launches: 3, floor: 5, ceiling: 60)
+        _ = await waitForText(at: ready, deadline: budget) { _ in FileManager.default.fileExists(atPath: ready.path) }
+
+        let report = try await control.send(handle: scratch.handle, text: Self.payload1200, submit: true)
+
+        #expect(report.verification == .canonicalOverrun)
+    }
+
+    /// The other side of the same probe: canonical mode is not itself the problem. A
+    /// line the kernel will hold is kept, and its echo is the evidence it was.
+    @Test(
+        "A default-mode reader under the line limit still verifies by its echo",
+        .enabled(if: tmuxIsInstalled, "tmux is not installed; only a real server can prove the send")
+    )
+    func echoingCanonicalReaderUnderTheLimitVerifies() async throws {
+        let scratch = try ScratchTmux()
+        defer { scratch.teardown() }
+        let control = scratch.control
+        let ready = scratch.path("ready")
+        let out = scratch.path("received")
+
+        try await control.launch(
+            handle: scratch.handle,
+            directory: scratch.root,
+            command: ": > '\(ready.path)'; exec cat > '\(out.path)'"
+        )
+        let budget = await LaunchBudget.deadline(launches: 3, floor: 5, ceiling: 60)
+        _ = await waitForText(at: ready, deadline: budget) { _ in FileManager.default.fileExists(atPath: ready.path) }
+
+        let report = try await control.send(handle: scratch.handle, text: Self.payload900, submit: false)
+
+        #expect(report.chunks == 4)
+        #expect(report.verification == .paneShowsText)
     }
 
     /// True when `flag` is immediately followed by `value` — the property that matters

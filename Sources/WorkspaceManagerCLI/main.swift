@@ -482,9 +482,19 @@ private final class CLIApp {
             verification: report.verification
         )
         // The warning goes to stderr in both modes, so a `--json` consumer keeps a
-        // parseable stdout and an interactive caller still cannot miss it.
-        if report.verification == .paneMissingText {
-            writeStderr("delivery unverified: pane tail does not show the sent text")
+        // parseable stdout and an interactive caller still cannot miss it. The
+        // canonical case names its cause, because that one is not "we looked and did
+        // not find it" — it is "the pane will show you text its reader never got".
+        switch report.verification {
+        case .paneMissingText:
+            writeStderr("delivery unverified: the pane does not show both ends of the sent text")
+        case .canonicalOverrun:
+            writeStderr(
+                "delivery unverified: the reader is in canonical mode and a line exceeds the kernel's "
+                    + "line limit; the echo does not prove delivery"
+            )
+        case .paneShowsText, .notChecked:
+            break
         }
         if json {
             print(try AutomationCLIResultPrinter.resultJSON(result))
@@ -497,7 +507,7 @@ private final class CLIApp {
         switch report.verification {
         case .paneShowsText:
             print("\(handed)\(submitted); the pane shows it")
-        case .paneMissingText:
+        case .paneMissingText, .canonicalOverrun:
             print("\(handed)\(submitted); delivery unverified")
         case .notChecked:
             print("\(handed)\(submitted); delivery not checked")
