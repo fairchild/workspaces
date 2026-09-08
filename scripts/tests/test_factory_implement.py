@@ -263,6 +263,35 @@ class EvaluateClaimTests(unittest.TestCase):
         )
         self.assertEqual(at_cap.action, "wip")
 
+    def test_label_state_splits_the_spoken_case_from_the_silent_ones(self) -> None:
+        body = "Fix `Sources/App/Sidebar.swift`." + EVIDENCE_CONTRACT
+        released_without_task = factory_implement.evaluate_claim(
+            issue(body, labels=("agent", "ready")),
+            0,
+            tracked_files=("Sources/App/Sidebar.swift",),
+        )
+        self.assertEqual(released_without_task.action, "missing_labels")
+        self.assertEqual(released_without_task.reason, "issue is missing labels: task")
+
+        for silent, labels, state in (
+            ("unreleased", ("agent", "task"), "open"),
+            ("conflicting", ("agent", "task", "ready", "claimed"), "open"),
+            # Conflicting state outranks label completeness: an in-flight claim
+            # missing `task` is bookkeeping, not a stranded release.
+            ("conflicting-and-incomplete", ("agent", "ready", "claimed"), "open"),
+            ("in-review-and-incomplete", ("task", "ready", "review"), "open"),
+            ("closed", ("agent", "ready"), "closed"),
+        ):
+            with self.subTest(silent=silent):
+                self.assertEqual(
+                    factory_implement.evaluate_claim(
+                        issue(body, labels=labels, state=state),
+                        0,
+                        tracked_files=("Sources/App/Sidebar.swift",),
+                    ).action,
+                    "skip",
+                )
+
 
 class RefusedPathsTests(unittest.TestCase):
     def test_parses_the_json_array_the_contributor_emits(self) -> None:

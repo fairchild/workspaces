@@ -230,6 +230,14 @@ runtime uses. Without it the runtime refuses to execute anyway
 (`FACTORY_REQUIRE_EXPLICIT_EVIDENCE`), so catching it at the gate turns a
 wasted claim-plus-model run into one API read and an explanatory comment.
 
+Label state splits the same way. A released issue missing `agent` or `task` is
+declined out loud and loses `ready` (#1558): nothing downstream can reach it —
+not a dispatch, and not the standing-queue sweep, which filters on
+`ready`+`agent`+`task` — so leaving `ready` in place would keep asserting a
+release that will never take. The other label-state refusals stay silent: an
+issue that was never released, one already carrying `claimed` or `review`, and
+a closed one.
+
 ## Peter planner: parked
 
 `.agents/scripts/run-planner.py` (a compatibility shim over `.agents/skills/peter-planner/scripts/run-planner.py`) and the `peter-planner` skill were hardened twice (#1133, #1144), and their tests (`.agents/scripts/test_run_planner.py`) still run in `ci-agents.yml`. No workflow exists that invokes the runtime — `agent-peter.yml` was never re-created after the v1 retirement, so nothing calls it on any trigger. This PR leaves it in place rather than deleting it: wiring it up is Milestone M2 ("Front door" — Triage stage) of the v2 plan, and dropping the hardened runtime now would just mean rebuilding it later. Revisit at M2; drop it only if M2 is abandoned outright.
