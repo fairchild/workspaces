@@ -372,8 +372,9 @@ struct TmuxSessionControlTests {
         let recorder = RecordingRunner(
             responses: [
                 RecordingRunner.ok,
+                // No tty answer, so no read-back and no baseline capture: the next
+                // calls are the chunks themselves.
                 RecordingRunner.output(""),
-                RecordingRunner.output("$ "),
                 RecordingRunner.ok,
                 RecordingRunner.failure,
             ]
@@ -405,9 +406,11 @@ struct TmuxSessionControlTests {
         let recorder = RecordingRunner(
             responses: [
                 RecordingRunner.ok,
-                // The payload is one long line, so the tty is asked what mode it is in;
-                // no answer leaves the send to the read-back, which is this test's path.
-                RecordingRunner.output(""),
+                // The payload is one long line, so the tty is asked what mode it is in.
+                // It answers, and says raw — which is the only answer that leaves the
+                // send to the read-back this test is about.
+                RecordingRunner.output("/dev/ttys042"),
+                RecordingRunner.output(Self.rawModes),
                 RecordingRunner.output("$ "),
                 RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok,
                 RecordingRunner.output(Self.payload1200),
@@ -462,6 +465,52 @@ struct TmuxSessionControlTests {
         let composed = String(repeating: "\u{00E9}", count: 400)
         #expect(composed.utf8.count < limit)
         #expect(TmuxSessionControl.overrunsCanonicalLine(composed))
+    }
+
+    /// The answer that used to be silently optimistic. A payload with an over-long
+    /// line whose terminal will not say what mode it is in cannot be settled by the
+    /// pane: in canonical mode the prefix echoes and the line is stranded, so a
+    /// read-back would report the loss as a success. Not checking is the honest answer,
+    /// and the cause says which "not checked" this is.
+    @Test("An unreadable tty mode leaves an over-limit send unchecked, not verified by its echo")
+    func unreadableModeIsNotCheckedRatherThanVerified() async throws {
+        let recorder = RecordingRunner(
+            responses: [
+                RecordingRunner.ok,
+                // The pane's tty cannot be resolved, so its mode is unknown.
+                RecordingRunner.output(""),
+                RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok, RecordingRunner.ok,
+                // Were the read-back to run, this capture would satisfy it.
+                RecordingRunner.output(Self.payload1200),
+            ]
+        )
+        let control = TmuxSessionControl(
+            socketLabel: "scratch",
+            run: recorder.runner,
+            environment: [:],
+            sendChunkPause: .zero
+        )
+
+        let report = try await control.send(handle: "wm-a-1", text: Self.payload1200, submit: false)
+
+        #expect(report.verification == .notChecked)
+        #expect(report.cause == TmuxSessionControl.unreadableModeCause)
+        // The read-back is skipped, not run and disbelieved: no capture was taken.
+        #expect(recorder.calls.contains { $0.contains("capture-pane") } == false)
+    }
+
+    /// Each way of not being sure is reached more than one way, and a caller acts on
+    /// the difference. A payload with nothing identifiable in it is unchecked without
+    /// anything having gone wrong.
+    @Test("Not-checked for want of something to look for carries no cause")
+    func notCheckedWithoutACauseIsNotAWarning() async throws {
+        let recorder = RecordingRunner(responses: [])
+        let control = TmuxSessionControl(socketLabel: "scratch", run: recorder.runner, environment: [:])
+
+        let report = try await control.send(handle: "wm-a-1", text: "y", submit: false)
+
+        #expect(report.verification == .notChecked)
+        #expect(report.cause == nil)
     }
 
     // MARK: - Read-back
@@ -650,8 +699,12 @@ struct TmuxSessionControlTests {
         String(repeating: "abcdefghij", count: 100) + String(repeating: "\u{00E9}", count: 100)
 
     /// 900 bytes on one line: under the kernel's canonical limit, so the same reader
-    /// that loses `payload1200` keeps this one.
+    /// that never gets `payload1200` is handed this one.
     private static let payload900 = String(repeating: "abcdefghij", count: 90)
+
+    /// What `stty -a` says about a terminal a TUI has put in raw mode.
+    private static let rawModes =
+        "lflags: -icanon -isig -iexten -echo -echoe -echok echoke -echonl echoctl"
 
     /// tmux is the whole substrate of these verbs, so a machine without it has nothing
     /// to prove and skips rather than fails.
@@ -833,8 +886,14 @@ struct TmuxSessionControlTests {
         _ = await waitForText(at: ready, deadline: budget) { _ in FileManager.default.fileExists(atPath: ready.path) }
 
         let report = try await control.send(handle: scratch.handle, text: Self.payload1200, submit: true)
+        // Submitted, and still nothing to read: the terminator went the way of every
+        // other byte that arrived after the queue filled, so the line is never handed
+        // over. Waiting for an arrival that cannot happen gets its own small bound.
+        let negativeBudget = await LaunchBudget.deadline(launches: 2, floor: 1, ceiling: 20)
+        let received = await waitForText(at: out, deadline: negativeBudget) { !$0.isEmpty }
 
         #expect(report.verification == .canonicalOverrun)
+        #expect(received.isEmpty)
     }
 
     /// The other side of the same probe: canonical mode is not itself the problem. A
@@ -858,10 +917,17 @@ struct TmuxSessionControlTests {
         let budget = await LaunchBudget.deadline(launches: 3, floor: 5, ceiling: 60)
         _ = await waitForText(at: ready, deadline: budget) { _ in FileManager.default.fileExists(atPath: ready.path) }
 
-        let report = try await control.send(handle: scratch.handle, text: Self.payload900, submit: false)
+        let report = try await control.send(handle: scratch.handle, text: Self.payload900, submit: true)
+        // The echo is what the read-back saw; this is what the reader actually got,
+        // which is the claim the echo is standing in for.
+        let budgetForArrival = await LaunchBudget.deadline(launches: 3, floor: 5, ceiling: 60)
+        let received = await waitForText(at: out, deadline: budgetForArrival) {
+            $0.trimmingCharacters(in: .newlines) == Self.payload900
+        }
 
         #expect(report.chunks == 4)
         #expect(report.verification == .paneShowsText)
+        #expect(received.trimmingCharacters(in: .newlines) == Self.payload900)
     }
 
     /// True when `flag` is immediately followed by `value` — the property that matters

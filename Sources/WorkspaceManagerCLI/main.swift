@@ -482,19 +482,13 @@ private final class CLIApp {
             verification: report.verification
         )
         // The warning goes to stderr in both modes, so a `--json` consumer keeps a
-        // parseable stdout and an interactive caller still cannot miss it. The
-        // canonical case names its cause, because that one is not "we looked and did
-        // not find it" — it is "the pane will show you text its reader never got".
-        switch report.verification {
-        case .paneMissingText:
-            writeStderr("delivery unverified: the pane does not show both ends of the sent text")
-        case .canonicalOverrun:
-            writeStderr(
-                "delivery unverified: the reader is in canonical mode and a line exceeds the kernel's "
-                    + "line limit; the echo does not prove delivery"
-            )
-        case .paneShowsText, .notChecked:
-            break
+        // parseable stdout and an interactive caller still cannot miss it. Every
+        // non-success answer names its cause, because "unverified" and "not checked"
+        // are each reached more than one way and the difference is what a caller acts
+        // on.
+        if let cause = report.cause {
+            let headline = report.verification == .notChecked ? "delivery not checked" : "delivery unverified"
+            writeStderr("\(headline): \(cause)")
         }
         if json {
             print(try AutomationCLIResultPrinter.resultJSON(result))

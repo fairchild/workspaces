@@ -54,8 +54,15 @@ public struct TmuxSessionControl: Sendable {
 
     /// The kernel's limit on a canonical-mode input line, from `<sys/syslimits.h>`:
     /// 1024 on this platform, and the probe agrees — a 1023-byte line arrives, a
-    /// 1024-byte one is discarded whole. A line's own bytes have to fit in one less,
-    /// because its terminator counts against the same limit.
+    /// 1024-byte one never reaches the reader at all.
+    ///
+    /// What the kernel does is narrower than "discards the line": it keeps the prefix
+    /// it accepted, echoing that much, and drops what arrives once the queue is full —
+    /// the terminator included. Dropping the terminator is what strands the line,
+    /// because a canonical reader is offered nothing until one arrives. So a line's own
+    /// bytes have to fit in one less than the limit, and a payload that overruns leaves
+    /// its prefix on the pane while its reader waits for a newline that was thrown
+    /// away.
     static let canonicalLineLimit = Int(MAX_CANON)
 
     /// Captures the read-back will take before calling a send unverified, and the gap
@@ -297,6 +304,10 @@ public struct TmuxSessionControl: Sendable {
     /// Measured decomposed, because that is the form a child's arguments reach the
     /// terminal in on this platform, and a line that fits composed can overrun once
     /// it does not.
+    ///
+    /// This asks only about the payload's own lines. Bytes already queued from an
+    /// earlier send that was never submitted count against the same limit, and a short
+    /// payload can complete an overrun it did not start — #1600.
     static func overrunsCanonicalLine(_ text: String) -> Bool {
         text.split(separator: "\n", omittingEmptySubsequences: false).contains { line in
             String(line).decomposedStringWithCanonicalMapping.utf8.count >= canonicalLineLimit
@@ -418,11 +429,12 @@ public struct TmuxSessionControl: Sendable {
     ///
     /// Before any of that, a payload with an over-long line asks the pane's terminal
     /// what mode it is in, because there is one case the read-back cannot judge: a
-    /// canonical-mode reader is offered nothing until a line's terminator arrives, so
-    /// a line past the kernel's limit is discarded whole — while the line discipline
-    /// echoes every byte of it to the pane. Reading that echo back would confirm a
+    /// canonical reader is offered nothing until a line's terminator arrives, and an
+    /// over-long line is exactly where the kernel drops that terminator — keeping the
+    /// prefix it accepted, and echoing it. Reading that echo back would confirm a
     /// delivery that did not happen, which is why it is answered from the sender side
-    /// instead.
+    /// instead. A terminal that will not say leaves the send `notChecked`: unknown is
+    /// not the same answer as safe.
     ///
     /// Not `@discardableResult`: dropping the answer is the bug this closes.
     public func send(handle: String, text: String, submit: Bool) async throws -> SendReport {
@@ -430,8 +442,8 @@ public struct TmuxSessionControl: Sendable {
             throw ControlError.handleNotLive(handle: handle)
         }
 
-        let overrun = await paneWillDiscardALine(handle: handle, text: text)
-        let expectation = overrun ? nil : Self.verificationExpectation(for: text)
+        let fate = await canonicalLineFate(handle: handle, text: text)
+        let expectation = fate == .delivered ? Self.verificationExpectation(for: text) : nil
         let baseline = expectation == nil ? nil : await capturedPane(handle: handle)
 
         let chunks = Self.textChunks(text, limit: sendChunkBytes)
@@ -472,13 +484,26 @@ public struct TmuxSessionControl: Sendable {
         }
 
         var verification = SendVerification.notChecked
-        if overrun {
+        var cause: String?
+        switch fate {
+        case .discarded:
             verification = .canonicalOverrun
-        } else if let expectation, let baseline {
+            cause = Self.canonicalOverrunCause
+        case .unknown:
+            // Nothing is checked and nothing is claimed. The read-back is skipped
+            // rather than run and disbelieved, because running it is what would put a
+            // `verified` on a send that may already be lost.
+            cause = Self.unreadableModeCause
+        case .delivered:
             // No baseline is not an empty baseline: without one, a copy already in the
             // scrollback is indistinguishable from a copy this send put there, which is
             // the false positive the baseline exists to prevent.
-            verification = await paneVerification(handle: handle, expectation: expectation, baseline: baseline)
+            if let expectation, let baseline {
+                verification = await paneVerification(handle: handle, expectation: expectation, baseline: baseline)
+                if verification == .paneMissingText {
+                    cause = Self.paneMissingTextCause
+                }
+            }
         }
 
         if submit {
@@ -497,19 +522,28 @@ public struct TmuxSessionControl: Sendable {
             }
         }
 
-        return SendReport(bytesOffered: text.utf8.count, chunks: chunks.count, verification: verification)
+        return SendReport(
+            bytesOffered: text.utf8.count,
+            chunks: chunks.count,
+            verification: verification,
+            cause: cause
+        )
     }
 
-    /// Whether the pane's reader will discard a line of this payload before it is ever
-    /// offered it: canonical mode, and a line past the kernel's limit.
+    /// What the pane's reader will do with this payload's longest line.
     ///
-    /// Asked only when the payload has such a line at all. The answer costs two
-    /// commands, and a payload whose lines all fit is safe in either mode, so an
-    /// ordinary send never pays for the question. A terminal that will not say what
-    /// mode it is in leaves the send to the read-back, which is where it was before.
-    private func paneWillDiscardALine(handle: String, text: String) async -> Bool {
+    /// Asked only when the payload has a line past the kernel's limit at all: the
+    /// answer costs two commands, and a payload whose lines all fit is offered to its
+    /// reader in either mode, so an ordinary send never pays for the question.
+    ///
+    /// `unknown` is its own answer rather than an optimistic `delivered`, because the
+    /// two are not interchangeable on the one payload where it matters. A terminal
+    /// that will not say what mode it is in is a terminal whose echo cannot settle
+    /// this, and treating silence as "not canonical" hands the question back to the
+    /// read-back — the false success this whole probe exists to remove.
+    private func canonicalLineFate(handle: String, text: String) async -> CanonicalLineFate {
         guard Self.overrunsCanonicalLine(text) else {
-            return false
+            return .delivered
         }
         guard
             let ttyResult = await run(
@@ -519,23 +553,23 @@ public struct TmuxSessionControl: Sendable {
             ),
             ttyResult.success
         else {
-            return false
+            return .unknown
         }
         let tty = ttyResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         // A device path or nothing: `stty -f` would happily open whatever else tmux
         // handed back, and this is meant to read a terminal, not to find out what else
         // it can open.
         guard tty.hasPrefix("/dev/") else {
-            return false
+            return .unknown
         }
         guard
             let modesResult = await run("/usr/bin/env", Self.ttyModesArguments(tty: tty), environment),
             modesResult.success,
             let canonical = Self.isCanonical(sttyOutput: modesResult.stdout)
         else {
-            return false
+            return .unknown
         }
-        return canonical
+        return canonical ? .discarded : .delivered
     }
 
     /// The pane's visible text with its whitespace removed, or `nil` when the capture
@@ -631,26 +665,53 @@ extension TmuxSessionControl {
         /// The read-back ran and the pane did not gain it.
         case paneMissingText = "unverified"
         /// The pane's reader is in canonical mode and a line of the payload is longer
-        /// than the kernel will hold, so that line is discarded before the reader is
-        /// offered any of it — while the line discipline echoes every byte to the pane.
-        /// Its own case because the echo would otherwise read as proof of exactly the
-        /// delivery that did not happen.
+        /// than the kernel will hold, so the terminator that would hand it over is
+        /// dropped with everything else that arrives after the queue fills — while the
+        /// prefix it did accept stays echoed on the pane. Its own case because that
+        /// echo would otherwise read as proof of exactly the delivery that did not
+        /// happen.
         case canonicalOverrun = "canonical-overrun"
-        /// Nothing identifiable to look for, or no capture answered.
+        /// Nothing identifiable to look for, no capture answered, or a payload with an
+        /// over-long line whose reader would not say what mode it is in — where the
+        /// read-back is skipped rather than run and disbelieved.
         case notChecked = "not-checked"
     }
 
+    /// What the pane's reader will do with this payload's longest line, as far as the
+    /// sender can establish it.
+    enum CanonicalLineFate: Equatable {
+        /// Every line fits, or the reader is not canonical: the line reaches it.
+        case delivered
+        /// The reader is canonical and a line is over the limit, so it is never
+        /// offered that line however much of it the pane shows.
+        case discarded
+        /// A line is over the limit and the terminal would not say what mode it is in.
+        case unknown
+    }
+
+    /// Why a verification landed where it did, where the case alone does not say it.
+    /// Carried on the report so the sentence lives with the code that knows it rather
+    /// than being reconstructed by each caller that prints it.
+    static let canonicalOverrunCause =
+        "the reader is in canonical mode and a line exceeds the kernel's line limit; "
+        + "the echo does not prove delivery"
+    static let unreadableModeCause =
+        "the reader's tty mode could not be read, so the echo is not trusted"
+    static let paneMissingTextCause = "the pane does not show both ends of the sent text"
+
     /// What a send can honestly say about itself: how much text tmux accepted, in
-    /// how many calls, and what the pane showed afterwards.
+    /// how many calls, what the pane showed afterwards, and why that is the answer.
     public struct SendReport: Sendable, Equatable {
         public let bytesOffered: Int
         public let chunks: Int
         public let verification: SendVerification
+        public let cause: String?
 
-        public init(bytesOffered: Int, chunks: Int, verification: SendVerification) {
+        public init(bytesOffered: Int, chunks: Int, verification: SendVerification, cause: String? = nil) {
             self.bytesOffered = bytesOffered
             self.chunks = chunks
             self.verification = verification
+            self.cause = cause
         }
     }
 }
