@@ -383,19 +383,34 @@ def evidence_entries(body: str) -> list[dict[str, Any]]:
 
 
 def _quotable(text: str) -> str:
-    """PR-controlled text, safe to place inside April's own comment.
+    """PR-controlled text, flattened and bounded, for use inside a code span.
 
-    HTML comment delimiters come out first: leaving them in would let a PR
-    body seed a response marker inside the very comment the marker is meant
-    to identify. Backticks and newlines go too, so a quoted item cannot break
-    out of the line it sits on, and the result is bounded.
+    Backticks and newlines come out, so a quoted item cannot break out of the
+    span or the line it sits on. Everything else is left alone: inside a span
+    it renders literally. Outside one, pass the result through `_inert`.
     """
-    flattened = " ".join(
-        text.replace("<!--", "").replace("-->", "").replace("`", "").split()
-    )
+    flattened = " ".join(text.replace("`", "").split())
     if len(flattened) <= ITEM_QUOTE_LIMIT:
         return flattened
     return flattened[: ITEM_QUOTE_LIMIT - 1].rstrip() + "…"
+
+
+def _inert(text: str) -> str:
+    """PR-controlled text, safe to render as prose in the factory's own comment.
+
+    Deleting `<!--` was the wrong shape of defence: it ran once, so `<<!--!--`
+    survived it as `<!--` and could comment out the instructions through the
+    real trailing marker -- leaving the owner a blank-looking comment the
+    factory counted as answered. Escaping cannot be outrun that way. `@` goes
+    with the angle brackets: an item is written by whoever opened the PR, and
+    it should not be able to ping anyone.
+    """
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("@", "&#64;")
+    )
 
 
 def _recognition_label(entry: dict[str, Any]) -> str:
@@ -410,12 +425,12 @@ def _recognition_label(entry: dict[str, Any]) -> str:
         return f"item {entry.get('index')}"
     clause = text.find(",")
     if ITEM_RECOGNITION_FLOOR <= clause <= ITEM_RECOGNITION_LIMIT:
-        return text[:clause]
+        return _inert(text[:clause])
     if len(text) <= ITEM_RECOGNITION_LIMIT:
-        return text
+        return _inert(text)
     cut = text.rfind(" ", ITEM_RECOGNITION_FLOOR, ITEM_RECOGNITION_LIMIT)
     kept = text[: cut if cut > 0 else ITEM_RECOGNITION_LIMIT]
-    return kept.rstrip(" ,;:") + "…"
+    return _inert(kept.rstrip(" ,;:")) + "…"
 
 
 def _count_word(count: int) -> str:

@@ -193,7 +193,8 @@ gh secret set EVIDENCE_UPLOAD_TOKEN --repo fairchild/workspaces --body "$TOKEN"
 ### `scripts/upload-evidence.py`
 
 Lower-level upload client. Accepts `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`,
-`webm`, and `mp4`, with a 50 MiB per-file limit enforced by both the client and
+`webm`, `mp4`, and `txt` — a test log goes up as text, not as a picture of
+one — with a 50 MiB per-file limit enforced by both the client and
 the evidence-store Worker. Uploads carry a fixed `Content-Length`; the Worker
 rejects chunked or malformed-length requests so accepted files can stream
 directly into R2 without consuming the Worker's memory budget. Called internally

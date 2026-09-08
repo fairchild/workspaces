@@ -1114,19 +1114,44 @@ def _normalize_evidence_item(item: str) -> str:
     return item.strip().strip("`").strip()
 
 
-def _evidence_command_text(item: str) -> str:
-    """The command a `test` or `build` item asks the lane to run.
+def _evidence_command_split(item: str) -> tuple[str, str]:
+    """The command a `test` or `build` item names, and the text after it.
 
     Only a span that *opens* the item counts. An item mentioning a command
     mid-sentence is not a request to run it, and reading one out of the middle
     would run something nobody asked for. Without an opening span there is no
-    boundary to cut on, so the item is read whole, exactly as before -- and
-    what is inside the span still faces the same allowlist.
+    boundary to cut on, so the item is read whole with an empty remainder,
+    exactly as before -- and what is inside the span still faces the same
+    allowlist.
     """
-    match = LEADING_CODE_SPAN_RE.match(item.strip())
+    text = item.strip()
+    match = LEADING_CODE_SPAN_RE.match(text)
     if match is None:
-        return _normalize_evidence_item(item)
-    return match.group("command").strip()
+        return _normalize_evidence_item(item), ""
+    return match.group("command").strip(), text[match.end():]
+
+
+def _evidence_command_text(item: str) -> str:
+    return _evidence_command_split(item)[0]
+
+
+def _remainder_carries_a_second_requirement(remainder: str) -> bool:
+    """Whether the text after the command asks for something else as well.
+
+    "passes" is the author saying what the command should do. "and a
+    screenshot", "(owner-attested)", a named check, a diff assertion: each is
+    a second thing that must be true, and running the command would satisfy
+    none of them. An item asking for two things is not a command item, so it
+    stays where it was before -- `other`, blocked, in front of a person.
+    """
+    if not remainder.strip():
+        return False
+    return (
+        VISUAL_EVIDENCE_RE.search(remainder) is not None
+        or OWNER_ATTESTED_RE.search(remainder) is not None
+        or DIFF_EVIDENCE_RE.search(remainder) is not None
+        or _ci_check_name(remainder) is not None
+    )
 
 
 def _ci_check_name(item: str) -> str | None:
@@ -1155,10 +1180,10 @@ def _is_diff_evidence(item: str) -> bool:
 
 def _evidence_item_kind(item: str) -> str:
     normalized = _normalize_evidence_item(item).casefold()
-    if normalized.startswith("swift test"):
-        return "test"
-    if normalized.startswith("swift build"):
-        return "build"
+    if normalized.startswith(("swift test", "swift build")):
+        if _remainder_carries_a_second_requirement(_evidence_command_split(item)[1]):
+            return "other"
+        return "test" if normalized.startswith("swift test") else "build"
     if VISUAL_EVIDENCE_RE.search(normalized):
         return "screenshot"
     if _is_owner_attested(item):
@@ -1385,6 +1410,13 @@ def _test_output_by_command(test_output: str) -> dict[str, str]:
     }
 
 
+def _lane_command_key(item: str) -> str:
+    """The command as `_evidence.yml` writes it above the run's output."""
+    command = _evidence_command_text(item)
+    argv = safe_swift_test_command_args(command) or safe_swift_build_command_args(command)
+    return shlex.join(argv) if argv is not None else command
+
+
 def _test_output_has_no_matching_tests(command: str, test_output: str) -> bool:
     if not test_output:
         return False
@@ -1409,8 +1441,10 @@ def _pending_ci_resolution(
 ) -> tuple[str, str]:
     kind = _evidence_item_kind(item)
     # The lane logs `$ <command>` above each run's output and this looks that
-    # key up, so it has to be the command the lane ran, not the item's prose.
-    normalized = _evidence_command_text(item)
+    # key up, so it has to be the command the lane ran, spelled the way the
+    # lane spelled it -- `shlex.join` of the parsed argv, not the author's
+    # quoting.
+    normalized = _lane_command_key(item)
     uploaded_screenshot_urls = screenshot_urls or []
     uploaded_text_urls = text_urls or []
 

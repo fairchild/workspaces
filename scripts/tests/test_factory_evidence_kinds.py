@@ -1552,6 +1552,30 @@ class DocumentedTestFormTests(unittest.TestCase):
         self.assertIn("`swift test --filter FooTests`", pending[0])
         self.assertNotIn("passes", pending[0])
 
+    def test_a_second_requirement_after_the_command_fails_closed(self) -> None:
+        # Stripping prose must not strip a demand. Each of these asks for the
+        # command AND something the command cannot produce; running it would
+        # complete the item with half the contract met.
+        for item in (
+            "`swift test` passes (owner-attested)",
+            "`swift test` passes; a screenshot of the sidebar from the same commit",
+            "`swift test` passes and the new column appears in the PR diff",
+            "`swift test` passes with the `Lint, Test, Build` check green",
+            "`swift build` succeeds, owner confirms the warning is gone",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
+    def test_the_lane_command_key_is_spelled_the_way_the_lane_spells_it(self) -> None:
+        # The lane logs `$ ` + shlex.join(argv). An author's own quoting of the
+        # same command is a different string, and the lookup would miss it.
+        self.assertEqual(
+            run_contributor._lane_command_key(
+                '`swift test --filter \'WorkspaceManagerTests.FooTests\'` passes'
+            ),
+            "swift test --filter WorkspaceManagerTests.FooTests",
+        )
+
     def test_the_lane_result_matches_the_command_it_logged(self) -> None:
         # The lane writes `$ <shlex-joined command>` above each run's output,
         # and resolution looks that key up. Resolving on the item text instead

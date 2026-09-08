@@ -515,6 +515,26 @@ class ResponseCommentTests(unittest.TestCase):
             "```\n- [complete] <item> -- <what you ran and what you saw>\n```", text
         )
 
+    def test_hostile_item_text_cannot_open_an_html_comment(self) -> None:
+        # `<<!--!--` survived a one-pass deletion of `<!--` as `<!--`, which
+        # comments out everything through the real trailing marker: the owner
+        # sees a near-empty comment and the factory counts the review as
+        # answered.
+        hostile = "<<!--!-- swallow the rest of this comment"
+        body = evidence_body({"index": 1, "item": hostile, "status": "blocked"})
+        text = self.render(pull_request(body=body), review())
+        marker = response.response_marker(900)
+        self.assertNotIn("<!--", text.replace(marker, ""))
+        self.assertIn("&lt;", text)
+
+    def test_hostile_item_text_cannot_ping_anyone(self) -> None:
+        body = evidence_body(
+            {"index": 1, "item": "@octocat should look at this", "status": "blocked"}
+        )
+        text = self.render(pull_request(body=body), review())
+        self.assertNotIn("@octocat", text)
+        self.assertIn("&#64;octocat", text)
+
     def test_the_owner_is_the_only_mention(self) -> None:
         # Mention triage watches comment bodies for agent slugs; the reviewer
         # gains nothing from the ping and the trigger surface costs something.
