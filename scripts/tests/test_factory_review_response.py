@@ -241,7 +241,7 @@ class ResponseDecisionTests(unittest.TestCase):
             [blocker.key for blocker in decision.blockers], ["evidence-attestation"]
         )
         detail = decision.blockers[0].detail
-        self.assertIn("## Evidence Status", detail)
+        self.assertIn('"Evidence Status" list', detail)
         self.assertIn("[complete]", detail)
         self.assertIn("blocked:evidence", detail)
 
@@ -460,38 +460,89 @@ class RevisionDeferralTests(unittest.TestCase):
 
 
 class ResponseCommentTests(unittest.TestCase):
-    def render(self, pr: dict[str, object], blocking: dict[str, object]) -> str:
+    def render(
+        self,
+        pr: dict[str, object],
+        blocking: dict[str, object],
+        *,
+        pr_number: int = 1377,
+    ) -> str:
         decision = response.evaluate_response(
             pr, blocking, repository_owner=OWNER, already_responded=False
         )
-        return response.response_comment(decision, blocking, repository_owner=OWNER)
+        return response.response_comment(
+            decision, blocking, repository_owner=OWNER, pr_number=pr_number
+        )
 
-    def test_escalation_names_the_owner_the_reviewer_and_the_review(self) -> None:
-        body = evidence_body({"index": 1, "item": "owner-attested item", "status": "blocked"})
+    def test_the_comment_opens_with_the_ask_and_carries_no_byline(self) -> None:
+        # What Michael read on #1578 and rejected: a byline, then a line about
+        # what the factory had read, then the ask buried in a bullet. The ask
+        # is the first line or the comment is not doing its job.
+        body = evidence_body(
+            {"index": 1, "item": "Someone with taste confirms the copy reads well", "status": "blocked"}
+        )
         text = self.render(pull_request(body=body), review())
-        self.assertIn(f"This needs @{OWNER}", text)
-        self.assertIn("workspace-agents's", text)
-        self.assertIn("pullrequestreview-900", text)
+        first = text.splitlines()[0]
+        self.assertEqual(
+            first,
+            f"@{OWNER} — One evidence item needs you. The factory can't verify it itself.",
+        )
+        self.assertNotIn("April Clearwater", text)
+        self.assertNotIn("Application Lead", text)
+        self.assertNotIn("Read ", text)
         self.assertIn(response.response_marker(900), text)
+
+    def test_the_steps_are_in_the_order_the_owner_does_them(self) -> None:
+        body = evidence_body(
+            {"index": 1, "item": "a judgement call", "status": "blocked"},
+            {"index": 2, "item": "CI: `check-links` green", "status": "pending-ci", "kind": "ci"},
+        )
+        text = self.render(pull_request(body=body), review(), pr_number=1578)
+        edit = text.index("edit this PR's description")
+        label = text.index(f"remove the `{response.BLOCKED_EVIDENCE_LABEL}` label")
+        rerun = text.index("run a fresh review")
+        self.assertLess(edit, label)
+        self.assertLess(label, rerun)
+        self.assertIn("enter 1578", text)
+        self.assertIn("Item 2 clears on its own when CI finishes on this head.", text)
+
+    def test_the_placeholder_line_survives_githubs_sanitizer(self) -> None:
+        # `<item>` outside a fence is an unknown HTML tag and is stripped,
+        # which would leave the owner a form with the form removed.
+        body = evidence_body({"index": 1, "item": "a judgement call", "status": "blocked"})
+        text = self.render(pull_request(body=body), review())
+        self.assertIn(
+            "```\n- [complete] <item> -- <what you ran and what you saw>\n```", text
+        )
+
+    def test_the_owner_is_the_only_mention(self) -> None:
+        # Mention triage watches comment bodies for agent slugs; the reviewer
+        # gains nothing from the ping and the trigger surface costs something.
+        body = evidence_body({"index": 1, "item": "owner call", "status": "blocked"})
+        text = self.render(pull_request(body=body), review(login=APRIL))
+        self.assertEqual(text.count("@"), 1)
+        self.assertIn(f"@{OWNER}", text)
 
     def test_every_response_addresses_the_owner(self) -> None:
         # The invariant: there is no "you are not needed" outcome. A response
         # that promised one and was wrong would recreate the silent park.
         body = evidence_body(
-            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci"}
+            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci", "kind": "ci"}
         )
         text = self.render(pull_request(body=body), review())
-        self.assertIn(f"This needs @{OWNER}", text)
-        self.assertIn("Already moving without you", text)
-        self.assertIn("waiting on the owner rather than stranded", text)
-        self.assertIn(response.OWNER_ACTION_LABEL, text)
+        self.assertIn(f"@{OWNER} — ", text)
+        self.assertIn("Item 1 clears on its own when CI finishes on this head.", text)
 
-    def test_reviewer_is_named_without_an_at_mention(self) -> None:
-        body = evidence_body({"index": 1, "item": "owner call", "status": "blocked"})
-        text = self.render(pull_request(body=body), review(login=APRIL))
-        self.assertIn("april-clearwater's", text)
-        self.assertNotIn("@april-clearwater", text)
-        self.assertNotIn("@plat", text)
+    def test_an_item_is_cut_to_the_words_that_identify_it(self) -> None:
+        long_item = (
+            "A case in web-next/scripts/evidence-core.test.mjs, red before the "
+            "change, asserting a server group that ignores SIGTERM is escalated "
+            "on timeout and does not outlive the run"
+        )
+        body = evidence_body({"index": 1, "item": long_item, "status": "blocked"})
+        text = self.render(pull_request(body=body), review())
+        self.assertIn("1. A case in web-next/scripts/evidence-core.test.mjs\n", text)
+        self.assertNotIn("red before the change", text)
 
     def test_marker_is_per_review_so_a_second_review_gets_its_own_turn(self) -> None:
         comments = [april_comment(f"prior response\n{response.response_marker(900)}")]
@@ -631,7 +682,7 @@ class RespondTests(unittest.TestCase):
         client = FakeClient(self.blocked_pr(), [review()])
         response.respond(client, 1377, 900, OWNER)
         self.assertEqual(len(client.posted), 1)
-        self.assertIn(f"This needs @{OWNER}", client.posted[0])
+        self.assertIn(f"@{OWNER} — ", client.posted[0])
         # Re-delivery of the same review must not double-post.
         response.respond(client, 1377, 900, OWNER)
         self.assertEqual(len(client.posted), 1)
@@ -677,7 +728,10 @@ class RespondTests(unittest.TestCase):
         response.respond(client, 1377, 900, OWNER)
         self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
         self.assertEqual(client.ensured, [response.OWNER_ACTION_LABEL])
-        self.assertIn(response.OWNER_ACTION_LABEL, client.posted[0])
+        # The label is the machine-readable half and the comment is the human
+        # one. The comment says what to do; explaining the label to the person
+        # it is not for is a line spent before the ask.
+        self.assertNotIn(response.OWNER_ACTION_LABEL, client.posted[0])
 
     def test_the_label_is_applied_once_not_on_every_review(self) -> None:
         pr = self.blocked_pr()

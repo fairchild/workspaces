@@ -143,6 +143,13 @@ DIFF_EVIDENCE_RE = re.compile(
     r"|the (?:pr )?diff (?:shows|proves|demonstrates|contains|includes)"
     r"|\b(?:shows?|contains?|includes?|appears?)\b[^\n]{0,60}?\bin the (?:pr )?diff\b"
 )
+# A `test` or `build` item opening with a backticked command, and whatever
+# follows it. The documented form is the command plus what it should do --
+# "`swift test --filter FooTests` passes" -- and read whole that is a
+# five-word command the allowlist refuses, which aborted the run before the
+# author's first commit. The span is the command; the rest is the author
+# saying what they expect of it.
+LEADING_CODE_SPAN_RE = re.compile(r"^(?P<ticks>`+)(?P<command>[^`]+?)(?P=ticks)")
 # Kinds the hosted `macos-26` evidence lane can gather; `ci` and `diff`
 # complete through the verifier workflow and review lane instead (#1120).
 MACOS_EVIDENCE_KINDS = frozenset({"test", "build", "screenshot"})
@@ -1107,6 +1114,21 @@ def _normalize_evidence_item(item: str) -> str:
     return item.strip().strip("`").strip()
 
 
+def _evidence_command_text(item: str) -> str:
+    """The command a `test` or `build` item asks the lane to run.
+
+    Only a span that *opens* the item counts. An item mentioning a command
+    mid-sentence is not a request to run it, and reading one out of the middle
+    would run something nobody asked for. Without an opening span there is no
+    boundary to cut on, so the item is read whole, exactly as before -- and
+    what is inside the span still faces the same allowlist.
+    """
+    match = LEADING_CODE_SPAN_RE.match(item.strip())
+    if match is None:
+        return _normalize_evidence_item(item)
+    return match.group("command").strip()
+
+
 def _ci_check_name(item: str) -> str | None:
     """The CI check an evidence item requires green on the PR head, or None.
 
@@ -1162,7 +1184,7 @@ def _needs_screenshot_evidence(requested_evidence: list[str]) -> bool:
 
 def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     return [
-        _normalize_evidence_item(item)
+        _evidence_command_text(item)
         for item in requested_evidence
         if _evidence_item_kind(item) == "test"
     ]
@@ -1177,7 +1199,7 @@ def synthesize_initial_execution_evidence(
     evidence_blocked: list[str] = []
     evidence_pending_ci: list[str] = []
     for index, item in enumerate(requested_evidence, start=1):
-        normalized = _normalize_evidence_item(item)
+        normalized = _evidence_command_text(item)
         kind = _evidence_item_kind(item)
         if kind == "build":
             evidence_pending_ci.append(
@@ -1294,7 +1316,7 @@ def validate_requested_test_commands(
 ) -> list[str]:
     commands = _extract_test_commands(requested_evidence)
     build_commands = [
-        _normalize_evidence_item(item)
+        _evidence_command_text(item)
         for item in requested_evidence
         if _evidence_item_kind(item) == "build"
     ]
@@ -1386,7 +1408,9 @@ def _pending_ci_resolution(
     text_urls: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str]:
     kind = _evidence_item_kind(item)
-    normalized = _normalize_evidence_item(item)
+    # The lane logs `$ <command>` above each run's output and this looks that
+    # key up, so it has to be the command the lane ran, not the item's prose.
+    normalized = _evidence_command_text(item)
     uploaded_screenshot_urls = screenshot_urls or []
     uploaded_text_urls = text_urls or []
 

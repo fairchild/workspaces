@@ -57,14 +57,13 @@ Performance comparison notes:
 - [ ] UI evidence attached (screenshot or recording from the exact commit under review)
 
 <!-- Upload evidence: uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug> -->
-<!-- Web tests: cd web && pnpm test:evidence → screenshot playwright-report/index.html -->
-<!-- Swift tests: swift test → screenshot output -->
+<!-- Tests: paste the command and the result line it printed -->
 
 Evidence for all PRs must include:
 
 - test results: pass/fail summary with command used
 - for UI changes: at least one screenshot or recording proving the result
-- for API/backend changes: test report screenshot or output
+- for API/backend changes: the named tests that ran, with the command
 - hosted links (via upload-evidence.py), not local file paths
 
 Evidence links:

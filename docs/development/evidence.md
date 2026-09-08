@@ -105,9 +105,7 @@ Reach for a fallback only when the lane above cannot apply, in this order:
 2. **ImageRenderer test → PNG** — for a *single* SwiftUI view in a transient or
    hover-only state that fixture mode cannot stage as a full window. Renders one
    view, not the composited window.
-3. **`qlmanage`-rendered test logs** — for non-UI changes where the evidence is
-   test output, not pixels (render the log to PNG, then `--file --no-capture`).
-4. **Local VM lane** (Tart/Lume on your own machine) — the full-fidelity
+3. **Local VM lane** (Tart/Lume on your own machine) — the full-fidelity
    fallback for the one case the in-process lane cannot cover: **a locked
    screen.** Every composited capture
    path (`CGWindowList` and ScreenCaptureKit) returns no pixels while the session
@@ -209,14 +207,22 @@ uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name 
 
 ## What counts as evidence
 
+A screenshot or a recording for anything a person can see. Numbers for anything
+measured. For everything else, the named tests that ran and what they covered,
+plus whatever else you ran locally. Use judgement, and round toward more
+evidence.
+
+A picture of test output is not a substitute for saying which tests ran. Paste
+the command and its result line; upload the log as text if it helps.
+
 | Change type | Minimum evidence | Extras |
 |-------------|-----------------|--------|
-| Swift UI | `swift test` summary screenshot | Running-app screenshot via the [app evidence lane](#app-evidence-lane-first-choice-ui-capture) (`--fixture`) |
-| Swift non-UI | `swift test` summary screenshot | — |
+| Swift UI | Running-app screenshot via the [app evidence lane](#app-evidence-lane-first-choice-ui-capture) (`--fixture`) | Before/after when the visual correction is the point |
+| Swift non-UI | The named tests that ran, with the command and its result line | Uploaded `test-output.txt` |
 | Web | `pnpm test` output | Playwright report screenshot |
-| API-only | Test output | — |
+| API-only | The named tests that ran, with the command | — |
 | Docs/config | Check "Not a testable change" in PR template | — |
-| Performance | Before/after/delta metrics | Metric source and commands |
+| Performance | Before/after/delta numbers in the PR body — the numbers are the artifact | Metric source and commands |
 
 For web screenshots without auth, start the dev server with:
 
@@ -241,13 +247,17 @@ finishing the PR and the PR waiting on you.
 | `Someone with taste confirms the copy reads well` | `other` | **you**, by hand |
 | `... (owner-attested)` | `other` | **you**, by hand — the directive is honoured over any other shape |
 
-Two rules worth knowing:
+Three rules worth knowing:
 
 - **A CI item must name the check in backticks, immediately before `green`, or
   before a CI noun and then a pass word.** ``` `check-links` check passes ``` works;
   "`pnpm check` passes locally" does not, because `pnpm check` is a command, not
   a check name. The classifier fails closed rather than guessing, since an item
   naming a check that does not exist never completes.
+- **A `test` or `build` item's command is the backticked span that opens it.**
+  In ``` `swift test --filter FooTests` passes ```, the lane runs
+  `swift test --filter FooTests` and reads "passes" as you saying what you
+  expect of it. A command mentioned mid-sentence is not a request to run it.
 - **`(owner-attested)` — or any "owner/maintainer confirms/approves/decides"
   phrasing — keeps the item yours** even when the rest of it looks mechanical.
   If you want the factory to close it, drop the parenthetical and write the

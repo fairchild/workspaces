@@ -21,6 +21,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -1475,6 +1476,96 @@ class EvidenceStatusLineCostTests(unittest.TestCase):
                 split = run_contributor.split_evidence_status_line(line, [item])
                 self.assertIsNotNone(split)
                 self.assertEqual(split[1], item)
+
+
+class DocumentedTestFormTests(unittest.TestCase):
+    """The `test` form the docs teach has to survive the parser.
+
+    `docs/development/evidence.md` and the admission decline comment both show
+    a backticked command followed by "passes". Read as one command that whole
+    string is unparseable, and the run aborted with `evidence_validation`
+    before the author's first commit -- so following the documentation was the
+    fastest way to fail. The command is the backticked span; what follows is
+    the author saying what the command should do.
+    """
+
+    DOCUMENTED_TEST_ITEM = "`swift test --filter FooTests` passes"
+    DOCUMENTED_BUILD_ITEM = "`swift build` succeeds"
+
+    def test_the_documented_item_still_classifies_as_a_test(self) -> None:
+        self.assertEqual(
+            run_contributor._evidence_item_kind(self.DOCUMENTED_TEST_ITEM), "test"
+        )
+
+    def test_trailing_prose_is_not_part_of_the_command(self) -> None:
+        self.assertEqual(
+            run_contributor._extract_test_commands([self.DOCUMENTED_TEST_ITEM]),
+            ["swift test --filter FooTests"],
+        )
+
+    def test_the_documented_item_is_admissible(self) -> None:
+        with mock.patch.object(
+            run_contributor,
+            "_listed_swift_tests",
+            return_value=["FooTests/theCase()"],
+        ):
+            errors = run_contributor.validate_requested_test_commands(
+                [self.DOCUMENTED_TEST_ITEM], env={}
+            )
+        self.assertEqual(errors, [])
+
+    def test_the_documented_build_item_is_admissible(self) -> None:
+        errors = run_contributor.validate_requested_test_commands(
+            [self.DOCUMENTED_BUILD_ITEM], env={}
+        )
+        self.assertEqual(errors, [])
+
+    def test_the_bare_command_form_is_unchanged(self) -> None:
+        self.assertEqual(
+            run_contributor._extract_test_commands(
+                ["swift test --filter FooTests", "`swift test`"]
+            ),
+            ["swift test --filter FooTests", "swift test"],
+        )
+
+    def test_an_unsafe_command_inside_the_span_is_still_refused(self) -> None:
+        # Stripping prose reaches only what is outside the span. Everything
+        # the allowlist refused before it still refuses.
+        errors = run_contributor.validate_requested_test_commands(
+            ["`swift test --parallel` passes"], env={}
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertIn("must use `swift test`", errors[0])
+
+    def test_prose_before_the_command_is_not_a_command(self) -> None:
+        # The span has to open the item. An item that merely mentions a
+        # command mid-sentence is not a request to run it, and reading one out
+        # of the middle would run a command nobody asked for.
+        item = "Run something, then `swift test --filter FooTests`"
+        self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
+    def test_the_pending_ci_seed_names_the_command_not_the_prose(self) -> None:
+        _, _, pending = run_contributor.synthesize_initial_execution_evidence(
+            [self.DOCUMENTED_TEST_ITEM]
+        )
+        self.assertEqual(len(pending), 1)
+        self.assertIn("`swift test --filter FooTests`", pending[0])
+        self.assertNotIn("passes", pending[0])
+
+    def test_the_lane_result_matches_the_command_it_logged(self) -> None:
+        # The lane writes `$ <shlex-joined command>` above each run's output,
+        # and resolution looks that key up. Resolving on the item text instead
+        # would miss the section and report "matched no tests" for a run that
+        # passed.
+        status, detail = run_contributor._pending_ci_resolution(
+            self.DOCUMENTED_TEST_ITEM,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+            test_output="$ swift test --filter FooTests\nTest run with 1 test passed.\n",
+        )
+        self.assertEqual(status, "complete")
+        self.assertIn("`swift test --filter FooTests`", detail)
 
 
 if __name__ == "__main__":

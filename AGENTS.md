@@ -33,7 +33,7 @@ Evidence is a merge gate. Do not create a PR without it. In order:
 3. **Paste the uploaded evidence URLs into the PR body**
 4. **Only then create the PR** — no `[pending-ci]` unless evidence is genuinely impossible locally
 
-Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. Setup, token sourcing, fallback lanes, troubleshooting: `docs/development/evidence.md`. Remote (claude.ai) sessions lack the token, mise, and a matching Playwright browser — sanctioned workarounds: `docs/development/remote-sessions.md`.
+Rules: match tests and evidence to the risk and blast radius — for docs-only changes, `git diff --check` plus a clear note is usually enough; blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. Setup, token sourcing, fallback lanes, troubleshooting: `docs/development/evidence.md`. Remote (claude.ai) sessions lack the token, mise, and a matching Playwright browser — sanctioned workarounds: `docs/development/remote-sessions.md`.
 
 ## High-Signal Lessons (unconditional)
 
