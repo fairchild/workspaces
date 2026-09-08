@@ -269,6 +269,11 @@ def latest_review_by(
 
     `COMMENTED` reviews are skipped: on GitHub they never replace a reviewer's
     standing verdict, so they must not replace it here either.
+
+    Ties break towards the later element. `submitted_at` has one-second
+    resolution and the API returns reviews chronologically, so on a tie the
+    list order is the only thing that still knows which came second -- and
+    `max` alone would answer with the first.
     """
     expected_login = REVIEWER_BOTS[reviewer].casefold()
     mine = [
@@ -280,7 +285,43 @@ def latest_review_by(
     ]
     if not mine:
         return None
-    return max(mine, key=lambda review: str(review.get("submitted_at") or ""))
+    return max(
+        enumerate(mine),
+        key=lambda pair: (str(pair[1].get("submitted_at") or ""), pair[0]),
+    )[1]
+
+
+def standing_rejection_id(
+    reviews: list[dict[str, Any]],
+    *,
+    reviewer: str,
+    head_sha: str,
+) -> int | None:
+    """The id of the reviewer's standing CHANGES_REQUESTED verdict on this head.
+
+    Two admissions answering one objection have this id in common, and it is
+    also what tells them apart once either has answered it: posting a review
+    replaces the standing verdict, so the id changes or disappears. Binding an
+    admission to the id it set out to answer is what makes "exactly one fresh
+    review" a mechanism rather than a hope -- a body edit and the Factory
+    Revise dispatch that accompanies it both arrive, and the second one finds
+    the objection already superseded (#1509).
+    """
+    standing = latest_review_by(reviews, reviewer=reviewer, head_sha=head_sha)
+    if standing is None or str(standing.get("state") or "").upper() != "CHANGES_REQUESTED":
+        return None
+    identifier = standing.get("id")
+    if not isinstance(identifier, int) or identifier <= 0:
+        # Fail closed rather than returning None: None means "nothing standing
+        # to bind to", which omits the guard entirely. A standing rejection
+        # whose id we cannot read is the one case where that silence would be
+        # wrong, so it stops the run instead of quietly permitting a second
+        # review of the same objection.
+        raise FactoryReviewError(
+            "the standing changes-requested review has no usable id, so this "
+            "review cannot be bound to the verdict it answers"
+        )
+    return identifier
 
 
 def stale_review_refreshable(
@@ -368,11 +409,33 @@ def count_daily_run_attempts(
     current_run_id: str,
     current_run_attempt: int = 1,
 ) -> int:
-    """Count raw execution attempts today, including retries and failures."""
+    """Count raw execution attempts today, including retries and failures.
+
+    A first-attempt run whose jobs were all skipped by their `if:` is not an
+    attempt. No step ran, so it cannot be part of a crash loop and it spent
+    nothing -- only a failure or a real execution is evidence of either. This
+    matters since #1509: the signal lane filters title-only, base-branch and
+    draft-body `edited` events at the job level, and a
+    `workflow_run` record is created for the filtered signal whatever its
+    conclusion, so ordinary title edits would otherwise walk this ceiling and
+    refuse the lane's real reviews for the rest of the UTC day.
+
+    Only the first attempt, because `conclusion` and `run_attempt` describe
+    different things: the conclusion is the latest attempt's, the count is
+    cumulative. A rerun that skips everything -- the kill switch flipped
+    between attempts, say -- would otherwise erase an earlier attempt that
+    really did run. A rerun is deliberate, so counting the whole run is the
+    safe direction, and nobody reruns a signal that was filtered.
+    """
     attempts_by_run = {
         str(run["id"]): max(1, int(run.get("run_attempt") or 1))
         for run in runs
-        if isinstance(run, dict) and run.get("id") is not None
+        if isinstance(run, dict)
+        and run.get("id") is not None
+        and not (
+            str(run.get("conclusion") or "").casefold() == "skipped"
+            and max(1, int(run.get("run_attempt") or 1)) == 1
+        )
     }
     if current_run_id:
         attempts_by_run[current_run_id] = max(
@@ -560,6 +623,7 @@ def evaluate_review(
     *,
     force: bool,
     stale_refresh: bool = False,
+    require_stale_refresh: bool = False,
 ) -> ReviewDecision:
     if str(pull_request.get("state") or "").casefold() != "open":
         return ReviewDecision("skip", "pull request is not open")
@@ -589,6 +653,18 @@ def evaluate_review(
     # fires `ready_for_review`, which brings the per-push cadence back.
     if bool(pull_request.get("draft")) and not force and reviewed_any_head(reviews, reviewer=reviewer):
         return ReviewDecision("skip", f"{reviewer} already reviewed this draft")
+    # A body edit is admitted for one reason only: it answers a rejection that
+    # is still standing (#1509). Without the requirement the edit would fall
+    # through to the dedup below, which passes whenever nothing was reviewed on
+    # this head -- so every body edit on every open pull request would buy a
+    # review. `stale_refresh` is the same live re-derivation the Evidence
+    # Verify lane's request goes through; this only makes it mandatory. `force`
+    # still overrides, as it does the draft and dedup skips below: the owner's
+    # dispatch reviews outright, whatever else is asking.
+    if require_stale_refresh and not force and not stale_refresh:
+        return ReviewDecision(
+            "skip", "body edit answers no standing changes-requested verdict"
+        )
     if (
         not force
         and not stale_refresh
@@ -623,8 +699,28 @@ def parse_args() -> argparse.Namespace:
             "from live PR state."
         ),
     )
+    parser.add_argument(
+        "--body-edit-review",
+        action="store_true",
+        help=(
+            "This run was triggered by a pull request body edit. Consider "
+            "re-reviewing a head this reviewer already reviewed, exactly as "
+            "--refresh-stale-review does, and review only if that same "
+            "derivation holds: an edit answering nothing standing is a skip, "
+            "not a fresh review."
+        ),
+    )
     parser.add_argument("--expected-head", default="")
     parser.add_argument("--expected-reviewer", choices=sorted(REVIEWER_BOTS))
+    parser.add_argument(
+        "--expected-standing-review",
+        default="",
+        help=(
+            "The id of the standing CHANGES_REQUESTED verdict this run was "
+            "admitted to answer. Skip if it is no longer the standing one: "
+            "another admission answering the same objection got there first."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -662,7 +758,10 @@ def main() -> int:
     reviews = client.pull_request_reviews(args.pr)
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
     stale_refresh = False
-    if args.refresh_stale_review and head_sha:
+    # Two callers ask the same question of live state. The Evidence Verify
+    # lane asks permissively (#1379); a body edit asks and is bound by the
+    # answer (#1509).
+    if (args.refresh_stale_review or args.body_edit_review) and head_sha:
         reviewer = route_reviewer(pull_request, files)
         stale_refresh = stale_review_refreshable(
             pull_request,
@@ -678,7 +777,12 @@ def main() -> int:
                     "readiness gate still fails)"
                 )
     decision = evaluate_review(
-        pull_request, files, reviews, force=args.force, stale_refresh=stale_refresh
+        pull_request,
+        files,
+        reviews,
+        force=args.force,
+        stale_refresh=stale_refresh,
+        require_stale_refresh=args.body_edit_review,
     )
     if args.expected_head and args.expected_head != head_sha:
         decision = ReviewDecision("skip", "pull request head changed after admission")
@@ -688,11 +792,37 @@ def main() -> int:
         and args.expected_reviewer != decision.reviewer
     ):
         decision = ReviewDecision("skip", "counterpart route changed after admission")
+    if args.expected_standing_review and decision.action == "review":
+        current = standing_rejection_id(
+            reviews, reviewer=decision.reviewer, head_sha=head_sha
+        )
+        if str(current or "") != args.expected_standing_review:
+            decision = ReviewDecision(
+                "skip", "the standing review this answers was already answered"
+            )
     print(f"Factory review decision for #{args.pr}: {decision.action} ({decision.reason})")
+    # Only the two paths that answer a rejection bind to one. The owner's
+    # force is unconditional by definition: binding it would let a verdict
+    # that moved between admission and preflight cancel the dispatch the
+    # owner made precisely to override such things.
+    standing_review = ""
+    if (
+        decision.action == "review"
+        and decision.reviewer
+        and not args.force
+        and (args.body_edit_review or args.refresh_stale_review)
+    ):
+        standing_review = str(
+            standing_rejection_id(
+                reviews, reviewer=decision.reviewer, head_sha=head_sha
+            )
+            or ""
+        )
     write_output("matched", "true" if decision.action == "review" else "false")
     write_output("pr_number", str(args.pr))
     write_output("reviewer", decision.reviewer)
     write_output("head_sha", head_sha)
+    write_output("standing_review", standing_review)
     write_output("linked_issue", str(linked_issue_number(pull_request) or ""))
     return 0
 
