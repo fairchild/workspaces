@@ -1688,6 +1688,155 @@ class AttestedTestKindTests(unittest.TestCase):
         self.assertEqual(len(complete), 1)
         self.assertIn("test_foo.py", complete[0])
 
+    def test_a_command_that_was_not_run_completes_nothing(self) -> None:
+        # The guard read the command line only, so a "was not run" under the
+        # command and a count under that was one statement to the window and
+        # two to the guard. This is the shape that reached the contributor
+        # gate after the readiness gate had already been fixed.
+        for body in (
+            "`pnpm test`\nwas not run in this environment\nThe suite has 214 tests passed\n",
+            "We will run `pnpm test` after review\nThe suite has 214 tests passed\n",
+            "`pnpm test`\nskipped on this runner\n214 tests passed elsewhere\n",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(run_contributor._attested_test_statement(body))
+
+    def test_a_label_beside_a_path_is_not_an_alternative(self) -> None:
+        # An item naming both a test path and the runner it runs on is about
+        # the path; offering the label let an unrelated run complete the item
+        # by mentioning `macos-26`.
+        _, paths = run_contributor._item_evidence_tokens(
+            "A test in `scripts/tests/test_foo.py` on `macos-26` passes"
+        )
+        self.assertEqual(paths, ["scripts/tests/test_foo.py"])
+        self.assertIsNone(
+            run_contributor._attested_test_statement(
+                "- `pytest scripts/tests/test_bar.py` on macos-26 -> 12 passed\n",
+                "A test in `scripts/tests/test_foo.py` on `macos-26` passes",
+            )
+        )
+
+    def test_a_bare_label_still_binds_where_it_is_all_there_is(self) -> None:
+        _, paths = run_contributor._item_evidence_tokens(
+            "`pnpm test` in `web-next` passes"
+        )
+        self.assertIn("web-next", paths)
+
+    def test_a_nonzero_exit_is_not_a_pass(self) -> None:
+        for body in (
+            "- `pytest` -> Ran 12 tests; Process completed with exit code 1\n",
+            "- `pnpm test` -> 12 tests passed; exit status 1\n",
+            "- `swift test` -> ran, exit code 2\n",
+            "- `pytest` -> Ran 12 tests; Process completed with exit code 127\n",
+            "- `pnpm test` -> 12 tests passed; process exited with status 127\n",
+            "- `pnpm test` -> 12 tests passed; exited with status 1\n",
+            "- `swift test` -> 12 tests passed; status: ERROR\n",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(run_contributor._attested_test_statement(body))
+
+    def test_a_negation_cannot_swallow_a_real_failure(self) -> None:
+        # "no failures but errors=2" was matched whole by the negation
+        # remover, leaving "=2" and reading a red run as clean.
+        for body in (
+            "- `pytest` -> Ran 12 tests, no failures but errors=2\n",
+            "- `pytest` -> 0 tests failed\n",
+            "- `pytest` -> no warnings but 3 errors\n",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(run_contributor._attested_test_statement(body))
+
+    def test_an_ordinary_passing_report_is_not_read_as_a_failure(self) -> None:
+        self.assertIsNotNone(
+            run_contributor._attested_test_statement(
+                "- `pnpm test` -> 12 tests passed, covering error handling\n"
+            )
+        )
+
+    def test_a_failed_run_is_not_a_pass(self) -> None:
+        # "Ran 12 tests" carries a count and a test noun. Read without the
+        # line under it, a red run completed the item and the quote showed
+        # only the first half.
+        for body in (
+            "- `pnpm test`\n  Ran 12 tests\n  FAILED (failures=2)\n",
+            "- `pnpm test` -> 12 tests failed\n",
+            "- `pytest` -> collected 0 items\n",
+            "- `pnpm test` -> 3 tests passed, 2 errored\n",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(run_contributor._attested_test_statement(body))
+
+    def test_a_pass_reported_as_an_absence_is_still_a_pass(self) -> None:
+        # A failure guard spelled with a bare `errors?` swallows the pass
+        # phrasings that name what did not happen.
+        self.assertIsNotNone(
+            run_contributor._attested_test_statement(
+                "- `pnpm test` -> 214 tests passed, no lint errors\n"
+            )
+        )
+
+    def test_a_mechanical_item_naming_an_environment_is_not_external(self) -> None:
+        # The environment word alone is not enough; it has to be somewhere
+        # someone goes and does something.
+        for item in (
+            "Unit coverage for the production configuration loader",
+            "Release notes mention the live-migration flag",
+            "A test asserting the staging URL is rejected",
+        ):
+            with self.subTest(item=item):
+                self.assertFalse(run_contributor._needs_a_person_to_look(item))
+
+    def test_a_docs_item_naming_a_release_is_not_external_verification(self) -> None:
+        self.assertFalse(
+            run_contributor._needs_a_person_to_look(
+                "Verify the release notes mention the new flag"
+            )
+        )
+        self.assertTrue(
+            run_contributor._needs_a_person_to_look(
+                "Verify the live endpoint returns the new field"
+            )
+        )
+
+    def test_a_neighbouring_path_is_not_this_path(self) -> None:
+        # Substring matching made `web-next` answer an item about `web`, and
+        # `not_test_foo.py` answer one about `test_foo.py`.
+        for item, body in (
+            (
+                "`pnpm test` in `web` passes",
+                "- `cd web-next && pnpm test` -> 214 tests passed\n",
+            ),
+            (
+                "`pnpm test` in `web-next` passes",
+                "- `cd web-next-old && pnpm test` -> 214 tests passed\n",
+            ),
+            (
+                "`pytest` over `scripts/tests/test_foo.py` passes",
+                "- `pytest scripts/tests/not_test_foo.py` -> 12 passed\n",
+            ),
+        ):
+            with self.subTest(item=item):
+                complete, _, _ = run_contributor.synthesize_initial_execution_evidence(
+                    [item], body=body
+                )
+                self.assertEqual(complete, [])
+
+    def test_a_bare_directory_binds_the_statement(self) -> None:
+        complete, _, _ = run_contributor.synthesize_initial_execution_evidence(
+            ["`pnpm test` in `web-next` passes"],
+            body="- `cd web-next && pnpm test` -> 214 tests passed\n",
+        )
+        self.assertEqual(len(complete), 1)
+
+    def test_a_run_in_another_directory_completes_nothing(self) -> None:
+        # `web-next` is what tells a `pnpm test` there apart from one in
+        # `web`, and dropping a directory-only span made them one claim.
+        body = "## Validation\n\n- `cd web && pnpm test` -> 214 tests passed\n"
+        complete, _, _ = run_contributor.synthesize_initial_execution_evidence(
+            ["`pnpm test` in `web-next` passes"], body=body
+        )
+        self.assertEqual(complete, [])
+
     def test_a_conditional_is_not_a_result(self) -> None:
         # "if all tests pass, merge" says nothing ran. Every accepted result
         # carries a count, because a runner that ran printed one.
@@ -1809,6 +1958,62 @@ class PerfEvidenceKindTests(unittest.TestCase):
             )
         )
 
+    def test_the_two_sides_have_to_measure_the_same_thing(self) -> None:
+        body = (
+            "## Performance\n\n- Before Summary: launch 1s\n- After Summary: memory 4GB\n"
+        )
+        self.assertIsNone(
+            run_contributor._perf_numbers(body, "launch latency before and after")
+        )
+
+    def test_a_percentile_alone_is_not_the_same_measurement(self) -> None:
+        # `p50 setup` shares only the percentile with `p50 launch latency`.
+        body = (
+            "## Performance\n\n- Before Summary: p50 setup 2.0s\n"
+            "- After Summary: p50 setup 1.0s\n"
+        )
+        self.assertIsNone(
+            run_contributor._perf_numbers(body, "p50 launch latency before and after")
+        )
+
+    def test_the_perf_producers_own_output_completes_a_perf_item(self) -> None:
+        # `scripts/pr-evidence.sh` writes this shape. It wrote JSON paths into
+        # both fields before, so the producer could not satisfy the parser.
+        body = (
+            "## Performance\n\n"
+            "- Scenario ID: `debug_no_activate`\n"
+            "- Before Summary: p50_launch_ms 1310.00 ms\n"
+            "- After Summary: p50_launch_ms 1020.00 ms\n"
+            "- Delta Summary: -290 ms (-22.1%)\n"
+        )
+        self.assertIsNotNone(
+            run_contributor._perf_numbers(
+                body, "p50 launch latency before and after on the same workload"
+            )
+        )
+
+    def test_a_metric_named_only_in_the_heading_completes_nothing(self) -> None:
+        # A section mentioning the metric somewhere, over values that measured
+        # something else, is not an answer.
+        body = (
+            "## Performance\n\nlaunch latency work\n\n"
+            "- Before Summary: setup 10s, memory 4GB\n"
+            "- After Summary: deploy 20ms, memory 3GB\n"
+        )
+        self.assertIsNone(
+            run_contributor._perf_numbers(body, "launch latency before and after")
+        )
+
+    def test_a_shared_unit_on_an_unrelated_measurement_is_not_a_comparison(self) -> None:
+        body = (
+            "## Performance\n\n"
+            "- Before Summary: launch 1s, memory 4GB\n"
+            "- After Summary: deploy 20ms, memory 3GB\n"
+        )
+        self.assertIsNone(
+            run_contributor._perf_numbers(body, "launch latency before and after")
+        )
+
     def test_a_number_without_a_unit_measures_nothing(self) -> None:
         # "Before Summary: issue #123" carries a digit and measures nothing;
         # a unit is what makes the two sides comparable.
@@ -1910,6 +2115,43 @@ class CompleteDetailTests(unittest.TestCase):
         errors = self.errors_for(self.ITEM, "\u5168\u30c6\u30b9\u30c8\u304c\u6210\u529f\u3057\u307e\u3057\u305f")
         self.assertEqual([e for e in errors if "proves nothing" in e], [])
 
+    def test_a_result_word_a_runner_prints_is_a_result(self) -> None:
+        for detail in ("PASS", "OK", "green"):
+            with self.subTest(detail=detail):
+                errors = self.errors_for(self.ITEM, detail)
+                self.assertEqual([e for e in errors if "proves nothing" in e], [])
+
+    def test_a_hand_edit_does_not_clear_the_gate_by_itself(self) -> None:
+        # Reading a visible edit straight into the accounting sounds like
+        # honouring the documented owner gesture and is instead an
+        # authorization hole: text differing from the metadata is a signal any
+        # PR author or bot with write access can produce, so it would clear an
+        # item the lane refused. The gesture is honoured where provenance is
+        # known -- the next factory turn carries a published line forward.
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": self.ITEM,
+                        "status": "pending-ci",
+                        "detail": "waiting on the author's run",
+                        "kind": "test-attested",
+                    }
+                ]
+            },
+            indent=2,
+        )
+        body = (
+            "## Summary\n\nA change.\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            "## Evidence Status\n"
+            f"- [complete] {self.ITEM} -- I ran it: 214 tests passed\n"
+        )
+        accounting = run_contributor.evaluate_evidence_accounting(body, [self.ITEM])
+        self.assertEqual(accounting["complete_items"], [])
+        self.assertEqual(accounting["pending_ci_items"], [self.ITEM])
+
     def test_a_host_lookalike_is_not_our_evidence_store(self) -> None:
         # `https://evil.example/evidence.cloudcompute.com/x.png` is not an
         # upload of ours, and a substring test said it was.
@@ -1980,6 +2222,27 @@ class BlockedItemVerdictTests(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("Screenshots of the new sidebar", error)
         self.assertNotIn(self.WEIGHABLE, error)
+
+    def test_verification_outside_this_repo_still_needs_a_person(self) -> None:
+        # A test suite says nothing about a deployed app. Each of these
+        # classifies `other`, and each needs somebody to go and do it.
+        for item in (
+            "Production smoke against the deployed app",
+            "Verify the live endpoint returns the new field",
+            "A real restart on the production host succeeds",
+            "A smoke test against the deployed app",
+            "The installed build launches from a cold start",
+            "Confirm the TestFlight build launches on an iPhone",
+            "Verify the signed DMG opens after download",
+        ):
+            with self.subTest(item=item):
+                error = run_contributor.review_evidence_gate_error(
+                    "approve_with_followups",
+                    self.accounting([item], [self.GREEN]),
+                    [],
+                )
+                self.assertIsNotNone(error)
+                self.assertIn("needs a person", error)
 
     def test_a_weighable_gap_with_green_tests_can_be_approved_with_followups(self) -> None:
         self.assertIsNone(

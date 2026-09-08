@@ -220,14 +220,59 @@ TEST_COMMAND_RE = re.compile(
 )
 TEST_RESULT_RE = re.compile(
     r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean"
-    r"|\d+\s+(?:tests?|cases?|examples?|files?)|no\s+\w+\s+errors?)\b"
+    # A count with no verdict beside it is not a result: "this patch changes
+    # 12 files" sat in the window under a command and read as its output. The
+    # verdict words above already carry every real report.
+    r")\b"
+    # A result is often reported as an absence -- "no lint errors", "zero
+    # failures", "0 warnings" -- and those are what a linter prints when it
+    # is happy.
+    r"|\b(?:no|zero|0)\s+(?:\w+\s+){0,2}(?:errors?|failures?|warnings?)\b"
+)
+# A run that failed is not evidence that anything passed. "12 tests failed"
+# carries a count and a test noun and was read as a result.
+TEST_FAILURE_RE = re.compile(
+    # `errors?` and `red` are ordinary words in a passing report -- "12 tests
+    # passed, covering error handling" is not a failure -- so a failure noun
+    # counts only where it is reporting a count or a status, and never where
+    # the sentence says what the tests cover.
+    r"(?i)(?<!covering )(?<!including )(?<!handling )(?<!for )(?<!about )"
+    r"\bfail(?:s|ed|ing|ure|ures)?\b"
+    r"|\b\d+\s+errors?\b|\berrors?\s*[=:]\s*[1-9]|\berrored\b"
+    r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
+    # A single-digit bound read `exit code 127` as a pass, and runners write
+    # the number behind `code`, `status`, `with`, or nothing at all.
+    r"|\bexit(?:ed|s)?\s*(?:with\s+)?(?:code|status)?\s*[:=]?\s*[1-9]\d*\b"
+    r"|\bnon-?zero exit\b|\bstatus\s*[:=]\s*(?:error|failed|failure|red)\b"
+    r"|\bprocess (?:completed|exited) with (?:exit )?(?:code|status) [1-9]\d*\b"
+)
+# A line that says the run did not happen. Without this, "`swift test` was
+# not run" and a sentence several lines later mentioning a count read as a
+# report of a passing run.
+NOT_RUN_RE = re.compile(
+    r"(?i)\b(?:not|never|couldn't|could not|cannot|can't|unable to|failed to|"
+    r"didn't|did not|skipped?|skipping|pending|todo|to do)\b"
+    # A plan is not a report. "We will run swift test after review" names a
+    # command and, two lines down, a count of the tests the change adds.
+    r"|\b(?:will|shall|going to|plan to|intend to|should|需)\s+(?:be\s+)?run\b"
+    r"|\bonce\s+(?:ci|the\s+\w+)\s+(?:runs|finishes|completes)\b"
+    r"|\bafter\s+(?:review|merge|approval)\b"
 )
 # Anything a person can see lives here. `WorkspaceManagerCore` and the CLI are
 # Swift that renders nothing, so an image proves nothing about them. An image
 # is evidence *of* what someone looks at; anywhere else it is a picture of
 # text.
+# All of `Sources/`, deliberately. `WorkspaceManagerCore` renders nothing
+# itself but defines the labels, icons and colors the app draws, so a screenshot
+# is real evidence about a change there -- and refusing a genuine app capture is
+# a worse failure than accepting a picture of text on a Swift PR. The line this
+# draws is against the agent scripts, the workflows and the docs.
+# `WorkspaceManagerCLI` draws nothing, so an image proves nothing about it;
+# `WorkspaceManagerCore` defines the labels and colors the app draws, so a
+# real app capture is evidence about a change there.
+NON_VISUAL_SOURCE_PREFIXES = ("Sources/WorkspaceManagerCLI/",)
 VISUAL_SURFACE_PREFIXES = (
-    "Sources/WorkspaceManager/",
+    "Sources/",
     "web/",
     "web-next/",
     "ios/",
@@ -238,29 +283,83 @@ VISUAL_SURFACE_PREFIXES = (
 IMAGE_EVIDENCE_RE = re.compile(r"!\[[^\]\n]*\]\([^)\s]+\)")
 # The extension ends the URL. `…/x.png.evil` is not a png.
 IMAGE_LINK_RE = re.compile(
-    r"(?i)https?://[^\s)\]]+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)(?=[\s)\]]|$)"
+    r"(?i)https?://[^\s)\]]+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)"
+    r"(?:[?#][^\s)\]]*)?(?=[\s)\]]|$)"
 )
 # The host, at the host's own position. A substring test would accept
 # `https://evil.example/evidence.cloudcompute.com/x.png` as an upload of ours.
-EVIDENCE_STORE_RE = re.compile(r"(?i)\bhttps://evidence\.cloudcompute\.com/\S+")
-EVIDENCE_STORE_LOG_RE = re.compile(
-    r"(?i)\bhttps://evidence\.cloudcompute\.com/[^\s)\]]+\.txt(?=[\s)\]]|$)"
+# The scheme has to start the URL, not sit inside one:
+# `https://evil.example/https://evidence.cloudcompute.com/x.txt` is somebody
+# else's host with ours written in its path.
+# Nothing that can carry a URL may precede the scheme:
+# `https://evil.example/?next=https://evidence.cloudcompute.com/x.txt` is
+# somebody else's host with ours in its query.
+# Every character a URL can carry before ours, and none that only delimits
+# one: a markdown link's `(` and `[` sit outside the URL, so excluding them
+# would refuse the ordinary `[log](https://evidence...)` form.
+_STORE_PREFIX = r"(?<![\w/.:=&?#~+%;,!$'*@-])"
+EVIDENCE_STORE_RE = re.compile(
+    rf"(?i){_STORE_PREFIX}https://evidence\.cloudcompute\.com/\S+"
 )
+EVIDENCE_STORE_LOG_RE = re.compile(
+    rf"(?i){_STORE_PREFIX}https://evidence\.cloudcompute\.com/"
+    r"[^\s)\]]+\.txt(?=[\s)\]]|$)"
+)
+
+
+# "no lint errors" and "zero failures" are pass phrasings that contain the
+# words a failure is spelled with. Stripped before the failure search, they
+# stop the failure pattern from swallowing the result pattern beside it --
+# `TEST_RESULT_RE` accepts `no \w+ errors?`, and without this that branch was
+# dead the moment a failure guard existed.
+NEGATED_FAILURE_RE = re.compile(
+    r"(?i)\b(?:no|zero|0|without|free of)\s+"
+    r"(?:(?!errors?\b|failures?\b|fail(?:s|ed|ing)?\b|warnings?\b|regressions?\b)"
+    r"\w+\s+){0,2}"
+    r"(?:errors?|failures?|fail(?:s|ed|ing)?|warnings?|regressions?)\b"
+)
+
+
+def _reports_a_failure(text: str) -> bool:
+    return bool(TEST_FAILURE_RE.search(NEGATED_FAILURE_RE.sub(" ", text)))
+
+
+# How far past a command its output may sit. A fenced block of runner output
+# with a blank line before it is the common shape, and it fits inside this.
+NAMED_TEST_WINDOW_LINES = 8
 
 
 def has_named_test_signal(body: str) -> bool:
     """A command and what it printed, in one breath.
 
-    Matched within a line and its neighbour, not anywhere in the body: a
-    planned `swift test` in one paragraph and the words "green status icon"
-    in another are not a report of a run.
+    Matched within a bounded window under the command, not anywhere in the
+    body: a planned `swift test` in one paragraph and the words "green status
+    icon" in another are not a report of a run. The window skips blank lines
+    and fences, which is ordinary formatting, and ends at a heading or the
+    next command, which is where the next statement begins.
     """
     lines = body.splitlines()
     for index, line in enumerate(lines):
         if not TEST_COMMAND_RE.search(line):
             continue
-        window = " ".join(lines[index : index + 2])
-        if TEST_RESULT_RE.search(window):
+        # A blank line, a fence, or a sentence of explanation between the
+        # command and its output is ordinary formatting, so the window skips
+        # those rather than ending on them. It ends at a heading or at the
+        # next command, which is where the next statement begins.
+        window = [line]
+        for follower in lines[index + 1 : index + NAMED_TEST_WINDOW_LINES]:
+            stripped = follower.strip()
+            if stripped.startswith("#") or TEST_COMMAND_RE.search(follower):
+                break
+            if stripped and not stripped.startswith(("```", "~~~")):
+                window.append(follower)
+        joined = " ".join(window)
+        # The guard reads the whole statement, not only its first line: the
+        # window is what decides, so a "was not run" on the command line and a
+        # count three lines down was read as a report of a passing run.
+        if NOT_RUN_RE.search(joined):
+            continue
+        if TEST_RESULT_RE.search(joined) and not _reports_a_failure(joined):
             return True
     return False
 
@@ -270,7 +369,11 @@ def has_image_evidence(body: str) -> bool:
 
 
 def touches_a_visual_surface(files: list[str]) -> bool:
-    return any(path.startswith(VISUAL_SURFACE_PREFIXES) for path in files)
+    return any(
+        path.startswith(VISUAL_SURFACE_PREFIXES)
+        and not path.startswith(NON_VISUAL_SOURCE_PREFIXES)
+        for path in files
+    )
 
 
 def has_any_evidence(body: str, files: list[str] | None = None) -> bool:
