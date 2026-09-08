@@ -199,10 +199,58 @@ class PRReadinessTests(unittest.TestCase):
         result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
         self.assertIn("No test/evidence signal found in PR body.", result.failures)
 
+    def test_a_failed_run_is_not_an_evidence_signal(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- `swift test` -- 12 tests failed",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_fenced_result_under_a_command_still_counts(self) -> None:
+        # A blank line and a fence between the command and its output is
+        # ordinary formatting, and a two-line window called it no evidence.
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "I ran `swift test`:\n\n```\nTest run with 1992 tests in 214 suites passed\n```",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertEqual(result.failures, [])
+
+    def test_a_release_body_listing_what_this_gate_asks_for_passes(self) -> None:
+        # `./scripts/...` could never match behind a word boundary, and
+        # `bash -n` and `actionlint` were missing though the release branch of
+        # this same gate names them.
+        for command in (
+            "`bash -n scripts/release.sh` -- ok",
+            "`actionlint` -- clean",
+            "`./scripts/validate-release-changes.sh` -- passed",
+        ):
+            with self.subTest(command=command):
+                body = GOOD_BODY.replace(
+                    "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+                    f"- {command}",
+                ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+                result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+                self.assertEqual(result.failures, [])
+
+    def test_a_screenshot_on_core_swift_still_counts(self) -> None:
+        # `WorkspaceManagerCore` renders nothing itself but defines the
+        # labels, icons and colors the app draws, so a real app capture is
+        # evidence about a change there.
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- ![sidebar](https://evidence.cloudcompute.com/workspaces/pr-1/sidebar.png)",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(
+            pr(body), ["Sources/WorkspaceManagerCore/Models/Models.swift"]
+        )
+        self.assertEqual(result.failures, [])
+
     def test_a_host_lookalike_is_not_our_evidence_store(self) -> None:
         body = GOOD_BODY.replace(
             "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
-            "- see https://evil.example/evidence.cloudcompute.com/tests.txt",
+            "- see https://evil.example/https://evidence.cloudcompute.com/tests.txt",
         ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
         result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
         self.assertIn("No test/evidence signal found in PR body.", result.failures)

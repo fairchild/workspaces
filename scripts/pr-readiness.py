@@ -222,12 +222,23 @@ TEST_RESULT_RE = re.compile(
     r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean"
     r"|\d+\s+(?:tests?|cases?|examples?|files?)|no\s+\w+\s+errors?)\b"
 )
+# A run that failed is not evidence that anything passed. "12 tests failed"
+# carries a count and a test noun and was read as a result.
+TEST_FAILURE_RE = re.compile(
+    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b|\berrors?\b|\berrored\b"
+    r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
+)
 # Anything a person can see lives here. `WorkspaceManagerCore` and the CLI are
 # Swift that renders nothing, so an image proves nothing about them. An image
 # is evidence *of* what someone looks at; anywhere else it is a picture of
 # text.
+# All of `Sources/`, deliberately. `WorkspaceManagerCore` renders nothing
+# itself but defines the labels, icons and colors the app draws, so a screenshot
+# is real evidence about a change there -- and refusing a genuine app capture is
+# a worse failure than accepting a picture of text on a Swift PR. The line this
+# draws is against the agent scripts, the workflows and the docs.
 VISUAL_SURFACE_PREFIXES = (
-    "Sources/WorkspaceManager/",
+    "Sources/",
     "web/",
     "web-next/",
     "ios/",
@@ -242,10 +253,20 @@ IMAGE_LINK_RE = re.compile(
 )
 # The host, at the host's own position. A substring test would accept
 # `https://evil.example/evidence.cloudcompute.com/x.png` as an upload of ours.
-EVIDENCE_STORE_RE = re.compile(r"(?i)\bhttps://evidence\.cloudcompute\.com/\S+")
-EVIDENCE_STORE_LOG_RE = re.compile(
-    r"(?i)\bhttps://evidence\.cloudcompute\.com/[^\s)\]]+\.txt(?=[\s)\]]|$)"
+# The scheme has to start the URL, not sit inside one:
+# `https://evil.example/https://evidence.cloudcompute.com/x.txt` is somebody
+# else's host with ours written in its path.
+EVIDENCE_STORE_RE = re.compile(
+    r"(?i)(?<![\w/.:-])https://evidence\.cloudcompute\.com/\S+"
 )
+EVIDENCE_STORE_LOG_RE = re.compile(
+    r"(?i)(?<![\w/.:-])https://evidence\.cloudcompute\.com/[^\s)\]]+\.txt(?=[\s)\]]|$)"
+)
+
+
+# How far past a command its output may sit. A fenced block of runner output
+# with a blank line before it is the common shape, and it fits inside this.
+NAMED_TEST_WINDOW_LINES = 8
 
 
 def has_named_test_signal(body: str) -> bool:
@@ -259,8 +280,19 @@ def has_named_test_signal(body: str) -> bool:
     for index, line in enumerate(lines):
         if not TEST_COMMAND_RE.search(line):
             continue
-        window = " ".join(lines[index : index + 2])
-        if TEST_RESULT_RE.search(window):
+        # A blank line, a fence, or a sentence of explanation between the
+        # command and its output is ordinary formatting, so the window skips
+        # those rather than ending on them. It ends at a heading or at the
+        # next command, which is where the next statement begins.
+        window = [line]
+        for follower in lines[index + 1 : index + NAMED_TEST_WINDOW_LINES]:
+            stripped = follower.strip()
+            if stripped.startswith("#") or TEST_COMMAND_RE.search(follower):
+                break
+            if stripped and not stripped.startswith(("```", "~~~")):
+                window.append(follower)
+        joined = " ".join(window)
+        if TEST_RESULT_RE.search(joined) and not TEST_FAILURE_RE.search(joined):
             return True
     return False
 

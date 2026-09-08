@@ -1686,6 +1686,28 @@ class AttestedTestKindTests(unittest.TestCase):
         self.assertEqual(len(complete), 1)
         self.assertIn("test_foo.py", complete[0])
 
+    def test_a_failed_run_is_not_a_pass(self) -> None:
+        # "Ran 12 tests" carries a count and a test noun. Read without the
+        # line under it, a red run completed the item and the quote showed
+        # only the first half.
+        for body in (
+            "- `pnpm test`\n  Ran 12 tests\n  FAILED (failures=2)\n",
+            "- `pnpm test` -> 12 tests failed\n",
+            "- `pytest` -> collected 0 items\n",
+            "- `pnpm test` -> 3 tests passed, 2 errored\n",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(run_contributor._attested_test_statement(body))
+
+    def test_a_run_in_another_directory_completes_nothing(self) -> None:
+        # `web-next` is what tells a `pnpm test` there apart from one in
+        # `web`, and dropping a directory-only span made them one claim.
+        body = "## Validation\n\n- `cd web && pnpm test` -> 214 tests passed\n"
+        complete, _, _ = run_contributor.synthesize_initial_execution_evidence(
+            ["`pnpm test` in `web-next` passes"], body=body
+        )
+        self.assertEqual(complete, [])
+
     def test_a_conditional_is_not_a_result(self) -> None:
         # "if all tests pass, merge" says nothing ran. Every accepted result
         # carries a count, because a runner that ran printed one.
@@ -1807,6 +1829,40 @@ class PerfEvidenceKindTests(unittest.TestCase):
             )
         )
 
+    def test_the_two_sides_have_to_measure_the_same_thing(self) -> None:
+        body = (
+            "## Performance\n\n- Before Summary: launch 1s\n- After Summary: memory 4GB\n"
+        )
+        self.assertIsNone(
+            run_contributor._perf_numbers(body, "launch latency before and after")
+        )
+
+    def test_a_percentile_alone_is_not_the_same_measurement(self) -> None:
+        # `p50 setup` shares only the percentile with `p50 launch latency`.
+        body = (
+            "## Performance\n\n- Before Summary: p50 setup 2.0s\n"
+            "- After Summary: p50 setup 1.0s\n"
+        )
+        self.assertIsNone(
+            run_contributor._perf_numbers(body, "p50 launch latency before and after")
+        )
+
+    def test_the_perf_producers_own_output_completes_a_perf_item(self) -> None:
+        # `scripts/pr-evidence.sh` writes this shape. It wrote JSON paths into
+        # both fields before, so the producer could not satisfy the parser.
+        body = (
+            "## Performance\n\n"
+            "- Scenario ID: `debug_no_activate`\n"
+            "- Before Summary: p50_launch_ms 1310 ms\n"
+            "- After Summary: p50_launch_ms 1020 ms\n"
+            "- Delta Summary: -290 ms (-22.1%)\n"
+        )
+        self.assertIsNotNone(
+            run_contributor._perf_numbers(
+                body, "p50 launch latency before and after on the same workload"
+            )
+        )
+
     def test_a_number_without_a_unit_measures_nothing(self) -> None:
         # "Before Summary: issue #123" carries a digit and measures nothing;
         # a unit is what makes the two sides comparable.
@@ -1908,6 +1964,40 @@ class CompleteDetailTests(unittest.TestCase):
         errors = self.errors_for(self.ITEM, "\u5168\u30c6\u30b9\u30c8\u304c\u6210\u529f\u3057\u307e\u3057\u305f")
         self.assertEqual([e for e in errors if "proves nothing" in e], [])
 
+    def test_a_result_word_a_runner_prints_is_a_result(self) -> None:
+        for detail in ("PASS", "OK", "green"):
+            with self.subTest(detail=detail):
+                errors = self.errors_for(self.ITEM, detail)
+                self.assertEqual([e for e in errors if "proves nothing" in e], [])
+
+    def test_a_hand_edit_reaches_the_accounting_not_only_the_next_render(self) -> None:
+        # The documented owner gesture is to rewrite a status line by hand.
+        # Read only from the metadata, that edit changed nothing until some
+        # later lane re-rendered the body.
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": self.ITEM,
+                        "status": "pending-ci",
+                        "detail": "waiting on the author's run",
+                        "kind": "test-attested",
+                    }
+                ]
+            },
+            indent=2,
+        )
+        body = (
+            "## Summary\n\nA change.\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            "## Evidence Status\n"
+            f"- [complete] {self.ITEM} -- I ran it: 214 tests passed\n"
+        )
+        accounting = run_contributor.evaluate_evidence_accounting(body, [self.ITEM])
+        self.assertEqual(accounting["complete_items"], [self.ITEM])
+        self.assertEqual(accounting["pending_ci_items"], [])
+
     def test_a_host_lookalike_is_not_our_evidence_store(self) -> None:
         # `https://evil.example/evidence.cloudcompute.com/x.png` is not an
         # upload of ours, and a substring test said it was.
@@ -1978,6 +2068,24 @@ class BlockedItemVerdictTests(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("Screenshots of the new sidebar", error)
         self.assertNotIn(self.WEIGHABLE, error)
+
+    def test_verification_outside_this_repo_still_needs_a_person(self) -> None:
+        # A test suite says nothing about a deployed app. Each of these
+        # classifies `other`, and each needs somebody to go and do it.
+        for item in (
+            "Production smoke against the deployed app",
+            "Verify the live endpoint returns the new field",
+            "A real restart on the production host succeeds",
+            "The installed build launches from a cold start",
+        ):
+            with self.subTest(item=item):
+                error = run_contributor.review_evidence_gate_error(
+                    "approve_with_followups",
+                    self.accounting([item], [self.GREEN]),
+                    [],
+                )
+                self.assertIsNotNone(error)
+                self.assertIn("needs a person", error)
 
     def test_a_weighable_gap_with_green_tests_can_be_approved_with_followups(self) -> None:
         self.assertIsNone(

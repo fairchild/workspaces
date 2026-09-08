@@ -235,6 +235,16 @@ MANUAL_JUDGEMENT_RE = re.compile(
     r"|\bplay(?:ed|ing)? with\b|\bwalkthrough\b|\bwalk-through\b"
     r"|\binteractively\b|\bhand-run\b"
 )
+# Something that happens outside this repository's test run, and that somebody
+# therefore has to go and do: a smoke against a deployed app, a live endpoint,
+# a restart on a real host. The test suite says nothing about any of it.
+EXTERNAL_VERIFICATION_RE = re.compile(
+    r"(?i)\b(?:in |on |against |from )?(?:production|prod|staging|canary|live"
+    r"|the deployed\b|deployed\b|real (?:device|host|hardware|machine)"
+    r"|the installed (?:app|build)|installed build)\b"
+    r"|\bsmoke\s+(?:test\w*\s+)?(?:against|on|of)\b"
+    r"|\b(?:verify|check|confirm)\b[^\n]{0,40}?\b(?:endpoint|url|deployment|release)\b"
+)
 # A statement in the PR body that names a test runner. Unanchored: the body is
 # prose about what was run, not a contract item.
 TEST_RUNNER_MENTION_RE = re.compile(
@@ -257,6 +267,14 @@ TEST_RUNNER_MENTION_RE = re.compile(
 # merge" says nothing ran, and "all tests pass" is a claim with no run behind
 # it. This is the strict half of Michael's fallback bar -- what the command
 # printed, not what the author expects of it.
+# A run that failed is not evidence that anything passed. "Ran 12 tests"
+# followed by "FAILED (failures=2)" carries a count and a test noun, and read
+# without this it completed the item and quoted only the first line.
+TEST_FAILURE_RE = re.compile(
+    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b|\berrors?\b|\berrored\b"
+    r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
+    r"|\bexit(?:ed|s)?\s+[1-9]\b|\bred\b|\bbroken\b"
+)
 TEST_RESULT_RE = re.compile(
     r"(?i)\bran\s+\d+\s+tests?\b"
     r"|\b\d+\s+(?:tests?|cases?|files?|examples?|assertions?|specs?|suites?)\s+"
@@ -904,6 +922,18 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
         body, requested_evidence
     ) or extract_evidence_status_entries(body, requested_evidence)
     entries = parsed["entries"]
+    # The documented owner gesture is to rewrite a status line by hand. Read
+    # only from the metadata, that edit changes nothing until some later lane
+    # re-renders the body -- so the line a person edited still reads blocked to
+    # the reviewer, and the gesture the factory asked for does not work.
+    if isinstance(entries, dict):
+        entries = dict(entries)
+        for entry in _owner_written_entries(body, requested_evidence).values():
+            entries[str(entry["item"])] = {
+                "status": str(entry["status"]),
+                "detail": str(entry["detail"]),
+            }
+        parsed = {**parsed, "entries": entries}
 
     matched: dict[str, str]
     contested_items: list[str] = []
@@ -961,16 +991,24 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
 # was strict about form and silent about proof, which is the inversion this
 # closes.
 DETAIL_WORD_RE = re.compile(r"\w+")
+# What a runner prints on its own line. Everything else that fits in one word
+# is a claim rather than a result.
+ONE_WORD_RESULTS = frozenset({"pass", "passed", "passing", "ok", "green", "success"})
 # Every way a picture reaches a markdown body, matched without a repeated
 # group around any of them -- the obvious spelling nests a quantifier inside a
 # quantifier, and the detail is PR-controlled text, so a crafted one
 # backtracked exponentially. Substituting each image out and asking what words
 # are left is linear and says the same thing.
 DETAIL_IMAGE_RE = re.compile(
-    r"!\[[^\]\n]*\]\([^)\s]+\)"
-    r"|!\[[^\]\n]*\]\[[^\]\n]*\]"
-    r"|<img\b[^>\n]*>"
-    r"|<?(?i:https?)://[^\s)\]>]+\.(?i:png|jpe?g|gif|webp|svg|webm|mp4)>?"
+    # Every part is bounded. Unbounded, a detail of `![` repeated starts a
+    # scan to the end of the string at each position and the whole check goes
+    # quadratic -- 7 seconds on 16,000 characters, and the hidden metadata is
+    # not subject to the markdown line limit.
+    r"!\[[^\]\n]{0,300}\]\([^)\n]{0,600}\)"
+    r"|!\[[^\]\n]{0,300}\](?:\[[^\]\n]{0,300}\])?"
+    r"|<img\b[^>\n]{0,600}>"
+    r"|<?https?://[^\s)\]>]{0,600}\.(?:png|jpe?g|gif|webp|svg|webm|mp4)>?",
+    re.IGNORECASE,
 )
 
 
@@ -988,10 +1026,11 @@ def _detail_proves_nothing(item: str, detail: str) -> bool:
     if not words:
         return True
     # "One word" is not a count in every script. A single ASCII word is a
-    # non-answer -- "done", "proof", "complete". A single run in a script that
-    # does not space its words is a sentence.
+    # non-answer -- "done", "proof", "complete" -- unless it is what a runner
+    # actually prints. A single run in a script that does not space its words
+    # is a sentence.
     if len(words) == 1 and words[0].isascii():
-        return True
+        return words[0].casefold() not in ONE_WORD_RESULTS
     if _evidence_item_kind(item) == "screenshot":
         return False
     # An image is evidence of what a person can see. On an item about looking
@@ -1185,6 +1224,8 @@ def parse_structured_evidence_updates(
 def _owner_written_entries(
     published_body: str,
     requested_evidence: list[str],
+    *,
+    mark_carried: bool = False,
 ) -> dict[int, dict[str, object]]:
     """Entries in the published PR body that no longer say what the machine wrote.
 
@@ -1240,10 +1281,11 @@ def _owner_written_entries(
         ):
             continue
         detail = str(entry["detail"]).strip()
-        # Written before this turn, and this turn may change the code under
-        # it. Saying so is the difference between an attestation a reader can
-        # weigh and a green that looks freshly earned.
-        if CARRIED_FORWARD_NOTE not in detail:
+        if mark_carried and CARRIED_FORWARD_NOTE not in detail:
+            # Written before this turn, and this turn may change the code
+            # under it. Saying so is the difference between an attestation a
+            # reader can weigh and a green that looks freshly earned. A read
+            # of the body as it stands is not a new turn, so it does not mark.
             detail = f"{detail} {CARRIED_FORWARD_NOTE}"
         preserved[position] = {
             "index": position,
@@ -1297,7 +1339,9 @@ def render_execution_summary_body(
         int(entry["index"]): entry
         for entry in complete_entries + blocked_entries + pending_ci_entries
     }
-    evidence_map.update(_owner_written_entries(published_body, requested_evidence))
+    evidence_map.update(
+        _owner_written_entries(published_body, requested_evidence, mark_carried=True)
+    )
     evidence_lines = [
         f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
         for index, entry in sorted(evidence_map.items())
@@ -1369,6 +1413,7 @@ def _needs_a_person_to_look(item: str) -> bool:
         or VISUAL_EVIDENCE_RE.search(item) is not None
         or OWNER_ATTESTED_RE.search(item) is not None
         or MANUAL_JUDGEMENT_RE.search(item) is not None
+        or EXTERNAL_VERIFICATION_RE.search(item) is not None
     )
 
 
@@ -1554,13 +1599,17 @@ def _item_evidence_tokens(item: str) -> tuple[list[str], list[str]]:
         match.group(0).casefold() for match in TEST_RUNNER_MENTION_RE.finditer(text)
     ]
     paths: list[str] = []
-    for span in re.finditer(r"`([^`\n]+)`", text):
+    for span in re.finditer(r"`([^`\n]{1,300})`", text):
         candidate = span.group(1).strip().strip("*")
-        if TEST_RUNNER_MENTION_RE.search(candidate):
+        if not candidate or TEST_RUNNER_MENTION_RE.search(candidate):
             continue
-        if "/" in candidate or "." in candidate:
+        # The whole span and its last segment both count, and a bare directory
+        # counts too: `web-next` is what tells a `pnpm test` there apart from
+        # a `pnpm test` in `web`, and dropping it made them the same claim.
+        if "/" in candidate or "." in candidate or "-" in candidate:
+            paths.append(candidate.casefold())
             paths.append(candidate.rsplit("/", 1)[-1].casefold())
-    return [runner for runner in runners if runner], [path for path in paths if path]
+    return [runner for runner in runners if runner], sorted({path for path in paths if path})
 
 
 def _attested_test_statement(body: str, item: str = "") -> str | None:
@@ -1593,7 +1642,8 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
             if follower.lstrip().startswith("#") or TEST_RUNNER_MENTION_RE.search(follower):
                 break
             window.append(follower)
-        if not TEST_RESULT_RE.search(" ".join(window)):
+        joined = " ".join(window)
+        if not TEST_RESULT_RE.search(joined) or TEST_FAILURE_RE.search(joined):
             continue
         quoted = [window[0]]
         if not TEST_RESULT_RE.search(window[0]):
@@ -1607,6 +1657,8 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
     return None
 
 
+# How a measurement is summarised, as opposed to what it measured.
+PERF_SUMMARY_TOKENS = frozenset({"p50", "p95", "p99", "delta"})
 PERF_METRIC_RE = re.compile(
     r"(?i)\b(?:p50|p95|p99|latency|duration|throughput|cpu|memory|footprint"
     r"|allocation|fps|startup|launch|cold start|frame|render|load|size)\b"
@@ -1627,13 +1679,23 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
     section = markdown_section(body, "Performance")
     if not section:
         return None
+    # What is measured has to match, not merely how it is summarised. `p50
+    # setup` shares only "p50" with `p50 launch latency`, and reading that as
+    # enough made them the same measurement. Requiring every token instead
+    # would refuse `p50 launch 1.31s` for want of the word "latency", so the
+    # rule is: something other than the percentile has to line up.
     wanted = {match.group(0).casefold() for match in PERF_METRIC_RE.finditer(item)}
-    wanted |= {
+    scenarios = {
         span.group(1).strip().casefold()
-        for span in re.finditer(r"`([^`\n]+)`", item)
+        for span in re.finditer(r"`([^`\n]{1,200})`", item)
         if span.group(1).strip()
     }
-    if wanted and not any(token in section.casefold() for token in wanted):
+    lowered = section.casefold()
+    if wanted:
+        matched = {token for token in wanted if token in lowered}
+        if not matched - PERF_SUMMARY_TOKENS:
+            return None
+    if scenarios and not any(token in lowered for token in scenarios):
         return None
     found: dict[str, str] = {}
     for line in MARKDOWN_LINE_ENDING_RE.split(section):
@@ -1645,6 +1707,17 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
             continue
         found.setdefault(match.group("label").casefold(), value)
     if "before" not in found or "after" not in found:
+        return None
+    # The two sides have to measure the same thing. "Before: launch 1s" beside
+    # "After: memory 4GB" is two measurements, not a comparison.
+    units = {
+        label: {
+            match.group(0).casefold().lstrip("-+0123456789., ")
+            for match in PERF_MEASUREMENT_RE.finditer(found[label])
+        }
+        for label in ("before", "after")
+    }
+    if not units["before"] & units["after"]:
         return None
     return "; ".join(
         f"{label} {found[label]}" for label in ("before", "after", "delta") if label in found

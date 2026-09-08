@@ -408,19 +408,45 @@ profile_performance() {
 
     local before_label="${before_path/#$REPO_ROOT\//}"
     local after_label="${after_path/#$REPO_ROOT\//}"
+    # The measured values, not the paths to the files holding them. The
+    # Performance section is where the numbers live and where the evidence
+    # gate reads them, and a JSON path is not a measurement.
+    local first_metric metric_name metric_rest before_value after_value delta_value
+    first_metric="$(grep -E '^- .+: .+ -> .+;' "$compare_output" | head -n 1 || true)"
+    before_value="see the delta block below"
+    after_value="see the delta block below"
+    delta_value=""
+    if [[ -n "$first_metric" ]]; then
+        metric_name="${first_metric#- }"
+        metric_name="${metric_name%%:*}"
+        metric_rest="${first_metric#*: }"
+        before_value="$metric_name ${metric_rest%% -> *}"
+        metric_rest="${metric_rest#* -> }"
+        after_value="$metric_name ${metric_rest%%;*}"
+        delta_value="${metric_rest#*; }"
+        delta_value="${delta_value%%;*}"
+    fi
+
     local markdown_path="$RUN_DIR/$NAME.md"
     {
         echo "Performance evidence for PR #$PR"
         echo ""
         echo "- Scenario ID: \`$SCENARIO\`"
-        echo "- Before Summary: \`$before_path\`"
-        echo "- After Summary: \`$after_path\`"
-        echo "- Delta Summary:"
+        echo "- Before Summary: $before_value"
+        echo "- After Summary: $after_value"
+        if [[ -n "$delta_value" ]]; then
+            echo "- Delta Summary: $delta_value"
+        else
+            echo "- Delta Summary: see the block below"
+        fi
+        echo ""
+        echo "Every metric:"
         echo ""
         echo '```'
         cat "$compare_output"
         echo '```'
         echo ""
+        echo "Metric source: \`$before_path\` and \`$after_path\`"
         echo "Local artifacts: \`$perf_dir\`"
     } >"$markdown_path"
 
