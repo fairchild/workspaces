@@ -268,8 +268,10 @@ echo "Uploaded: $URL" >&2
 echo "" >&2
 echo "Markdown:" >&2
 FILE_EXT="${FILE##*.}"
+# A text log is not an image. Emitting `![](...)` for a .txt renders a broken
+# image where the reader wanted a link to the log.
 case "$FILE_EXT" in
-  [Ww][Ee][Bb][Mm]|[Mm][Pp]4) echo "[${NAME}](${URL})" >&2 ;;
+  [Ww][Ee][Bb][Mm]|[Mm][Pp]4|[Tt][Xx][Tt]) echo "[${NAME}](${URL})" >&2 ;;
   *) echo "![${NAME}](${URL})" >&2 ;;
 esac
 echo "" >&2

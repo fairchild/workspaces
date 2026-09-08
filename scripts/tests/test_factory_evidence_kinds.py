@@ -1555,16 +1555,36 @@ class DocumentedTestFormTests(unittest.TestCase):
     def test_a_second_requirement_after_the_command_fails_closed(self) -> None:
         # Stripping prose must not strip a demand. Each of these asks for the
         # command AND something the command cannot produce; running it would
-        # complete the item with half the contract met.
+        # complete the item with half the contract met. The grammar is an
+        # allowlist, so the last two -- a second command, and an owner
+        # directive with the verb before the noun -- fail closed without
+        # anyone having thought to name them.
         for item in (
             "`swift test` passes (owner-attested)",
             "`swift test` passes; a screenshot of the sidebar from the same commit",
             "`swift test` passes and the new column appears in the PR diff",
             "`swift test` passes with the `Lint, Test, Build` check green",
             "`swift build` succeeds, owner confirms the warning is gone",
+            "`swift test --filter FooTests` passes and `swift test --filter BarTests` passes",
+            "`swift test` passes, approved by the owner",
+            "`swift test --filter FooTests` passes, including the screenshot metadata cases",
         ):
             with self.subTest(item=item):
                 self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
+    def test_the_verdicts_people_actually_write_are_accepted(self) -> None:
+        for item, kind in (
+            ("`swift test`", "test"),
+            ("`swift test --filter FooTests` passes", "test"),
+            ("`swift test` passes locally", "test"),
+            ("`swift test --filter FooTests` must pass on the PR head", "test"),
+            ("`swift test` is green", "test"),
+            ("`swift build` succeeds", "build"),
+            ("`swift build` succeeds cleanly.", "build"),
+            ("swift test --filter FooTests", "test"),
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), kind)
 
     def test_the_lane_command_key_is_spelled_the_way_the_lane_spells_it(self) -> None:
         # The lane logs `$ ` + shlex.join(argv). An author's own quoting of the

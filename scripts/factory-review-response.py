@@ -386,31 +386,30 @@ def _quotable(text: str) -> str:
     """PR-controlled text, flattened and bounded, for use inside a code span.
 
     Backticks and newlines come out, so a quoted item cannot break out of the
-    span or the line it sits on. Everything else is left alone: inside a span
-    it renders literally. Outside one, pass the result through `_inert`.
+    span or the line it sits on, and HTML comment delimiters come out to a
+    fixed point -- one pass left `<<!--!--` behind as `<!--`. Rendering is
+    `_inert`'s job; this is about what the string may contain at all.
     """
     flattened = " ".join(text.replace("`", "").split())
+    while "<!--" in flattened or "-->" in flattened:
+        flattened = flattened.replace("<!--", "").replace("-->", "")
     if len(flattened) <= ITEM_QUOTE_LIMIT:
         return flattened
     return flattened[: ITEM_QUOTE_LIMIT - 1].rstrip() + "…"
 
 
 def _inert(text: str) -> str:
-    """PR-controlled text, safe to render as prose in the factory's own comment.
+    """PR-controlled text, rendered so none of it can act.
 
-    Deleting `<!--` was the wrong shape of defence: it ran once, so `<<!--!--`
-    survived it as `<!--` and could comment out the instructions through the
-    real trailing marker -- leaving the owner a blank-looking comment the
-    factory counted as answered. Escaping cannot be outrun that way. `@` goes
-    with the angle brackets: an item is written by whoever opened the PR, and
-    it should not be able to ping anyone.
+    A code span, not an escape list. Escaping `<` stopped the HTML-comment
+    class -- deleting `<!--` ran once, so `<<!--!--` survived it as `<!--` and
+    could comment out the instructions through the real trailing marker -- but
+    left every markdown construct alive: `[text](url)`, an image, an autolink,
+    a nested list marker, a mention. Inside a span all of them are characters,
+    and `_quotable` has already taken the backticks out, so nothing in the
+    text can close the span it sits in.
     """
-    return (
-        text.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("@", "&#64;")
-    )
+    return f"`{text}`" if text else text
 
 
 def _recognition_label(entry: dict[str, Any]) -> str:

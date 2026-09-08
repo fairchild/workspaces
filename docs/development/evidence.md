@@ -1,6 +1,9 @@
 # Evidence Guide
 
-Evidence is a merge gate for all PRs. Upload test results or screenshots before creating a PR.
+Evidence is a merge gate for all PRs. A screenshot or a recording for anything a
+person can see, numbers for anything measured, and for everything else the named
+tests that ran with the command and its result line. Upload what needs a link;
+a command and its result belong in the PR body.
 
 > **Remote (claude.ai) sessions:** `EVIDENCE_UPLOAD_TOKEN` is not available in those containers. The sanctioned fallback — a green CI run link on the exact branch/commit as hosted evidence, plus session-delivered screenshots for UI changes — is documented in `remote-sessions.md`.
 
@@ -215,6 +218,8 @@ evidence.
 
 A picture of test output is not a substitute for saying which tests ran. Paste
 the command and its result line; upload the log as text if it helps.
+
+Minimum is the floor for that change type, not the ceiling.
 
 | Change type | Minimum evidence | Extras |
 |-------------|-----------------|--------|

@@ -150,6 +150,20 @@ DIFF_EVIDENCE_RE = re.compile(
 # author's first commit. The span is the command; the rest is the author
 # saying what they expect of it.
 LEADING_CODE_SPAN_RE = re.compile(r"^(?P<ticks>`+)(?P<command>[^`]+?)(?P=ticks)")
+# Everything a `test` or `build` item is allowed to say after its command:
+# what the command should do, and nothing else. See
+# `_remainder_is_only_a_verdict` for why this is an allowlist.
+COMMAND_REMAINDER_RE = re.compile(
+    r"(?i)^[\s,;:.\u2014\u2013-]*"
+    r"(?:(?:must|should|has to|have to|will|to)\s+)?"
+    r"(?:still\s+|all\s+|both\s+)?"
+    r"(?:pass(?:es|ed|ing)?|succeed(?:s|ed|ing)?|is green|are green|green|clean"
+    r"|exits? 0|runs? clean)?"
+    r"(?:\s+(?:locally|cleanly|first|in ci|on this head|on the pr head"
+    r"|on the exact commit(?: under review)?|from the exact commit(?: under review)?"
+    r"|after the change|before and after))*"
+    r"[\s.!]*$"
+)
 # Kinds the hosted `macos-26` evidence lane can gather; `ci` and `diff`
 # complete through the verifier workflow and review lane instead (#1120).
 MACOS_EVIDENCE_KINDS = frozenset({"test", "build", "screenshot"})
@@ -1135,23 +1149,18 @@ def _evidence_command_text(item: str) -> str:
     return _evidence_command_split(item)[0]
 
 
-def _remainder_carries_a_second_requirement(remainder: str) -> bool:
-    """Whether the text after the command asks for something else as well.
+def _remainder_is_only_a_verdict(remainder: str) -> bool:
+    """Whether the text after the command only says what the command should do.
 
-    "passes" is the author saying what the command should do. "and a
-    screenshot", "(owner-attested)", a named check, a diff assertion: each is
-    a second thing that must be true, and running the command would satisfy
-    none of them. An item asking for two things is not a command item, so it
-    stays where it was before -- `other`, blocked, in front of a person.
+    An allowlist, not a blacklist. A list of demands to refuse is only as good
+    as the demands someone thought of: "and `swift test --filter Bar` passes"
+    is a second command, "approved by the owner" puts the verb before the
+    noun, and neither reads as a demand to a pattern written for "(owner-
+    attested)". A list of verdicts to accept fails the other way -- an item
+    the grammar does not recognise stays `other`, blocked, in front of a
+    person, exactly where it was before any of this.
     """
-    if not remainder.strip():
-        return False
-    return (
-        VISUAL_EVIDENCE_RE.search(remainder) is not None
-        or OWNER_ATTESTED_RE.search(remainder) is not None
-        or DIFF_EVIDENCE_RE.search(remainder) is not None
-        or _ci_check_name(remainder) is not None
-    )
+    return COMMAND_REMAINDER_RE.match(remainder) is not None
 
 
 def _ci_check_name(item: str) -> str | None:
@@ -1181,7 +1190,7 @@ def _is_diff_evidence(item: str) -> bool:
 def _evidence_item_kind(item: str) -> str:
     normalized = _normalize_evidence_item(item).casefold()
     if normalized.startswith(("swift test", "swift build")):
-        if _remainder_carries_a_second_requirement(_evidence_command_split(item)[1]):
+        if not _remainder_is_only_a_verdict(_evidence_command_split(item)[1]):
             return "other"
         return "test" if normalized.startswith("swift test") else "build"
     if VISUAL_EVIDENCE_RE.search(normalized):

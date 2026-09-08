@@ -53,7 +53,7 @@ Performance comparison notes:
 ## Evidence
 
 - [ ] Not a testable change (docs-only, config)
-- [ ] Test evidence attached (Playwright report, test output, or equivalent)
+- [ ] Tests named below: the command and the line it printed
 - [ ] UI evidence attached (screenshot or recording from the exact commit under review)
 
 <!-- Upload evidence: uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug> -->
@@ -61,10 +61,10 @@ Performance comparison notes:
 
 Evidence for all PRs must include:
 
-- test results: pass/fail summary with command used
+- test results: the command used and its pass/fail summary line
 - for UI changes: at least one screenshot or recording proving the result
 - for API/backend changes: the named tests that ran, with the command
-- hosted links (via upload-evidence.py), not local file paths
+- anything uploaded: a hosted link (via upload-evidence.py), not a local file path
 
 Evidence links:
 

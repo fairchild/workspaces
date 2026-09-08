@@ -525,15 +525,25 @@ class ResponseCommentTests(unittest.TestCase):
         text = self.render(pull_request(body=body), review())
         marker = response.response_marker(900)
         self.assertNotIn("<!--", text.replace(marker, ""))
-        self.assertIn("&lt;", text)
+        self.assertIn("1. ` swallow the rest of this comment`", text)
 
-    def test_hostile_item_text_cannot_ping_anyone(self) -> None:
-        body = evidence_body(
-            {"index": 1, "item": "@octocat should look at this", "status": "blocked"}
-        )
-        text = self.render(pull_request(body=body), review())
-        self.assertNotIn("@octocat", text)
-        self.assertIn("&#64;octocat", text)
+    def test_hostile_item_text_cannot_act_as_markdown(self) -> None:
+        # A code span is the whole defence: escaping `<` alone left every
+        # markdown construct alive in a comment the owner is meant to trust.
+        for hostile in (
+            "@octocat should look at this",
+            "[click here](https://example.com/phish)",
+            "![](https://example.com/tracker.png)",
+            "- [ ] pretend to be a checklist item",
+            "~~~\nnot a fence either",
+        ):
+            with self.subTest(hostile=hostile):
+                body = evidence_body(
+                    {"index": 1, "item": hostile, "status": "blocked"}
+                )
+                text = self.render(pull_request(body=body), review())
+                self.assertIn(f"1. `{response._quotable(hostile)}`", text)
+                self.assertEqual(text.count(response.response_marker(900)), 1)
 
     def test_the_owner_is_the_only_mention(self) -> None:
         # Mention triage watches comment bodies for agent slugs; the reviewer
@@ -561,7 +571,7 @@ class ResponseCommentTests(unittest.TestCase):
         )
         body = evidence_body({"index": 1, "item": long_item, "status": "blocked"})
         text = self.render(pull_request(body=body), review())
-        self.assertIn("1. A case in web-next/scripts/evidence-core.test.mjs\n", text)
+        self.assertIn("1. `A case in web-next/scripts/evidence-core.test.mjs`\n", text)
         self.assertNotIn("red before the change", text)
 
     def test_marker_is_per_review_so_a_second_review_gets_its_own_turn(self) -> None:
