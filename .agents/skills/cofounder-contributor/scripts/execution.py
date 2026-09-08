@@ -540,6 +540,7 @@ def build_execution_summary_body(
     evidence_complete, evidence_blocked, evidence_pending_ci = synthesize_initial_execution_evidence(
         requested_evidence,
         visual_evidence_available=visual_evidence_available,
+        body=summary_body,
     )
     return render_execution_summary_body(
         summary_body,

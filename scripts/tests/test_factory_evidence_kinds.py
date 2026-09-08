@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import itertools
+import json
 import random
 import sys
 import time
@@ -150,10 +151,15 @@ class EvidenceKindClassificationTests(unittest.TestCase):
         for item in (
             "The owner must be present for the irreversible sign-off described in the diff",
             "Someone with taste confirms the copy reads well",
-            "All tests pass",
         ):
             with self.subTest(item=item):
                 self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+        # "All tests pass" was in this list as a third non-diff example. It is
+        # still not a diff item; it is now a `test-attested` one, which is the
+        # whole point of the widening.
+        self.assertEqual(
+            run_contributor._evidence_item_kind("All tests pass"), "test-attested"
+        )
 
     def test_diff_items_classify_by_prefix_and_phrasing(self) -> None:
         for item in (
@@ -1475,6 +1481,377 @@ class EvidenceStatusLineCostTests(unittest.TestCase):
                 split = run_contributor.split_evidence_status_line(line, [item])
                 self.assertIsNotNone(split)
                 self.assertEqual(split[1], item)
+
+
+class AttestedTestKindTests(unittest.TestCase):
+    """Tests a person runs and reports, instead of an owner escalation.
+
+    `_evidence_item_kind` recognised two runners, both Swift, so 74% of the
+    real items written in this repo since 2026-08-24 landed in `other` --
+    blocked at PR open, parked on the owner, cleared by hand afterwards.
+    Michael's bar: "if not ui change or similar, then just stating the tests
+    that ran and covered the feature, and/or anything done locally, can
+    suffice."
+    """
+
+    RUNNERS = (
+        "`pnpm test` in `web-next` passes",
+        "cd web-next && pnpm test passes",
+        "`bun test` passes",
+        "`pytest` over the changed module passes",
+        "`python3 -m pytest` (or the repo's runner) over `evidence.py`'s tests passes",
+        "`uv run --script scripts/tests/test_factory_evidence_kinds.py` and every other "
+        "`scripts/tests/*.py` pass",
+    )
+    STATEMENTS = (
+        "A test in `scripts/tests/test_upload_evidence.py` that exercises a local-worker "
+        "base URL, fails on `main`, and passes after",
+        "A case in `web-next/scripts/evidence-core.test.mjs`, red before the change, "
+        "asserting a server group that ignores SIGTERM is escalated on timeout",
+        "A test asserting the EXIT trap does not convert a failing run into exit 0",
+        "Every `scripts/tests/*.py` passes under `uv run --script`",
+        "Named tests that ran: FooTests, BarTests, all green",
+    )
+
+    def test_runners_the_hosted_lane_cannot_execute_classify_as_attested(self) -> None:
+        for item in self.RUNNERS:
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "test-attested")
+
+    def test_named_test_statements_classify_as_attested(self) -> None:
+        for item in self.STATEMENTS:
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "test-attested")
+
+    def test_swift_test_stays_on_the_hosted_lane(self) -> None:
+        self.assertEqual(
+            run_contributor._evidence_item_kind("swift test --filter FooTests"), "test"
+        )
+        self.assertTrue(
+            run_contributor._needs_macos_evidence(["swift test --filter FooTests"])
+        )
+        self.assertFalse(run_contributor._needs_macos_evidence(list(self.RUNNERS)))
+
+    def test_judgement_calls_are_still_the_owner_s(self) -> None:
+        # Each of these was `other` before and has to stay there: no test run
+        # answers any of them.
+        for item in (
+            "Someone with taste confirms the copy reads well",
+            "The PR body states the verdict, keep or remove, and the reasoning (owner-attested)",
+            "A written audit of every exit path in `scripts/verify-release-bundle.sh`",
+            "**A captured real restart, not a unit test.** `log stream` across a cold start",
+            "A statement of whether the shared state is reachable from production code",
+            "A case where the sidebar is scrolled away from the active row and the "
+            "context is still readable.",
+        ):
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+
+    def test_a_ci_check_name_is_not_a_test_path(self) -> None:
+        # `build-and-test` is a check; `scripts/tests/*.py` is where tests
+        # live. Reading the first as the second would send it down a lane that
+        # polls no check and it would never complete.
+        for item in ("CI `build-and-test` succeeds", "CI: `build-and-test` succeeds."):
+            with self.subTest(item=item):
+                self.assertNotEqual(
+                    run_contributor._evidence_item_kind(item), "test-attested"
+                )
+
+    def test_an_owner_directive_still_outranks_the_widening(self) -> None:
+        self.assertEqual(
+            run_contributor._evidence_item_kind(
+                "`pnpm test` in `web-next` passes (owner-attested)"
+            ),
+            "other",
+        )
+
+    def test_an_attested_contract_no_longer_blocks_at_open(self) -> None:
+        self.assertFalse(run_contributor._has_unautomatable_evidence(list(self.RUNNERS)))
+        self.assertFalse(
+            run_contributor._has_unautomatable_evidence(list(self.STATEMENTS))
+        )
+
+    def test_the_open_prs_that_were_blocked_on_this_are_not_any_more(self) -> None:
+        # #1578 and #1579 both carried `blocked:evidence` + `owner-action` on
+        # exactly these two items.
+        for item in (
+            "`pnpm test` in `web-next` passes",
+            "Every `scripts/tests/*.py` passes under `uv run --script`",
+        ):
+            with self.subTest(item=item):
+                _, blocked, _ = run_contributor.synthesize_initial_execution_evidence(
+                    [item]
+                )
+                self.assertEqual(blocked, [])
+
+    def test_a_named_run_in_the_body_completes_the_item(self) -> None:
+        body = (
+            "## Summary\n\nFixed it.\n\n"
+            "## Validation\n\n"
+            "- `cd web-next && pnpm test` -> 214 tests passed\n"
+        )
+        complete, blocked, pending = run_contributor.synthesize_initial_execution_evidence(
+            ["`pnpm test` in `web-next` passes"], body=body
+        )
+        self.assertEqual((blocked, pending), ([], []))
+        self.assertEqual(len(complete), 1)
+        self.assertIn("214 tests passed", complete[0])
+
+    def test_a_body_with_no_run_leaves_the_item_pending_not_blocked(self) -> None:
+        complete, blocked, pending = run_contributor.synthesize_initial_execution_evidence(
+            ["`pnpm test` in `web-next` passes"], body="## Summary\n\nFixed it.\n"
+        )
+        self.assertEqual((complete, blocked), ([], []))
+        self.assertIn("completes on the command and the line it printed", pending[0])
+
+    def test_a_command_without_a_result_is_not_a_statement(self) -> None:
+        # A command with no result is a plan. Completing on it would make the
+        # bar "say you will run tests".
+        self.assertIsNone(
+            run_contributor._attested_test_statement("Run `pnpm test` before merging.")
+        )
+        self.assertIsNone(
+            run_contributor._attested_test_statement("Everything is green.")
+        )
+
+    def test_a_statement_stops_at_the_next_heading(self) -> None:
+        body = (
+            "## Validation\n\n- ran `pnpm test`\n\n"
+            "## Performance\n\n- Before Summary: 214 ms passed\n"
+        )
+        self.assertIsNone(run_contributor._attested_test_statement(body))
+
+    def test_the_macos_lane_leaves_attested_items_alone(self) -> None:
+        item = "`pnpm test` in `web-next` passes"
+        body = (
+            "## Evidence Status\n"
+            f"- [pending-ci] {item} -- waiting on the author's run\n"
+        )
+        self.assertEqual(
+            run_contributor.reconcile_pending_ci_evidence(
+                body,
+                requested_evidence=[item],
+                build_succeeded=True,
+                tests_succeeded=True,
+                smoke_succeeded=True,
+            ),
+            body,
+        )
+
+
+class PerfEvidenceKindTests(unittest.TestCase):
+    """Numbers are evidence. The classifier had no kind for them."""
+
+    ITEMS = (
+        "Before/after measurements on the same workload",
+        "Before and after perf numbers from `scripts/perf-runner.sh`, same workload",
+        "p50 launch latency before and after, canonical scenario `debug_no_activate`",
+        "Main thread measured at or below 5% of one core; before/after/delta recorded",
+    )
+
+    def test_before_after_measurement_phrasing_classifies_as_perf(self) -> None:
+        for item in self.ITEMS:
+            with self.subTest(item=item):
+                self.assertEqual(run_contributor._evidence_item_kind(item), "perf")
+
+    def test_a_perf_contract_no_longer_blocks_at_open(self) -> None:
+        self.assertFalse(run_contributor._has_unautomatable_evidence(list(self.ITEMS)))
+
+    def test_numbers_in_the_performance_section_complete_the_item(self) -> None:
+        body = (
+            "## Summary\n\nFaster.\n\n"
+            "## Performance\n\n"
+            "- Scenario ID: debug_no_activate\n"
+            "- Before Summary: p50 1.31s\n"
+            "- After Summary: p50 1.02s\n"
+            "- Delta Summary: -0.29s\n"
+        )
+        complete, blocked, pending = run_contributor.synthesize_initial_execution_evidence(
+            [self.ITEMS[0]], body=body
+        )
+        self.assertEqual((blocked, pending), ([], []))
+        self.assertIn("p50 1.31s", complete[0])
+        self.assertIn("p50 1.02s", complete[0])
+
+    def test_one_side_of_a_comparison_measures_nothing(self) -> None:
+        body = "## Performance\n\n- Before Summary: p50 1.31s\n- After Summary:\n"
+        complete, _, pending = run_contributor.synthesize_initial_execution_evidence(
+            [self.ITEMS[0]], body=body
+        )
+        self.assertEqual(complete, [])
+        self.assertIn("Performance section", pending[0])
+
+    def test_an_unfilled_template_section_completes_nothing(self) -> None:
+        body = (
+            "## Performance\n\n"
+            "- [ ] Not a performance-sensitive change\n"
+            "- Scenario ID:\n- Before Summary:\n- After Summary:\n- Delta Summary:\n"
+        )
+        self.assertIsNone(run_contributor._perf_numbers(body))
+
+    def test_a_word_count_before_and_after_is_not_a_perf_item(self) -> None:
+        # It is a diff you can read, and routing it through the Performance
+        # section would leave it pending on a section it never wanted.
+        self.assertNotEqual(
+            run_contributor._evidence_item_kind(
+                "Word count of root `AGENTS.md` before and after, both numbers in the PR body"
+            ),
+            "perf",
+        )
+
+
+class BlockedItemVerdictTests(unittest.TestCase):
+    """Where "use judgement, rounding on the side of more evidence" lives.
+
+    Any blocked item forced `request_changes`, whatever the change touched.
+    The reviewer is the only actor in the pipeline that reads the diff, so
+    the gate now permits the judgement it can safely permit and refuses the
+    one it cannot.
+    """
+
+    def accounting(self, blocked: list[str], complete: list[str]) -> dict[str, object]:
+        return {"blocked_items": blocked, "complete_items": complete, "pending_ci_items": []}
+
+    def test_a_blocked_visual_item_still_forces_request_changes(self) -> None:
+        accounting = self.accounting(
+            ["Screenshots of the new sidebar"], ["`pnpm test` in `web-next` passes"]
+        )
+        for verdict in ("approve", "approve_with_followups"):
+            with self.subTest(verdict=verdict):
+                error = run_contributor.review_evidence_gate_error(verdict, accounting, [])
+                self.assertIsNotNone(error)
+                self.assertIn("visual", error)
+
+    def test_a_blocked_non_visual_item_with_green_tests_can_be_approved_with_followups(
+        self,
+    ) -> None:
+        accounting = self.accounting(
+            ["Someone with taste confirms the copy reads well"],
+            ["`pnpm test` in `web-next` passes"],
+        )
+        self.assertIsNone(
+            run_contributor.review_evidence_gate_error(
+                "approve_with_followups", accounting, []
+            )
+        )
+
+    def test_a_bare_approve_still_needs_a_whole_contract(self) -> None:
+        accounting = self.accounting(
+            ["Someone with taste confirms the copy reads well"],
+            ["`pnpm test` in `web-next` passes"],
+        )
+        self.assertIsNotNone(
+            run_contributor.review_evidence_gate_error("approve", accounting, [])
+        )
+
+    def test_without_a_green_named_test_the_gap_is_not_weighable(self) -> None:
+        accounting = self.accounting(
+            ["Someone with taste confirms the copy reads well"],
+            ["Diff: the README links the overview page"],
+        )
+        error = run_contributor.review_evidence_gate_error(
+            "approve_with_followups", accounting, []
+        )
+        self.assertIsNotNone(error)
+        self.assertIn("named test", error)
+
+    def test_request_changes_is_never_gated(self) -> None:
+        accounting = self.accounting(["Screenshots of the new sidebar"], [])
+        self.assertIsNone(
+            run_contributor.review_evidence_gate_error("request_changes", accounting, [])
+        )
+
+
+class OwnerWrittenEvidenceTests(unittest.TestCase):
+    """The revise lane replaced the whole section on every turn.
+
+    An owner who pasted a test summary lost it to the next revision. Every
+    lane writes the hidden metadata beside the markdown in the same pass, so
+    a line that has drifted from its metadata is a person's.
+    """
+
+    ITEM = "`pnpm test` in `web-next` passes"
+
+    def body(self, detail: str, machine_detail: str) -> str:
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": self.ITEM,
+                        "status": "complete",
+                        "detail": machine_detail,
+                        "kind": "test-attested",
+                    }
+                ]
+            },
+            indent=2,
+        )
+        return (
+            "## Summary\n\nFixed it.\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            "## Evidence Status\n"
+            f"- [complete] {self.ITEM} -- {detail}\n"
+        )
+
+    def test_a_hand_written_detail_survives_the_next_turn(self) -> None:
+        owner_text = "ran it locally: 214 tests passed on this head"
+        body = self.body(owner_text, "the factory's own words")
+        rendered, errors = run_contributor.render_execution_summary_body(
+            body,
+            requested_evidence=[self.ITEM],
+            evidence_complete=None,
+            evidence_blocked=None,
+            evidence_pending_ci=["1 -- waiting on the author's run"],
+        )
+        self.assertEqual(errors, [])
+        self.assertIn(owner_text, rendered)
+        self.assertNotIn("waiting on the author's run", rendered)
+
+    def test_a_machine_written_detail_is_replaced_as_before(self) -> None:
+        machine_text = "the factory's own words"
+        body = self.body(machine_text, machine_text)
+        rendered, errors = run_contributor.render_execution_summary_body(
+            body,
+            requested_evidence=[self.ITEM],
+            evidence_complete=None,
+            evidence_blocked=None,
+            evidence_pending_ci=["1 -- waiting on the author's run"],
+        )
+        self.assertEqual(errors, [])
+        self.assertIn("waiting on the author's run", rendered)
+        self.assertNotIn(machine_text, rendered)
+
+    def test_a_section_a_person_wrote_from_scratch_survives(self) -> None:
+        body = (
+            "## Summary\n\nFixed it.\n\n"
+            "## Evidence Status\n"
+            f"- [complete] {self.ITEM} -- I ran it: 214 tests passed\n"
+        )
+        rendered, errors = run_contributor.render_execution_summary_body(
+            body,
+            requested_evidence=[self.ITEM],
+            evidence_complete=None,
+            evidence_blocked=None,
+            evidence_pending_ci=["1 -- waiting on the author's run"],
+        )
+        self.assertEqual(errors, [])
+        self.assertIn("I ran it: 214 tests passed", rendered)
+
+    def test_the_preserved_line_becomes_the_record(self) -> None:
+        # Preserved once, then it is the machine state too -- so the next turn
+        # sees no drift and nothing is preserved twice over.
+        owner_text = "ran it locally: 214 tests passed on this head"
+        rendered, _ = run_contributor.render_execution_summary_body(
+            self.body(owner_text, "the factory's own words"),
+            requested_evidence=[self.ITEM],
+            evidence_complete=None,
+            evidence_blocked=None,
+            evidence_pending_ci=["1 -- waiting on the author's run"],
+        )
+        self.assertEqual(
+            run_contributor._owner_written_entries(rendered, [self.ITEM]), {}
+        )
 
 
 if __name__ == "__main__":

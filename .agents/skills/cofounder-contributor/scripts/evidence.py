@@ -143,10 +143,97 @@ DIFF_EVIDENCE_RE = re.compile(
     r"|the (?:pr )?diff (?:shows|proves|demonstrates|contains|includes)"
     r"|\b(?:shows?|contains?|includes?|appears?)\b[^\n]{0,60}?\bin the (?:pr )?diff\b"
 )
+# Test runners the hosted lane cannot execute. `swift test` is absent on
+# purpose: the lane runs that one, so it stays kind `test` and nothing about
+# it changes. Everything here is a runner a person runs, which is why the
+# kind it produces completes on what the person wrote down rather than on a
+# job the factory could have started.
+ATTESTED_TEST_COMMAND_RE = re.compile(
+    r"(?i)^(?:cd\s+[^\s&;|]+\s*&&\s*)?"
+    r"(?:"
+    r"(?:pnpm|npm|yarn|bun)(?:\s+(?:--dir|--filter|-C|-w)\s+\S+)*\s+(?:run\s+)?test\b"
+    r"|pytest\b"
+    r"|python3?\s+-m\s+(?:pytest|unittest)\b"
+    r"|uv\s+run\b[^`\n]{0,80}?test"
+    r")"
+)
+# "A test in `<path>` asserting X" and its neighbours. The item has to *open*
+# with a test noun, optionally behind an article and the adjectives people
+# actually write. Anchoring there is what keeps "A written audit of every exit
+# path", "A captured real restart, not a unit test" and "A statement of
+# whether the shared state is reachable" where they belong: those name a
+# person's judgement, and no test run answers them.
+ATTESTED_TEST_STATEMENT_RE = re.compile(
+    r"(?i)^\**(?:a|an|one|the|each|every|all)?\s*"
+    r"(?:new|added|failing|red|regression|parser|unit|integration|first|"
+    r"targeted|additional|full|whole|entire|existing|named)?\s*"
+    r"(?:test|tests|case|cases|spec|specs|suite|suites)\b"
+    # "Case" is the word people also reach for when they mean a situation.
+    # "A case where the sidebar is scrolled away and the context is still
+    # readable" wants a picture, and no test run answers it -- so the noun
+    # has to be doing test work somewhere in the item before it counts.
+    r"[^\n]{0,120}?"
+    r"(?:\bassert\w*|\bcover\w*|\bexercis\w*|\bfails? on\b|\bred before\b"
+    r"|\bgreen\b|\bpass\w*|\bproves?\b|`[^`]+`)"
+)
+# The other half of the same shape: the item names a test file, glob or suite
+# in backticks and says it passes. "Every `scripts/tests/*.py` passes under
+# `uv run --script`" is the most-written evidence item in this repo and it
+# classified `other`.
+# A path, not a name. `build-and-test` is a CI check; `scripts/tests/*.py` is
+# a place tests live. Requiring a separator or an extension is what tells them
+# apart, and getting it wrong would send a check name down the attested lane
+# where no check is ever polled.
+TEST_PATH_TOKEN = r"(?:\btests?\b|[_./-]test|\btest[_-])"
+TEST_PATH_SPAN_RE = re.compile(
+    rf"`[^`\n]*/[^`\n]*{TEST_PATH_TOKEN}[^`\n]*`"
+    rf"|`[^`\n]*{TEST_PATH_TOKEN}[^`\n]*\.[a-z]{{1,4}}`"
+)
+EVIDENCE_PASS_WORD_RE = re.compile(
+    r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|clean)\b"
+)
+# A `perf` item asks for a measurement, and the measurement is the artifact.
+# The planner is told to request these (`peter-planner.md`), the PR template
+# enforces a Performance section, and every one of them classified `other` --
+# unautomatable, blocked, parked on the owner.
+PERF_EVIDENCE_RE = re.compile(
+    r"(?i)\bbefore\s*(?:/|and|,|\s+to\s+)\s*after\b[^\n]{0,48}?"
+    # A metric word, not "numbers": "word count before and after, both numbers
+    # in the body" is a diff you can read, and routing it through the
+    # Performance section would leave it pending on a section it never wanted.
+    r"\b(?:measurement|metric|timing|latency|duration|delta|benchmark|perf"
+    r"|baseline|throughput|cpu|memory|footprint|allocation|fps"
+    r"|p50|p95|p99|ms|seconds?)"
+    r"|\b(?:p50|p95|p99)\b[^\n]{0,60}?\bbefore\b[^\n]{0,24}?\bafter\b"
+    r"|\bbefore/after/delta\b"
+    r"|\bperf(?:ormance)?\s+(?:numbers|measurements|deltas?|baselines?|comparison)\b"
+)
+# A statement in the PR body that names a test runner. Unanchored: the body is
+# prose about what was run, not a contract item.
+TEST_RUNNER_MENTION_RE = re.compile(
+    r"(?i)\b(?:swift\s+test|(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?test|pytest"
+    r"|python3?\s+-m\s+(?:pytest|unittest)|uv\s+run[^`\n]{0,80}?test|go\s+test"
+    r"|cargo\s+test|xcodebuild\s+test)\b"
+)
+# And what that runner printed. Both halves have to be present: a command with
+# no result is a plan, and a result with no command is a claim nobody else can
+# re-run. This is Michael's fallback bar -- "just stating the tests that ran
+# and covered the feature" -- written strictly enough to check.
+TEST_RESULT_RE = re.compile(
+    r"(?i)\bran\s+\d+\s+tests?\b"
+    r"|\b\d+\s+(?:tests?|cases?|files?|examples?|assertions?|specs?|suites?)\s+"
+    r"(?:pass(?:ed|ing|es)?|ok|green|succeeded)\b"
+    r"|\b\d+\s+pass(?:ed|ing)\b"
+    r"|\btest run with \d+ tests? passed\b"
+    r"|\ball\s+(?:\d+\s+)?tests?\s+(?:pass(?:ed|ing|es)?|green)\b"
+    r"|\b(?:suite|tests?)\s+(?:is\s+|are\s+)?green\b"
+    r"|\bexit(?:ed|s)?\s+0\b"
+)
 # Kinds the hosted `macos-26` evidence lane can gather; `ci` and `diff`
-# complete through the verifier workflow and review lane instead (#1120).
+# complete through the verifier workflow and review lane instead (#1120), and
+# `test-attested` and `perf` complete on what the PR body says.
 MACOS_EVIDENCE_KINDS = frozenset({"test", "build", "screenshot"})
-EVENT_COMPLETED_KINDS = frozenset({"ci", "diff"})
+EVENT_COMPLETED_KINDS = frozenset({"ci", "diff", "test-attested", "perf"})
 SAFE_CANDIDATE_ENV_KEYS = {
     "CI",
     "COLORTERM",
@@ -993,6 +1080,51 @@ def parse_structured_evidence_updates(
     return parsed, errors
 
 
+def _owner_written_entries(
+    body: str,
+    requested_evidence: list[str],
+) -> dict[int, dict[str, object]]:
+    """Entries whose status line no longer says what the machine wrote there.
+
+    Every lane that writes `## Evidence Status` writes the hidden metadata
+    beside it in the same pass, so the two agree until a person edits the
+    markdown. A line that has drifted from its metadata is a person's, and the
+    revise lane replaces the whole section on every turn -- so a test summary
+    an owner pasted survived exactly until the next revision. Drift is the
+    only signal here that does not depend on recognising the machine's own
+    phrasings, which change.
+    """
+    if not _explicit_evidence_contract(requested_evidence):
+        return {}
+    rendered = extract_evidence_status_entries(body, requested_evidence)
+    written = rendered.get("entries")
+    if not isinstance(written, dict) or rendered.get("invalid_lines"):
+        return {}
+    metadata = _structured_evidence_entries(body, requested_evidence) or {}
+    machine = metadata.get("entries")
+    machine = machine if isinstance(machine, dict) else {}
+    positions = {
+        _normalize_evidence_key(item): position
+        for position, item in enumerate(requested_evidence, start=1)
+    }
+    preserved: dict[int, dict[str, object]] = {}
+    for item, entry in written.items():
+        position = positions.get(_normalize_evidence_key(item))
+        if position is None:
+            continue
+        requested = requested_evidence[position - 1]
+        recorded = machine.get(requested)
+        if isinstance(recorded, dict) and recorded.get("detail") == entry.get("detail"):
+            continue
+        preserved[position] = {
+            "index": position,
+            "item": requested,
+            "status": entry["status"],
+            "detail": entry["detail"],
+        }
+    return preserved
+
+
 def render_execution_summary_body(
     summary_body: str,
     *,
@@ -1035,6 +1167,7 @@ def render_execution_summary_body(
         int(entry["index"]): entry
         for entry in complete_entries + blocked_entries + pending_ci_entries
     }
+    evidence_map.update(_owner_written_entries(summary_body, requested_evidence))
     evidence_lines = [
         f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
         for index, entry in sorted(evidence_map.items())
@@ -1062,7 +1195,13 @@ def render_execution_summary_body(
             "entries": structured_entries,
         },
     )
-    blocked_like_entries = blocked_entries + pending_ci_entries
+    # Read off the map, not off the synthesized lists: an entry a person
+    # wrote is the one that decides whether this PR is still blocked.
+    blocked_like_entries = [
+        entry
+        for _, entry in sorted(evidence_map.items())
+        if str(entry.get("status", "")) in {"blocked", "pending-ci"}
+    ]
     if blocked_like_entries and "blocked on evidence" not in rendered.casefold():
         blocked_note = "; ".join(str(entry["detail"]) for entry in blocked_like_entries)
         validation = markdown_section(rendered, "Validation")
@@ -1074,6 +1213,14 @@ def render_execution_summary_body(
     return rendered, []
 
 
+def _named_tests_are_green(accounting: dict[str, object]) -> bool:
+    """Whether something in the contract was actually proved by a test."""
+    return any(
+        _evidence_item_kind(str(item)) in {"test", "test-attested", "ci"}
+        for item in accounting.get("complete_items", [])
+    )
+
+
 def review_evidence_gate_error(verdict: str, accounting: dict[str, object], errors: list[str]) -> str | None:
     if verdict == "request_changes":
         return None
@@ -1081,11 +1228,32 @@ def review_evidence_gate_error(verdict: str, accounting: dict[str, object], erro
         return "; ".join(errors)
     blocked_items = accounting["blocked_items"]
     if blocked_items:
-        preview = "; ".join(str(item) for item in blocked_items[:3])
-        return (
-            "requested evidence is still blocked and review must stay in request_changes; "
-            f"blocked: {preview}"
+        # A blocked item on something a person can see is not approvable: no
+        # amount of reading replaces looking at it. A blocked item on
+        # something nobody sees, on a PR whose named tests are green, is a gap
+        # a reviewer can weigh -- and `approve_with_followups` is the verdict
+        # that says "approved, and here is what is still unproven". A bare
+        # `approve` still means the contract is whole.
+        visual = [
+            item for item in blocked_items if _evidence_item_kind(str(item)) == "screenshot"
+        ]
+        weighable = (
+            verdict == "approve_with_followups"
+            and not visual
+            and _named_tests_are_green(accounting)
         )
+        if not weighable:
+            preview = "; ".join(str(item) for item in blocked_items[:3])
+            if visual:
+                return (
+                    "requested visual evidence is still blocked and review must stay in "
+                    f"request_changes; blocked: {preview}"
+                )
+            return (
+                "requested evidence is still blocked; approve_with_followups needs at least "
+                "one named test complete on this head, otherwise review must stay in "
+                f"request_changes; blocked: {preview}"
+            )
     # Pending `diff` items do not block approve: the approving review IS the
     # verification act, and the review lane writes the completion (bound to
     # the review URL and head SHA) immediately after the approval lands.
@@ -1131,6 +1299,26 @@ def _is_diff_evidence(item: str) -> bool:
     return DIFF_EVIDENCE_RE.search(_normalize_evidence_item(item)) is not None
 
 
+def _is_attested_test(item: str) -> bool:
+    """Whether the item names tests a person runs and reports.
+
+    Three shapes, all of them written in this repo's issues: a command for a
+    runner the hosted lane has no toolchain for, an item opening with a test
+    noun, and an item naming a test file or glob and saying it passes.
+    """
+    # The raw item, not the normalized one: `_normalize_evidence_item` strips
+    # backticks off the ends, which unbalances a code span sitting at either
+    # end -- and the span is exactly what the path rule reads.
+    text = item.strip()
+    if ATTESTED_TEST_COMMAND_RE.match(text.lstrip("`")):
+        return True
+    if ATTESTED_TEST_STATEMENT_RE.match(text):
+        return True
+    return bool(
+        TEST_PATH_SPAN_RE.search(text) and EVIDENCE_PASS_WORD_RE.search(text)
+    )
+
+
 def _evidence_item_kind(item: str) -> str:
     normalized = _normalize_evidence_item(item).casefold()
     if normalized.startswith("swift test"):
@@ -1145,6 +1333,10 @@ def _evidence_item_kind(item: str) -> str:
         return "ci"
     if _is_diff_evidence(item):
         return "diff"
+    if PERF_EVIDENCE_RE.search(normalized):
+        return "perf"
+    if _is_attested_test(item):
+        return "test-attested"
     return "other"
 
 
@@ -1168,10 +1360,84 @@ def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     ]
 
 
+# How far past a runner mention the result line may sit. A command and its
+# summary land within a couple of lines of each other in every shape people
+# write -- a fenced block, a bullet, a sentence.
+ATTESTED_TEST_WINDOW_LINES = 4
+ATTESTED_TEST_QUOTE_LIMIT = 180
+# The Performance section's own fields, as `.github/pull_request_template.md`
+# writes them and `pr-perf-evidence.yml` enforces them.
+PERF_FIELD_RE = re.compile(
+    r"(?i)^\s*[-*]?\s*(?P<label>before|after|delta)\b[^:\n]{0,24}:\s*(?P<value>.+)$"
+)
+
+
+def _attested_test_statement(body: str) -> str | None:
+    """A statement in the PR body naming a test run and what it printed.
+
+    Both halves are required. A command with no result is a plan; a result
+    with no command is a claim nobody else can re-run. Together they are
+    Michael's fallback bar -- "just stating the tests that ran and covered the
+    feature" -- and they are checkable, which is why this can complete an item
+    the factory has no toolchain to run.
+    """
+    if not body.strip():
+        return None
+    lines = MARKDOWN_LINE_ENDING_RE.split(body)
+    for index, line in enumerate(lines):
+        if not TEST_RUNNER_MENTION_RE.search(line):
+            continue
+        # A heading ends the statement. Reading past one would quote the
+        # Performance section back as though it were a test result.
+        window = []
+        for follower in lines[index : index + ATTESTED_TEST_WINDOW_LINES]:
+            if window and follower.lstrip().startswith("#"):
+                break
+            window.append(follower)
+        if not TEST_RESULT_RE.search(" ".join(window)):
+            continue
+        quoted = [window[0]]
+        if not TEST_RESULT_RE.search(window[0]):
+            quoted += [
+                follower for follower in window[1:] if TEST_RESULT_RE.search(follower)
+            ][:1]
+        flattened = " ".join(" ".join(quoted).split())
+        if len(flattened) > ATTESTED_TEST_QUOTE_LIMIT:
+            flattened = flattened[: ATTESTED_TEST_QUOTE_LIMIT - 1].rstrip() + "\u2026"
+        return flattened
+    return None
+
+
+def _perf_numbers(body: str) -> str | None:
+    """The before and after the PR body's Performance section carries.
+
+    Both, or nothing: one side of a comparison measures nothing. Delta rides
+    along when it is there, since it is the line a reader actually reads.
+    """
+    section = markdown_section(body, "Performance")
+    if not section:
+        return None
+    found: dict[str, str] = {}
+    for line in MARKDOWN_LINE_ENDING_RE.split(section):
+        match = PERF_FIELD_RE.match(line)
+        if match is None:
+            continue
+        value = match.group("value").strip()
+        if not any(character.isdigit() for character in value):
+            continue
+        found.setdefault(match.group("label").casefold(), value)
+    if "before" not in found or "after" not in found:
+        return None
+    return "; ".join(
+        f"{label} {found[label]}" for label in ("before", "after", "delta") if label in found
+    )
+
+
 def synthesize_initial_execution_evidence(
     requested_evidence: list[str],
     *,
     visual_evidence_available: bool = True,
+    body: str = "",
 ) -> tuple[list[str], list[str], list[str]]:
     evidence_complete: list[str] = []
     evidence_blocked: list[str] = []
@@ -1205,6 +1471,26 @@ def synthesize_initial_execution_evidence(
             evidence_pending_ci.append(
                 f"{index} -- verifiable by reading the PR diff; completed by the counterpart review of the current head"
             )
+        elif kind == "test-attested":
+            attested = _attested_test_statement(body)
+            if attested:
+                evidence_complete.append(f"{index} -- named tests in the PR body: {attested}")
+            else:
+                evidence_pending_ci.append(
+                    f"{index} -- the hosted lane has no toolchain for this runner; completes on the "
+                    "command and the line it printed, stated in this PR body"
+                )
+        elif kind == "perf":
+            numbers = _perf_numbers(body)
+            if numbers:
+                evidence_complete.append(
+                    f"{index} -- measured in the PR body's Performance section: {numbers}"
+                )
+            else:
+                evidence_pending_ci.append(
+                    f"{index} -- completes on before and after numbers in this PR body's "
+                    "Performance section"
+                )
         else:
             evidence_blocked.append(
                 f"{index} -- automation cannot reconcile this evidence item automatically; owner follow-up required"

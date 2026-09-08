@@ -238,6 +238,9 @@ finishing the PR and the PR waiting on you.
 | ``` The `check-links` check passes on the PR head ``` | `ci` | same |
 | `Diff: the README links the overview page` | `diff` | the counterpart review, bound to the review URL and head SHA |
 | `The new column appears in the PR diff` | `diff` | same |
+| ``` `pnpm test` in `web-next` passes ``` | `test-attested` | you, by stating the command and its result line in the PR body |
+| `A test in ``scripts/tests/test_foo.py`` asserting X` | `test-attested` | same |
+| `Before/after latency on the same workload` | `perf` | the numbers in the PR body's Performance section |
 | `Someone with taste confirms the copy reads well` | `other` | **you**, by hand |
 | `... (owner-attested)` | `other` | **you**, by hand — the directive is honoured over any other shape |
 
@@ -252,6 +255,14 @@ Two rules worth knowing:
   phrasing — keeps the item yours** even when the rest of it looks mechanical.
   If you want the factory to close it, drop the parenthetical and write the
   diff or CI form instead.
+
+`test-attested` and `perf` are the kinds the factory cannot run for you and
+does not park on you either. A `test-attested` item completes the moment the PR
+body carries a test command and the line it printed — "`pnpm test` — 214 tests
+passed" is enough, and a command with no result is not. A `perf` item completes
+on a filled-in `Before Summary` and `After Summary` in the body's Performance
+section. Until then both sit `pending-ci`, which is visible and fails the
+readiness gate, rather than `blocked`, which puts the PR in front of the owner.
 
 The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what
