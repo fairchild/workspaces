@@ -278,7 +278,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/wait` | **Operator scope, typed wait.** Evaluates a condition (`surface_attached`, `workspace_selected`, `surface_text_matches`, `prompt_ready`) server-side until satisfied, a bounded timeout elapses, or current state proves it unsatisfiable. Body is `{"for":"…","predicate":{…},"timeoutMS":n}`; the outcome is the typed enum `satisfied` / `timed_out` / `not_applicable`, never a bare boolean. Topology/selection conditions require `workspace.read`; content conditions require `surface.read`. See [Wait](#wait). |
 | `GET /v1/focus` | **Operator scope.** Truthful report of the app's live focus state: `{appIsActive, keyWindowID, firstResponderSurfaceID, focusPossible}`. `focusPossible: false` marks a no-activate (or CI) launch where the app cannot take focus — absent focus is then "unavailable", not a focus failure. Requires `window.read`. See [Focus](#focus). |
 | `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. `{"teardownTerminals":true}` kills the workspace's tmux sessions and retires its terminal tiles first, so a live terminal cannot fail the call. Returns `completed` with the archived workspace id, post-gesture selection state, and (after teardown) a teardown report, or `confirmation_required` if the UI path ever reaches a modal. A live terminal without teardown fails typed: `terminal_active` (`retryable: true`) on the exit-timeout, `close_blocked_by_confirmation` (`retryable: false`) when the close-confirmation blocks. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
-| `POST /v1/workspace/note` | **Operator scope, mutation.** Sets or clears the **Workspace Note** on the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same setter the row menu's "Add Note…" / "Edit Note…" / "Clear Note" items write through. Body is `{"workspaceID":"…","note":"…"}`; a `note` that is absent or `null` clears the line, so there is no second verb for "stop showing this". Returns the *stored* note — trimmed, interior whitespace collapsed, truncated at 120 characters — with `changed` reporting whether that differed from what was already there. A `note` present but neither string nor null fails `invalid_request`, as does a `workspaceID` that is missing, blank, non-UUID, or untracked; a body that is not JSON fails `malformed_json`; a live-window-less app fails `unsupported`; any method other than POST fails `method_not_allowed`. Requires `workspace.note`; tile handles fail `capability_denied`. See [Workspace note](#workspace-note). |
+| `POST /v1/workspace/note` | **Operator scope, mutation.** Sets or clears the **Workspace Note** on the workspace named by the body's `workspaceID` (a `workspace.read` id), writing through the window-bound gesture layer. It applies the same normalization as the row menu's "Add Note…" / "Edit Note…" / "Clear Note" items and lands in the same stored field, but the two are separate setters, not one shared path. Body is `{"workspaceID":"…","note":"…"}`; a `note` that is absent or `null` clears the line, so there is no second verb for "stop showing this". Returns the *stored* note — trimmed, interior whitespace collapsed, truncated at 120 characters — with `changed` reporting whether that differed from what was already there. A `note` present but neither string nor null fails `invalid_request`, as does a `workspaceID` that is missing, blank, non-UUID, or untracked, and so does an empty body (the missing-`workspaceID` check runs before any parse); a non-empty body that is not valid JSON fails `malformed_json`; a live-window-less app fails `unsupported`; any method other than POST fails `method_not_allowed`. Requires `workspace.note`; tile handles fail `capability_denied`. See [Workspace note](#workspace-note). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -757,7 +757,7 @@ that pasted a paragraph learns what the row will show:
   "changed": true, "system": { "capabilities": [ … ] } }
 ```
 
-- **What the setter normalizes.** Every writer goes through
+- **What the setter normalizes.** Both writers call
   `WorkspaceNote.normalized`. It splits the text on whitespace and newlines,
   drops the empty pieces, and rejoins with single spaces — so leading and
   trailing whitespace is gone and every interior run of spaces, tabs, or
@@ -773,16 +773,23 @@ that pasted a paragraph learns what the row will show:
   or clearing an already-clear note all complete with `changed: false`. It is
   not a report of whether the app wrote: the assignment and the SwiftData save
   run either way.
-- **Same path as the UI.** The verb enters the window-bound note setter through
-  the gesture layer, the same `WorkspaceNote.normalized` write behind the
-  sidebar row menu's "Add Note…" / "Edit Note…" / "Clear Note" items. A note set
-  over the socket and one typed into the sidebar are the same write, so they
-  render identically.
-- **Failure mapping.** A `workspaceID` that is missing, non-string, blank
-  (empty or whitespace-only), non-UUID, or untracked fails `invalid_request`; a
-  body that is not JSON fails `malformed_json`; a live-window-less app fails
-  `unsupported` (never a data-layer fallback); any method other than POST on
-  this path fails `method_not_allowed`.
+- **Two writers, one normalization.** The verb and the sidebar are separate
+  setters, not a shared code path: the verb writes through the window-bound
+  gesture layer, while the row menu's "Add Note…" / "Edit Note…" / "Clear Note"
+  items write through the sidebar's own. Each independently calls
+  `WorkspaceNote.normalized` and assigns the same stored field, so a note set
+  over the socket and one typed into the sidebar render identically today.
+  Nothing enforces that: the two implementations can diverge without a type or
+  a test failing, so read the equivalence as a fact about the code as it stands
+  rather than a guarantee the API makes.
+- **Failure mapping.** An empty body fails `invalid_request`, not
+  `malformed_json` — the missing-`workspaceID` check runs before any JSON parse
+  — and so does a `workspaceID` that is present but non-string, blank (empty or
+  whitespace-only), non-UUID, or untracked, and a body that parses as JSON but
+  is not an object. A non-empty body that is not valid JSON fails
+  `malformed_json`. A live-window-less app fails `unsupported` (never a
+  data-layer fallback); any method other than POST on this path fails
+  `method_not_allowed`.
 - **Operator mutation.** Requires `workspace.note`, distinct from the read-only
   `workspace.read` — a handle granted the inventory read cannot write the line
   the sidebar shows. A tile handle lacks it and fails `capability_denied`. The
@@ -1044,9 +1051,10 @@ refused rather than resolved, so a caller never has to guess which one the app
 honored. It prints the workspace name and the note the app *stored*, which is
 the normalized form rather than the text sent (`<name>: <note>`, or `<name>:
 note cleared`); `--json` emits the raw result envelope, including `changed`.
-This is the verb an agent calls at a checkpoint, and it enters the app's own
-note setter, so a note set from a script and one typed into the sidebar are the
-same write.
+This is the verb an agent calls at a checkpoint. It applies the same
+normalization as the sidebar's own note setter and writes the same stored
+field, so a note set from a script reads like a typed one — though the two
+setters are separate implementations, not one shared path.
 
 `automation wait` is the server-side typed wait: its exit code follows the
 outcome so `set -e` scripts branch without parsing JSON — 0 `satisfied`,
