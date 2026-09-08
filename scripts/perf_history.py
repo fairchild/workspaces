@@ -131,11 +131,21 @@ def append_history_row(history_csv_path: Path, row: dict[str, Any]) -> list[dict
             writer.writeheader()
             for existing in existing_rows:
                 writer.writerow({field: existing.get(field, "") for field in HISTORY_FIELDNAMES})
+            # A temp file opens at 0600; the history it replaces is world-readable. The
+            # mode is set before the sync so it sits inside the same durability barrier
+            # as the bytes.
+            os.chmod(tmp.name, mode)
             f.flush()
             os.fsync(f.fileno())
-        # A temp file opens at 0600; the history it replaces is world-readable.
-        os.chmod(tmp.name, mode)
         os.replace(tmp.name, history_csv_path)
+        # Syncing the file makes its contents durable; the rename that publishes them
+        # lives in the directory, so the directory is synced too. Without this a crash
+        # just after the replace can come back to the old name.
+        directory = os.open(history_csv_path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
     except BaseException:
         Path(tmp.name).unlink(missing_ok=True)
         raise
