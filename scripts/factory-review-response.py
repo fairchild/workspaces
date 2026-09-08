@@ -459,7 +459,11 @@ def _entry_index(entry: dict[str, Any]) -> int | None:
     """
     try:
         value = int(entry.get("index"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # `1e309` decodes to infinity, and `int()` of that raises
+        # OverflowError rather than ValueError -- which would abort the
+        # response lane before it posts anything, turning a bad index into
+        # silence instead of a comment.
         return None
     return value if value > 0 else None
 

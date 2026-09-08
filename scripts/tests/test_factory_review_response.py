@@ -560,6 +560,19 @@ class ResponseCommentTests(unittest.TestCase):
                 self.assertNotIn("<!--", text.replace(marker, ""))
                 self.assertNotIn("swallow everything below", text)
 
+    def test_an_index_that_is_not_a_number_does_not_abort_the_lane(self) -> None:
+        # `1e309` decodes to infinity and `int()` of that raises
+        # OverflowError, not ValueError, so a bad index became silence
+        # instead of a comment.
+        for index in (1e309, float("nan"), -1e309, None, [1]):
+            for status, kind in (("blocked", "other"), ("pending-ci", "ci")):
+                with self.subTest(index=index, status=status):
+                    body = evidence_body(
+                        {"index": index, "item": "an item", "status": status, "kind": kind}
+                    )
+                    text = self.render(pull_request(body=body), review())
+                    self.assertIn(response.response_marker(900), text)
+
     def test_the_owner_is_the_only_mention(self) -> None:
         # Mention triage watches comment bodies for agent slugs; the reviewer
         # gains nothing from the ping and the trigger surface costs something.
