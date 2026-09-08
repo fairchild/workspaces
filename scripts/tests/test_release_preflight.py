@@ -37,7 +37,10 @@ def preflight_relevant_script_paths() -> set[str]:
     body = SCRIPT_PATH.read_text()
     block = body[body.index("is_ci_relevant_path()") :]
     block = block[: block.index("return 1")]
-    return set(re.findall(r"(scripts/[A-Za-z0-9_.-]+)", block))
+    # `/` is in the class: without it `scripts/lib/release-signing.sh` reads
+    # as `scripts/lib`, which matches nothing in ci.yml and makes the two
+    # directions of this parity check contradict each other.
+    return set(re.findall(r"(scripts/[A-Za-z0-9_./-]+)", block))
 
 
 class CiRelevantPathParityTests(unittest.TestCase):

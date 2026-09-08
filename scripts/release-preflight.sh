@@ -152,6 +152,7 @@ is_ci_relevant_path() {
             scripts/check-subprocess-timeouts.py | \
             scripts/generate-sparkle-appcast.sh | \
             scripts/install-local.sh | \
+            scripts/lib/release-signing.sh | \
             scripts/notarize.sh | \
             scripts/prepare-prerelease.sh | \
             scripts/prepare-release.sh | \
@@ -163,6 +164,7 @@ is_ci_relevant_path() {
             scripts/release-version.sh | \
             scripts/setup-release-secrets.sh | \
             scripts/verify-app-keychain-signing.sh | \
+            scripts/verify-ghostty-pin.sh | \
             scripts/verify-installed-perf.sh | \
             scripts/verify-p12.sh | \
             scripts/verify-release-bundle.sh)
