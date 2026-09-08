@@ -2522,6 +2522,26 @@ class DocumentedTestFormTests(unittest.TestCase):
             with self.subTest(item=item):
                 self.assertEqual(run_contributor._evidence_item_kind(item), "other")
 
+    def test_a_before_and_after_run_is_two_runs_not_a_verdict(self) -> None:
+        # The lane runs the head only, so this completed with a baseline it
+        # never took.
+        self.assertEqual(
+            run_contributor._evidence_item_kind("`swift test` passes before and after"),
+            "other",
+        )
+
+    def test_a_number_too_long_to_build_does_not_take_the_lane_down(self) -> None:
+        # Past 4300 digits `json.loads` refuses to build the integer and
+        # raises a plain ValueError, not JSONDecodeError. The body it reads is
+        # PR-editable, and the unhandled error aborted the run.
+        body = (
+            "## Summary\n\n<!-- evidence-status:v1\n"
+            '{"entries": [{"index": ' + "1" * 4301 + "}]}\n-->\n"
+        )
+        self.assertIsNone(run_contributor._extract_evidence_metadata(body))
+        accounting = run_contributor.evaluate_evidence_accounting(body, ["an item"])
+        self.assertEqual(accounting["source"], "structured-invalid")
+
     def test_the_verdicts_people_actually_write_are_accepted(self) -> None:
         for item, kind in (
             ("`swift test`", "test"),

@@ -164,7 +164,10 @@ COMMAND_REMAINDER_RE = re.compile(
     r"|exits? 0|runs? clean)?"
     r"(?:\s+(?:locally|cleanly|first|in ci|on this head|on the pr head"
     r"|on the exact commit(?: under review)?|from the exact commit(?: under review)?"
-    r"|after the change|before and after))*"
+    # "before and after" is not a verdict: it asks for a baseline run and a
+    # second one, and the lane runs the head only, so the item completed with
+    # half of what it asked for.
+    r"|after the change))*"
     r"[\s.!]*$"
 )
 # Test runners the hosted lane cannot execute. `swift test` is absent on
@@ -661,7 +664,11 @@ def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
         return None
     try:
         payload = json.loads(match.group("payload"))
-    except json.JSONDecodeError:
+    except ValueError:
+        # ValueError, not JSONDecodeError: past 4300 digits `json.loads`
+        # refuses to build the integer at all and raises the plain class, and
+        # the body this reads is PR-editable. Caught as JSONDecodeError only,
+        # it escaped and took the lane with it.
         return None
     if not isinstance(payload, dict):
         return None
@@ -710,11 +717,14 @@ def _structured_evidence_entries(
         return None
     try:
         payload = json.loads(match.group("payload"))
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:
+        # See `_extract_evidence_metadata`: a number too long to build raises
+        # the plain class, and `msg` is a `JSONDecodeError` attribute.
+        detail = getattr(exc, "msg", None) or str(exc)
         return {
             "section_present": has_markdown_section(body, "Evidence Status"),
             "entries": {},
-            "invalid_lines": [f"metadata payload is not valid JSON: {exc.msg}"],
+            "invalid_lines": [f"metadata payload is not valid JSON: {detail}"],
             "duplicate_items": [],
             "source": "structured-invalid",
         }

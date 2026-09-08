@@ -129,6 +129,13 @@ PENDING_COMPLETERS = {
     "screenshot": "when the macOS evidence lane finishes on this head",
 }
 PENDING_COMPLETER_FALLBACK = "when the lane that owns {it} finishes on this head"
+# Kinds no lane completes. They were added after this table was written, so
+# they fell to the fallback and told the owner to wait for something that does
+# not exist -- when what they actually need to do is write a line in the body.
+AUTHOR_PENDING_ASKS = {
+    "test-attested": "state the command you ran and the line it printed",
+    "perf": "fill this PR body's Performance section with Before and After measurements",
+}
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
 # States that neither block nor replace a reviewer's standing verdict.
 NON_SUPERSEDING_REVIEW_STATES = frozenset({"COMMENTED", "PENDING", "DISMISSED"})
@@ -486,15 +493,44 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
                 detail=_attestation_block(blocked),
             )
         )
-    if pending:
+    waiting_on_author = [
+        entry
+        for entry in pending
+        if str(entry.get("kind") or "").strip() in AUTHOR_PENDING_ASKS
+    ]
+    self_clearing = [entry for entry in pending if entry not in waiting_on_author]
+    if waiting_on_author:
+        blockers.append(
+            Blocker(
+                key="evidence-pending-author",
+                owner_required=True,
+                detail=_author_pending_block(waiting_on_author),
+            )
+        )
+    if self_clearing:
         blockers.append(
             Blocker(
                 key="evidence-pending-ci",
                 owner_required=False,
-                detail=_pending_block(pending),
+                detail=_pending_block(self_clearing),
             )
         )
     return blockers
+
+
+def _author_pending_block(pending: list[dict[str, Any]]) -> str:
+    """The ask for a pending entry no lane will ever complete."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in pending:
+        ask = AUTHOR_PENDING_ASKS[str(entry.get("kind") or "").strip()]
+        grouped.setdefault(ask, []).append(entry)
+    lines = []
+    for ask, entries in grouped.items():
+        lines.append(f"For {_index_phrase(entries).lower()}, {ask}.")
+    lines.append(
+        "Nothing runs these for you. The next review reads what you write."
+    )
+    return "\n".join(lines)
 
 
 def _attestation_block(blocked: list[dict[str, Any]]) -> str:

@@ -573,6 +573,44 @@ class ResponseCommentTests(unittest.TestCase):
                     text = self.render(pull_request(body=body), review())
                     self.assertIn(response.response_marker(900), text)
 
+    def test_a_kind_no_lane_completes_asks_the_author_for_it(self) -> None:
+        # `PENDING_COMPLETERS` was written before #1582 added these two kinds,
+        # so they fell to the fallback and told the owner to wait for a lane
+        # that does not exist.
+        body = evidence_body(
+            {"index": 1, "item": "`pnpm test` in `web-next` passes",
+             "status": "pending-ci", "kind": "test-attested"},
+            {"index": 2, "item": "Before/after latency on the same workload",
+             "status": "pending-ci", "kind": "perf"},
+        )
+        text = self.render(pull_request(body=body), review())
+        self.assertIn("state the command you ran and the line it printed", text)
+        self.assertIn("Before and After measurements", text)
+        self.assertIn("Nothing runs these for you", text)
+        self.assertNotIn("clears on its own", text)
+        self.assertNotIn("the lane that owns", text)
+
+    def test_such_an_item_is_the_owner_s_to_move(self) -> None:
+        # It is not self-clearing, so the response has to say the owner is the
+        # blocking party rather than list it as already moving.
+        entries = [
+            {"index": 1, "item": "`pnpm test` in `web-next` passes",
+             "status": "pending-ci", "kind": "test-attested"}
+        ]
+        blockers = response.evidence_blockers(entries)
+        self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+        self.assertTrue(blockers[0].owner_required)
+
+    def test_a_lane_backed_pending_item_still_clears_on_its_own(self) -> None:
+        entries = [
+            {"index": 3, "item": "CI: `Lint, Test, Build` green on the PR head",
+             "status": "pending-ci", "kind": "ci"}
+        ]
+        blockers = response.evidence_blockers(entries)
+        self.assertEqual([b.key for b in blockers], ["evidence-pending-ci"])
+        self.assertFalse(blockers[0].owner_required)
+        self.assertIn("clears on its own", blockers[0].detail)
+
     def test_the_owner_is_the_only_mention(self) -> None:
         # Mention triage watches comment bodies for agent slugs; the reviewer
         # gains nothing from the ping and the trigger surface costs something.
