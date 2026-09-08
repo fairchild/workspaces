@@ -96,6 +96,7 @@ from evidence import (  # noqa: E402, F401
     _attested_test_statement,
     _ci_check_name,
     _evidence_item_kind,
+    _encodable_payload,
     _evidence_status_boundaries,
     _explicit_evidence_contract,
     _extract_evidence_metadata,

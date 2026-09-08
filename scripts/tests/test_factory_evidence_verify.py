@@ -727,5 +727,43 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertNotIn("APRIL_PRIVATE_KEY", workflow)
 
 
+class HostileIndexTests(unittest.TestCase):
+    """A PR-editable index must not take the verifier down.
+
+    `1e9999` parses as infinity and `int()` of that raises OverflowError,
+    which the reads here caught no more than the shared ones did.
+    """
+
+    def body(self) -> str:
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1e9999,
+                        "item": "CI: `check-links` green on the PR head",
+                        "status": "pending-ci",
+                        "kind": "ci",
+                    }
+                ]
+            }
+        )
+        return "## Summary\n\n<!-- evidence-status:v1\n" + payload + "\n-->\n"
+
+    def test_the_verifier_skips_it_rather_than_raising(self) -> None:
+        entries = verify.evidence_entries(self.body())
+        self.assertEqual(verify.ci_entries_needing_verification(entries, "abc1234"), [])
+
+    def test_the_update_targeting_check_returns_rather_than_raising(self) -> None:
+        # It cannot read the index, so the entry contributes no check name.
+        # What matters is that it answers at all: the read used to raise and
+        # take the verifier with it.
+        self.assertIsInstance(
+            verify._updates_targeting_unchanged_entries(
+                self.body(), {1: {"status": "complete", "detail": "d"}}
+            ),
+            dict,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

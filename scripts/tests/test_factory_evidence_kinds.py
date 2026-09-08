@@ -2522,6 +2522,143 @@ class DocumentedTestFormTests(unittest.TestCase):
             with self.subTest(item=item):
                 self.assertEqual(run_contributor._evidence_item_kind(item), "other")
 
+    def test_a_before_and_after_run_is_two_runs_not_a_verdict(self) -> None:
+        # The lane runs the head only, so this completed with a baseline it
+        # never took.
+        self.assertEqual(
+            run_contributor._evidence_item_kind("`swift test` passes before and after"),
+            "other",
+        )
+
+    def metadata_body(self, payload: str) -> str:
+        return "## Summary\n\n<!-- evidence-status:v1\n" + payload + "\n-->\n"
+
+    def test_a_payload_json_cannot_build_does_not_take_the_lane_down(self) -> None:
+        # The body this reads is PR-editable, and `json.loads` has two ways to
+        # refuse that are not JSONDecodeError: past 4300 digits it will not
+        # build the integer and raises the plain ValueError, and a deeply
+        # nested payload exhausts the stack with RecursionError. Either one
+        # escaped and aborted the run.
+        for label, payload in (
+            ("long integer", '{"entries": [{"index": ' + "1" * 4301 + "}]}"),
+            # An object, and deep enough that 3.13 recurses too: a list at
+            # 1200 parses there, so the case proved nothing on that runtime.
+            ("deep nesting", '{"a":' * 20000 + "1" + "}" * 20000),
+        ):
+            with self.subTest(label=label):
+                body = self.metadata_body(payload)
+                self.assertIsNone(run_contributor._extract_evidence_metadata(body))
+                accounting = run_contributor.evaluate_evidence_accounting(
+                    body, ["an item"]
+                )
+                self.assertEqual(accounting["source"], "structured-invalid")
+
+    def test_a_lone_surrogate_does_not_break_the_writers(self) -> None:
+        # A JSON-escaped lone surrogate parses fine and then cannot be encoded
+        # as UTF-8, so every writer of the body it lands in raises
+        # UnicodeEncodeError -- `gh pr edit`, the evidence workflow.
+        body = self.metadata_body(
+            '{"entries": [{"index": 1, "item": "x", "status": "complete",'
+            ' "detail": "\\ud800"}]}'
+        )
+        for label, rendered in (
+            (
+                "update",
+                run_contributor.update_evidence_entries(
+                    body, {1: {"status": "complete", "detail": "y"}}
+                ),
+            ),
+            (
+                "reconcile",
+                run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                rendered.encode("utf-8")
+
+    def test_cleaning_a_body_does_not_grow_it_past_what_github_stores(self) -> None:
+        # Escaping everything to ASCII kept a lone surrogate out, and turned
+        # 6,000 emoji into 78,000 characters -- past GitHub's 65,536 limit, so
+        # the body could not be written back at all.
+        emoji = "\U0001F600" * 6000
+        body = self.metadata_body(
+            json.dumps(
+                {"entries": [{"index": 1, "item": emoji, "status": "complete",
+                              "detail": "d"}]}
+            )
+        )
+        rendered = run_contributor.update_evidence_entries(
+            body, {1: {"status": "complete", "detail": "kept"}}
+        )
+        self.assertLess(len(rendered), len(body))
+
+    def test_a_deeply_nested_payload_does_not_take_a_writer_down(self) -> None:
+        # A thousand nested arrays parse fine on this runtime, and then both
+        # the cleaning pass and `json.dumps` with an indent recurse on the way
+        # back out -- so a body could be built that no writer could serialise.
+        body = self.metadata_body('{"entries": [' + "[" * 1000 + "]" * 1000 + "]}")
+        self.assertEqual(
+            run_contributor.evaluate_evidence_accounting(body, ["x"])["source"],
+            "structured-invalid",
+        )
+        for label, rendered in (
+            (
+                "update",
+                run_contributor.update_evidence_entries(
+                    body, {1: {"status": "complete", "detail": "d"}}
+                ),
+            ),
+            (
+                "reconcile",
+                run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                self.assertIsInstance(rendered, str)
+
+    def test_an_ordinary_payload_is_carried_through_unchanged(self) -> None:
+        payload = {
+            "entries": [
+                {"index": 1, "item": "x", "status": "complete", "detail": "d",
+                 "kind": "ci"}
+            ]
+        }
+        self.assertEqual(run_contributor._encodable_payload(payload), payload)
+
+    def test_an_infinite_index_does_not_take_any_metadata_path_down(self) -> None:
+        # `1e9999` parses as infinity and `int()` of that raises OverflowError,
+        # which the three index reads did not catch.
+        body = self.metadata_body(
+            '{"entries": [{"index": 1e9999, "item": "x", "status": "complete",'
+            ' "detail": "d"}]}'
+        )
+        self.assertEqual(
+            run_contributor.evaluate_evidence_accounting(body, ["x"])["source"],
+            "structured-invalid",
+        )
+        self.assertIsInstance(
+            run_contributor.update_evidence_entries(
+                body, {1: {"status": "complete", "detail": "y"}}
+            ),
+            str,
+        )
+        self.assertIsInstance(
+            run_contributor.reconcile_pending_ci_evidence(
+                body, build_succeeded=True, tests_succeeded=True, smoke_succeeded=True
+            ),
+            str,
+        )
+
     def test_the_verdicts_people_actually_write_are_accepted(self) -> None:
         for item, kind in (
             ("`swift test`", "test"),

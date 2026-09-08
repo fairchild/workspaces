@@ -164,7 +164,10 @@ COMMAND_REMAINDER_RE = re.compile(
     r"|exits? 0|runs? clean)?"
     r"(?:\s+(?:locally|cleanly|first|in ci|on this head|on the pr head"
     r"|on the exact commit(?: under review)?|from the exact commit(?: under review)?"
-    r"|after the change|before and after))*"
+    # "before and after" is not a verdict: it asks for a baseline run and a
+    # second one, and the lane runs the head only, so the item completed with
+    # half of what it asked for.
+    r"|after the change))*"
     r"[\s.!]*$"
 )
 # Test runners the hosted lane cannot execute. `swift test` is absent on
@@ -661,7 +664,11 @@ def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
         return None
     try:
         payload = json.loads(match.group("payload"))
-    except json.JSONDecodeError:
+    except (ValueError, RecursionError):
+        # Not only JSONDecodeError: past 4300 digits `json.loads` refuses to
+        # build the integer and raises the plain ValueError, and a deeply
+        # nested payload exhausts the stack. The body this reads is
+        # PR-editable, and either one escaped and took the lane with it.
         return None
     if not isinstance(payload, dict):
         return None
@@ -671,13 +678,23 @@ def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
 def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
     metadata = (
         f"<!-- evidence-status:v{EVIDENCE_METADATA_VERSION}\n"
-        f"{json.dumps(payload, indent=2, ensure_ascii=False)}\n"
+        # The payload is cleaned rather than escaped. A JSON-escaped lone
+        # surrogate re-emits as invalid UTF-8 and every writer of this body
+        # raises UnicodeEncodeError on it -- but escaping everything to ASCII
+        # to avoid that turns 6,000 emoji into 78,000 characters, past what
+        # GitHub will store. Dropping what cannot be encoded costs one
+        # character and leaves the rest as it was written.
+        f"{json.dumps(_encodable_payload(payload), indent=2, ensure_ascii=False)}\n"
         f"-->"
     )
     cleaned = _strip_evidence_metadata(body).strip()
     pattern = r"(?m)^## Evidence Status\s*$"
     if re.search(pattern, cleaned):
-        return re.sub(pattern, f"{metadata}\n\n## Evidence Status", cleaned, count=1)
+        # A function replacement, not a string: the metadata carries `\uXXXX`
+        # escapes now, and `re.sub` reads a backslash in a replacement string
+        # as one of its own.
+        replacement = f"{metadata}\n\n## Evidence Status"
+        return re.sub(pattern, lambda _: replacement, cleaned, count=1)
     if cleaned:
         return f"{cleaned}\n\n{metadata}"
     return metadata
@@ -710,11 +727,14 @@ def _structured_evidence_entries(
         return None
     try:
         payload = json.loads(match.group("payload"))
-    except json.JSONDecodeError as exc:
+    except (ValueError, RecursionError) as exc:
+        # See `_extract_evidence_metadata`. `msg` is a `JSONDecodeError`
+        # attribute, so the other two classes need their own text.
+        detail = getattr(exc, "msg", None) or str(exc) or type(exc).__name__
         return {
             "section_present": has_markdown_section(body, "Evidence Status"),
             "entries": {},
-            "invalid_lines": [f"metadata payload is not valid JSON: {exc.msg}"],
+            "invalid_lines": [f"metadata payload is not valid JSON: {detail}"],
             "duplicate_items": [],
             "source": "structured-invalid",
         }
@@ -745,7 +765,10 @@ def _structured_evidence_entries(
             continue
         try:
             index = int(raw_entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
+        # OverflowError too: `1e9999` in the PR-editable metadata parses as
+        # infinity, and `int()` of that raises a class the other two do not
+        # cover.
             invalid_lines.append(f"entry {position} is missing a valid integer index")
             continue
         if index < 1 or index > len(requested_evidence):
@@ -2283,6 +2306,55 @@ def _pending_ci_resolution(
     return "blocked", "self-hosted macOS CI cannot reconcile this evidence item automatically"
 
 
+# A real payload is a dict, an entries list, an entry dict, and scalars --
+# four levels. Anything past this is not evidence state, and `json.dumps`
+# with an indent recurses on the way out, so a body deep enough to parse and
+# too deep to write would be built and then refused by the writer.
+PAYLOAD_MAX_DEPTH = 8
+PAYLOAD_TOO_DEEP = "<nested past what evidence metadata carries>"
+
+
+def _encodable_payload(value: object) -> object:
+    """The same payload with every string cleaned of what cannot be encoded.
+
+    Iterative, not recursive: the payload comes from a PR-editable body, and
+    a thousand nested arrays parse fine and then exhaust the stack on the way
+    back out. `json.dumps` survives that depth; this used not to.
+    """
+    root: dict[str, object] = {"v": value}
+    stack: list[tuple[object, object, object, int]] = [(root, "v", value, 0)]
+    while stack:
+        holder, key, current, depth = stack.pop()
+        if depth > PAYLOAD_MAX_DEPTH:
+            holder[key] = PAYLOAD_TOO_DEEP  # type: ignore[index]
+            continue
+        if isinstance(current, str):
+            holder[key] = _encodable(current)  # type: ignore[index]
+        elif isinstance(current, dict):
+            cleaned: dict[object, object] = {}
+            for inner_key, inner in current.items():
+                clean_key = _encodable(inner_key) if isinstance(inner_key, str) else inner_key
+                cleaned[clean_key] = inner
+                stack.append((cleaned, clean_key, inner, depth + 1))
+            holder[key] = cleaned  # type: ignore[index]
+        elif isinstance(current, list):
+            copied = list(current)
+            holder[key] = copied  # type: ignore[index]
+            for position, inner in enumerate(copied):
+                stack.append((copied, position, inner, depth + 1))
+    return root["v"]
+
+
+def _encodable(text: str) -> str:
+    """Text that survives being written back to GitHub.
+
+    A JSON-escaped lone surrogate parses fine and then cannot be encoded as
+    UTF-8, so the body this text lands in raises `UnicodeEncodeError` in every
+    writer of it. Dropping it here keeps the rest of the line.
+    """
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
 def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
     """Re-render the Evidence Status section and hidden metadata from entries."""
     rendered_entries: list[dict[str, object]] = []
@@ -2291,11 +2363,11 @@ def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
             continue
         try:
             index = int(entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             continue
-        item = str(entry.get("item", "")).strip()
+        item = _encodable(str(entry.get("item", "")).strip())
         status = str(entry.get("status", "")).strip()
-        detail = str(entry.get("detail", "")).strip()
+        detail = _encodable(str(entry.get("detail", "")).strip())
         if index < 1 or not item or status not in {"complete", "blocked", "pending-ci"} or not detail:
             continue
         rendered_entries.append(
@@ -2350,7 +2422,7 @@ def update_evidence_entries(body: str, updates: dict[int, dict[str, object]]) ->
         entry = dict(raw_entry)
         try:
             index = int(entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             updated_entries.append(entry)
             continue
         update = updates.get(index)

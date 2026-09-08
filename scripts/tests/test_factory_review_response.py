@@ -254,6 +254,7 @@ class ResponseDecisionTests(unittest.TestCase):
                 "index": 1,
                 "item": "CI: `check-links` green on the PR head",
                 "status": "pending-ci",
+                "kind": "ci",
             }
         )
         decision = self.evaluate(
@@ -284,7 +285,8 @@ class ResponseDecisionTests(unittest.TestCase):
 
     def test_owner_blocker_alongside_a_self_clearing_one_still_escalates(self) -> None:
         body = evidence_body(
-            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci"},
+            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci",
+             "kind": "ci"},
             {"index": 2, "item": "owner-attested judgement call", "status": "blocked"},
         )
         decision = self.evaluate(pull_request(body=body))
@@ -361,7 +363,8 @@ class RevisionDeferralTests(unittest.TestCase):
 
     def test_a_self_clearing_blocker_still_defers_and_stays_visible(self) -> None:
         body = evidence_body(
-            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci"}
+            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci",
+             "kind": "ci"}
         )
         decision = self.evaluate(
             pull_request(labels=("author:april", "blocked:evidence"), body=body)
@@ -572,6 +575,111 @@ class ResponseCommentTests(unittest.TestCase):
                     )
                     text = self.render(pull_request(body=body), review())
                     self.assertIn(response.response_marker(900), text)
+
+    def test_a_kind_no_lane_completes_asks_the_author_for_it(self) -> None:
+        # `PENDING_COMPLETERS` was written before #1582 added these two kinds,
+        # so they fell to the fallback and told the owner to wait for a lane
+        # that does not exist.
+        body = evidence_body(
+            {"index": 1, "item": "`pnpm test` in `web-next` passes",
+             "status": "pending-ci", "kind": "test-attested"},
+            {"index": 2, "item": "Before/after latency on the same workload",
+             "status": "pending-ci", "kind": "perf"},
+        )
+        text = self.render(pull_request(body=body), review())
+        self.assertIn("state in this PR body the command you ran", text)
+        self.assertIn("Before and After measurements", text)
+        self.assertIn("Nothing runs these for you", text)
+        self.assertNotIn("clears on its own", text)
+        self.assertNotIn("the lane that owns", text)
+
+    def test_such_an_item_is_the_owner_s_to_move(self) -> None:
+        # It is not self-clearing, so the response has to say the owner is the
+        # blocking party rather than list it as already moving.
+        entries = [
+            {"index": 1, "item": "`pnpm test` in `web-next` passes",
+             "status": "pending-ci", "kind": "test-attested"}
+        ]
+        blockers = response.evidence_blockers(entries)
+        self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+        self.assertTrue(blockers[0].owner_required)
+
+    def test_a_pending_entry_with_no_kind_is_the_owner_s(self) -> None:
+        # The grouping is an allowlist. An entry with no kind, kind `other`,
+        # or a kind added later used to land in the self-clearing group and be
+        # told a lane would finish it; there is no such lane.
+        for entry in (
+            {"index": 1, "item": "something", "status": "pending-ci"},
+            {"index": 1, "item": "something", "status": "pending-ci", "kind": "other"},
+            {"index": 1, "item": "something", "status": "pending-ci", "kind": "a-later-kind"},
+        ):
+            with self.subTest(kind=entry.get("kind")):
+                blockers = response.evidence_blockers([entry])
+                self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+                self.assertTrue(blockers[0].owner_required)
+                self.assertNotIn("the lane that owns", blockers[0].detail)
+
+    def test_a_stored_kind_that_lies_does_not_promise_a_lane(self) -> None:
+        # `kind` sits in the same PR-editable metadata as everything else, and
+        # the lanes recompute it from the item text. Reading the stored value
+        # let an `other` item labelled `"kind": "ci"` be described as clearing
+        # on its own, when the verifier would skip it.
+        for item, claimed in (
+            ("Someone with taste confirms the copy reads well", "ci"),
+            ("`pnpm test` in `web-next` passes", "diff"),
+        ):
+            with self.subTest(claimed=claimed):
+                blockers = response.evidence_blockers(
+                    [{"index": 1, "item": item, "status": "pending-ci", "kind": claimed}]
+                )
+                self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+                self.assertTrue(blockers[0].owner_required)
+
+    def test_a_falsy_item_with_a_lying_kind_is_still_the_owner_s(self) -> None:
+        # Falling back to the stored kind when the item is empty put every
+        # falsy item back under the lying label it carried.
+        for item in ("", None, False, 0, [], {}):
+            with self.subTest(item=repr(item)):
+                blockers = response.evidence_blockers(
+                    [{"index": 1, "item": item, "status": "pending-ci", "kind": "ci"}]
+                )
+                self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+
+    def test_a_lane_needs_an_index_to_write_back_through(self) -> None:
+        # The completers skip an entry whose index will not parse, so calling
+        # it self-clearing promised a write that never happens.
+        blockers = response.evidence_blockers(
+            [{"index": 1e9999, "item": "CI: `check-links` green on the PR head",
+              "status": "pending-ci", "kind": "ci"}]
+        )
+        self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+        self.assertTrue(blockers[0].owner_required)
+
+    def test_the_ask_agrees_with_how_many_items_it_is_about(self) -> None:
+        one = response.evidence_blockers(
+            [{"index": 1, "item": "`pnpm test` in `web-next` passes",
+              "status": "pending-ci", "kind": "test-attested"}]
+        )[0].detail
+        self.assertIn("the command you ran and the line it printed", one)
+        self.assertIn("Nothing runs this for you", one)
+        several = response.evidence_blockers(
+            [{"index": 1, "item": "`pnpm test` in `web-next` passes",
+              "status": "pending-ci", "kind": "test-attested"},
+             {"index": 2, "item": "`pytest` over `scripts/tests/` passes",
+              "status": "pending-ci", "kind": "test-attested"}]
+        )[0].detail
+        self.assertIn("each command you ran and the line it printed", several)
+        self.assertIn("Nothing runs these for you", several)
+
+    def test_a_lane_backed_pending_item_still_clears_on_its_own(self) -> None:
+        entries = [
+            {"index": 3, "item": "CI: `Lint, Test, Build` green on the PR head",
+             "status": "pending-ci", "kind": "ci"}
+        ]
+        blockers = response.evidence_blockers(entries)
+        self.assertEqual([b.key for b in blockers], ["evidence-pending-ci"])
+        self.assertFalse(blockers[0].owner_required)
+        self.assertIn("clears on its own", blockers[0].detail)
 
     def test_the_owner_is_the_only_mention(self) -> None:
         # Mention triage watches comment bodies for agent slugs; the reviewer
