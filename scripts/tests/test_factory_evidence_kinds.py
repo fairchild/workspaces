@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import itertools
+import os
 import random
 import sys
 import time
@@ -1504,8 +1505,11 @@ class DocumentedTestFormTests(unittest.TestCase):
         )
 
     def test_the_documented_item_is_admissible(self) -> None:
+        # Patched on `evidence`, not on the wrapper: the preflight resolves
+        # through `sys.modules.get("run_contributor", sys.modules[__name__])`,
+        # and this file loads the wrapper under its own name.
         with mock.patch.object(
-            run_contributor,
+            sys.modules["evidence"],
             "_listed_swift_tests",
             return_value=["FooTests/theCase()"],
         ):
@@ -1513,6 +1517,24 @@ class DocumentedTestFormTests(unittest.TestCase):
                 [self.DOCUMENTED_TEST_ITEM], env={}
             )
         self.assertEqual(errors, [])
+
+    def test_the_preflight_skips_where_there_is_no_swift_to_ask(self) -> None:
+        # The agent lanes run `ubuntu-latest`. `swift test list` raises
+        # FileNotFoundError there, and an unhandled one aborted the run
+        # instead of skipping a preflight that cannot apply.
+        self.assertEqual(
+            run_contributor.run_optional(
+                ["definitely-not-a-real-binary-xyzzy"], timeout=5, default="fallback"
+            ),
+            "fallback",
+        )
+        with mock.patch.dict(os.environ, {"PATH": "/nonexistent"}, clear=False):
+            self.assertEqual(
+                run_contributor.validate_requested_test_commands(
+                    [self.DOCUMENTED_TEST_ITEM], env={"PATH": "/nonexistent"}
+                ),
+                [],
+            )
 
     def test_the_documented_build_item_is_admissible(self) -> None:
         errors = run_contributor.validate_requested_test_commands(
