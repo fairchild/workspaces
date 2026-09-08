@@ -216,8 +216,12 @@ measured. For everything else, the named tests that ran and what they covered,
 plus whatever else you ran locally. Use judgement, and round toward more
 evidence.
 
-A picture of test output is not a substitute for saying which tests ran. Paste
-the command and its result line; upload the log as text if it helps.
+**An image of text is never evidence.** Rendering a test summary to an SVG or a
+PNG so that a gate sees an image was, in Michael's words, "a reward hack I
+allowed to go through for a while" — and never again. Paste the command and its
+result line; upload the log as text if it helps. An image is evidence of what a
+person can see, which means a screenshot is asked for only when the change is
+one someone looks at.
 
 Minimum is the floor for that change type, not the ceiling.
 
