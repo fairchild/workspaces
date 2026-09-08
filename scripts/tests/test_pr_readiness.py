@@ -244,6 +244,7 @@ class PRReadinessTests(unittest.TestCase):
             "- `pytest` -> Ran 12 tests; Process completed with exit code 127",
             "- `swift test` -> 12 tests passed; exit status: 1",
             "- `swift test` -> 12 tests passed; status: ERROR",
+            "- `swift test` -> 12 tests passed; process exited with status 127",
         ):
             with self.subTest(line=line):
                 body = GOOD_BODY.replace(
@@ -252,6 +253,24 @@ class PRReadinessTests(unittest.TestCase):
                 ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
                 result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
                 self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_count_with_no_verdict_is_not_output(self) -> None:
+        # "This patch changes 12 files" sat in the window under a command and
+        # read as the command's output.
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- `swift test`\n- This patch changes 12 files.",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_trusted_host_after_an_at_sign_is_not_our_store(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- see https://evil.example/@https://evidence.cloudcompute.com/fake.txt",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
 
     def test_a_plan_to_run_is_not_a_report(self) -> None:
         body = GOOD_BODY.replace(

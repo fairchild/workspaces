@@ -220,7 +220,10 @@ TEST_COMMAND_RE = re.compile(
 )
 TEST_RESULT_RE = re.compile(
     r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean"
-    r"|(?!0\b)\d+\s+(?:tests?|cases?|examples?|files?))\b"
+    # A count with no verdict beside it is not a result: "this patch changes
+    # 12 files" sat in the window under a command and read as its output. The
+    # verdict words above already carry every real report.
+    r")\b"
     # A result is often reported as an absence -- "no lint errors", "zero
     # failures", "0 warnings" -- and those are what a linter prints when it
     # is happy.
@@ -237,11 +240,11 @@ TEST_FAILURE_RE = re.compile(
     r"\bfail(?:s|ed|ing|ure|ures)?\b"
     r"|\b\d+\s+errors?\b|\berrors?\s*[=:]\s*[1-9]|\berrored\b"
     r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
-    # A single-digit bound read `exit code 127` as a pass. Punctuation between
-    # the word and the number is how most runners actually print it.
-    r"|\bexit(?:ed|s)?\s*(?:code|status)?\s*[:=]?\s*[1-9]\d*\b"
+    # A single-digit bound read `exit code 127` as a pass, and runners write
+    # the number behind `code`, `status`, `with`, or nothing at all.
+    r"|\bexit(?:ed|s)?\s*(?:with\s+)?(?:code|status)?\s*[:=]?\s*[1-9]\d*\b"
     r"|\bnon-?zero exit\b|\bstatus\s*[:=]\s*(?:error|failed|failure|red)\b"
-    r"|\bprocess completed with exit code [1-9]\d*\b"
+    r"|\bprocess (?:completed|exited) with (?:exit )?(?:code|status) [1-9]\d*\b"
 )
 # A line that says the run did not happen. Without this, "`swift test` was
 # not run" and a sentence several lines later mentioning a count read as a
@@ -294,7 +297,7 @@ IMAGE_LINK_RE = re.compile(
 # Every character a URL can carry before ours, and none that only delimits
 # one: a markdown link's `(` and `[` sit outside the URL, so excluding them
 # would refuse the ordinary `[log](https://evidence...)` form.
-_STORE_PREFIX = r"(?<![\w/.:=&?#~+%;,!$'*-])"
+_STORE_PREFIX = r"(?<![\w/.:=&?#~+%;,!$'*@-])"
 EVIDENCE_STORE_RE = re.compile(
     rf"(?i){_STORE_PREFIX}https://evidence\.cloudcompute\.com/\S+"
 )

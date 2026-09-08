@@ -1688,11 +1688,49 @@ class AttestedTestKindTests(unittest.TestCase):
         self.assertEqual(len(complete), 1)
         self.assertIn("test_foo.py", complete[0])
 
+    def test_a_command_that_was_not_run_completes_nothing(self) -> None:
+        # The guard read the command line only, so a "was not run" under the
+        # command and a count under that was one statement to the window and
+        # two to the guard. This is the shape that reached the contributor
+        # gate after the readiness gate had already been fixed.
+        for body in (
+            "`pnpm test`\nwas not run in this environment\nThe suite has 214 tests passed\n",
+            "We will run `pnpm test` after review\nThe suite has 214 tests passed\n",
+            "`pnpm test`\nskipped on this runner\n214 tests passed elsewhere\n",
+        ):
+            with self.subTest(body=body):
+                self.assertIsNone(run_contributor._attested_test_statement(body))
+
+    def test_a_label_beside_a_path_is_not_an_alternative(self) -> None:
+        # An item naming both a test path and the runner it runs on is about
+        # the path; offering the label let an unrelated run complete the item
+        # by mentioning `macos-26`.
+        _, paths = run_contributor._item_evidence_tokens(
+            "A test in `scripts/tests/test_foo.py` on `macos-26` passes"
+        )
+        self.assertEqual(paths, ["scripts/tests/test_foo.py"])
+        self.assertIsNone(
+            run_contributor._attested_test_statement(
+                "- `pytest scripts/tests/test_bar.py` on macos-26 -> 12 passed\n",
+                "A test in `scripts/tests/test_foo.py` on `macos-26` passes",
+            )
+        )
+
+    def test_a_bare_label_still_binds_where_it_is_all_there_is(self) -> None:
+        _, paths = run_contributor._item_evidence_tokens(
+            "`pnpm test` in `web-next` passes"
+        )
+        self.assertIn("web-next", paths)
+
     def test_a_nonzero_exit_is_not_a_pass(self) -> None:
         for body in (
             "- `pytest` -> Ran 12 tests; Process completed with exit code 1\n",
             "- `pnpm test` -> 12 tests passed; exit status 1\n",
             "- `swift test` -> ran, exit code 2\n",
+            "- `pytest` -> Ran 12 tests; Process completed with exit code 127\n",
+            "- `pnpm test` -> 12 tests passed; process exited with status 127\n",
+            "- `pnpm test` -> 12 tests passed; exited with status 1\n",
+            "- `swift test` -> 12 tests passed; status: ERROR\n",
         ):
             with self.subTest(body=body):
                 self.assertIsNone(run_contributor._attested_test_statement(body))

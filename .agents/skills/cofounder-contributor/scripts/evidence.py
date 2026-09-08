@@ -312,11 +312,11 @@ TEST_FAILURE_RE = re.compile(
     r"\bfail(?:s|ed|ing|ure|ures)?\b"
     r"|\b\d+\s+errors?\b|\berrors?\s*[=:]\s*[1-9]|\berrored\b"
     r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
-    # A single-digit bound read `exit code 127` as a pass. Punctuation between
-    # the word and the number is how most runners actually print it.
-    r"|\bexit(?:ed|s)?\s*(?:code|status)?\s*[:=]?\s*[1-9]\d*\b"
+    # A single-digit bound read `exit code 127` as a pass, and runners write
+    # the number behind `code`, `status`, `with`, or nothing at all.
+    r"|\bexit(?:ed|s)?\s*(?:with\s+)?(?:code|status)?\s*[:=]?\s*[1-9]\d*\b"
     r"|\bnon-?zero exit\b|\bstatus\s*[:=]\s*(?:error|failed|failure|red)\b"
-    r"|\bprocess completed with exit code [1-9]\d*\b"
+    r"|\bprocess (?:completed|exited) with (?:exit )?(?:code|status) [1-9]\d*\b"
 )
 # "no lint errors" and "zero failures" are pass phrasings that contain the
 # words a failure is spelled with. Stripped before the failure search, they
@@ -1668,6 +1668,11 @@ ATTESTED_TEST_QUOTE_LIMIT = 180
 NOT_RUN_RE = re.compile(
     r"(?i)\b(?:not|never|couldn't|could not|cannot|can't|unable to|failed to|"
     r"didn't|did not|skipped?|skipping|pending|todo|to do)\b"
+    # A plan is not a report. "We will run `pnpm test` after review" names a
+    # command and, a line down, a count of the tests the change adds.
+    r"|\b(?:will|shall|going to|plan to|intend to|should)\s+(?:be\s+)?run\b"
+    r"|\bonce\s+(?:ci|the\s+\w+)\s+(?:runs|finishes|completes)\b"
+    r"|\bafter\s+(?:review|merge|approval)\b"
 )
 # The Performance section's own fields, as `.github/pull_request_template.md`
 # writes them and `pr-perf-evidence.yml` enforces them.
@@ -1711,6 +1716,15 @@ def _item_evidence_tokens(item: str) -> tuple[list[str], list[str]]:
         # counts too: `web-next` is what tells a `pnpm test` there apart from
         # a `pnpm test` in `web`, and dropping it made them the same claim.
         paths.append(candidate.casefold())
+    # A span that looks like a path outranks one that does not. An item naming
+    # both `scripts/tests/test_foo.py` and `macos-26` is about the first; the
+    # second is a label, and offering it as an alternative let an unrelated
+    # run complete the item by mentioning the runner it ran on.
+    shaped = [
+        path for path in paths if "/" in path or re.search(r"\.[a-z0-9]{1,5}$", path)
+    ]
+    if shaped:
+        paths = shaped
     # A basename on its own is a weaker claim than the path that contains it:
     # `pytest test_foo.py` in some other directory is not a run of
     # `scripts/tests/test_foo.py`. So the tail is offered only where the item
@@ -1754,8 +1768,6 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
             continue
         if required and not _line_names(line, required):
             continue
-        if NOT_RUN_RE.search(line):
-            continue
         # The result belongs to the run named on this line. A heading ends the
         # statement, and so does another runner: "`pnpm test` was not run"
         # followed by "`pytest` -> 214 tests passed" is two statements, and
@@ -1766,6 +1778,11 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
                 break
             window.append(follower)
         joined = " ".join(window)
+        # The guard reads the whole statement, not only its first line: a "was
+        # not run" under the command and a count under that is one statement,
+        # and reading the line alone called it a passing run.
+        if NOT_RUN_RE.search(joined):
+            continue
         if not TEST_RESULT_RE.search(joined) or _reports_a_failure(joined):
             continue
         quoted = [window[0]]
