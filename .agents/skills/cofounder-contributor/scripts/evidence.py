@@ -961,12 +961,17 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
 # was strict about form and silent about proof, which is the inversion this
 # closes.
 DETAIL_WORD_RE = re.compile(r"\w+")
-# One image, matched without a repeated group around it. The obvious spelling
-# -- a group for "one image plus padding", repeated -- nests a quantifier
-# inside a quantifier, and the detail is PR-controlled text, so a crafted one
-# would have backtracked exponentially. Substituting each image out and asking
-# what is left is linear and says the same thing.
-DETAIL_IMAGE_RE = re.compile(r"!\[[^\]\n]*\]\([^)\s]+\)")
+# Every way a picture reaches a markdown body, matched without a repeated
+# group around any of them -- the obvious spelling nests a quantifier inside a
+# quantifier, and the detail is PR-controlled text, so a crafted one
+# backtracked exponentially. Substituting each image out and asking what words
+# are left is linear and says the same thing.
+DETAIL_IMAGE_RE = re.compile(
+    r"!\[[^\]\n]*\]\([^)\s]+\)"
+    r"|!\[[^\]\n]*\]\[[^\]\n]*\]"
+    r"|<img\b[^>\n]*>"
+    r"|<?(?i:https?)://[^\s)\]>]+\.(?i:png|jpe?g|gif|webp|svg|webm|mp4)>?"
+)
 
 
 def _detail_proves_nothing(item: str, detail: str) -> bool:
@@ -979,7 +984,13 @@ def _detail_proves_nothing(item: str, detail: str) -> bool:
     perfectly good answer.
     """
     text = detail.strip()
-    if len(DETAIL_WORD_RE.findall(text)) <= 1:
+    words = DETAIL_WORD_RE.findall(text)
+    if not words:
+        return True
+    # "One word" is not a count in every script. A single ASCII word is a
+    # non-answer -- "done", "proof", "complete". A single run in a script that
+    # does not space its words is a sentence.
+    if len(words) == 1 and words[0].isascii():
         return True
     if _evidence_item_kind(item) == "screenshot":
         return False

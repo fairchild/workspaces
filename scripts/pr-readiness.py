@@ -208,27 +208,61 @@ def has_checked_box(body: str, label: str) -> bool:
 # a report: a command with no result is a plan, a result with no command is a
 # claim nobody can check.
 TEST_COMMAND_RE = re.compile(
-    r"(?i)\b(?:swift\s+test|swift\s+build|(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?\S*test"
+    # A path-shaped command cannot carry a leading `\b`: nothing before the
+    # `.` in `./scripts/foo.sh` is a word character, so the boundary never
+    # holds and the alternative is unreachable. The word-initial names take
+    # the boundary; the rest do not.
+    r"(?i)(?:\b(?:swift\s+(?:test|build)|(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?\S*test"
     r"|pytest|python3?\s+-m\s+(?:pytest|unittest)|uv\s+run|go\s+test|cargo\s+test"
-    r"|xcodebuild\s+test|mise\s+run|make\s+test|\./scripts/\S+|git\s+diff\s+--check)\b"
+    r"|xcodebuild\s+test|mise\s+run|make\s+test|bash\s+-n|actionlint|shellcheck"
+    r"|swift-format|git\s+diff\s+--check|validate-release-changes)\b"
+    r"|\./\S+\.(?:sh|py|ts|js)\b|\./scripts/\S+)"
 )
 TEST_RESULT_RE = re.compile(
-    r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean|no\s+\w+\s+errors?)\b"
+    r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean"
+    r"|\d+\s+(?:tests?|cases?|examples?|files?)|no\s+\w+\s+errors?)\b"
 )
-# Anything a person can see lives here. An image is evidence *of* one of these;
-# on a change nobody looks at, an image is a picture of text.
-VISUAL_SURFACE_PREFIXES = ("Sources/", "web/", "web-next/", "ios/", "prototypes/", "fixtures/ui-state/")
-IMAGE_EVIDENCE_RE = re.compile(r"!\[.*\]\(https?://")
-IMAGE_LINK_RE = re.compile(r"(?i)https?://\S+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)\b")
+# Anything a person can see lives here. `WorkspaceManagerCore` and the CLI are
+# Swift that renders nothing, so an image proves nothing about them. An image
+# is evidence *of* what someone looks at; anywhere else it is a picture of
+# text.
+VISUAL_SURFACE_PREFIXES = (
+    "Sources/WorkspaceManager/",
+    "web/",
+    "web-next/",
+    "ios/",
+    "prototypes/",
+    "fixtures/ui-state/",
+)
+# A closing paren is required: `![x](https://` is a broken link, not evidence.
+IMAGE_EVIDENCE_RE = re.compile(r"!\[[^\]\n]*\]\([^)\s]+\)")
+# The extension ends the URL. `…/x.png.evil` is not a png.
+IMAGE_LINK_RE = re.compile(
+    r"(?i)https?://[^\s)\]]+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)(?=[\s)\]]|$)"
+)
 # The host, at the host's own position. A substring test would accept
 # `https://evil.example/evidence.cloudcompute.com/x.png` as an upload of ours.
 EVIDENCE_STORE_RE = re.compile(r"(?i)\bhttps://evidence\.cloudcompute\.com/\S+")
-EVIDENCE_STORE_LOG_RE = re.compile(r"(?i)\bhttps://evidence\.cloudcompute\.com/\S+\.txt\b")
+EVIDENCE_STORE_LOG_RE = re.compile(
+    r"(?i)\bhttps://evidence\.cloudcompute\.com/[^\s)\]]+\.txt(?=[\s)\]]|$)"
+)
 
 
 def has_named_test_signal(body: str) -> bool:
-    """A command and what it printed, somewhere in the body."""
-    return bool(TEST_COMMAND_RE.search(body) and TEST_RESULT_RE.search(body))
+    """A command and what it printed, in one breath.
+
+    Matched within a line and its neighbour, not anywhere in the body: a
+    planned `swift test` in one paragraph and the words "green status icon"
+    in another are not a report of a run.
+    """
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if not TEST_COMMAND_RE.search(line):
+            continue
+        window = " ".join(lines[index : index + 2])
+        if TEST_RESULT_RE.search(window):
+            return True
+    return False
 
 
 def has_image_evidence(body: str) -> bool:

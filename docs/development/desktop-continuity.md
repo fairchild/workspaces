@@ -54,7 +54,7 @@ The harness:
 3. opens the requested local repo terminal using the existing startup auto-selection path;
 4. captures `before-close.png` by exact window id;
 5. terminates the exact app PID with `NSRunningApplication.terminate()`;
-6. writes and renders a close proof PNG;
+6. writes a close proof as text;
 7. relaunches without auto-selection and captures `after-reopen.png`;
 8. checks tmux survival with `scripts/tmux-continuity-probe.sh`;
 9. writes `summary.json` with PIDs, window ids, tmux session, artifact paths, and restore timing.

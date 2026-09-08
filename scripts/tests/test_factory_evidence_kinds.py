@@ -1884,6 +1884,30 @@ class CompleteDetailTests(unittest.TestCase):
         self.errors_for(self.ITEM, hostile)
         self.assertLess(time.monotonic() - start, 1.0)
 
+    def test_every_way_a_picture_reaches_a_body_is_read_as_one(self) -> None:
+        # One lowercase inline form was the only shape recognised, so an
+        # uppercase scheme, an autolink, a reference image, an HTML tag or a
+        # bare image URL each closed a test item on their own.
+        for detail in (
+            "![tests](https://evidence.cloudcompute.com/pr-1/tests.svg)",
+            "![tests](HTTPS://evidence.cloudcompute.com/pr-1/tests.PNG)",
+            "<https://evidence.cloudcompute.com/pr-1/tests.png>",
+            "![tests][store]",
+            '<img src="https://evidence.cloudcompute.com/pr-1/tests.png">',
+            "https://evidence.cloudcompute.com/pr-1/tests.svg",
+        ):
+            with self.subTest(detail=detail):
+                errors = self.errors_for(self.ITEM, detail)
+                self.assertTrue(
+                    any("image of text" in error for error in errors), errors
+                )
+
+    def test_a_sentence_without_spaces_is_not_one_word(self) -> None:
+        # "One word" is not a count in every script. A Japanese sentence
+        # written without spaces is one `\w+` run and a real answer.
+        errors = self.errors_for(self.ITEM, "\u5168\u30c6\u30b9\u30c8\u304c\u6210\u529f\u3057\u307e\u3057\u305f")
+        self.assertEqual([e for e in errors if "proves nothing" in e], [])
+
     def test_a_host_lookalike_is_not_our_evidence_store(self) -> None:
         # `https://evil.example/evidence.cloudcompute.com/x.png` is not an
         # upload of ours, and a substring test said it was.

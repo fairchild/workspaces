@@ -112,7 +112,7 @@ Common examples:
 - `./scripts/pr-evidence.sh --pr <N> --profile performance`
   - Runs the PR evidence wrapper around canonical performance comparison.
   - Writes before/after artifacts under `./output/evidence/pr-<number>/.../performance/`.
-  - Uploads an SVG delta summary through `./scripts/evidence.sh`.
+  - Uploads a text delta summary through `./scripts/evidence.sh`. The numbers belong in the PR body's Performance section; the upload is the log behind them.
   - Use `--before-summary`, `--after-summary`, `--skip-before`, and `--skip-after` when comparing summaries captured on separate commits.
 - Contract source of truth:
   - `./config/performance/contract.json`
