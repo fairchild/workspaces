@@ -220,6 +220,10 @@ TEST_RESULT_RE = re.compile(
 VISUAL_SURFACE_PREFIXES = ("Sources/", "web/", "web-next/", "ios/", "prototypes/", "fixtures/ui-state/")
 IMAGE_EVIDENCE_RE = re.compile(r"!\[.*\]\(https?://")
 IMAGE_LINK_RE = re.compile(r"(?i)https?://\S+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)\b")
+# The host, at the host's own position. A substring test would accept
+# `https://evil.example/evidence.cloudcompute.com/x.png` as an upload of ours.
+EVIDENCE_STORE_RE = re.compile(r"(?i)\bhttps://evidence\.cloudcompute\.com/\S+")
+EVIDENCE_STORE_LOG_RE = re.compile(r"(?i)\bhttps://evidence\.cloudcompute\.com/\S+\.txt\b")
 
 
 def has_named_test_signal(body: str) -> bool:
@@ -244,16 +248,13 @@ def has_any_evidence(body: str, files: list[str] | None = None) -> bool:
     again choose to create an svg of text just to have evidence. That was a
     reward hack I allowed to go through for a while."
     """
-    lowered = body.lower()
-    uploaded_log = bool(
-        re.search(r"(?i)evidence\.cloudcompute\.com/\S+\.txt\b", body)
-    )
+    visual = touches_a_visual_surface(files or [])
     return any(
         (
             has_named_test_signal(body),
-            uploaded_log,
-            has_image_evidence(body) and touches_a_visual_surface(files or []),
-            "evidence.cloudcompute.com" in lowered and touches_a_visual_surface(files or []),
+            bool(EVIDENCE_STORE_LOG_RE.search(body)),
+            has_image_evidence(body) and visual,
+            bool(EVIDENCE_STORE_RE.search(body)) and visual,
             has_checked_box(body, "Not a testable change"),
         )
     )

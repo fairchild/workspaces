@@ -199,6 +199,14 @@ class PRReadinessTests(unittest.TestCase):
         result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
         self.assertIn("No test/evidence signal found in PR body.", result.failures)
 
+    def test_a_host_lookalike_is_not_our_evidence_store(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- see https://evil.example/evidence.cloudcompute.com/tests.txt",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
     def test_docs_only_pr_without_evidence_passes(self) -> None:
         body = GOOD_BODY.replace(
             "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",

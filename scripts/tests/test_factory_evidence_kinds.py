@@ -1875,6 +1875,24 @@ class CompleteDetailTests(unittest.TestCase):
         )
         self.assertEqual([e for e in errors if "proves nothing" in e], [])
 
+    def test_a_crafted_detail_does_not_hang_the_gate(self) -> None:
+        # The detail is PR-controlled text. The obvious spelling of "one
+        # image plus padding, repeated" nests a quantifier in a quantifier,
+        # and this input backtracked exponentially against it.
+        hostile = "![" * 400 + "](http://(" * 400
+        start = time.monotonic()
+        self.errors_for(self.ITEM, hostile)
+        self.assertLess(time.monotonic() - start, 1.0)
+
+    def test_a_host_lookalike_is_not_our_evidence_store(self) -> None:
+        # `https://evil.example/evidence.cloudcompute.com/x.png` is not an
+        # upload of ours, and a substring test said it was.
+        errors = self.errors_for(
+            self.SCREENSHOT,
+            "![x](https://evil.example/evidence.cloudcompute.com/x.png) and nothing else",
+        )
+        self.assertEqual([e for e in errors if "proves nothing" in e], [])
+
     def test_a_real_result_line_is_accepted(self) -> None:
         for detail in (
             "Test run with 1992 tests in 214 suites passed",

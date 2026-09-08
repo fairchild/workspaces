@@ -960,10 +960,13 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
 # and an image link closed a test item just as well as a result line did. It
 # was strict about form and silent about proof, which is the inversion this
 # closes.
-EMPTY_DETAIL_RE = re.compile(r"^(?:\W*|\W*\w+\W*)$")
-DETAIL_IMAGE_ONLY_RE = re.compile(
-    r"^(?:\W*!\[[^\]]*\]\(\s*https?://[^)]+\)\W*)+$"
-)
+DETAIL_WORD_RE = re.compile(r"\w+")
+# One image, matched without a repeated group around it. The obvious spelling
+# -- a group for "one image plus padding", repeated -- nests a quantifier
+# inside a quantifier, and the detail is PR-controlled text, so a crafted one
+# would have backtracked exponentially. Substituting each image out and asking
+# what is left is linear and says the same thing.
+DETAIL_IMAGE_RE = re.compile(r"!\[[^\]\n]*\]\([^)\s]+\)")
 
 
 def _detail_proves_nothing(item: str, detail: str) -> bool:
@@ -976,13 +979,15 @@ def _detail_proves_nothing(item: str, detail: str) -> bool:
     perfectly good answer.
     """
     text = detail.strip()
-    if not text or EMPTY_DETAIL_RE.match(text):
+    if len(DETAIL_WORD_RE.findall(text)) <= 1:
         return True
+    if _evidence_item_kind(item) == "screenshot":
+        return False
     # An image is evidence of what a person can see. On an item about looking
     # at something it is the proof; anywhere else it is a picture of text.
-    return DETAIL_IMAGE_ONLY_RE.match(text) is not None and (
-        _evidence_item_kind(item) != "screenshot"
-    )
+    if not DETAIL_IMAGE_RE.search(text):
+        return False
+    return not DETAIL_WORD_RE.search(DETAIL_IMAGE_RE.sub(" ", text))
 
 
 def _truncate(text: str, max_len: int = 80) -> str:
