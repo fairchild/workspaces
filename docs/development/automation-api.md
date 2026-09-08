@@ -154,12 +154,24 @@ WorkSpaces terminal tile. See
 
 ## Verb contract: verbs = clicks
 
-Every mutation verb enters the app's own path for the gesture it names, and never
-reaches around the UI into a service or SwiftData write the equivalent user action
-would not make. The single place this rule is enforced is the internal gesture-verb
-layer (`AutomationGestureVerbs`): it is constructed with *only* gesture closures —
-the app's real UI entry points — and holds no backend handle of its own, so a verb
-reaches app state only through a closure the live window installed.
+A mutation verb enters the app's own path for the gesture it names rather than
+reaching around the UI into a write the equivalent user action would not make.
+Five verbs are held to that rule by the internal gesture-verb layer
+(`AutomationGestureVerbs`): `workspace.select`, `workspace.create`,
+`workspace.archive`, `repo.terminal`, and `workspace.note`. The layer is
+constructed with *only* gesture closures the live window installs, and holds no
+service, backend, or SwiftData handle of its own, so those verbs reach app state
+only through a closure the UI supplied. With no live window the app installs no
+gesture layer at all and the controller answers `unsupported` rather than falling
+back to a data-layer write.
+
+`tile.focus`, `tile.split`, `tile.close`, and `input.write` do not route through
+that layer. They are caller-scoped tile operations implemented on the controller
+against the live `TileTreeStore` and the Ghostty text-input bridge — the same
+runtime a keystroke drives — so their failures are the handle's and the runtime's
+(`stale_handle` once the handle no longer maps to a live tile, `unsupported` for a
+split V1 does not support) rather than the gesture layer's missing-window
+`unsupported`.
 
 `workspace.select` is the exemplar: selecting a workspace via the API writes the
 *same selection binding* a sidebar click writes — the binding whose setter attaches
@@ -182,9 +194,10 @@ selected with its terminal attached. Concretely, this is why the rule matters:
   binding fails exactly when a user click would, so a broken selection path is caught
   by the verb, not hidden behind a service call that still "succeeds."
 
-Verbs whose gesture can be deflected — `workspace.select`, `workspace.create`,
-`workspace.archive`, `repo.terminal`, and the tile verbs — return a structured
-outcome, so dialogs and dead-ends become data rather than a hang or a fallback:
+Four verbs answer with a structured `outcome`, so a dialog or a dead end arrives as
+data rather than a hang or a fallback: `workspace.select`, `workspace.create`,
+`workspace.archive`, and `repo.terminal`. Their `outcome` is the same two-case
+value:
 
 | Outcome | Meaning | Wire |
 | --- | --- | --- |
@@ -192,22 +205,38 @@ outcome, so dialogs and dead-ends become data rather than a hang or a fallback:
 | `confirmation_required` | The gesture would surface a modal; the payload names what the user would confirm. Surfaced as data so a verb never blocks on modal UI. `workspace.create` uses this for provider setup confirmations. | Success envelope, `outcome: "confirmation_required"`, with `confirmation`. |
 | `unsupported` | The verb cannot run in the current context — most often no live window. It fails closed rather than falling back to a data-layer write. | Error envelope, code `unsupported`. |
 
+`workspace.create` is the only one that raises `confirmation_required` today.
+`workspace.select` and `workspace.archive` model the case but reach no dialog on
+their current paths, and `repo.terminal` has no confirmation arm at all, so it can
+only ever answer `completed`.
+
+The other four mutation verbs answer in their own shapes:
+
+- `tile.focus` and `tile.split` return the tile mutation result with no `outcome`
+  field at all: `changed` plus the surface ids the operation touched
+  (`focusedSurfaceID`, and for a split `createdSurfaceID`). A focus with no
+  neighbour in that direction is `changed: false` with `reason: "no_neighbor"`.
+- `tile.close` returns that same shape with `outcome: "requested"` — its only
+  value — and `changed: false`. Close is fire-and-forget into the app's
+  close-confirmation path, so the result names the surface the request targeted
+  and never claims the tile closed.
+- `input.write` returns `accepted`, `byteCount`, and the `surfaceID` it wrote
+  into, with no `outcome`: a paste either lands or fails closed on a stale handle.
+- `workspace.note` returns the stored `note` and `changed`, with no `outcome`.
+
 An id that resolves to no tracked repo or workspace fails `invalid_request` (it is
 not a gesture outcome — nothing was driven). App Intents and any companion app call
 the same verb layer, so "Siri said done" and "the sidebar updated" are the same
 event.
 
-`workspace.note` is where the contract reads differently, and the difference is in
-the UI rather than in the verb. A note has no machinery beneath it: the sidebar's
-own menu item normalizes the text and assigns the stored field, so the user's
-gesture is already a direct write and there is no deeper entry point for a verb to
-enter. The verb's gesture closure is therefore the write itself — the same
-`WorkspaceNote.normalized` call into the same field, installed by the live window —
-rather than a call into a sidebar controller action, and the two writers are
-separate implementations that nothing forces to stay equivalent. Its result shape
-follows: it reports the stored `note` and `changed` with no `outcome` field, since
-no dialog can deflect it. It still fails closed — no live window is `unsupported`,
-an untracked id is `invalid_request`. See [Workspace note](#workspace-note).
+`workspace.note` is the one gesture verb whose closure is itself the stored write,
+and the difference is in the UI rather than in the verb: a note has no machinery
+beneath it — the sidebar's own menu item normalizes the text and assigns the same
+field — so there is no deeper entry point for a verb to enter, and the two setters
+are separate implementations that nothing forces to stay equivalent. That is why
+its result carries `note` and `changed` rather than an `outcome`: no dialog can
+deflect it. It still fails closed, `unsupported` with no live window and
+`invalid_request` for an untracked id. Details: [Workspace note](#workspace-note).
 
 ### App Intents veneer
 
@@ -1157,9 +1186,11 @@ review before they can be added. Read-only global reads are the reviewed
 operator-scope exceptions — window capture (`window.read` listing and
 `window.snapshot` composited snapshots) and the repo/workspace inventory
 (`workspace.read`) — gated behind the opt-in operator scope above, never granted to
-tile handles. Operator mutations are limited to reviewed gesture verbs such as
-`workspace.select` and `workspace.create`, which drive real UI paths under the
-verbs-=-clicks contract, never data-layer writes. Reviewed exceptions widen the
+tile handles. Operator mutations are limited to the reviewed gesture verbs —
+`workspace.select`, `workspace.create`, `workspace.archive`, `repo.terminal`, and
+`workspace.note` — which enter real UI paths under the verbs-=-clicks contract
+rather than reaching around the UI (see [Verb contract](#verb-contract-verbs--clicks)
+for where `workspace.note` differs). Reviewed exceptions widen the
 read/write surface deliberately: caller-scoped input injection ships as the experimental,
 double-gated `input.write` capability (see
 [Automation Input Write Decision](../decisions/automation-input-write.md)), and
