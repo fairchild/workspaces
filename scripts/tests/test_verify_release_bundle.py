@@ -379,6 +379,21 @@ class FailClosedUnderTheSystemBashTests(VerifierArgumentTestCase):
         self.assertNotIn("unbound variable", output, f"this was not a `set -e` abort\n{output}")
 
 
+class MissingSharedConstantTests(unittest.TestCase):
+    """The verifier now sources scripts/lib/release-signing.sh for the authority
+    it requires. That source runs before the EXIT trap is armed, so this covers
+    the one thing a new dependency must never do: turn a missing file into a
+    pass."""
+
+    def test_a_missing_signing_lib_is_not_a_pass(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="VerifyReleaseBundleNoLib-") as root:
+            script = Path(root) / "verify-release-bundle.sh"
+            script.write_text(SCRIPT_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+            script.chmod(0o755)
+            result = run_verifier("--structure-only", ABSENT_BUNDLE, script=script)
+        self.assertNotEqual(result.returncode, 0)
+
+
 def script_with_injected_abort(root: Path, statement: str, marker: str) -> Path:
     """A copy of the verifier that aborts right after its EXIT trap is armed.
 
@@ -388,6 +403,9 @@ def script_with_injected_abort(root: Path, statement: str, marker: str) -> Path:
     of it so a test cannot pass on an exit code the injection never caused.
     """
     source = SCRIPT_PATH.read_text(encoding="utf-8")
+    # The verifier reads the required signing authority from scripts/lib, which
+    # it sources before arming its trap, so the copy needs that directory too.
+    shutil.copytree(SCRIPT_PATH.parent / "lib", root / "lib")
     anchor = "trap cleanup EXIT\n"
     if anchor not in source:
         raise AssertionError(f"{SCRIPT_PATH} no longer arms its EXIT trap as expected")

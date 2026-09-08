@@ -40,6 +40,9 @@ CLI_NAME="workspaces"
 APP_BUNDLE="$BUILD_DIR/$APP_BUNDLE_NAME.app"
 VERIFY_KEYCHAIN_SIGNING_SCRIPT="$SCRIPT_DIR/verify-app-keychain-signing.sh"
 VERIFY_RELEASE_BUNDLE_SCRIPT="$SCRIPT_DIR/verify-release-bundle.sh"
+VERIFY_GHOSTTY_PIN_SCRIPT="$SCRIPT_DIR/verify-ghostty-pin.sh"
+# shellcheck source=lib/release-signing.sh
+source "$SCRIPT_DIR/lib/release-signing.sh"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
 CLI_BUNDLE_RELATIVE_PATH="Contents/Helpers/$CLI_NAME"
 
@@ -273,12 +276,57 @@ codesign_with_identity() {
     return "$rc"
 }
 
+# codesign accepts an identity as a SHA-1 or as a substring of a certificate
+# name, so the preflight resolves it the same way and insists it names exactly
+# one certificate. Zero is the misconfiguration this exists to catch; more than
+# one is a codesign failure in its own right.
+resolve_signing_identity_name() {
+    local -a find_cmd=(security find-identity -v -p codesigning)
+    if [[ -n "$CODESIGN_KEYCHAIN_PATH" ]]; then
+        find_cmd+=("$CODESIGN_KEYCHAIN_PATH")
+    fi
+
+    local listing="" line="" hash="" name="" resolved="" matches=0
+    listing="$("${find_cmd[@]}" 2>/dev/null)" || listing=""
+
+    while IFS= read -r line; do
+        hash="$(printf '%s' "$line" | sed -n 's/^ *[0-9]*) \([0-9A-Fa-f]\{40\}\) .*/\1/p')"
+        name="$(printf '%s' "$line" | sed -n 's/^[^"]*"\(.*\)"[^"]*$/\1/p')"
+        [[ -n "$name" ]] || continue
+        if [[ "$SIGNING_IDENTITY" == "$hash" ]] || [[ "$name" == *"$SIGNING_IDENTITY"* ]]; then
+            matches=$((matches + 1))
+            resolved="$name"
+        fi
+    done <<< "$listing"
+
+    if (( matches != 1 )); then
+        printf '%s\n' "$listing" >&2
+        if (( matches == 0 )); then
+            echo "SIGNING_IDENTITY \"$SIGNING_IDENTITY\" matches no codesigning certificate in the keychain" >&2
+        else
+            echo "SIGNING_IDENTITY \"$SIGNING_IDENTITY\" matches $matches certificates; name one exactly or use its SHA-1" >&2
+        fi
+        return 1
+    fi
+
+    printf '%s\n' "$resolved"
+}
+
 prepare_signing_assets() {
     require_cmd security
     [[ -x "$PLIST_BUDDY" ]] || fail "PlistBuddy not found at $PLIST_BUDDY"
     [[ -x "$VERIFY_KEYCHAIN_SIGNING_SCRIPT" ]] || fail "Missing verifier script at $VERIFY_KEYCHAIN_SIGNING_SCRIPT"
     [[ -x "$VERIFY_RELEASE_BUNDLE_SCRIPT" ]] || fail "Missing verifier script at $VERIFY_RELEASE_BUNDLE_SCRIPT"
     [[ -n "${SIGNING_IDENTITY:-}" ]] || fail "SIGNING_IDENTITY must be set for signed builds"
+
+    local resolved_identity=""
+    resolved_identity="$(resolve_signing_identity_name)" ||
+        fail "Could not resolve SIGNING_IDENTITY to a single codesigning certificate"
+    if [[ "$resolved_identity" != "$RELEASE_SIGNING_AUTHORITY: "* ]]; then
+        fail "SIGNING_IDENTITY resolves to \"$resolved_identity\", but a packaged build must be signed with a $RELEASE_SIGNING_AUTHORITY certificate ($VERIFY_RELEASE_BUNDLE_SCRIPT rejects anything else once the build is done)"
+    fi
+    log_success "Signing identity: $resolved_identity"
+
     [[ -n "$PROVISIONING_PROFILE_PATH" ]] || fail "PROVISIONING_PROFILE_PATH is required for signed builds"
 
     PROVISIONING_PROFILE_PATH="$(expand_home_prefix "$PROVISIONING_PROFILE_PATH")"
@@ -411,6 +459,9 @@ log_step "Pre-flight checks"
 
 [[ -f "$PROJECT_DIR/Package.swift" ]] || fail "Package.swift not found. Run from the WorkSpaces repo directory."
 log_success "Package.swift found"
+
+[[ -x "$VERIFY_GHOSTTY_PIN_SCRIPT" ]] || fail "Missing verifier script at $VERIFY_GHOSTTY_PIN_SCRIPT"
+"$VERIFY_GHOSTTY_PIN_SCRIPT" || fail "GhosttyKit.xcframework does not match the pinned Ghostty commit"
 
 if [[ "$SIGN_APP" == true ]]; then
     if [[ -f "$SIGNING_CONFIG" ]]; then
