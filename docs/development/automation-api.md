@@ -137,8 +137,13 @@ WorkSpaces terminal tile. See
   `hostSessionID`.
 - Capabilities are enforced before each scoped operation.
 - Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
-- Mutation verbs enter the same UI gesture the equivalent user action does — they
-  never write the data layer directly. See [Verb contract](#verb-contract-verbs--clicks).
+- The five gesture verbs (`workspace.select`, `workspace.create`,
+  `workspace.archive`, `repo.terminal`, `workspace.note`) reach app state only
+  through gesture closures the live window installs, never around the UI;
+  `tile.focus`, `tile.split`, `tile.close`, and `input.write` drive the terminal
+  runtime from the controller instead. `workspace.note`'s closure is itself the
+  stored write, because the sidebar's own menu item is too. See
+  [Verb contract](#verb-contract-verbs--clicks).
 - App Intents are in-process, user-initiated, OS-mediated veneers; they do not
   require the Automation API or Operator Scope experiments and do not expose a
   socket or process-readable operator credential.
