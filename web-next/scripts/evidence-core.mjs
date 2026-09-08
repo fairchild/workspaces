@@ -61,7 +61,17 @@ export function expectedCaptureFiles(
 	return names.flatMap((name) => themes.map((theme) => `${name}-${theme}.png`));
 }
 
-/** The first 8 bytes of every PNG. A file that lacks them is not a capture. */
+/**
+ * The first 8 bytes of every PNG. A file that lacks them is not a capture.
+ *
+ * This is a signature check, not a decode: it proves the file starts like a
+ * PNG, not that Playwright wrote a complete, undamaged image. It does not
+ * catch a screenshot truncated after the header, a corrupted or missing
+ * IDAT/IEND chunk, wrong dimensions, or a blank/solid frame from a page that
+ * hadn't settled — those need an actual PNG decode or a perceptual diff
+ * against a reference image, and this gate does neither. Real scope
+ * boundary, not an oversight (#1535).
+ */
 export const PNG_SIGNATURE = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10);
 
 function hasPNGSignature(header) {
@@ -106,22 +116,37 @@ export function describeMissingCaptures(outputDir, missing, expectedCount) {
  * the whole run — an empty loop is how the walk used to exit 0 having done
  * nothing (#976) — and it rejects with a diagnosable error when the run
  * outlives its budget. Always cancel it, or it holds the process open.
+ *
+ * `onExpire` is cooperative cancellation, not an afterthought: `expired`
+ * does not reject until `onExpire` (if given) resolves, so a caller that
+ * uses it to escalate-and-await a still-running child (e.g. harness.mjs's
+ * `stop()`, which SIGTERMs and then SIGKILLs after a grace period) gets a
+ * genuine ordering guarantee — the child is terminated before the run is
+ * reported as timed out — instead of racing an abandoned cleanup against
+ * `main()`'s `process.exit()` (#1535). Without `onExpire`, a resistant
+ * process group can outlive the run: `main()`'s exit handler only sends one
+ * SIGTERM from inside a synchronous `'exit'` listener, with no chance to
+ * escalate if that is ignored.
  */
 export function createRunDeadline(
 	timeoutMs,
-	{ timers = globalThis, envVar = "EVIDENCE_TIMEOUT_MS" } = {},
+	{ timers = globalThis, envVar = "EVIDENCE_TIMEOUT_MS", onExpire } = {},
 ) {
 	let timer;
 	const expired = new Promise((_, reject) => {
-		timer = timers.setTimeout(
-			() =>
-				reject(
-					new Error(
-						`Evidence run exceeded ${timeoutMs}ms without finishing. The last capture logged above is where it stalled; raise ${envVar} if the walk legitimately needs longer.`,
-					),
+		const fail = () =>
+			reject(
+				new Error(
+					`Evidence run exceeded ${timeoutMs}ms without finishing. The last capture logged above is where it stalled; raise ${envVar} if the walk legitimately needs longer.`,
 				),
-			timeoutMs,
-		);
+			);
+		timer = timers.setTimeout(async () => {
+			try {
+				await onExpire?.();
+			} finally {
+				fail();
+			}
+		}, timeoutMs);
 	});
 	return { expired, cancel: () => timers.clearTimeout(timer) };
 }

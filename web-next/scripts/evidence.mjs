@@ -446,7 +446,12 @@ async function capturePrototype(page, theme, file) {
 	await page.screenshot({ path: file });
 }
 
-async function runWalk() {
+/**
+ * Runs the walk, publishing the live server onto `serverRef` as soon as it
+ * starts so `main()` can reach it from the deadline's `onExpire` even though
+ * this call itself is raced against the deadline and may be abandoned mid-walk.
+ */
+async function runWalk(serverRef) {
 	// Start from an empty directory so a previous run's PNGs cannot satisfy
 	// this run's completion check.
 	rmSync(OUTPUT_DIR, { recursive: true, force: true });
@@ -458,6 +463,7 @@ async function runWalk() {
 	let primaryError;
 	try {
 		server = await startProductionServer(PORT, env);
+		serverRef.current = server;
 		db = await connectSeedClient(server.baseUrl, databaseUrl);
 		browser = await launchChromium();
 		for (const colorScheme of THEMES) {
@@ -538,9 +544,19 @@ function assertWalkComplete() {
 }
 
 async function main() {
-	const deadline = createRunDeadline(RUN_TIMEOUT_MS);
+	// Holds the live server so a timeout can reach and terminate it even
+	// though runWalk() itself is raced below and may be abandoned mid-walk.
+	const serverRef = {};
+	const deadline = createRunDeadline(RUN_TIMEOUT_MS, {
+		// Cooperative cancellation (#1535): stop() SIGTERMs the detached
+		// `next start` group and escalates to SIGKILL after a grace period if
+		// it's still alive, and createRunDeadline awaits this before rejecting
+		// — so a resistant server is terminated before the run is reported as
+		// timed out, rather than racing an abandoned cleanup against exit().
+		onExpire: () => serverRef.current?.stop(),
+	});
 	try {
-		await Promise.race([runWalk(), deadline.expired]);
+		await Promise.race([runWalk(serverRef), deadline.expired]);
 	} finally {
 		deadline.cancel();
 	}
