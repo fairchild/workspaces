@@ -220,7 +220,11 @@ TEST_COMMAND_RE = re.compile(
 )
 TEST_RESULT_RE = re.compile(
     r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean"
-    r"|\d+\s+(?:tests?|cases?|examples?|files?)|no\s+\w+\s+errors?)\b"
+    r"|\d+\s+(?:tests?|cases?|examples?|files?))\b"
+    # A result is often reported as an absence -- "no lint errors", "zero
+    # failures", "0 warnings" -- and those are what a linter prints when it
+    # is happy.
+    r"|\b(?:no|zero|0)\s+(?:\w+\s+){0,2}(?:errors?|failures?|warnings?)\b"
 )
 # A run that failed is not evidence that anything passed. "12 tests failed"
 # carries a count and a test noun and was read as a result.
@@ -264,6 +268,21 @@ EVIDENCE_STORE_LOG_RE = re.compile(
 )
 
 
+# "no lint errors" and "zero failures" are pass phrasings that contain the
+# words a failure is spelled with. Stripped before the failure search, they
+# stop the failure pattern from swallowing the result pattern beside it --
+# `TEST_RESULT_RE` accepts `no \w+ errors?`, and without this that branch was
+# dead the moment a failure guard existed.
+NEGATED_FAILURE_RE = re.compile(
+    r"(?i)\b(?:no|zero|0|without|free of)\s+(?:\w+\s+){0,2}"
+    r"(?:errors?|failures?|fail(?:s|ed|ing)?|warnings?|regressions?)\b"
+)
+
+
+def _reports_a_failure(text: str) -> bool:
+    return bool(TEST_FAILURE_RE.search(NEGATED_FAILURE_RE.sub(" ", text)))
+
+
 # How far past a command its output may sit. A fenced block of runner output
 # with a blank line before it is the common shape, and it fits inside this.
 NAMED_TEST_WINDOW_LINES = 8
@@ -272,9 +291,11 @@ NAMED_TEST_WINDOW_LINES = 8
 def has_named_test_signal(body: str) -> bool:
     """A command and what it printed, in one breath.
 
-    Matched within a line and its neighbour, not anywhere in the body: a
-    planned `swift test` in one paragraph and the words "green status icon"
-    in another are not a report of a run.
+    Matched within a bounded window under the command, not anywhere in the
+    body: a planned `swift test` in one paragraph and the words "green status
+    icon" in another are not a report of a run. The window skips blank lines
+    and fences, which is ordinary formatting, and ends at a heading or the
+    next command, which is where the next statement begins.
     """
     lines = body.splitlines()
     for index, line in enumerate(lines):
@@ -292,7 +313,7 @@ def has_named_test_signal(body: str) -> bool:
             if stripped and not stripped.startswith(("```", "~~~")):
                 window.append(follower)
         joined = " ".join(window)
-        if TEST_RESULT_RE.search(joined) and not TEST_FAILURE_RE.search(joined):
+        if TEST_RESULT_RE.search(joined) and not _reports_a_failure(joined):
             return True
     return False
 

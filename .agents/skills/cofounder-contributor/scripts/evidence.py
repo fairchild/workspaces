@@ -243,7 +243,8 @@ EXTERNAL_VERIFICATION_RE = re.compile(
     r"|the deployed\b|deployed\b|real (?:device|host|hardware|machine)"
     r"|the installed (?:app|build)|installed build)\b"
     r"|\bsmoke\s+(?:test\w*\s+)?(?:against|on|of)\b"
-    r"|\b(?:verify|check|confirm)\b[^\n]{0,40}?\b(?:endpoint|url|deployment|release)\b"
+    r"|\b(?:verify|check|confirm)\b[^\n]{0,40}?"
+    r"\b(?:endpoint|url|deployment|deployed build|running service)\b"
 )
 # A statement in the PR body that names a test runner. Unanchored: the body is
 # prose about what was run, not a contract item.
@@ -275,6 +276,21 @@ TEST_FAILURE_RE = re.compile(
     r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
     r"|\bexit(?:ed|s)?\s+[1-9]\b|\bred\b|\bbroken\b"
 )
+# "no lint errors" and "zero failures" are pass phrasings that contain the
+# words a failure is spelled with. Stripped before the failure search, they
+# stop the failure pattern from swallowing the result pattern beside it --
+# `TEST_RESULT_RE` accepts `no \w+ errors?`, and without this that branch was
+# dead the moment a failure guard existed.
+NEGATED_FAILURE_RE = re.compile(
+    r"(?i)\b(?:no|zero|0|without|free of)\s+(?:\w+\s+){0,2}"
+    r"(?:errors?|failures?|fail(?:s|ed|ing)?|warnings?|regressions?)\b"
+)
+
+
+def _reports_a_failure(text: str) -> bool:
+    return bool(TEST_FAILURE_RE.search(NEGATED_FAILURE_RE.sub(" ", text)))
+
+
 TEST_RESULT_RE = re.compile(
     r"(?i)\bran\s+\d+\s+tests?\b"
     r"|\b\d+\s+(?:tests?|cases?|files?|examples?|assertions?|specs?|suites?)\s+"
@@ -1643,7 +1659,7 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
                 break
             window.append(follower)
         joined = " ".join(window)
-        if not TEST_RESULT_RE.search(joined) or TEST_FAILURE_RE.search(joined):
+        if not TEST_RESULT_RE.search(joined) or _reports_a_failure(joined):
             continue
         quoted = [window[0]]
         if not TEST_RESULT_RE.search(window[0]):

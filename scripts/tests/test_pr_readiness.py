@@ -207,6 +207,23 @@ class PRReadinessTests(unittest.TestCase):
         result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
         self.assertIn("No test/evidence signal found in PR body.", result.failures)
 
+    def test_a_pass_phrased_as_an_absence_still_counts(self) -> None:
+        # `TEST_RESULT_RE` accepts "no lint errors" as a pass. A failure guard
+        # spelled with a bare `errors?` matches inside that same phrase, which
+        # made the branch dead the moment the guard existed.
+        for line in (
+            "- `mise run lint` -- no lint errors",
+            "- `mise run lint` -- zero failures",
+            "- `./scripts/check.sh` -- 0 errors",
+        ):
+            with self.subTest(line=line):
+                body = GOOD_BODY.replace(
+                    "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+                    line,
+                ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+                result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+                self.assertEqual(result.failures, [])
+
     def test_a_fenced_result_under_a_command_still_counts(self) -> None:
         # A blank line and a fence between the command and its output is
         # ordinary formatting, and a two-line window called it no evidence.

@@ -1699,6 +1699,27 @@ class AttestedTestKindTests(unittest.TestCase):
             with self.subTest(body=body):
                 self.assertIsNone(run_contributor._attested_test_statement(body))
 
+    def test_a_pass_reported_as_an_absence_is_still_a_pass(self) -> None:
+        # A failure guard spelled with a bare `errors?` swallows the pass
+        # phrasings that name what did not happen.
+        self.assertIsNotNone(
+            run_contributor._attested_test_statement(
+                "- `pnpm test` -> 214 tests passed, no lint errors\n"
+            )
+        )
+
+    def test_a_docs_item_naming_a_release_is_not_external_verification(self) -> None:
+        self.assertFalse(
+            run_contributor._needs_a_person_to_look(
+                "Verify the release notes mention the new flag"
+            )
+        )
+        self.assertTrue(
+            run_contributor._needs_a_person_to_look(
+                "Verify the live endpoint returns the new field"
+            )
+        )
+
     def test_a_run_in_another_directory_completes_nothing(self) -> None:
         # `web-next` is what tells a `pnpm test` there apart from one in
         # `web`, and dropping a directory-only span made them one claim.
