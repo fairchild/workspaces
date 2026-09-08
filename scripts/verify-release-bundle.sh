@@ -31,6 +31,9 @@ EXPECTED_BUNDLE_NAME="WorkSpaces.app"
 EXPECTED_DISPLAY_NAME="WorkSpaces"
 EXPECTED_EXECUTABLE_NAME="WorkspaceManager"
 PLIST_BUDDY="/usr/libexec/PlistBuddy"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/release-signing.sh
+source "$SCRIPT_DIR/lib/release-signing.sh"
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/workspaces-release-bundle.XXXXXX")"
 
 # A zero exit has to be earned. On macOS `/bin/bash` — 3.2.57, the shell the
@@ -174,9 +177,9 @@ verify_codesign_identity() {
         fail "$label is missing a TeamIdentifier"
     fi
 
-    if ! grep -q '^Authority=Developer ID Application:' "$report_file"; then
+    if ! grep -q "^Authority=${RELEASE_SIGNING_AUTHORITY}:" "$report_file"; then
         cat "$report_file" >&2 || true
-        fail "$label is not signed with a Developer ID Application authority"
+        fail "$label is not signed with a $RELEASE_SIGNING_AUTHORITY authority"
     fi
 }
 

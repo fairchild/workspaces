@@ -204,13 +204,91 @@ def has_checked_box(body: str, label: str) -> bool:
     return bool(re.search(rf"(?im)^\s*[-*]\s*\[x\]\s*{re.escape(label)}\b", body))
 
 
-def has_any_evidence(body: str) -> bool:
-    lowered = body.lower()
+# A command someone can re-run, and what it printed. Either half alone is not
+# a report: a command with no result is a plan, a result with no command is a
+# claim nobody can check.
+TEST_COMMAND_RE = re.compile(
+    # A path-shaped command cannot carry a leading `\b`: nothing before the
+    # `.` in `./scripts/foo.sh` is a word character, so the boundary never
+    # holds and the alternative is unreachable. The word-initial names take
+    # the boundary; the rest do not.
+    r"(?i)(?:\b(?:swift\s+(?:test|build)|(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?\S*test"
+    r"|pytest|python3?\s+-m\s+(?:pytest|unittest)|uv\s+run|go\s+test|cargo\s+test"
+    r"|xcodebuild\s+test|mise\s+run|make\s+test|bash\s+-n|actionlint|shellcheck"
+    r"|swift-format|git\s+diff\s+--check|validate-release-changes)\b"
+    r"|\./\S+\.(?:sh|py|ts|js)\b|\./scripts/\S+)"
+)
+TEST_RESULT_RE = re.compile(
+    r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean"
+    r"|\d+\s+(?:tests?|cases?|examples?|files?)|no\s+\w+\s+errors?)\b"
+)
+# Anything a person can see lives here. `WorkspaceManagerCore` and the CLI are
+# Swift that renders nothing, so an image proves nothing about them. An image
+# is evidence *of* what someone looks at; anywhere else it is a picture of
+# text.
+VISUAL_SURFACE_PREFIXES = (
+    "Sources/WorkspaceManager/",
+    "web/",
+    "web-next/",
+    "ios/",
+    "prototypes/",
+    "fixtures/ui-state/",
+)
+# A closing paren is required: `![x](https://` is a broken link, not evidence.
+IMAGE_EVIDENCE_RE = re.compile(r"!\[[^\]\n]*\]\([^)\s]+\)")
+# The extension ends the URL. `…/x.png.evil` is not a png.
+IMAGE_LINK_RE = re.compile(
+    r"(?i)https?://[^\s)\]]+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)(?=[\s)\]]|$)"
+)
+# The host, at the host's own position. A substring test would accept
+# `https://evil.example/evidence.cloudcompute.com/x.png` as an upload of ours.
+EVIDENCE_STORE_RE = re.compile(r"(?i)\bhttps://evidence\.cloudcompute\.com/\S+")
+EVIDENCE_STORE_LOG_RE = re.compile(
+    r"(?i)\bhttps://evidence\.cloudcompute\.com/[^\s)\]]+\.txt(?=[\s)\]]|$)"
+)
+
+
+def has_named_test_signal(body: str) -> bool:
+    """A command and what it printed, in one breath.
+
+    Matched within a line and its neighbour, not anywhere in the body: a
+    planned `swift test` in one paragraph and the words "green status icon"
+    in another are not a report of a run.
+    """
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if not TEST_COMMAND_RE.search(line):
+            continue
+        window = " ".join(lines[index : index + 2])
+        if TEST_RESULT_RE.search(window):
+            return True
+    return False
+
+
+def has_image_evidence(body: str) -> bool:
+    return bool(IMAGE_EVIDENCE_RE.search(body) or IMAGE_LINK_RE.search(body))
+
+
+def touches_a_visual_surface(files: list[str]) -> bool:
+    return any(path.startswith(VISUAL_SURFACE_PREFIXES) for path in files)
+
+
+def has_any_evidence(body: str, files: list[str] | None = None) -> bool:
+    """Whether this body carries a signal that anything was verified.
+
+    An image used to satisfy this on its own, for any change at all, which is
+    what made rendering a test summary to an SVG worth doing. It now satisfies
+    it only where there is something to see. Michael, 2026-09: "We will never
+    again choose to create an svg of text just to have evidence. That was a
+    reward hack I allowed to go through for a while."
+    """
+    visual = touches_a_visual_surface(files or [])
     return any(
         (
-            "evidence.cloudcompute.com" in lowered,
-            bool(re.search(r"!\[.*\]\(https?://", body)),
-            bool(re.search(r"(?i)(test|tests).*(pass|passed)|\d+\s+passed", body)),
+            has_named_test_signal(body),
+            bool(EVIDENCE_STORE_LOG_RE.search(body)),
+            has_image_evidence(body) and visual,
+            bool(EVIDENCE_STORE_RE.search(body)) and visual,
             has_checked_box(body, "Not a testable change"),
         )
     )
@@ -270,8 +348,14 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):
         failures.append("PR text contains a merge-stop instruction.")
 
-    if not has_any_evidence(body) and not is_docs_only(files):
-        failures.append("No test/evidence signal found in PR body.")
+    if not has_any_evidence(body, files) and not is_docs_only(files):
+        if has_image_evidence(body) and not touches_a_visual_surface(files):
+            failures.append(
+                "The only evidence in the PR body is an image, and this change is not one "
+                "anyone looks at. State the command you ran and the line it printed."
+            )
+        else:
+            failures.append("No test/evidence signal found in PR body.")
 
     release_files = changed_release_files(files)
     if release_files:
@@ -298,8 +382,9 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
 COMMENT_MARKER = "<!-- pr-readiness-gate -->"
 
 EVIDENCE_HINT = (
-    "an uploaded evidence link (`evidence.cloudcompute.com`), an embedded image, "
-    'a test summary containing "N passed", or a checked `- [x] Not a testable change` box'
+    "the command you ran and the line it printed (`swift test` — `Test run with 1992 "
+    "tests passed`), an uploaded `.txt` log, a screenshot or recording for a change "
+    "someone looks at, or a checked `- [x] Not a testable change` box"
 )
 
 

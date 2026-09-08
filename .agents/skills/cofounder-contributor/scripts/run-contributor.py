@@ -82,7 +82,9 @@ from _helpers import (  # noqa: E402, F401
 )
 
 from evidence import (  # noqa: E402, F401
+    CARRIED_FORWARD_NOTE,
     EVENT_COMPLETED_KINDS,
+    LANE_EXEMPT_KINDS,
     EVIDENCE_FALLBACK_SENTENCE,
     EVIDENCE_METADATA_RE,
     EVIDENCE_METADATA_VERSION,
@@ -91,6 +93,7 @@ from evidence import (  # noqa: E402, F401
     MACOS_EVIDENCE_KINDS,
     STRUCTURED_EVIDENCE_UPDATE_RE,
     SWIFT_TEST_NO_MATCH_TEXT,
+    _attested_test_statement,
     _ci_check_name,
     _evidence_item_kind,
     _evidence_status_boundaries,
@@ -109,7 +112,9 @@ from evidence import (  # noqa: E402, F401
     _needs_screenshot_evidence,
     _normalize_evidence_item,
     _normalize_evidence_key,
+    _owner_written_entries,
     _pending_ci_resolution,
+    _perf_numbers,
     _selector_matches_test_list,
     _structured_evidence_entries,
     _swift_test_filter_selector,

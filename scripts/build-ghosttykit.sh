@@ -56,6 +56,11 @@ ARM64_HOMEBREW_PREFIX="/opt/homebrew"
 # post-build repair, strip, and verification steps all locate it by this name,
 # and a rename upstream surfaces as assert_host_arch_slice finding no archive.
 GHOSTTY_ARCHIVE_NAME="libghostty-internal.a"
+# Written inside the xcframework after a successful build, so the pin travels
+# with the artifact. Frameworks/ is gitignored and the xcframework is routinely
+# copied between checkouts, which is how a framework built at an older pin ends
+# up under newer source with nothing to say so.
+GHOSTTY_PIN_STAMP_NAME=".ghostty-pin"
 HOMEBREW_ZIG_FORMULA="zig"
 HOMEBREW_ZIG_BIN="$ARM64_HOMEBREW_PREFIX/opt/$HOMEBREW_ZIG_FORMULA/bin/zig"
 GHOSTTY_ARCH_DIAGNOSTICS="${GHOSTTY_ARCH_DIAGNOSTICS:-1}"
@@ -628,12 +633,28 @@ install_xcframework() {
   cp -R "$src" "$OUT_DIR/"
 }
 
+# The pin this xcframework was built at, recorded only after the asserts below
+# have passed, so a framework that failed verification is never stamped as good.
+stamp_pin() {
+  local framework="$1"
+  printf '%s\n' "$GHOSTTY_COMMIT" > "$framework/$GHOSTTY_PIN_STAMP_NAME"
+}
+
+# Consumers ask for the pin rather than grepping these assignments out of this
+# file; verify-ghostty-pin.sh reads all three from here.
+print_pin_manifest() {
+  printf 'GHOSTTY_COMMIT=%s\n' "$GHOSTTY_COMMIT"
+  printf 'GHOSTTY_ARCHIVE_NAME=%s\n' "$GHOSTTY_ARCHIVE_NAME"
+  printf 'GHOSTTY_PIN_STAMP_NAME=%s\n' "$GHOSTTY_PIN_STAMP_NAME"
+}
+
 main() {
   local arg purge_cache=0
   for arg in "$@"; do
     case "$arg" in
       --purge-cache) purge_cache=1 ;;
-      *) die "unknown argument: $arg (supported: --purge-cache)" ;;
+      --print-pin) print_pin_manifest; return 0 ;;
+      *) die "unknown argument: $arg (supported: --purge-cache, --print-pin)" ;;
     esac
   done
 
@@ -668,7 +689,8 @@ main() {
   log_arch_diagnostics "$OUT_DIR/GhosttyKit.xcframework"
   assert_host_arch_slice "$OUT_DIR/GhosttyKit.xcframework"
   assert_macos_deployment_target "$OUT_DIR/GhosttyKit.xcframework"
-  echo "Built GhosttyKit.xcframework -> $OUT_DIR/GhosttyKit.xcframework"
+  stamp_pin "$OUT_DIR/GhosttyKit.xcframework"
+  echo "Built GhosttyKit.xcframework ($GHOSTTY_COMMIT) -> $OUT_DIR/GhosttyKit.xcframework"
 }
 
 main "$@"

@@ -112,7 +112,7 @@ Common examples:
 - `./scripts/pr-evidence.sh --pr <N> --profile performance`
   - Runs the PR evidence wrapper around canonical performance comparison.
   - Writes before/after artifacts under `./output/evidence/pr-<number>/.../performance/`.
-  - Uploads an SVG delta summary through `./scripts/evidence.sh`.
+  - Uploads a text delta summary through `./scripts/evidence.sh`. The numbers belong in the PR body's Performance section; the upload is the log behind them.
   - Use `--before-summary`, `--after-summary`, `--skip-before`, and `--skip-after` when comparing summaries captured on separate commits.
 - Contract source of truth:
   - `./config/performance/contract.json`
@@ -143,11 +143,11 @@ Use these scripts for day-to-day UI verification:
 - `--name <slug>` without `--file` screenshots the desktop, so it is for UI work; `--file <path>` uploads an existing screenshot, recording, or `.txt` log. A test log goes up as text — an image of text is never evidence.
 - `./scripts/pr-evidence.sh` is a profile-driven wrapper built on top of it for specific PR evidence bundles:
   - Creates a local evidence bundle under `./output/evidence/pr-<number>/`.
-  - Uploads artifacts through `evidence.sh` and prints Markdown links.
+  - Uploads artifacts through `evidence.sh` and prints Markdown links. Summaries go up as text: an image of text is never evidence.
   - Initial profiles:
     - `swift-unit`: focused Swift tests, full Swift tests, and `git diff --check`.
     - `ghostty-shortcuts`: GhosttyKit build, app build, watched debug launch, foreground `Cmd+D` / `Cmd+[` / `Cmd+]` shortcut smoke, runtime log summary, and window capture.
-    - `performance`: canonical before/after performance comparison rendered as uploadable PR evidence.
+    - `performance`: canonical before/after performance comparison, written as a text summary and a PR-body markdown block. The numbers are the evidence; paste them into the PR body's Performance section.
   - Examples:
     - `./scripts/pr-evidence.sh --pr 387 --profile swift-unit --filter GhosttyRuntimeConfigFactory`
     - `./scripts/pr-evidence.sh --pr 387 --profile ghostty-shortcuts`

@@ -108,34 +108,29 @@ Cloudflare credentials.
 The 60-second query timeout is per environment rather than per run, since
 environments are queried in sequence.
 
-The wrangler settings that change where migrations live are honored:
-`migrations_table` when a binding renames the table, and `migrations_pattern` for
-nested layouts, whose migrations wrangler records under their path relative to
-`migrations_dir`. A binding that omits `migrations_dir` is still watched, using
-wrangler's default of `migrations`, because omitting the field is not opting out.
-`infra/feedback-store` sets `migrations_dir` and takes the defaults for the rest.
+This check reads one wrangler setting off each binding: `migrations_dir`. A binding
+that omits it is still watched, using wrangler's default of `migrations`, because
+omitting the field is not opting out. `infra/feedback-store` sets `migrations_dir`
+and takes wrangler's defaults for everything else — a flat directory of `*.sql`
+files and the `d1_migrations` table name — which is the only shape any service in
+`D1_SERVICE_DIRS` uses.
 
-Two places where this check is narrower than wrangler, both reported rather than
-guessed at. Pattern matching uses Python's `Path.glob`, which agrees with wrangler's
-minimatch on literal characters, `*`, `?` and `**` in segments that do not begin
-with a dot, and on skipping dotfiles and anything reached through a symlink. A
-pattern outside that subset — character or POSIX classes, brace alternation,
-extglobs, a leading `!` or `#`, a segment naming a dot component, or a trailing
-`**`, whose meaning depends on the Python version — warns and says which part it
-cannot compare, rather than matching a different set of files than wrangler
-applies. A table name carrying a
-NUL, and an empty one, are refused rather than sent.
+Two wrangler settings this check does not read: `migrations_table`, for a binding
+that renames the table, and `migrations_pattern`, for a nested layout whose
+migrations wrangler records under their path relative to `migrations_dir`. Support
+for both was scoped out (#1533) after it grew unreachable from any binding in this
+repo; it returns, with its original tests, alongside the D1 service that needs it.
 
-One SQL failure is deliberately not in that bucket. A database that has never had
-a migration applied has no migrations table, so the query errors — but that is the
-answer, not an obstacle, and it is maximal drift: every migration in the repo is
-pending. It reports `fail`. Read as a warn it would make a freshly recreated
-database report *softer* than one missing a single migration, since `--strict` fails
-only on `fail`. Wrangler reports that error on stdout while writing unrelated
-chatter to stderr, so both streams are read. Wrangler's JSON is decoded before the
-table name is compared, and compared for equality rather than matched inside the
-message, so a neighbouring table like `d1_migrations_v2` is an obstacle rather than
-an answer and a quoted name survives the round trip.
+One SQL failure is deliberately reported as `fail`, not folded into the `warn`
+bucket above. A database that has never had a migration applied has no migrations
+table, so the query errors — but that is the answer, not an obstacle, and it is
+maximal drift: every migration in the repo is pending. Read as a warn it would make
+a freshly recreated database report *softer* than one missing a single migration,
+since `--strict` fails only on `fail`. Wrangler reports that error on stdout while
+writing unrelated chatter to stderr, so both streams are read. Wrangler's JSON is
+decoded before the table name is compared, and compared for equality rather than
+matched inside the message, so a neighbouring table like `d1_migrations_v2` is an
+obstacle rather than an answer.
 
 ## Explicit Follow-Ups
 
