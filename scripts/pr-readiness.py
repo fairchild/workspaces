@@ -229,12 +229,19 @@ TEST_RESULT_RE = re.compile(
 # A run that failed is not evidence that anything passed. "12 tests failed"
 # carries a count and a test noun and was read as a result.
 TEST_FAILURE_RE = re.compile(
-    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b"
+    # `errors?` and `red` are ordinary words in a passing report -- "12 tests
+    # passed, covering error handling" is not a failure -- so a failure noun
+    # counts only where it is reporting a count or a status, and never where
+    # the sentence says what the tests cover.
+    r"(?i)(?<!covering )(?<!including )(?<!handling )(?<!for )(?<!about )"
+    r"\bfail(?:s|ed|ing|ure|ures)?\b"
     r"|\b\d+\s+errors?\b|\berrors?\s*[=:]\s*[1-9]|\berrored\b"
     r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
-    r"|\bexit(?:ed|s)?\s+(?:code\s+|status\s+)?[1-9]\b"
-    r"|\bexit\s+code\s+[1-9]\b|\bnon-?zero exit\b"
-    r"|\bprocess completed with exit code [1-9]\b"
+    # A single-digit bound read `exit code 127` as a pass. Punctuation between
+    # the word and the number is how most runners actually print it.
+    r"|\bexit(?:ed|s)?\s*(?:code|status)?\s*[:=]?\s*[1-9]\d*\b"
+    r"|\bnon-?zero exit\b|\bstatus\s*[:=]\s*(?:error|failed|failure|red)\b"
+    r"|\bprocess completed with exit code [1-9]\d*\b"
 )
 # A line that says the run did not happen. Without this, "`swift test` was
 # not run" and a sentence several lines later mentioning a count read as a
@@ -242,6 +249,11 @@ TEST_FAILURE_RE = re.compile(
 NOT_RUN_RE = re.compile(
     r"(?i)\b(?:not|never|couldn't|could not|cannot|can't|unable to|failed to|"
     r"didn't|did not|skipped?|skipping|pending|todo|to do)\b"
+    # A plan is not a report. "We will run swift test after review" names a
+    # command and, two lines down, a count of the tests the change adds.
+    r"|\b(?:will|shall|going to|plan to|intend to|should|需)\s+(?:be\s+)?run\b"
+    r"|\bonce\s+(?:ci|the\s+\w+)\s+(?:runs|finishes|completes)\b"
+    r"|\bafter\s+(?:review|merge|approval)\b"
 )
 # Anything a person can see lives here. `WorkspaceManagerCore` and the CLI are
 # Swift that renders nothing, so an image proves nothing about them. An image
@@ -268,7 +280,8 @@ VISUAL_SURFACE_PREFIXES = (
 IMAGE_EVIDENCE_RE = re.compile(r"!\[[^\]\n]*\]\([^)\s]+\)")
 # The extension ends the URL. `…/x.png.evil` is not a png.
 IMAGE_LINK_RE = re.compile(
-    r"(?i)https?://[^\s)\]]+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)(?=[\s)\]]|$)"
+    r"(?i)https?://[^\s)\]]+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)"
+    r"(?:[?#][^\s)\]]*)?(?=[\s)\]]|$)"
 )
 # The host, at the host's own position. A substring test would accept
 # `https://evil.example/evidence.cloudcompute.com/x.png` as an upload of ours.
@@ -278,7 +291,10 @@ IMAGE_LINK_RE = re.compile(
 # Nothing that can carry a URL may precede the scheme:
 # `https://evil.example/?next=https://evidence.cloudcompute.com/x.txt` is
 # somebody else's host with ours in its query.
-_STORE_PREFIX = r"(?<![\w/.:=&?#~+-])"
+# Every character a URL can carry before ours, and none that only delimits
+# one: a markdown link's `(` and `[` sit outside the URL, so excluding them
+# would refuse the ordinary `[log](https://evidence...)` form.
+_STORE_PREFIX = r"(?<![\w/.:=&?#~+%;,!$'*-])"
 EVIDENCE_STORE_RE = re.compile(
     rf"(?i){_STORE_PREFIX}https://evidence\.cloudcompute\.com/\S+"
 )
@@ -327,8 +343,6 @@ def has_named_test_signal(body: str) -> bool:
         # command and its output is ordinary formatting, so the window skips
         # those rather than ending on them. It ends at a heading or at the
         # next command, which is where the next statement begins.
-        if NOT_RUN_RE.search(line):
-            continue
         window = [line]
         for follower in lines[index + 1 : index + NAMED_TEST_WINDOW_LINES]:
             stripped = follower.strip()
@@ -337,6 +351,11 @@ def has_named_test_signal(body: str) -> bool:
             if stripped and not stripped.startswith(("```", "~~~")):
                 window.append(follower)
         joined = " ".join(window)
+        # The guard reads the whole statement, not only its first line: the
+        # window is what decides, so a "was not run" on the command line and a
+        # count three lines down was read as a report of a passing run.
+        if NOT_RUN_RE.search(joined):
+            continue
         if TEST_RESULT_RE.search(joined) and not _reports_a_failure(joined):
             return True
     return False

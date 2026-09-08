@@ -264,10 +264,16 @@ EXTERNAL_VERIFICATION_RE = re.compile(
     # production config" and "release notes mention the live-migration flag"
     # are mechanical. It has to be somewhere someone goes and does something.
     r"(?i)\b(?:in|on|against|from)\s+(?:the\s+)?"
+    # "logging in production mode" and "the staging config" name a setting,
+    # not a place someone goes.
     r"(?:production|prod|staging|canary|live|deployed)\b"
+    r"(?!\s+(?:mode|config\w*|settings?|code|path|flag|branch|environment variable))"
     r"|\b(?:a|one|the)?\s*(?:real|live)\s+(?:restart|run|device|host|hardware"
     r"|machine|session|install)\b"
     r"|\bthe installed (?:app|build)\b|\binstalled build\b"
+    r"|\btestflight\b|\bnotari[sz]ed\b|\bsigned (?:dmg|app|build|artifact)\b"
+    r"|\bon an? (?:iphone|ipad|mac|device|phone)\b"
+    r"|\bafter download(?:ing)?\b|\bfrom the download\b"
     r"|\bsmoke\s+(?:test\w*\s+)?(?:against|on|of)\b"
     r"|\b(?:verify|check|confirm)\b[^\n]{0,40}?"
     r"\b(?:endpoint|deployment|deployed build|running service)\b"
@@ -300,13 +306,17 @@ TEST_RUNNER_MENTION_RE = re.compile(
 TEST_FAILURE_RE = re.compile(
     # `errors?` and `red` are ordinary words in a passing report -- "12 tests
     # passed, covering error handling" is not a failure -- so a failure noun
-    # counts only where it is reporting a count or a status.
-    r"(?i)\bfail(?:s|ed|ing|ure|ures)?\b"
+    # counts only where it is reporting a count or a status, and never where
+    # the sentence says what the tests cover.
+    r"(?i)(?<!covering )(?<!including )(?<!handling )(?<!for )(?<!about )"
+    r"\bfail(?:s|ed|ing|ure|ures)?\b"
     r"|\b\d+\s+errors?\b|\berrors?\s*[=:]\s*[1-9]|\berrored\b"
     r"|\b(?:0|no)\s+tests?\b|\bcollected\s+0\b|\bno tests? ran\b"
-    r"|\bexit(?:ed|s)?\s+(?:code\s+|status\s+)?[1-9]\b"
-    r"|\bexit\s+code\s+[1-9]\b|\bnon-?zero exit\b"
-    r"|\bprocess completed with exit code [1-9]\b"
+    # A single-digit bound read `exit code 127` as a pass. Punctuation between
+    # the word and the number is how most runners actually print it.
+    r"|\bexit(?:ed|s)?\s*(?:code|status)?\s*[:=]?\s*[1-9]\d*\b"
+    r"|\bnon-?zero exit\b|\bstatus\s*[:=]\s*(?:error|failed|failure|red)\b"
+    r"|\bprocess completed with exit code [1-9]\d*\b"
 )
 # "no lint errors" and "zero failures" are pass phrasings that contain the
 # words a failure is spelled with. Stripped before the failure search, they
@@ -1664,6 +1674,12 @@ NOT_RUN_RE = re.compile(
 PERF_FIELD_RE = re.compile(
     r"(?i)^\s*[-*]?\s*(?P<label>before|after|delta)\b[^:\n]{0,24}:\s*(?P<value>.+)$"
 )
+# One metric, both sides and the delta, as `perf-compare.py` prints it and
+# `pr-evidence.sh` copies it into the body.
+PERF_COMPARISON_RE = re.compile(
+    r"^[-*]\s*(?P<metric>[^:\n]{1,80}):\s*(?P<before>[^\n]{1,80}?)\s*->\s*"
+    r"(?P<after>[^\n;]{1,80}?)\s*;\s*(?P<delta>[^\n;]{1,80})"
+)
 # A measurement, not a number. "Before Summary: issue #123" carries a digit
 # and measures nothing; a unit is what makes the two sides comparable.
 PERF_MEASUREMENT_RE = re.compile(
@@ -1695,7 +1711,12 @@ def _item_evidence_tokens(item: str) -> tuple[list[str], list[str]]:
         # counts too: `web-next` is what tells a `pnpm test` there apart from
         # a `pnpm test` in `web`, and dropping it made them the same claim.
         paths.append(candidate.casefold())
-        paths.append(candidate.rsplit("/", 1)[-1].casefold())
+    # A basename on its own is a weaker claim than the path that contains it:
+    # `pytest test_foo.py` in some other directory is not a run of
+    # `scripts/tests/test_foo.py`. So the tail is offered only where the item
+    # named no directory at all.
+    if not any("/" in path for path in paths):
+        paths.extend(path.rsplit("/", 1)[-1].casefold() for path in list(paths))
     return [runner for runner in runners if runner], sorted({path for path in paths if path})
 
 
@@ -1703,12 +1724,13 @@ def _line_names(line: str, tokens: list[str]) -> bool:
     """Whether the line names one of these tokens, as a token.
 
     Substring matching made `web-next` answer an item about `web`, and
-    `not_test_foo.py` answer one about `test_foo.py`. A path sits between
-    separators, so the boundary is anything that is not a path character.
+    `not_test_foo.py` answer one about `test_foo.py`. A token ends at a word
+    or path character, and may be preceded by a path separator -- `./`, `/`
+    and `cd ./web-next` all name the thing that follows them.
     """
     lowered = line.casefold()
     return any(
-        re.search(rf"(?<![\w./-]){re.escape(token)}(?![\w./-])", lowered)
+        re.search(rf"(?<![\w.-]){re.escape(token)}(?![\w.-])", lowered)
         for token in tokens
     )
 
@@ -1760,6 +1782,26 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
 
 # How a measurement is summarised, as opposed to what it measured.
 PERF_SUMMARY_TOKENS = frozenset({"p50", "p95", "p99", "delta"})
+# What each metric is measured in. A launch latency reported in megabytes is
+# not a launch latency, and matching on a shared unit alone let "launch memory
+# 10 MB" answer an item about launch latency.
+PERF_METRIC_UNITS = {
+    "latency": {"ms", "s", "sec", "secs", "second", "seconds", "us", "\u00b5s", "ns", "min", "minutes"},
+    "duration": {"ms", "s", "sec", "secs", "second", "seconds", "us", "\u00b5s", "ns", "min", "minutes"},
+    "startup": {"ms", "s", "sec", "secs", "second", "seconds"},
+    "launch": {"ms", "s", "sec", "secs", "second", "seconds"},
+    "cold start": {"ms", "s", "sec", "secs", "second", "seconds"},
+    "render": {"ms", "s", "fps", "hz"},
+    "frame": {"ms", "fps", "hz"},
+    "load": {"ms", "s", "sec", "secs", "second", "seconds"},
+    "memory": {"mb", "kb", "gb", "bytes", "byte"},
+    "footprint": {"mb", "kb", "gb", "bytes", "byte"},
+    "allocation": {"mb", "kb", "gb", "bytes", "byte"},
+    "size": {"mb", "kb", "gb", "bytes", "byte"},
+    "cpu": {"%", "percent", "cores", "core"},
+    "throughput": {"ops", "req", "hz"},
+    "fps": {"fps", "hz"},
+}
 PERF_METRIC_RE = re.compile(
     r"(?i)\b(?:p50|p95|p99|latency|duration|throughput|cpu|memory|footprint"
     r"|allocation|fps|startup|launch|cold start|frame|render|load|size)\b"
@@ -1816,15 +1858,54 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
     lowered = section.casefold()
     if scenarios and not any(token in lowered for token in scenarios):
         return None
-    found: dict[str, str] = {}
+
+    candidates: list[dict[str, str]] = []
+    fields: dict[str, str] = {}
     for line in MARKDOWN_LINE_ENDING_RE.split(section):
+        # A comparison line carries both sides at once. `pr-evidence.sh`
+        # promotes one metric into the Before/After fields and lists the rest
+        # here, so an item about any other metric would never find its numbers
+        # without reading these.
+        comparison = PERF_COMPARISON_RE.match(line.strip())
+        if comparison is not None:
+            name = comparison.group("metric").strip()
+            delta = comparison.group("delta").strip()
+            # The two sides are printed bare and the unit sits on the delta,
+            # so read it across rather than call a comparison unmeasured.
+            unit_match = PERF_MEASUREMENT_RE.search(delta)
+            unit = (
+                unit_match.group(0).lstrip("-+0123456789., ") if unit_match else ""
+            )
+            candidates.append(
+                {
+                    "before": f"{name} {comparison.group('before').strip()} {unit}".strip(),
+                    "after": f"{name} {comparison.group('after').strip()} {unit}".strip(),
+                    "delta": delta,
+                }
+            )
+            continue
         match = PERF_FIELD_RE.match(line)
         if match is None:
             continue
         value = match.group("value").strip()
         if not PERF_MEASUREMENT_RE.search(value):
             continue
-        found.setdefault(match.group("label").casefold(), value)
+        fields.setdefault(match.group("label").casefold(), value)
+    if fields:
+        candidates.insert(0, fields)
+    for found in candidates:
+        answer = _perf_comparison(found, wanted, scenarios, lowered)
+        if answer is not None:
+            return answer
+    return None
+
+
+def _perf_comparison(
+    found: dict[str, str],
+    wanted: set[str],
+    scenarios: set[str],
+    lowered: str,
+) -> str | None:
     if "before" not in found or "after" not in found:
         return None
     # The metric has to be named in the values themselves, not anywhere in the
@@ -1833,19 +1914,34 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
     # measured on the part of each value that names the metric -- otherwise
     # "Before: launch 1s, memory 4GB" and "After: deploy 20ms, memory 3GB"
     # agree on GB and measure nothing in common.
+    shared: set[str] = set()
     if wanted:
         named = {
-            label: {token for token in wanted if token in found[label].casefold()}
+            label: {
+                token
+                for token in wanted
+                # `_` and `-` separate words in a metric name, so
+                # `p50_launch_ms` names launch. A `\w` boundary would not see
+                # it, and that is the shape the producer writes.
+                if re.search(rf"(?<![a-z0-9]){re.escape(token)}(?![a-z0-9])", found[label].casefold())
+            }
             for label in ("before", "after")
         }
-        shared = named["before"] & named["after"]
-        if not shared - PERF_SUMMARY_TOKENS:
+        shared = named["before"] & named["after"] - PERF_SUMMARY_TOKENS
+        if not shared:
             return None
     units = {
-        label: _measurement_units(found[label], shared if wanted else None)
+        label: _measurement_units(found[label], shared or None)
         for label in ("before", "after")
     }
-    if not units["before"] & units["after"]:
+    common = units["before"] & units["after"]
+    if not common:
+        return None
+    # And the unit has to be one the metric is measured in. A launch latency
+    # reported in megabytes measured something else that happened to share a
+    # unit with the other side.
+    expected = set().union(*(PERF_METRIC_UNITS.get(token, set()) for token in shared)) if shared else set()
+    if expected and not common & expected:
         return None
     return "; ".join(
         f"{label} {found[label]}" for label in ("before", "after", "delta") if label in found

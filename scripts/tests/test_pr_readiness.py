@@ -239,12 +239,50 @@ class PRReadinessTests(unittest.TestCase):
                 result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
                 self.assertIn("No test/evidence signal found in PR body.", result.failures)
 
+    def test_a_multi_digit_exit_code_is_not_an_evidence_signal(self) -> None:
+        for line in (
+            "- `pytest` -> Ran 12 tests; Process completed with exit code 127",
+            "- `swift test` -> 12 tests passed; exit status: 1",
+            "- `swift test` -> 12 tests passed; status: ERROR",
+        ):
+            with self.subTest(line=line):
+                body = GOOD_BODY.replace(
+                    "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+                    line,
+                ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+                result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+                self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_plan_to_run_is_not_a_report(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "We will run `swift test` after review.\n\nThe change adds 12 tests.",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_trusted_host_after_a_path_separator_is_not_our_store(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- see https://evil.example/path;https://evidence.cloudcompute.com/fake.txt",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_an_image_url_with_a_query_is_still_an_image(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- https://evidence.cloudcompute.com/workspaces/pr-1/sidebar.png?raw=1",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Sidebar.swift"])
+        self.assertEqual(result.failures, [])
+
     def test_a_command_that_was_not_run_is_not_a_report(self) -> None:
         # The widened window joined a "was not run" line to a count several
         # lines below it and read the pair as a passing run.
         body = GOOD_BODY.replace(
             "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
-            "- `swift test` was not run in this environment\n\nThe change adds 12 tests.",
+            "- `swift test`\n- was not run in this environment\n- The change adds 12 tests.",
         ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
         result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
         self.assertIn("No test/evidence signal found in PR body.", result.failures)

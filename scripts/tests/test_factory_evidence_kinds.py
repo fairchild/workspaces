@@ -2194,6 +2194,8 @@ class BlockedItemVerdictTests(unittest.TestCase):
             "A real restart on the production host succeeds",
             "A smoke test against the deployed app",
             "The installed build launches from a cold start",
+            "Confirm the TestFlight build launches on an iPhone",
+            "Verify the signed DMG opens after download",
         ):
             with self.subTest(item=item):
                 error = run_contributor.review_evidence_gate_error(
