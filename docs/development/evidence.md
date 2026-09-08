@@ -238,6 +238,9 @@ finishing the PR and the PR waiting on you.
 | ``` The `check-links` check passes on the PR head ``` | `ci` | same |
 | `Diff: the README links the overview page` | `diff` | the counterpart review, bound to the review URL and head SHA |
 | `The new column appears in the PR diff` | `diff` | same |
+| ``` `pnpm test` in `web-next` passes ``` | `test-attested` | you, by stating the command and its result line in the PR body |
+| `A test in ``scripts/tests/test_foo.py`` asserting X` | `test-attested` | same |
+| `Before/after latency on the same workload` | `perf` | the numbers in the PR body's Performance section |
 | `Someone with taste confirms the copy reads well` | `other` | **you**, by hand |
 | `... (owner-attested)` | `other` | **you**, by hand — the directive is honoured over any other shape |
 
@@ -252,6 +255,46 @@ Two rules worth knowing:
   phrasing — keeps the item yours** even when the rest of it looks mechanical.
   If you want the factory to close it, drop the parenthetical and write the
   diff or CI form instead.
+
+**An image of text is never evidence.** The readiness gate used to accept any
+embedded image as the whole evidence signal, for any change at all, which is
+what made rendering a test summary to an SVG worth doing. An image now
+satisfies the gate only where there is something to see, and a `[complete]`
+entry whose detail is an image alone closes only a screenshot item. The
+producer is gone too: `scripts/pr-evidence.sh` writes its summaries as text,
+and `scripts/continuity-evidence.sh` no longer renders its close proof to PNG.
+
+`test-attested` and `perf` are the kinds the factory cannot run for you and
+does not park on you either.
+
+A `test-attested` item completes on a statement in the PR body naming the
+command and the line it printed — "`pnpm test` — 214 tests passed" is enough.
+Both halves are required and the result has to carry a count: a command with no
+result is a plan, and "if all tests pass, merge" says nothing ran. The statement
+also has to name *this* item's runner or path, so one `pnpm test` line does not
+complete a `pytest` item beside it.
+
+A `perf` item completes on a filled-in `Before Summary` and `After Summary` in
+the body's Performance section, each carrying a measurement with a unit.
+
+Both complete as an attestation, and the status line says so: "attested by the
+PR author, not run by the factory". Nothing in the pipeline re-runs the command
+to check. That is deliberate — it is the bar for a change nobody has to look at
+— and it is why the reviewer is told to read the claim against the diff.
+
+Neither has an event-driven lane. They are read when the factory next writes
+the PR body — at PR open, and on each revise turn — so filling the body after
+the PR opens completes the entry on the next turn. A status line you edit by
+hand is carried forward by that same turn, marked `(carried forward from an
+earlier revision)` so a reader can tell it was written before the code under
+it. The CI verifier and the macOS lane write only through the hidden metadata,
+so a hand edit does not survive those two; edit the body again after them.
+Until the entry completes both sit `pending-ci`, which is visible and fails the
+readiness gate, rather than `blocked`, which puts the PR in front of the owner.
+
+Evidence a person has to produce — by looking, by following a protocol, by
+deciding — stays `other` however it is phrased. "A test protocol covering a
+manual production restart" names a test and is still yours.
 
 The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what

@@ -61,7 +61,7 @@ GOOD_BODY = """## Summary
 
 ## Evidence
 
-- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)
+- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed
 
 ## Blockers
 
@@ -158,9 +158,58 @@ class PRReadinessTests(unittest.TestCase):
             result.failures,
         )
 
+    def test_an_image_of_text_does_not_satisfy_a_change_nobody_looks_at(self) -> None:
+        # The loophole that made rendering a test summary to an SVG worth
+        # doing: an image satisfied this gate for any change at all. Michael,
+        # 2026-09: "We will never again choose to create an svg of text just
+        # to have evidence. That was a reward hack I allowed to go through for
+        # a while."
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn(
+            "The only evidence in the PR body is an image, and this change is not one "
+            "anyone looks at. State the command you ran and the line it printed.",
+            result.failures,
+        )
+
+    def test_an_image_still_satisfies_a_change_someone_looks_at(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- ![sidebar](https://evidence.cloudcompute.com/workspaces/pr-1/sidebar.png)",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Sidebar.swift"])
+        self.assertEqual(result.failures, [])
+
+    def test_an_uploaded_text_log_satisfies_any_change(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- [test-output](https://evidence.cloudcompute.com/workspaces/pr-1/test-output.txt)",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertEqual(result.failures, [])
+
+    def test_a_pass_word_with_no_command_is_not_a_report(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- Everything passed.",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
+    def test_a_host_lookalike_is_not_our_evidence_store(self) -> None:
+        body = GOOD_BODY.replace(
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
+            "- see https://evil.example/evidence.cloudcompute.com/tests.txt",
+        ).replace("- [x] Other checks run: swift test --filter GhosttyCallbackUserdata", "- [x] Other checks run:")
+        result = pr_readiness.evaluate(pr(body), ["scripts/factory-implement.py"])
+        self.assertIn("No test/evidence signal found in PR body.", result.failures)
+
     def test_docs_only_pr_without_evidence_passes(self) -> None:
         body = GOOD_BODY.replace(
-            "- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)",
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
             "- Docs-only change; no test or screenshot evidence applicable.",
         )
         result = pr_readiness.evaluate(pr(body), ["backlog/ROADMAP.md"])
@@ -168,7 +217,7 @@ class PRReadinessTests(unittest.TestCase):
 
     def test_mixed_docs_and_code_still_requires_evidence(self) -> None:
         body = GOOD_BODY.replace(
-            "- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)",
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed",
             "- Docs-only change; no test or screenshot evidence applicable.",
         )
         result = pr_readiness.evaluate(
@@ -239,11 +288,11 @@ class ReadinessCommentTests(unittest.TestCase):
 
     def test_evidence_failure_comment_lists_accepted_signals(self) -> None:
         body = GOOD_BODY.replace(
-            "- ![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)", "-"
+            "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed", "-"
         )
         result = pr_readiness.evaluate(pr(body), ["Sources/WorkspaceManager/Foo.swift"])
         comment = pr_readiness.comment_markdown(result)
-        self.assertIn("N passed", comment)
+        self.assertIn("the command you ran and the line it printed", comment)
         self.assertIn("Not a testable change", comment)
 
     def test_pass_comment_is_a_single_resolved_line(self) -> None:

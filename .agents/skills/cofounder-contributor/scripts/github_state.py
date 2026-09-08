@@ -786,6 +786,10 @@ def find_issue_execution_state(
                 "number": pr.get("number"),
                 "title": pr.get("title"),
                 "url": pr.get("url"),
+                # The body as GitHub holds it, which is the only copy a person
+                # can have edited. A model's proposed body is not evidence of
+                # what anyone wrote.
+                "body": str(pr.get("body", "")),
                 "headRefName": pr.get("headRefName"),
                 "reviewDecision": pr.get("reviewDecision"),
                 "author_login": author_login,

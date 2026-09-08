@@ -533,13 +533,22 @@ def build_execution_summary_body(
     *,
     requested_evidence: list[str],
     visual_evidence_available: bool = True,
+    published_body: str = "",
 ) -> tuple[str, list[str]]:
+    """The PR body this turn will publish.
+
+    `data["body"]` is what the model wrote this turn. `published_body` is what
+    GitHub currently holds, which is the only copy a person can have edited --
+    so it, and not the model's text, is what an owner-written evidence line is
+    read from.
+    """
     summary_body = str(data.get("body", "")).strip()
     if not requested_evidence:
         return summary_body, []
     evidence_complete, evidence_blocked, evidence_pending_ci = synthesize_initial_execution_evidence(
         requested_evidence,
         visual_evidence_available=visual_evidence_available,
+        body=summary_body,
     )
     return render_execution_summary_body(
         summary_body,
@@ -547,6 +556,7 @@ def build_execution_summary_body(
         evidence_complete=evidence_complete,
         evidence_blocked=evidence_blocked,
         evidence_pending_ci=evidence_pending_ci,
+        published_body=published_body,
     )
 
 
@@ -1156,6 +1166,7 @@ def route_execution_action(
         visual_evidence_available=(
             env.get("FACTORY_VISUAL_EVIDENCE_AVAILABLE", "true").casefold() != "false"
         ),
+        published_body=str((own_pr or {}).get("body", "")),
     )
     if summary_errors:
         print(
