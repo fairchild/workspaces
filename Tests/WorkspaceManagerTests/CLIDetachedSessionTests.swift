@@ -8,8 +8,9 @@
 //  `TmuxSessionControlTests` pins the composed arguments; only this proves they work.
 //
 //  Isolation: every run gets its own tmux socket label, its own CLI state directory,
-//  and its own synthetic workspaces root, so the suite can never reach a desktop's
-//  live `-L workspaces` sessions.
+//  its own synthetic workspaces root, and its own `TMUX_TMPDIR`, so the suite can never
+//  reach a desktop's live `-L workspaces` sessions — and leaves no socket behind when it
+//  is done. See `Fixture.environment` for why the last of those is what closes #1443.
 //
 
 import Foundation
@@ -21,17 +22,33 @@ import Testing
 struct CLIDetachedSessionTests {
 
     /// One isolated CLI world: a scratch git repo, a workspace made through the CLI's
-    /// own `ws new`, and a private tmux socket that is killed on teardown.
+    /// own `ws new`, and a private tmux socket that lives inside `root` and dies with it.
     private struct Fixture {
         let binary: URL
         let root: URL
         let socketLabel: String
         let workspaceSelector = "repo/detached"
 
+        /// `TMUX_TMPDIR` is what makes this fixture's socket disposable, and it is the
+        /// whole of #1443's fix.
+        ///
+        /// tmux puts a `-L` socket at `$TMUX_TMPDIR/tmux-<uid>/<label>`, defaulting to
+        /// `/tmp`, and it does not unlink that file when the server exits — not even on
+        /// a clean `kill-server`. A stale socket is cleared only when a *later* server
+        /// claims the same label, which never happens here because every fixture invents
+        /// a fresh one. That is the leak #1443 measured: not a kill that failed, but a
+        /// kill that succeeded and left the file.
+        ///
+        /// Pointing `TMUX_TMPDIR` at `root` moves the socket inside the directory
+        /// teardown already removes, so cleanup is containment rather than a sweep of a
+        /// world-writable directory this suite does not own. It also makes the label's
+        /// uniqueness irrelevant to isolation: two fixtures that drew the same label
+        /// still get separate servers, because they get separate socket directories.
         var environment: [String: String] {
             [
                 "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
                 "WORKSPACES_SYNTHETIC_ROOT": root.appendingPathComponent("workspaces").path,
+                "TMUX_TMPDIR": root.path,
                 TmuxSessionControl.socketLabelEnvironmentKey: socketLabel,
             ]
         }
@@ -47,35 +64,23 @@ struct CLIDetachedSessionTests {
         }
 
         func teardown() {
+            // The kill needs the same `TMUX_TMPDIR` the launches ran under, or it looks
+            // for this label in the default socket directory and finds nothing to kill,
+            // leaving a live server behind holding the scratch tree open.
             let kill = Process()
             kill.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             kill.arguments = ["tmux", "-L", socketLabel, "kill-server"]
+            kill.environment = ProcessInfo.processInfo.environment.merging(environment) { _, new in
+                new
+            }
             kill.standardOutput = FileHandle.nullDevice
             kill.standardError = FileHandle.nullDevice
             try? kill.run()
             kill.waitUntilExit()
-            removeSocketFileIfPresent()
+            // Removing `root` takes the socket directory with it, so the suite leaves
+            // nothing behind whether the kill above succeeded, failed, or had no server
+            // to find in the first place.
             try? FileManager.default.removeItem(at: root)
-        }
-
-        /// `kill-server` unlinks its socket as tmux's own server exits cleanly, but a
-        /// server this fixture never actually started (a test that stopped short of
-        /// `ws launch`) leaves nothing to kill, and one killed by signal or wedged past
-        /// the command's own timeout can leave the file behind regardless. Sweeping
-        /// every `tmux-*` directory under `/tmp` for this fixture's own unique label —
-        /// the same lookup #1443's reproduce command uses — makes socket cleanup a
-        /// property of teardown rather than of `kill-server` happening to succeed.
-        private func removeSocketFileIfPresent() {
-            let tmp = URL(fileURLWithPath: "/tmp")
-            guard
-                let entries = try? FileManager.default.contentsOfDirectory(
-                    at: tmp,
-                    includingPropertiesForKeys: nil
-                )
-            else { return }
-            for entry in entries where entry.lastPathComponent.hasPrefix("tmux-") {
-                try? FileManager.default.removeItem(at: entry.appendingPathComponent(socketLabel))
-            }
         }
     }
 
@@ -96,30 +101,44 @@ struct CLIDetachedSessionTests {
 
     private func makeFixture() throws -> Fixture {
         let binary = try #require(CLIBinary.url, CLIBinary.missingBinaryMessage)
-        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+        // Rooted at `/tmp` rather than `NSTemporaryDirectory()` because the tmux socket
+        // now lives under this directory, and a unix socket path has to fit in
+        // `sockaddr_un.sun_path` — 104 bytes on Darwin. The per-user temporary directory
+        // spends about half of that on its own prefix before this fixture adds a UUID,
+        // a `tmux-<uid>` component and the label; `/tmp` leaves room to spare.
+        let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cli-detached-\(UUID().uuidString)")
         let repo = root.appendingPathComponent("repo")
         try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
-
-        for arguments in [["init", "-q", "."], ["commit", "-q", "--allow-empty", "-m", "init"]] {
-            let git = Process()
-            git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            git.arguments = ["git"] + arguments
-            git.currentDirectoryURL = repo
-            git.standardOutput = FileHandle.nullDevice
-            git.standardError = FileHandle.nullDevice
-            try git.run()
-            git.waitUntilExit()
-        }
 
         let fixture = Fixture(
             binary: binary,
             root: root,
             socketLabel: "wsparity-test-\(UUID().uuidString.prefix(8).lowercased())"
         )
-        try fixture.run(["repo", "add", repo.path])
-        let created = try fixture.run(["ws", "new", "repo", "detached"])
-        #expect(created.status == 0)
+
+        // The caller's `defer { fixture.teardown() }` is not registered until this
+        // returns, so setup owns its own failure path — otherwise a throw here leaks the
+        // scratch tree it just created, which is the same class of litter as #1443.
+        do {
+            for arguments in [["init", "-q", "."], ["commit", "-q", "--allow-empty", "-m", "init"]] {
+                let git = Process()
+                git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+                git.arguments = ["git"] + arguments
+                git.currentDirectoryURL = repo
+                git.standardOutput = FileHandle.nullDevice
+                git.standardError = FileHandle.nullDevice
+                try git.run()
+                git.waitUntilExit()
+            }
+
+            try fixture.run(["repo", "add", repo.path])
+            let created = try fixture.run(["ws", "new", "repo", "detached"])
+            #expect(created.status == 0)
+        } catch {
+            fixture.teardown()
+            throw error
+        }
         return fixture
     }
 
