@@ -32,6 +32,10 @@ on:
       - "scripts/prepare-prerelease.sh"
       - "scripts/prepare-release.sh"
       - "scripts/release-preflight.sh"
+      - "scripts/release-candidate.py"
+      - "scripts/release-environments.py"
+      - "scripts/release.py"
+      - "scripts/verify-release-candidate.sh"
       - "scripts/release-version.sh"
       - "scripts/setup-release-secrets.sh"
       - "scripts/verify-app-keychain-signing.sh"
@@ -68,6 +72,10 @@ on:
       - "scripts/prepare-prerelease.sh"
       - "scripts/prepare-release.sh"
       - "scripts/release-preflight.sh"
+      - "scripts/release-candidate.py"
+      - "scripts/release-environments.py"
+      - "scripts/release.py"
+      - "scripts/verify-release-candidate.sh"
       - "scripts/release-version.sh"
       - "scripts/setup-release-secrets.sh"
       - "scripts/verify-app-keychain-signing.sh"
@@ -85,7 +93,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 90
     steps:
       # Same checkout shape as release.yml. fetch-depth: 0 is not incidental —
@@ -101,12 +109,12 @@ jobs:
       # doing so. release.yml only ever executes on a tag push, so an
       # environmental assumption that holds nowhere else is discovered by a
       # failed release — v0.24.0 burned four of them that way. This job runs on
-      # the same macos-15 image, so matching the provisioning here is what makes
+      # the same macos-26 image, so matching the provisioning here is what makes
       # a PR able to fail instead.
       - name: Ensure mise
         uses: jdx/mise-action@7e36c90d9ab29c415a2384db3006f3ec8a8cc654 # v4.2.4
         with:
-          version: 2026.8.16
+          version: 2026.9.1
           install: true
           cache: true
 
@@ -196,3 +204,13 @@ jobs:
 
       - name: Test
         run: swift test
+
+      # Suites that measure SwiftUI render passes need the main run loop to
+      # themselves: a display cycle driven by another suite lands between the
+      # two rebuild counts they compare, and can render in the same pass as the
+      # change under test, which no assertion can separate (#1542). They skip
+      # the parallel run above and get this process instead.
+      - name: Render tests (isolated)
+        env:
+          WORKSPACES_RENDER_TESTS: "1"
+        run: swift test --filter SidebarRowRebuildTests

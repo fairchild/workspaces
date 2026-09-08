@@ -13,7 +13,7 @@
 
 Two lanes, split by what each one actually needs:
 
-- **Behavioral UI smoke** runs in the cloud, on GitHub-hosted `macos-15`
+- **Behavioral UI smoke** runs in the cloud, on GitHub-hosted `macos-26`
   (`.github/workflows/ui-smoke-advisory.yml`). Whether it becomes a required
   status is [#1229](https://github.com/fairchild/workspaces/issues/1229) and is
   unaffected by this decision.

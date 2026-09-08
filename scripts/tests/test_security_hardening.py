@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pyyaml"]
 # ///
 """Security policy tests for workflows, setup, and local runner surfaces.
 
@@ -25,6 +25,7 @@ import tempfile
 import tomllib
 import unittest
 from pathlib import Path
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -189,26 +190,42 @@ class SecurityHardeningTests(unittest.TestCase):
             "Actions with floating (non-SHA) refs found:\n" + "\n".join(floating_refs),
         )
 
+    def assert_macos_targets_are_hosted(self, workflow: str, name: str) -> None:
+        """Every macOS target in the workflow names a GitHub-hosted image.
+
+        The property is hosted-vs-self-hosted, so the image version is not
+        asserted: pinning it here would fail every runner-image bump while
+        defending nothing.
+        """
+        targets = re.findall(r"(?m)^\s*runs-on:\s*(.+?)\s*$", workflow)
+        self.assertTrue(targets, f"{name} declares no runs-on")
+        macos_targets = [t for t in targets if "macos" in t.lower()]
+        self.assertTrue(macos_targets, f"{name} declares no macOS runner")
+        for target in macos_targets:
+            self.assertRegex(
+                target,
+                r"^macos-(latest|\d+)(-(large|xlarge|intel))?$",
+                f"{name} must run macOS work on a GitHub-hosted image, got {target!r}",
+            )
+
     def test_pull_request_ci_uses_github_hosted_runner(self) -> None:
         """Untrusted PR code must not run on persistent self-hosted macOS runners."""
         workflow = (REPO_ROOT / ".github/workflows/ci.yml").read_text()
         self.assertIn("pull_request:", workflow)
-        self.assertIn("runs-on: macos-15", workflow)
-        self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
+        self.assert_macos_targets_are_hosted(workflow, "ci.yml")
 
     def test_ci_fallback_uses_github_hosted_runner(self) -> None:
         """Failed PR fallback must not execute untrusted commits on self-hosted runners."""
         workflow = (REPO_ROOT / ".github/workflows/ci-fallback.yml").read_text()
         self.assertIn("workflow_run:", workflow)
-        self.assertIn("runs-on: macos-15", workflow)
-        self.assertNotIn("runs-on: [self-hosted, lume-macos]", workflow)
+        self.assert_macos_targets_are_hosted(workflow, "ci-fallback.yml")
         self.assertNotIn("runs-on: [self-hosted, signing-host]", workflow)
 
     def test_release_workflow_does_not_export_secrets_job_wide(self) -> None:
         """Generated and notarization secrets must not be written into GITHUB_ENV."""
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
         self.assertIn("::add-mask::$KEYCHAIN_PASSWORD", workflow)
-        self.assertIn("environment: release", workflow)
+        self.assertIn("environment: release-candidate", workflow)
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("publish-github-release:", workflow)
         self.assertIn("validate-published-release-assets:", workflow)
@@ -250,8 +267,15 @@ class SecurityHardeningTests(unittest.TestCase):
         """
         workflow = (REPO_ROOT / ".github/workflows/release.yml").read_text()
 
-        for unpinned in ("brew install mise", "curl", "| sh", "| bash"):
+        # Reading the public Sparkle feed with curl is a release check, not a
+        # tool bootstrap. Only reject curl inside commands that provision mise.
+        for unpinned in ("brew install mise", "mise.run", "| sh", "| bash"):
             self.assertNotIn(unpinned, workflow, f"unpinned mise bootstrap: {unpinned}")
+        for job in yaml.safe_load(workflow)["jobs"].values():
+            for step in job.get("steps", []):
+                command = step.get("run", "")
+                if "mise" in command:
+                    self.assertNotIn("curl", command, "mise bootstrap must use its pinned action")
 
         self.assertRegex(
             workflow,
@@ -291,7 +315,7 @@ class SecurityHardeningTests(unittest.TestCase):
         zig_entries = lock["tools"]["zig"]
         self.assertEqual(len(zig_entries), 1)
         zig = zig_entries[0]
-        self.assertEqual(zig["version"], "0.15.2")
+        self.assertEqual(zig["version"], "0.16.0")
         self.assertEqual(zig["backend"], "core:zig")
         for platform in ("linux-x64", "macos-arm64"):
             entry = zig[f"platforms.{platform}"]
@@ -300,7 +324,7 @@ class SecurityHardeningTests(unittest.TestCase):
 
     def test_mise_invocations_are_locked_and_pinned(self) -> None:
         verify_mise = (REPO_ROOT / "scripts/verify-mise-security.sh").read_text()
-        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.8.16\"", verify_mise)
+        self.assertIn("MISE_EXPECTED_VERSION=\"v2026.9.1\"", verify_mise)
         self.assertIn("verify_locked_zig_exec", verify_mise)
         self.assertIn("github.com/repos/jdx/mise/releases/latest", verify_mise)
         self.assertIn("Authorization: Bearer $GITHUB_TOKEN", verify_mise)
@@ -310,7 +334,7 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertLess(
             build_ghosttykit.index('[[ -x "$HOMEBREW_ZIG_BIN" ]]'),
             build_ghosttykit.index('command -v mise >/dev/null 2>&1'),
-            "build-ghosttykit must prefer Homebrew zig@0.15 before the upstream mise Zig fallback",
+            "build-ghosttykit must prefer Homebrew zig before the upstream mise Zig fallback",
         )
         self.assertIn('mise exec --locked "zig@$ZIG_VERSION" -- zig', build_ghosttykit)
         self.assertIn("MISE_CONFIG_FILE=$PROJECT_DIR/.mise.toml", build_ghosttykit)
@@ -318,8 +342,8 @@ class SecurityHardeningTests(unittest.TestCase):
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=$HOME/.config/mise", build_ghosttykit)
 
         xcode_cloud_post_clone = (REPO_ROOT / "ci_scripts/ci_post_clone.sh").read_text()
-        self.assertIn("brew install zig@0.15", xcode_cloud_post_clone)
-        self.assertIn('homebrew_zig_bin="/opt/homebrew/opt/zig@0.15/bin/zig"', xcode_cloud_post_clone)
+        self.assertIn("brew install zig", xcode_cloud_post_clone)
+        self.assertIn('homebrew_zig_bin="/opt/homebrew/opt/zig/bin/zig"', xcode_cloud_post_clone)
         self.assertIn("brew install uv", xcode_cloud_post_clone)
         self.assertIn("uv python install 3.11", xcode_cloud_post_clone)
         self.assertLess(
@@ -331,7 +355,7 @@ class SecurityHardeningTests(unittest.TestCase):
         setup = (REPO_ROOT / "scripts/setup").read_text()
         self.assertIn('"$REPO_ROOT/.mise.toml"|"$REPO_ROOT/web/.mise.toml"', setup)
         self.assertIn('if [[ "$FAST" == "1" ]]', setup)
-        self.assertIn("mise install --locked zig@0.15.2", setup)
+        self.assertIn("mise install --locked zig@0.16.0", setup)
         self.assertIn("MISE_IGNORED_CONFIG_PATHS=", setup)
         self.assertIn('-path "*/.pnpm-store" -prune', setup)
         self.assertNotIn("trust every checked-in project config", setup)
@@ -345,9 +369,9 @@ class SecurityHardeningTests(unittest.TestCase):
         sandbox = (REPO_ROOT / "web/src/lib/agent-runtime/vercel-sandbox.ts").read_text()
         # The pin lives in TS constants (single source of truth) that feed both
         # the install command and the base-snapshot fingerprint.
-        self.assertIn('const MISE_VERSION = "v2026.8.16"', sandbox)
+        self.assertIn('const MISE_VERSION = "v2026.9.1"', sandbox)
         self.assertIn(
-            '"cff4832ded79af2951e800bddcb5a22acac58630d765a2d062c1180680a0bb35"',
+            '"c98423c8470d6dc416d9f7036d0646d8ef5ae92ad9186907f8fcc84cbe7db4ea"',
             sandbox,
         )
         # The install command still wires the pinned constant and verifies it.

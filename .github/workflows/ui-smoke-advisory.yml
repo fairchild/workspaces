@@ -1,7 +1,9 @@
 # Advisory behavioral gate for issue #1229: desktop-ui-smoke on GitHub-hosted
-# macos-15, which boots an auto-login Aqua session (proven green on PR #1264's
-# own run, 2026-08-08). Advisory while the flake profile accumulates; the
-# required-status proposal happens in #1229 once stability is demonstrated.
+# macos-26. The lane needs an auto-login Aqua session, which the hosted image
+# boots; that was proven green on macos-15 (PR #1264's own run, 2026-08-08) and
+# carries over to macos-26 only as far as this lane's own runs show. Advisory
+# while the flake profile accumulates; the required-status proposal happens in
+# #1229 once stability is demonstrated.
 name: UI Smoke (advisory)
 
 on:
@@ -27,7 +29,7 @@ concurrency:
 
 jobs:
   ui-smoke:
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5

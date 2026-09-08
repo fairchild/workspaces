@@ -143,7 +143,7 @@ DIFF_EVIDENCE_RE = re.compile(
     r"|the (?:pr )?diff (?:shows|proves|demonstrates|contains|includes)"
     r"|\b(?:shows?|contains?|includes?|appears?)\b[^\n]{0,60}?\bin the (?:pr )?diff\b"
 )
-# Kinds the hosted `macos-15` evidence lane can gather; `ci` and `diff`
+# Kinds the hosted `macos-26` evidence lane can gather; `ci` and `diff`
 # complete through the verifier workflow and review lane instead (#1120).
 MACOS_EVIDENCE_KINDS = frozenset({"test", "build", "screenshot"})
 EVENT_COMPLETED_KINDS = frozenset({"ci", "diff"})

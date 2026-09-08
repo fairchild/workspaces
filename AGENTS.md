@@ -37,7 +37,7 @@ Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an ex
 
 ## High-Signal Lessons (unconditional)
 
-- **Every lane needing macOS is GitHub-hosted `macos-15`** — generic build/test, the UI smoke lane (`ui-smoke-advisory.yml`), agent evidence (`_evidence.yml`), and release/signing/notarization; agent and metadata jobs run `ubuntu-latest`. No self-hosted runner is registered for this repo at all — `blue-workspaces` was deregistered on 2026-08-13, after `lume-macos` and `tart-ui` — so `.github/actionlint.yaml` allows no self-hosted label and a `runs-on` naming one fails lint. Reaching for `signing-host` does not fall back to hosted; it queues forever. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
+- **Every lane needing macOS is GitHub-hosted `macos-26`** — generic build/test, the UI smoke lane (`ui-smoke-advisory.yml`), agent evidence (`_evidence.yml`), and release/signing/notarization; agent and metadata jobs run `ubuntu-latest`. No self-hosted runner is registered for this repo at all — `blue-workspaces` was deregistered on 2026-08-13, after `lume-macos` and `tart-ui` — so `.github/actionlint.yaml` allows no self-hosted label and a `runs-on` naming one fails lint. Reaching for `signing-host` does not fall back to hosted; it queues forever. Perf benchmarks are not a CI lane: they run laptop-local, opt-in per run, per `docs/decisions/perf-measurement-laptop-optin.md`.
 - **Ship a diagnostic probe instead of your third guess.** When you're guessing, stop and instrument.
 - **The tracker lags the code — verify before planning from it.** Before sequencing work from open issues, `rg` the acceptance criteria against the tree; close what's done in the same cycle that ships it (`Closes #N` in every implementing PR).
 
@@ -72,7 +72,7 @@ mise run lint                  # swift-format lint --strict (CI fails without it
 | `web-next/` (active web app) | `web-next/AGENTS.md`, then `web-next/CONTRIBUTING.md` |
 | Issue lifecycle / backlog | `backlog/AGENTS.md` |
 | Lume VMs | `mise run dev-lume-ensure` first; `docs/development/lume-integration.md` |
-| Release / signing / notarization | `RELEASING.md`; runner lanes: `CONTRIBUTING.md` § "CI Runner Lanes" |
+| Release / signing / notarization | `RELEASING.md`; normal release entry point: `uv run --script scripts/release.py` (one human CI publication approval) |
 | Milestone delivery / subagent fan-out | `.agents/skills/drive/SKILL.md` / `.agents/skills/subagent-delegation/SKILL.md` |
 | Symbol/task → file lookup | `docs/agents/code-map.md` |
 | Lessons ledger | `docs/agents/lessons.md` |

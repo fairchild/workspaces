@@ -1,19 +1,45 @@
 # Releasing WorkspaceManager
 
-This document describes the complete process for creating a new release of WorkspaceManager,
-including optional tester prereleases before a stable release is published.
+A release request prepares a signed, notarized installer and its Sparkle feed,
+then waits for one human publication approval. Optional manual testing uses the
+same installer that will ship.
 
-## Overview
+## Normal release
 
-WorkspaceManager is distributed as a notarized DMG file via GitHub Releases. The release process involves:
+```bash
+uv run --script scripts/release.py --dry-run
+uv run --script scripts/release.py --version <X.Y.Z> --notes-file /path/to/notes.md
+```
 
-1. **Versioning** - Land a release metadata PR, then tag stable releases or dispatch tester prereleases
-2. **Building** - Create release binary with SPM
-3. **Bundling** - Package into a proper .app bundle
-4. **Signing** - Sign with Developer ID certificate
-5. **Notarizing** - Submit to Apple for notarization
-6. **Packaging** - Create DMG with stapled notarization ticket
-7. **Releasing** - Upload to GitHub Releases
+Omit `--version` to select the conventional-commit version. The agent reviews the
+release notes and their Sparkle rendering, runs the entry point, completes the
+metadata PR's required review, and follows CI until the candidate is ready.
+A request to cut a release authorizes this preparation and metadata auto-merge;
+it does not authorize an agent to approve publication. Do not add routine chat
+confirmations or push a stable tag manually. Generic release skills use this
+repo entry point and contract.
+
+```mermaid
+flowchart LR
+    A[Release request] --> B[Reviewed metadata PR and main CI]
+    B --> C[Build, sign, notarize and validate]
+    C --> D[Candidate download and readiness summary]
+    D --> E[One publication approval]
+    E --> F[Publish identical assets]
+    F --> G[Verify public release and stable Sparkle feed]
+```
+
+At readiness, download the candidate from the workflow summary if you want to
+test it, or choose **Review deployments → release-publication → Approve and
+deploy**. The artifact link is also the deployment's environment URL. No manual
+test confirmation is needed. Signing and validation failures appear before
+this button becomes available.
+
+The automation checks exact-source main CI, bundle signing and provisioning,
+notarization, Gatekeeper, artifact hashes, the Sparkle signature, and packaged
+CLI launch. It reads committed performance evidence under the existing
+freshness policy. It does not claim a full GUI or installed Sparkle upgrade test.
+Laptop performance measurements still require their separate owner opt-in.
 
 ## Prerequisites
 
@@ -150,27 +176,53 @@ Then test signing:
 
 ### GitHub Actions Setup (for CI/CD)
 
-Before adding release secrets, create a GitHub Actions environment named
-`release` in repository settings and require reviewer approval for deployments
-to that environment. The release workflow references this environment before it
-imports signing material, so environment protection is the approval gate for
-Developer ID, notarization, and Sparkle release secrets.
+Candidate signing uses `release-candidate`; human publication uses
+`release-publication`. Both allow only `main`, with no tags or wildcards.
+The legacy `release` environment keeps its existing human reviewer protection.
+Never make it automatic: completed historical main workflows can still rerun
+using their old code and would otherwise bypass the new publication gate.
 
-The workflow is split into three jobs:
+Merge the reviewed workflow first, then configure the new environments from
+that exact checkout:
 
-- `build-sign-notarize-release` runs on GitHub-hosted `macos-15` with read-only
-  repository permissions. It imports the Developer ID certificate into a
-  temporary keychain, builds and signs the app, notarizes the DMG, generates
-  the Sparkle appcast, uploads release assets as workflow artifacts, then
-  deletes the temporary keychain. Every credential comes from repository
-  secrets, so the job carries no dependency on a particular machine.
-- `publish-github-release` runs on `ubuntu-latest` with `contents: write`. It
-  downloads the signed artifacts and creates or updates the GitHub Release.
-- `validate-published-release-assets` runs on GitHub-hosted macOS with
-  read-only repository permissions after publication. It downloads the public
-  release assets, validates the Sparkle appcast, confirms the latest DMG
-  matches the versioned DMG, and runs macOS DMG notarization/Gatekeeper checks
-  against the published asset.
+```bash
+uv run --script scripts/release-environments.py apply
+# Initial setup stops here, listing missing candidate signing credentials.
+./scripts/setup-release-secrets.sh <signing-file options below>
+uv run --script scripts/release-environments.py apply
+uv run --script scripts/release-environments.py check --settings
+```
+
+`apply` verifies remote main's workflow, preserves the legacy gate, and creates
+and fully checks the new publication gate before configuring candidate signing.
+It requires publication to contain no environment secrets. Candidate signing
+remains gated until its main-only policy and all required secret names are in
+place; only then does `apply` make that new environment automatic. Partial
+setup can be rerun. No step changes legacy reviewers or copies secret values.
+GitHub does not return stored secret values, so candidate credentials must be
+loaded from the operator's existing protected signing files.
+
+`check` is the read-only policy check used by CI. `check --settings` additionally
+checks secret scopes with operator permissions and is reused by the host
+security audit. The signing job validates resolved values before building.
+
+Main retains the repository's existing review rules and administrator authority.
+Before signing, candidate qualification independently verifies that every commit
+since the previous stable release belongs to a merged main PR with an independent
+approval on its final head before merge. A bypassed or unreviewed commit fails
+this proof; CI success alone is insufficient. Release tooling must still match
+current main during qualification and publication, so a newer hardening fix
+cannot be paired with an older source copy of its scripts.
+
+The workflow jobs are:
+
+| Job | Boundary |
+| --- | --- |
+| `qualify` | Ubuntu, no signing secrets; successful trusted CI on the exact main commit, release intent, version/tag and environment policy. |
+| `build-sign-notarize-release` | Hosted macOS, read-only repository access, signing environment; builds and seals a candidate, then deletes temporary signing material. |
+| `validate-candidate` | Hosted macOS, no secrets; downloads the immutable artifact by ID, checks the actual installer and writes readiness summary. |
+| `publish-github-release` | Ubuntu, human publication gate and repository write access; verifies and publishes those same bytes. |
+| `validate-published-release-assets` | Hosted macOS, read-only; validates public assets and the actual stable Sparkle URL. |
 
 Keep signing/notarization credentials scoped to the steps that need them. Do not
 write generated keychain passwords or Apple notarization credentials to
@@ -185,17 +237,18 @@ Preferred setup path:
     --profile-path ~/.config/apple/workspaces.provisionprofile \
     --api-key-path ~/.config/apple/AuthKey_<KEY_ID>.p8 \
     --api-key-id <KEY_ID> \
-    --api-issuer-id <ISSUER_ID>
+    --api-issuer-id <ISSUER_ID> \
+    --sparkle-key-file /protected/path/sparkle-private-key.txt
 ```
 
 Notes:
-- The script is idempotent by default and only fills missing secrets/variables.
+- The script is idempotent by default and only fills missing candidate secrets/variables. Supply the existing Sparkle private key; generating a new key would break existing installations' update trust.
 - Add `--force` to overwrite existing values.
 - Add `--non-interactive` for CI-friendly usage.
-- Add `--run-release --watch` to dispatch the release workflow from `main` immediately after setup and stream the result.
+- Add `--run-release` only to request a tester candidate after successful main CI. It still waits for publication approval; `--watch` waits through that gate.
 
-If you prefer to configure GitHub manually, add these to the **`release` environment**, not to
-repository secrets (Settings > Environments > release > Environment secrets):
+If you prefer to configure GitHub manually, add these to the **`release-candidate` environment**, not to
+repository secrets (Settings > Environments > release-candidate > Environment secrets):
 
 | Secret | Description |
 |--------|-------------|
@@ -208,8 +261,8 @@ repository secrets (Settings > Environments > release > Environment secrets):
 | `SPARKLE_PRIVATE_KEY` | Sparkle EdDSA private key, matching `SUPublicEDKey` |
 
 **Why the environment and not repository scope.** A repository secret is readable by any workflow
-on any branch. Scoping these to `release` means a job must declare `environment: release` and clear
-its human approval before it can read them at all — so the credentials are protected by
+on any branch. Scoping these to `release-candidate` means a job must declare `environment: release-candidate` and pass
+its main-only branch policy before it can read them — so the credentials are protected by
 construction rather than by everyone remembering not to reference them. This will surprise anyone
 adding a workflow that needs signing: the secret resolves empty until the job declares the
 environment.
@@ -256,225 +309,78 @@ base64 -i ~/.config/apple/AuthKey_<KEY_ID>.p8 | pbcopy
 
 ---
 
-## Release Methods
+## Continuation and recovery
 
-There are two normal lanes:
+Successful `CI` completion on a release metadata commit starts candidate
+preparation automatically. Ordinary main changes do not sign an installer. The
+metadata PR must change only `CHANGELOG.md` and `Info.plist`, and its squash
+commit title must start with `release: v`. `scripts/release.py` prepares that PR
+and enables auto-merge under the repository's existing review/check rules. Its
+`release-base` marker binds notes/version selection to the prepared main commit.
+If main advances during preparation, the command preserves the worktree and
+requires regenerated notes. If it advances before the metadata merge, candidate
+qualification rejects a merge parent that differs from that marker. Refresh the
+metadata PR rather than silently shipping additional changes.
 
-- **Tester prerelease:** metadata PR, merge to `main`, then manually dispatch
-  `Release` from `main`. This creates a non-latest GitHub prerelease.
-- **Stable release:** metadata PR, merge to `main`, then push `v<X.Y.Z>`. This
-  creates or refreshes the latest stable GitHub Release and Sparkle appcast.
+```bash
+uv run --script scripts/release.py --version <X.Y.Z> --status
+```
 
-Both lanes use the same protected signing, notarization, appcast, manifest,
-artifact upload, and published-asset validation workflow.
+Repeat the entry point with the same version to resume an existing metadata PR.
+A failed preparation retains its temporary worktree and explains what needs
+repair. It never discards edited notes or overwrites a conflicting release.
+GitHub PRs, runs, artifact IDs, manifests, and releases are the durable state;
+there is no separate release service or agent polling daemon.
 
-### Rehearsing from `main` (optional)
+To retry candidate preparation after fixing a main failure, wait for successful
+CI on that exact commit, then explicitly dispatch from main:
 
-A manual `Release` dispatch from `main` runs the whole signing, notarization,
-appcast, manifest, and published-asset path and publishes the result as
-`workspaces-v<version>-main.<run_number>`, a prerelease that leaves the stable
-channel and the Sparkle feed untouched. It is the only way to exercise the
-release environment without spending a version number to find out whether it
-works.
+```bash
+gh workflow run release.yml --ref main -f channel=stable
+```
 
-That environment is worth exercising deliberately because `release.yml` is its
-only consumer and only runs on a tag push, so an assumption that holds nowhere
-else in CI is discovered when a release breaks. v0.24.0 found four in a row that
-way: a perf gate reading a log stream that no longer carried the metrics
-(#1296), a mise pin whose upstream release assets had been pruned (#1297), a uv
-the workflow never installed (#1298), and a red `main`.
+This requires an unpublished version newer than latest and a valid release
+metadata commit. A tooling fix after the metadata merge requires refreshed
+metadata and successful CI on that new source. An intentional tester
+candidate uses the current version without moving latest or the stable feed:
 
-The rehearsal was routine through v0.23.0 — dispatched 2026-06-26, 06-28, 06-30,
-and 07-07, green every time — and was skipped ahead of v0.24.0. It also covers
-more ground now than it did then: #1293 moved signing and notarization from the
-self-hosted `signing-host` runner to a hosted `macos-15` image, and the hosted
-lane has since run green end to end — a manual `main` dispatch on 2026-08-22
-(run #78) and the v0.25.0 release on 2026-08-23 (run #80).
+```bash
+gh workflow run release.yml --ref main -f channel=tester
+```
 
-A rehearsal is worth its approval click after a change to `release.yml`,
-signing, notarization, or the runner image — the surfaces only this workflow
-exercises — or when testers should get a build first (Method 1A). For a
-release that changes none of those, tag directly: the release-blocking gates
-now run on the metadata PR (`release-change-validation` runs the
-perf-benchmark gate whenever `Info.plist` changes, and `prepare-release.sh`
-runs it locally in every mode), so the failure the rehearsal used to be the
-first to find fails a PR check instead. Note the rehearsal builds `main` as of
-its dispatch and is graded as the version in `Info.plist` at that commit — it
-exercises the lane, not the exact commit you will tag.
+Tester publication uses `workspaces-v<version>-main.<run_id>` and the same human
+gate. Routine stable releases need no tester rehearsal or second build.
 
-Approve the dispatch in the same sitting. The publish step targets the SHA
-`main` pointed at when the run was dispatched, and run #81 — approved two days
-after dispatch, with `main` six commits ahead by then — failed at that step
-with an HTTP 403 no promptly-approved run has hit.
+The candidate expires after seven days. The readiness summary binds source,
+version/build, release notes, benchmark result and installer hash; the job
+outputs bind its immutable artifact ID and identity hash. Changed or expired
+assets fail closed. A publication retry may resume only its own draft and
+upload missing assets, with no clobber. It re-downloads and checks every asset
+before making the release public. Downstream-only retries also check notes,
+channel/latest status, title, target, and public bytes against the original
+candidate, so an externally edited tester cannot be accepted as stable. Re-running failed jobs preserves candidate
+identity; re-running the build creates a new candidate requiring new approval.
+GitHub can request approval again when retrying a failed gated job.
 
-To rehearse:
+After approval, CI creates or verifies the tag at the candidate source, publishes
+the GitHub release, and verifies signed public assets. For stable releases it
+also fetches `https://github.com/fairchild/workspaces/releases/latest/download/appcast.xml`
+and compares it with the verified appcast. Completion means that route has
+passed, not merely that the upload job is green.
 
-1. Dispatch `Release` from `main` (Actions > `Release` > `Run workflow` >
-   Ref: `main`) and let it finish. Mechanics and tester handoff: Method 1A.
-2. Confirm the published prerelease is real, not just listed:
+If post-publication verification fails, report the failed public boundary and
+inspect it before retrying that validation job. Do not rebuild or silently
+replace published assets. A rollback is an explicit release operation: inspect
+the previous known-good release and its complete signed assets before changing
+latest. Sparkle's increasing build-number policy means changing latest alone
+does not downgrade already updated installations; use a corrective release
+with a higher build for them.
 
-   ```bash
-   gh release download workspaces-v0.21.0-main.42 \
-       --repo fairchild/workspaces \
-       --pattern "WorkSpaces-0.21.0.dmg" \
-       --dir /tmp/workspaces-rehearsal \
-       --clobber
-   xcrun stapler validate /tmp/workspaces-rehearsal/WorkSpaces-0.21.0.dmg
-   ```
+### Exceptional manual local release
 
-3. Then tag.
 
-A rehearsal that fails costs a run number. A tag that fails costs a tag, a
-changelog entry, and a version.
-
-### Method 1: Stable Release
-
-Use this after tester signoff or when you are ready to publish directly to all
-users. Rehearse first (above) when the release lane itself changed.
-
-1. **Open a stable release metadata PR**
-
-   Start from current `origin/main`:
-
-   ```bash
-   git fetch origin main --tags
-   git checkout -b release/v0.21.0 origin/main
-   ./scripts/prepare-release.sh --version 0.21.0 --metadata-only
-   ```
-
-   The helper updates `Info.plist` version/build metadata and prepends a
-   `CHANGELOG.md` section computed from commits since the latest stable `v*`
-   tag. It does not commit, tag, push, or publish.
-
-   Preview without mutating:
-
-   ```bash
-   ./scripts/prepare-release.sh --version 0.21.0 --metadata-only --dry-run
-   ```
-
-   Review the generated changelog notes — including how Sparkle renders them
-   (§ "Changelog Notes in the Update Dialog") — then commit the metadata
-   changes, open a PR, attach evidence, and merge it to `main`.
-
-2. **Tag the merged `main` commit**
-
-   ```bash
-   git fetch origin main --tags
-   git checkout main
-   git pull --ff-only origin main
-   ./scripts/release-version.sh assert-tag-match v0.21.0
-   git tag v0.21.0
-   git push origin v0.21.0
-   ```
-
-   Pushing `v0.21.0` triggers `.github/workflows/release.yml`.
-
-3. **Approve and watch the protected release workflow**
-
-   - Workflow: `.github/workflows/release.yml`
-   - Trigger: `push` tag `v*`
-   - Runner: GitHub-hosted `macos-15`
-   - Protected environment: `release`
-
-   The environment requires the owner's approval and waits silently until it
-   gets it. An agent driving a release opens the run's page in the owner's
-   browser the moment the run enters `waiting` (`open <run-url>`) — the
-   owner's phone notifications are not a reliable channel, the laptop is.
-
-   Guardrails:
-   - The tagged commit must be reachable from `origin/main`.
-   - Tag-driven releases fail fast if app version metadata does not match the
-     requested release tag.
-   - Release preflight waits for in-flight `build-and-test` checks on the exact
-     source commit before signing starts.
-   - Temporary signing keychain is created and destroyed within the job, so a
-     failed run leaves no signing material behind on the runner.
-
-4. **Final download and update check**
-
-   After the release workflow passes and published-asset validation is green,
-   finish the release with an operator/user-visible update-path check:
-
-   ```bash
-   gh release download v0.21.0 \
-       --repo fairchild/workspaces \
-       --pattern "WorkSpaces-0.21.0.dmg" \
-       --dir /tmp/workspaces-release-v0.21.0 \
-       --clobber
-   ```
-
-   Confirm the versioned DMG downloads from the published GitHub Release; do not
-   stop at seeing the asset listed in the browser. Ask the user to open the
-   installed app and choose `WorkSpaces > Check for Updates...`; Sparkle should
-   offer the new stable version with matching release notes. Record that
-   confirmation in the release handoff/status update.
-
-### Method 1A: Optional Tester Prerelease
-
-Use this when several changes have landed on `main` and you want testers to
-exercise the signed, notarized app before publishing a new stable release. It is
-also the mechanism behind the pre-tag rehearsal above — the same dispatch serves
-both, so a rehearsal costs nothing extra when you were going to hand testers a
-build anyway.
-
-1. **Open a prerelease metadata PR**
-
-   Start from current `origin/main` and choose a SemVer prerelease version:
-
-   ```bash
-   git fetch origin main --tags
-   git checkout -b release/0.21.0-beta.1 origin/main
-   ./scripts/prepare-prerelease.sh --version 0.21.0-beta.1
-   ```
-
-   The helper requires a prerelease suffix such as `-alpha.1`, `-beta.1`, or
-   `-rc.1`. It updates `Info.plist`, bumps `CFBundleVersion`, and prepends a
-   matching changelog section. It does not commit, tag, push, or publish.
-
-   Preview without mutating:
-
-   ```bash
-   ./scripts/prepare-prerelease.sh --version 0.21.0-beta.1 --dry-run
-   ```
-
-   Review the generated changelog notes — including how Sparkle renders them
-   (§ "Changelog Notes in the Update Dialog") — then commit the metadata
-   changes, open a PR, attach evidence, and merge it to `main`.
-
-2. **Dispatch the Release workflow from `main`**
-
-   In GitHub: Actions > `Release` > `Run workflow` > Ref: `main`.
-
-   Manual dispatch from `main` always publishes a tester prerelease named
-   `workspaces-v<version>-main.<run_number>` with `--prerelease` and
-   `--latest=false`. It does not replace the latest stable release and does not
-   change the stable Sparkle feed.
-
-3. **Hand the prerelease to testers**
-
-   Send testers the GitHub prerelease URL or the versioned DMG asset from that
-   prerelease. `WorkSpaces > Check for Updates...` uses
-   `releases/latest/download/appcast.xml`, so normal update checks
-   intentionally continue to see only the latest stable release.
-
-4. **Publish stable after tester signoff**
-
-   Merge any fixes, set the final stable version if the prerelease used
-   `-alpha`, `-beta`, or `-rc`, and use Method 1 to create a fresh `v<X.Y.Z>`
-   stable tag. Do not promote the `workspaces-v...` tester tag.
-
-### Manual Reruns
-
-- Dispatch `Release` from `main` to create another tester prerelease for the
-  current app version.
-- Dispatch `Release` from an existing `v*` or `workspaces-v*` tag to rebuild and
-  refresh assets for that exact tag.
-- Tag shape controls release classification: `v<X.Y.Z>` is stable/latest;
-  SemVer prerelease tags and all `workspaces-v*` tags are GitHub prereleases.
-
-### Method 2: Manual Local Release
-
-For testing or when CI isn't available.
+Local packaging is useful for diagnosis. Direct publication requires explicit
+incident-recovery authorization; it does not provide the normal candidate gate.
 
 1. **Prepare Release Metadata**
 
@@ -530,7 +436,8 @@ Pre-release versions:
 - `0.1.0-beta.1` - Beta releases
 - `0.1.0-alpha.1` - Alpha releases
 
-Build numbers (CFBundleVersion) are auto-incremented by CI or can be set manually.
+Build numbers (`CFBundleVersion`) are incremented in the metadata PR and stay
+fixed throughout candidate validation and publication.
 
 ---
 
@@ -586,7 +493,10 @@ xcrun stapler validate build/WorkSpaces-0.3.1.dmg
 # Should say "The validate action worked!"
 ```
 
-### Installed Performance
+### Installed Performance (owner opt-in)
+
+Run only during an explicitly authorized laptop measurement session.
+
 ```bash
 ./scripts/verify-installed-perf.sh build/WorkSpaces.app build/release-installed-perf
 # Should report launch_to_first_prompt, terminal_first_output, and first_prompt_ready
@@ -647,6 +557,10 @@ security find-identity -v -p codesigning
 
 | Script | Purpose |
 |--------|---------|
+| `scripts/release.py` | Prepare/resume metadata PR and enable reviewed auto-merge |
+| `scripts/release-environments.py` | Prepare and audit new candidate/publication environments while preserving legacy approval |
+| `scripts/release-candidate.py` | Qualify source, seal candidate identity, summarize readiness and promote verified assets |
+| `scripts/verify-release-candidate.sh` | Validate the downloaded DMG and launch its packaged CLI before approval |
 | `scripts/build-release.sh` | Build app bundle from SPM |
 | `scripts/verify-app-keychain-signing.sh` | Verify embedded provisioning profile and signed keychain entitlements |
 | `scripts/verify-release-bundle.sh` | Verify Developer ID signing across bundled code objects before notarization |

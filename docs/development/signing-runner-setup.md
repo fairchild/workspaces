@@ -1,7 +1,7 @@
 # Signing Runner Setup
 
 > **The `Release` workflow no longer uses this lane, and the lane no longer
-> exists.** Signing and notarization run on hosted `macos-15`, taking every
+> exists.** Signing and notarization run on hosted `macos-26`, taking every
 > credential from repository secrets. `blue-workspaces` — the last runner
 > carrying `signing-host` — was deregistered and removed from the host on
 > 2026-08-13, before hosted notarization had proven itself green. This runbook is
@@ -77,7 +77,7 @@ Confirm at least one online runner now includes `signing-host`.
 ## 4. Re-admit the lane in the repo, then point the release at it
 
 Steps 1–3 make the runner available; they do not route anything to it. As shipped,
-`build-sign-notarize-release` in `.github/workflows/release.yml` is `runs-on: macos-15`,
+`build-sign-notarize-release` in `.github/workflows/release.yml` is `runs-on: macos-26`,
 so dispatching `Release` now will not touch this runner no matter how healthy it is.
 
 Three repo edits do that, and the first two gate the third — skip either and a
