@@ -107,6 +107,23 @@ require_cmd() {
     command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
 
+# Resource trees reach the bundle as whole-directory copies from build products
+# elsewhere. A copy that moves nothing yields an app that builds and packages
+# clean and then misbehaves at runtime, so the source has to exist, hold
+# something, and copy successfully — every failure names the pair it could not
+# copy (#1502).
+copy_tree_or_fail() {
+    local src="$1"
+    local dst="$2"
+    local label="$3"
+
+    [[ -d "$src" ]] || fail "$label: source directory not found: $src (needed for $dst)"
+    [[ -n "$(ls -A "$src")" ]] || fail "$label: source directory is empty: $src (nothing to copy into $dst)"
+    [[ -d "$dst" ]] || fail "$label: destination directory not found: $dst (copying from $src)"
+    cp -R "$src"/* "$dst"/ || fail "$label: copy failed: $src -> $dst"
+    log_success "$label"
+}
+
 expand_home_prefix() {
     local path="$1"
     if [[ "$path" == "~" ]]; then
@@ -525,11 +542,13 @@ if [[ -f "$PRIVACY_MANIFEST" ]]; then
     log_success "Copied PrivacyInfo.xcprivacy"
 fi
 
+# Package.swift declares resources for this target unconditionally
+# (PrivacyInfo.xcprivacy, Assets.xcassets, HookForwarders), so every successful
+# release build emits this bundle — its absence is a broken build, not a shape
+# some configuration produces. verify-release-bundle.sh requires the hook
+# forwarders that live in it.
 SPM_RESOURCES=".build/release/WorkspaceManager_WorkspaceManager.bundle"
-if [[ -d "$SPM_RESOURCES" ]]; then
-    cp -R "$SPM_RESOURCES"/* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
-    log_success "Copied SPM resources"
-fi
+copy_tree_or_fail "$SPM_RESOURCES" "$APP_BUNDLE/Contents/Resources" "Copied SPM resources"
 
 SPARKLE_FRAMEWORK=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
@@ -540,8 +559,8 @@ else
 fi
 
 if GHOSTTY_SHARE_DIR_RESOLVED="$(resolve_ghostty_share_dir)"; then
-    cp -R "$GHOSTTY_SHARE_DIR_RESOLVED"/* "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
-    log_success "Copied Ghostty resources from $GHOSTTY_SHARE_DIR_RESOLVED"
+    copy_tree_or_fail "$GHOSTTY_SHARE_DIR_RESOLVED" "$APP_BUNDLE/Contents/Resources" \
+        "Copied Ghostty resources from $GHOSTTY_SHARE_DIR_RESOLVED"
 else
     log_warning "Ghostty share resources not found; packaged shell integration may be degraded"
 fi
