@@ -35,7 +35,6 @@ AFTER_LOG=""
 AFTER_CAPTURED_AT=""
 RESTORE_ELAPSED_SECONDS=""
 CLOSE_PROOF_TXT=""
-CLOSE_PROOF_PNG=""
 PROBE_START_LOG=""
 PROBE_CHECK_LOG=""
 PROBE_CLEANUP_LOG=""
@@ -65,7 +64,8 @@ What it proves:
   - the Workspaces tmux socket survives the app terminate/relaunch boundary
 
 The script writes an evidence bundle under output/continuity-evidence/ and does
-not upload artifacts. Upload before/closed/after PNGs with scripts/evidence.sh.
+not upload artifacts. Upload the before/after screenshots with scripts/evidence.sh;
+the close proof is text and goes up as text.
 USAGE
 }
 
@@ -137,7 +137,6 @@ ensure_dependencies() {
     command -v swift >/dev/null 2>&1 || fail "swift is required"
     command -v screencapture >/dev/null 2>&1 || fail "screencapture is required"
     command -v tmux >/dev/null 2>&1 || fail "tmux is required"
-    command -v qlmanage >/dev/null 2>&1 || fail "qlmanage is required to render close proof"
     [[ -x "$LAUNCH_SCRIPT" ]] || fail "missing launch script: $LAUNCH_SCRIPT"
     [[ -x "$CAPTURE_SCRIPT" ]] || fail "missing capture script: $CAPTURE_SCRIPT"
     [[ -x "$PROBE_SCRIPT" ]] || fail "missing tmux probe script: $PROBE_SCRIPT"
@@ -158,7 +157,6 @@ prepare_paths() {
     DATA_DIR="$RUN_DIR/data"
     SUMMARY_PATH="$RUN_DIR/summary.json"
     CLOSE_PROOF_TXT="$RUN_DIR/closed-process-proof.txt"
-    CLOSE_PROOF_PNG="$RUN_DIR/closed-process-proof.txt.png"
     PROBE_START_LOG="$RUN_DIR/tmux-probe-start.log"
     PROBE_CHECK_LOG="$RUN_DIR/tmux-probe-check.log"
     PROBE_CLEANUP_LOG="$RUN_DIR/tmux-probe-cleanup.log"
@@ -231,8 +229,7 @@ write_summary() {
     "tmux_session": "$(json_escape "$BEFORE_TMUX_SESSION")"
   },
   "closed": {
-    "proof_text": "$(json_escape "$CLOSE_PROOF_TXT")",
-    "proof_png": "$(json_escape "$CLOSE_PROOF_PNG")"
+    "proof_text": "$(json_escape "$CLOSE_PROOF_TXT")"
   },
   "after": {
     "pid": "$(json_escape "$AFTER_PID")",
@@ -378,11 +375,6 @@ write_close_proof() {
     } >"$CLOSE_PROOF_TXT"
 }
 
-render_close_proof() {
-    qlmanage -t -s 1000 -o "$RUN_DIR" "$CLOSE_PROOF_TXT" >/dev/null
-    [[ -f "$CLOSE_PROOF_PNG" ]] || fail "close proof PNG was not created: $CLOSE_PROOF_PNG"
-}
-
 launch_debug_app() {
     local output_file="$1"
     local clean_flag="$2"
@@ -472,7 +464,6 @@ run() {
     terminate_app_pid "$BEFORE_PID"
     wait_for_pid_exit "$BEFORE_PID" || fail "before app pid did not exit: $BEFORE_PID"
     write_close_proof
-    render_close_proof
     run_probe_check
 
     local after_launch_out="$RUN_DIR/launch-after.log"
@@ -505,7 +496,7 @@ run() {
     log "Continuity evidence passed."
     log "Run directory: $RUN_DIR"
     log "Before screenshot: $RUN_DIR/before-close.png"
-    log "Closed proof: $CLOSE_PROOF_PNG"
+    log "Closed proof: $CLOSE_PROOF_TXT"
     log "After screenshot: $RUN_DIR/after-reopen.png"
     log "Summary: $SUMMARY_PATH"
 }

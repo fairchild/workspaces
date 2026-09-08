@@ -142,6 +142,7 @@ Review rules:
 - A `[blocked]` item that needs a person to look at something — a screenshot, on-screen copy, a protocol someone follows, a call someone makes — is `request_changes`. Reading the diff is not looking at the thing.
 - A `[blocked]` item that needs nobody to look, on a PR whose named tests ran and passed, is `approve_with_followups`. Name the gap in the review: which item is unproven, and what would prove it. A PR held for evidence nobody needs costs more than the gap does.
 - An entry reading "attested by the PR author, not run by the factory" is the author's word, not a run anyone watched. Read it against the diff — does a test exist for what it claims to cover, and does the count look like that suite? — and say in the review that you did. The gate lets these through; you are the one who checks them.
+- Say in one line what level of evidence this change shape required, and why. A screenshot for something someone looks at, numbers for something measured, the named tests for everything else. An image of text is never evidence: if a PR offers a rendered test summary, ask for the command and the line it printed instead.
 - `approve` is for a contract fully accounted for and unblocked. Anything short of that is `approve_with_followups` or `request_changes`.
 - Separate code-quality feedback from evidence-gate feedback in your review body.
 

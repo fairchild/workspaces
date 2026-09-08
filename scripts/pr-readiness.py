@@ -204,13 +204,56 @@ def has_checked_box(body: str, label: str) -> bool:
     return bool(re.search(rf"(?im)^\s*[-*]\s*\[x\]\s*{re.escape(label)}\b", body))
 
 
-def has_any_evidence(body: str) -> bool:
+# A command someone can re-run, and what it printed. Either half alone is not
+# a report: a command with no result is a plan, a result with no command is a
+# claim nobody can check.
+TEST_COMMAND_RE = re.compile(
+    r"(?i)\b(?:swift\s+test|swift\s+build|(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?\S*test"
+    r"|pytest|python3?\s+-m\s+(?:pytest|unittest)|uv\s+run|go\s+test|cargo\s+test"
+    r"|xcodebuild\s+test|mise\s+run|make\s+test|\./scripts/\S+|git\s+diff\s+--check)\b"
+)
+TEST_RESULT_RE = re.compile(
+    r"(?i)\b(?:pass(?:es|ed|ing)?|green|succeed(?:s|ed)?|ok|clean|no\s+\w+\s+errors?)\b"
+)
+# Anything a person can see lives here. An image is evidence *of* one of these;
+# on a change nobody looks at, an image is a picture of text.
+VISUAL_SURFACE_PREFIXES = ("Sources/", "web/", "web-next/", "ios/", "prototypes/", "fixtures/ui-state/")
+IMAGE_EVIDENCE_RE = re.compile(r"!\[.*\]\(https?://")
+IMAGE_LINK_RE = re.compile(r"(?i)https?://\S+\.(?:png|jpe?g|gif|webp|svg|webm|mp4)\b")
+
+
+def has_named_test_signal(body: str) -> bool:
+    """A command and what it printed, somewhere in the body."""
+    return bool(TEST_COMMAND_RE.search(body) and TEST_RESULT_RE.search(body))
+
+
+def has_image_evidence(body: str) -> bool:
+    return bool(IMAGE_EVIDENCE_RE.search(body) or IMAGE_LINK_RE.search(body))
+
+
+def touches_a_visual_surface(files: list[str]) -> bool:
+    return any(path.startswith(VISUAL_SURFACE_PREFIXES) for path in files)
+
+
+def has_any_evidence(body: str, files: list[str] | None = None) -> bool:
+    """Whether this body carries a signal that anything was verified.
+
+    An image used to satisfy this on its own, for any change at all, which is
+    what made rendering a test summary to an SVG worth doing. It now satisfies
+    it only where there is something to see. Michael, 2026-09: "We will never
+    again choose to create an svg of text just to have evidence. That was a
+    reward hack I allowed to go through for a while."
+    """
     lowered = body.lower()
+    uploaded_log = bool(
+        re.search(r"(?i)evidence\.cloudcompute\.com/\S+\.txt\b", body)
+    )
     return any(
         (
-            "evidence.cloudcompute.com" in lowered,
-            bool(re.search(r"!\[.*\]\(https?://", body)),
-            bool(re.search(r"(?i)(test|tests).*(pass|passed)|\d+\s+passed", body)),
+            has_named_test_signal(body),
+            uploaded_log,
+            has_image_evidence(body) and touches_a_visual_surface(files or []),
+            "evidence.cloudcompute.com" in lowered and touches_a_visual_surface(files or []),
             has_checked_box(body, "Not a testable change"),
         )
     )
@@ -270,8 +313,14 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):
         failures.append("PR text contains a merge-stop instruction.")
 
-    if not has_any_evidence(body) and not is_docs_only(files):
-        failures.append("No test/evidence signal found in PR body.")
+    if not has_any_evidence(body, files) and not is_docs_only(files):
+        if has_image_evidence(body) and not touches_a_visual_surface(files):
+            failures.append(
+                "The only evidence in the PR body is an image, and this change is not one "
+                "anyone looks at. State the command you ran and the line it printed."
+            )
+        else:
+            failures.append("No test/evidence signal found in PR body.")
 
     release_files = changed_release_files(files)
     if release_files:
@@ -298,8 +347,9 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
 COMMENT_MARKER = "<!-- pr-readiness-gate -->"
 
 EVIDENCE_HINT = (
-    "an uploaded evidence link (`evidence.cloudcompute.com`), an embedded image, "
-    'a test summary containing "N passed", or a checked `- [x] Not a testable change` box'
+    "the command you ran and the line it printed (`swift test` — `Test run with 1992 "
+    "tests passed`), an uploaded `.txt` log, a screenshot or recording for a change "
+    "someone looks at, or a checked `- [x] Not a testable change` box"
 )
 
 

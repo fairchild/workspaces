@@ -934,8 +934,14 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     ]
     matched_keys = set(matched.values())
     unexpected_items = [item for item in entries if item not in matched_keys]
+    unproven_items = [
+        item
+        for item in complete_items
+        if _detail_proves_nothing(item, str(entries[matched[item]].get("detail", "")))
+    ]
     return {
         **parsed,
+        "unproven_items": unproven_items,
         "missing_items": missing_items,
         "contested_items": contested_items,
         "duplicate_requested_items": _indistinguishable(requested_evidence),
@@ -947,6 +953,36 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
         "blocked_on_evidence": "blocked on evidence" in body.casefold(),
         "contract_required": True,
     }
+
+
+# What a completed entry has to say. The accounting layer read the status word
+# and the index and never the words after `--`, so `- [complete] <item> -- done`
+# and an image link closed a test item just as well as a result line did. It
+# was strict about form and silent about proof, which is the inversion this
+# closes.
+EMPTY_DETAIL_RE = re.compile(r"^(?:\W*|\W*\w+\W*)$")
+DETAIL_IMAGE_ONLY_RE = re.compile(
+    r"^(?:\W*!\[[^\]]*\]\(\s*https?://[^)]+\)\W*)+$"
+)
+
+
+def _detail_proves_nothing(item: str, detail: str) -> bool:
+    """Whether a `[complete]` entry's detail says nothing that could be checked.
+
+    Three shapes fail: nothing, one word, and an image standing alone on an
+    item that is not about looking at something. What the detail must not be
+    is the whole rule -- saying what it must contain would mean re-stating the
+    command the item already names, and "all passed" against `swift test` is a
+    perfectly good answer.
+    """
+    text = detail.strip()
+    if not text or EMPTY_DETAIL_RE.match(text):
+        return True
+    # An image is evidence of what a person can see. On an item about looking
+    # at something it is the proof; anywhere else it is a picture of text.
+    return DETAIL_IMAGE_ONLY_RE.match(text) is not None and (
+        _evidence_item_kind(item) != "screenshot"
+    )
 
 
 def _truncate(text: str, max_len: int = 80) -> str:
@@ -1042,6 +1078,14 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tu
         errors.append(
             "PR body must account for every requested evidence item exactly; "
             f"missing: {preview}"
+        )
+    unproven_items = accounting.get("unproven_items") or []
+    if unproven_items:
+        preview = _format_missing_preview(list(unproven_items), requested_evidence)
+        errors.append(
+            "these entries are marked complete but their detail proves nothing; "
+            "say what you ran and what it printed, and note that an image of text "
+            f"is not evidence: {preview}"
         )
     if accounting["blocked_items"] and not accounting["blocked_on_evidence"]:
         errors.append(

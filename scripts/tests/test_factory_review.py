@@ -632,8 +632,8 @@ class FactoryReviewTests(unittest.TestCase):
 
     READY_BODY = (
         "## Summary\n\nA change.\n\n"
-        "## Evidence Status\n- [complete] CI green -- proof\n\n"
-        "## Validation\n- 12 passed\n\n"
+        "## Evidence Status\n- [complete] CI green -- `Lint, Test, Build` green on this head\n\n"
+        "## Validation\n- `uv run --script scripts/tests/test_factory_review.py` -- Ran 12 tests, OK\n\n"
         "## Mergeability\n"
         "- Surface: infra — the factory review lane\n"
         "- User-facing behavior changed: No\n"
@@ -690,10 +690,10 @@ class FactoryReviewTests(unittest.TestCase):
         cases = {
             "no Mergeability": self.READY_BODY.replace("## Mergeability", "## Notes"),
             "evidence still blocked": self.READY_BODY.replace(
-                "- [complete] CI green -- proof", "- [blocked] CI green -- waiting"
+                "- [complete] CI green", "- [blocked] CI green"
             ),
             "evidence still pending": self.READY_BODY.replace(
-                "- [complete] CI green -- proof", "- [pending-ci] CI green -- waiting"
+                "- [complete] CI green", "- [pending-ci] CI green"
             ),
             "blank Mergeability field": self.READY_BODY.replace(
                 "- Residual risk or follow-up: None", "- Residual risk or follow-up: TBD"

@@ -1835,6 +1835,57 @@ class PerfEvidenceKindTests(unittest.TestCase):
         )
 
 
+class CompleteDetailTests(unittest.TestCase):
+    """The accounting layer read the status word and never the words after it.
+
+    `- [complete] <item> -- done` and an image link closed a test item just as
+    well as a result line did. It was strict about form and silent about
+    proof, which is the inversion this closes.
+    """
+
+    ITEM = "`swift test --filter FooTests` passes"
+    SCREENSHOT = "Screenshots of the new sidebar"
+
+    def errors_for(self, item: str, detail: str) -> list[str]:
+        body = f"## Evidence Status\n- [complete] {item} -- {detail}\n"
+        _, errors = run_contributor.validate_evidence_accounting(body, [item])
+        return errors
+
+    def test_a_one_word_detail_proves_nothing(self) -> None:
+        for detail in ("done", "proof", "yes", "."):
+            with self.subTest(detail=detail):
+                errors = self.errors_for(self.ITEM, detail)
+                self.assertTrue(
+                    any("proves nothing" in error for error in errors), errors
+                )
+
+    def test_an_image_alone_does_not_close_a_test_item(self) -> None:
+        # The reward hack, stated as a rule: a picture of a test summary is
+        # not a test summary.
+        errors = self.errors_for(
+            self.ITEM,
+            "![tests](https://evidence.cloudcompute.com/workspaces/pr-1/tests.svg)",
+        )
+        self.assertTrue(any("image of text" in error for error in errors), errors)
+
+    def test_an_image_does_close_a_screenshot_item(self) -> None:
+        errors = self.errors_for(
+            self.SCREENSHOT,
+            "![sidebar](https://evidence.cloudcompute.com/workspaces/pr-1/sidebar.png)",
+        )
+        self.assertEqual([e for e in errors if "proves nothing" in e], [])
+
+    def test_a_real_result_line_is_accepted(self) -> None:
+        for detail in (
+            "Test run with 1992 tests in 214 suites passed",
+            "all passed",
+            "succeeded on self-hosted macOS CI: [test-output](https://example.com/o.txt)",
+        ):
+            with self.subTest(detail=detail):
+                errors = self.errors_for(self.ITEM, detail)
+                self.assertEqual([e for e in errors if "proves nothing" in e], [])
+
+
 class BlockedItemVerdictTests(unittest.TestCase):
     """Where "use judgement, rounding on the side of more evidence" lives.
 

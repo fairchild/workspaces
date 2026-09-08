@@ -256,6 +256,14 @@ Two rules worth knowing:
   If you want the factory to close it, drop the parenthetical and write the
   diff or CI form instead.
 
+**An image of text is never evidence.** The readiness gate used to accept any
+embedded image as the whole evidence signal, for any change at all, which is
+what made rendering a test summary to an SVG worth doing. An image now
+satisfies the gate only where there is something to see, and a `[complete]`
+entry whose detail is an image alone closes only a screenshot item. The
+producer is gone too: `scripts/pr-evidence.sh` writes its summaries as text,
+and `scripts/continuity-evidence.sh` no longer renders its close proof to PNG.
+
 `test-attested` and `perf` are the kinds the factory cannot run for you and
 does not park on you either.
 
