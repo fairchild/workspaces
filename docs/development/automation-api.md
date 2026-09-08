@@ -154,13 +154,12 @@ WorkSpaces terminal tile. See
 
 ## Verb contract: verbs = clicks
 
-Every mutation verb enters the same UI path the equivalent user gesture does. A
-verb never writes the service or SwiftData layer directly; it drives the real UI
-entry point and inherits exactly what a click produces. The single place this rule
-is enforced is the internal gesture-verb layer
-(`AutomationGestureVerbs`): it is constructed with *only* gesture closures — the
-app's real UI entry points — and holds no backend handle, so a verb structurally
-cannot bypass the UI.
+Every mutation verb enters the app's own path for the gesture it names, and never
+reaches around the UI into a service or SwiftData write the equivalent user action
+would not make. The single place this rule is enforced is the internal gesture-verb
+layer (`AutomationGestureVerbs`): it is constructed with *only* gesture closures —
+the app's real UI entry points — and holds no backend handle of its own, so a verb
+reaches app state only through a closure the live window installed.
 
 `workspace.select` is the exemplar: selecting a workspace via the API writes the
 *same selection binding* a sidebar click writes — the binding whose setter attaches
@@ -183,8 +182,9 @@ selected with its terminal attached. Concretely, this is why the rule matters:
   binding fails exactly when a user click would, so a broken selection path is caught
   by the verb, not hidden behind a service call that still "succeeds."
 
-Verbs return a structured outcome so dialogs and dead-ends become data, never a
-hang or a fallback:
+Verbs whose gesture can be deflected — `workspace.select`, `workspace.create`,
+`workspace.archive`, `repo.terminal`, and the tile verbs — return a structured
+outcome, so dialogs and dead-ends become data rather than a hang or a fallback:
 
 | Outcome | Meaning | Wire |
 | --- | --- | --- |
@@ -196,6 +196,18 @@ An id that resolves to no tracked repo or workspace fails `invalid_request` (it 
 not a gesture outcome — nothing was driven). App Intents and any companion app call
 the same verb layer, so "Siri said done" and "the sidebar updated" are the same
 event.
+
+`workspace.note` is where the contract reads differently, and the difference is in
+the UI rather than in the verb. A note has no machinery beneath it: the sidebar's
+own menu item normalizes the text and assigns the stored field, so the user's
+gesture is already a direct write and there is no deeper entry point for a verb to
+enter. The verb's gesture closure is therefore the write itself — the same
+`WorkspaceNote.normalized` call into the same field, installed by the live window —
+rather than a call into a sidebar controller action, and the two writers are
+separate implementations that nothing forces to stay equivalent. Its result shape
+follows: it reports the stored `note` and `changed` with no `outcome` field, since
+no dialog can deflect it. It still fails closed — no live window is `unsupported`,
+an untracked id is `invalid_request`. See [Workspace note](#workspace-note).
 
 ### App Intents veneer
 
@@ -281,7 +293,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/wait` | **Operator scope, typed wait.** Evaluates a condition (`surface_attached`, `workspace_selected`, `surface_text_matches`, `prompt_ready`) server-side until satisfied, a bounded timeout elapses, or current state proves it unsatisfiable. Body is `{"for":"…","predicate":{…},"timeoutMS":n}`; the outcome is the typed enum `satisfied` / `timed_out` / `not_applicable`, never a bare boolean. Topology/selection conditions require `workspace.read`; content conditions require `surface.read`. See [Wait](#wait). |
 | `GET /v1/focus` | **Operator scope.** Truthful report of the app's live focus state: `{appIsActive, keyWindowID, firstResponderSurfaceID, focusPossible}`. `focusPossible: false` marks a no-activate (or CI) launch where the app cannot take focus — absent focus is then "unavailable", not a focus failure. Requires `window.read`. See [Focus](#focus). |
 | `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. `{"teardownTerminals":true}` kills the workspace's tmux sessions and retires its terminal tiles first, so a live terminal cannot fail the call. Returns `completed` with the archived workspace id, post-gesture selection state, and (after teardown) a teardown report, or `confirmation_required` if the UI path ever reaches a modal. A live terminal without teardown fails typed: `terminal_active` (`retryable: true`) on the exit-timeout, `close_blocked_by_confirmation` (`retryable: false`) when the close-confirmation blocks. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
-| `POST /v1/workspace/note` | **Operator scope, mutation.** Sets or clears the **Workspace Note** on the workspace named by the body's `workspaceID` (a `workspace.read` id), writing through the window-bound gesture layer. It applies the same normalization as the row menu's "Add Note…" / "Edit Note…" / "Clear Note" items and lands in the same stored field, but the two are separate setters, not one shared path. Body is `{"workspaceID":"…","note":"…"}`; a `note` that is absent or `null` clears the line, so there is no second verb for "stop showing this". Returns the *stored* note — trimmed, interior whitespace collapsed, truncated at 120 characters — with `changed` reporting whether that differed from what was already there. A zero-byte body fails `invalid_request`, since the missing-`workspaceID` check runs before any parse. A body that is not valid JSON fails `malformed_json`. A bare JSON scalar (string, number, `true`, `false`, `null`) also fails `malformed_json`, because the decoder rejects top-level fragments. A body that parses to a JSON array fails `invalid_request`, carrying no `workspaceID`. Past that, a `workspaceID` that is non-string, blank, non-UUID, or untracked fails `invalid_request`, as does a `note` present but neither string nor null. A live-window-less app fails `unsupported`; any method other than POST fails `method_not_allowed`. Requires `workspace.note`; tile handles fail `capability_denied`. See [Workspace note](#workspace-note). |
+| `POST /v1/workspace/note` | **Operator scope, mutation.** Sets or clears the **Workspace Note** on the workspace named by the body's `workspaceID` (a `workspace.read` id), writing through the window-bound gesture layer. It applies the same normalization as the row menu's "Add Note…" / "Edit Note…" / "Clear Note" items and lands in the same stored field, but the two are separate setters, not one shared path. Body is `{"workspaceID":"…","note":"…"}`; a `note` that is absent or `null` clears the line, so there is no second verb for "stop showing this". Returns the *stored* note — trimmed, interior whitespace collapsed, truncated at 120 characters — with `changed` reporting whether that differed from what was already there. A zero-byte body fails `invalid_request`, since the missing-`workspaceID` check runs before any parse. A body that is not valid JSON fails `malformed_json`. A bare JSON scalar (string, number, `true`, `false`, `null`) also fails `malformed_json`, because the decoder rejects top-level fragments. A body that parses to a JSON array fails `invalid_request`, carrying no `workspaceID`. Past that, a `workspaceID` that is absent (`{}`), non-string, blank, non-UUID, or untracked fails `invalid_request`, as does a `note` present but neither string nor null. A live-window-less app fails `unsupported`; any method other than POST fails `method_not_allowed`. Requires `workspace.note`; tile handles fail `capability_denied`. See [Workspace note](#workspace-note). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -424,7 +436,8 @@ mutation rides this route.
   "system": {
     "capabilities": [
       "window.read", "window.snapshot", "workspace.read",
-      "workspace.select", "workspace.create", "surface.read", "workspace.archive"
+      "workspace.select", "workspace.create", "surface.read", "workspace.archive",
+      "workspace.note", "repo.terminal", "ui.read"
     ]
   }
 }
@@ -785,17 +798,18 @@ that pasted a paragraph learns what the row will show:
   Nothing enforces that: the two implementations can diverge without a type or
   a test failing, so read the equivalence as a fact about the code as it stands
   rather than a guarantee the API makes.
-- **Failure mapping.** Body handling is four cases, in the order the router
+- **Failure mapping.** Body handling is five cases, in the order the router
   checks them. A zero-byte body fails `invalid_request`, not `malformed_json` —
   the missing-`workspaceID` check runs before any JSON parse. A body that is not
   valid JSON fails `malformed_json`. A body that is a bare JSON scalar — a
   string, a number, `true`, `false`, or `null` — also fails `malformed_json`,
   because the decoder rejects top-level fragments, so "valid JSON" alone is not
   enough. A body that parses to a JSON array fails `invalid_request`, because an
-  array carries no `workspaceID`. Past that, a `workspaceID` that is non-string,
-  blank (empty or whitespace-only), non-UUID, or untracked fails
-  `invalid_request`. A live-window-less app fails `unsupported` (never a
-  data-layer fallback); any method other than POST on this path fails
+  array carries no `workspaceID`. A JSON object with no `workspaceID` — `{}` —
+  fails `invalid_request` at the same check, as does a `workspaceID` that is
+  present but non-string, blank (empty or whitespace-only), non-UUID, or
+  untracked. A live-window-less app fails `unsupported` (never a data-layer
+  fallback); any method other than POST on this path fails
   `method_not_allowed`.
 - **Operator mutation.** Requires `workspace.note`, distinct from the read-only
   `workspace.read` — a handle granted the inventory read cannot write the line
