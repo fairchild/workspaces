@@ -1,6 +1,9 @@
 # Evidence Guide
 
-Evidence is a merge gate for all PRs. Upload test results or screenshots before creating a PR.
+Evidence is a merge gate for all PRs. A screenshot or a recording for anything a
+person can see, numbers for anything measured, and for everything else the named
+tests that ran with the command and its result line. Upload what needs a link;
+a command and its result belong in the PR body.
 
 > **Remote (claude.ai) sessions:** `EVIDENCE_UPLOAD_TOKEN` is not available in those containers. The sanctioned fallback — a green CI run link on the exact branch/commit as hosted evidence, plus session-delivered screenshots for UI changes — is documented in `remote-sessions.md`.
 
@@ -105,9 +108,7 @@ Reach for a fallback only when the lane above cannot apply, in this order:
 2. **ImageRenderer test → PNG** — for a *single* SwiftUI view in a transient or
    hover-only state that fixture mode cannot stage as a full window. Renders one
    view, not the composited window.
-3. **`qlmanage`-rendered test logs** — for non-UI changes where the evidence is
-   test output, not pixels (render the log to PNG, then `--file --no-capture`).
-4. **Local VM lane** (Tart/Lume on your own machine) — the full-fidelity
+3. **Local VM lane** (Tart/Lume on your own machine) — the full-fidelity
    fallback for the one case the in-process lane cannot cover: **a locked
    screen.** Every composited capture
    path (`CGWindowList` and ScreenCaptureKit) returns no pixels while the session
@@ -149,7 +150,8 @@ exist afterwards.
 ### Web UI evidence
 
 The app lane is macOS-app only. Web dashboard evidence still uses
-`mise run web:evidence` / Playwright report screenshots (see the web table
+`mise run web:evidence` / Playwright reports and screenshots of the rendered
+page (see the web table
 below and `web/docs/local-dev.md`).
 
 ## Setup
@@ -195,7 +197,8 @@ gh secret set EVIDENCE_UPLOAD_TOKEN --repo fairchild/workspaces --body "$TOKEN"
 ### `scripts/upload-evidence.py`
 
 Lower-level upload client. Accepts `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`,
-`webm`, and `mp4`, with a 50 MiB per-file limit enforced by both the client and
+`webm`, `mp4`, and `txt` — a test log goes up as text, not as a picture of
+one — with a 50 MiB per-file limit enforced by both the client and
 the evidence-store Worker. Uploads carry a fixed `Content-Length`; the Worker
 rejects chunked or malformed-length requests so accepted files can stream
 directly into R2 without consuming the Worker's memory budget. Called internally
@@ -209,14 +212,28 @@ uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name 
 
 ## What counts as evidence
 
+A screenshot or a recording for anything a person can see. Numbers for anything
+measured. For everything else, the named tests that ran and what they covered,
+plus whatever else you ran locally. Use judgement, and round toward more
+evidence.
+
+**An image of text is never evidence.** Rendering a test summary to an SVG or a
+PNG so that a gate sees an image was, in Michael's words, "a reward hack I
+allowed to go through for a while" — and never again. Paste the command and its
+result line; upload the log as text if it helps. An image is evidence of what a
+person can see, which means a screenshot is asked for only when the change is
+one someone looks at.
+
+Minimum is the floor for that change type, not the ceiling.
+
 | Change type | Minimum evidence | Extras |
 |-------------|-----------------|--------|
-| Swift UI | `swift test` summary screenshot | Running-app screenshot via the [app evidence lane](#app-evidence-lane-first-choice-ui-capture) (`--fixture`) |
-| Swift non-UI | `swift test` summary screenshot | — |
-| Web | `pnpm test` output | Playwright report screenshot |
-| API-only | Test output | — |
+| Swift UI | Running-app screenshot via the [app evidence lane](#app-evidence-lane-first-choice-ui-capture) (`--fixture`) | Before/after when the visual correction is the point |
+| Swift non-UI | The named tests that ran, with the command and its result line | Uploaded `test-output.txt` |
+| Web | `pnpm test` output, with the command and its result line | Playwright report for a UI change; the HTML report as an artifact, not a picture of it |
+| API-only | The named tests that ran, with the command | — |
 | Docs/config | Check "Not a testable change" in PR template | — |
-| Performance | Before/after/delta metrics | Metric source and commands |
+| Performance | Before/after/delta numbers in the PR body — the numbers are the artifact | Metric source and commands |
 
 For web screenshots without auth, start the dev server with:
 
@@ -244,13 +261,17 @@ finishing the PR and the PR waiting on you.
 | `Someone with taste confirms the copy reads well` | `other` | **you**, by hand |
 | `... (owner-attested)` | `other` | **you**, by hand — the directive is honoured over any other shape |
 
-Two rules worth knowing:
+Three rules worth knowing:
 
 - **A CI item must name the check in backticks, immediately before `green`, or
   before a CI noun and then a pass word.** ``` `check-links` check passes ``` works;
   "`pnpm check` passes locally" does not, because `pnpm check` is a command, not
   a check name. The classifier fails closed rather than guessing, since an item
   naming a check that does not exist never completes.
+- **A `test` or `build` item's command is the backticked span that opens it.**
+  In ``` `swift test --filter FooTests` passes ```, the lane runs
+  `swift test --filter FooTests` and reads "passes" as you saying what you
+  expect of it. A command mentioned mid-sentence is not a request to run it.
 - **`(owner-attested)` — or any "owner/maintainer confirms/approves/decides"
   phrasing — keeps the item yours** even when the rest of it looks mechanical.
   If you want the factory to close it, drop the parenthetical and write the

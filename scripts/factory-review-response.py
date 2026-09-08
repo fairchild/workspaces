@@ -96,6 +96,39 @@ REVISION_LANE_SWITCH = "FACTORY_REVISE_ENABLED"
 # comment delimiters would let PR text seed a marker inside April's own
 # comment, and an unbounded item would let it dominate the response.
 ITEM_QUOTE_LIMIT = 160
+# How much of an item the owner needs to tell which line it is. The whole item
+# is already in the PR body a scroll away; repeating it here buries the ask
+# under the machine's own bookkeeping. A leading clause names the file, the
+# command or the assertion, which is what a person scans for.
+ITEM_RECOGNITION_LIMIT = 96
+# Below this a leading clause names nothing -- "CI" or "A test in" on its own
+# identifies no line -- so the cut is taken later instead.
+ITEM_RECOGNITION_FLOOR = 24
+COUNT_WORDS = (
+    "no",
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+    "Six",
+    "Seven",
+    "Eight",
+    "Nine",
+    "Ten",
+)
+# What finishes a `pending-ci` entry, by the kind recorded on it. Naming the
+# lane is the difference between "wait" and "wait for what"; an entry written
+# before kinds were recorded names none, and gets the shape that is true of
+# all of them.
+PENDING_COMPLETERS = {
+    "ci": "when CI finishes on this head",
+    "diff": "when the next review lands on this head",
+    "test": "when the macOS evidence lane finishes on this head",
+    "build": "when the macOS evidence lane finishes on this head",
+    "screenshot": "when the macOS evidence lane finishes on this head",
+}
+PENDING_COMPLETER_FALLBACK = "when the lane that owns {it} finishes on this head"
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
 # States that neither block nor replace a reviewer's standing verdict.
 NON_SUPERSEDING_REVIEW_STATES = frozenset({"COMMENTED", "PENDING", "DISMISSED"})
@@ -350,25 +383,89 @@ def evidence_entries(body: str) -> list[dict[str, Any]]:
 
 
 def _quotable(text: str) -> str:
-    """PR-controlled text, safe to place inside April's own comment.
+    """PR-controlled text, flattened and bounded, for use inside a code span.
 
-    HTML comment delimiters come out first: leaving them in would let a PR
-    body seed a response marker inside the very comment the marker is meant
-    to identify. Backticks and newlines go too, so a quoted item cannot break
-    out of the line it sits on, and the result is bounded.
+    Backticks and newlines come out, so a quoted item cannot break out of the
+    span or the line it sits on, and HTML comment delimiters come out to a
+    fixed point -- one pass left `<<!--!--` behind as `<!--`. Rendering is
+    `_inert`'s job; this is about what the string may contain at all.
     """
-    flattened = " ".join(
-        text.replace("<!--", "").replace("-->", "").replace("`", "").split()
-    )
+    flattened = " ".join(text.replace("`", "").split())
+    while "<!--" in flattened or "-->" in flattened:
+        flattened = flattened.replace("<!--", "").replace("-->", "")
     if len(flattened) <= ITEM_QUOTE_LIMIT:
         return flattened
     return flattened[: ITEM_QUOTE_LIMIT - 1].rstrip() + "…"
 
 
-def _entry_label(entry: dict[str, Any]) -> str:
-    index = entry.get("index")
-    item = _quotable(str(entry.get("item") or ""))
-    return f"item {index} (\"{item}\")" if item else f"item {index}"
+def _inert(text: str) -> str:
+    """PR-controlled text, rendered so none of it can act.
+
+    A code span, not an escape list. Escaping `<` stopped the HTML-comment
+    class -- deleting `<!--` ran once, so `<<!--!--` survived it as `<!--` and
+    could comment out the instructions through the real trailing marker -- but
+    left every markdown construct alive: `[text](url)`, an image, an autolink,
+    a nested list marker, a mention. Inside a span all of them are characters,
+    and `_quotable` has already taken the backticks out, so nothing in the
+    text can close the span it sits in.
+    """
+    return f"`{text}`" if text else text
+
+
+def _recognition_label(entry: dict[str, Any]) -> str:
+    """Enough of the item to recognise which Evidence Status line it is.
+
+    Cut at the first clause boundary when there is one, otherwise at a word
+    boundary. The words identify the line; the list marker beside them is only
+    a marker, so nothing here depends on the entry's index rendering.
+    """
+    text = _quotable(str(entry.get("item") or ""))
+    if not text:
+        index = _entry_index(entry)
+        return f"item {index}" if index is not None else "an unnamed item"
+    clause = text.find(",")
+    if ITEM_RECOGNITION_FLOOR <= clause <= ITEM_RECOGNITION_LIMIT:
+        return _inert(text[:clause])
+    if len(text) <= ITEM_RECOGNITION_LIMIT:
+        return _inert(text)
+    cut = text.rfind(" ", ITEM_RECOGNITION_FLOOR, ITEM_RECOGNITION_LIMIT)
+    kept = text[: cut if cut > 0 else ITEM_RECOGNITION_LIMIT]
+    return _inert(kept.rstrip(" ,;:")) + "…"
+
+
+def _count_word(count: int) -> str:
+    return COUNT_WORDS[count] if count < len(COUNT_WORDS) else str(count)
+
+
+def _index_phrase(entries: list[dict[str, Any]]) -> str:
+    """`Item 3` / `Items 3 and 4` / `Items 3, 4 and 7`."""
+    indexes = [str(index) for entry in entries if (index := _entry_index(entry)) is not None]
+    if not indexes:
+        return "Those items" if len(entries) != 1 else "That item"
+    noun = "Item" if len(indexes) == 1 else "Items"
+    if len(indexes) == 1:
+        return f"{noun} {indexes[0]}"
+    return f"{noun} {', '.join(indexes[:-1])} and {indexes[-1]}"
+
+
+def _entry_index(entry: dict[str, Any]) -> int | None:
+    """The entry's index, or None if it is not one.
+
+    `index` comes from the same PR-editable metadata the item text does, and
+    it reaches the comment through two paths that never touched `_quotable`.
+    An index of `"1\n<!--"` opens an HTML comment inside a comment the owner
+    is meant to trust, hiding the instructions under it while the real
+    trailing marker still counts the review as answered.
+    """
+    try:
+        value = int(entry.get("index"))
+    except (TypeError, ValueError, OverflowError):
+        # `1e309` decodes to infinity, and `int()` of that raises
+        # OverflowError rather than ValueError -- which would abort the
+        # response lane before it posts anything, turning a bad index into
+        # silence instead of a comment.
+        return None
+    return value if value > 0 else None
 
 
 def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
@@ -382,35 +479,67 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
     ]
     blockers: list[Blocker] = []
     if blocked:
-        listed = "; ".join(_entry_label(entry) for entry in blocked)
         blockers.append(
             Blocker(
                 key="evidence-attestation",
                 owner_required=True,
-                detail=(
-                    f"**Owner evidence attestation.** Requested evidence {listed} "
-                    "cannot be reconciled mechanically. Gesture: in this PR body's "
-                    "`## Evidence Status` list, rewrite each of those lines as "
-                    "`- [complete] <item> -- <how you verified it>`, then remove the "
-                    f"`{BLOCKED_EVIDENCE_LABEL}` label. The readiness gate and the "
-                    "linked issue's state follow from those two edits."
-                ),
+                detail=_attestation_block(blocked),
             )
         )
     if pending:
-        listed = "; ".join(_entry_label(entry) for entry in pending)
         blockers.append(
             Blocker(
                 key="evidence-pending-ci",
                 owner_required=False,
-                detail=(
-                    f"Requested evidence {listed} completes when the named checks "
-                    "finish on this head — `factory-evidence-verify.yml` writes the "
-                    f"entry and drops `{BLOCKED_EVIDENCE_LABEL}` on its own."
-                ),
+                detail=_pending_block(pending),
             )
         )
     return blockers
+
+
+def _attestation_block(blocked: list[dict[str, Any]]) -> str:
+    """The ask, the items, and the two edits that clear them."""
+    plural = len(blocked) != 1
+    them, those, lines = (
+        ("them", "those", f"{_count_word(len(blocked)).lower()} lines")
+        if plural
+        else ("it", "that", "line")
+    )
+    return "\n\n".join(
+        [
+            f"{_count_word(len(blocked))} evidence item{'s' if plural else ''} "
+            f"need{'' if plural else 's'} you. The factory can't verify "
+            f"{them} itself.",
+            "\n".join(
+                f"{position}. {_recognition_label(entry)}"
+                for position, entry in enumerate(blocked, start=1)
+            ),
+            f"To clear {them}, edit this PR's description. In the "
+            f'"Evidence Status" list, change {those} {lines} to:',
+            # Fenced, not inline: GitHub's sanitizer eats `<item>` as an
+            # unknown HTML tag, and the placeholder is the whole point.
+            "```\n- [complete] <item> -- <what you ran and what you saw>\n```",
+            f"Then remove the `{BLOCKED_EVIDENCE_LABEL}` label.",
+        ]
+    )
+
+
+def _pending_block(pending: list[dict[str, Any]]) -> str:
+    """One line per lane: which items it clears, and when."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for entry in pending:
+        kind = str(entry.get("kind") or "").strip()
+        completer = PENDING_COMPLETERS.get(kind, PENDING_COMPLETER_FALLBACK)
+        grouped.setdefault(completer, []).append(entry)
+    lines = []
+    for completer, entries in grouped.items():
+        plural = len(entries) != 1
+        verb = "clear on their own" if plural else "clears on its own"
+        lines.append(
+            f"{_index_phrase(entries)} {verb} "
+            f"{completer.format(it='them' if plural else 'it')}."
+        )
+    return "\n".join(lines)
 
 
 def label_blockers(labels: set[str], *, evidence_accounted: bool) -> list[Blocker]:
@@ -421,9 +550,9 @@ def label_blockers(labels: set[str], *, evidence_accounted: bool) -> list[Blocke
                 key="needs-human",
                 owner_required=True,
                 detail=(
-                    f"**`{NEEDS_HUMAN_LABEL}` is applied.** Someone has already marked "
-                    "this as needing human intervention; the factory does not clear "
-                    "that label."
+                    f"Remove `{NEEDS_HUMAN_LABEL}` once it no longer applies. "
+                    "Someone applied it to say a person is needed here, and the "
+                    "factory never removes it."
                 ),
             )
         )
@@ -439,9 +568,8 @@ def label_blockers(labels: set[str], *, evidence_accounted: bool) -> list[Blocke
                 key=f"label:{label}",
                 owner_required=True,
                 detail=(
-                    f"**`{label}` is applied.** The readiness gate fails while any "
-                    "`blocked:` label is present. Gesture: resolve what the label "
-                    "names, then remove it."
+                    f"Resolve what `{label}` names, then remove the label. The "
+                    "readiness gate fails while any `blocked:` label is on the PR."
                 ),
             )
         )
@@ -466,13 +594,11 @@ def revision_required_blocker(reason: str) -> Blocker:
         key="revision-required",
         owner_required=True,
         detail=(
-            "**A change to the diff was requested.** Nothing the owner can act on "
-            "in this PR's machine-readable state (evidence entries, blocking "
-            "labels) accounts for the review, so the requested change is to the "
-            "code or prose itself. The contributor revision loop "
-            f"({REVISION_LOOP_ISSUE}) can take that turn, but {reason}. Gesture: "
-            "push the revision, or re-release the linked issue with the review's "
-            "feedback folded into it."
+            "Push the revision, or re-release the linked issue with the review's "
+            "feedback folded in. The review asks for a change to the code or "
+            "prose: nothing in this PR's evidence entries or labels accounts for "
+            f"it. The revision loop ({REVISION_LOOP_ISSUE}) could take that turn, "
+            f"but {reason}."
         ),
     )
 
@@ -482,11 +608,11 @@ def revision_exhausted_blocker(attempts: int) -> Blocker:
         key="revision-attempts-exhausted",
         owner_required=True,
         detail=(
-            f"**The revision loop has spent its {REVISION_ATTEMPT_CEILING} turns on "
-            f"this PR** ({attempts} reviews answered with a revision) and a reviewer "
-            "is still blocking. Another model turn reads the same code against the "
-            "same objection, so the loop stops here. Gesture: push the revision, or "
-            "re-release the linked issue with the review's feedback folded into it."
+            "Push the revision, or re-release the linked issue with the review's "
+            "feedback folded in. The revision loop has spent its "
+            f"{REVISION_ATTEMPT_CEILING} turns on this PR ({attempts} reviews "
+            "answered with a revision) and a reviewer is still blocking. Another "
+            "turn reads the same code against the same objection."
         ),
     )
 
@@ -636,38 +762,34 @@ def response_comment(
     review: dict[str, Any],
     *,
     repository_owner: str,
+    pr_number: int,
     labelled: bool = True,
 ) -> str:
-    review_url = str(review.get("html_url") or "").strip()
-    reference = f"[requested changes]({review_url})" if review_url else "requested changes"
-    owner_lines = [b.detail for b in decision.blockers if b.owner_required]
-    self_clearing = [b.detail for b in decision.blockers if not b.owner_required]
+    """What the owner reads: the ask, then the steps in the order they are done.
 
-    lines = [APRIL_ATTRIBUTION.rstrip("\n"), ""]
-    lines.append(f"Read {reviewer_name(review)}'s {reference}.")
-    lines += ["", f"**This needs @{repository_owner}** — the factory cannot clear it:", ""]
-    lines += [f"- {line}" for line in owner_lines]
-    if self_clearing:
-        lines += ["", "Already moving without you, for context:", ""]
-        lines += [f"- {line}" for line in self_clearing]
-    closing = (
-        "Once that lands, ask for a fresh counterpart review (`Factory Review` → run "
-        "for this PR number) and the loop picks it back up."
+    No byline and no preamble. The comment lands under the review it answers,
+    in a timeline that already says who wrote it and what it is replying to,
+    so a line spent on either is a line before the ask. The owner's mention
+    opens the first block because it is what reaches them, not because the
+    sentence needs an address.
+    """
+    owner_blocks = [b.detail for b in decision.blockers if b.owner_required]
+    self_clearing = [b.detail for b in decision.blockers if not b.owner_required]
+    if owner_blocks:
+        owner_blocks[0] = f"@{repository_owner} — {owner_blocks[0]}"
+
+    blocks = owner_blocks + self_clearing
+    blocks.append(
+        "After that, run a fresh review: Actions → Factory Review → Run workflow "
+        f"→ enter {pr_number}."
     )
-    if labelled:
-        closing += (
-            f" `{OWNER_ACTION_LABEL}` stays on this PR until a reviewer stops blocking "
-            "it, so it reads as waiting on the owner rather than stranded — here and "
-            "in the Factory Digest."
+    if not labelled:
+        blocks.append(
+            f"The `{OWNER_ACTION_LABEL}` label could not be applied, so this PR "
+            "will not show up as waiting on you — the workflow run says why."
         )
-    else:
-        closing += (
-            f" The `{OWNER_ACTION_LABEL}` label could not be applied, so this PR will "
-            "not show up as waiting on you until it is — the workflow run says why."
-        )
-    lines += ["", closing]
-    lines += ["", response_marker(int(review.get("id") or 0))]
-    return "\n".join(lines) + "\n"
+    blocks.append(response_marker(int(review.get("id") or 0)))
+    return "\n\n".join(blocks) + "\n"
 
 
 def label_applied_by_factory(
@@ -846,7 +968,11 @@ def respond(
     client.comment(
         pr_number,
         response_comment(
-            decision, review, repository_owner=repository_owner, labelled=labelled
+            decision,
+            review,
+            repository_owner=repository_owner,
+            pr_number=pr_number,
+            labelled=labelled,
         ),
     )
     print(

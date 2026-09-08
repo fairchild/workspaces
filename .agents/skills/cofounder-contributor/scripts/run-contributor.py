@@ -104,6 +104,7 @@ from evidence import (  # noqa: E402, F401
     _has_unautomatable_evidence,
     _insert_evidence_metadata,
     _is_diff_evidence,
+    _lane_command_key,
     _latest_evidence_metadata_match,
     _listed_swift_tests,
     _match_evidence_entries,

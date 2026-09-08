@@ -365,11 +365,11 @@ def revision_blocked_blocker(reason: str, run_url: str) -> response.Blocker:
         key="revision-turn-incomplete",
         owner_required=True,
         detail=(
-            "**April's revision turn did not land.** The revision lane took this "
-            f"review and stopped: {reason}. The change to the diff is still unmade. "
-            f"Run: {run_url}. Gesture: push the revision, or clear what that reason "
-            "names and re-run `Factory Revise` for this PR — a manual dispatch is "
-            "a recovery run and may retake an already-escalated review."
+            "Push the revision, or clear what stopped the last one and re-run "
+            "`Factory Revise` for this PR. The revision lane took this review and "
+            f"stopped: {reason}. The change to the diff is still unmade. Run: "
+            f"{run_url}. A manual dispatch is a recovery run and may retake an "
+            "already-escalated review."
         ),
     )
 
@@ -377,16 +377,16 @@ def revision_blocked_blocker(reason: str, run_url: str) -> response.Blocker:
 def needs_owner_blocker(comment_posted: bool, run_url: str) -> response.Blocker:
     """The owner ask when April herself concluded the review is theirs."""
     where = (
-        "Her reasoning is in her comment above."
+        "The reasoning is in the comment above."
         if comment_posted
-        else f"Her comment could not be posted; the run log carries it: {run_url}."
+        else f"That comment could not be posted; the run log carries it: {run_url}."
     )
     return response.Blocker(
         key="revision-needs-owner",
         owner_required=True,
         detail=(
-            "**April read the review and determined it needs you.** "
-            f"{where} The revision lane stops here by her own call."
+            "This review needs you: the revision lane read it and stopped by its "
+            f"own call. {where}"
         ),
     )
 
@@ -510,7 +510,11 @@ def force_escalate(
     client.comment(
         pr_number,
         response.response_comment(
-            escalation, review, repository_owner=repository_owner, labelled=labelled
+            escalation,
+            review,
+            repository_owner=repository_owner,
+            pr_number=pr_number,
+            labelled=labelled,
         ),
     )
     print(
