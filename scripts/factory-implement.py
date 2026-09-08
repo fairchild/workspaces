@@ -81,6 +81,12 @@ FACTORY_LABEL_ACTORS = frozenset({"april-clearwater[bot]"})
 TERMINAL_DECLINES = frozenset({"privileged", "no_evidence_contract"})
 TRANSIENT_DEFERRALS = frozenset({"wip", "budget"})
 
+# The labels an issue must carry before any factory run can take it. A released
+# issue missing one of the other two is terminal in the same way a decline is,
+# but its comment names labels that vary per issue, so it gets its own action
+# (`missing_labels`) instead of a static entry in TERMINAL_DECLINE_COMMENTS.
+REQUIRED_CLAIM_LABELS = frozenset({"agent", "task", "ready"})
+
 # Admission comments speak as the pipeline stage, not as a contributor
 # persona: no contributor ran, so persona attribution would misattribute.
 PRIVILEGED_COMMENT = (
@@ -439,6 +445,21 @@ def privileged_scope(
     return bool(sensitive_agent_patch_paths(candidates))
 
 
+def missing_required_labels(issue: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(sorted(REQUIRED_CLAIM_LABELS - label_names(issue)))
+
+
+def missing_labels_comment(missing: tuple[str, ...]) -> str:
+    listing = ", ".join(f"`{name}`" for name in missing)
+    noun = "label" if len(missing) == 1 else "labels"
+    return (
+        "Factory admission: declined — this issue is released but missing the "
+        f"{listing} {noun} admission requires, so no factory run can take it "
+        "and the standing-queue sweep cannot reach it either. Removing "
+        f"`ready`; add the missing {noun} and re-release."
+    )
+
+
 def evaluate_claim(
     issue: dict[str, Any],
     claimed_count: int,
@@ -450,9 +471,15 @@ def evaluate_claim(
     labels = label_names(issue)
     if str(issue.get("state", "")).casefold() != "open":
         return ClaimDecision("skip", "issue is not open")
-    missing = {"agent", "task", "ready"} - labels
+    missing = missing_required_labels(issue)
     if missing:
-        return ClaimDecision("skip", f"issue is missing labels: {', '.join(sorted(missing))}")
+        # A released issue missing `agent` or `task` is stranded: nothing acts
+        # on it and the sweep's `ready`+`agent`+`task` filter skips it too, so
+        # it is spoken and `ready` is withdrawn. `ready` itself missing means
+        # nothing was released -- a manual dispatch on an unreleased issue --
+        # and that stays silent, writing nothing the owner did not ask for.
+        action = "skip" if "ready" in missing else "missing_labels"
+        return ClaimDecision(action, f"issue is missing labels: {', '.join(missing)}")
     conflicting = {"claimed", "review"} & labels
     if conflicting:
         return ClaimDecision(
@@ -916,6 +943,14 @@ def claim(
     write_output("verified_actor", verified_actor)
     if decision.action in TERMINAL_DECLINES:
         comment_once(client, issue_number, TERMINAL_DECLINE_COMMENTS[decision.action])
+        client.update_issue(issue_number, decline_payload(issue))
+        return
+    if decision.action == "missing_labels":
+        comment_once(
+            client,
+            issue_number,
+            missing_labels_comment(missing_required_labels(issue)),
+        )
         client.update_issue(issue_number, decline_payload(issue))
         return
     if decision.action == "stale_scope":

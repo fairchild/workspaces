@@ -180,12 +180,20 @@ class FactoryImplementTests(unittest.TestCase):
             ).action,
             "privileged",
         )
+        # Missing `ready` is nothing-was-released, which stays a silent skip.
         self.assertEqual(
             factory_implement.evaluate_claim(
                 self.issue(labels=("agent", "task")), 0
             ).action,
             "skip",
         )
+        # A release missing `agent` or `task` is spoken instead (#1558).
+        for released in (("agent", "ready"), ("task", "ready"), ("ready",)):
+            with self.subTest(labels=released):
+                self.assertEqual(
+                    factory_implement.evaluate_claim(self.issue(labels=released), 0).action,
+                    "missing_labels",
+                )
         for conflicting in ("claimed", "review"):
             with self.subTest(conflicting=conflicting):
                 self.assertEqual(
@@ -638,6 +646,16 @@ class FactoryImplementTests(unittest.TestCase):
             factory_implement.TERMINAL_DECLINES & factory_implement.TRANSIENT_DEFERRALS,
             frozenset(),
         )
+        # `missing_labels` is terminal in effect but names labels that vary per
+        # issue, so it stays out of the static comment table and carries its own
+        # builder instead.
+        self.assertNotIn(
+            "missing_labels",
+            factory_implement.TERMINAL_DECLINES | factory_implement.TRANSIENT_DEFERRALS,
+        )
+        self.assertIn("`task`", factory_implement.missing_labels_comment(("task",)))
+        both = factory_implement.missing_labels_comment(("agent", "task"))
+        self.assertIn("`agent`, `task` labels", both)
 
     def claim_client(self, issue) -> mock.Mock:
         client = mock.Mock()
@@ -726,6 +744,47 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("matched=false", outputs)
         self.assertNotIn("matched=true", outputs)
 
+    def test_missing_required_label_on_a_released_issue_speaks_and_withdraws_ready(
+        self,
+    ) -> None:
+        # #1558: eleven issues released without `task` skipped in silence, so
+        # `ready` kept asserting a release nothing would ever act on, and the
+        # sweep's `ready`+`agent`+`task` filter could not reach them either.
+        client = self.claim_client(
+            self.issue(labels=("agent", "ready", "quality"))
+        )
+        actions_client = mock.Mock()
+        actions_client.workflow_runs_on.return_value = []
+
+        outputs = self.run_claim(client, actions_client)
+
+        client.comment.assert_called_once()
+        comment_body = client.comment.call_args.args[1]
+        self.assertIn("`task`", comment_body)
+        self.assertNotIn("`agent`", comment_body)
+        self.assertIn("re-release", comment_body)
+        client.update_issue.assert_called_once_with(42, {"labels": ["agent", "quality"]})
+        client.add_assignees.assert_not_called()
+        self.assertIn("matched=false", outputs)
+        self.assertNotIn("matched=true", outputs)
+
+    def test_conflicting_claimed_label_stays_silent_and_touches_nothing(self) -> None:
+        # `claimed` and `review` are factory bookkeeping the pipeline writes
+        # itself; commenting on them would turn every re-dispatch into noise.
+        client = self.claim_client(
+            self.issue(labels=("agent", "task", "ready", "claimed"))
+        )
+        actions_client = mock.Mock()
+        actions_client.workflow_runs_on.return_value = []
+
+        outputs = self.run_claim(client, actions_client)
+
+        client.comment.assert_not_called()
+        client.update_issue.assert_not_called()
+        client.add_assignees.assert_not_called()
+        self.assertIn("matched=false", outputs)
+        self.assertNotIn("matched=true", outputs)
+
     def test_claim_defers_and_never_touches_labels_when_content_edited_after_release(
         self,
     ) -> None:
@@ -786,6 +845,7 @@ class FactoryImplementTests(unittest.TestCase):
             factory_implement.PRIVILEGED_COMMENT,
             factory_implement.WIP_COMMENT,
             budget,
+            factory_implement.missing_labels_comment(("task",)),
         ):
             with self.subTest(body=body):
                 self.assertNotIn("April Clearwater", body)
