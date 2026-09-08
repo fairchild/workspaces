@@ -100,6 +100,15 @@ class VerifyGhosttyPinTests(unittest.TestCase):
         self.assertIn(stale, result.stderr)
         self.assertIn(self.commit, result.stderr)
 
+    def test_a_mismatch_says_the_stale_build_has_to_go_too(self) -> None:
+        """Rebuilding the framework does not evict objects already compiled
+        against the previous one — the hazard #1576 was filed for."""
+        with tempfile.TemporaryDirectory() as tmp:
+            framework = self.make_framework(Path(tmp), self.archive, "0" * 40)
+            result = self.run_script(framework)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("swift package clean", result.stderr)
+
     def test_unstamped_framework_with_an_older_archive_name_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             framework = self.make_framework(Path(tmp), "libghostty-fat.a", None)

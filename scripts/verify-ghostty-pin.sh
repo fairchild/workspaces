@@ -63,7 +63,7 @@ stamp_file="$FRAMEWORK/$GHOSTTY_PIN_STAMP_NAME"
 if [[ -f "$stamp_file" ]]; then
     stamped="$(tr -d '[:space:]' < "$stamp_file")"
     if [[ "$stamped" != "$GHOSTTY_COMMIT" ]]; then
-        fail "framework was built at $stamped but the source pins $GHOSTTY_COMMIT; $recovery"
+        fail "framework was built at $stamped but the source pins $GHOSTTY_COMMIT; $recovery, then run 'swift package clean' — objects compiled against the previous framework survive an incremental rebuild and give wrong answers (#1576)"
     fi
     echo "Verified GhosttyKit.xcframework at pinned commit $GHOSTTY_COMMIT"
     exit 0
