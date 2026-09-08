@@ -2597,6 +2597,44 @@ class DocumentedTestFormTests(unittest.TestCase):
         )
         self.assertLess(len(rendered), len(body))
 
+    def test_a_deeply_nested_payload_does_not_take_a_writer_down(self) -> None:
+        # A thousand nested arrays parse fine on this runtime, and then both
+        # the cleaning pass and `json.dumps` with an indent recurse on the way
+        # back out -- so a body could be built that no writer could serialise.
+        body = self.metadata_body('{"entries": [' + "[" * 1000 + "]" * 1000 + "]}")
+        self.assertEqual(
+            run_contributor.evaluate_evidence_accounting(body, ["x"])["source"],
+            "structured-invalid",
+        )
+        for label, rendered in (
+            (
+                "update",
+                run_contributor.update_evidence_entries(
+                    body, {1: {"status": "complete", "detail": "d"}}
+                ),
+            ),
+            (
+                "reconcile",
+                run_contributor.reconcile_pending_ci_evidence(
+                    body,
+                    build_succeeded=True,
+                    tests_succeeded=True,
+                    smoke_succeeded=True,
+                ),
+            ),
+        ):
+            with self.subTest(label=label):
+                self.assertIsInstance(rendered, str)
+
+    def test_an_ordinary_payload_is_carried_through_unchanged(self) -> None:
+        payload = {
+            "entries": [
+                {"index": 1, "item": "x", "status": "complete", "detail": "d",
+                 "kind": "ci"}
+            ]
+        }
+        self.assertEqual(run_contributor._encodable_payload(payload), payload)
+
     def test_an_infinite_index_does_not_take_any_metadata_path_down(self) -> None:
         # `1e9999` parses as infinity and `int()` of that raises OverflowError,
         # which the three index reads did not catch.

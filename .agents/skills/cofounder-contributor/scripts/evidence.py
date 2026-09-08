@@ -2306,15 +2306,43 @@ def _pending_ci_resolution(
     return "blocked", "self-hosted macOS CI cannot reconcile this evidence item automatically"
 
 
+# A real payload is a dict, an entries list, an entry dict, and scalars --
+# four levels. Anything past this is not evidence state, and `json.dumps`
+# with an indent recurses on the way out, so a body deep enough to parse and
+# too deep to write would be built and then refused by the writer.
+PAYLOAD_MAX_DEPTH = 8
+PAYLOAD_TOO_DEEP = "<nested past what evidence metadata carries>"
+
+
 def _encodable_payload(value: object) -> object:
-    """The same payload with every string cleaned of what cannot be encoded."""
-    if isinstance(value, str):
-        return _encodable(value)
-    if isinstance(value, dict):
-        return {_encodable_payload(k): _encodable_payload(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_encodable_payload(item) for item in value]
-    return value
+    """The same payload with every string cleaned of what cannot be encoded.
+
+    Iterative, not recursive: the payload comes from a PR-editable body, and
+    a thousand nested arrays parse fine and then exhaust the stack on the way
+    back out. `json.dumps` survives that depth; this used not to.
+    """
+    root: dict[str, object] = {"v": value}
+    stack: list[tuple[object, object, object, int]] = [(root, "v", value, 0)]
+    while stack:
+        holder, key, current, depth = stack.pop()
+        if depth > PAYLOAD_MAX_DEPTH:
+            holder[key] = PAYLOAD_TOO_DEEP  # type: ignore[index]
+            continue
+        if isinstance(current, str):
+            holder[key] = _encodable(current)  # type: ignore[index]
+        elif isinstance(current, dict):
+            cleaned: dict[object, object] = {}
+            for inner_key, inner in current.items():
+                clean_key = _encodable(inner_key) if isinstance(inner_key, str) else inner_key
+                cleaned[clean_key] = inner
+                stack.append((cleaned, clean_key, inner, depth + 1))
+            holder[key] = cleaned  # type: ignore[index]
+        elif isinstance(current, list):
+            copied = list(current)
+            holder[key] = copied  # type: ignore[index]
+            for position, inner in enumerate(copied):
+                stack.append((copied, position, inner, depth + 1))
+    return root["v"]
 
 
 def _encodable(text: str) -> str:
