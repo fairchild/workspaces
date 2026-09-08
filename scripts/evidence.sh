@@ -6,7 +6,7 @@
 # Usage:
 #   ./scripts/evidence.sh --pr 253 --name sticky-tab-bar
 #   ./scripts/evidence.sh --pr 253 --name before-fix --file /tmp/existing.png
-#   ./scripts/evidence.sh --pr 253 --name test-results --file test-output.png --no-capture
+#   ./scripts/evidence.sh --pr 253 --name test-results --file test-output.txt --no-capture
 #
 #   # One-command app evidence (first-choice UI capture): launch a named fixture
 #   # state, snapshot the main window via operator scope, upload — headless-safe,

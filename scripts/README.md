@@ -140,7 +140,7 @@ Use these scripts for day-to-day UI verification:
 0. `./scripts/evidence.sh`
 - Canonical evidence capture + upload entry point (see `AGENTS.md` "Evidence-Driven Development").
 - `--fixture <scenario>` launches a fixture state and snapshots the main window via operator scope — first choice for macOS-app UI evidence, no activation, no focus steal.
-- `--name <slug>` without `--file` screenshots the desktop, so it is for UI work; `--file <path>` uploads an existing screenshot, recording, or `.txt` log.
+- `--name <slug>` without `--file` screenshots the desktop, so it is for UI work; `--file <path>` uploads an existing screenshot, recording, or `.txt` log. A test log goes up as text — an image of text is never evidence.
 - `./scripts/pr-evidence.sh` is a profile-driven wrapper built on top of it for specific PR evidence bundles:
   - Creates a local evidence bundle under `./output/evidence/pr-<number>/`.
   - Uploads artifacts through `evidence.sh` and prints Markdown links. Summaries go up as text: an image of text is never evidence.

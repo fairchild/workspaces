@@ -14,9 +14,9 @@ The token exists only as a GitHub Actions secret; remote containers have no
 **Sanctioned convention:** a green CI run link on the exact branch/commit is
 acceptable hosted evidence for remote sessions — cite it in the PR's Evidence
 section as `[Web CI passed on this branch](<run url>)` and say the token was
-unavailable. This satisfies the "no local-only proof" rule because the run is
-hosted and verifiable. Established across PRs #725/#727/#731/#732 and accepted
-in review.
+unavailable. A hosted run anyone can open is the strongest proof available from
+a container that cannot upload. Established across PRs #725/#727/#731/#732 and
+accepted in review.
 
 Limits of the convention:
 

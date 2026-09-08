@@ -29,11 +29,11 @@ Agents coordinate through the GitHub-native state machine — issue labels and P
 Evidence is a merge gate. Do not create a PR without it. In order:
 
 1. **Run tests** — `swift test`, `cd web-next && pnpm test`, or `cd web && pnpm test`
-2. **Capture evidence** — for macOS-app UI, first choice is the app evidence lane: `./scripts/evidence.sh --pr <number> --fixture <scenario>` (fixture state, operator-scope window snapshot, upload — no activation, no focus steal). Otherwise `./scripts/evidence.sh --pr <number> --name <slug>` (test output; web screenshots without auth: `mise run web:dev`).
-3. **Paste the uploaded evidence URLs into the PR body**
+2. **Capture evidence for anything a person can see** — for macOS-app UI, the app evidence lane: `./scripts/evidence.sh --pr <number> --fixture <scenario>` (fixture state, operator-scope window snapshot, upload — no activation, no focus steal). Web screenshots without auth: `mise run web:dev`. `--name <slug>` without `--file` screenshots the whole desktop, so it is for UI work, not for test output.
+3. **For everything else, name the tests** — the command and the line it printed, in the PR body. Upload a log with `--file <path> --no-capture` when it adds something; a picture of test output does not.
 4. **Only then create the PR** — no `[pending-ci]` unless evidence is genuinely impossible locally
 
-Rules: no local-only proof (upload via `evidence.sh`); blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. Setup, token sourcing, fallback lanes, troubleshooting: `docs/development/evidence.md`. Remote (claude.ai) sessions lack the token, mise, and a matching Playwright browser — sanctioned workarounds: `docs/development/remote-sessions.md`.
+Rules: match tests and evidence to the risk and blast radius — for docs-only changes, `git diff --check` plus a clear note is usually enough; blocked evidence is an explicit state (`blocked on evidence` in the PR, with why); performance-sensitive changes need before/after/delta baselines in the PR body. Setup, token sourcing, fallback lanes, troubleshooting: `docs/development/evidence.md`. Remote (claude.ai) sessions lack the token, mise, and a matching Playwright browser — sanctioned workarounds: `docs/development/remote-sessions.md`.
 
 ## High-Signal Lessons (unconditional)
 
@@ -58,7 +58,7 @@ Full ledger with history and the surface-specific lessons: `docs/agents/lessons.
 ./scripts/build-ghosttykit.sh  # Build GhosttyKit.xcframework (once / after pin changes)
 swift build / swift test / swift run
 mise run lint                  # swift-format lint --strict (CI fails without it)
-./scripts/evidence.sh --pr <N> --name <slug>   # required before PRs
+./scripts/evidence.sh --pr <N> --fixture <scenario>   # UI evidence, before a PR that changes UI
 ```
 
 ## Routing

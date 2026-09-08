@@ -146,6 +146,27 @@ DIFF_EVIDENCE_RE = re.compile(
     r"|the (?:pr )?diff (?:shows|proves|demonstrates|contains|includes)"
     r"|\b(?:shows?|contains?|includes?|appears?)\b[^\n]{0,60}?\bin the (?:pr )?diff\b"
 )
+# A `test` or `build` item opening with a backticked command, and whatever
+# follows it. The documented form is the command plus what it should do --
+# "`swift test --filter FooTests` passes" -- and read whole that is a
+# five-word command the allowlist refuses, which aborted the run before the
+# author's first commit. The span is the command; the rest is the author
+# saying what they expect of it.
+LEADING_CODE_SPAN_RE = re.compile(r"^(?P<ticks>`+)(?P<command>[^`]+?)(?P=ticks)")
+# Everything a `test` or `build` item is allowed to say after its command:
+# what the command should do, and nothing else. See
+# `_remainder_is_only_a_verdict` for why this is an allowlist.
+COMMAND_REMAINDER_RE = re.compile(
+    r"(?i)^[\s,;:.\u2014\u2013-]*"
+    r"(?:(?:must|should|has to|have to|will|to)\s+)?"
+    r"(?:still\s+|all\s+|both\s+)?"
+    r"(?:pass(?:es|ed|ing)?|succeed(?:s|ed|ing)?|is green|are green|green|clean"
+    r"|exits? 0|runs? clean)?"
+    r"(?:\s+(?:locally|cleanly|first|in ci|on this head|on the pr head"
+    r"|on the exact commit(?: under review)?|from the exact commit(?: under review)?"
+    r"|after the change|before and after))*"
+    r"[\s.!]*$"
+)
 # Test runners the hosted lane cannot execute. `swift test` is absent on
 # purpose: the lane runs that one, so it stays kind `test` and nothing about
 # it changes. Everything here is a runner a person runs, which is why the
@@ -1489,6 +1510,41 @@ def _normalize_evidence_item(item: str) -> str:
     return item.strip().strip("`").strip()
 
 
+def _evidence_command_split(item: str) -> tuple[str, str]:
+    """The command a `test` or `build` item names, and the text after it.
+
+    Only a span that *opens* the item counts. An item mentioning a command
+    mid-sentence is not a request to run it, and reading one out of the middle
+    would run something nobody asked for. Without an opening span there is no
+    boundary to cut on, so the item is read whole with an empty remainder,
+    exactly as before -- and what is inside the span still faces the same
+    allowlist.
+    """
+    text = item.strip()
+    match = LEADING_CODE_SPAN_RE.match(text)
+    if match is None:
+        return _normalize_evidence_item(item), ""
+    return match.group("command").strip(), text[match.end():]
+
+
+def _evidence_command_text(item: str) -> str:
+    return _evidence_command_split(item)[0]
+
+
+def _remainder_is_only_a_verdict(remainder: str) -> bool:
+    """Whether the text after the command only says what the command should do.
+
+    An allowlist, not a blacklist. A list of demands to refuse is only as good
+    as the demands someone thought of: "and `swift test --filter Bar` passes"
+    is a second command, "approved by the owner" puts the verb before the
+    noun, and neither reads as a demand to a pattern written for "(owner-
+    attested)". A list of verdicts to accept fails the other way -- an item
+    the grammar does not recognise stays `other`, blocked, in front of a
+    person, exactly where it was before any of this.
+    """
+    return COMMAND_REMAINDER_RE.match(remainder) is not None
+
+
 def _ci_check_name(item: str) -> str | None:
     """The CI check an evidence item requires green on the PR head, or None.
 
@@ -1537,10 +1593,10 @@ def _is_attested_test(item: str) -> bool:
 
 def _evidence_item_kind(item: str) -> str:
     normalized = _normalize_evidence_item(item).casefold()
-    if normalized.startswith("swift test"):
-        return "test"
-    if normalized.startswith("swift build"):
-        return "build"
+    if normalized.startswith(("swift test", "swift build")):
+        if not _remainder_is_only_a_verdict(_evidence_command_split(item)[1]):
+            return "other"
+        return "test" if normalized.startswith("swift test") else "build"
     if VISUAL_EVIDENCE_RE.search(normalized):
         return "screenshot"
     if _is_owner_attested(item):
@@ -1570,7 +1626,7 @@ def _needs_screenshot_evidence(requested_evidence: list[str]) -> bool:
 
 def _extract_test_commands(requested_evidence: list[str]) -> list[str]:
     return [
-        _normalize_evidence_item(item)
+        _evidence_command_text(item)
         for item in requested_evidence
         if _evidence_item_kind(item) == "test"
     ]
@@ -1750,7 +1806,7 @@ def synthesize_initial_execution_evidence(
     evidence_blocked: list[str] = []
     evidence_pending_ci: list[str] = []
     for index, item in enumerate(requested_evidence, start=1):
-        normalized = _normalize_evidence_item(item)
+        normalized = _evidence_command_text(item)
         kind = _evidence_item_kind(item)
         if kind == "build":
             evidence_pending_ci.append(
@@ -1876,13 +1932,26 @@ def _selector_matches_test_list(selector: str, listed_tests: list[str]) -> bool:
 
 
 def _listed_swift_tests(env: dict[str, str]) -> list[str]:
-    output = run_optional(
-        ["swift", "test", "list"],
-        timeout=GITHUB_API_TIMEOUT,
-        cwd=REPO_ROOT,
-        env=env,
-        default="",
-    )
+    try:
+        output = run_optional(
+            ["swift", "test", "list"],
+            timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT,
+            env=env,
+            default="",
+        )
+    except FileNotFoundError:
+        # The agent lanes run `ubuntu-latest`, which has no Swift toolchain, so
+        # this preflight cannot apply there. Caught here rather than in
+        # `run_optional`: that helper has 26 call sites, and one of them reads
+        # `git status --porcelain` where an empty answer means "clean" -- a
+        # swallowed error there would let a revision finish without committing
+        # the edits it made.
+        log(
+            "skipping `swift test list` evidence selector preflight because no swift "
+            "executable is available on this runner"
+        )
+        return []
     return [
         line.strip()
         for line in output.splitlines()
@@ -1896,7 +1965,7 @@ def validate_requested_test_commands(
 ) -> list[str]:
     commands = _extract_test_commands(requested_evidence)
     build_commands = [
-        _normalize_evidence_item(item)
+        _evidence_command_text(item)
         for item in requested_evidence
         if _evidence_item_kind(item) == "build"
     ]
@@ -1965,6 +2034,13 @@ def _test_output_by_command(test_output: str) -> dict[str, str]:
     }
 
 
+def _lane_command_key(item: str) -> str:
+    """The command as `_evidence.yml` writes it above the run's output."""
+    command = _evidence_command_text(item)
+    argv = safe_swift_test_command_args(command) or safe_swift_build_command_args(command)
+    return shlex.join(argv) if argv is not None else command
+
+
 def _test_output_has_no_matching_tests(command: str, test_output: str) -> bool:
     if not test_output:
         return False
@@ -1988,7 +2064,11 @@ def _pending_ci_resolution(
     text_urls: list[tuple[str, str]] | None = None,
 ) -> tuple[str, str]:
     kind = _evidence_item_kind(item)
-    normalized = _normalize_evidence_item(item)
+    # The lane logs `$ <command>` above each run's output and this looks that
+    # key up, so it has to be the command the lane ran, spelled the way the
+    # lane spelled it -- `shlex.join` of the parsed argv, not the author's
+    # quoting.
+    normalized = _lane_command_key(item)
     uploaded_screenshot_urls = screenshot_urls or []
     uploaded_text_urls = text_urls or []
 

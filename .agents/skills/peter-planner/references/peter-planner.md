@@ -88,8 +88,8 @@ labels: [enhancement]
 priority: 1
 blocked_by: []
 requested_evidence:
-  - "Relevant swift test command(s) the PR must account for"
-  - "Any screenshots, logs, or perf comparisons the PR must account for in Evidence Status"
+  - "`swift test --filter WorkspaceManagerTests.AgentSessionRegistryTests` passes"
+  - "CI: `Lint, Test, Build` green on the PR head"
 ---
 
 ## Context
@@ -112,7 +112,7 @@ labels: [enhancement, "area: ui"]
 priority: 2
 blocked_by: [1]
 requested_evidence:
-  - "Screenshot from the exact commit under review"
+  - "For UI or visual work only: screenshot from the exact commit under review"
   - "Targeted test command covering the changed surface"
 ---
 

@@ -748,7 +748,7 @@ class ResolveTests(QuietTest):
         )
         outputs = self.resolve(client, revision_outcome="needs-owner")
         self.assertEqual(len(client.posted), 1)
-        self.assertIn("her comment above", client.posted[0].casefold())
+        self.assertIn("the reasoning is in the comment above", client.posted[0].casefold())
         self.assertTrue(response.has_response_for_review(client._comments, 900))
         self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
         self.assertEqual(outputs["escalated"], "true")
@@ -789,7 +789,7 @@ class ResolveTests(QuietTest):
         self.assertEqual(outputs["escalated"], "true")
         self.assertEqual(len(client.posted), 1)
         posted = client.posted[0]
-        self.assertIn(f"This needs @{OWNER}", posted)
+        self.assertIn(f"@{OWNER} — Push the revision", posted)
         self.assertIn(RUN_URL, posted)
         self.assertEqual(client.added, [response.OWNER_ACTION_LABEL])
         self.assertTrue(
