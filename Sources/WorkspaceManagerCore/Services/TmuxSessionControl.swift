@@ -31,6 +31,33 @@ public struct TmuxSessionControl: Sendable {
     /// Scrollback lines `read` returns when the caller names no bound.
     public static let defaultCaptureLines = 200
 
+    /// Bytes handed to tmux per `send-keys -l` call.
+    ///
+    /// A pty's input queue holds about 1022 bytes, and everything sitting in it is
+    /// discarded when the receiving process flushes its input — which is what a TUI
+    /// does the moment it enters raw mode, and what the kernel does when a
+    /// canonical-mode line overruns the queue. Neither tmux nor `send-keys` loses
+    /// anything; the queue does. So the payload's exposure is however much of it is
+    /// undrained at once, and chunking well under the queue's depth is what bounds
+    /// that to a chunk instead of a kilobyte.
+    public static let defaultSendChunkBytes = 256
+
+    /// The gap between chunks. A reader wakes on input and empties the queue in
+    /// well under a millisecond; this is the room it needs, at a cost of a tenth of
+    /// a second per kilobyte sent.
+    public static let defaultSendChunkPause = Duration.milliseconds(25)
+
+    /// How many trailing characters of the payload the read-back looks for. Long
+    /// enough not to match by accident, short enough to survive a composer that
+    /// wraps or reflows everything before it.
+    public static let verificationFragmentLength = 24
+
+    /// Captures the read-back will take before calling a send unverified, and the gap
+    /// between them. The echo of what was typed reaches the pane through the pty and
+    /// tmux's event loop, so the first capture can be early rather than wrong.
+    public static let verificationAttempts = 3
+    public static let verificationRetryPause = Duration.milliseconds(40)
+
     /// Geometry a detached session is created at. tmux would otherwise default to
     /// 80x24, and an agent that renders into 80 columns keeps that wrapping in the
     /// scrollback `read` returns — a client attaching later resizes the session but
@@ -41,15 +68,21 @@ public struct TmuxSessionControl: Sendable {
     public let socketLabel: String
     private let run: CommandRunner
     private let environment: [String: String]
+    private let sendChunkBytes: Int
+    private let sendChunkPause: Duration
 
     public init(
         socketLabel: String = TmuxSessionControl.defaultSocketLabel,
         run: @escaping CommandRunner = TmuxSessionControl.defaultRunner,
-        environment: [String: String] = TmuxSessionProbe.defaultEnvironment
+        environment: [String: String] = TmuxSessionProbe.defaultEnvironment,
+        sendChunkBytes: Int = TmuxSessionControl.defaultSendChunkBytes,
+        sendChunkPause: Duration = TmuxSessionControl.defaultSendChunkPause
     ) {
         self.socketLabel = socketLabel
         self.run = run
         self.environment = environment
+        self.sendChunkBytes = sendChunkBytes
+        self.sendChunkPause = sendChunkPause
     }
 
     /// Resolves the socket label from a launch environment, falling back to the
@@ -137,6 +170,97 @@ public struct TmuxSessionControl: Sendable {
         text: String
     ) -> [String] {
         ["tmux", "-L", socketLabel, "send-keys", "-t", paneTarget(handle), "-l", "--", text]
+    }
+
+    /// Splits `text` into pieces of at most `limit` UTF-8 bytes, cut on scalar
+    /// boundaries so every piece is itself valid UTF-8 — each one becomes an argv
+    /// string, and a scalar cut in half would reach the pane as replacement
+    /// characters. Concatenating the pieces reproduces the input exactly.
+    ///
+    /// The one piece that may exceed `limit` is a single scalar wider than it: the
+    /// alternative is to corrupt the character, and the sizes this is called with are
+    /// hundreds of bytes against a four-byte maximum.
+    public static func textChunks(
+        _ text: String,
+        limit: Int = TmuxSessionControl.defaultSendChunkBytes
+    ) -> [String] {
+        let bound = max(1, limit)
+        var chunks: [String] = []
+        var current = String.UnicodeScalarView()
+        var currentBytes = 0
+
+        for scalar in text.unicodeScalars {
+            let width = utf8Width(scalar)
+            if currentBytes + width > bound, !current.isEmpty {
+                chunks.append(String(current))
+                current = String.UnicodeScalarView()
+                currentBytes = 0
+            }
+            current.append(scalar)
+            currentBytes += width
+        }
+        if !current.isEmpty {
+            chunks.append(String(current))
+        }
+        return chunks
+    }
+
+    static func utf8Width(_ scalar: Unicode.Scalar) -> Int {
+        switch scalar.value {
+        case 0..<0x80: return 1
+        case 0x80..<0x800: return 2
+        case 0x800..<0x1_0000: return 3
+        default: return 4
+        }
+    }
+
+    /// The two fragments a read-back looks for: the start of the payload's first line
+    /// with content and the end of its last.
+    ///
+    /// Both ends, because the loss this exists to catch takes the *front*: a tail that
+    /// is present says nothing about the head, and #1450's payloads arrived with their
+    /// first kilobyte gone and their tail intact. Fragments are drawn from a single
+    /// line each and matched without whitespace, because a composer wraps a long line
+    /// wherever its width runs out — a break the capture carries through the middle of
+    /// anything long enough to be worth checking — while a composer that decorates
+    /// each line puts a prompt marker or a continuation glyph *between* lines, where a
+    /// fragment spanning a break would not survive. Payloads routinely start or end
+    /// with a blank line, so both ends walk inward to a line with content; too little
+    /// content to identify proves nothing, and is not looked for at all.
+    struct SendExpectation: Equatable {
+        let head: String
+        let tail: String
+    }
+
+    static func verificationExpectation(for text: String) -> SendExpectation? {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line in String(line.filter { !$0.isWhitespace }) }
+            .filter { $0.count >= 4 }
+        guard let first = lines.first, let last = lines.last else { return nil }
+        return SendExpectation(
+            head: String(first.prefix(verificationFragmentLength)),
+            tail: String(last.suffix(verificationFragmentLength))
+        )
+    }
+
+    /// Whitespace-insensitive for the same reason the fragments are.
+    static func compacted(_ text: String) -> String {
+        text.filter { !$0.isWhitespace }
+    }
+
+    /// How many times `fragment` appears in an already-compacted capture. A count
+    /// rather than a yes/no because a pane keeps its scrollback: the same brief sent
+    /// twice would otherwise verify against its own first copy, and the send that
+    /// needs proving is the one that just happened.
+    static func occurrences(of fragment: String, inCompacted captured: String) -> Int {
+        guard !fragment.isEmpty else { return 0 }
+        var count = 0
+        var searchRange = captured.startIndex..<captured.endIndex
+        while let found = captured.range(of: fragment, range: searchRange) {
+            count += 1
+            searchRange = found.upperBound..<captured.endIndex
+        }
+        return count
     }
 
     /// The submit keystroke, sent as a separate call precisely because the text
@@ -232,26 +356,77 @@ public struct TmuxSessionControl: Sendable {
         return Self.trimmingTrailingBlankLines(result.stdout)
     }
 
-    /// Types `text` into the session, optionally submitting it. Returns the number
-    /// of UTF-8 bytes written so a caller can tell a silent no-op from a delivery.
-    @discardableResult
-    public func send(handle: String, text: String, submit: Bool) async throws -> Int {
+    /// Types `text` into the session, optionally submitting it, and reports what was
+    /// handed to tmux and whether the pane came to show it.
+    ///
+    /// The payload goes out in `sendChunkBytes` pieces with `sendChunkPause` between
+    /// them, because the pty input queue between tmux and the pane's process is about
+    /// a kilobyte deep and its contents are discarded whenever that process flushes
+    /// its input. Chunking bounds how much of the payload is ever sitting there. (The
+    /// bound is on the payload's own UTF-8 bytes; where macOS decomposes a composed
+    /// character on its way into a child's arguments the wire form is longer, at worst
+    /// by half, which is still far under the queue's depth.)
+    ///
+    /// The pane is captured once before the send and again after, so what is looked
+    /// for is a *new* occurrence of the payload's ends rather than any occurrence —
+    /// scrollback outlives a send, and the same text sent twice would otherwise prove
+    /// itself. The read-back runs before the submit keystroke: after Enter the composer
+    /// has consumed the text, so the pane could not show it and the check would fail on
+    /// every correct send.
+    ///
+    /// Not `@discardableResult`: dropping the answer is the bug this closes.
+    public func send(handle: String, text: String, submit: Bool) async throws -> SendReport {
         guard await isLive(handle: handle) else {
             throw ControlError.handleNotLive(handle: handle)
         }
-        guard
-            let textResult = await run(
-                "/usr/bin/env",
-                Self.sendTextArguments(socketLabel: socketLabel, handle: handle, text: text),
-                environment
-            )
-        else {
-            throw ControlError.tmuxUnavailable
+
+        let expectation = Self.verificationExpectation(for: text)
+        let baseline = expectation == nil ? nil : await capturedPane(handle: handle)
+
+        let chunks = Self.textChunks(text, limit: sendChunkBytes)
+        for (index, chunk) in chunks.enumerated() {
+            try Task.checkCancellation()
+            guard
+                let result = await run(
+                    "/usr/bin/env",
+                    Self.sendTextArguments(socketLabel: socketLabel, handle: handle, text: chunk),
+                    environment
+                )
+            else {
+                // Only the first chunk can mean "no tmux". After that something was
+                // already typed into the pane, and a caller told it was unavailable
+                // would retry from the start and double the prefix.
+                guard index == 0 else {
+                    throw ControlError.commandFailed(
+                        verb: "send-keys (chunk \(index + 1) of \(chunks.count))",
+                        handle: handle,
+                        stderr: "tmux did not answer; \(index) chunk(s) were already typed into the pane"
+                    )
+                }
+                throw ControlError.tmuxUnavailable
+            }
+            guard result.success else {
+                // Which chunk, because a failure after the first one leaves the pane
+                // holding part of the payload — a caller that resends blind would
+                // double it, and the message is the only place that can say so.
+                throw ControlError.commandFailed(
+                    verb: "send-keys (chunk \(index + 1) of \(chunks.count))",
+                    handle: handle,
+                    stderr: result.stderr
+                )
+            }
+            if index + 1 < chunks.count {
+                try await Task.sleep(for: sendChunkPause)
+            }
         }
-        guard textResult.success else {
-            throw ControlError.commandFailed(verb: "send-keys", handle: handle, stderr: textResult.stderr)
+
+        var verification = SendVerification.notChecked
+        if let expectation {
+            verification = await paneVerification(handle: handle, expectation: expectation, baseline: baseline)
         }
+
         if submit {
+            try Task.checkCancellation()
             guard
                 let enterResult = await run(
                     "/usr/bin/env",
@@ -265,7 +440,68 @@ public struct TmuxSessionControl: Sendable {
                 throw ControlError.commandFailed(verb: "send-keys Enter", handle: handle, stderr: enterResult.stderr)
             }
         }
-        return text.utf8.count
+
+        return SendReport(bytesOffered: text.utf8.count, chunks: chunks.count, verification: verification)
+    }
+
+    /// The pane's visible text with its whitespace removed, or `nil` when the capture
+    /// did not answer.
+    private func capturedPane(handle: String) async -> String? {
+        guard
+            let result = await run(
+                "/usr/bin/env",
+                Self.capturePaneArguments(
+                    socketLabel: socketLabel,
+                    handle: handle,
+                    lines: Self.defaultCaptureLines
+                ),
+                environment
+            ),
+            result.success
+        else {
+            return nil
+        }
+        return Self.compacted(result.stdout)
+    }
+
+    /// Whether the pane gained both ends of the payload. A capture that does not
+    /// answer leaves the send unchecked rather than failing it — the text may well
+    /// have arrived, and the caller is owed the distinction between "looked and did
+    /// not find it" and "could not look". A miss already seen is never downgraded to
+    /// unchecked by a later capture that failed: the look that succeeded is the one
+    /// that carries information.
+    ///
+    /// Retried, because a pane that has the text and a pane that has not rendered it
+    /// yet look identical: the echo travels back through the pty and tmux's event loop
+    /// after `send-keys` has already returned. A found payload answers on the first
+    /// attempt, so only a send that really is in doubt pays for the waiting.
+    private func paneVerification(
+        handle: String,
+        expectation: SendExpectation,
+        baseline: String?
+    ) async -> SendVerification {
+        let beforeHead = baseline.map { Self.occurrences(of: expectation.head, inCompacted: $0) } ?? 0
+        let beforeTail = baseline.map { Self.occurrences(of: expectation.tail, inCompacted: $0) } ?? 0
+
+        var outcome = SendVerification.notChecked
+        for attempt in 0..<Self.verificationAttempts {
+            if Task.isCancelled {
+                return outcome
+            }
+            if attempt > 0 {
+                try? await Task.sleep(for: Self.verificationRetryPause)
+            }
+            guard let captured = await capturedPane(handle: handle) else {
+                continue
+            }
+            if Self.occurrences(of: expectation.head, inCompacted: captured) > beforeHead,
+                Self.occurrences(of: expectation.tail, inCompacted: captured) > beforeTail
+            {
+                return .paneShowsText
+            }
+            outcome = .paneMissingText
+        }
+        return outcome
     }
 
     /// Production runner: `ProcessRunner.run` with the same short deadline the
@@ -281,6 +517,40 @@ public struct TmuxSessionControl: Sendable {
             )
         } catch {
             return nil
+        }
+    }
+}
+
+// MARK: - Send reporting
+
+extension TmuxSessionControl {
+
+    /// Whether the pane was seen to gain what was sent. `bytesOffered` is a count of
+    /// what tmux was handed, which is why it is named that and not `bytesDelivered`:
+    /// only `verification` speaks to arrival, and only as far as a pane can.
+    public enum SendVerification: String, Codable, Sendable, Equatable {
+        /// The pane gained both ends of the payload. Evidence the terminal received
+        /// the text — not that the program behind it read the text: an echo is
+        /// produced by the line discipline, which is also the layer that discards an
+        /// over-long canonical line. A pane can show what its reader never got.
+        case paneShowsText = "verified"
+        /// The read-back ran and the pane did not gain it.
+        case paneMissingText = "unverified"
+        /// Nothing identifiable to look for, or no capture answered.
+        case notChecked = "not-checked"
+    }
+
+    /// What a send can honestly say about itself: how much text tmux accepted, in
+    /// how many calls, and what the pane showed afterwards.
+    public struct SendReport: Sendable, Equatable {
+        public let bytesOffered: Int
+        public let chunks: Int
+        public let verification: SendVerification
+
+        public init(bytesOffered: Int, chunks: Int, verification: SendVerification) {
+            self.bytesOffered = bytesOffered
+            self.chunks = chunks
+            self.verification = verification
         }
     }
 }
@@ -342,12 +612,23 @@ public struct WorkspaceSendResult: Codable, Sendable, Equatable {
     public let handle: String
     public let socketLabel: String
     public let bytes: Int
+    public let chunks: Int
     public let submitted: Bool
+    public let verification: TmuxSessionControl.SendVerification
 
-    public init(handle: String, socketLabel: String, bytes: Int, submitted: Bool) {
+    public init(
+        handle: String,
+        socketLabel: String,
+        bytes: Int,
+        chunks: Int,
+        submitted: Bool,
+        verification: TmuxSessionControl.SendVerification
+    ) {
         self.handle = handle
         self.socketLabel = socketLabel
         self.bytes = bytes
+        self.chunks = chunks
         self.submitted = submitted
+        self.verification = verification
     }
 }

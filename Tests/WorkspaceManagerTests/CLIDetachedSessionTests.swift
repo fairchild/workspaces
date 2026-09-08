@@ -242,6 +242,10 @@ struct CLIDetachedSessionTests {
         let sendResult = try JSONDecoder().decode(WorkspaceSendResult.self, from: Data(send.stdout.utf8))
         #expect(sendResult.submitted)
         #expect(sendResult.bytes == "echo sent-marker".utf8.count)
+        // Short enough for one chunk, and echoed by the shell, so the read-back can
+        // say the pane held it rather than restating the count that was handed over.
+        #expect(sendResult.chunks == 1)
+        #expect(sendResult.verification == .paneShowsText)
 
         let text = try await readUntil(fixture, selector: handle) { $0.contains("sent-marker") }
         #expect(text.contains("sent-marker"))

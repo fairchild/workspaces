@@ -80,7 +80,9 @@ tmux session on the app's own `-L workspaces` socket, named the way the app name
 that workspace's terminal — opening the workspace in the app (tmux-per-session
 mode) attaches to the agent already running there rather than starting a second
 one. `--name <label>` launches a sibling session instead. `ws read` and `ws send`
-take either a handle or a workspace selector.
+take either a handle or a workspace selector. `ws send` types the text in chunks
+small enough to stay under the pty input queue's depth and then reads the pane
+back, reporting `delivery unverified` when the pane does not show what it sent.
 
 ## Configuration
 
