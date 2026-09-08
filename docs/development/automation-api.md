@@ -114,13 +114,17 @@ WorkSpaces terminal tile. See
   against the fresh registry (`stale_handle`).
 - **Capture, read, and operator mutations.** The operator capability set is
   `window.read` (list windows), `window.snapshot` (composited PNG of a listed
-  window), `workspace.read` (list repos and workspaces), and `surface.read`
-  (bounded terminal text read-back for surfaces this same operator handle
-  created through `workspace.create` this launch), plus
-  `workspace.select` and `workspace.create`, reviewed exceptions that drive real
-  UI gestures rather than data-layer writes
-  (see [Verb contract](#verb-contract-verbs--clicks)). Operator handles still
-  never carry tile mutation or `input.write`.
+  window), `workspace.read` (list repos and workspaces), `ui.read` (structural
+  UI-state read), and `surface.read` (bounded terminal text read-back for
+  surfaces this same operator handle created through `workspace.create` this
+  launch), plus `workspace.select`, `workspace.create`, `workspace.archive`,
+  and `repo.terminal` — reviewed exceptions that drive real UI gestures rather
+  than data-layer writes
+  (see [Verb contract](#verb-contract-verbs--clicks)) — and `workspace.note`,
+  which writes through the window-bound note verb rather than the sidebar's own
+  setter, applying the same normalization and landing in the same stored field
+  (two writers, not one path; see [Workspace note](#workspace-note)). Operator
+  handles still never carry tile mutation or `input.write`.
 
 ## Invariants
 
@@ -133,8 +137,13 @@ WorkSpaces terminal tile. See
   `hostSessionID`.
 - Capabilities are enforced before each scoped operation.
 - Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
-- Mutation verbs enter the same UI gesture the equivalent user action does — they
-  never write the data layer directly. See [Verb contract](#verb-contract-verbs--clicks).
+- The five gesture verbs (`workspace.select`, `workspace.create`,
+  `workspace.archive`, `repo.terminal`, `workspace.note`) reach app state only
+  through gesture closures the live window installs, never around the UI;
+  `tile.focus`, `tile.split`, `tile.close`, and `input.write` drive the terminal
+  runtime from the controller instead. `workspace.note`'s closure is itself the
+  stored write, because the sidebar's own menu item is too. See
+  [Verb contract](#verb-contract-verbs--clicks).
 - App Intents are in-process, user-initiated, OS-mediated veneers; they do not
   require the Automation API or Operator Scope experiments and do not expose a
   socket or process-readable operator credential.
@@ -150,13 +159,24 @@ WorkSpaces terminal tile. See
 
 ## Verb contract: verbs = clicks
 
-Every mutation verb enters the same UI path the equivalent user gesture does. A
-verb never writes the service or SwiftData layer directly; it drives the real UI
-entry point and inherits exactly what a click produces. The single place this rule
-is enforced is the internal gesture-verb layer
-(`AutomationGestureVerbs`): it is constructed with *only* gesture closures — the
-app's real UI entry points — and holds no backend handle, so a verb structurally
-cannot bypass the UI.
+A mutation verb enters the app's own path for the gesture it names rather than
+reaching around the UI into a write the equivalent user action would not make.
+Five verbs are held to that rule by the internal gesture-verb layer
+(`AutomationGestureVerbs`): `workspace.select`, `workspace.create`,
+`workspace.archive`, `repo.terminal`, and `workspace.note`. The layer is
+constructed with *only* gesture closures the live window installs, and holds no
+service, backend, or SwiftData handle of its own, so those verbs reach app state
+only through a closure the UI supplied. With no live window the app installs no
+gesture layer at all and the controller answers `unsupported` rather than falling
+back to a data-layer write.
+
+`tile.focus`, `tile.split`, `tile.close`, and `input.write` do not route through
+that layer. They are caller-scoped tile operations implemented on the controller
+against the live `TileTreeStore` and the Ghostty text-input bridge — the same
+runtime a keystroke drives — so their failures are the handle's and the runtime's
+(`stale_handle` once the handle no longer maps to a live tile, `unsupported` for a
+split V1 does not support) rather than the gesture layer's missing-window
+`unsupported`.
 
 `workspace.select` is the exemplar: selecting a workspace via the API writes the
 *same selection binding* a sidebar click writes — the binding whose setter attaches
@@ -179,8 +199,10 @@ selected with its terminal attached. Concretely, this is why the rule matters:
   binding fails exactly when a user click would, so a broken selection path is caught
   by the verb, not hidden behind a service call that still "succeeds."
 
-Verbs return a structured outcome so dialogs and dead-ends become data, never a
-hang or a fallback:
+Four verbs answer with a structured `outcome`, so a dialog or a dead end arrives as
+data rather than a hang or a fallback: `workspace.select`, `workspace.create`,
+`workspace.archive`, and `repo.terminal`. Their `outcome` is the same two-case
+value:
 
 | Outcome | Meaning | Wire |
 | --- | --- | --- |
@@ -188,10 +210,38 @@ hang or a fallback:
 | `confirmation_required` | The gesture would surface a modal; the payload names what the user would confirm. Surfaced as data so a verb never blocks on modal UI. `workspace.create` uses this for provider setup confirmations. | Success envelope, `outcome: "confirmation_required"`, with `confirmation`. |
 | `unsupported` | The verb cannot run in the current context — most often no live window. It fails closed rather than falling back to a data-layer write. | Error envelope, code `unsupported`. |
 
+`workspace.create` is the only one that raises `confirmation_required` today.
+`workspace.select` and `workspace.archive` model the case but reach no dialog on
+their current paths, and `repo.terminal` has no confirmation arm at all, so it can
+only ever answer `completed`.
+
+The other four mutation verbs answer in their own shapes:
+
+- `tile.focus` and `tile.split` return the tile mutation result with no `outcome`
+  field at all: `changed` plus the surface ids the operation touched
+  (`focusedSurfaceID`, and for a split `createdSurfaceID`). A focus with no
+  neighbour in that direction is `changed: false` with `reason: "no_neighbor"`.
+- `tile.close` returns that same shape with `outcome: "requested"` — its only
+  value — and `changed: false`. Close is fire-and-forget into the app's
+  close-confirmation path, so the result names the surface the request targeted
+  and never claims the tile closed.
+- `input.write` returns `accepted`, `byteCount`, and the `surfaceID` it wrote
+  into, with no `outcome`: a paste either lands or fails closed on a stale handle.
+- `workspace.note` returns the stored `note` and `changed`, with no `outcome`.
+
 An id that resolves to no tracked repo or workspace fails `invalid_request` (it is
 not a gesture outcome — nothing was driven). App Intents and any companion app call
 the same verb layer, so "Siri said done" and "the sidebar updated" are the same
 event.
+
+`workspace.note` is the one gesture verb whose closure is itself the stored write,
+and the difference is in the UI rather than in the verb: a note has no machinery
+beneath it — the sidebar's own menu item normalizes the text and assigns the same
+field — so there is no deeper entry point for a verb to enter, and the two setters
+are separate implementations that nothing forces to stay equivalent. That is why
+its result carries `note` and `changed` rather than an `outcome`: no dialog can
+deflect it. It still fails closed, `unsupported` with no live window and
+`invalid_request` for an untracked id. Details: [Workspace note](#workspace-note).
 
 ### App Intents veneer
 
@@ -277,6 +327,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/wait` | **Operator scope, typed wait.** Evaluates a condition (`surface_attached`, `workspace_selected`, `surface_text_matches`, `prompt_ready`) server-side until satisfied, a bounded timeout elapses, or current state proves it unsatisfiable. Body is `{"for":"…","predicate":{…},"timeoutMS":n}`; the outcome is the typed enum `satisfied` / `timed_out` / `not_applicable`, never a bare boolean. Topology/selection conditions require `workspace.read`; content conditions require `surface.read`. See [Wait](#wait). |
 | `GET /v1/focus` | **Operator scope.** Truthful report of the app's live focus state: `{appIsActive, keyWindowID, firstResponderSurfaceID, focusPossible}`. `focusPossible: false` marks a no-activate (or CI) launch where the app cannot take focus — absent focus is then "unavailable", not a focus failure. Requires `window.read`. See [Focus](#focus). |
 | `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. `{"teardownTerminals":true}` kills the workspace's tmux sessions and retires its terminal tiles first, so a live terminal cannot fail the call. Returns `completed` with the archived workspace id, post-gesture selection state, and (after teardown) a teardown report, or `confirmation_required` if the UI path ever reaches a modal. A live terminal without teardown fails typed: `terminal_active` (`retryable: true`) on the exit-timeout, `close_blocked_by_confirmation` (`retryable: false`) when the close-confirmation blocks. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
+| `POST /v1/workspace/note` | **Operator scope, mutation.** Sets or clears the **Workspace Note** on the workspace named by the body's `workspaceID` (a `workspace.read` id), writing through the window-bound gesture layer. It applies the same normalization as the row menu's "Add Note…" / "Edit Note…" / "Clear Note" items and lands in the same stored field, but the two are separate setters, not one shared path. Body is `{"workspaceID":"…","note":"…"}`; a `note` that is absent or `null` clears the line, so there is no second verb for "stop showing this". Returns the *stored* note — trimmed, interior whitespace collapsed, truncated at 120 characters — with `changed` reporting whether that differed from what was already there. A zero-byte body fails `invalid_request`, since the missing-`workspaceID` check runs before any parse. A body that is not valid JSON fails `malformed_json`. A bare JSON scalar (string, number, `true`, `false`, `null`) also fails `malformed_json`, because the decoder rejects top-level fragments. A body that parses to a JSON array fails `invalid_request`, carrying no `workspaceID`. Past that, a `workspaceID` that is absent (`{}`), non-string, blank, non-UUID, or untracked fails `invalid_request`, as does a `note` present but neither string nor null. A live-window-less app fails `unsupported`; any method other than POST fails `method_not_allowed`. Requires `workspace.note`; tile handles fail `capability_denied`. See [Workspace note](#workspace-note). |
 | `GET /v1/web-surfaces` | Returns the app's WorkSpaces-owned web surfaces (global, repo, or workspace scoped) with stable source id, display name, configured URL, and — only when a `WKWebView` is live — the live URL, title, and loading state. Read-only. |
 | `GET /v1/web-surfaces/{id}/snapshot` | Returns a bounded PNG of the live web surface with stable source id `{id}`. Read-only pixels of an already-visible surface (`browser.read`). Fails closed when no `WKWebView` is live — never instantiates a hidden view. See [Web-surface snapshot bounds](#web-surface-snapshot-bounds). |
 | `POST /v1/tile/focus` | Focuses `left`, `right`, `up`, `down`, `next`, or `previous` relative to the caller tile. |
@@ -314,6 +365,7 @@ handle.
 | `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for any live terminal surface) and `POST /v1/wait` for the `surface_text_matches` / `prompt_ready` conditions; granted only to operator handles, never to tile handles |
 | `repo.terminal` | `POST /v1/repo/terminal` (drive the real repo-terminal selection for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.select` because its target is a repo, not a workspace |
 | `workspace.archive` | `POST /v1/workspace/archive` (drive the real sidebar archive action for a workspace); granted only to operator handles, never to tile handles |
+| `workspace.note` | `POST /v1/workspace/note` (set or clear a workspace's note through the window-bound note verb, which applies the same normalization as the sidebar's own setter and lands in the same stored field — two writers, not one path); granted only to operator handles, never to tile handles — a write, distinct from the read-only `workspace.read`, so a caller granted the inventory read cannot write the line the sidebar shows |
 | `tile.focus` | `POST /v1/tile/focus` |
 | `tile.split` | `POST /v1/tile/split` |
 | `tile.close` | `POST /v1/tile/close` |
@@ -418,7 +470,8 @@ mutation rides this route.
   "system": {
     "capabilities": [
       "window.read", "window.snapshot", "workspace.read",
-      "workspace.select", "workspace.create", "surface.read", "workspace.archive"
+      "workspace.select", "workspace.create", "surface.read", "workspace.archive",
+      "workspace.note", "repo.terminal", "ui.read"
     ]
   }
 }
@@ -727,6 +780,76 @@ is whatever the sidebar gesture left selected.
   `/v1/workspace/archive#teardown`) carrying retired-surface and killed-session
   counts — counts only, never session names.
 
+## Workspace note
+
+`POST /v1/workspace/note` (operator scope, `workspace.note`) sets or clears a
+workspace's **Workspace Note** — the one short line about where that work stream
+stands, which is what an agent updates at a checkpoint. It is neither the
+workspace's lifecycle status nor the sidebar's transient action message; a note
+outlives the action that wrote it ([`GLOSSARY.md`](../../GLOSSARY.md),
+"Workspace Note"). The body names the target by a `workspaceID` obtained from
+`workspace.read`:
+
+```json
+{ "workspaceID": "…", "note": "rebased on main, waiting on CI" }
+```
+
+`note` absent or `null` clears the line, so "stop showing this" needs no second
+verb. A `note` key that is present but neither a string nor `null` is a caller
+error (`invalid_request`), which keeps a mistyped body from silently clearing a
+note.
+
+The success envelope reports the note the app actually **stored**, so a caller
+that pasted a paragraph learns what the row will show:
+
+```json
+{ "workspaceID": "…", "workspaceName": "feature-a", "note": "rebased on main, waiting on CI",
+  "changed": true, "system": { "capabilities": [ … ] } }
+```
+
+- **What the setter normalizes.** Both writers call
+  `WorkspaceNote.normalized`. It splits the text on whitespace and newlines,
+  drops the empty pieces, and rejoins with single spaces — so leading and
+  trailing whitespace is gone and every interior run of spaces, tabs, or
+  newlines becomes exactly one space, which is what keeps a pasted paragraph to
+  the single line the row renders. Text that collapses to nothing (`""`, or
+  whitespace only) is stored as `null`: clearing a note and never setting one
+  are the same state rather than two. Anything longer than 120 characters is
+  truncated to its first 119 characters plus `…`, for a stored line of exactly
+  120. A caller with more to say has the Workspace Journal.
+- **What `changed` reports.** `changed` is whether the stored value moved —
+  the normalized note compared against what the workspace already held. Sending
+  the same text twice, sending text that normalizes to what is already stored,
+  or clearing an already-clear note all complete with `changed: false`. It is
+  not a report of whether the app wrote: the assignment and the SwiftData save
+  run either way.
+- **Two writers, one normalization.** The verb and the sidebar are separate
+  setters, not a shared code path: the verb writes through the window-bound
+  gesture layer, while the row menu's "Add Note…" / "Edit Note…" / "Clear Note"
+  items write through the sidebar's own. Each independently calls
+  `WorkspaceNote.normalized` and assigns the same stored field, so a note set
+  over the socket and one typed into the sidebar render identically today.
+  Nothing enforces that: the two implementations can diverge without a type or
+  a test failing, so read the equivalence as a fact about the code as it stands
+  rather than a guarantee the API makes.
+- **Failure mapping.** Body handling is five cases, in the order the router
+  checks them. A zero-byte body fails `invalid_request`, not `malformed_json` —
+  the missing-`workspaceID` check runs before any JSON parse. A body that is not
+  valid JSON fails `malformed_json`. A body that is a bare JSON scalar — a
+  string, a number, `true`, `false`, or `null` — also fails `malformed_json`,
+  because the decoder rejects top-level fragments, so "valid JSON" alone is not
+  enough. A body that parses to a JSON array fails `invalid_request`, because an
+  array carries no `workspaceID`. A JSON object with no `workspaceID` — `{}` —
+  fails `invalid_request` at the same check, as does a `workspaceID` that is
+  present but non-string, blank (empty or whitespace-only), non-UUID, or
+  untracked. A live-window-less app fails `unsupported` (never a data-layer
+  fallback); any method other than POST on this path fails
+  `method_not_allowed`.
+- **Operator mutation.** Requires `workspace.note`, distinct from the read-only
+  `workspace.read` — a handle granted the inventory read cannot write the line
+  the sidebar shows. A tile handle lacks it and fails `capability_denied`. The
+  call is operator-tagged in `automation-audit.jsonl` like every operator route.
+
 ## UI state
 
 `GET /v1/ui-state` (`ui.read`, operator scope) answers "what is the window
@@ -906,9 +1029,10 @@ workspaces automation input write 'echo hi'
 workspaces automation input write 'echo hi' --submit
 ```
 
-`automation window list`, `automation window snapshot`, `automation workspace
-list`, `automation wait`, and `automation focus` are the operator-scope
-commands. Unlike the tile-scoped commands, they read
+`automation window list`, `automation window snapshot`, every `automation
+workspace` subcommand (`list`, `select`, `create`, `archive`, `note`),
+`automation repo terminal`, `automation wait`, and `automation focus` are the
+operator-scope commands. Unlike the tile-scoped commands, they read
 the per-launch operator credential file (minted next to the socket by an opt-in
 launch) rather than the injected terminal environment, so they work from any
 same-user shell outside a WorkSpaces tile. Absent the credential they fail closed
@@ -929,6 +1053,9 @@ workspaces automation workspace create <repo-id> feature-a --provider lume --gue
 workspaces automation workspace archive <id>                     # archive through the sidebar action path
 workspaces automation workspace archive <id> --teardown          # kill tmux + retire terminals first
 workspaces automation workspace archive <id> --json
+workspaces automation workspace note <id> --text "rebased on main, waiting on CI"
+workspaces automation workspace note <id> --clear                 # remove the line from the row
+workspaces automation workspace note <id> --text "handoff ready" --json
 workspaces automation repo terminal <repo-id>                     # open the repo terminal through the UI path
 workspaces automation repo terminal <repo-id> --json
 workspaces automation wait --for workspace_selected --workspace-id <id> --timeout-ms 10000 --json
@@ -972,6 +1099,18 @@ list`). It prints the repo, the directory, and the surface it attached;
 `--json` emits the raw result envelope. This is the verb the API parity lane
 uses for the repo step of the daily-driver walk.
 
+`automation workspace note <id> --text "<text>"` sets the short line the
+sidebar shows under the workspace with stable `<id>` (from `automation workspace
+list`); `--clear` removes it. The two are mutually exclusive — passing both is
+refused rather than resolved, so a caller never has to guess which one the app
+honored. It prints the workspace name and the note the app *stored*, which is
+the normalized form rather than the text sent (`<name>: <note>`, or `<name>:
+note cleared`); `--json` emits the raw result envelope, including `changed`.
+This is the verb an agent calls at a checkpoint. It applies the same
+normalization as the sidebar's own note setter and writes the same stored
+field, so a note set from a script reads like a typed one — though the two
+setters are separate implementations, not one shared path.
+
 `automation wait` is the server-side typed wait: its exit code follows the
 outcome so `set -e` scripts branch without parsing JSON — 0 `satisfied`,
 2 `timed_out`, 3 `not_applicable`. `automation focus` prints the truthful focus
@@ -990,6 +1129,7 @@ inventory probe, which shortens it.
 | Focus wire models | `Sources/WorkspaceManagerCore/Services/Automation/AutomationFocus.swift` |
 | Focus enumeration (AppKit → state) | `Sources/WorkspaceManager/Views/MainWindow/AutomationFocusEnumerator.swift` |
 | Gesture-verb layer (verbs = clicks) | `Sources/WorkspaceManagerCore/Services/Automation/AutomationGestureVerbs.swift` |
+| Workspace-note normalization (pure) | `Sources/WorkspaceManagerCore/Models/WorkspaceNote.swift` |
 | Socket listener and lock | `Sources/WorkspaceManagerCore/Services/Automation/AutomationListener.swift` |
 | HTTP route projection | `Sources/WorkspaceManagerCore/Services/Automation/AutomationHTTPRouter.swift` |
 | Web-surface snapshot encoding (pure) | `Sources/WorkspaceManagerCore/Services/Automation/WebSurfaceSnapshotEncoder.swift` |
@@ -1051,9 +1191,11 @@ review before they can be added. Read-only global reads are the reviewed
 operator-scope exceptions — window capture (`window.read` listing and
 `window.snapshot` composited snapshots) and the repo/workspace inventory
 (`workspace.read`) — gated behind the opt-in operator scope above, never granted to
-tile handles. Operator mutations are limited to reviewed gesture verbs such as
-`workspace.select` and `workspace.create`, which drive real UI paths under the
-verbs-=-clicks contract, never data-layer writes. Reviewed exceptions widen the
+tile handles. Operator mutations are limited to the reviewed gesture verbs —
+`workspace.select`, `workspace.create`, `workspace.archive`, `repo.terminal`, and
+`workspace.note` — which enter real UI paths under the verbs-=-clicks contract
+rather than reaching around the UI (see [Verb contract](#verb-contract-verbs--clicks)
+for where `workspace.note` differs). Reviewed exceptions widen the
 read/write surface deliberately: caller-scoped input injection ships as the experimental,
 double-gated `input.write` capability (see
 [Automation Input Write Decision](../decisions/automation-input-write.md)), and
