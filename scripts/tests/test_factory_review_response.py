@@ -254,6 +254,7 @@ class ResponseDecisionTests(unittest.TestCase):
                 "index": 1,
                 "item": "CI: `check-links` green on the PR head",
                 "status": "pending-ci",
+                "kind": "ci",
             }
         )
         decision = self.evaluate(
@@ -284,7 +285,8 @@ class ResponseDecisionTests(unittest.TestCase):
 
     def test_owner_blocker_alongside_a_self_clearing_one_still_escalates(self) -> None:
         body = evidence_body(
-            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci"},
+            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci",
+             "kind": "ci"},
             {"index": 2, "item": "owner-attested judgement call", "status": "blocked"},
         )
         decision = self.evaluate(pull_request(body=body))
@@ -361,7 +363,8 @@ class RevisionDeferralTests(unittest.TestCase):
 
     def test_a_self_clearing_blocker_still_defers_and_stays_visible(self) -> None:
         body = evidence_body(
-            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci"}
+            {"index": 1, "item": "CI: `check-links` green", "status": "pending-ci",
+             "kind": "ci"}
         )
         decision = self.evaluate(
             pull_request(labels=("author:april", "blocked:evidence"), body=body)
@@ -584,7 +587,7 @@ class ResponseCommentTests(unittest.TestCase):
              "status": "pending-ci", "kind": "perf"},
         )
         text = self.render(pull_request(body=body), review())
-        self.assertIn("state the command you ran and the line it printed", text)
+        self.assertIn("state in this PR body the command you ran", text)
         self.assertIn("Before and After measurements", text)
         self.assertIn("Nothing runs these for you", text)
         self.assertNotIn("clears on its own", text)
@@ -600,6 +603,21 @@ class ResponseCommentTests(unittest.TestCase):
         blockers = response.evidence_blockers(entries)
         self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
         self.assertTrue(blockers[0].owner_required)
+
+    def test_a_pending_entry_with_no_kind_is_the_owner_s(self) -> None:
+        # The grouping is an allowlist. An entry with no kind, kind `other`,
+        # or a kind added later used to land in the self-clearing group and be
+        # told a lane would finish it; there is no such lane.
+        for entry in (
+            {"index": 1, "item": "something", "status": "pending-ci"},
+            {"index": 1, "item": "something", "status": "pending-ci", "kind": "other"},
+            {"index": 1, "item": "something", "status": "pending-ci", "kind": "a-later-kind"},
+        ):
+            with self.subTest(kind=entry.get("kind")):
+                blockers = response.evidence_blockers([entry])
+                self.assertEqual([b.key for b in blockers], ["evidence-pending-author"])
+                self.assertTrue(blockers[0].owner_required)
+                self.assertNotIn("the lane that owns", blockers[0].detail)
 
     def test_a_lane_backed_pending_item_still_clears_on_its_own(self) -> None:
         entries = [

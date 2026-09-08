@@ -128,12 +128,18 @@ PENDING_COMPLETERS = {
     "build": "when the macOS evidence lane finishes on this head",
     "screenshot": "when the macOS evidence lane finishes on this head",
 }
-PENDING_COMPLETER_FALLBACK = "when the lane that owns {it} finishes on this head"
+# No fallback lane: there is no generic one, and naming a lane that does not
+# exist is how the owner was told to wait for nothing. A kind nobody claims is
+# the owner's, which is the direction that fails safe.
+PENDING_UNCLAIMED_ASK = (
+    "say in this PR body what would prove it, or mark the line complete with "
+    "what you checked"
+)
 # Kinds no lane completes. They were added after this table was written, so
 # they fell to the fallback and told the owner to wait for something that does
 # not exist -- when what they actually need to do is write a line in the body.
 AUTHOR_PENDING_ASKS = {
-    "test-attested": "state the command you ran and the line it printed",
+    "test-attested": "state in this PR body the command you ran and the line it printed",
     "perf": "fill this PR body's Performance section with Before and After measurements",
 }
 CHANGES_REQUESTED = "CHANGES_REQUESTED"
@@ -493,12 +499,15 @@ def evidence_blockers(entries: list[dict[str, Any]]) -> list[Blocker]:
                 detail=_attestation_block(blocked),
             )
         )
-    waiting_on_author = [
+    # Allowlist, not blocklist. Everything unrecognised used to land in the
+    # self-clearing group -- kind `other`, no kind at all, a kind added later
+    # -- and be told a lane would finish it.
+    self_clearing = [
         entry
         for entry in pending
-        if str(entry.get("kind") or "").strip() in AUTHOR_PENDING_ASKS
+        if str(entry.get("kind") or "").strip() in PENDING_COMPLETERS
     ]
-    self_clearing = [entry for entry in pending if entry not in waiting_on_author]
+    waiting_on_author = [entry for entry in pending if entry not in self_clearing]
     if waiting_on_author:
         blockers.append(
             Blocker(
@@ -522,8 +531,8 @@ def _author_pending_block(pending: list[dict[str, Any]]) -> str:
     """The ask for a pending entry no lane will ever complete."""
     grouped: dict[str, list[dict[str, Any]]] = {}
     for entry in pending:
-        ask = AUTHOR_PENDING_ASKS[str(entry.get("kind") or "").strip()]
-        grouped.setdefault(ask, []).append(entry)
+        kind = str(entry.get("kind") or "").strip()
+        grouped.setdefault(AUTHOR_PENDING_ASKS.get(kind, PENDING_UNCLAIMED_ASK), []).append(entry)
     lines = []
     for ask, entries in grouped.items():
         lines.append(f"For {_index_phrase(entries).lower()}, {ask}.")
@@ -565,16 +574,14 @@ def _pending_block(pending: list[dict[str, Any]]) -> str:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for entry in pending:
         kind = str(entry.get("kind") or "").strip()
-        completer = PENDING_COMPLETERS.get(kind, PENDING_COMPLETER_FALLBACK)
-        grouped.setdefault(completer, []).append(entry)
+        # Only allowlisted kinds reach here; the caller sends the rest to the
+        # author block, so there is no fallback lane to name.
+        grouped.setdefault(PENDING_COMPLETERS[kind], []).append(entry)
     lines = []
     for completer, entries in grouped.items():
         plural = len(entries) != 1
         verb = "clear on their own" if plural else "clears on its own"
-        lines.append(
-            f"{_index_phrase(entries)} {verb} "
-            f"{completer.format(it='them' if plural else 'it')}."
-        )
+        lines.append(f"{_index_phrase(entries)} {verb} {completer}.")
     return "\n".join(lines)
 
 

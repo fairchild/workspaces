@@ -664,11 +664,11 @@ def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
         return None
     try:
         payload = json.loads(match.group("payload"))
-    except ValueError:
-        # ValueError, not JSONDecodeError: past 4300 digits `json.loads`
-        # refuses to build the integer at all and raises the plain class, and
-        # the body this reads is PR-editable. Caught as JSONDecodeError only,
-        # it escaped and took the lane with it.
+    except (ValueError, RecursionError):
+        # Not only JSONDecodeError: past 4300 digits `json.loads` refuses to
+        # build the integer and raises the plain ValueError, and a deeply
+        # nested payload exhausts the stack. The body this reads is
+        # PR-editable, and either one escaped and took the lane with it.
         return None
     if not isinstance(payload, dict):
         return None
@@ -717,10 +717,10 @@ def _structured_evidence_entries(
         return None
     try:
         payload = json.loads(match.group("payload"))
-    except ValueError as exc:
-        # See `_extract_evidence_metadata`: a number too long to build raises
-        # the plain class, and `msg` is a `JSONDecodeError` attribute.
-        detail = getattr(exc, "msg", None) or str(exc)
+    except (ValueError, RecursionError) as exc:
+        # See `_extract_evidence_metadata`. `msg` is a `JSONDecodeError`
+        # attribute, so the other two classes need their own text.
+        detail = getattr(exc, "msg", None) or str(exc) or type(exc).__name__
         return {
             "section_present": has_markdown_section(body, "Evidence Status"),
             "entries": {},
@@ -755,7 +755,10 @@ def _structured_evidence_entries(
             continue
         try:
             index = int(raw_entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
+        # OverflowError too: `1e9999` in the PR-editable metadata parses as
+        # infinity, and `int()` of that raises a class the other two do not
+        # cover.
             invalid_lines.append(f"entry {position} is missing a valid integer index")
             continue
         if index < 1 or index > len(requested_evidence):
@@ -2301,7 +2304,7 @@ def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
             continue
         try:
             index = int(entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             continue
         item = str(entry.get("item", "")).strip()
         status = str(entry.get("status", "")).strip()
@@ -2360,7 +2363,7 @@ def update_evidence_entries(body: str, updates: dict[int, dict[str, object]]) ->
         entry = dict(raw_entry)
         try:
             index = int(entry["index"])
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, OverflowError):
             updated_entries.append(entry)
             continue
         update = updates.get(index)

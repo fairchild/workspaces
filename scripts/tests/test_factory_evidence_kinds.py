@@ -2530,17 +2530,50 @@ class DocumentedTestFormTests(unittest.TestCase):
             "other",
         )
 
-    def test_a_number_too_long_to_build_does_not_take_the_lane_down(self) -> None:
-        # Past 4300 digits `json.loads` refuses to build the integer and
-        # raises a plain ValueError, not JSONDecodeError. The body it reads is
-        # PR-editable, and the unhandled error aborted the run.
-        body = (
-            "## Summary\n\n<!-- evidence-status:v1\n"
-            '{"entries": [{"index": ' + "1" * 4301 + "}]}\n-->\n"
+    def metadata_body(self, payload: str) -> str:
+        return "## Summary\n\n<!-- evidence-status:v1\n" + payload + "\n-->\n"
+
+    def test_a_payload_json_cannot_build_does_not_take_the_lane_down(self) -> None:
+        # The body this reads is PR-editable, and `json.loads` has two ways to
+        # refuse that are not JSONDecodeError: past 4300 digits it will not
+        # build the integer and raises the plain ValueError, and a deeply
+        # nested payload exhausts the stack with RecursionError. Either one
+        # escaped and aborted the run.
+        for label, payload in (
+            ("long integer", '{"entries": [{"index": ' + "1" * 4301 + "}]}"),
+            ("deep nesting", "[" * 1200 + "]" * 1200),
+        ):
+            with self.subTest(label=label):
+                body = self.metadata_body(payload)
+                self.assertIsNone(run_contributor._extract_evidence_metadata(body))
+                accounting = run_contributor.evaluate_evidence_accounting(
+                    body, ["an item"]
+                )
+                self.assertEqual(accounting["source"], "structured-invalid")
+
+    def test_an_infinite_index_does_not_take_any_metadata_path_down(self) -> None:
+        # `1e9999` parses as infinity and `int()` of that raises OverflowError,
+        # which the three index reads did not catch.
+        body = self.metadata_body(
+            '{"entries": [{"index": 1e9999, "item": "x", "status": "complete",'
+            ' "detail": "d"}]}'
         )
-        self.assertIsNone(run_contributor._extract_evidence_metadata(body))
-        accounting = run_contributor.evaluate_evidence_accounting(body, ["an item"])
-        self.assertEqual(accounting["source"], "structured-invalid")
+        self.assertEqual(
+            run_contributor.evaluate_evidence_accounting(body, ["x"])["source"],
+            "structured-invalid",
+        )
+        self.assertIsInstance(
+            run_contributor.update_evidence_entries(
+                body, {1: {"status": "complete", "detail": "y"}}
+            ),
+            str,
+        )
+        self.assertIsInstance(
+            run_contributor.reconcile_pending_ci_evidence(
+                body, build_succeeded=True, tests_succeeded=True, smoke_succeeded=True
+            ),
+            str,
+        )
 
     def test_the_verdicts_people_actually_write_are_accepted(self) -> None:
         for item, kind in (
