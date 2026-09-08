@@ -103,13 +103,27 @@ struct CLIDetachedSessionTests {
         let binary = try #require(CLIBinary.url, CLIBinary.missingBinaryMessage)
         // Rooted at `/tmp` rather than `NSTemporaryDirectory()` because the tmux socket
         // now lives under this directory, and a unix socket path has to fit in
-        // `sockaddr_un.sun_path` — 104 bytes on Darwin. The per-user temporary directory
-        // spends about half of that on its own prefix before this fixture adds a UUID,
-        // a `tmux-<uid>` component and the label; `/tmp` leaves room to spare.
-        let root = URL(fileURLWithPath: "/tmp")
-            .appendingPathComponent("cli-detached-\(UUID().uuidString)")
-        let repo = root.appendingPathComponent("repo")
-        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        // `sockaddr_un.sun_path` — 104 bytes on Darwin, so 103 before the terminating
+        // NUL. tmux resolves the directory before binding, so `/tmp` counts as
+        // `/private/tmp`. The budget, worst case:
+        //
+        //     /private/tmp  ws-cli-  <uuid32>  /tmux-  <uid>  /  wsparity-test-  <8>
+        //           12  + 1 +   7  +    32   +    6  +  10  + 1 +      14      + 8 = 91
+        //
+        // That spends a ten-digit uid, the widest a 32-bit uid gets, and still leaves 12
+        // bytes. The per-user `NSTemporaryDirectory()` is ~49 bytes of prefix on its own
+        // and overruns. Lengthening any component here means redoing this arithmetic.
+        let root = URL(fileURLWithPath: "/tmp").appendingPathComponent(
+            "ws-cli-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased())"
+        )
+        // Non-recursive and 0700: creation fails rather than adopting anything already at
+        // this path, so a name planted in world-writable `/tmp` cannot be inherited, and
+        // the scratch tree is no more readable than the per-user directory it replaces.
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: false,
+            attributes: [.posixPermissions: 0o700]
+        )
 
         let fixture = Fixture(
             binary: binary,
@@ -118,9 +132,13 @@ struct CLIDetachedSessionTests {
         )
 
         // The caller's `defer { fixture.teardown() }` is not registered until this
-        // returns, so setup owns its own failure path — otherwise a throw here leaks the
-        // scratch tree it just created, which is the same class of litter as #1443.
+        // returns, so setup owns its own failure path from the moment `root` exists —
+        // otherwise a throw here leaks the scratch tree, the same class of litter #1443
+        // is about.
         do {
+            let repo = root.appendingPathComponent("repo")
+            try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+
             for arguments in [["init", "-q", "."], ["commit", "-q", "--allow-empty", "-m", "init"]] {
                 let git = Process()
                 git.executableURL = URL(fileURLWithPath: "/usr/bin/env")
