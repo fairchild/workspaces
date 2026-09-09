@@ -106,7 +106,27 @@ struct WorkspaceServiceTests {
         return (testRoot, repoDir, wsRoot)
     }
 
-    /// Sets UserDefaults workspacesRoot, returns the previous value for restore.
+    /// Builds a UserDefaults suite scoped to exactly one test invocation, plus a
+    /// cleanup closure to drop it. `WorkspaceService`'s default preferences store
+    /// is `LaunchPreferences.defaults`, which resolves to `UserDefaults.standard`
+    /// in an unconfigured test run — a domain shared with *every other process*
+    /// running this same test executable, not just other suites in this process
+    /// (#1536). A UUID-named suite can never collide with another test's, so
+    /// every `WorkspaceService` under test gets its own instead of touching that
+    /// shared domain.
+    private func makeIsolatedPreferences() -> (defaults: UserDefaults, cleanup: () -> Void) {
+        let suiteName = "com.cloudcompute.workspaces.tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            fatalError("Failed to create isolated UserDefaults suite \(suiteName) for test")
+        }
+        return (defaults, { defaults.removePersistentDomain(forName: suiteName) })
+    }
+
+    // TODO(#1536 follow-up): the tests below still route through the shared
+    // `UserDefaults.standard` domain via these two helpers instead of
+    // `makeIsolatedPreferences()`. They need the same conversion as the rest of
+    // this file — inject an isolated `preferences:` UserDefaults into their
+    // `WorkspaceService` and drop this pair — to be fully clear of #1536.
     private func setWorkspacesRoot(_ url: URL) -> String? {
         let key = "workspacesRoot"
         let original = UserDefaults.standard.string(forKey: key)
@@ -114,7 +134,6 @@ struct WorkspaceServiceTests {
         return original
     }
 
-    /// Restores UserDefaults workspacesRoot to its previous value.
     private func restoreWorkspacesRoot(_ original: String?) {
         let key = "workspacesRoot"
         if let original {
@@ -200,12 +219,14 @@ struct WorkspaceServiceTests {
         let customRoot = testRoot.appendingPathComponent("custom-root", isDirectory: true)
         let syntheticRoot = testRoot.appendingPathComponent("synthetic-root", isDirectory: true)
 
-        let original = setWorkspacesRoot(customRoot)
-        defer { restoreWorkspacesRoot(original) }
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        preferences.set(customRoot.path, forKey: "workspacesRoot")
 
         let service = WorkspaceService(
             materializer: RecordingWorkspaceMaterializer(),
-            environment: [SyntheticRunRoot.environmentKey: syntheticRoot.path]
+            environment: [SyntheticRunRoot.environmentKey: syntheticRoot.path],
+            preferences: preferences
         )
         let resolvedRoot = await service.workspacesRoot
         #expect(resolvedRoot.path == syntheticRoot.path)
@@ -343,11 +364,12 @@ struct WorkspaceServiceTests {
         let materializer = RecordingWorkspaceMaterializer()
         materializer.resultBranch = "workspace/my-feature"
         materializer.createsDestination = true
-        let service = WorkspaceService(materializer: materializer)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(materializer: materializer, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "my-feature")
 
@@ -364,11 +386,12 @@ struct WorkspaceServiceTests {
     @Test("default materializer creates a git worktree branch")
     func defaultMaterializerCreatesGitWorktreeBranch() async throws {
         let mockGit = MockGitService()
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "my-feature")
 
@@ -387,11 +410,12 @@ struct WorkspaceServiceTests {
     @Test("default materializer fetches and branches from requested ref")
     func defaultMaterializerUsesRequestedRef() async throws {
         let mockGit = MockGitService()
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         _ = try await service.createWorkspace(
             repoName: "test-repo",
@@ -408,11 +432,12 @@ struct WorkspaceServiceTests {
     @Test("createWorkspace rejects unsafe fromRef values before git")
     func createWorkspaceRejectsUnsafeFromRef() async throws {
         let mockGit = MockGitService()
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         await #expect(throws: WorkspaceError.self) {
             _ = try await service.createWorkspace(
@@ -431,11 +456,12 @@ struct WorkspaceServiceTests {
     func sequentialRaceFanOutFailFast() async throws {
         let materializer = RecordingWorkspaceMaterializer()
         materializer.createsDestination = true
-        let service = WorkspaceService(materializer: materializer)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(materializer: materializer, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let plan = RaceGroupPlanner.plan(prompt: "demo race", count: 3, command: "claude")
         var created: [URL] = []
@@ -470,11 +496,12 @@ struct WorkspaceServiceTests {
         let materializer = RecordingWorkspaceMaterializer()
         materializer.createsDestination = true
         materializer.materializeError = GitError.commandFailed(args: ["worktree", "add"], stderr: "already exists")
-        let service = WorkspaceService(materializer: materializer)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(materializer: materializer, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         await #expect(throws: WorkspaceError.self) {
             _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "test-ws")
@@ -495,16 +522,18 @@ struct WorkspaceServiceTests {
         materializer.materializeError = GitError.commandFailed(args: ["worktree", "add"], stderr: "already exists")
         materializer.removeError = CleanupError()
         let cleanupFailures = CleanupFailureRecorder()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
         let service = WorkspaceService(
             materializer: materializer,
             cleanupFailureReporter: { failure in
                 cleanupFailures.record(failure)
-            }
+            },
+            preferences: preferences
         )
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         await #expect(throws: WorkspaceError.self) {
             _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "test-ws")
@@ -524,11 +553,12 @@ struct WorkspaceServiceTests {
     @Test("createWorkspace throws when directory already exists")
     func createWorkspaceThrowsWhenExists() async throws {
         let mockGit = MockGitService()
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let (testRoot, _, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let wsDir =
             wsRoot
@@ -544,11 +574,12 @@ struct WorkspaceServiceTests {
     @Test("createWorkspace rejects path traversal names")
     func createWorkspaceRejectsPathTraversalName() async throws {
         let mockGit = MockGitService()
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         await #expect(throws: WorkspaceError.self) {
             _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "..")
@@ -558,11 +589,12 @@ struct WorkspaceServiceTests {
     @Test("createWorkspace rejects empty names after sanitization")
     func createWorkspaceRejectsEmptySanitizedName() async throws {
         let mockGit = MockGitService()
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         await #expect(throws: WorkspaceError.self) {
             _ = try await service.createWorkspace(repoName: "test-repo", repoLocalURL: repoDir, name: "   ")
@@ -572,11 +604,12 @@ struct WorkspaceServiceTests {
     @Test("createWorkspace emits progress phases in order on success")
     func createWorkspaceEmitsProgressPhasesInOrderOnSuccess() async throws {
         let mockGit = MockGitService()
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let recorder = PhaseRecorder()
         _ = try await service.createWorkspace(
@@ -596,13 +629,14 @@ struct WorkspaceServiceTests {
     func createWorkspaceStopsProgressAtFailingPhase() async throws {
         let mockGit = MockGitService()
         mockGit.createWorktreeError = GitError.commandFailed(args: ["worktree", "add"], stderr: "failed")
-        let service = WorkspaceService(gitService: mockGit)
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(gitService: mockGit, preferences: preferences)
         let tempRoot = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: tempRoot) }
         let wsRoot = tempRoot.appendingPathComponent("workspaces")
         try FileManager.default.createDirectory(at: wsRoot, withIntermediateDirectories: true)
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let recorder = PhaseRecorder()
         await #expect(throws: WorkspaceError.self) {
@@ -622,11 +656,12 @@ struct WorkspaceServiceTests {
 
     @Test("createWorkspace materializes a git worktree")
     func createWorkspaceMaterializesGitWorktree() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let info = try await service.createWorkspace(
             repoName: "test-repo",
@@ -656,7 +691,9 @@ struct WorkspaceServiceTests {
 
     @Test("createWorkspace with fromRef materializes from fetched origin ref")
     func createWorkspaceMaterializesFromFetchedRef() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let testRoot = try makeTempDir()
         defer { try? FileManager.default.removeItem(at: testRoot) }
         let seedDir = testRoot.appendingPathComponent("seed", isDirectory: true)
@@ -687,8 +724,7 @@ struct WorkspaceServiceTests {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         #expect(fetchedHead != staleHead)
 
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let info = try await service.createWorkspace(
             repoName: "test-repo",

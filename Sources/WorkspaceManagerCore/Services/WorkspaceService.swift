@@ -85,6 +85,12 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     private let materializer: any WorkspaceMaterializer
     private let cleanupFailureReporter: @Sendable (WorkspaceCleanupFailure) -> Void
     private let syntheticWorkspacesRoot: URL?
+    // Which UserDefaults domain the custom-root read/write goes through. Defaults
+    // to the process-wide `LaunchPreferences.defaults`, but every call site that
+    // wants a `workspacesRoot` isolated to itself — chiefly tests, since the
+    // standard domain is shared with every other process running this same
+    // executable, not just other code in this process (#1536) — injects its own.
+    private let preferences: UserDefaults
 
     // MARK: - Workspace Root Configuration
 
@@ -99,7 +105,7 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
         if let syntheticWorkspacesRoot {
             return syntheticWorkspacesRoot
         }
-        if let customPath = LaunchPreferences.defaults.string(forKey: "workspacesRoot"),
+        if let customPath = preferences.string(forKey: "workspacesRoot"),
             !customPath.isEmpty
         {
             return URL(fileURLWithPath: customPath)
@@ -108,25 +114,33 @@ public actor WorkspaceService: WorkspaceServiceProtocol {
     }
 
     public func setWorkspacesRoot(_ url: URL) {
-        LaunchPreferences.defaults.set(url.path, forKey: "workspacesRoot")
+        preferences.set(url.path, forKey: "workspacesRoot")
     }
 
     public func resetWorkspacesRoot() {
-        LaunchPreferences.defaults.removeObject(forKey: "workspacesRoot")
+        preferences.removeObject(forKey: "workspacesRoot")
     }
 
-    public init(gitService: any GitServiceProtocol = GitService.shared) {
-        self.init(materializer: GitWorktreeWorkspaceMaterializer(gitService: gitService))
+    public init(
+        gitService: any GitServiceProtocol = GitService.shared,
+        preferences: UserDefaults = LaunchPreferences.defaults
+    ) {
+        self.init(
+            materializer: GitWorktreeWorkspaceMaterializer(gitService: gitService),
+            preferences: preferences
+        )
     }
 
     init(
         materializer: any WorkspaceMaterializer,
         cleanupFailureReporter: @escaping @Sendable (WorkspaceCleanupFailure) -> Void = defaultCleanupFailureReporter,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        preferences: UserDefaults = LaunchPreferences.defaults
     ) {
         self.materializer = materializer
         self.cleanupFailureReporter = cleanupFailureReporter
         self.syntheticWorkspacesRoot = SyntheticRunRoot.url(environment: environment)
+        self.preferences = preferences
         if let syntheticWorkspacesRoot {
             log.info(
                 "Synthetic run root active: workspaces root overridden to \(syntheticWorkspacesRoot.path, privacy: .public)"
