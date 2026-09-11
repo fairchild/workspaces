@@ -613,14 +613,14 @@ class SectionHeadingCaseTests(unittest.TestCase):
         )
         self.assertIn(f"## Validation\n{note}\n\n## Risks", rendered)
 
-    def test_the_execution_state_sync_reads_a_lower_case_blocked_by(self) -> None:
-        # sync-execution-state.py carries its own copy of the section match. If
-        # it disagreed with the helper, one would call an issue blocked and the
-        # other would not.
-        self.assertEqual(
-            sync_execution_state.extract_blocked_by("## Blocked by\n\n- #12\n- #34\n"),
-            [12, 34],
-        )
+    def test_both_readers_of_blocked_by_take_a_lower_case_heading(self) -> None:
+        # The rule belongs to the helper, not to the evidence headings: a fix
+        # scoped to those two would leave this one behind. sync-execution-state.py
+        # carries its own copy of the match, and if the two disagreed, one would
+        # call an issue blocked and the other would not.
+        body = "## Blocked by\n\n- #12\n- #34\n"
+        self.assertEqual(run_contributor.extract_blocked_by(body), [12, 34])
+        self.assertEqual(sync_execution_state.extract_blocked_by(body), [12, 34])
 
 
 class EvidenceSplitAnchoringTests(unittest.TestCase):
