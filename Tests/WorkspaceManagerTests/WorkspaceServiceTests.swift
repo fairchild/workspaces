@@ -122,27 +122,6 @@ struct WorkspaceServiceTests {
         return (defaults, { defaults.removePersistentDomain(forName: suiteName) })
     }
 
-    // TODO(#1536 follow-up): the tests below still route through the shared
-    // `UserDefaults.standard` domain via these two helpers instead of
-    // `makeIsolatedPreferences()`. They need the same conversion as the rest of
-    // this file — inject an isolated `preferences:` UserDefaults into their
-    // `WorkspaceService` and drop this pair — to be fully clear of #1536.
-    private func setWorkspacesRoot(_ url: URL) -> String? {
-        let key = "workspacesRoot"
-        let original = UserDefaults.standard.string(forKey: key)
-        UserDefaults.standard.set(url.path, forKey: key)
-        return original
-    }
-
-    private func restoreWorkspacesRoot(_ original: String?) {
-        let key = "workspacesRoot"
-        if let original {
-            UserDefaults.standard.set(original, forKey: key)
-        } else {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-    }
-
     private func makeTempDir() throws -> URL {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent("WorkspaceServiceTest-\(UUID().uuidString)")
@@ -741,11 +720,12 @@ struct WorkspaceServiceTests {
 
     @Test("createWorkspace can materialize with repository copy adapter")
     func createWorkspaceCanMaterializeWithRepositoryCopyAdapter() async throws {
-        let service = WorkspaceService(materializer: GitCloneWorkspaceMaterializer())
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(materializer: GitCloneWorkspaceMaterializer(), preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let info = try await service.createWorkspace(
             repoName: "test-repo",
@@ -775,11 +755,12 @@ struct WorkspaceServiceTests {
 
     @Test("createWorkspace can materialize from a linked worktree source")
     func createWorkspaceMaterializesFromLinkedWorktreeSource() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let sourceWorktree = testRoot.appendingPathComponent("source-worktree", isDirectory: true)
         _ = try runGit(
@@ -803,11 +784,12 @@ struct WorkspaceServiceTests {
 
     @Test("createWorkspace runs project-scripts setup from the new worktree")
     func createWorkspaceRunsProjectScriptsSetupFromNewWorktree() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let scriptsDir = repoDir.appendingPathComponent("scripts", isDirectory: true)
         try FileManager.default.createDirectory(at: scriptsDir, withIntermediateDirectories: true)
@@ -837,11 +819,12 @@ struct WorkspaceServiceTests {
 
     @Test("createWorkspace cleans up when workspace branch already exists")
     func createWorkspaceCleansUpWhenWorkspaceBranchExists() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
         _ = try runGit(["branch", "workspace/conflict"], at: repoDir)
 
         await #expect(throws: WorkspaceError.self) {
@@ -864,11 +847,12 @@ struct WorkspaceServiceTests {
 
     @Test("deleteWorkspace removes linked worktree metadata and branch")
     func deleteWorkspaceRemovesLinkedWorktreeMetadataAndBranch() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let info = try await service.createWorkspace(
             repoName: "test-repo",
@@ -887,11 +871,12 @@ struct WorkspaceServiceTests {
 
     @Test("createWorkspace keeps setup.sh warning behavior")
     func createWorkspaceKeepsSetupWarningBehavior() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
         let setupPath = repoDir.appendingPathComponent("setup.sh")
         try """
         #!/bin/bash
@@ -1096,11 +1081,12 @@ struct WorkspaceServiceTests {
 
     @Test("archiveWorkspace moves a linked worktree and updates git metadata")
     func archiveWorkspaceMovesLinkedWorktree() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let info = try await service.createWorkspace(
             repoName: "test-repo",
@@ -1124,11 +1110,12 @@ struct WorkspaceServiceTests {
 
     @Test("unarchiveWorkspace restores a linked worktree to its original path")
     func unarchiveWorkspaceRestoresLinkedWorktree() async throws {
-        let service = WorkspaceService()
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        defer { cleanupPreferences() }
+        let service = WorkspaceService(preferences: preferences)
         let (testRoot, repoDir, wsRoot) = try makeGitWorkspaceFixture()
         defer { try? FileManager.default.removeItem(at: testRoot) }
-        let originalRoot = setWorkspacesRoot(wsRoot)
-        defer { restoreWorkspacesRoot(originalRoot) }
+        preferences.set(wsRoot.path, forKey: "workspacesRoot")
 
         let info = try await service.createWorkspace(
             repoName: "test-repo",
