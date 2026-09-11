@@ -361,6 +361,22 @@ query FactoryImplementIssueEdits(
     def update_issue(self, number: int, payload: dict[str, Any]) -> None:
         self.request("PATCH", f"/repos/{self.repository}/issues/{number}", payload)
 
+    def remove_label(self, number: int, name: str) -> None:
+        """Remove one label, leaving the rest of the live set as it is.
+
+        A 404 means the label is already off the issue, which is the outcome
+        asked for; a retried DELETE whose first attempt landed sees the same.
+        """
+        label = urllib.parse.quote(name, safe="")
+        try:
+            self.request(
+                "DELETE", f"/repos/{self.repository}/issues/{number}/labels/{label}"
+            )
+        except FactoryImplementError as error:
+            cause = error.__cause__
+            if not (isinstance(cause, urllib.error.HTTPError) and cause.code == 404):
+                raise
+
     def add_assignees(self, number: int, assignees: list[str]) -> None:
         self.request(
             "POST",
@@ -520,10 +536,6 @@ def claim_payload(issue: dict[str, Any]) -> dict[str, Any]:
 def rollback_payload(issue: dict[str, Any]) -> dict[str, Any]:
     labels = sorted((label_names(issue) - {"claimed", "ready"}) | {"ready"})
     return {"labels": labels}
-
-
-def decline_payload(issue: dict[str, Any]) -> dict[str, Any]:
-    return {"labels": sorted(label_names(issue) - {"ready"})}
 
 
 def sync_claim_assignee(
@@ -945,9 +957,11 @@ def claim(
     write_output("matched", "false")
     write_output("issue_scope_digest", issue_scope_digest(issue))
     write_output("verified_actor", verified_actor)
+    # `issue` is several API calls old by now. A decline removes only `ready`,
+    # so a label change someone made since then stands (#1596).
     if decision.action in TERMINAL_DECLINES:
         comment_once(client, issue_number, TERMINAL_DECLINE_COMMENTS[decision.action])
-        client.update_issue(issue_number, decline_payload(issue))
+        client.remove_label(issue_number, "ready")
         return
     if decision.action == "missing_labels":
         comment_once(
@@ -955,7 +969,7 @@ def claim(
             issue_number,
             missing_labels_comment(missing_required_labels(issue)),
         )
-        client.update_issue(issue_number, decline_payload(issue))
+        client.remove_label(issue_number, "ready")
         return
     if decision.action == "stale_scope":
         ready_created_at = str(ready_event["created_at"])
