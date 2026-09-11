@@ -154,12 +154,12 @@ jobs:
       - name: Build (release, unsigned bundle)
         run: ./scripts/build-release.sh --no-sign
 
-      # The bundling step above is fail-open on its resource copies — a missing
-      # Ghostty share dir warns, an SPM copy failure is swallowed — so building
-      # clean says nothing about what landed in the bundle. These assertions are
-      # the ones that do, and until now they only ran after signing, which meant a
-      # resource-layout break passed CI and failed the release minutes later
-      # (#1305). Nothing in this mode needs a secret or a signature.
+      # The bundling step above fails closed on its resource-tree copies
+      # (`copy_tree_or_fail`), but that proves a non-empty tree was copied, not
+      # what it held, and an unresolved Ghostty share dir still only warns. These
+      # assertions check what landed, and needing no secret or signature they run
+      # here, where a resource-layout break fails the PR that causes it rather
+      # than the release (#1305).
       - name: Verify unsigned bundle structure
         run: ./scripts/verify-release-bundle.sh --structure-only build/WorkSpaces.app
 

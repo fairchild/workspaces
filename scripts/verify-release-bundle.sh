@@ -10,8 +10,10 @@
 # The structure group needs no secrets and no signature, so `--structure-only`
 # runs it against an unsigned build — which is what lets CI catch a resource
 # layout break on the PR that causes it rather than at the release (#1305).
-# Bundling in `build-release.sh` is fail-open on those copies, so these
-# assertions are the only thing standing behind them.
+# Bundling in `build-release.sh` fails closed on those copies through
+# `copy_tree_or_fail`, but that proves a non-empty tree was copied, not what it
+# held, and an unresolved Ghostty share dir still only warns. These assertions
+# are what check the resources themselves.
 #
 # Usage:
 #   ./scripts/verify-release-bundle.sh build/WorkSpaces.app
@@ -267,10 +269,10 @@ verify_bundle_identity "$APP_BUNDLE"
 [[ -d "$APP_BUNDLE/Contents/Resources/terminfo" ]] || fail "Missing bundled terminfo directory"
 # The directory existing is not the runtime's test. `GhosttyResourcesLocator`
 # .isUsableResourcesDirectory treats the bundled resources as usable only when this
-# compiled terminfo entry is present, so it is what the app actually requires — and it
-# is what a partial copy drops while still leaving the directories behind, since the
-# Ghostty copy discards stderr and forces exit zero (`build-release.sh:492`). Asserting
-# only the directories would bless exactly that state.
+# compiled terminfo entry is present, so it is what the app actually requires — and a
+# share dir can hold both directories without it, which `copy_tree_or_fail` copies
+# clean because it asks only that the tree be non-empty. Asserting only the
+# directories would bless exactly that state.
 [[ -f "$APP_BUNDLE/Contents/Resources/terminfo/78/xterm-ghostty" ]] \
     || fail "Missing compiled terminfo entry terminfo/78/xterm-ghostty (the runtime's usability test)"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/event-forwarder.sh" ]] || fail "Missing Claude hook event forwarder"
