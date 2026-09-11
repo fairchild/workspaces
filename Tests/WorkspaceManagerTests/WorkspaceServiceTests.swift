@@ -107,19 +107,42 @@ struct WorkspaceServiceTests {
     }
 
     /// Builds a UserDefaults suite scoped to exactly one test invocation, plus a
-    /// cleanup closure to drop it. `WorkspaceService`'s default preferences store
+    /// cleanup closure that deletes its plist. `WorkspaceService`'s default preferences store
     /// is `LaunchPreferences.defaults`, which resolves to `UserDefaults.standard`
     /// in an unconfigured test run — a domain shared with *every other process*
     /// running this same test executable, not just other suites in this process
     /// (#1536). A UUID-named suite can never collide with another test's, so
     /// every `WorkspaceService` under test gets its own instead of touching that
     /// shared domain.
-    private func makeIsolatedPreferences() -> (defaults: UserDefaults, cleanup: () -> Void) {
-        let suiteName = "com.cloudcompute.workspaces.tests.\(UUID().uuidString)"
+    ///
+    /// Cleanup only unlinks the file. A value `set` on the suite is already on disk
+    /// when `set` returns, so nothing is left to write back; emptying the domain first
+    /// (`removePersistentDomain`, `removeObject`) queues a cfprefsd write that lands after
+    /// the unlink, often at process exit, and leaves an empty plist behind anyway.
+    private func makeIsolatedPreferences(
+        suiteName: String = "com.cloudcompute.workspaces.tests.\(UUID().uuidString)"
+    ) -> (defaults: UserDefaults, cleanup: () -> Void) {
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             fatalError("Failed to create isolated UserDefaults suite \(suiteName) for test")
         }
-        return (defaults, { defaults.removePersistentDomain(forName: suiteName) })
+        let file = Self.preferencesFile(forSuite: suiteName)
+        return (
+            defaults,
+            {
+                do {
+                    try FileManager.default.removeItem(at: file)
+                } catch CocoaError.fileNoSuchFile {
+                } catch {
+                    Issue.record("Could not remove isolated preferences file \(file.path): \(error)")
+                }
+            }
+        )
+    }
+
+    private static func preferencesFile(forSuite suiteName: String) -> URL {
+        FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Preferences", isDirectory: true)
+            .appendingPathComponent("\(suiteName).plist")
     }
 
     private func makeTempDir() throws -> URL {
@@ -198,7 +221,8 @@ struct WorkspaceServiceTests {
         let customRoot = testRoot.appendingPathComponent("custom-root", isDirectory: true)
         let syntheticRoot = testRoot.appendingPathComponent("synthetic-root", isDirectory: true)
 
-        let (preferences, cleanupPreferences) = makeIsolatedPreferences()
+        let suiteName = "com.cloudcompute.workspaces.tests.\(UUID().uuidString)"
+        let (preferences, cleanupPreferences) = makeIsolatedPreferences(suiteName: suiteName)
         defer { cleanupPreferences() }
         preferences.set(customRoot.path, forKey: "workspacesRoot")
 
@@ -211,6 +235,12 @@ struct WorkspaceServiceTests {
         #expect(resolvedRoot.path == syntheticRoot.path)
         // Init creates the synthetic root, not a root outside the boundary.
         #expect(FileManager.default.fileExists(atPath: syntheticRoot.path))
+
+        // The isolated domain is a file on disk; cleanup takes the file with it.
+        let preferencesFile = Self.preferencesFile(forSuite: suiteName)
+        #expect(FileManager.default.fileExists(atPath: preferencesFile.path))
+        cleanupPreferences()
+        #expect(!FileManager.default.fileExists(atPath: preferencesFile.path))
     }
 
     // MARK: - runLifecycleScript Tests
