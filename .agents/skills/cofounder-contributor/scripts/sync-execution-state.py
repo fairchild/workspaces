@@ -278,7 +278,7 @@ def trusted_comment_author(
 
 
 def markdown_section(body: str, heading: str) -> str:
-    pattern = rf"(?ms)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
+    pattern = rf"(?msi)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
     match = re.search(pattern, body)
     if not match:
         return ""

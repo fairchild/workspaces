@@ -40,6 +40,9 @@ def load_module(name: str, path: Path):
 
 
 run_contributor = load_module("run_contributor_evidence_kinds", SCRIPT_PATH)
+sync_execution_state = load_module(
+    "sync_execution_state_evidence_kinds", SCRIPT_PATH.with_name("sync-execution-state.py")
+)
 
 CI_ITEM = "CI: `Lint, Test, Build, E2E & Perf` green on the PR head"
 DIFF_ITEM = (
@@ -542,6 +545,82 @@ Scope note: an unindented paragraph is a new block, not part of the bullet.
         )
         self.assertEqual(parsed["entries"], {})
         self.assertEqual(parsed["invalid_lines"], [line])
+
+
+class SectionHeadingCaseTests(unittest.TestCase):
+    """A heading's case does not decide whether its section exists (#1598).
+
+    #1450 wrote `## Requested evidence` and was read as having no contract at
+    all, while #1558, one letter away, was held to every item. GitHub renders
+    the two headings alike, so neither author could see the difference.
+    """
+
+    ITEMS = "- `swift test` passes\n- Screenshots of the new sidebar\n"
+
+    def test_a_lower_case_requested_evidence_heading_is_the_same_contract(self) -> None:
+        canonical = run_contributor.extract_requested_evidence(
+            f"## Requested Evidence\n\n{self.ITEMS}"
+        )
+        self.assertEqual(canonical, ["`swift test` passes", "Screenshots of the new sidebar"])
+        for heading in ("Requested evidence", "requested evidence", "REQUESTED EVIDENCE"):
+            with self.subTest(heading=heading):
+                self.assertEqual(
+                    run_contributor.extract_requested_evidence(f"## {heading}\n\n{self.ITEMS}"),
+                    canonical,
+                )
+
+    def test_a_lower_case_evidence_status_heading_is_the_status_section(self) -> None:
+        requested = ["`swift test` passes"]
+        body = "## evidence status\n- [complete] `swift test` passes -- 214 tests passed\n"
+        self.assertTrue(run_contributor.has_markdown_section(body, "Evidence Status"))
+        accounting = run_contributor.evaluate_evidence_accounting(body, requested)
+        self.assertEqual(accounting["missing_items"], [])
+        self.assertEqual(accounting["complete_items"], requested)
+
+    def test_re_rendering_a_section_replaces_it_whatever_its_case(self) -> None:
+        # Presence tolerating case while the strip does not would leave the
+        # hand-written section beside the rendered one: two status sections.
+        body = (
+            "## Summary\nx\n\n"
+            "## evidence status\n- [pending-ci] the item\n\n"
+            "## Validation\n- ran it\n"
+        )
+        rendered = run_contributor.insert_markdown_section(
+            body, "Evidence Status", "- [complete] the item -- proof", before_heading="Validation"
+        )
+        self.assertEqual(rendered.casefold().count("## evidence status"), 1)
+        self.assertIn("- [complete] the item -- proof", rendered)
+        self.assertNotIn("[pending-ci]", rendered)
+
+    def test_inserting_before_a_lower_case_heading_keeps_the_new_section(self) -> None:
+        # Presence and placement are two matches. If only presence tolerates
+        # case, placement finds nothing to insert before and the new section
+        # is dropped without a word.
+        body = "## Summary\nx\n\n## risks\n- none\n"
+        rendered = run_contributor.insert_markdown_section(
+            body, "Validation", "- ran it", before_heading="Risks"
+        )
+        self.assertIn("## Validation\n- ran it", rendered)
+        self.assertLess(rendered.index("## Validation"), rendered.index("## risks"))
+
+    def test_the_inserted_section_is_written_as_text(self) -> None:
+        # Placement is a substitution. Handed a replacement string, `re.sub`
+        # reads a backslash in the section as one of its own escapes, and a
+        # `\d` in a validation note raised instead of being inserted.
+        note = r"- ran `rg '\d+ tests'` over the log"
+        rendered = run_contributor.insert_markdown_section(
+            "## Risks\n- none\n", "Validation", note, before_heading="Risks"
+        )
+        self.assertIn(f"## Validation\n{note}\n\n## Risks", rendered)
+
+    def test_the_execution_state_sync_reads_a_lower_case_blocked_by(self) -> None:
+        # sync-execution-state.py carries its own copy of the section match. If
+        # it disagreed with the helper, one would call an issue blocked and the
+        # other would not.
+        self.assertEqual(
+            sync_execution_state.extract_blocked_by("## Blocked by\n\n- #12\n- #34\n"),
+            [12, 34],
+        )
 
 
 class EvidenceSplitAnchoringTests(unittest.TestCase):
