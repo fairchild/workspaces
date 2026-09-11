@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import re
 import sys
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -628,10 +630,6 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertEqual(rollback["labels"], ["agent", "quality", "ready", "task"])
         self.assertNotIn("assignees", rollback)
 
-        decline = factory_implement.decline_payload(issue)
-        self.assertEqual(decline["labels"], ["agent", "quality", "task"])
-        self.assertNotIn("assignees", decline)
-
     def test_negative_outcomes_partition_terminal_and_transient(self) -> None:
         self.assertEqual(
             factory_implement.TERMINAL_DECLINES | factory_implement.TRANSIENT_DEFERRALS,
@@ -711,9 +709,8 @@ class FactoryImplementTests(unittest.TestCase):
         client.comment.assert_called_once_with(
             42, factory_implement.PRIVILEGED_COMMENT
         )
-        client.update_issue.assert_called_once_with(
-            42, {"labels": ["agent", "quality", "task"]}
-        )
+        client.remove_label.assert_called_once_with(42, "ready")
+        client.update_issue.assert_not_called()
         client.add_assignees.assert_not_called()
         self.assertIn("matched=false", outputs)
         self.assertNotIn("matched=true", outputs)
@@ -737,9 +734,8 @@ class FactoryImplementTests(unittest.TestCase):
         )
         comment_body = client.comment.call_args.args[1]
         self.assertIn("## Requested Evidence", comment_body)
-        client.update_issue.assert_called_once_with(
-            42, {"labels": ["agent", "quality", "task"]}
-        )
+        client.remove_label.assert_called_once_with(42, "ready")
+        client.update_issue.assert_not_called()
         client.add_assignees.assert_not_called()
         self.assertIn("matched=false", outputs)
         self.assertNotIn("matched=true", outputs)
@@ -763,10 +759,93 @@ class FactoryImplementTests(unittest.TestCase):
         self.assertIn("`task`", comment_body)
         self.assertNotIn("`agent`", comment_body)
         self.assertIn("re-release", comment_body)
-        client.update_issue.assert_called_once_with(42, {"labels": ["agent", "quality"]})
+        client.remove_label.assert_called_once_with(42, "ready")
+        client.update_issue.assert_not_called()
         client.add_assignees.assert_not_called()
         self.assertIn("matched=false", outputs)
         self.assertNotIn("matched=true", outputs)
+
+    def test_terminal_decline_keeps_label_changes_made_after_the_snapshot(self) -> None:
+        # #1596: admission reads the issue once, then spends several API calls
+        # deciding. A label someone adds or removes in that window is theirs;
+        # the decline takes back `ready` and nothing else.
+        declines = {
+            "privileged": self.issue(
+                body="Change `.github/workflows/ci.yml`",
+                labels=("agent", "task", "ready", "quality"),
+            ),
+            "no_evidence_contract": self.issue(
+                body="Change Sources/Feature.swift",
+                labels=("agent", "task", "ready", "quality"),
+            ),
+            "missing_labels": self.issue(labels=("agent", "ready", "quality")),
+        }
+        for action, snapshot in declines.items():
+            with self.subTest(action=action):
+                client = self.claim_client(snapshot)
+                live = factory_implement.label_names(snapshot)
+
+                def relabel_during_admission() -> list[dict[str, object]]:
+                    live.add("needs-human")
+                    live.discard("quality")
+                    return []
+
+                def replace_labels(number: int, payload: dict[str, object]) -> None:
+                    live.clear()
+                    live.update(payload.get("labels", ()))
+
+                client.claimed_issues.side_effect = relabel_during_admission
+                client.update_issue.side_effect = replace_labels
+                client.remove_label.side_effect = lambda number, name: live.discard(name)
+                actions_client = mock.Mock()
+                actions_client.workflow_runs_on.return_value = []
+
+                self.run_claim(client, actions_client)
+
+                self.assertEqual(
+                    live,
+                    (factory_implement.label_names(snapshot) - {"ready", "quality"})
+                    | {"needs-human"},
+                )
+                client.remove_label.assert_called_once_with(42, "ready")
+                client.update_issue.assert_not_called()
+
+    def test_remove_label_deletes_one_label_and_treats_already_gone_as_done(self) -> None:
+        client = factory_implement.GitHubClient("fairchild/workspaces", "token")
+        response = mock.MagicMock()
+        response.__enter__.return_value.read.return_value = b"[]"
+
+        def http_error(code: int, message: str) -> urllib.error.HTTPError:
+            body = json.dumps({"message": message}).encode("utf-8")
+            return urllib.error.HTTPError("", code, message, {}, io.BytesIO(body))
+
+        with mock.patch.object(
+            factory_implement.urllib.request, "urlopen", return_value=response
+        ) as urlopen:
+            client.remove_label(42, "needs human")
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_method(), "DELETE")
+        self.assertTrue(
+            request.full_url.endswith(
+                "/repos/fairchild/workspaces/issues/42/labels/needs%20human"
+            ),
+            request.full_url,
+        )
+
+        with mock.patch.object(
+            factory_implement.urllib.request,
+            "urlopen",
+            side_effect=http_error(404, "Label does not exist"),
+        ):
+            client.remove_label(42, "ready")
+
+        with mock.patch.object(
+            factory_implement.urllib.request,
+            "urlopen",
+            side_effect=http_error(403, "Resource not accessible by integration"),
+        ):
+            with self.assertRaisesRegex(factory_implement.FactoryImplementError, "HTTP 403"):
+                client.remove_label(42, "ready")
 
     def test_conflicting_claimed_label_stays_silent_and_touches_nothing(self) -> None:
         # `claimed` and `review` are factory bookkeeping the pipeline writes
