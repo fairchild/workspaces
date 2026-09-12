@@ -16,8 +16,12 @@ test here reaches the network, `gh`, or a live PR.
 
 from __future__ import annotations
 
+import html
+import http.server
 import importlib.util
 import re
+import shutil
+import threading
 import sys
 import unittest
 import unittest.mock
@@ -71,6 +75,39 @@ class GeneratorTestCase(unittest.TestCase):
         return pr_review_page.load_fixture(fixture)
 
 
+class Policy(GeneratorTestCase):
+    def test_the_policy_is_the_first_thing_in_the_head(self) -> None:
+        """The page is untrusted text on an origin every artifact shares.
+
+        A policy that arrives after something else in `<head>` is a policy that
+        arrived after that thing could act.
+        """
+        page = self.page(SPECIMEN)
+        head = page[page.index("<head>") : page.index("</head>")]
+        first_meta = re.search(r"<meta[^>]*>", head)
+        self.assertIsNotNone(first_meta)
+        self.assertIn("Content-Security-Policy", first_meta.group(0))
+        for directive in (
+            "default-src 'none'",
+            "img-src data: https:",
+            "base-uri 'none'",
+            "form-action 'none'",
+        ):
+            self.assertIn(directive, first_meta.group(0))
+
+    def test_the_page_loads_nothing_from_anywhere(self) -> None:
+        for fixture in (SPECIMEN, SYNTHETIC):
+            page = self.page(fixture)
+            self.assertNotIn("<script", page, "a script tag on a page whose policy forbids scripts")
+            self.assertNotIn("<link", page)
+            self.assertNotIn("cdnjs", page)
+            for src in re.findall(r'src="([^"]+)"', page):
+                self.assertTrue(
+                    src.startswith(("data:image/", "https://")),
+                    f"page reaches for {src}",
+                )
+
+
 class PageShape(GeneratorTestCase):
     def test_the_five_sections_appear_in_the_reading_order(self) -> None:
         page = self.page(SPECIMEN)
@@ -85,15 +122,6 @@ class PageShape(GeneratorTestCase):
             f"sections are out of order: {pr_review_page.SECTIONS}",
         )
         self.assertEqual(len(pr_review_page.SECTIONS), 5)
-
-    def test_the_page_carries_no_external_asset_but_mermaid(self) -> None:
-        page = self.page(SPECIMEN)
-        self.assertNotIn("<link", page, "a stylesheet link means the page is not self-contained")
-        for src in re.findall(r'<script[^>]+src="([^"]+)"', page):
-            self.assertTrue(
-                src.startswith("https://cdnjs.cloudflare.com/"),
-                f"unexpected external script: {src}",
-            )
 
     def test_pr_body_markup_cannot_reach_the_page_unescaped(self) -> None:
         source = self.source(SYNTHETIC)
@@ -199,9 +227,15 @@ class DiffByConcern(GeneratorTestCase):
 
 class Diagram(GeneratorTestCase):
     def test_a_diagram_in_the_body_is_the_one_rendered(self) -> None:
+        """The body's diagram is what gets drawn -- and drawn is the word.
+
+        Its labels are pixels in the page, not text, which is the whole point of
+        rendering to an image: nothing the source said survives as markup.
+        """
+        self.assertIn("named key error", pr_review_page.diagram_source(self.source(SYNTHETIC)))
         page = self.page(SYNTHETIC)
-        self.assertIn("named key error", page)
         self.assertNotIn("review-page:diagram", page)
+        self.assertNotIn("named key error", page)
 
     def test_the_fence_under_the_marker_is_the_carrier(self) -> None:
         diagram = pr_review_page.diagram_source(self.source(SYNTHETIC))
@@ -230,6 +264,70 @@ class Diagram(GeneratorTestCase):
         source = self.source(SYNTHETIC)
         source.pr["body"] = "## Summary\n- One thing.\n\n<!-- review-page:diagram -->\ngraph LR\n  a --> b\n"
         self.assertTrue(pr_review_page.diagram_source(source).startswith("graph TD"))
+
+    def test_a_marker_nested_in_an_outer_comment_carries_nothing(self) -> None:
+        """Comments do not nest, so GitHub shows this block and its fence to nobody.
+
+        A page that draws it shows a diagram no reviewer can see in the body the
+        page claims to front.
+        """
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n"
+            "<!--\n<!-- review-page:diagram -->\n```mermaid\ngraph LR\n"
+            "  hidden --> payload\n```\n-->\n"
+        )
+        self.assertIsNotNone(
+            pr_review_page.DIAGRAM_MARKER_RE.search(source.pr["body"]),
+            "the fence pattern alone should still match; the guard is what refuses it",
+        )
+        diagram = pr_review_page.diagram_source(source)
+        self.assertNotIn("payload", diagram)
+        self.assertTrue(diagram.startswith("graph TD"), diagram)
+
+    def test_the_diagram_leaves_as_an_image_not_as_markup(self) -> None:
+        page = self.page(SYNTHETIC)
+        self.assertRegex(page, r'<img width="\d+" alt="Diagram of the change" src="data:image/png;base64,')
+        self.assertNotIn("<svg", page)
+
+    @unittest.skipUnless(shutil.which("mmdc"), "no local renderer to constrain")
+    def test_the_renderer_reaches_no_network_during_a_build(self) -> None:
+        """A diagram label can name a URL, and the renderer is a browser.
+
+        The listener here is on loopback, which is the case an IP literal would
+        slip past host-resolver rules alone, so it is the one worth proving.
+        """
+        hits: list[str] = []
+
+        class Probe(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802 - http.server's spelling
+                hits.append(self.path)
+                self.send_response(200)
+                self.send_header("Content-Type", "image/png")
+                self.end_headers()
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Probe)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            source = self.source(SYNTHETIC)
+            source.pr["body"] = (
+                "## Summary\n- One thing.\n\n"
+                "<!-- review-page:diagram -->\n```mermaid\ngraph LR\n"
+                f'  a["<img src=\'http://127.0.0.1:{port}/probe\'>"] --> b\n```\n'
+            )
+            page = pr_review_page.build_page(source)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+        self.assertEqual(hits, [], f"the build fetched {hits} from a PR body's diagram")
+        self.assertNotIn(f"127.0.0.1:{port}", page, "the URL survived into the page")
 
     def test_a_hostile_label_cannot_become_markup(self) -> None:
         """The mermaid source is a PR body's text, wherever it lands."""
@@ -302,6 +400,138 @@ class WhereItStands(GeneratorTestCase):
         page = self.page(SYNTHETIC)
         self.assertIn("Should the message name every missing key", page)
         self.assertNotIn("Typo in the note.", page)
+
+
+class Unavailable(GeneratorTestCase):
+    """Three states, not two: present, none, and could-not-find-out."""
+
+    def test_a_failed_thread_query_reports_unavailable_not_none(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.threads = None
+        page = pr_review_page.build_page(source)
+        self.assertIn("Review threads: unavailable", page)
+        self.assertNotIn("No open review threads.", page)
+
+    def test_a_thread_query_that_raises_yields_unavailable(self) -> None:
+        def explode(*_args: object, **_kwargs: object) -> str:
+            raise RuntimeError("gh: API rate limit exceeded")
+
+        with unittest.mock.patch.object(pr_review_page, "_run", explode):
+            self.assertIsNone(pr_review_page.read_threads(99))
+
+    def test_an_empty_thread_list_still_reports_none_open(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.threads = []
+        self.assertIn("No open review threads.", pr_review_page.build_page(source))
+
+    def test_absent_reviews_and_checks_report_unavailable(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr.pop("reviews")
+        source.pr.pop("statusCheckRollup")
+        page = pr_review_page.build_page(source)
+        self.assertIn("Reviews: unavailable", page)
+        self.assertIn("Checks: unavailable", page)
+        self.assertNotIn("No reviews yet.", page)
+        self.assertNotIn("No checks reported.", page)
+
+    def test_empty_reviews_and_checks_still_report_none(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["reviews"] = []
+        source.pr["statusCheckRollup"] = []
+        page = pr_review_page.build_page(source)
+        self.assertIn("No reviews yet.", page)
+        self.assertIn("No checks reported.", page)
+
+
+class Schemes(GeneratorTestCase):
+    def test_only_web_addresses_become_links_and_images(self) -> None:
+        """A prefix test is not a scheme test: `httpjavascript:` passes one."""
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n## Evidence\n"
+            "- [one](javascript:alert1)\n"
+            "- [two](httpjavascript:alert2)\n"
+            "- ![three](javascript:alert3)\n"
+            "- ![four](data:text/html;base64,PHNjcmlwdD4=)\n"
+            "- [five](https://evidence.example.com/ok.txt)\n"
+            "- ![six](https://evidence.example.com/ok.png)\n"
+        )
+        page = pr_review_page.build_page(source)
+        for scheme in ("javascript:", "httpjavascript:", "data:text/html"):
+            self.assertNotIn(f'href="{scheme}', page)
+            self.assertNotIn(f'src="{scheme}', page)
+        self.assertIn('href="https://evidence.example.com/ok.txt"', page)
+        self.assertIn('src="https://evidence.example.com/ok.png"', page)
+        # Refused is not hidden: the reader still sees what the body said.
+        self.assertIn("javascript:alert1", page)
+
+    def test_the_scheme_gate_is_a_parse_not_a_prefix(self) -> None:
+        self.assertIsNone(pr_review_page._safe_url("httpjavascript:alert(1)"))
+        self.assertIsNone(pr_review_page._safe_url("javascript:alert(1)"))
+        self.assertIsNone(pr_review_page._safe_url("data:text/html,<script>"))
+        self.assertEqual(pr_review_page._safe_url("https://x.test/a"), "https://x.test/a")
+        self.assertEqual(pr_review_page._safe_url("http://x.test/a"), "http://x.test/a")
+
+
+class Escaping(GeneratorTestCase):
+    """The characters that matter, wherever PR text lands in the page."""
+
+    DANGEROUS = ('"', "<", ">")
+
+    def assertEscaped(self, page: str, raw: str) -> None:
+        self.assertNotIn(raw, page)
+        for character in self.DANGEROUS:
+            if character in raw:
+                self.assertIn(html.escape(character, quote=True), page)
+
+    def test_a_hostile_title_cannot_break_out_of_its_element(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["title"] = '"><img src=x onerror=alert(1)>'
+        page = pr_review_page.build_page(source)
+        # The characters are shown; what must not exist is a tag made of them.
+        self.assertEscaped(page, '"><img src=x onerror=alert(1)>')
+        self.assertNotIn("<img src=x", page)
+
+    def test_a_hostile_group_heading_is_escaped(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            '## Summary\n- <img src=x onerror=alert(1)> in `src/config.py` is only text.\n'
+        )
+        page = pr_review_page.build_page(source)
+        self.assertNotIn("<img src=x onerror=alert(1)>", page)
+        self.assertIn("&lt;img", page)
+
+    def test_a_hostile_filename_cannot_escape_a_mermaid_label(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = "## Summary\n- One thing.\n"
+        source.pr["files"] = [{"path": 'src/a"]--x[b.py', "additions": 1, "deletions": 0}]
+        diagram = pr_review_page.diagram_source(source)
+        # `"]` legitimately closes every label; what must not survive is this
+        # filename's own copy of it, which would close the label early.
+        self.assertNotIn('a"]--x[b.py', diagram)
+        self.assertIn("#quot;", diagram)
+        self.assertIn("#93;", diagram)
+
+    def test_markup_in_a_diff_hunk_is_escaped(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.diff = (
+            "diff --git a/src/config.py b/src/config.py\n"
+            "--- a/src/config.py\n+++ b/src/config.py\n"
+            '@@ -1,2 +1,3 @@\n context\n+<img src=x onerror="alert(1)">\n'
+        )
+        page = pr_review_page.build_page(source)
+        self.assertNotIn('<img src=x onerror="alert(1)">', page)
+        self.assertIn("&lt;img", page)
+
+    def test_a_hostile_evidence_caption_is_escaped(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n## Evidence\n"
+            '- ![" onerror="alert(1)](https://evidence.example.com/a.png)\n'
+        )
+        page = pr_review_page.build_page(source)
+        self.assertNotIn('onerror="alert(1)"', page)
+        self.assertIn("&quot;", page)
 
 
 class BodyLink(GeneratorTestCase):

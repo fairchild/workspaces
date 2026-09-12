@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import html
 import json
 import re
@@ -40,22 +41,50 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "build" / "pr-review"
 DEFAULT_REPO = "fairchild/workspaces"
 EVIDENCE_SCRIPT = REPO_ROOT / "scripts" / "evidence.sh"
-MERMAID_CDN = "https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"
 GH_TIMEOUT = 120
 MMDC_TIMEOUT = 180
 UPLOAD_TIMEOUT = 300
 
+# The page is built from text nobody vetted and served from an origin every
+# other evidence artifact shares, so it carries its own policy and loads
+# nothing: no script anywhere, images only as data or over https, and the
+# inline stylesheet the page ships with. The origin's own headers are #1616.
+CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; "
+    "base-uri 'none'; form-action 'none'"
+)
+
+# The renderer is a browser handed mermaid source from a PR body, and a label
+# can name a URL. These close every way out: names resolve to nothing, and the
+# proxy that everything else must go through -- loopback included, which is
+# where an IP literal would otherwise slip past a resolver rule -- refuses the
+# connection. A diagram needs no network to draw.
+#
+# `--disable-remote-fonts` belongs on this list by intent and is absent by
+# result: with it, mermaid-cli 11.12 fails every render outright with
+# `DOMException: NetworkError`, so the page would never show a diagram at all.
+# A closed network denies remote fonts anyway, which is what the flag was for.
+PUPPETEER_ARGS = (
+    "--host-resolver-rules=MAP * ~NOTFOUND",
+    "--disable-extensions",
+    "--proxy-server=127.0.0.1:1",
+    "--proxy-bypass-list=<-loopback>",
+)
+DIAGRAM_WIDTH = 760
+SAFE_SCHEMES = {"http", "https"}
+
 PR_FIELDS = (
-    "number,title,body,headRefOid,state,isDraft,author,url,labels,reviews,"
-    "comments,statusCheckRollup,files,additions,deletions,baseRefName,"
+    "number,title,body,headRefOid,state,isDraft,author,url,reviews,"
+    "statusCheckRollup,files,additions,deletions,baseRefName,"
     "headRefName,createdAt,updatedAt"
 )
 
@@ -67,6 +96,7 @@ SECTIONS = (
     "Where it stands",
 )
 EVERYTHING_ELSE = "Everything else"
+UNAVAILABLE = "unavailable (the query failed)"
 LINK_PREFIX = "Review page: "
 
 EVIDENCE_SECTIONS = ("Evidence", "Evidence Status", "Validation")
@@ -95,9 +125,14 @@ HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
 # disagreement is prose to a reader of the PR and diagram source here
 # (`py/bad-tag-filter`). The fence has one reading, and GitHub draws it in the
 # body as well.
+DIAGRAM_MARKER = "<!-- review-page:diagram -->"
 DIAGRAM_MARKER_RE = re.compile(
     r"<!--\s*review-page:diagram\s*-->\s*```mermaid\n(.*?)```", re.DOTALL
 )
+# Both terminators, so a comment's extent here is the extent a browser gives it.
+# Used to find the marker that is a comment of its own and reject the one that
+# is merely inside somebody else's.
+COMMENT_RE = re.compile(r"<!--.*?(?:-->|--!>)", re.DOTALL)
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"(])")
 
 
@@ -107,7 +142,8 @@ class Source:
 
     pr: dict
     diff: str
-    threads: list[dict] = field(default_factory=list)
+    # None is "the query failed", which is not the same answer as "none open".
+    threads: list[dict] | None = None
 
 
 @dataclass
@@ -127,7 +163,6 @@ class Hunk:
 class Bullet:
     """A Summary bullet: its whole text claims hunks, its first sentence titles them."""
 
-    text: str
     heading: str
     paths: set[str]
     tokens: set[str]
@@ -138,7 +173,6 @@ class Bullet:
 class Group:
     heading: str
     hunks: list[Hunk]
-    bullet: Bullet | None = None
 
 
 # --------------------------------------------------------------------------
@@ -162,12 +196,13 @@ def read_pr(number: int, repo: str = DEFAULT_REPO) -> Source:
     return Source(pr=pr, diff=diff, threads=read_threads(number, repo))
 
 
-def read_threads(number: int, repo: str = DEFAULT_REPO) -> list[dict]:
+def read_threads(number: int, repo: str = DEFAULT_REPO) -> list[dict] | None:
     """Review threads, which `gh pr view --json` does not carry.
 
-    A page that cannot say whether a conversation is still open is worse than one
-    that says it does not know, so a failure here degrades to no threads rather
-    than taking the build down with it.
+    Returns None when the query failed, which the page reports as unavailable.
+    Reporting it as no open threads would be the one failure that makes a
+    summary page worse than no summary page: a reader would take a silence for
+    an all-clear.
     """
     owner, _, name = repo.partition("/")
     query = """
@@ -190,15 +225,16 @@ def read_threads(number: int, repo: str = DEFAULT_REPO) -> list[dict]:
             ],
             timeout=GH_TIMEOUT,
         ))
-    except (RuntimeError, subprocess.SubprocessError, json.JSONDecodeError):
-        return []
+    except (RuntimeError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+        print(f"[pr-review-page] review threads unavailable: {error}", file=sys.stderr)
+        return None
     return payload["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
 
 
 def load_fixture(directory: Path | str) -> Source:
     directory = Path(directory)
     threads_file = directory / "threads.json"
-    threads = json.loads(threads_file.read_text()) if threads_file.is_file() else []
+    threads = json.loads(threads_file.read_text()) if threads_file.is_file() else None
     return Source(
         pr=json.loads((directory / "pr.json").read_text()),
         diff=(directory / "pr.diff").read_text(),
@@ -345,7 +381,6 @@ def make_bullet(text: str) -> Bullet:
     tokens = {token for span in spans for token in TOKEN_RE.findall(span)}
     tokens -= {p.split("/")[-1] for p in paths}
     return Bullet(
-        text=text,
         heading=first_sentence(readable(text)),
         paths=paths,
         tokens=tokens,
@@ -400,7 +435,7 @@ def group_hunks(source: Source) -> list[Group]:
             claimed[best_index].append(hunk)
 
     groups = [
-        Group(heading=bullets[index].heading, hunks=hunks, bullet=bullets[index])
+        Group(heading=bullets[index].heading, hunks=hunks)
         for index, hunks in claimed.items()
         if hunks
     ]
@@ -418,17 +453,48 @@ def _node_id(path: str) -> str:
     return "n" + re.sub(r"[^A-Za-z0-9]", "", path)[-24:]
 
 
+def _mermaid_label(text: str) -> str:
+    """Text mermaid reads as a label and nothing else.
+
+    A label is interpolated into quoted mermaid source, so a filename holding a
+    quote or a bracket would close it and the rest would be read as graph. The
+    entities below are mermaid's own escape, and it draws them as the character.
+    """
+    for character, entity in (("&", "#amp;"), ('"', "#quot;"), ("<", "#lt;"),
+                              (">", "#gt;"), ("[", "#91;"), ("]", "#93;")):
+        text = text.replace(character, entity)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _marker_is_its_own_comment(body: str, start: int) -> bool:
+    """Whether the marker at `start` is a comment, rather than inside one.
+
+    Comments do not nest: an outer `<!--` ends at the first terminator, which a
+    nested marker supplies, so GitHub shows nothing for the whole block while a
+    naive search still finds the marker inside it. Scanning comment extents the
+    way a browser closes them tells the two apart -- the marker's own comment
+    begins exactly where the marker does.
+    """
+    for comment in COMMENT_RE.finditer(body):
+        if comment.start() == start:
+            return comment.group(0).strip() == DIAGRAM_MARKER
+        if comment.start() < start < comment.end():
+            return False
+    return False
+
+
 def diagram_source(source: Source) -> str:
     """The body's own mermaid fence, or a small graph of what the PR touches."""
     body = source.pr.get("body") or ""
-    if match := DIAGRAM_MARKER_RE.search(body):
-        return match.group(1).strip()
+    for match in DIAGRAM_MARKER_RE.finditer(body):
+        if _marker_is_its_own_comment(body, match.start()):
+            return match.group(1).strip()
 
     paths = [entry["path"] for entry in source.pr.get("files", [])]
     root = closes_issue(body) or f"#{source.pr.get('number', '')}"
-    lines = ["graph TD", f'  root["{root}"]']
+    lines = ["graph TD", f'  root["{_mermaid_label(root)}"]']
     for path in paths:
-        lines.append(f'  root --> {_node_id(path)}["{Path(path).name}"]')
+        lines.append(f'  root --> {_node_id(path)}["{_mermaid_label(Path(path).name)}"]')
     for path in paths:
         covered = _covered_by(path, paths)
         if covered:
@@ -451,30 +517,61 @@ def _covered_by(test_path: str, paths: list[str]) -> str | None:
     return None
 
 
+def _png_width(data: bytes) -> int | None:
+    """Pixel width from a PNG's IHDR, or None if this is not one."""
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        return None
+    return int.from_bytes(data[16:20], "big")
+
+
 def render_diagram(mermaid: str) -> str:
-    """Inline SVG where a renderer exists, else the browser renders it."""
+    """A picture of the diagram, or its source as text when nothing can draw it.
+
+    The source is PR text, so the drawing happens here, once, in a browser with
+    no way out to a network -- and what leaves is a PNG. An SVG would carry
+    whatever the renderer put in it into every reader's browser: remote images,
+    foreign objects, fonts. A raster image carries pixels.
+
+    When there is no renderer the page shows the escaped source and says it did
+    not draw it. There is no browser-side fallback: source this build refused is
+    not source to hand a second engine in someone else's browser.
+    """
     mmdc = shutil.which("mmdc")
     if mmdc:
         with tempfile.TemporaryDirectory() as work:
             source_file = Path(work) / "diagram.mmd"
-            out_file = Path(work) / "diagram.svg"
+            out_file = Path(work) / "diagram.png"
+            config_file = Path(work) / "puppeteer.json"
             source_file.write_text(mermaid)
+            config_file.write_text(json.dumps({"args": list(PUPPETEER_ARGS)}))
             try:
                 subprocess.run(
                     [mmdc, "-i", str(source_file), "-o", str(out_file),
-                     "-b", "transparent", "-t", "neutral"],
+                     "-b", "transparent", "-t", "neutral", "-s", "2",
+                     "--puppeteerConfigFile", str(config_file)],
                     capture_output=True,
                     text=True,
                     timeout=MMDC_TIMEOUT,
                     check=True,
                 )
-                return f'<div class="diagram">{out_file.read_text()}</div>'
-            except (subprocess.SubprocessError, OSError):
-                pass
+                drawn = out_file.read_bytes()
+                encoded = base64.b64encode(drawn).decode("ascii")
+            except (subprocess.SubprocessError, OSError) as error:
+                print(f"[pr-review-page] diagram not rendered: {error}", file=sys.stderr)
+            else:
+                # Drawn at 2x for a screen that wants it, shown at 1x so a small
+                # graph stays small: a fixed width taken from the image rather
+                # than imposed on it, capped so a wide one still fits the column.
+                width = min((_png_width(drawn) or DIAGRAM_WIDTH * 2) // 2, DIAGRAM_WIDTH)
+                return (
+                    f'<div class="diagram"><img width="{width}" '
+                    f'alt="Diagram of the change" '
+                    f'src="data:image/png;base64,{encoded}"></div>'
+                )
     return (
-        f'<pre class="mermaid">{html.escape(mermaid)}</pre>\n'
-        f'<script src="{MERMAID_CDN}"></script>\n'
-        '<script>mermaid.initialize({startOnLoad:true,theme:"neutral"});</script>'
+        '<div class="diagram"><p class="meta">No renderer was available, so this is '
+        "the diagram's source rather than the diagram.</p>"
+        f"<pre>{html.escape(mermaid)}</pre></div>"
     )
 
 
@@ -521,7 +618,9 @@ def evidence_items(pr: dict) -> EvidenceItems:
         for label, url in LINK_MD_RE.findall(text):
             if url.lower().endswith(IMAGE_SUFFIXES):
                 images.append((url, label))
-            elif url.startswith("http") and url not in seen_links:
+            elif url not in seen_links:
+                # Collected whatever its scheme: what a body linked is worth
+                # showing even when it is not something to make clickable.
                 seen_links.add(url)
                 links.append((url, label))
     return EvidenceItems(images=images, commands=commands, links=links)
@@ -617,6 +716,7 @@ a { color: var(--accent); }
 .lede li { margin: .35rem 0; }
 .lede { padding-left: 1.1rem; }
 .card { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 1rem 1.1rem; }
+.diagram img { max-width: 100%; height: auto; }
 .diagram, pre.mermaid { background: var(--card); border: 1px solid var(--rule); border-radius: 10px; padding: 1rem; overflow-x: auto; text-align: center; }
 details { border: 1px solid var(--rule); border-radius: 10px; background: var(--card); margin: .75rem 0; }
 details > summary { cursor: pointer; padding: .7rem .9rem; font-weight: 600; }
@@ -640,6 +740,26 @@ footer { margin-top: 3rem; border-top: 1px solid var(--rule); padding-top: 1rem;
 
 def _esc(text: object) -> str:
     return html.escape(str(text), quote=True)
+
+
+def _safe_url(url: str) -> str | None:
+    """The URL if a browser should be allowed to dial it, else None.
+
+    URLs here come out of PR bodies. A prefix test is not a scheme test --
+    `httpjavascript:` passes `startswith("http")` -- so the scheme is parsed and
+    compared. What fails is shown as text, because a reader still wants to see
+    what the body said.
+    """
+    try:
+        scheme = urlsplit(url).scheme.lower()
+    except ValueError:
+        return None
+    return url if scheme in SAFE_SCHEMES else None
+
+
+def _pr_link(pr: dict) -> str:
+    url = _safe_url(pr.get("url") or "")
+    return f'<a href="{_esc(url)}">the pull request itself</a>' if url else "no link recorded"
 
 
 def _diff_html(hunk: Hunk) -> str:
@@ -673,7 +793,11 @@ def build_page(source: Source, head: str | None = None) -> str:
 
     parts: list[str] = []
     parts.append("<!doctype html>")
-    parts.append('<html lang="en"><head><meta charset="utf-8">')
+    parts.append('<html lang="en"><head>')
+    parts.append(
+        f'<meta http-equiv="Content-Security-Policy" content="{CONTENT_SECURITY_POLICY}">'
+    )
+    parts.append('<meta charset="utf-8">')
     parts.append('<meta name="viewport" content="width=device-width, initial-scale=1">')
     parts.append(f"<title>#{_esc(number)} — {_esc(title)}</title>")
     parts.append(f"<style>{STYLE}</style></head><body><div class=\"wrap\">")
@@ -688,7 +812,7 @@ def build_page(source: Source, head: str | None = None) -> str:
         f'<p class="meta">{_esc(author)} · {_esc(state)} · '
         f'+{_esc(pr.get("additions", 0))} −{_esc(pr.get("deletions", 0))} '
         f"across {len(files)} file{'s' if len(files) != 1 else ''}{closes} · "
-        f'<a href="{_esc(pr.get("url", ""))}">the pull request itself</a></p>'
+        f'{_pr_link(pr)}</p>'
     )
     parts.append("</header><main>")
 
@@ -723,8 +847,13 @@ def build_page(source: Source, head: str | None = None) -> str:
     parts.append(f'<section id="evidence" class="evidence"><h2>{SECTIONS[3]}</h2>')
     if items.images:
         for url, alt in items.images:
-            parts.append(f'<figure><img src="{_esc(url)}" alt="{_esc(alt)}">'
-                         f"<figcaption>{_esc(alt)}</figcaption></figure>")
+            safe = _safe_url(url)
+            if safe:
+                parts.append(f'<figure><img src="{_esc(safe)}" alt="{_esc(alt)}">'
+                             f"<figcaption>{_esc(alt)}</figcaption></figure>")
+            else:
+                parts.append(f'<p class="meta">Image not shown, its address is not a '
+                             f"web address: {_esc(url)}</p>")
     if items.commands:
         parts.append("<h3>What was run</h3><table><tbody>")
         for command, result in items.commands:
@@ -733,7 +862,11 @@ def build_page(source: Source, head: str | None = None) -> str:
     if items.links:
         parts.append("<h3>Linked</h3><ul>")
         for url, label in items.links:
-            parts.append(f'<li><a href="{_esc(url)}">{_esc(label)}</a></li>')
+            safe = _safe_url(url)
+            if safe:
+                parts.append(f'<li><a href="{_esc(safe)}">{_esc(label)}</a></li>')
+            else:
+                parts.append(f"<li>{_esc(label)}: {_esc(url)}</li>")
         parts.append("</ul>")
     if not (items.images or items.commands or items.links):
         parts.append('<p class="meta">The PR body carries no evidence section.</p>')
@@ -741,27 +874,38 @@ def build_page(source: Source, head: str | None = None) -> str:
 
     # 5. Where it stands
     parts.append(f'<section id="stands" class="stands"><h2>{SECTIONS[4]}</h2><ul>')
-    reviews = latest_reviews(pr)
-    if reviews:
+    # Three states, not two, everywhere in this section: it says what is there,
+    # or that there is none, or that it could not find out. Printing the third
+    # as the second is what turns a summary page into a misleading one.
+    if pr.get("reviews") is None:
+        parts.append(f"<li>Reviews: {UNAVAILABLE}</li>")
+    elif reviews := latest_reviews(pr):
         for login, verdict, when in reviews:
             parts.append(f"<li>{_esc(login)} — {_esc(verdict)}{_esc(' on ' + when if when else '')}</li>")
     else:
         parts.append("<li>No reviews yet.</li>")
-    threads = open_threads(source.threads)
-    if threads:
+
+    if source.threads is None:
+        parts.append(f"<li>Review threads: {UNAVAILABLE}</li>")
+    elif threads := open_threads(source.threads):
         for where, who, text in threads:
             parts.append(f"<li>Open thread on <code>{_esc(where)}</code> — {_esc(who)}: {_esc(text)}</li>")
     else:
         parts.append("<li>No open review threads.</li>")
-    tally, unhappy = check_summary(pr)
-    if tally:
-        counted = ", ".join(f"{count} {verdict.lower()}" for verdict, count in sorted(tally.items()))
-        parts.append(f"<li>Checks: {_esc(counted)}.</li>")
-        for name, verdict, url in unhappy:
-            link = f' — <a href="{_esc(url)}">the run</a>' if url else ""
-            parts.append(f"<li>{_esc(name)}: {_esc(verdict)}{link}</li>")
+
+    if pr.get("statusCheckRollup") is None:
+        parts.append(f"<li>Checks: {UNAVAILABLE}</li>")
     else:
-        parts.append("<li>No checks reported.</li>")
+        tally, unhappy = check_summary(pr)
+        if tally:
+            counted = ", ".join(f"{count} {verdict.lower()}" for verdict, count in sorted(tally.items()))
+            parts.append(f"<li>Checks: {_esc(counted)}.</li>")
+            for name, verdict, url in unhappy:
+                safe = _safe_url(url or "")
+                link = f' — <a href="{_esc(safe)}">the run</a>' if safe else ""
+                parts.append(f"<li>{_esc(name)}: {_esc(verdict)}{link}</li>")
+        else:
+            parts.append("<li>No checks reported.</li>")
     parts.append("</ul></section></main>")
 
     built = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
