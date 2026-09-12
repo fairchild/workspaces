@@ -441,6 +441,13 @@ class StructureOnlyOverARealBundleTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("Verified release bundle structure", result.stdout)
 
+    def test_missing_compose_template_fails_before_publication(self) -> None:
+        template = self.bundle / "Contents" / "Resources" / "ComposeSandbox" / "compose.yaml"
+        template.unlink()
+        result = run_verifier("--structure-only", str(self.bundle))
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("Missing Compose sandbox resource: compose.yaml", result.stderr)
+
     def test_a_complete_unsigned_bundle_passes_structure_only_without_home(self) -> None:
         """A `HOME`-less environment verifies for real now, instead of exiting 0 blind.
 
@@ -630,6 +637,7 @@ def build_structurally_valid_bundle(root: Path) -> Path:
     (resources / "ghostty").mkdir(parents=True)
     (resources / "terminfo" / "78").mkdir(parents=True)
     (resources / "HookForwarders").mkdir(parents=True)
+    (resources / "ComposeSandbox").mkdir(parents=True)
 
     with (contents / "Info.plist").open("wb") as handle:
         plistlib.dump(
@@ -648,6 +656,8 @@ def build_structurally_valid_bundle(root: Path) -> Path:
     (resources / "terminfo" / "78" / "xterm-ghostty").write_bytes(b"\x1a\x01")
     for forwarder in ("event-forwarder.sh", "statusline.sh"):
         (resources / "HookForwarders" / forwarder).write_text("#!/bin/sh\n", encoding="utf-8")
+    for compose_resource in ("compose.yaml", "Dockerfile", ".dockerignore"):
+        (resources / "ComposeSandbox" / compose_resource).write_text("# fixture\n", encoding="utf-8")
 
     return bundle
 

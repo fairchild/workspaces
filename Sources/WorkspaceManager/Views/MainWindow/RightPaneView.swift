@@ -85,6 +85,7 @@ final class RightPaneSessionState: ObservableObject {
     @Published var fileTree: FileNode?
     @Published var fileTreeFailure: FileTreeLoadFailure?
     @Published var changedFiles: [FileChange] = []
+    @Published var gitStatusFailure: String?
     @Published var isLoading = false
     @Published var lastRefresh = Date()
     @Published var timelineLastRefresh: Date?
@@ -146,6 +147,7 @@ struct RightPaneView: View {
     private let showTimeline: Bool
     private let showActivity: Bool
     private let supportsFilesystemInspection: Bool
+    private let composeWorkspace: WorkspaceProviderTarget?
 
     @AppStorage(NotificationConstants.enabledKey)
     private var notificationsEnabled = NotificationConstants.defaultEnabled
@@ -192,6 +194,7 @@ struct RightPaneView: View {
         self.showTimeline = true
         self.showActivity = true
         self.supportsFilesystemInspection = workspace.localDirectoryURL != nil
+        self.composeWorkspace = workspace.backendIdentifier == "compose" ? WorkspaceProviderTarget(workspace) : nil
     }
 
     init(
@@ -212,6 +215,7 @@ struct RightPaneView: View {
         self.showTimeline = false
         self.showActivity = false
         self.supportsFilesystemInspection = true
+        self.composeWorkspace = nil
     }
 
     var body: some View {
@@ -269,6 +273,7 @@ struct RightPaneView: View {
                     ChangedFilesTabView(
                         changes: state.changedFiles,
                         isLoading: state.isLoading,
+                        failure: state.gitStatusFailure,
                         onFileSelected: selectFile,
                         onReviewDiff: { reviewDiffTarget = $0 }
                     )
@@ -372,6 +377,7 @@ struct RightPaneView: View {
                     filePath: change.path,
                     directoryURL: directoryURL,
                     status: change.status,
+                    composeWorkspace: composeWorkspace,
                     onChanged: { state.refreshRequestID = UUID() },
                     onClose: { reviewDiffTarget = nil }
                 )
@@ -458,7 +464,14 @@ struct RightPaneView: View {
 
         let (fileTreeResult, changedFiles) = await (treeTask, statusTask)
         state.applyFileTreeResult(fileTreeResult)
-        state.changedFiles = changedFiles
+        switch changedFiles {
+        case .success(let changes):
+            state.changedFiles = changes
+            state.gitStatusFailure = nil
+        case .failure(let error):
+            state.changedFiles = []
+            state.gitStatusFailure = error.localizedDescription
+        }
     }
 
     private func loadFileTree() async -> Result<FileNode, FileTreeLoadFailure> {
@@ -471,21 +484,25 @@ struct RightPaneView: View {
                     throw fixture.simulatedError
                 }
             #endif
-            return .success(try await gitService.getFileTree(at: directoryURL))
+            return .success(try await inspection(at: directoryURL).fileTree())
         } catch {
             log.error("Failed to load file tree: \(error, privacy: .public)")
             return .failure(FileTreeLoadFailure.classify(error))
         }
     }
 
-    private func loadGitStatus() async -> [FileChange] {
-        guard let directoryURL else { return [] }
+    private func loadGitStatus() async -> Result<[FileChange], any Error> {
+        guard let directoryURL else { return .success([]) }
         do {
-            return try await gitService.getStatus(at: directoryURL)
+            return .success(try await inspection(at: directoryURL).status())
         } catch {
             log.error("Failed to load git status: \(error, privacy: .public)")
-            return []
+            return .failure(error)
         }
+    }
+
+    private func inspection(at directoryURL: URL) -> ComposeRepositoryInspection {
+        ComposeRepositoryInspection(workspace: composeWorkspace, directoryURL: directoryURL, hostGit: gitService)
     }
 
     private func selectFile(relativePath: String) {
@@ -493,7 +510,8 @@ struct RightPaneView: View {
         onFileSelected(
             CodePreviewSelection(
                 rootURL: directoryURL,
-                relativePath: relativePath
+                relativePath: relativePath,
+                composeWorkspace: composeWorkspace
             )
         )
     }
@@ -530,6 +548,9 @@ struct RightPaneView: View {
             }
             if state.isLoading {
                 return "Refreshing working tree"
+            }
+            if state.gitStatusFailure != nil {
+                return "Working tree status unavailable"
             }
             let changeCount = state.changedFiles.count
             if changeCount == 0 {
@@ -735,11 +756,18 @@ struct FileNodeView: View {
 struct ChangedFilesTabView: View {
     let changes: [FileChange]
     let isLoading: Bool
+    var failure: String? = nil
     let onFileSelected: (String) -> Void
     var onReviewDiff: (FileChange) -> Void = { _ in }
 
     var body: some View {
-        if changes.isEmpty && !isLoading {
+        if let failure, !isLoading {
+            ContentUnavailableView(
+                "Changes Unavailable",
+                systemImage: "exclamationmark.triangle",
+                description: Text(failure)
+            )
+        } else if changes.isEmpty && !isLoading {
             ContentUnavailableView(
                 "No Changes",
                 systemImage: "checkmark.circle",

@@ -7,6 +7,93 @@ import WorkspaceManagerCore
 
 @Suite("SidebarWorkspaceControllerBehavior")
 struct SidebarWorkspaceControllerBehaviorTests {
+    @Test("Compose stop errors preserve the observed runtime state", arguments: [true, false])
+    @MainActor
+    func composeStopErrorReconcilesActualState(statusAvailable: Bool) async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "sandbox", localPath: URL(fileURLWithPath: "/tmp/sandbox-source"))
+        let workspace = Workspace(
+            name: "agent", path: URL(fileURLWithPath: "/tmp/sandbox-clone"),
+            sourceRepo: repo, backendIdentifier: "compose", remoteId: "ws-test"
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+        let provider = MockWorkspaceProvider(descriptor: ComposeWorkspaceProvider.providerDescriptor)
+        await provider.setStopFailure(observedStatus: statusAvailable ? .stopped : nil)
+        let controller = makeController(
+            context: context, workspaceService: MockWorkspaceService(), providers: [provider])
+
+        await #expect(throws: TestWorkspaceProviderError.self) { try await controller.stop(workspace) }
+
+        let persisted = try #require(context.fetch(FetchDescriptor<Workspace>()).first)
+        #expect(persisted.status == (statusAvailable ? .stopped : .active))
+        #expect(await provider.stopCallCount() == 1)
+    }
+
+    @Test(
+        "Compose deletion passes the data choice to its provider without running host teardown",
+        arguments: [false, true])
+    @MainActor
+    func composeDeletionStaysInsideProvider(deleteFiles: Bool) async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "sandbox", localPath: URL(fileURLWithPath: "/tmp/sandbox-source"))
+        let workspace = Workspace(
+            name: "agent",
+            path: URL(fileURLWithPath: "/tmp/sandbox-clone"),
+            sourceRepo: repo,
+            backendIdentifier: "compose",
+            remoteId: "ws-test"
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+        let service = MockWorkspaceService()
+        let provider = MockWorkspaceProvider(descriptor: ComposeWorkspaceProvider.providerDescriptor)
+        let controller = makeController(context: context, workspaceService: service, providers: [provider])
+
+        try await controller.deleteWorkspace(workspace, deleteFiles: deleteFiles)
+
+        #expect(await provider.deleteDataChoices() == [deleteFiles])
+        #expect(service.deleteWorkspaceCalls.isEmpty)
+        #expect(try context.fetch(FetchDescriptor<Workspace>()).isEmpty)
+    }
+
+    @Test("Failed Compose provisioning retains its identity for explicit cleanup")
+    @MainActor
+    func failedComposeProvisioningRetainsOwnedResourcesRecord() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "sandbox", localPath: URL(fileURLWithPath: "/tmp/sandbox-source"))
+        context.insert(repo)
+        let provider = MockWorkspaceProvider(descriptor: ComposeWorkspaceProvider.providerDescriptor)
+        await provider.setProvisionalFailure(
+            WorkspaceProviderCreationResult(
+                name: "agent",
+                path: URL(fileURLWithPath: "/tmp/sandbox-partial"),
+                status: .provisioning,
+                backendIdentifier: "compose",
+                remoteId: "ws-retained",
+                backendMetadataRaw: "retained-cleanup-identity"
+            )
+        )
+        let service = MockWorkspaceService()
+        let controller = makeController(context: context, workspaceService: service, providers: [provider])
+
+        await #expect(throws: TestWorkspaceProviderError.self) {
+            _ = try await controller.createWorkspace(from: repo, name: "agent", providerID: "compose")
+        }
+
+        let retained = try #require(context.fetch(FetchDescriptor<Workspace>()).first)
+        #expect(retained.remoteId == "ws-retained")
+        #expect(retained.backendMetadataRaw == "retained-cleanup-identity")
+        #expect(retained.status == .stopped)
+        #expect(service.createWorkspaceCalls.isEmpty)
+        #expect(service.deleteWorkspaceCalls.isEmpty)
+    }
+
     actor OperationRecorder {
         private var events: [String] = []
 
@@ -1245,9 +1332,12 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
     private var deleteError: (any Error)?
     private var startError: (any Error)?
     private var stopError: (any Error)?
+    private var observedStatus: WorkspaceStatus?
     private var archiveError: (any Error)?
     private var createRequests: [WorkspaceProviderCreationRequest] = []
     private var deleteTargets: [WorkspaceProviderTarget] = []
+    private var deletionChoices: [Bool] = []
+    private var provisionalFailure: WorkspaceProviderCreationResult?
     private var startTargets: [WorkspaceProviderTarget] = []
     private var stopTargets: [WorkspaceProviderTarget] = []
     private var archiveTargets: [WorkspaceProviderTarget] = []
@@ -1274,6 +1364,10 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
         progress: WorkspaceProviderProgressHandler?,
         persist: WorkspaceProviderPersistenceHandler?
     ) async throws -> WorkspaceProviderCreationResult {
+        if let provisionalFailure {
+            try await persist?(provisionalFailure)
+            throw TestWorkspaceProviderError.createFailed
+        }
         if let createError {
             throw createError
         }
@@ -1335,8 +1429,31 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
         createResult = result
     }
 
+    func setProvisionalFailure(_ result: WorkspaceProviderCreationResult) {
+        provisionalFailure = result
+    }
+
+    func deleteWorkspace(_ workspace: WorkspaceProviderTarget, deleteFiles: Bool) async throws {
+        deletionChoices.append(deleteFiles)
+        try await deleteWorkspace(workspace)
+    }
+
+    func deleteDataChoices() -> [Bool] { deletionChoices }
+
     func setDeleteError(_ error: (any Error)?) {
         deleteError = error
+    }
+
+    func setStopFailure(observedStatus: WorkspaceStatus?) {
+        stopError = TestWorkspaceProviderError.stopFailed
+        self.observedStatus = observedStatus
+    }
+
+    func syncStatuses(for workspaces: [WorkspaceProviderTarget]) async throws -> [WorkspaceProviderStatusSnapshot] {
+        guard let observedStatus else { throw ComposeSandboxError.unavailable("Fixture daemon unavailable") }
+        return workspaces.compactMap { workspace in
+            workspace.remoteId.map { WorkspaceProviderStatusSnapshot(remoteId: $0, status: observedStatus) }
+        }
     }
 
     func createRequestsSnapshot() -> [WorkspaceProviderCreationRequest] {
@@ -1372,4 +1489,6 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
 
 private enum TestWorkspaceProviderError: Error {
     case deleteFailed
+    case createFailed
+    case stopFailed
 }

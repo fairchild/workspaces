@@ -7,10 +7,23 @@
 
 import AppKit
 import SwiftUI
+import WorkspaceManagerCore
 
 struct CodePreviewSelection: Identifiable, Hashable {
     let rootURL: URL
     let relativePath: String
+    var composeWorkspace: WorkspaceProviderTarget? = nil
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.rootURL == rhs.rootURL && lhs.relativePath == rhs.relativePath
+            && lhs.composeWorkspace == rhs.composeWorkspace
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(rootURL)
+        hasher.combine(relativePath)
+        hasher.combine(composeWorkspace?.id)
+    }
 
     var id: String {
         "\(rootURL.path)#\(relativePath)"
@@ -119,7 +132,7 @@ struct CodeFilePreviewView: View {
                     .accessibilityLabel("Review Diff")
                 }
 
-                if let defaultEditor {
+                if let defaultEditor, selection.composeWorkspace == nil {
                     OpenInEditorSplitButton(
                         editorOptions: editorOptions,
                         defaultEditor: defaultEditor,
@@ -231,6 +244,7 @@ struct CodeFilePreviewView: View {
             DiffReviewSheet(
                 filePath: selection.relativePath,
                 directoryURL: selection.rootURL,
+                composeWorkspace: selection.composeWorkspace,
                 onChanged: { onSaved() },
                 onClose: { isShowingDiffReview = false }
             )
@@ -245,7 +259,13 @@ struct CodeFilePreviewView: View {
         CodePreviewDiagnostics.log("selected file=\(selection.fileURL.path)")
 
         do {
-            let payload = try await CodePreviewLoader.load(fileURL: selection.fileURL)
+            let payload: CodePreviewPayload
+            if selection.composeWorkspace != nil {
+                payload = try await ComposeSafeFiles.preview(
+                    root: selection.rootURL, relativePath: selection.relativePath)
+            } else {
+                payload = try await CodePreviewLoader.load(fileURL: selection.fileURL)
+            }
             if Task.isCancelled {
                 CodePreviewDiagnostics.log("load cancelled file=\(selection.fileURL.path)")
                 return

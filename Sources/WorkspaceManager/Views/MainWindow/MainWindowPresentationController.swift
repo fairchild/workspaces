@@ -145,6 +145,9 @@ struct MainWindowPresentationController {
         selectedWorkspace: Workspace?,
         selectedRepo: Repo?
     ) -> OpenInEditorTarget? {
+        guard selectedCodePreview?.composeWorkspace == nil,
+            selectedWorkspace?.backendIdentifier != "compose"
+        else { return nil }
         if let selectedCodePreview {
             return .projectAndFile(
                 rootURL: selectedCodePreview.rootURL,

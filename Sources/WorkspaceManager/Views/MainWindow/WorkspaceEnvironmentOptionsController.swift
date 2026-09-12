@@ -541,6 +541,9 @@ struct WorkspaceEnvironmentOptionsController {
         for descriptor: WorkspaceProviderDescriptor,
         guestOS: WorkspaceGuestOS?
     ) -> String {
+        if descriptor.id == ComposeWorkspaceProvider.identifier {
+            return descriptor.displayName
+        }
         guard let guestOS else {
             return descriptor.displayName
         }
@@ -552,6 +555,9 @@ struct WorkspaceEnvironmentOptionsController {
         for descriptor: WorkspaceProviderDescriptor,
         guestOS: WorkspaceGuestOS?
     ) -> String {
+        if descriptor.id == ComposeWorkspaceProvider.identifier {
+            return "Linux containers with workspace files on this Mac"
+        }
         guard let guestOS else {
             if descriptor.usesHostWorkspaceFiles {
                 return "Runs on this Mac with host files"
@@ -575,6 +581,9 @@ struct WorkspaceEnvironmentOptionsController {
         for descriptor: WorkspaceProviderDescriptor,
         guestOS: WorkspaceGuestOS?
     ) -> String {
+        if descriptor.id == ComposeWorkspaceProvider.identifier {
+            return "shippingbox"
+        }
         switch guestOS {
         case .macOS:
             return "desktopcomputer"

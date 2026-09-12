@@ -323,7 +323,7 @@ public struct WorkspaceProviderTarget: Sendable, Equatable {
 
     public var usesHostWorkspaceFiles: Bool {
         switch backend {
-        case .local, .lume: return true
+        case .local, .lume, .compose: return true
         case .daytona, .ssh, .unknown: return false
         }
     }
@@ -382,6 +382,8 @@ public typealias WorkspaceProviderSetupProgressHandler =
     func stopWorkspace(_ workspace: WorkspaceProviderTarget) async throws
     func archiveWorkspace(_ workspace: WorkspaceProviderTarget) async throws
     func deleteWorkspace(_ workspace: WorkspaceProviderTarget) async throws
+    /// Removes a workspace's runtime, optionally including its retained files and provider data.
+    func deleteWorkspace(_ workspace: WorkspaceProviderTarget, deleteFiles: Bool) async throws
     func syncStatuses(for workspaces: [WorkspaceProviderTarget]) async throws -> [WorkspaceProviderStatusSnapshot]
 }
 
@@ -419,6 +421,10 @@ extension WorkspaceProviderProtocol {
 
     public func deleteWorkspace(_ workspace: WorkspaceProviderTarget) async throws {
         // Local workspaces do not require remote cleanup.
+    }
+
+    public func deleteWorkspace(_ workspace: WorkspaceProviderTarget, deleteFiles: Bool) async throws {
+        try await deleteWorkspace(workspace)
     }
 
     public func syncStatuses(
@@ -462,6 +468,7 @@ extension WorkspaceProviderRegistry {
     public static let live = WorkspaceProviderRegistry(
         providers: [
             LocalWorkspaceProvider(),
+            ComposeWorkspaceProvider.shared,
             DaytonaWorkspaceProvider(),
             LumeWorkspaceProvider(),
         ]

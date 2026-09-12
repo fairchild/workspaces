@@ -277,6 +277,10 @@ verify_bundle_identity "$APP_BUNDLE"
     || fail "Missing compiled terminfo entry terminfo/78/xterm-ghostty (the runtime's usability test)"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/event-forwarder.sh" ]] || fail "Missing Claude hook event forwarder"
 [[ -f "$APP_BUNDLE/Contents/Resources/HookForwarders/statusline.sh" ]] || fail "Missing Claude status-line forwarder"
+for compose_resource in compose.yaml Dockerfile .dockerignore; do
+    [[ -f "$APP_BUNDLE/Contents/Resources/ComposeSandbox/$compose_resource" ]] \
+        || fail "Missing Compose sandbox resource: $compose_resource"
+done
 
 if [[ "$STRUCTURE_ONLY" == true ]]; then
     echo "Verified release bundle structure for $APP_BUNDLE (signing not checked)"

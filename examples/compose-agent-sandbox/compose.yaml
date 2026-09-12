@@ -1,0 +1,47 @@
+# One project owns one working copy, terminal service, network and home volume.
+# Keep this trusted file outside the checkout mounted into the agent container.
+services:
+  agent:
+    image: ${SANDBOX_IMAGE:-workspaces-compose-agent:v1}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    pull_policy: never
+    user: "1000:1000"
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    cpus: 2.0
+    mem_limit: 4g
+    pids_limit: 512
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=512m,mode=1777
+    volumes:
+      - type: bind
+        source: ${WORKSPACE_DIR:?Set WORKSPACE_DIR to an existing self-contained clone}
+        target: /workspace
+        bind:
+          create_host_path: false
+      - type: volume
+        source: agent-home
+        target: /home/agent
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'test "$$(id -u)" = 1000 && test -d /workspace/.git && test -w /workspace && test -w /home/agent && command -v bash && command -v tmux'
+      interval: 2s
+      timeout: 3s
+      retries: 15
+      start_period: 2s
+    stop_grace_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "2"
+
+volumes:
+  agent-home:

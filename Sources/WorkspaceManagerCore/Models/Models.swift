@@ -364,7 +364,7 @@ public final class Workspace {
 
     public var usesHostWorkspaceFiles: Bool {
         switch backend {
-        case .local, .lume: return true
+        case .local, .lume, .compose: return true
         case .daytona, .ssh, .unknown: return false
         }
     }
@@ -564,6 +564,7 @@ public enum WebSourceOwnershipScope: Hashable, Codable, Sendable {
 public enum BackendKind: Codable, Sendable, Equatable {
     case local
     case lume
+    case compose
     case daytona
     case ssh
     /// A provider ID not in this enum — preserves the raw string for registry lookups.
@@ -573,6 +574,7 @@ public enum BackendKind: Codable, Sendable, Equatable {
         switch rawValue {
         case "local": self = .local
         case "lume": self = .lume
+        case "compose": self = .compose
         case "daytona": self = .daytona
         case "ssh": self = .ssh
         default: self = .unknown(rawValue)
@@ -583,6 +585,7 @@ public enum BackendKind: Codable, Sendable, Equatable {
         switch self {
         case .local: return "local"
         case .lume: return "lume"
+        case .compose: return "compose"
         case .daytona: return "daytona"
         case .ssh: return "ssh"
         case .unknown(let id): return id

@@ -314,12 +314,18 @@ struct SidebarView: View {
             isPresented: $showingDeleteConfirmation,
             presenting: workspaceToDelete
         ) { workspace in
-            Button("Delete (Keep Files)", role: .destructive) {
+            Button(
+                workspace.backend == .compose ? "Remove (Keep Files and Data)" : "Delete (Keep Files)",
+                role: .destructive
+            ) {
                 Task { @MainActor in
                     await performDelete(workspace, deleteFiles: false)
                 }
             }
-            Button("Delete and Remove Files", role: .destructive) {
+            Button(
+                workspace.backend == .compose ? "Delete Files and Container Data" : "Delete and Remove Files",
+                role: .destructive
+            ) {
                 Task { @MainActor in
                     await performDelete(workspace, deleteFiles: true)
                 }
@@ -328,7 +334,11 @@ struct SidebarView: View {
                 workspaceToDelete = nil
             }
         } message: { workspace in
-            Text("Are you sure you want to delete '\(workspace.name)'?")
+            Text(
+                workspace.backend == .compose
+                    ? "Remove '\(workspace.name)' and its containers? You can keep its files and volumes, or permanently delete them."
+                    : "Are you sure you want to delete '\(workspace.name)'?"
+            )
         }
         .alert(
             "Workspace Note",

@@ -1,0 +1,4 @@
+# The trusted build never sends a workspace checkout or credentials to Docker.
+**
+!Dockerfile
+!.dockerignore

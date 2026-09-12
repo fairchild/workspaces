@@ -206,6 +206,10 @@ struct MainWindowLandingActionController {
     }
 
     func openWorkspaceInDefaultEditor(_ workspace: Workspace) {
+        guard workspace.backendIdentifier != ComposeWorkspaceProvider.identifier else {
+            dependencies.presentLandingError("Edit sandbox files in the workspace terminal.")
+            return
+        }
         do {
             try OpenInEditorShortcutFlow.perform(
                 target: .project(rootURL: workspace.workspaceURL),
