@@ -7,6 +7,9 @@ an independent clone, an `agent` service, and a persistent agent home volume.
 The [standalone reference](../../examples/compose-agent-sandbox/README.md) uses the
 same base template without requiring WorkSpaces. It also demonstrates adding
 Postgres as a second service. The app currently uses the base agent template only.
+Its [visual feature guide](../../examples/compose-agent-sandbox/index.html) includes
+an interactive lifecycle diagram and recordings of the standalone runtime and
+production provider test.
 
 ## Create and use a workspace
 

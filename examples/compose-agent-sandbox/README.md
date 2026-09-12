@@ -4,6 +4,12 @@ Run an agent in a Linux terminal with its own working copy, home directory and
 optional database. Each workspace is an ordinary Docker Compose project. This
 example works without WorkSpaces, and WorkSpaces uses the same base template.
 
+Open the [visual feature guide](index.html) for an interactive lifecycle diagram
+and recorded end-to-end demonstrations. The page and its `media/` directory work
+locally without a build step; this README remains the setup reference. The media
+captures the runtime at commit `5dca13102c27` and is excluded from Docker builds by
+the existing `.dockerignore` allowlist.
+
 The host keeps the checkout visible to editors. Commands, Git, setup scripts and
 agent tools run inside `agent`. That boundary matters because Git configuration
 and repository scripts can execute programs. A Git worktree points outside its
