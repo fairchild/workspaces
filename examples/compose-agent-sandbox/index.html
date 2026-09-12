@@ -5,7 +5,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="A Docker Compose project for each agent workspace. Explore terminal continuity, separate working copies, durable services and the runnable WorkSpaces reference.">
+  <meta name="description" content="A small directory that defines a complete agent environment. Iterate on the Compose reference, then enter a Linux workspace through WorkSpaces or directly from a terminal.">
   <meta name="color-scheme" content="light dark">
   <title>Compose workspaces · WorkSpaces</title>
   <style>
@@ -60,6 +60,21 @@
     .text-link { font-size: 13px; }
     .fine { color: var(--muted); font-size: 13px; line-height: 1.6; }
     .hero .fine { margin-top: 21px; margin-bottom: 0; }
+    .environment-figure { margin-bottom: 54px; }
+    .environment-figure > a { display: block; border: 1px solid var(--line); background: #f5f3ec; }
+    .environment-figure img { display: block; width: 100%; height: auto; }
+    .environment-figure figcaption { max-width: 940px; line-height: 1.6; }
+    .definition { padding: 18px 0 64px; display: grid; grid-template-columns: 1fr 1.1fr; gap: 80px; }
+    .file-map { border: 1px solid var(--line); background: var(--panel); align-self: start; }
+    .file-map-title { padding: 15px 20px; border-bottom: 1px solid var(--line); font: 12px var(--mono); color: var(--green); }
+    .file-map ul { list-style: none; padding: 8px 20px; margin: 0; }
+    .file-map li { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .file-map li:last-child { border: 0; }
+    .file-map a { font-family: var(--mono); overflow-wrap: anywhere; }
+    .file-map span { color: var(--muted); }
+    .iteration { margin-top: 22px; padding-left: 20px; border-left: 2px solid var(--green); }
+    .iteration p { font-size: 14px; color: var(--muted); }
+    .entry-note { padding: 16px 18px; border-left: 2px solid var(--green); background: var(--wash); font-size: 13px; color: var(--muted); }
     .explorer { border: 1px solid var(--line); background: var(--panel); }
     .explorer-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; padding: 22px 28px; border-bottom: 1px solid var(--line); }
     .explorer-head p { margin: 0; }
@@ -135,7 +150,7 @@
     footer p { margin: 0; }
     footer a { margin-left: 20px; }
     @media (max-width: 900px) {
-      .hero, .section-intro, .split, .boundary { gap: 32px; }
+      .hero, .section-intro, .split, .boundary, .definition { gap: 32px; }
       .hero { padding-top: 48px; }
       .projects { gap: 20px; padding: 20px; }
       .project { padding: 16px; }
@@ -149,8 +164,12 @@
       .brand small { display: none; }
       nav { gap: 16px; font-size: 12px; }
       nav a:last-child { display: none; }
-      .hero, .section-intro, .split, .boundary { grid-template-columns: 1fr; gap: 26px; }
+      .hero, .section-intro, .split, .boundary, .definition { grid-template-columns: 1fr; gap: 26px; }
       .hero { padding: 42px 0 36px; }
+      .environment-figure { margin-bottom: 38px; }
+      .definition { padding-bottom: 40px; }
+      .file-map ul { padding: 8px 15px; }
+      .file-map li { gap: 12px; }
       h1 { font-size: 48px; }
       .lede { font-size: 17px; }
       .projects { grid-template-columns: 1fr; gap: 20px; padding: 18px; }
@@ -175,18 +194,28 @@
   <header>
     <div class="wrap nav">
       <a href="#main" class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>WorkSpaces <small>Reference 01</small></a>
-      <nav aria-label="Page navigation"><a href="#lifecycle">How it works</a><a href="#demo">Demo</a><a href="#run">Run it</a></nav>
+      <nav aria-label="Page navigation"><a href="#directory">Directory</a><a href="#lifecycle">Environment</a><a href="#demo">Demo</a></nav>
     </div>
   </header>
   <main id="main" class="wrap">
     <div class="hero">
-      <div><p class="eyebrow">Docker Compose workspaces</p><h1>A Linux workspace.<br><em>An ordinary<br>Compose project.</em></h1></div>
+      <div><p class="eyebrow">Docker Compose workspaces</p><h1>A whole environment.<br><em>Defined in<br>one directory.</em></h1></div>
       <div class="hero-copy">
-        <p class="lede">Give each coding task its own tools, working copy and services. Keep the files visible on your host while the terminal, Git and setup scripts run inside a container.</p>
-        <div class="actions"><a class="button" href="#demo">Watch the real run <span aria-hidden="true">↗</span></a><a class="text-link" href="README.md">Read the setup guide</a></div>
-        <p class="fine">A runnable reference for any agent. The WorkSpaces integration uses the same base template.</p>
+        <p class="lede">Work on a small, self-contained set of files. Those files define the Linux tools, terminal, services and storage for a workspace. Enter through WorkSpaces or use Docker Compose directly.</p>
+        <div class="actions"><a class="button" href="#directory">Explore the directory <span aria-hidden="true">↓</span></a><a class="text-link" href="#demo">Watch the real run</a></div>
+        <p class="fine">The directory is the definition. Each running workspace has its own clone, processes and persistent data.</p>
       </div>
     </div>
+
+    <figure class="environment-figure">
+      <a href="media/environment-overview.webp" aria-label="Open the full-size environment illustration"><img src="media/environment-overview.webp" width="1536" height="1024" alt="A small directory defines one workspace environment containing a Linux terminal, working copy, agent home and optional database. WorkSpaces and a direct terminal provide two entry points." fetchpriority="high"></a>
+      <figcaption>Concept illustration. The definition stays outside the runtime. A working copy is one part of the environment; the terminal, installed tools, processes and service data complete it. <a href="media/README.md">Image source and prompt</a></figcaption>
+    </figure>
+
+    <section id="directory" class="definition" aria-labelledby="directory-title">
+      <div><span class="section-no">01 / A small place to work</span><h2 id="directory-title">Change the environment<br>from inside this directory.</h2><p class="body-copy">The definition, tests, explanation and visual assets live together. You can read the whole example, change the tools or add a service, and test it without building the native app.</p><div class="iteration"><p>Edit the Dockerfile or Compose configuration. Run <code>./smoke.sh --with-postgres</code> here. Inspect the disposable workspace and its test results, then refine the definition.</p><p>For the guide itself, edit <code>index.html</code> and reload it. It uses local images, recordings and inline styles, with no frontend build step.</p></div><a class="text-link" href="README.md#work-on-this-directory">Read the local development loop ↗</a></div>
+      <div class="file-map" aria-label="Files in the self-contained example"><div class="file-map-title">compose-agent-sandbox/</div><ul><li><a href="compose.yaml">compose.yaml</a><span>Terminal service, storage and limits</span></li><li><a href="Dockerfile">Dockerfile</a><span>Linux tools and the agent user</span></li><li><a href="compose.postgres.yaml">compose.postgres.yaml</a><span>Optional database and its network</span></li><li><a href="smoke.sh">smoke.sh</a><span>Real lifecycle and isolation checks</span></li><li><a href=".dockerignore">.dockerignore</a><span>Only trusted build inputs</span></li><li><a href="README.md">README.md</a><span>Setup and iteration instructions</span></li><li><a href="index.html">index.html</a><span>This interactive explanation</span></li><li><a href="media/README.md">media/</a><span>Illustration, prompt and real demos</span></li></ul></div>
+    </section>
 
     <section id="lifecycle" aria-labelledby="lifecycle-title">
       <div class="explorer">
@@ -215,7 +244,7 @@
     </section>
 
     <section class="section" id="demo" aria-labelledby="demo-title">
-      <div class="section-intro"><div><span class="section-no">01 / See it run</span><h2 id="demo-title">Two workspaces.<br>One recorded proof.</h2></div><p>This is a real Docker run with synthetic repositories and cached images. Commands execute at normal speed, including startup and teardown.</p></div>
+      <div class="section-intro"><div><span class="section-no">02 / See it run</span><h2 id="demo-title">Watch the<br>environment work.</h2></div><p>This is a real Docker run with synthetic repositories and cached images. Commands execute at normal speed, including startup and teardown.</p></div>
       <div class="demo-grid">
         <figure><video controls playsinline preload="metadata" poster="media/compose-poster.png" aria-label="Docker Compose workspace demonstration" aria-describedby="demo-caption"><source src="media/compose-sandbox.mp4" type="video/mp4"><a href="media/compose-sandbox.mp4">Download the MP4</a></video><figcaption id="demo-caption"><span>01:54 · silent terminal recording · 1× speed</span><a href="media/terminal.txt">Read the full transcript</a></figcaption></figure>
         <aside class="proof" aria-label="What the recording verifies"><div><div class="proof-number">2<span>independent projects</span></div><p class="fine" style="margin-top:12px">Both get an agent terminal and their own Postgres service.</p></div><ul><li>Code changes and passing tests inside Linux</li><li>The same tmux shell after reattachment</li><li>Files and data survive recreation</li><li>Alpha removed while beta stays healthy</li><li>Scoped Docker cleanup at the end</li></ul></aside>
@@ -224,13 +253,13 @@
     </section>
 
     <section class="section split" id="run" aria-labelledby="run-title">
-      <div><span class="section-no">02 / Use the reference</span><h2 id="run-title">Bring your agent.</h2><p class="body-copy">The image includes Bash, Git, tmux, Node.js, npm and Python. Install your agent in the container and authenticate there. Its home volume keeps installed tools and login state for that workspace.</p><p class="body-copy">Start with the executable smoke test. It creates two disposable clones, runs the checks and removes its Docker projects. Temporary fixture files and logs remain for inspection.</p><div class="terminal"><div class="terminal-head"><span>From the repository root</span><button class="copy" id="copy-command" type="button" aria-label="Copy smoke test command">Copy</button></div><pre><code id="smoke-command">cd examples/compose-agent-sandbox
-./smoke.sh --with-postgres</code></pre></div><p class="fine">Requires Git and a local Linux Docker runtime with Compose 2.24+. The first run builds the image. On Linux, UID 1000 needs write access to the dedicated clone.</p><a class="text-link" href="README.md">Create a workspace you can keep ↗</a></div>
-      <div><span class="section-no">03 / In WorkSpaces</span><h2>The app owns<br>the lifecycle.</h2><p class="body-copy">Choose Docker Compose when creating a workspace. The provider pins the Docker context, snapshots the trusted template and prepares an independent clone from the selected commit.</p><div class="features"><div class="feature"><h3>A guest terminal for each session</h3><p>Each Terminal Session gets its own tmux identity. Detaching keeps the guest shell alive; stopping the runtime ends its processes.</p></div><div class="feature"><h3>Host-visible files, guest Git</h3><p>The Files tab offers bounded, read-only previews. The Changes tab executes Git inside the agent container, with no fallback to host Git.</p></div><div class="feature"><h3>Explicit start, stop and delete</h3><p>Operations address the saved Compose project. Rebuild is available through the provider API. Archive is not supported.</p></div></div><p class="fine" style="margin-top:20px">Implementation in <a href="https://github.com/fairchild/workspaces/pull/1620">PR #1620</a>. The app uses the base agent service. Postgres and custom stacks are standalone examples.</p></div>
+      <div><span class="section-no">03 / Enter directly</span><h2 id="run-title">The terminal way in.</h2><p class="body-copy">Use the reference without WorkSpaces. Give the environment an independent clone and a stable Compose project name, start it, then enter the <code>agent</code> service.</p><p class="body-copy">Bash, Git, tmux, Node.js and Python are already there. Install and authenticate your agent inside the environment. Its home volume retains those tools and login state.</p><div class="terminal"><div class="terminal-head"><span>From this directory</span><button class="copy" id="copy-command" type="button" aria-label="Copy smoke test command">Copy</button></div><pre><code id="smoke-command"># Build and verify two disposable environments
+./smoke.sh --with-postgres</code></pre></div><p class="fine">Requires Git and a local Linux Docker runtime with Compose 2.24+. The test removes its Docker projects and retains temporary fixture files and logs. On Linux, UID 1000 needs write access to each dedicated clone.</p><a class="text-link" href="README.md#start-a-workspace">Set up a workspace, then enter its terminal ↗</a></div>
+      <div><span class="section-no">04 / Enter through WorkSpaces</span><h2>The native way in.</h2><p class="body-copy">WorkSpaces puts a crafted Mac terminal around the environment, with session tabs, splits and file and change inspection. Choose Docker Compose when creating a workspace; the app manages that project's identity and lifecycle.</p><div class="features"><div class="feature"><h3>The checkout is part of the environment</h3><p>This provider uses an independent clone, alongside Linux processes, installed tools, the agent's home and persistent storage. The terminal opens inside that complete runtime.</p></div><div class="feature"><h3>Native navigation, guest execution</h3><p>Files stay visible on the host with read-only previews in the app. Git and repository scripts run in the container. Each Terminal Session attaches to its own guest tmux session.</p></div><div class="feature"><h3>Start, stop and return</h3><p>Detaching keeps the guest shell alive. Stopping ends its processes and retains data. The provider also supports rebuild through its API and scoped deletion.</p></div></div><p class="entry-note" style="margin-top:20px">Today, WorkSpaces bundles this base definition when the app is built. Edits here can be tried directly with Compose; using them in new app workspaces requires rebuilding the app. Existing workspaces retain their saved snapshots. Arbitrary directory import and custom stacks are not app controls yet.</p><p class="fine">Implementation in <a href="https://github.com/fairchild/workspaces/pull/1620">PR #1620</a>. The app uses the agent service; Postgres is an optional standalone example.</p></div>
     </section>
 
     <section class="section boundary" aria-labelledby="boundary-title">
-      <div><span class="section-no">04 / The boundary</span><h2 id="boundary-title">Separate state.<br>Known limits.</h2><p class="body-copy">Compose gives each workspace its own runtime and storage. Its configuration is trusted input: review it, keep it outside the agent's clone and use a unique project name.</p><div class="limits" aria-label="Base agent resource limits"><span>2 CPUs</span><span>4 GiB memory</span><span>512 processes</span><span>512 MiB temporary storage</span></div></div>
+      <div><span class="section-no">05 / The boundary</span><h2 id="boundary-title">Separate state.<br>Known limits.</h2><p class="body-copy">Compose gives each workspace its own runtime and storage. Its configuration is trusted input: review it, keep it outside the agent's clone and use a unique project name.</p><div class="limits" aria-label="Base agent resource limits"><span>2 CPUs</span><span>4 GiB memory</span><span>512 processes</span><span>512 MiB temporary storage</span></div></div>
       <dl><div><dt>Writable</dt><dd>The dedicated checkout, the agent's home volume and a temporary filesystem. The root filesystem is read-only, and Linux capabilities are dropped.</dd></div><div><dt>Not mounted</dt><dd>The host home, Docker socket, SSH agent, automation socket and host credentials. Agent credentials created inside its home persist with that volume.</dd></div><div><dt>Network</dt><dd>Outbound access is allowed, including reachable host and LAN services. The example publishes no host ports. Postgres uses its project's internal network.</dd></div><div><dt>Kernel</dt><dd>Containers share the Docker host's Linux kernel. Use a stronger boundary, such as a dedicated VM, for hostile code.</dd></div><div><dt>Deletion</dt><dd>Standalone <code>down --volumes</code> removes the project's home and database data but keeps the host clone. WorkSpaces can also remove the clone when you choose to delete files.</dd></div></dl>
     </section>
   </main>
