@@ -1,0 +1,148 @@
+demo $ demo intro
+WORKSPACES / COMPOSE SANDBOX
+
+One workspace = one Compose project.
+Each project gets a Linux terminal, checkout, home and network.
+This reference also adds its own Postgres database.
+
+Live Docker execution. Synthetic code. Cached images. Real-time playback.
+The compose helper selects a project and the included trusted YAML.
+
+1  Start two workspaces     4  Check isolation
+2  Edit and test in Linux   5  Restart and recreate
+3  Detach and reattach      6  Delete one; keep the other
+demo $ demo start
+01 / TWO INDEPENDENT WORKSPACES
+
+Starting alpha and beta: agent + postgres in each project...
+[1] 21050
+[2] 21051
+[1]-  Done                    compose alpha up -d --no-build --wait --wait-timeout 90 > "$DEMO_DIR/logs/start-alpha.log" 2>&1
+[2]+  Done                    compose beta up -d --no-build --wait --wait-timeout 90 > "$DEMO_DIR/logs/start-beta.log" 2>&1
+CONTAINER                          STATE     HEALTH
+ws-video-vnfv2uxa-alpha-agent-1  running  healthy
+ws-video-vnfv2uxa-alpha-postgres-1  running  healthy
+CONTAINER                          STATE     HEALTH
+ws-video-vnfv2uxa-beta-agent-1  running  healthy
+ws-video-vnfv2uxa-beta-postgres-1  running  healthy
+PASS Two healthy projects. No fixed container names or host ports.
+demo $ chapter '02 / EDIT AND TEST INSIDE LINUX'; guest alpha
+02 / EDIT AND TEST INSIDE LINUX
+
+alpha:/workspace $ uname -s; id -un; pwd
+
+Linux
+agent
+/workspace
+alpha:/workspace $ cat sum.mjs
+
+export const sum = (a, b) => a - b;
+alpha:/workspace $ sed -i 's/a - b/a + b/' sum.mjs
+
+alpha:/workspace $ node --test --test-reporter=spec
+
+✔ sum adds two numbers (0.597664ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 57.159465
+alpha:/workspace $ git diff
+
+diff --git a/sum.mjs b/sum.mjs
+index 2abed46..bc5f04d 100644
+--- a/sum.mjs
++++ b/sum.mjs
+@@ -1 +1 @@
+-export const sum = (a, b) => a - b;
++export const sum = (a, b) => a + b;
+
+alpha:/workspace $ exit
+
+exit
+demo $ chapter '03 / DETACH WITHOUT LOSING YOUR SHELL'
+03 / DETACH WITHOUT LOSING YOUR SHELL
+
+demo $ compose alpha exec agent tmux new-session -A -s demo
+
+[demo] 0:bash*                                            "8719604c9359" 17:02 12-Sep-26
+
+[demo] 0:bash*                                            "8719604c9359" 17:02 12-Sep-26agent@8719604c9359:/workspace$ PS1='alpha:tmux $ '; export DEMO_SESSION=still-here; echo
+ "$$" > ~/.demo-pid
+alpha:tmux $ echo "session=$DEMO_SESSION pid=$$"
+session=still-here pid=105
+alpha:tmux $ [detached (from session demo)]
+demo $ compose alpha exec agent tmux attach -t demo
+agent@8719604c9359:/workspace$ PS1='alpha:tmux $ '; export DEMO_SESSION=still-here; echo "$$" > ~/.demo-pid
+alpha:tmux $ echo "session=$DEMO_SESSION pid=$$"
+session=still-here pid=105
+alpha:tmux $
+
+[demo] 0:bash*                                            "8719604c9359" 17:02 12-Sep-26agent@8719604c9359:/workspace$ PS1='alpha:tmux $ '; export DEMO_SESSION=still-here; echo "$$" > ~/.demo-pid
+alpha:tmux $ echo "session=$DEMO_SESSION pid=$$"
+session=still-here pid=105
+alpha:tmux $
+
+[demo] 0:bash*                                            "8719604c9359" 17:02 12-Sep-26test "$$" = "$(cat ~/.demo-pid)" && test "$DEMO_SESSION" = still-here && to
+uch /workspace/.tmux-pass && echo "PASS same shell: session=$DEMO_SESSION pid=$$"
+PASS same shell: session=still-here pid=105
+alpha:tmux $ [detached (from session demo)]
+demo $ demo isolate
+04 / SEPARATE FILES, HOMES AND NETWORKS
+
+✔ sum adds two numbers (0.652043ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 61.735179
+PASS Only alpha has the code change, workspace file and home file.
+PASS UID 1000; read-only root; no Docker socket; 2 CPUs / 4 GiB / 512 PIDs.
+PASS Distinct project networks. Outbound network access remains enabled.
+demo $ demo persist
+05 / DATA SURVIVES STOP AND RECREATION
+
+CREATE TABLE
+INSERT 0 1
+Guest terminal reached postgres:5432 over its project network.
+
+Stopping alpha; beta keeps running...
+PASS Alpha stopped; both beta containers are still running.
+
+Starting alpha, then recreating its containers...
+.
+PASS New containers retained the checkout, home volume and database row.
+Terminal detach keeps a shell alive; stopping a container ends it.
+demo $ demo delete
+06 / DELETE ALPHA; KEEP BETA
+
+CONTAINER                          STATE     HEALTH
+ws-video-vnfv2uxa-beta-agent-1  running  healthy
+ws-video-vnfv2uxa-beta-postgres-1  running  healthy
+beta terminal still works
+PASS Alpha containers, volumes and networks removed. Beta is healthy.
+PASS Alpha checkout and code change remain available on the host.
+demo $ demo finish
+END-TO-END / VERIFIED
+
+PASS Docker projects removed; synthetic checkouts retained.
+
+Two workspaces. Guest code and tests. Persistent terminal attachment.
+
+Separate state. Durable files and database. Scoped teardown.
+
+Same base agent template bundled with WorkSpaces.
+
+Postgres is an optional overlay in the standalone example.
+
+Standalone replay: demo.sh + compose.tape + reference/
+
+Docker containers share a Linux kernel; this is not a hostile-code VM.
+demo $ exit
+exit
