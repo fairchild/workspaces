@@ -19,6 +19,11 @@ Summary bullet and the group headings are those same sentences, so a factory tur
 that writes better sentences improves the page without touching this file. Every
 text source is `plain_language`.
 
+To draw the shape yourself rather than take the generated graph, put a ```mermaid
+fence under a `<!-- review-page:diagram -->` marker in the PR body. The fence is
+the only carrier: GitHub renders it there too, and a comment's contents are not
+something a parser and a browser agree on.
+
 Usage:
   uv run --script scripts/pr-review-page.py --pr 1602
   uv run --script scripts/pr-review-page.py --pr 1602 --head d13afd8e --upload --link
@@ -82,12 +87,14 @@ CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 IMAGE_MD_RE = re.compile(r"!\[([^\]]*)\]\((\S+?)\)")
 LINK_MD_RE = re.compile(r"(?<!!)\[([^\]]+)\]\((\S+?)\)")
 HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$")
-# A mermaid edge is `-->`, which also ends an HTML comment, so a diagram held in
-# one is read to its terminator line -- a line that is only `-->` -- rather than
-# to the first arrow. The marker form (`<!-- review-page:diagram -->` above a
-# ```mermaid fence) has no such hazard and GitHub renders the fence in the body
-# itself, so it is the form to prefer.
-DIAGRAM_RE = re.compile(r"<!--\s*review-page:diagram\s*(.*?)^[ \t]*-->[ \t]*$", re.DOTALL | re.MULTILINE)
+# An authored diagram is a ```mermaid fence under a `<!-- review-page:diagram -->`
+# marker, and never the inside of a comment. Where a comment ends is not one
+# answer: a browser ends it at `--!>` as well as at `-->`, and `-->` is also a
+# mermaid edge, so anything reading a comment for content ends up disagreeing
+# with the renderer about where that content stopped -- and the text after the
+# disagreement is prose to a reader of the PR and diagram source here
+# (`py/bad-tag-filter`). The fence has one reading, and GitHub draws it in the
+# body as well.
 DIAGRAM_MARKER_RE = re.compile(
     r"<!--\s*review-page:diagram\s*-->\s*```mermaid\n(.*?)```", re.DOTALL
 )
@@ -412,14 +419,10 @@ def _node_id(path: str) -> str:
 
 
 def diagram_source(source: Source) -> str:
-    """The body's own mermaid block, or a small graph of what the PR touches."""
+    """The body's own mermaid fence, or a small graph of what the PR touches."""
     body = source.pr.get("body") or ""
     if match := DIAGRAM_MARKER_RE.search(body):
         return match.group(1).strip()
-    if match := DIAGRAM_RE.search(body):
-        inner = match.group(1)
-        inner = re.sub(r"^\s*```(?:mermaid)?\s*", "", inner.strip())
-        return re.sub(r"```\s*$", "", inner).strip()
 
     paths = [entry["path"] for entry in source.pr.get("files", [])]
     root = closes_issue(body) or f"#{source.pr.get('number', '')}"

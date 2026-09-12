@@ -20,6 +20,7 @@ import importlib.util
 import re
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -202,23 +203,51 @@ class Diagram(GeneratorTestCase):
         self.assertIn("named key error", page)
         self.assertNotIn("review-page:diagram", page)
 
-    def test_the_arrows_survive_the_html_comment(self) -> None:
-        """`-->` is both a mermaid edge and a comment terminator.
-
-        Reading to the first one leaves a graph of a single node, which renders
-        as a diagram that says nothing and looks deliberate.
-        """
+    def test_the_fence_under_the_marker_is_the_carrier(self) -> None:
         diagram = pr_review_page.diagram_source(self.source(SYNTHETIC))
         self.assertIn("parse_config", diagram)
         self.assertIn("named key error", diagram)
 
-    def test_a_fenced_diagram_under_a_marker_is_accepted_too(self) -> None:
+    def test_a_diagram_inside_an_html_comment_is_ignored(self) -> None:
+        """Where a comment ends is not one answer, so it carries nothing.
+
+        A browser ends a comment at `--!>` as well as at `-->`, and a mermaid
+        edge is `-->`. Any parser that reads a comment for content disagrees
+        with the renderer about where the content stopped, and the text after
+        the disagreement is prose in the PR body and diagram source here
+        (`py/bad-tag-filter`). The marker plus a fence has one reading.
+        """
         source = self.source(SYNTHETIC)
         source.pr["body"] = (
             "## Summary\n- One thing.\n\n"
-            "<!-- review-page:diagram -->\n```mermaid\ngraph LR\n  a --> b\n```\n"
+            "<!-- review-page:diagram\n```mermaid\ngraph LR\n  a --> b\n```\n-->\n"
         )
-        self.assertEqual(pr_review_page.diagram_source(source), "graph LR\n  a --> b")
+        diagram = pr_review_page.diagram_source(source)
+        self.assertNotIn("graph LR", diagram)
+        self.assertTrue(diagram.startswith("graph TD"), diagram)
+
+    def test_the_marker_needs_its_fence(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = "## Summary\n- One thing.\n\n<!-- review-page:diagram -->\ngraph LR\n  a --> b\n"
+        self.assertTrue(pr_review_page.diagram_source(source).startswith("graph TD"))
+
+    def test_a_hostile_label_cannot_become_markup(self) -> None:
+        """The mermaid source is a PR body's text, wherever it lands."""
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n"
+            '<!-- review-page:diagram -->\n```mermaid\ngraph LR\n'
+            '  a["<script>alert(1)</script>"] --> b\n```\n'
+        )
+        page = pr_review_page.build_page(source)
+        self.assertNotIn("<script>alert(1)</script>", page)
+
+        # And on the path CI takes, where no local renderer exists and the
+        # source is handed to the browser as text.
+        with unittest.mock.patch.object(pr_review_page.shutil, "which", return_value=None):
+            fallback = pr_review_page.render_diagram('graph LR\n  a["<script>alert(1)</script>"]')
+        self.assertNotIn("<script>alert(1)</script>", fallback)
+        self.assertIn("&lt;script&gt;", fallback)
 
     def test_without_one_the_generated_graph_names_the_files_and_the_issue(self) -> None:
         source = self.source(SPECIMEN)
