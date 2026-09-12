@@ -688,6 +688,7 @@ final class TileTreeStore: ObservableObject {
             id: splitSessionID,
             key: primarySession.key,
             directory: primarySession.directoryURL,
+            customCommand: primarySession.customCommand,
             tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(
                 for: primarySession.directoryURL,
                 paneSessionID: splitSessionID

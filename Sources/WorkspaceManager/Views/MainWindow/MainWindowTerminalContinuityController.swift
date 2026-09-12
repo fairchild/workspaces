@@ -55,7 +55,15 @@ struct MainWindowTerminalContinuityController {
         )
     {
         let excludedScopeKeys = archivedWorkspaceScopeKeys
-        let sessions = dependencies.tileTreeStore.sessions.filter { !excludedScopeKeys.contains($0.key) }
+        let primarySessions = dependencies.tileTreeStore.sessions
+        let primaryIDs = Set(primarySessions.map(\.id))
+        // Preserve guest identities for split terminals too. The existing manifest
+        // restores terminal sessions as tabs; it does not persist the split layout.
+        let composeSplits = dependencies.tileTreeStore.allLiveSessions.filter {
+            guard !primaryIDs.contains($0.id), case .backendSession(let providerID, _) = $0.key else { return false }
+            return providerID == ComposeWorkspaceProvider.identifier
+        }
+        let sessions = (primarySessions + composeSplits).filter { !excludedScopeKeys.contains($0.key) }
         let validSessionIDs = Set(sessions.map(\.id))
         let activeSessionID =
             dependencies.tileTreeStore.activeSessionID.flatMap {
@@ -105,6 +113,46 @@ struct MainWindowTerminalContinuityController {
             activeSessionIDByScopeKey: inputs.activeSessionIDByScopeKey
         )
         dependencies.manifestRawValue.wrappedValue = manifest.rawValue
+    }
+
+    /// Recreate Compose attachments from current workspace metadata, never from
+    /// the persisted shell command. This only attaches; it cannot start services.
+    func restoredHostSessionSnapshot(
+        includeHostSessions: Bool = true,
+        composeReattachmentSpec: (WorkspaceProviderTarget) throws -> TerminalLaunchSpec = {
+            try ComposeWorkspaceProvider.shared.reattachmentLaunchSpec(for: $0)
+        }
+    ) -> TerminalContinuityManifest.HostSessionSnapshot? {
+        guard let manifest = TerminalContinuityManifest.decode(from: dependencies.manifestRawValue.wrappedValue) else {
+            return nil
+        }
+        let workspaces = dependencies.repos().flatMap(\.workspaces).filter {
+            $0.backendIdentifier == ComposeWorkspaceProvider.identifier && $0.status != .archived
+        }
+        var validated: [UUID: HostTerminalSession] = [:]
+        for record in manifest.sessionRecords {
+            guard case .backendSession(let providerID, _) = record.key,
+                providerID == ComposeWorkspaceProvider.identifier,
+                let workspace = workspaces.first(where: { terminalSessionKey(for: $0) == record.key })
+            else { continue }
+            do {
+                let spec = try composeReattachmentSpec(WorkspaceProviderTarget(workspace))
+                guard spec.sessionKey == record.key, spec.customCommand != nil else { continue }
+                validated[record.id] = HostTerminalSession(
+                    id: record.id, key: spec.sessionKey, directory: spec.workingDirectory,
+                    customCommand: spec.customCommand
+                )
+            } catch {
+                terminalContinuityLog.error(
+                    "Compose terminal restore unavailable: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
+        return manifest.hostSessionSnapshot(
+            excludingScopeKeys: archivedWorkspaceScopeKeys,
+            validatedProviderSessions: validated,
+            includeHostSessions: includeHostSessions
+        )
     }
 
     func restoredLaunchDirectory(for repo: Repo) -> URL? {

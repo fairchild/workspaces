@@ -219,10 +219,17 @@ struct TerminalContinuityManifest: Codable, Equatable {
 
     func hostSessionSnapshot(
         excludingScopeKeys excludedScopeKeys: Set<HostTerminalSessionKey> = [],
+        validatedProviderSessions: [UUID: HostTerminalSession] = [:],
+        includeHostSessions: Bool = true,
         fileManager: FileManager = .default
     ) -> HostSessionSnapshot? {
-        let restoredSessions = sessionRecords.compactMap {
-            $0.restoredSession(fileManager: fileManager)
+        let restoredSessions = sessionRecords.compactMap { record -> HostTerminalSession? in
+            if let validated = validatedProviderSessions[record.id],
+                validated.id == record.id, validated.key == record.key
+            {
+                return validated
+            }
+            return includeHostSessions ? record.restoredSession(fileManager: fileManager) : nil
         }.filter {
             !excludedScopeKeys.contains($0.key)
         }

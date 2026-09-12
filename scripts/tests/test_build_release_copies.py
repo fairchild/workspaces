@@ -19,7 +19,7 @@ signing, on a tag (#1502).
 These tests lift `copy_tree_or_fail` and the logging helpers it calls out of the
 real script by name and run them under bash against throwaway directories:
 no build, no network, no signing material, no repo state touched. The last case
-is a text assertion instead, because the wiring — that the two resource copies
+is a text assertion instead, because the wiring — that the resource copies
 actually route through the helper — is not reachable from the helper itself;
 the end-to-end `./scripts/build-release.sh --no-sign` in the PR's evidence is
 what proves the wired script still produces a complete bundle.
@@ -163,11 +163,37 @@ class CopyTreeOrFailTests(unittest.TestCase):
 class ResourceCopyCallSiteTests(unittest.TestCase):
     """The helper only protects the bundle if the resource copies use it."""
 
-    def test_both_resource_trees_are_copied_through_the_helper(self) -> None:
+    def test_resource_trees_are_copied_through_the_helper(self) -> None:
         calls = [line.strip() for line in SCRIPT_SOURCE.splitlines() if line.strip().startswith("copy_tree_or_fail ")]
-        self.assertEqual(len(calls), 2, f"expected the SPM and Ghostty copies, found: {calls}")
+        self.assertEqual(len(calls), 3, f"expected the SPM, Compose, and Ghostty copies, found: {calls}")
         self.assertTrue(any("SPM_RESOURCES" in call for call in calls), calls)
+        self.assertTrue(any("examples/compose-agent-sandbox" in call for call in calls), calls)
         self.assertTrue(any("GHOSTTY_SHARE_DIR_RESOLVED" in call for call in calls), calls)
+
+    def test_compose_packaging_populates_a_fresh_bundle(self) -> None:
+        """Exercise the actual packaging block with only Resources present."""
+        start = SCRIPT_SOURCE.index("# Ship the same reviewed Compose template")
+        end = SCRIPT_SOURCE.index("SPARKLE_FRAMEWORK=", start)
+        definitions = "\n\n".join(bash_function(name) for name in HARNESS_FUNCTIONS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "examples" / "compose-agent-sandbox"
+            source.mkdir(parents=True)
+            for name in ("compose.yaml", "Dockerfile", ".dockerignore"):
+                (source / name).write_text(f"fixture: {name}\n", encoding="utf-8")
+            bundle = root / "WorkSpaces.app"
+            (bundle / "Contents" / "Resources").mkdir(parents=True)
+            result = subprocess.run(
+                ["bash", "-c", "set -e\n" + definitions + '\nAPP_BUNDLE="$1"\n'
+                 + SCRIPT_SOURCE[start:end], "compose-copy", str(bundle)],
+                cwd=root, capture_output=True, text=True, timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            for name in ("compose.yaml", "Dockerfile", ".dockerignore"):
+                self.assertEqual(
+                    (bundle / "Contents" / "Resources" / "ComposeSandbox" / name).read_bytes(),
+                    (source / name).read_bytes(),
+                )
 
     def test_the_spm_copy_is_unconditional(self) -> None:
         """Routing through the helper is not enough on its own: wrapping the call

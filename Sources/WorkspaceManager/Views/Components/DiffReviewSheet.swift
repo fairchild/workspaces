@@ -19,6 +19,7 @@ struct DiffReviewSheet: View {
     /// Known git status for `filePath`, if the caller has it (the Changes tab does). When nil the
     /// sheet resolves it so discard can word itself and route correctly for untracked files.
     var status: GitStatus? = nil
+    var composeWorkspace: WorkspaceProviderTarget? = nil
     /// Invoked after a stage / unstage / discard mutates the working tree so callers can refresh.
     var onChanged: () -> Void = {}
     let onClose: () -> Void
@@ -38,6 +39,10 @@ struct DiffReviewSheet: View {
 
     private var isUntracked: Bool {
         resolvedStatus == .untracked
+    }
+
+    private var inspection: ComposeRepositoryInspection {
+        ComposeRepositoryInspection(workspace: composeWorkspace, directoryURL: directoryURL, hostGit: gitService)
     }
 
     var body: some View {
@@ -80,14 +85,14 @@ struct DiffReviewSheet: View {
                     onStage: {
                         Task {
                             await performAction {
-                                try await gitService.stage(file: filePath, at: directoryURL)
+                                try await inspection.stage(file: filePath)
                             }
                         }
                     },
                     onUnstage: {
                         Task {
                             await performAction {
-                                try await gitService.unstage(file: filePath, at: directoryURL)
+                                try await inspection.unstage(file: filePath)
                             }
                         }
                     },
@@ -128,9 +133,9 @@ struct DiffReviewSheet: View {
         // Stage/Unstage routes discard correctly instead of trusting the now-stale passed-in status.
         resolvedStatus = status
         do {
-            async let diffTask = gitService.diff(file: filePath, at: directoryURL)
+            async let diffTask = inspection.diff(file: filePath)
             resolvedStatus =
-                try? await gitService.getStatus(at: directoryURL)
+                try await inspection.status()
                 .first(where: { $0.path == filePath })?.status
             phase = .loaded(try await diffTask)
         } catch {
@@ -140,11 +145,7 @@ struct DiffReviewSheet: View {
 
     private func performDiscard() async {
         await performAction {
-            if isUntracked {
-                try await gitService.discardUntracked(file: filePath, at: directoryURL)
-            } else {
-                try await gitService.discard(file: filePath, at: directoryURL)
-            }
+            try await inspection.discard(file: filePath, untracked: isUntracked)
         }
     }
 

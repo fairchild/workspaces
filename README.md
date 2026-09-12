@@ -46,6 +46,12 @@ WorkSpaces gives you a native app that wraps a terminal with some niceties for s
 - `cmd+o` to open repo in editor, defaulting to zed
 - Lifecycle hooks (`scripts/setup`, `scripts/stop`, `scripts/archive`; legacy `setup.sh` / `archive.sh`)
 
+[Docker Compose workspaces](docs/development/compose-workspaces.md) run each
+workspace's terminal and Git operations in a Linux container. The
+[standalone agent sandbox example](examples/compose-agent-sandbox/README.md)
+provides the same base environment with ordinary Compose commands and an optional
+Postgres service.
+
 ## Usage
 
 1. Launch app and resume your last repo overview, workspace terminal, or web view

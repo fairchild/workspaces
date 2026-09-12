@@ -1026,7 +1026,7 @@ struct ContentView: View {
             .onReceive(agentSessionRegistry.statusesDidChange) { _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
             }
-            .onChange(of: tileTreeStore.sessions) { _, _ in
+            .onChange(of: tileTreeStore.allLiveSessions) { _, _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
                 terminalContinuityController.persistSnapshot()
             }
@@ -2278,10 +2278,10 @@ struct ContentView: View {
         // session on the same key (issue #783 #3). The default-home fallback below
         // still seeds one shell so the window isn't empty pre-restore, and
         // executeRestore retires that shell if the plan claims its key.
-        if !restoreSessionsOnLaunchEnabled,
-            !tileTreeStore.hasSessions,
-            let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
-                .hostSessionSnapshot(excludingScopeKeys: terminalContinuityController.archivedWorkspaceScopeKeys)
+        if !tileTreeStore.hasSessions,
+            let snapshot = terminalContinuityController.restoredHostSessionSnapshot(
+                includeHostSessions: !restoreSessionsOnLaunchEnabled
+            )
         {
             tileTreeStore.restoreSessions(
                 snapshot.sessions,

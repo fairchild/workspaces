@@ -1,11 +1,14 @@
-# VM Workspace Providers and Lume
+# Workspace providers: local, cloud, VM, and Compose
 
-This document explains how VM-backed workspaces work **today**. Historical context and design rationale are separated into a dedicated section at the end, so readers who only want the current model can stop before that section.
+This document explains the workspace provider model, including local shells,
+cloud sandboxes, Lume VMs, and Docker Compose containers. Historical context and
+design rationale appear at the end.
 
 ## Quick Definitions
 
 - `Daytona` is the cloud provider in this app. It creates remote Linux sandboxes and gives the app an SSH entrypoint. For more Daytona-specific detail, see [Daytona Cloud Workspaces](daytona-vm.md).
 - `Lume` is a local Apple Silicon VM system with a daemon and CLI. In this app it creates local Linux or macOS VMs, mounts a host workspace directory into the guest, provides terminal access through `lume ssh`, can expose a full desktop through VNC, and relies on a standalone validated-base gate before macOS clone reuse.
+- `Docker Compose` runs one local Linux Compose project per workspace, with an independent host-visible clone and an `agent` service for terminals and Git. See [Docker Compose workspaces](development/compose-workspaces.md) for its lifecycle and trust boundaries.
 
 ## Current Mental Model
 
@@ -23,17 +26,20 @@ New Workspace
     |
     +-------------------+--------------------+----------------------+
     |                   |                    |                      |
-    v                   v                    v
-  Local             Daytona               Lume VM
-  host shell        cloud sandbox         local VM
-  host files        SSH terminal          host-shared files
-                                          SSH terminal + desktop
+    v                   v                    v                      v
+  Local             Daytona               Lume VM              Docker Compose
+  host shell        cloud sandbox         local VM             Linux containers
+  host files        SSH terminal          host-shared files    independent clone
+                                          SSH + desktop        exec + guest tmux
 ```
 
 The important boundary is:
 
-- the app owns the workspace list, selection state, file tree, code preview, git status, and terminal session routing
+- the app owns the workspace list, selection state, file and changes presentation, and terminal session routing
 - the provider owns creation, start, stop, delete, and environment-specific launch behavior
+
+For Compose, host-visible files do not authorize host execution: Git operations
+run inside the agent container, and native file inspection rejects symbolic links.
 
 ```mermaid
 flowchart LR
@@ -42,6 +48,7 @@ flowchart LR
     Sheet --> Local["Local provider"]
     Sheet --> Daytona["Daytona provider"]
     Sheet --> Lume["Lume provider"]
+    Sheet --> Compose["Compose provider"]
 
     Local --> HostFiles["Host workspace files"]
     Local --> Terminal["In-app terminal"]
@@ -54,6 +61,12 @@ flowchart LR
     LumeVM --> Terminal
     LumeVM --> Desktop["External VNC desktop"]
 
+    Compose --> Clone["Independent host-visible clone"]
+    Compose --> Agent["Linux agent container"]
+    Agent --> Terminal
+    Agent --> GuestGit["Git execution"]
+    Clone --> SafeFiles["No-follow file preview"]
+
     HostFiles --> Inspector["Right pane: files, previews, git status"]
 ```
 
@@ -64,6 +77,7 @@ flowchart LR
 | Local | Host macOS process | Host workspace directory | Default shell in workspace directory | No | Local-only archive toggle |
 | Daytona | Cloud Linux sandbox | Placeholder path only | Provider returns SSH command | No | Yes |
 | Lume | Local VM on Apple Silicon | Host workspace directory mounted into guest | `lume ssh <vm>` | External VNC URL | No |
+| Docker Compose | Local Docker Linux runtime | Independent host clone; read-only native previews; Git in container | `docker compose exec` with guest tmux | No | No |
 
 ## What The User Sees
 
@@ -74,6 +88,7 @@ The new workspace sheet presents a provider picker instead of a local/remote tog
 - `Local` behaves like the original host workspace flow.
 - `Cloud Linux` is available when the repo has a remote origin URL and the Daytona backend is configured.
 - `macOS VM` and `Linux VM` are available on supported Apple Silicon hosts. Missing Lume install or daemon health is handled by the first-use setup and repair flow instead of hiding the option.
+- `Docker Compose` requires a running local Docker context with Linux containers and the Compose plugin. It builds the app's trusted template and runs setup in the agent container.
 
 When `Lume VM` is selected, the sheet also offers a guest OS choice:
 
@@ -95,6 +110,7 @@ Clicking a workspace still feels like selecting a normal row in the sidebar, but
 - `Local`: activate a host shell in the workspace directory.
 - `Daytona`: get or start the sandbox, then launch the returned SSH command.
 - `Lume`: ensure the VM is running and SSH-ready, then launch `lume ssh`.
+- `Docker Compose`: validate the saved template and running project, then attach to its agent service. A stopped project must be started explicitly.
 
 ### Opening the desktop
 
@@ -126,6 +142,7 @@ flowchart TB
         Local["LocalWorkspaceProvider"]
         Daytona["DaytonaWorkspaceProvider"]
         Lume["LumeWorkspaceProvider"]
+        Compose["ComposeWorkspaceProvider"]
         WorkspaceService["WorkspaceService"]
         SessionCoordinator["HostTerminalSessionCoordinator"]
         Models["Workspace model"]
@@ -144,6 +161,7 @@ flowchart TB
     Registry --> Local
     Registry --> Daytona
     Registry --> Lume
+    Registry --> Compose
 ```
 
 ## The Lume Workspace Flow
@@ -220,6 +238,7 @@ Examples:
 - `Local`: host path, no custom command
 - `Daytona`: backend session key, temp working directory, SSH command
 - `Lume`: backend session key, host workspace path, `lume ssh <vm>`
+- `Docker Compose`: backend session key, trusted configuration directory, and a Compose exec command. At launch the app binds a stable terminal UUID to the guest tmux session name.
 
 ### `DesktopLaunchSpec`
 
@@ -238,7 +257,9 @@ Provider-backed terminal sessions now use:
 HostTerminalSessionKey.backendSession(providerID: String, instanceID: String)
 ```
 
-That matters most for Lume because the Lume terminal and a local host shell may both point at the same host directory, but they are not the same session and must not be deduplicated.
+Lume and Compose terminals can have host-visible files without being host shell
+sessions. Their provider keys keep terminal routing separate from local sessions
+that happen to use the same directory.
 
 ```mermaid
 flowchart LR
@@ -273,7 +294,8 @@ That is what keeps sidebar selection synchronized with provider-backed terminals
 - `stopped`
 - `archived`
 
-`provisioning` exists mainly for Lume, because VM creation and unattended guest setup can take long enough that the UI needs an honest intermediate state.
+`provisioning` covers creation and guest setup for Lume and Compose. A Compose
+workspace becomes active only after its readiness probe and setup script succeed.
 
 ### Provider status mapping
 
@@ -286,6 +308,9 @@ That is what keeps sidebar selection synchronized with provider-backed terminals
 | Daytona `started` / `starting` | `active` |
 | Daytona `stopped` / `stopping` | `stopped` |
 | Daytona `archived` / `archiving` | `archived` |
+| Compose agent running and healthy | `active` |
+| Compose project stopped or missing | `stopped` |
+| Compose daemon unavailable | Error; preserve last observed state |
 
 For Lume, `archived` is only a compatibility status in the shared workspace model when the external VM no longer exists. The UI does not offer an Archive action for Lume.
 
@@ -302,6 +327,11 @@ For Lume that payload includes:
 
 That lets the app recover provider-specific behavior from the persisted workspace record without adding Lume-only top-level fields.
 
+Compose stores `ComposeSandboxMetadata`, including its project name, Docker
+context and endpoint, checkout and trusted configuration paths, terminal service,
+guest working directory, and template hashes. Its receipt and template snapshot
+are host-owned and outside the agent's writable clone.
+
 ## Status Sync On Launch
 
 At app startup, `ContentView` groups non-local workspaces by provider and asks each provider to reconcile status.
@@ -310,6 +340,7 @@ This preserves provider-specific behavior:
 
 - Daytona lists sandboxes and maps cloud states
 - Lume lists VMs from the daemon and maps VM states
+- Compose validates the saved project and reads its agent service state; daemon errors do not imply deletion
 
 The UI does not have to know how those providers obtain or interpret status.
 
@@ -321,6 +352,10 @@ The UI does not have to know how those providers obtain or interpret status.
 | `Sources/WorkspaceManagerCore/Services/LocalWorkspaceProvider.swift` | Host-backed workspace provider |
 | `Sources/WorkspaceManagerCore/Services/DaytonaWorkspaceProvider.swift` | Daytona provider wrapper |
 | `Sources/WorkspaceManagerCore/Services/LumeWorkspaceProvider.swift` | Lume REST + CLI provider |
+| `Sources/WorkspaceManagerCore/Services/ComposeWorkspaceProvider.swift` | Independent clone, container lifecycle, Git execution, and terminal attachment |
+| `Sources/WorkspaceManagerCore/Services/ComposeWorkspaceRuntime.swift` | Trusted template snapshots, context validation, and Docker command construction |
+| `Sources/WorkspaceManager/Services/ComposeRepositoryInspection.swift` | Routes native Changes and diff actions to container Git |
+| `Sources/WorkspaceManager/Services/ComposeSafeFiles.swift` | Bounded no-follow file inspection and read-only preview |
 | `Sources/WorkspaceManagerCore/Models/Models.swift` | `WorkspaceStatus.provisioning`, `backendMetadataRaw` |
 | `Sources/WorkspaceManagerCore/Services/HostTerminalSessionCoordinator.swift` | `backendSession` identity semantics |
 | `Sources/WorkspaceManager/Views/MainWindow/NewWorkspaceSheet.swift` | Provider picker and Lume guest OS selection |
@@ -335,6 +370,7 @@ The UI does not have to know how those providers obtain or interpret status.
 - Full desktop support is external VNC only.
 - The terminal lands in the guest shell's default working directory; the app still treats the host workspace path as the source of truth for files.
 - Daytona remains Linux-only and remote-origin-dependent.
+- Compose is local and Linux-only. Native previews are read-only; project Compose files are not imported. Optional Postgres remains a standalone reference feature.
 
 ---
 
@@ -386,6 +422,8 @@ Embedding VM control in-process would couple VM ownership to the app process, wh
 ## Related Docs
 
 - [Daytona Cloud Workspaces](daytona-vm.md)
+- [Docker Compose workspaces](development/compose-workspaces.md)
+- [Standalone Compose agent sandbox](../examples/compose-agent-sandbox/README.md)
 - [Lume Validation Runbook](development/lume-validation.md)
 - [Swift & macOS Patterns for Web Developers](archive/patterns.md)
 - [Product Overview](product_overview.md)

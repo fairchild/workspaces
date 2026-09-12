@@ -161,7 +161,13 @@ struct SidebarWorkspaceController {
             return persistedWorkspace
         } catch {
             if let persistedWorkspace {
-                modelContext.delete(persistedWorkspace)
+                // Compose may have created durable files or volumes before startup failed.
+                // Keep the owned identity available for diagnosis and explicit cleanup.
+                if providerID == "compose" {
+                    persistedWorkspace.status = .stopped
+                } else {
+                    modelContext.delete(persistedWorkspace)
+                }
                 do {
                     try saveModelContext(action: "revert failed workspace creation")
                 } catch {
@@ -182,8 +188,10 @@ struct SidebarWorkspaceController {
             try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
         } else {
             let provider = try provider(for: workspace)
-            try await provider.deleteWorkspace(WorkspaceProviderTarget(workspace))
-            if provider.descriptor.usesHostWorkspaceFiles {
+            try await provider.deleteWorkspace(WorkspaceProviderTarget(workspace), deleteFiles: deleteFiles)
+            // Compose owns file deletion too: host teardown and Git must never execute
+            // against a checkout whose scripts and repository metadata an agent controls.
+            if provider.descriptor.usesHostWorkspaceFiles && workspace.backend != .compose {
                 try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
             }
         }
@@ -195,7 +203,20 @@ struct SidebarWorkspaceController {
 
     func stop(_ workspace: Workspace) async throws {
         let provider = try provider(for: workspace)
-        try await provider.stopWorkspace(WorkspaceProviderTarget(workspace))
+        do {
+            try await provider.stopWorkspace(WorkspaceProviderTarget(workspace))
+        } catch {
+            // A Compose stop hook can fail after the runtime has successfully stopped.
+            // Preserve that observed transition so Start remains available for recovery.
+            if workspace.backend == .compose,
+                let snapshot = try? await provider.syncStatuses(for: [WorkspaceProviderTarget(workspace)]).first,
+                snapshot.remoteId == workspace.remoteId
+            {
+                workspace.status = snapshot.status
+                try? saveModelContext(action: "reconcile stopped sandbox")
+            }
+            throw error
+        }
         workspace.status = .stopped
         try saveModelContext(action: "stop workspace")
     }

@@ -64,6 +64,10 @@ actor DeferredWorkspaceProvider: WorkspaceProviderProtocol {
         try await resolvedProvider().deleteWorkspace(workspace)
     }
 
+    func deleteWorkspace(_ workspace: WorkspaceProviderTarget, deleteFiles: Bool) async throws {
+        try await resolvedProvider().deleteWorkspace(workspace, deleteFiles: deleteFiles)
+    }
+
     func syncStatuses(for workspaces: [WorkspaceProviderTarget]) async throws -> [WorkspaceProviderStatusSnapshot] {
         try await resolvedProvider().syncStatuses(for: workspaces)
     }
