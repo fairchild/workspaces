@@ -146,7 +146,7 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
 
 
 def markdown_section(body: str, heading: str) -> str:
-    pattern = rf"(?ms)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
+    pattern = rf"(?msi)^## {re.escape(heading)}\n(.*?)(?=^## |\n---\n|\Z)"
     match = re.search(pattern, body)
     if not match:
         return ""
@@ -154,11 +154,11 @@ def markdown_section(body: str, heading: str) -> str:
 
 
 def has_markdown_section(body: str, heading: str) -> bool:
-    return re.search(rf"(?m)^## {re.escape(heading)}\s*$", body) is not None
+    return re.search(rf"(?mi)^## {re.escape(heading)}\s*$", body) is not None
 
 
 def strip_markdown_section(body: str, heading: str) -> str:
-    pattern = rf"(?ms)^## {re.escape(heading)}\n.*?(?=^## |\n---\n|\Z)"
+    pattern = rf"(?msi)^## {re.escape(heading)}\n.*?(?=^## |\n---\n|\Z)"
     stripped = re.sub(pattern, "", body).strip()
     return re.sub(r"\n{3,}", "\n\n", stripped)
 
@@ -173,8 +173,8 @@ def insert_markdown_section(
     section = f"## {heading}\n{content.strip()}".rstrip()
     cleaned = strip_markdown_section(body.strip(), heading).strip()
     if before_heading and has_markdown_section(cleaned, before_heading):
-        pattern = rf"(?m)^## {re.escape(before_heading)}\s*$"
-        return re.sub(pattern, f"{section}\n\n## {before_heading}", cleaned, count=1)
+        pattern = rf"(?mi)^(## {re.escape(before_heading)})\s*$"
+        return re.sub(pattern, lambda match: f"{section}\n\n{match.group(1)}", cleaned, count=1)
     if cleaned:
         return f"{cleaned}\n\n{section}"
     return section
