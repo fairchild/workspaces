@@ -55,6 +55,14 @@ def _load_generator():
 
 pr_review_page = _load_generator()
 
+# `mmdc` is on a developer's machine and not on the hosted runner, so a test
+# that asserts a drawn diagram asserts something CI cannot produce. These skip
+# where it is absent; the path CI does take is a contract of its own, held by
+# `test_without_a_renderer_the_page_shows_the_source_and_says_so`.
+requires_renderer = unittest.skipUnless(
+    shutil.which("mmdc"), "no local mermaid renderer (mmdc)"
+)
+
 
 class GeneratorTestCase(unittest.TestCase):
     # Building a page renders its diagram, and where `mmdc` is installed that is
@@ -226,6 +234,7 @@ class DiffByConcern(GeneratorTestCase):
 
 
 class Diagram(GeneratorTestCase):
+    @requires_renderer
     def test_a_diagram_in_the_body_is_the_one_rendered(self) -> None:
         """The body's diagram is what gets drawn -- and drawn is the word.
 
@@ -285,12 +294,35 @@ class Diagram(GeneratorTestCase):
         self.assertNotIn("payload", diagram)
         self.assertTrue(diagram.startswith("graph TD"), diagram)
 
+    @requires_renderer
     def test_the_diagram_leaves_as_an_image_not_as_markup(self) -> None:
         page = self.page(SYNTHETIC)
         self.assertRegex(page, r'<img width="\d+" alt="Diagram of the change" src="data:image/png;base64,')
         self.assertNotIn("<svg", page)
 
-    @unittest.skipUnless(shutil.which("mmdc"), "no local renderer to constrain")
+    def test_without_a_renderer_the_page_shows_the_source_and_says_so(self) -> None:
+        """The fallback is a contract, not a shrug.
+
+        It is the path every hosted runner takes, so it is the one path a test
+        must not need a renderer to check: the source is shown as escaped text,
+        the page says it did not draw it, and nothing in that block can load,
+        run, or fetch anything.
+        """
+        source = self.source(SYNTHETIC)
+        with unittest.mock.patch.object(pr_review_page.shutil, "which", return_value=None):
+            page = pr_review_page.build_page(source)
+
+        shape = page[page.index('id="shape"') : page.index('<section id="diff"')]
+        self.assertIn("No renderer was available", shape)
+        self.assertIn("<pre>graph LR", shape)
+        self.assertIn("--&gt;", shape, "the mermaid arrows should be escaped text")
+        self.assertIn("parse_config", shape)
+        for markup in ("<img", "<svg", "<script"):
+            self.assertNotIn(markup, shape, f"{markup} in a block that only shows source")
+        self.assertNotIn("<script", page)
+        self.assertNotIn("<svg", page)
+
+    @requires_renderer
     def test_the_renderer_reaches_no_network_during_a_build(self) -> None:
         """A diagram label can name a URL, and the renderer is a browser.
 
