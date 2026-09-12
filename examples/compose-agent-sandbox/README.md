@@ -1,8 +1,9 @@
 # Compose agent sandbox
 
-Run an agent in a Linux terminal with its own working copy, home directory and
-optional database. Each workspace is an ordinary Docker Compose project. This
-example works without WorkSpaces, and WorkSpaces uses the same base template.
+This small directory defines a complete working environment: a Linux terminal,
+tools, a working copy, an agent home and optional services. Each running workspace
+is an ordinary Docker Compose project. You can iterate on this reference without
+WorkSpaces, and WorkSpaces bundles the same base template for its native terminal.
 
 Open the [visual feature guide](index.html) for an interactive lifecycle diagram
 and recorded end-to-end demonstrations. The page and its `media/` directory work
@@ -14,6 +15,51 @@ The host keeps the checkout visible to editors. Commands, Git, setup scripts and
 agent tools run inside `agent`. That boundary matters because Git configuration
 and repository scripts can execute programs. A Git worktree points outside its
 directory, so use a self-contained clone with its own `.git` directory and objects.
+
+## Work on this directory
+
+Keep the definition small enough to understand and test in one place:
+
+| File | What to change here |
+| --- | --- |
+| `Dockerfile` | Linux tools, system packages and the agent user. |
+| `compose.yaml` | The terminal service, mounts, health check and resource limits. |
+| `compose.postgres.yaml` | The optional database, its network and persistent data. |
+| `smoke.sh` | The executable contract for lifecycle, persistence and separation. |
+| `.dockerignore` | The allowlist that excludes everything except trusted build inputs. |
+| `index.html` | The interactive feature explanation, styles and behavior. |
+| `media/` | The generated illustration and its prompt, plus real terminal recordings. |
+| `README.md` | Setup instructions and the local development loop. |
+
+From this directory, edit the definition and run:
+
+```bash
+./smoke.sh --with-postgres
+```
+
+The test builds the image, creates two disposable clones and projects, checks the
+runtime, and removes only its Docker resources. It prints the location of retained
+fixtures and logs. If the Dockerfile has not changed and the image is already
+built, `--skip-build` skips that build step. Changes to the optional services belong
+in the matching smoke checks as well.
+
+For the explanation page, open `index.html` directly or serve this directory:
+
+```bash
+python3 -m http.server 8098 --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8098/` and reload after edits. The page needs no frontend
+build or external assets. See [media/README.md](media/README.md) for the generated
+image's model, prompt and the recordings' provenance.
+
+The directory holds the definition, not a workspace's mutable state. The setup
+below snapshots the trusted files outside each mounted clone. WorkSpaces also
+uses a snapshot: the app bundles the base files when built and copies them for
+each new workspace. Testing changes here needs no app build; using those changes
+in new WorkSpaces environments does. Existing workspaces keep their saved
+snapshots. The app does not yet import an arbitrary Compose directory or attach
+an external project through its UI.
 
 ## Start a workspace
 
