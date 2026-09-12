@@ -58,9 +58,21 @@ UPLOAD_TIMEOUT = 300
 # other evidence artifact shares, so it carries its own policy and loads
 # nothing: no script anywhere, images only as data or over https, and the
 # inline stylesheet the page ships with. The origin's own headers are #1616.
+# Hosts a PR body may point an image at. `img-src https:` would let a body make
+# every reader's browser call on any host it named, with nothing in between --
+# on the body itself GitHub's camo proxy is what stands there. An image from
+# anywhere else is shown as its address in text instead of fetched.
+IMAGE_HOSTS = (
+    "evidence.cloudcompute.com",
+    "user-images.githubusercontent.com",
+    "private-user-images.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "github.com",
+)
 CONTENT_SECURITY_POLICY = (
-    "default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; "
-    "base-uri 'none'; form-action 'none'"
+    "default-src 'none'; "
+    + "img-src data: " + " ".join(f"https://{host}" for host in IMAGE_HOSTS) + "; "
+    "style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"
 )
 
 # The renderer is a browser handed mermaid source from a PR body, and a label
@@ -81,6 +93,34 @@ PUPPETEER_ARGS = (
 )
 DIAGRAM_WIDTH = 760
 SAFE_SCHEMES = {"http", "https"}
+# An image is only worth fetching from somewhere the policy will also allow.
+IMAGE_SCHEMES = {"https"}
+
+# The second layer behind the allowlist, not the first: strict refuses HTML in
+# labels and `htmlLabels: false` refuses it again, and `secure` pins both so an
+# `%%{init}%%` directive in the source cannot turn either back on.
+MERMAID_CONFIG = {
+    "securityLevel": "strict",
+    "htmlLabels": False,
+    # Wrapping is mermaid's own once HTML labels are off, and its default
+    # breaks a filename mid-word; 420 keeps one on a line.
+    "flowchart": {"htmlLabels": False, "wrappingWidth": 420},
+    "secure": ["securityLevel", "htmlLabels", "flowchart", "secure"],
+}
+
+# What an authored fence may contain. A diagram of a pull request's shape is
+# boxes, arrows and words; everything a renderer can be talked into reading off
+# the build host's disk lives outside that. Refusing the syntax is the check --
+# sanitising what a renderer produced is a race against its feature list.
+MERMAID_HEADER_RE = re.compile(
+    r"^(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)$|^sequenceDiagram$|^stateDiagram(?:-v2)?$"
+)
+MERMAID_LABEL_RE = re.compile(r'"[^"]*"|\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|\|[^|]*\|')
+# Checked against the whole source, lowercased. `<` and `>` are not here because
+# an edge is made of them; they are refused inside labels instead.
+MERMAID_FORBIDDEN = ("@{", "%%{", "href", "click", "img", "image", "file:", "/", "\\", "..")
+MERMAID_LABEL_FORBIDDEN = ("<", ">")
+MERMAID_SKELETON_RE = re.compile(r"^[A-Za-z0-9_ \t.,:;!?=<>|~^*&+#()\[\]{}\"'-]*$")
 
 PR_FIELDS = (
     "number,title,body,headRefOid,state,isDraft,author,url,reviews,"
@@ -97,6 +137,8 @@ SECTIONS = (
 )
 EVERYTHING_ELSE = "Everything else"
 UNAVAILABLE = "unavailable (the query failed)"
+# What one query returns; a PR with more than this is told so on the page.
+THREAD_QUERY_CAP = 100
 LINK_PREFIX = "Review page: "
 
 EVIDENCE_SECTIONS = ("Evidence", "Evidence Status", "Validation")
@@ -187,12 +229,35 @@ def _run(argv: list[str], *, timeout: int) -> str:
     return result.stdout
 
 
+def current_head(number: int, repo: str = DEFAULT_REPO) -> str:
+    return json.loads(_run(
+        ["gh", "pr", "view", str(number), "--repo", repo, "--json", "headRefOid"],
+        timeout=GH_TIMEOUT,
+    ))["headRefOid"]
+
+
+def refuse_if_head_moved(number: int, repo: str, expected: str) -> None:
+    """A page names one head; every part of it has to be that head's.
+
+    The body, the diff, the upload and the body edit are four separate calls,
+    and a push between any two of them would publish a page describing one head
+    with another head's contents.
+    """
+    moved = current_head(number, repo)
+    if moved != expected:
+        raise ValueError(
+            f"#{number} moved from {expected[:8]} to {moved[:8]} while this page was "
+            "being built; nothing was published"
+        )
+
+
 def read_pr(number: int, repo: str = DEFAULT_REPO) -> Source:
     pr = json.loads(_run(
         ["gh", "pr", "view", str(number), "--repo", repo, "--json", PR_FIELDS],
         timeout=GH_TIMEOUT,
     ))
     diff = _run(["gh", "pr", "diff", str(number), "--repo", repo], timeout=GH_TIMEOUT)
+    refuse_if_head_moved(number, repo, pr.get("headRefOid", ""))
     return Source(pr=pr, diff=diff, threads=read_threads(number, repo))
 
 
@@ -225,10 +290,18 @@ def read_threads(number: int, repo: str = DEFAULT_REPO) -> list[dict] | None:
             ],
             timeout=GH_TIMEOUT,
         ))
-    except (RuntimeError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+
+        nodes = payload["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    except (
+        RuntimeError,
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+    ) as error:
         print(f"[pr-review-page] review threads unavailable: {error}", file=sys.stderr)
         return None
-    return payload["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"]
+    return nodes
 
 
 def load_fixture(directory: Path | str) -> Source:
@@ -247,8 +320,20 @@ def load_fixture(directory: Path | str) -> Source:
 # --------------------------------------------------------------------------
 
 
+def visible_body(body: str) -> str:
+    """The body with every HTML comment removed.
+
+    A comment is content GitHub shows to nobody, so it is not a bullet, an
+    image, a link or a closing reference here either. A page that front-ends a
+    pull request cannot show what a reader of that pull request cannot.
+    The marker scan keeps the raw body: it needs to know where comments are.
+    """
+    return COMMENT_RE.sub("", body or "")
+
+
 def body_sections(body: str) -> dict[str, str]:
-    """Markdown `## ` sections, keyed by heading."""
+    """Markdown `## ` sections of the visible body, keyed by heading."""
+    body = visible_body(body)
     sections: dict[str, str] = {}
     heading = ""
     lines: list[str] = []
@@ -327,7 +412,7 @@ def plain_language(pr: dict) -> list[str]:
 
 
 def closes_issue(body: str) -> str | None:
-    match = re.search(r"(?i)\bcloses\s+#(\d+)", body or "")
+    match = re.search(r"(?i)\bcloses\s+#(\d+)", visible_body(body))
     return f"#{match.group(1)}" if match else None
 
 
@@ -453,6 +538,31 @@ def _node_id(path: str) -> str:
     return "n" + re.sub(r"[^A-Za-z0-9]", "", path)[-24:]
 
 
+def is_renderable_mermaid(source: str) -> bool:
+    """Whether an authored fence is in the subset this page will draw.
+
+    Everything outside it is shown as escaped source instead, which costs a
+    picture and keeps the build host's filesystem out of a published PNG: mmdc
+    renders from a `file://` page, so a bare path in an image shape or an HTML
+    label resolves on the machine doing the build.
+    """
+    lines = [line.strip() for line in source.splitlines() if line.strip()]
+    if not lines or not MERMAID_HEADER_RE.match(lines[0]):
+        return False
+
+    lowered = source.lower()
+    if any(token in lowered for token in MERMAID_FORBIDDEN):
+        return False
+
+    for line in lines:
+        for label in MERMAID_LABEL_RE.findall(line):
+            if any(token in label for token in MERMAID_LABEL_FORBIDDEN):
+                return False
+        if not MERMAID_SKELETON_RE.match(MERMAID_LABEL_RE.sub("", line)):
+            return False
+    return True
+
+
 def _mermaid_label(text: str) -> str:
     """Text mermaid reads as a label and nothing else.
 
@@ -483,13 +593,49 @@ def _marker_is_its_own_comment(body: str, start: int) -> bool:
     return False
 
 
-def diagram_source(source: Source) -> str:
-    """The body's own mermaid fence, or a small graph of what the PR touches."""
-    body = source.pr.get("body") or ""
-    for match in DIAGRAM_MARKER_RE.finditer(body):
-        if _marker_is_its_own_comment(body, match.start()):
-            return match.group(1).strip()
+def _quoted_line_numbers(body: str) -> set[int]:
+    """Lines a reader sees as literal text rather than as markup.
 
+    A marker inside a fenced example, a CDATA block or a processing instruction
+    is shown by GitHub as the characters it is made of. Drawing it would be the
+    two readers disagreeing again, which is the whole defect this guard exists
+    for -- only quieter, because here the text is visible.
+    """
+    quoted: set[int] = set()
+    fence = ""
+    for number, line in enumerate(body.splitlines()):
+        stripped = line.strip()
+        if fence:
+            quoted.add(number)
+            if stripped.startswith(fence):
+                fence = ""
+            continue
+        if match := re.match(r"^(`{3,}|~{3,})", stripped):
+            fence = match.group(1)
+            quoted.add(number)
+    for pattern in (r"<!\[CDATA\[.*?\]\]>", r"<\?.*?\?>"):
+        for match in re.finditer(pattern, body, re.DOTALL):
+            start = body.count("\n", 0, match.start())
+            quoted.update(range(start, body.count("\n", 0, match.end()) + 1))
+    return quoted
+
+
+def authored_diagram(source: Source) -> str | None:
+    """The body's own mermaid fence, if the body really shows one."""
+    body = source.pr.get("body") or ""
+    quoted = _quoted_line_numbers(body)
+    for match in DIAGRAM_MARKER_RE.finditer(body):
+        if not _marker_is_its_own_comment(body, match.start()):
+            continue
+        if body.count("\n", 0, match.start()) in quoted:
+            continue
+        return match.group(1).strip()
+    return None
+
+
+def generated_diagram(source: Source) -> str:
+    """A small graph of what this pull request touches."""
+    body = source.pr.get("body") or ""
     paths = [entry["path"] for entry in source.pr.get("files", [])]
     root = closes_issue(body) or f"#{source.pr.get('number', '')}"
     lines = ["graph TD", f'  root["{_mermaid_label(root)}"]']
@@ -500,6 +646,12 @@ def diagram_source(source: Source) -> str:
         if covered:
             lines.append(f"  {_node_id(path)} -. tests .-> {_node_id(covered)}")
     return "\n".join(lines)
+
+
+def diagram_source(source: Source) -> str:
+    """What the page will draw: the body's fence where there is one, else ours."""
+    authored = authored_diagram(source)
+    return authored if authored is not None else generated_diagram(source)
 
 
 def _covered_by(test_path: str, paths: list[str]) -> str | None:
@@ -524,7 +676,7 @@ def _png_width(data: bytes) -> int | None:
     return int.from_bytes(data[16:20], "big")
 
 
-def render_diagram(mermaid: str) -> str:
+def render_diagram(mermaid: str, *, authored: bool = False) -> str:
     """A picture of the diagram, or its source as text when nothing can draw it.
 
     The source is PR text, so the drawing happens here, once, in a browser with
@@ -536,18 +688,28 @@ def render_diagram(mermaid: str) -> str:
     not draw it. There is no browser-side fallback: source this build refused is
     not source to hand a second engine in someone else's browser.
     """
+    if authored and not is_renderable_mermaid(mermaid):
+        return _diagram_source_block(
+            mermaid,
+            "This diagram's source is outside the syntax this page will draw, so "
+            "it is shown as source.",
+        )
+
     mmdc = shutil.which("mmdc")
     if mmdc:
         with tempfile.TemporaryDirectory() as work:
             source_file = Path(work) / "diagram.mmd"
             out_file = Path(work) / "diagram.png"
             config_file = Path(work) / "puppeteer.json"
+            mermaid_config = Path(work) / "mermaid.json"
             source_file.write_text(mermaid)
             config_file.write_text(json.dumps({"args": list(PUPPETEER_ARGS)}))
+            mermaid_config.write_text(json.dumps(MERMAID_CONFIG))
             try:
                 subprocess.run(
                     [mmdc, "-i", str(source_file), "-o", str(out_file),
                      "-b", "transparent", "-t", "neutral", "-s", "2",
+                     "-c", str(mermaid_config),
                      "--puppeteerConfigFile", str(config_file)],
                     capture_output=True,
                     text=True,
@@ -568,9 +730,15 @@ def render_diagram(mermaid: str) -> str:
                     f'alt="Diagram of the change" '
                     f'src="data:image/png;base64,{encoded}"></div>'
                 )
+    return _diagram_source_block(
+        mermaid, "No renderer was available, so this is the diagram's source rather "
+        "than the diagram."
+    )
+
+
+def _diagram_source_block(mermaid: str, note: str) -> str:
     return (
-        '<div class="diagram"><p class="meta">No renderer was available, so this is '
-        "the diagram's source rather than the diagram.</p>"
+        f'<div class="diagram"><p class="meta">{_esc(note)}</p>'
         f"<pre>{html.escape(mermaid)}</pre></div>"
     )
 
@@ -742,6 +910,19 @@ def _esc(text: object) -> str:
     return html.escape(str(text), quote=True)
 
 
+def _safe_image_url(url: str) -> str | None:
+    """An image address worth putting in an `<img>`.
+
+    Narrower than a link: `http:` and any host outside `IMAGE_HOSTS` would be
+    refused by the page's own policy anyway, and a blocked image reads as the
+    page being broken rather than as the body having named somewhere odd.
+    """
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in IMAGE_SCHEMES:
+        return None
+    return url if parts.hostname in IMAGE_HOSTS else None
+
+
 def _safe_url(url: str) -> str | None:
     """The URL if a browser should be allowed to dial it, else None.
 
@@ -824,7 +1005,11 @@ def build_page(source: Source, head: str | None = None) -> str:
 
     # 2. The shape of the change
     parts.append(f'<section id="shape"><h2>{SECTIONS[1]}</h2>')
-    parts.append(render_diagram(diagram_source(source)))
+    authored = authored_diagram(source)
+    parts.append(render_diagram(
+        authored if authored is not None else generated_diagram(source),
+        authored=authored is not None,
+    ))
     parts.append("</section>")
 
     # 3. The diff by concern
@@ -847,13 +1032,14 @@ def build_page(source: Source, head: str | None = None) -> str:
     parts.append(f'<section id="evidence" class="evidence"><h2>{SECTIONS[3]}</h2>')
     if items.images:
         for url, alt in items.images:
-            safe = _safe_url(url)
+            safe = _safe_image_url(url)
             if safe:
                 parts.append(f'<figure><img src="{_esc(safe)}" alt="{_esc(alt)}">'
                              f"<figcaption>{_esc(alt)}</figcaption></figure>")
             else:
-                parts.append(f'<p class="meta">Image not shown, its address is not a '
-                             f"web address: {_esc(url)}</p>")
+                parts.append(f'<p class="meta">Image not shown, because this page only '
+                             f"loads images from the evidence store and GitHub: "
+                             f"{_esc(url)}</p>")
     if items.commands:
         parts.append("<h3>What was run</h3><table><tbody>")
         for command, result in items.commands:
@@ -890,6 +1076,11 @@ def build_page(source: Source, head: str | None = None) -> str:
     elif threads := open_threads(source.threads):
         for where, who, text in threads:
             parts.append(f"<li>Open thread on <code>{_esc(where)}</code> — {_esc(who)}: {_esc(text)}</li>")
+        if len(source.threads) >= THREAD_QUERY_CAP:
+            parts.append(
+                f"<li>Only the first {THREAD_QUERY_CAP} review threads were read, so "
+                "there may be more.</li>"
+            )
     else:
         parts.append("<li>No open review threads.</li>")
 
@@ -931,7 +1122,21 @@ def body_with_link(body: str, url: str) -> str:
     """
     lines = body.splitlines()
     line = f"{LINK_PREFIX}{url}"
+
+    # Only a line that is this line: above the first `## ` heading, not inside a
+    # comment, not inside a fenced example. Rewriting a `Review page:` that some
+    # body quotes in its own prose would edit that prose and add no link.
+    commented = {
+        body.count("\n", 0, match.start()) + offset
+        for match in COMMENT_RE.finditer(body)
+        for offset in range(body.count("\n", match.start(), match.end()) + 1)
+    }
+    quoted = _quoted_line_numbers(body)
     for index, existing in enumerate(lines):
+        if existing.startswith("## "):
+            break
+        if index in commented or index in quoted:
+            continue
         if existing.startswith(LINK_PREFIX):
             lines[index] = line
             return "\n".join(lines) + ("\n" if body.endswith("\n") else "")
@@ -971,13 +1176,16 @@ def upload(path: Path, number: int, name: str) -> str:
     return urls[-1]
 
 
-def write_link(number: int, url: str, repo: str) -> None:
+def write_link(number: int, url: str, repo: str, expected_head: str = "") -> None:
     """Insert the link into the body the PR has right now.
 
     The body read when the page was built is minutes old by the time this runs,
     and writing that one back would silently revert whatever the author changed
-    in between.
+    in between. If the head moved in those minutes, the page the link points at
+    describes a commit that is no longer the PR's, so nothing is written.
     """
+    if expected_head:
+        refuse_if_head_moved(number, repo, expected_head)
     body = json.loads(_run(
         ["gh", "pr", "view", str(number), "--repo", repo, "--json", "body"],
         timeout=GH_TIMEOUT,
@@ -1023,13 +1231,17 @@ def main() -> int:
         print(f"error: {error}", file=sys.stderr)
         return 1
 
+
     args.out.mkdir(parents=True, exist_ok=True)
     out_file = args.out / f"{number}.html"
     out_file.write_text(page)
     print(out_file)
 
     url = args.url
+    built_head = source.pr.get("headRefOid", "")
     if args.upload:
+        if not args.fixture:
+            refuse_if_head_moved(number, args.repo, built_head)
         url = upload(out_file, number, f"pr-review-{number}")
         print(url)
 
@@ -1040,7 +1252,7 @@ def main() -> int:
         if args.fixture:
             print("error: --link edits a live PR body and will not run from a fixture", file=sys.stderr)
             return 1
-        write_link(number, url, args.repo)
+        write_link(number, url, args.repo, built_head)
         print(f"linked from the body of #{number}")
 
     return 0

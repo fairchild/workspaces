@@ -16,11 +16,15 @@ test here reaches the network, `gh`, or a live PR.
 
 from __future__ import annotations
 
+import base64
 import html
 import http.server
 import importlib.util
+import json
 import re
+import subprocess
 import shutil
+import tempfile
 import threading
 import sys
 import unittest
@@ -346,20 +350,21 @@ class Diagram(GeneratorTestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
-            source = self.source(SYNTHETIC)
-            source.pr["body"] = (
-                "## Summary\n- One thing.\n\n"
-                "<!-- review-page:diagram -->\n```mermaid\ngraph LR\n"
-                f'  a["<img src=\'http://127.0.0.1:{port}/probe\'>"] --> b\n```\n'
+            # Straight at the renderer, not through the page: the allowlist
+            # refuses this syntax before mmdc ever sees it, and the sandbox is
+            # the layer behind that one, which is what this asserts.
+            drawn = pr_review_page.render_diagram(
+                f'graph LR\n  a["<img src=\'http://127.0.0.1:{port}/probe\'>"] --> b',
+                authored=False,
             )
-            page = pr_review_page.build_page(source)
         finally:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
 
-        self.assertEqual(hits, [], f"the build fetched {hits} from a PR body's diagram")
-        self.assertNotIn(f"127.0.0.1:{port}", page, "the URL survived into the page")
+        self.assertEqual(hits, [], f"the build fetched {hits} from a diagram's source")
+        self.assertIn("data:image/png;base64,", drawn, "the diagram did not render at all")
+        self.assertNotIn(f"127.0.0.1:{port}", drawn, "the URL survived into the page")
 
     def test_a_hostile_label_cannot_become_markup(self) -> None:
         """The mermaid source is a PR body's text, wherever it lands."""
@@ -387,14 +392,134 @@ class Diagram(GeneratorTestCase):
         self.assertIn("#1536", diagram)
 
 
+class AuthoredDiagramAllowlist(GeneratorTestCase):
+    """An authored fence is drawn only if its syntax is provably harmless.
+
+    mmdc renders from a `file://` page, so a bare path in an image shape or an
+    HTML label resolves on the build host and is rasterised into the PNG the
+    page publishes. Refusing the syntax is what closes that; sanitising the
+    render is a race against mermaid's feature set.
+    """
+
+    def body_with(self, diagram: str) -> str:
+        return f"## Summary\n- One thing.\n\n{pr_review_page.DIAGRAM_MARKER}\n```mermaid\n{diagram}\n```\n"
+
+    def probe_png(self) -> Path:
+        probe = Path(self.enterContext(tempfile.TemporaryDirectory())) / "probe.png"
+        # 1x1 magenta PNG: something the build user can read at a known path.
+        probe.write_bytes(base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        ))
+        return probe
+
+    def assertShownAsSource(self, page: str, needle: str) -> None:
+        self.assertNotIn("data:image/png", page, "a refused diagram was rendered anyway")
+        self.assertIn("No renderer", page + "not rendered")  # tolerated wording check below
+        self.assertIn(html.escape(needle, quote=True), page)
+
+    @requires_renderer
+    def test_an_image_shape_naming_a_local_file_is_not_rendered(self) -> None:
+        probe = self.probe_png()
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = self.body_with(f'flowchart LR\n  A@{{ img: "{probe}" }}\n  A --> B')
+        page = pr_review_page.build_page(source)
+        self.assertNotIn("data:image/png", page)
+        self.assertIn("@{", page)
+
+    @requires_renderer
+    def test_an_html_label_naming_a_local_file_is_not_rendered(self) -> None:
+        probe = self.probe_png()
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = self.body_with(f'graph LR\n  a["<img src=\'{probe}\'>"] --> b')
+        page = pr_review_page.build_page(source)
+        self.assertNotIn("data:image/png", page)
+        self.assertIn("&lt;img", page)
+
+    def test_the_allowlist_refuses_what_can_reach_a_file_or_a_browser(self) -> None:
+        for diagram in (
+            'flowchart LR\n  A@{ img: "/etc/hosts" }',
+            'graph LR\n  a["<img src=x>"] --> b',
+            'graph LR\n  a["../../secret.png"] --> b',
+            'graph LR\n  a["file:///etc/hosts"] --> b',
+            'graph LR\n  a --> b\n  click a "https://example.test"',
+            'graph LR\n  a["<a href=\'x\'>y</a>"] --> b',
+            '%%{init: {"securityLevel": "loose"}}%%\ngraph LR\n  a --> b',
+            'graph LR\n  a["/absolute/path.png"] --> b',
+            "not a diagram at all",
+        ):
+            with self.subTest(diagram=diagram.splitlines()[0]):
+                self.assertFalse(
+                    pr_review_page.is_renderable_mermaid(diagram),
+                    f"allowlist admitted {diagram!r}",
+                )
+
+    def test_the_allowlist_admits_an_ordinary_shape_diagram(self) -> None:
+        for diagram in (
+            "graph LR\n  caller[caller] --> parse[parse_config]\n  parse --> named[named key error]",
+            "flowchart TD\n  a --> b\n  b -.-> c",
+            "sequenceDiagram\n  Alice->>Bob: asks\n  Bob-->>Alice: answers",
+            "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running",
+        ):
+            with self.subTest(diagram=diagram.splitlines()[0]):
+                self.assertTrue(
+                    pr_review_page.is_renderable_mermaid(diagram),
+                    f"allowlist refused an ordinary diagram: {diagram!r}",
+                )
+
+    @requires_renderer
+    def test_the_generated_graph_still_renders_though_its_labels_hold_slashes(self) -> None:
+        """The generated graph is ours, and its labels are file paths.
+
+        It does not go through the allowlist, which exists for text a stranger
+        wrote; its labels are escaped by `_mermaid_label` instead.
+        """
+        source = self.source(SPECIMEN)
+        page = pr_review_page.build_page(source)
+        self.assertIn("data:image/png;base64,", page)
+
+
+class HiddenContent(GeneratorTestCase):
+    """What GitHub does not show, the page does not show either."""
+
+    def test_a_summary_inside_a_comment_is_not_the_pages_opening(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "*Bench Persona, Fixture Lead*\n\n"
+            "<!--\n## Summary\n- Hidden bullet nobody can see.\n-->\n\n"
+            "## Summary\n- The visible bullet.\n"
+        )
+        page = pr_review_page.build_page(source)
+        self.assertIn("The visible bullet.", page)
+        self.assertNotIn("Hidden bullet", page)
+
+    def test_an_image_inside_a_comment_is_never_fetched(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n## Evidence\n"
+            "<!--\n"
+            "- ![hidden](https://tracker.example.test/pixel.png)\n"
+            "- [hidden link](https://tracker.example.test/click)\n"
+            "-->\n"
+            "- ![shown](https://evidence.cloudcompute.com/ok.png)\n"
+        )
+        page = pr_review_page.build_page(source)
+        self.assertNotIn("tracker.example.test", page)
+        self.assertIn("evidence.cloudcompute.com/ok.png", page)
+
+    def test_a_closes_reference_inside_a_comment_is_not_the_issue(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = "## Summary\n- One thing.\n\n<!-- Closes #4321 -->\n"
+        self.assertIsNone(pr_review_page.closes_issue(source.pr["body"]))
+
+
 class Evidence(GeneratorTestCase):
     def test_an_evidence_image_is_shown_not_linked(self) -> None:
         page = self.page(SYNTHETIC)
-        self.assertIn('<img src="https://evidence.example.com/workspaces/pr-99/after.png"', page)
+        self.assertIn('<img src="https://evidence.cloudcompute.com/workspaces/pr-99/after.png"', page)
 
     def test_a_non_image_evidence_link_is_listed(self) -> None:
         page = self.page(SYNTHETIC)
-        self.assertIn('href="https://evidence.example.com/workspaces/pr-99/run.txt"', page)
+        self.assertIn('href="https://evidence.cloudcompute.com/workspaces/pr-99/run.txt"', page)
 
     def test_a_named_test_command_keeps_the_line_it_printed(self) -> None:
         page = self.page(SPECIMEN)
@@ -485,15 +610,15 @@ class Schemes(GeneratorTestCase):
             "- [two](httpjavascript:alert2)\n"
             "- ![three](javascript:alert3)\n"
             "- ![four](data:text/html;base64,PHNjcmlwdD4=)\n"
-            "- [five](https://evidence.example.com/ok.txt)\n"
-            "- ![six](https://evidence.example.com/ok.png)\n"
+            "- [five](https://evidence.cloudcompute.com/ok.txt)\n"
+            "- ![six](https://evidence.cloudcompute.com/ok.png)\n"
         )
         page = pr_review_page.build_page(source)
         for scheme in ("javascript:", "httpjavascript:", "data:text/html"):
             self.assertNotIn(f'href="{scheme}', page)
             self.assertNotIn(f'src="{scheme}', page)
-        self.assertIn('href="https://evidence.example.com/ok.txt"', page)
-        self.assertIn('src="https://evidence.example.com/ok.png"', page)
+        self.assertIn('href="https://evidence.cloudcompute.com/ok.txt"', page)
+        self.assertIn('src="https://evidence.cloudcompute.com/ok.png"', page)
         # Refused is not hidden: the reader still sees what the body said.
         self.assertIn("javascript:alert1", page)
 
@@ -559,11 +684,169 @@ class Escaping(GeneratorTestCase):
         source = self.source(SYNTHETIC)
         source.pr["body"] = (
             "## Summary\n- One thing.\n\n## Evidence\n"
-            '- ![" onerror="alert(1)](https://evidence.example.com/a.png)\n'
+            '- ![" onerror="alert(1)](https://evidence.cloudcompute.com/a.png)\n'
         )
         page = pr_review_page.build_page(source)
         self.assertNotIn('onerror="alert(1)"', page)
         self.assertIn("&quot;", page)
+
+
+class QuotedMarkers(GeneratorTestCase):
+    """A marker a reader sees as literal text is not a diagram either."""
+
+    def diagram_for(self, body: str) -> str:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = body
+        return pr_review_page.diagram_source(source)
+
+    def test_a_marker_inside_a_fenced_example_is_not_drawn(self) -> None:
+        body = (
+            "## Summary\n- One thing.\n\n````text\n"
+            f"{pr_review_page.DIAGRAM_MARKER}\n```mermaid\ngraph LR\n  quoted --> payload\n```\n"
+            "````\n"
+        )
+        self.assertNotIn("payload", self.diagram_for(body))
+
+    def test_a_marker_inside_cdata_is_not_drawn(self) -> None:
+        body = (
+            "## Summary\n- One thing.\n\n<![CDATA[\n"
+            f"{pr_review_page.DIAGRAM_MARKER}\n```mermaid\ngraph LR\n  quoted --> payload\n```\n"
+            "]]>\n"
+        )
+        self.assertNotIn("payload", self.diagram_for(body))
+
+    def test_a_marker_inside_a_processing_instruction_is_not_drawn(self) -> None:
+        body = (
+            "## Summary\n- One thing.\n\n<?php\n"
+            f"{pr_review_page.DIAGRAM_MARKER}\n```mermaid\ngraph LR\n  quoted --> payload\n```\n"
+            "?>\n"
+        )
+        self.assertNotIn("payload", self.diagram_for(body))
+
+    def test_the_ordinary_marker_still_works(self) -> None:
+        body = (
+            "## Summary\n- One thing.\n\n"
+            f"{pr_review_page.DIAGRAM_MARKER}\n```mermaid\ngraph LR\n  a --> b\n```\n"
+        )
+        self.assertEqual(self.diagram_for(body), "graph LR\n  a --> b")
+
+
+class HeadMoved(GeneratorTestCase):
+    """Four calls build one page; they have to be four calls about one head."""
+
+    def test_a_head_that_moves_between_the_body_and_the_diff_is_refused(self) -> None:
+        calls = {"n": 0}
+
+        def gh(argv, **_kwargs):
+            calls["n"] += 1
+            if "--json" in argv and "headRefOid" == argv[argv.index("--json") + 1]:
+                return '{"headRefOid": "bbbbbbbbbbbb"}'
+            if "diff" in argv:
+                return "diff --git a/x b/x\n"
+            return '{"headRefOid": "aaaaaaaaaaaa", "number": 99, "title": "t", "body": ""}'
+
+        with unittest.mock.patch.object(pr_review_page, "_run", gh):
+            with self.assertRaises(ValueError) as caught:
+                pr_review_page.read_pr(99)
+        self.assertIn("moved from aaaaaaaa to bbbbbbbb", str(caught.exception))
+
+    def test_write_link_refuses_a_moved_head_before_touching_the_body(self) -> None:
+        seen: list[list[str]] = []
+
+        def gh(argv, **_kwargs):
+            seen.append(argv)
+            return '{"headRefOid": "bbbbbbbbbbbb"}'
+
+        with unittest.mock.patch.object(pr_review_page, "_run", gh):
+            with self.assertRaises(ValueError):
+                pr_review_page.write_link(99, "https://x.test/p.html", "o/r", "aaaaaaaaaaaa")
+        self.assertTrue(all("edit" not in argv for argv in seen), "the body was edited anyway")
+
+
+class ThreadQuery(GeneratorTestCase):
+    def test_a_payload_without_the_expected_shape_is_unavailable_not_a_crash(self) -> None:
+        for payload in ('{"data": null}', '{"errors": [{"message": "gone"}]}', '{"data": {}}', "[]"):
+            with self.subTest(payload=payload):
+                with unittest.mock.patch.object(pr_review_page, "_run", lambda *a, **k: payload):
+                    self.assertIsNone(pr_review_page.read_threads(99))
+
+    def test_the_page_says_when_it_read_only_the_first_hundred(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.threads = [
+            {
+                "isResolved": False,
+                "path": f"src/f{index}.py",
+                "line": index,
+                "comments": {"nodes": [{"author": {"login": "someone"}, "body": "a note"}]},
+            }
+            for index in range(pr_review_page.THREAD_QUERY_CAP)
+        ]
+        page = pr_review_page.build_page(source)
+        self.assertIn(f"Only the first {pr_review_page.THREAD_QUERY_CAP} review threads", page)
+
+    def test_a_short_list_says_nothing_about_a_cap(self) -> None:
+        self.assertNotIn("Only the first", self.page(SYNTHETIC))
+
+
+class RendererWiring(GeneratorTestCase):
+    """Runs everywhere, including where there is no renderer to run.
+
+    The offline proof has two halves: that the flags work, which needs a
+    browser, and that they are actually handed to one, which does not. CI can
+    only ever see the second half, so the second half is asserted here.
+    """
+
+    def test_the_renderer_is_launched_with_the_network_closed(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(argv, **_kwargs):
+            captured["argv"] = argv
+            config = Path(argv[argv.index("--puppeteerConfigFile") + 1])
+            captured["puppeteer"] = json.loads(config.read_text())
+            captured["mermaid"] = json.loads(Path(argv[argv.index("-c") + 1]).read_text())
+            Path(argv[argv.index("-o") + 1]).write_bytes(
+                base64.b64decode(
+                    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+                )
+            )
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        with (
+            unittest.mock.patch.object(pr_review_page.shutil, "which", return_value="/fake/mmdc"),
+            unittest.mock.patch.object(pr_review_page.subprocess, "run", fake_run),
+        ):
+            drawn = pr_review_page.render_diagram("graph LR\n  a --> b", authored=False)
+
+        self.assertIn("data:image/png;base64,", drawn)
+        args = captured["puppeteer"]["args"]
+        self.assertIn("--host-resolver-rules=MAP * ~NOTFOUND", args)
+        self.assertIn("--proxy-server=127.0.0.1:1", args)
+        self.assertIn("--proxy-bypass-list=<-loopback>", args)
+        mermaid = captured["mermaid"]
+        self.assertEqual(mermaid["securityLevel"], "strict")
+        self.assertFalse(mermaid["htmlLabels"])
+        self.assertIn("securityLevel", mermaid["secure"])
+
+
+class ImageHosts(GeneratorTestCase):
+    def test_the_policy_names_the_hosts_rather_than_all_of_https(self) -> None:
+        page = self.page(SYNTHETIC)
+        policy = re.search(r'content="([^"]*default-src[^"]*)"', page).group(1)
+        self.assertNotIn("img-src data: https:;", policy)
+        self.assertIn("https://evidence.cloudcompute.com", policy)
+
+    def test_an_image_from_an_unlisted_host_is_named_not_fetched(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n## Evidence\n"
+            "- ![tracker](https://tracker.example.test/pixel.png)\n"
+            "- ![plain](http://evidence.cloudcompute.com/a.png)\n"
+        )
+        page = pr_review_page.build_page(source)
+        self.assertNotIn('<img src="https://tracker.example.test', page)
+        self.assertNotIn('<img src="http://', page)
+        self.assertIn("Image not shown", page)
+        self.assertIn("tracker.example.test/pixel.png", page)
 
 
 class BodyLink(GeneratorTestCase):
@@ -601,6 +884,33 @@ class BodyLink(GeneratorTestCase):
         twice = pr_review_page.body_with_link(once, self.URL + "?v=2")
         self.assertEqual(twice.count("Review page: "), 1)
         self.assertIn(f"Review page: {self.URL}?v=2", twice)
+
+    def test_a_quoted_review_page_line_is_not_the_one_rewritten(self) -> None:
+        """A body may talk about this line; talking about it is not having it.
+
+        Rewriting a `Review page:` inside a comment or a fenced example edits
+        that prose and leaves the body with no link a reader can see.
+        """
+        for hidden in (
+            "<!--\nReview page: https://old.test/hidden.html\n-->",
+            "```\nReview page: https://old.test/quoted.html\n```",
+        ):
+            with self.subTest(hidden=hidden.splitlines()[0]):
+                body = f"*A Persona, Lead*\n\n{hidden}\n\n## Summary\n- One thing.\n"
+                linked = pr_review_page.body_with_link(body, self.URL)
+                self.assertIn(hidden, linked, "the quoted line was edited")
+                visible = [
+                    line for line in linked.splitlines()
+                    if line.startswith("Review page: ") and self.URL in line
+                ]
+                self.assertEqual(len(visible), 1, linked)
+                self.assertEqual(linked.splitlines()[0], "*A Persona, Lead*")
+
+    def test_a_review_page_line_below_the_first_heading_is_left_alone(self) -> None:
+        body = "*A Persona, Lead*\n\n## Summary\n- Review page: https://old.test/x.html\n"
+        linked = pr_review_page.body_with_link(body, self.URL)
+        self.assertIn("- Review page: https://old.test/x.html", linked)
+        self.assertEqual(linked.splitlines()[2], f"Review page: {self.URL}")
 
     def test_a_body_with_no_byline_takes_the_line_at_the_top(self) -> None:
         linked = pr_review_page.body_with_link("## Summary\n- One thing.\n", self.URL)
