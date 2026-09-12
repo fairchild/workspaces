@@ -144,6 +144,38 @@ class UploadEvidenceTests(unittest.TestCase):
             )
             self.assertIn("swift-test.txt", stdout)
 
+    def test_html_uploads_as_a_page_not_as_a_download(self) -> None:
+        """A review page is only a page if the store is told it is one.
+
+        Both halves are load-bearing and separable: the extension decides
+        whether the upload is accepted at all, the mapping decides whether a
+        browser renders it or saves it. Dropping either one leaves every other
+        test in this file green.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            page = Path(tmp) / "1602.html"
+            page.write_text("<!doctype html><title>review</title>\n", encoding="utf-8")
+            with patch.object(
+                upload_evidence, "urlopen", side_effect=minting_store
+            ) as urlopen:
+                result, stdout, stderr = self.run_main(page)
+
+            self.assertEqual(result, 0, stderr)
+            request = urlopen.call_args.args[0]
+            self.assertEqual(request.get_header("Content-type"), "text/html; charset=utf-8")
+            self.assertIn("1602.html", stdout)
+
+    def test_an_unlisted_extension_is_still_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            script = Path(tmp) / "payload.svgz"
+            script.write_bytes(b"not an allowed type")
+            with patch.object(upload_evidence, "urlopen", side_effect=minting_store) as urlopen:
+                result, _stdout, stderr = self.run_main(script)
+
+            self.assertEqual(result, 1)
+            self.assertIn("unsupported file type", stderr)
+            urlopen.assert_not_called()
+
     def test_rejects_files_over_the_upload_cap_before_reading_or_network(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             video = Path(tmp) / "too-large.webm"

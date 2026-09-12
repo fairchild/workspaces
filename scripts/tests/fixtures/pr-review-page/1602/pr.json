@@ -1,0 +1,514 @@
+{
+  "additions": 156,
+  "author": {
+    "is_bot": true,
+    "login": "app/april-clearwater"
+  },
+  "baseRefName": "main",
+  "body": "*April Clearwater, Application Lead*\n\n## Summary\n- Named the shared state: `WorkspaceService.workspacesRoot`/`setWorkspacesRoot`/`resetWorkspacesRoot` (`Sources/WorkspaceManagerCore/Services/WorkspaceService.swift:98-116`, before this change) read and wrote `LaunchPreferences.defaults`, which resolves to `UserDefaults.standard` in any run that sets neither `WORKSPACES_SYNTHETIC_ROOT` nor `WORKSPACES_PREFERENCES_SUITE` (`Sources/WorkspaceManagerCore/Services/LaunchPreferences.swift:80-104`). `UserDefaults.standard` is an on-disk, cfprefsd-backed domain keyed off the executable's identity, not scoped to a Swift process — two separate `swift test` invocations of the same package share it, which is exactly the two-worktree repro in the issue. `WorkspaceServiceTests`'s own `setWorkspacesRoot`/`restoreWorkspacesRoot` helpers (`Tests/WorkspaceManagerTests/WorkspaceServiceTests.swift:110-125`, before this change) wrote to that same domain directly, so one process's `wsRoot` UUID could be read back by another process's test mid-run — the \"WSTest-A8A4A015… reading WSTest-AC10E5D0…\" failure in the issue. This is reachable from production code, not only the fixture: it's the same path a live app and a `workspaces` CLI invocation without the isolation env vars would race on.\n- Fix: `WorkspaceService` now takes an injectable `preferences: UserDefaults` (default `LaunchPreferences.defaults`, so production behavior is unchanged) and reads/writes the custom root through it instead of hardcoding `LaunchPreferences.defaults`. Added `makeIsolatedPreferences()` to `WorkspaceServiceTests`, which hands each converted test a `UserDefaults(suiteName:)` scoped to a fresh UUID — a domain no other test, in this process or a concurrent one, can ever collide with — and converted the majority of the suite's `createWorkspace`/`workspacesRoot` tests to use it.\n- The eight remaining tests are converted to `makeIsolatedPreferences()` as well, and the two `UserDefaults.standard` helpers (`setWorkspacesRoot`/`restoreWorkspacesRoot`) and their `TODO(#1536 follow-up)` comment are removed.\n\n<!-- evidence-status:v1\n{\n  \"entries\": [\n    {\n      \"index\": 1,\n      \"item\": \"The full suite passes under `swift test` three times consecutively **while a second full `swift test` runs alongside it**, with the command used and all three results pasted\",\n      \"status\": \"complete\",\n      \"detail\": \"the hosted lane has no toolchain for this runner; state the command and the line it printed in this PR body, and the next factory turn completes this entry (or edit the line yourself)\",\n      \"kind\": \"test-attested\",\n      \"note\": \"at `266db386`, checkout A is this branch's worktree and checkout B a local clone of it (not a worktree); each round ran `(cd A && swift test > A-N.log 2>&1) & (cd B && swift test > B-N.log 2>&1) & wait`, and a process snapshot 10s into the round showed both checkouts' `swiftpm-testing-helper` running at once. Round 5: A `✔ Test run with 2157 tests in 279 suites passed after 20.463 seconds.` B `✔ Test run with 2157 tests in 279 suites passed after 21.028 seconds.` Round 6: A `✔ Test run with 2157 tests in 279 suites passed after 20.621 seconds.` B `✔ Test run with 2157 tests in 279 suites passed after 20.513 seconds.` Round 7: A `✔ Test run with 2157 tests in 279 suites passed after 20.826 seconds.` B `✔ Test run with 2157 tests in 279 suites passed after 20.764 seconds.` Every round, including the one unrelated failure in round 4, is listed under Validation.\"\n    },\n    {\n      \"index\": 2,\n      \"item\": \"The shared state named in the PR body, with a file:line pointer, and one sentence on how it crosses the suite boundary\",\n      \"status\": \"complete\",\n      \"detail\": \"automation cannot reconcile this evidence item automatically; owner follow-up required\",\n      \"kind\": \"other\",\n      \"note\": \"`WorkspaceService.workspacesRoot`/`setWorkspacesRoot`/`resetWorkspacesRoot` (`Sources/WorkspaceManagerCore/Services/WorkspaceService.swift:98-116` before this change) read and wrote `LaunchPreferences.defaults`, which is `UserDefaults.standard` when neither `WORKSPACES_SYNTHETIC_ROOT` nor `WORKSPACES_PREFERENCES_SUITE` is set (`Sources/WorkspaceManagerCore/Services/LaunchPreferences.swift:80-104`, `:136`). It crosses the suite boundary because `UserDefaults.standard` is an on-disk domain served by cfprefsd and keyed by the executable, so two `swift test` processes of this package read and write the same `workspacesRoot` key.\"\n    },\n    {\n      \"index\": 3,\n      \"item\": \"CI `build-and-test` succeeds\",\n      \"status\": \"complete\",\n      \"detail\": \"automation cannot reconcile this evidence item automatically; owner follow-up required\",\n      \"kind\": \"other\",\n      \"note\": \"green on head d13afd8e: `build-and-test` run 34596303172 (ci.yml, GitHub-hosted macos-26) completed success at 12:20:57Z; also green on 266db386 (run 34594093783) and 97c1de33 (run 34359147304)\"\n    },\n    {\n      \"index\": 4,\n      \"item\": \"A statement of whether the shared state is reachable from production code or only from the test fixture\",\n      \"status\": \"complete\",\n      \"detail\": \"automation cannot reconcile this evidence item automatically; owner follow-up required\",\n      \"kind\": \"other\",\n      \"note\": \"reachable from production code, not only the fixture: the app (`Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:741`) and the `workspaces` CLI (`Sources/WorkspaceManagerCLI/main.swift:30`) both use `WorkspaceService.shared`, which reads and writes the `workspacesRoot` key in `LaunchPreferences.defaults`, the same key the Settings pane binds (`Sources/WorkspaceManager/Views/SettingsView.swift:22`). This PR leaves that default in place; only tests inject a private suite.\"\n    }\n  ]\n}\n-->\n\n## Evidence Status\n- [complete] The full suite passes under `swift test` three times consecutively **while a second full `swift test` runs alongside it**, with the command used and all three results pasted -- at `266db386`, checkout A is this branch's worktree and checkout B a local clone of it (not a worktree); each round ran `(cd A && swift test > A-N.log 2>&1) & (cd B && swift test > B-N.log 2>&1) & wait`, and a process snapshot 10s into the round showed both checkouts' `swiftpm-testing-helper` running at once. Round 5: A `✔ Test run with 2157 tests in 279 suites passed after 20.463 seconds.` B `✔ Test run with 2157 tests in 279 suites passed after 21.028 seconds.` Round 6: A `✔ Test run with 2157 tests in 279 suites passed after 20.621 seconds.` B `✔ Test run with 2157 tests in 279 suites passed after 20.513 seconds.` Round 7: A `✔ Test run with 2157 tests in 279 suites passed after 20.826 seconds.` B `✔ Test run with 2157 tests in 279 suites passed after 20.764 seconds.` Every round, including the one unrelated failure in round 4, is listed under Validation.\n- [complete] The shared state named in the PR body, with a file:line pointer, and one sentence on how it crosses the suite boundary -- `WorkspaceService.workspacesRoot`/`setWorkspacesRoot`/`resetWorkspacesRoot` (`Sources/WorkspaceManagerCore/Services/WorkspaceService.swift:98-116` before this change) read and wrote `LaunchPreferences.defaults`, which is `UserDefaults.standard` when neither `WORKSPACES_SYNTHETIC_ROOT` nor `WORKSPACES_PREFERENCES_SUITE` is set (`Sources/WorkspaceManagerCore/Services/LaunchPreferences.swift:80-104`, `:136`). It crosses the suite boundary because `UserDefaults.standard` is an on-disk domain served by cfprefsd and keyed by the executable, so two `swift test` processes of this package read and write the same `workspacesRoot` key.\n- [complete] CI `build-and-test` succeeds -- green on head d13afd8e: `build-and-test` run 34596303172 (ci.yml, GitHub-hosted macos-26) completed success at 12:20:57Z; also green on 266db386 (run 34594093783) and 97c1de33 (run 34359147304)\n- [complete] A statement of whether the shared state is reachable from production code or only from the test fixture -- reachable from production code, not only the fixture: the app (`Sources/WorkspaceManager/App/WorkspaceManagerApp.swift:741`) and the `workspaces` CLI (`Sources/WorkspaceManagerCLI/main.swift:30`) both use `WorkspaceService.shared`, which reads and writes the `workspacesRoot` key in `LaunchPreferences.defaults`, the same key the Settings pane binds (`Sources/WorkspaceManager/Views/SettingsView.swift:22`). This PR leaves that default in place; only tests inject a private suite.\n\n## Validation\n- `swift test --filter WorkspaceServiceTests`: `✔ Test run with 46 tests in 1 suite passed after 1.441 seconds.`\n- `mise run lint` (`swift-format lint --strict --recursive Sources/ Tests/`): exit 0, no findings.\n- `swift test`, sequential, after the concurrent rounds: `✔ Test run with 2157 tests in 279 suites passed after 19.623 seconds.`\n- Concurrent rounds, all at `266db386`, run from the command in Evidence Status item 1. Overlap is checked from each log's `Test Suite 'All tests' started at` stamp, and from rounds 3 onward also by a process snapshot 10s in.\n\n  | Round | Checkout A | Checkout B | Test runs overlapped |\n  |---|---|---|---|\n  | 1 | passed, 20.900s | passed, 20.559s | no: B was still compiling its test target while A's tests ran, so this is a warm-up |\n  | 2 | passed, 21.240s | passed, 21.061s | yes, same start stamp |\n  | 3 | passed, 20.863s | passed, 20.806s | yes, snapshot |\n  | 4 | passed, 20.711s | 1 issue, 20.711s | yes, snapshot |\n  | 5 | passed, 20.463s | passed, 21.028s | yes, snapshot |\n  | 6 | passed, 20.621s | passed, 20.513s | yes, snapshot |\n  | 7 | passed, 20.826s | passed, 20.764s | yes, snapshot |\n\n  The `WorkspaceService` suite passed in all 14 runs. The one failure, round 4 checkout B, was `RuntimeSamplerCostTests.swift:169`: the app-tree footprint drifted 13.6% against a 10% bound. That test measures its own process tree and does not touch `UserDefaults`, so it is a separate defect, filed as #1606. Rounds 5-7 are the three consecutive rounds quoted in Evidence Status.\n- Machine during the rounds: 32 GB RAM, swap 10.0-10.2 of 11.3 GB used, 36-45% memory free, 1-minute load average up to 96. Both runs fit at once, so nothing was staggered.\n- The owner's part of this PR (the eight conversions and every run above) was done by Claude Code in the repo steward's worker tile `claude-1536-finish-preferences`.\n\n## Risks\n- 21 tests in the suite still use a `WorkspaceService` on the default preferences: 11 build one for `deleteWorkspace`, `archiveWorkspace`-by-path and `getWorkspaceSize`, and 10 call `WorkspaceService.shared` for lifecycle scripts and name sanitization. None of them reads the domain: `preferences` is read only by `createWorkspace` (`WorkspaceService.swift:182`) and `root` (`:504`), and none of those tests calls either. A new test in this suite that calls either one on a default-built service would be exposed again.\n- Each test's `UserDefaults(suiteName:)` plist is deleted from `~/Library/Preferences` in the test's `defer`, so a clean run leaves none behind; only a crash leaves one, the UUID-named plist of the test whose cleanup never ran.\n- `preferences:` is a trailing defaulted parameter on both initializers, so the production call sites (`WorkspaceService.shared` in the app and the CLI) compile and behave as before. The full suite, `WorkspaceOrphanReconcilerTests` included, passes.\n- The concurrent repro was not re-run on the pre-fix commit on this machine. The comparison is against the issue's report: failures in 2 of 3 contended rounds on the old code, against none in `WorkspaceService` across 6 overlapping rounds here.\n\n## Mergeability\n- Surface: desktop — `Sources/WorkspaceManagerCore/Services/WorkspaceService.swift` (injectable `preferences:`), `Tests/WorkspaceManagerTests/WorkspaceServiceTests.swift`\n- User-facing behavior changed: No. `WorkspaceService` still defaults to `LaunchPreferences.defaults`, so the app and the CLI read and write the same `workspacesRoot` key as before.\n- Non-happy paths considered: two full-suite processes racing (seven rounds, under Validation); tests that never read the root keep the default domain (listed under Risks); per-test suites are cleaned up in `defer`, and a crash leaks only a UUID-named plist.\n- Release/ops preconditions: n/a\n- Residual risk or follow-up: #1606, a separate load-sensitive `RuntimeSamplerCost` flake seen once in 14 concurrent runs; the concurrent repro was not re-run on the pre-fix commit.\n\nCloses #1536\n\n<!-- contributor:issue=1536;agent=april-clearwater -->\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nhttps://claude.ai/code/session_01QrSceQotsidvcP4tVgf2ud\n\nOrchestrator note (workspaces)\n\n\n",
+  "createdAt": "2026-09-09T13:45:33Z",
+  "deletions": 89,
+  "files": [
+    {
+      "additions": 20,
+      "changeType": "MODIFIED",
+      "deletions": 6,
+      "path": "Sources/WorkspaceManagerCore/Services/WorkspaceService.swift"
+    },
+    {
+      "additions": 136,
+      "changeType": "MODIFIED",
+      "deletions": 83,
+      "path": "Tests/WorkspaceManagerTests/WorkspaceServiceTests.swift"
+    }
+  ],
+  "headRefName": "codex/april-clearwater-issue-1536-flaky-workspaceservicetests-contaminate-each-oth",
+  "headRefOid": "d13afd8e072458a55ffcca3e91b015770ea018fe",
+  "isDraft": false,
+  "number": 1602,
+  "reviews": [
+    {
+      "author": {
+        "login": "workspace-agents"
+      },
+      "authorAssociation": "CONTRIBUTOR",
+      "body": "*Plat Ironwood, Platform Lead*\n\n## ⛔ Request changes — partial fix claims to close #1536, and the one measurement that would prove it is unrun\n\nThis narrows the shared state correctly, but leaves 8 of the suite's tests on the exact path the issue names, and the PR still says `Closes #1536`.\n\n- **Blocking:** `Tests/WorkspaceManagerTests/WorkspaceServiceTests.swift` (TODO near the `setWorkspacesRoot`/`restoreWorkspacesRoot` helpers) — 8 tests still write through `UserDefaults.standard`, the shared domain the issue is about. The acceptance criterion is \"the failure does not reproduce across repeated concurrent full-suite runs\"; with a third of the suite still exposed, that's unproven and plausibly false.\n- **Blocking:** evidence item 1 (three concurrent `swift test` runs, results pasted) is `pending-ci`. This is not something the ordinary `build-and-test` lane exercises — it's two full `swift test` processes racing, per the issue's own repro. Deferring it to the standard downstream evidence job doesn't get it run; someone needs to actually execute the repro and paste the three results.\n- **Blocking:** `## Evidence Status` item 3, `CI build-and-test succeeds`, is `blocked`, and the readiness-gate bot comment on this PR confirms the gate is failing with the `blocked:evidence` label still on. That needs to turn green before this merges regardless of the above.\n\n**Evidence:** ⛔ item 1 (concurrent-run proof) unrun; item 3 (CI green) unconfirmed. Items 2 and 4 are auto-marked \"blocked\" but are actually answered in prose in the PR body — see below.\n\n<details>\n<summary>File:line check on items 2/4, and why the partial conversion matters</summary>\n\nItems 2 and 4 don't need a person to look at anything — they're written statements, and I read them against the diff:\n\n- Item 2 (name the shared state + file:line + how it crosses the boundary): the PR body correctly points at `WorkspaceService.workspacesRoot`/`setWorkspacesRoot`/`resetWorkspacesRoot`, which the diff's first hunk (`@@ -85,6 +85,12 @@` through `@@ -108,25 +114,33 @@`) confirms previously read/wrote `LaunchPreferences.defaults` unconditionally — that resolves to `UserDefaults.standard`, an on-disk cfprefsd domain keyed by executable identity, not by process. That's a correct and specific answer.\n- Item 4 (production-reachable or fixture-only): the PR states it's reachable from production — a live app or a `workspaces` CLI invocation without the isolation env vars hits the same code path. That's the right answer and worth taking seriously: it means this was never purely a test-fixture bug.\n\nGiven item 4, the incomplete conversion is not just a test-suite tidiness gap — the production-reachable path (`WorkspaceService.setWorkspacesRoot`) is now fixed for the ~2/3 of tests using `makeIsolatedPreferences()`, but the remaining 8 tests exercise the *same production method* through the *still-shared* domain. So the concurrent-run repro in the issue is very likely to still reproduce for those 8, and the PR's own Risks section says so plainly.\n\nGiven that, `Closes #1536` is premature. Either finish converting the remaining 8 tests in this PR (it's the same mechanical pattern already applied to the rest of the file — `makeIsolatedPreferences()` plus dropping the two old helpers), or retitle this as a partial mitigation, drop the `Closes` keyword, and open the follow-up as its own tracked issue rather than a TODO comment.\n\nCode itself is clean: `preferences: UserDefaults = LaunchPreferences.defaults` as a trailing defaulted param on both initializers is a non-breaking, well-scoped change, and the per-test UUID-suite pattern in `makeIsolatedPreferences()` is a sound way to get true process isolation without touching the actor's production default.\n\n</details>",
+      "commit": {
+        "oid": "97c1de3399d7d65722b4eb00b1f635f43259e8dd"
+      },
+      "id": "PRR_kwDORLike88AAAABM0YR8g",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "DISMISSED",
+      "submittedAt": "2026-09-09T13:47:25Z"
+    },
+    {
+      "author": {
+        "login": "workspace-agents"
+      },
+      "authorAssociation": "CONTRIBUTOR",
+      "body": "*Plat Ironwood, Platform Lead*\n\n## 🟡 Approve with follow-ups — blockers from my last pass are cleared\n\nAll three things I blocked on are answered on head `d13afd8e`: all 23 root-touching tests now go through `makeIsolatedPreferences()` (the 8 stragglers are converted, the old `UserDefaults.standard` helpers are gone), the concurrent-repro evidence is pasted with real numbers (rounds 5-7 clean, one unrelated flake filed as #1606), and `build-and-test` reports green on this head (run 34596303172, completed 12:20:57Z).\n\n- **Worth noting:** the leak-fix's cleanup (`WorkspaceServiceTests.swift:117-133`) relies on `UserDefaults.set` flushing to disk synchronously — documented as async by Apple, empirically synchronous in ~1,000 combined probe rounds. Comment says so; that's the right amount of caution for something unspecified but load-tested.\n- **Worth noting:** the pre-cleanup existence assertion at `WorkspaceServiceTests.swift:241` fails under a sandboxed exec (reproduced by the reviewing agent's own sandbox). Not fixed here — filed as #1611 rather than blocking this PR on it, which is the right call since this target doesn't run sandboxed today.\n- **Worth noting:** #1606 (RuntimeSamplerCost footprint drift, seen once in 14 concurrent rounds) is out of this PR's fence and correctly filed separately rather than folded in.\n\n**Evidence:** ✅ all four requested-evidence items are `[complete]` in the PR body, matching the issue's four asks — named shared state with file:line, three consecutive concurrent full-suite passes, CI green, and the production-reachability statement.\n\n<details>\n<summary>Evidence-level reasoning and code check</summary>\n\nThis is a shared-state concurrency bug, so the right bar was a repro someone actually ran twice at once (not a screenshot, not a single-process test count) plus the named unit test. That's what's here: `swift test --filter WorkspaceServiceTests` (46 passed) covers the mechanical conversion, and the paired-process repro (rounds 5-7, `Test run with 2157 tests in 279 suites passed`, both checkouts, `Suite \"WorkspaceService\" passed` in all 14 logs) covers the actual contamination claim from #1536.\n\nReading the diff against the `preferences` field: it's a trailing-defaulted parameter on both `WorkspaceService` initializers (`Sources/WorkspaceManagerCore/Services/WorkspaceService.swift`), so `WorkspaceService.shared` in the app and CLI are unaffected — production still reads `LaunchPreferences.defaults`. The test-file diff shows every `setWorkspacesRoot`/`restoreWorkspacesRoot` call site replaced with a UUID-suite `preferences.set(...)`, and the two old helpers plus the `TODO(#1536 follow-up)` are gone, matching the \"8 tests still on `UserDefaults.standard`\" gap I flagged last time.\n\nTwo independent static passes (recorded in the comment thread) landed on the same conclusion I reach reading the diff: no blocking findings, two minor ones correctly triaged (one accepted as documented risk, one deferred to #1611). I didn't re-run anything — no Swift toolchain here — but the reasoning in those passes is checkable against the diff and holds up.\n\n</details>",
+      "commit": {
+        "oid": "d13afd8e072458a55ffcca3e91b015770ea018fe"
+      },
+      "id": "PRR_kwDORLike88AAAABNKznxA",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "APPROVED",
+      "submittedAt": "2026-09-11T12:40:27Z"
+    }
+  ],
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:55:07Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596303147/job/103252754908",
+      "name": "readiness",
+      "startedAt": "2026-09-11T11:54:56Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:35Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147808/job/103265177809",
+      "name": "claim",
+      "startedAt": "2026-09-11T12:40:36Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Approved Mention Execution"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:31Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141193/job/103265155808",
+      "name": "triage",
+      "startedAt": "2026-09-11T12:40:31Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Mention Triage"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:31Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141519/job/103265158462",
+      "name": "admit",
+      "startedAt": "2026-09-11T12:40:32Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Revise"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:20:56Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596303172/job/103252738135",
+      "name": "build-and-test",
+      "startedAt": "2026-09-11T11:54:57Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:55:42Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596298362/job/103252725482",
+      "name": "Analyze (actions)",
+      "startedAt": "2026-09-11T11:54:50Z",
+      "status": "COMPLETED",
+      "workflowName": "CodeQL"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:54:59Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596303116/job/103252737383",
+      "name": "check-links",
+      "startedAt": "2026-09-11T11:54:51Z",
+      "status": "COMPLETED",
+      "workflowName": "Docs Link Check"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:29:08Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599137296/job/103261902037",
+      "name": "check-evidence",
+      "startedAt": "2026-09-11T12:29:04Z",
+      "status": "COMPLETED",
+      "workflowName": "Evidence Reminder"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:38:44Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599980730/job/103264633461",
+      "name": "check-evidence",
+      "startedAt": "2026-09-11T12:38:41Z",
+      "status": "COMPLETED",
+      "workflowName": "Evidence Reminder"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:54:57Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596303153/job/103252737750",
+      "name": "signal",
+      "startedAt": "2026-09-11T11:54:52Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Review"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:29:07Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599137359/job/103261901752",
+      "name": "signal",
+      "startedAt": "2026-09-11T12:29:04Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Review"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:38:48Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599980660/job/103264633289",
+      "name": "signal",
+      "startedAt": "2026-09-11T12:38:42Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Review"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:41:36Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141216/job/103265235969",
+      "name": "respond",
+      "startedAt": "2026-09-11T12:40:50Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Review Response"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:48Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141274/job/103265154836",
+      "name": "respond",
+      "startedAt": "2026-09-11T12:40:33Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Review Response"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:54:56Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596303132/job/103252737627",
+      "name": "enforce-perf-evidence",
+      "startedAt": "2026-09-11T11:54:52Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Perf Evidence"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:29:06Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599137176/job/103261901433",
+      "name": "enforce-perf-evidence",
+      "startedAt": "2026-09-11T12:29:04Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Perf Evidence"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:38:46Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599980614/job/103264632915",
+      "name": "enforce-perf-evidence",
+      "startedAt": "2026-09-11T12:38:42Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Perf Evidence"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:40Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147726/job/103265176056",
+      "name": "enforce-perf-evidence",
+      "startedAt": "2026-09-11T12:40:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Perf Evidence"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:54Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600163670/job/103265230365",
+      "name": "enforce-perf-evidence",
+      "startedAt": "2026-09-11T12:40:50Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Perf Evidence"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:29:13Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599137168/job/103261902050",
+      "name": "readiness",
+      "startedAt": "2026-09-11T12:29:04Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:38:54Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599980650/job/103264633856",
+      "name": "readiness",
+      "startedAt": "2026-09-11T12:38:42Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:46Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147794/job/103265176496",
+      "name": "readiness",
+      "startedAt": "2026-09-11T12:40:37Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:41:00Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600163683/job/103265246605",
+      "name": "readiness",
+      "startedAt": "2026-09-11T12:40:53Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:06:15Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596303143/job/103252737677",
+      "name": "ui-smoke",
+      "startedAt": "2026-09-11T11:54:59Z",
+      "status": "COMPLETED",
+      "workflowName": "UI Smoke (advisory)"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:55:53Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596298362/job/103252725557",
+      "name": "Analyze (javascript-typescript)",
+      "startedAt": "2026-09-11T11:54:49Z",
+      "status": "COMPLETED",
+      "workflowName": "CodeQL"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:55:44Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596298362/job/103252725577",
+      "name": "Analyze (python)",
+      "startedAt": "2026-09-11T11:54:49Z",
+      "status": "COMPLETED",
+      "workflowName": "CodeQL"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:05:30Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596298362/job/103252725329",
+      "name": "Analyze (swift)",
+      "startedAt": "2026-09-11T11:54:55Z",
+      "status": "COMPLETED",
+      "workflowName": "CodeQL"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:50Z",
+      "conclusion": "CANCELLED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147794/job/103265176667",
+      "name": "release-change-validation",
+      "startedAt": "2026-09-11T12:40:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:35Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147808/job/103265204111",
+      "name": "april",
+      "startedAt": "2026-09-11T12:40:41Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Approved Mention Execution"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:31Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141519/job/103265182978",
+      "name": "revise",
+      "startedAt": "2026-09-11T12:40:37Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Revise"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:55:07Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34596303147/job/103252755240",
+      "name": "release-change-validation",
+      "startedAt": "2026-09-11T11:54:56Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:29:14Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599137168/job/103261901818",
+      "name": "release-change-validation",
+      "startedAt": "2026-09-11T12:29:04Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:38:58Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34599980650/job/103264633409",
+      "name": "release-change-validation",
+      "startedAt": "2026-09-11T12:38:47Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:41:01Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600163683/job/103265246702",
+      "name": "release-change-validation",
+      "startedAt": "2026-09-11T12:40:53Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Readiness"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:35Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147808/job/103265215147",
+      "name": "plat",
+      "startedAt": "2026-09-11T12:40:44Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Approved Mention Execution"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:31Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141519/job/103265159654",
+      "name": "resolve",
+      "startedAt": "2026-09-11T12:40:32Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Revise"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:35Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147808/job/103265178142",
+      "name": "peter",
+      "startedAt": "2026-09-11T12:40:36Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Approved Mention Execution"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:31Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141519/job/103265159172",
+      "name": "evidence",
+      "startedAt": "2026-09-11T12:40:32Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Revise"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:35Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147808/job/103265203001",
+      "name": "claude",
+      "startedAt": "2026-09-11T12:40:41Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Approved Mention Execution"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:35Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147808/job/103265178923",
+      "name": "april-evidence",
+      "startedAt": "2026-09-11T12:40:36Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Approved Mention Execution"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:31Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600141519/job/103265159175",
+      "name": "telemetry",
+      "startedAt": "2026-09-11T12:40:32Z",
+      "status": "COMPLETED",
+      "workflowName": "Factory Revise"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T12:40:35Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/fairchild/workspaces/actions/runs/34600147808/job/103265178405",
+      "name": "plat-evidence",
+      "startedAt": "2026-09-11T12:40:36Z",
+      "status": "COMPLETED",
+      "workflowName": "Agent: Approved Mention Execution"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:55:34Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/fairchild/workspaces/runs/103252914142",
+      "name": "CodeQL",
+      "startedAt": "2026-09-11T11:55:32Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "Vercel",
+      "startedAt": "2026-09-11T11:54:54Z",
+      "state": "SUCCESS",
+      "targetUrl": "https://vercel.com/cloudcompute/workspaces/zLeGWPVsLUifFZPjaSUovaZPRgmJ"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-11T11:54:54Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://vercel.com/github",
+      "name": "Vercel Preview Comments",
+      "startedAt": "2026-09-11T11:54:54Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    }
+  ],
+  "title": "Give WorkspaceServiceTests each their own preferences domain instead of UserDefaults.standard",
+  "updatedAt": "2026-09-11T12:40:44Z",
+  "url": "https://github.com/fairchild/workspaces/pull/1602"
+}

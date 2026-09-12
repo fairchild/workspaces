@@ -1,0 +1,5 @@
+# These are recorded `gh pr diff` outputs, kept byte-for-byte. A diff's context
+# line for a blank source line is a single space, so `git diff --check` reports
+# trailing whitespace on every one of them; stripping it would make the fixture
+# something GitHub never produced.
+*.diff -whitespace

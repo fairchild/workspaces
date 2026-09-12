@@ -78,6 +78,14 @@ Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks
   - Requires an interactive display-capable macOS session; it is not valid in headless AppKit environments.
   - `--allow-skip-noninteractive` converts only the known display-session limitation into a recorded skip for release automation.
 
+## PR Review Page
+
+- `uv run --script ./scripts/pr-review-page.py --pr <n> [--head <sha>] [--upload] [--link]`
+  - Builds `build/pr-review/<n>.html`: a dense PR's front page — plain language, a diagram, the diff grouped under the sentence that explains it, the evidence, and where it stands.
+  - `--upload` puts it in the evidence store and prints the URL; `--link` writes `Review page: <url>` under the PR body's byline and leaves every other byte alone.
+  - `--fixture <dir>` builds from a recorded PR instead of `gh`, which is how the tests run.
+  - A diagram in the body wins over the generated one: put a ```mermaid fence under a `<!-- review-page:diagram -->` marker, where GitHub renders it too.
+
 ## Script Test Harnesses
 
 Standalone script tests live in `./scripts/tests/`. Keep those files executable
