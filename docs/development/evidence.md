@@ -197,8 +197,8 @@ gh secret set EVIDENCE_UPLOAD_TOKEN --repo fairchild/workspaces --body "$TOKEN"
 ### `scripts/upload-evidence.py`
 
 Lower-level upload client. Accepts `png`, `jpg`, `jpeg`, `gif`, `webp`, `svg`,
-`webm`, `mp4`, and `txt` — a test log goes up as text, not as a picture of
-one — with a 50 MiB per-file limit enforced by both the client and
+`webm`, `mp4`, `txt`, and `html` — a test log goes up as text, not as a picture
+of one — with a 50 MiB per-file limit enforced by both the client and
 the evidence-store Worker. Uploads carry a fixed `Content-Length`; the Worker
 rejects chunked or malformed-length requests so accepted files can stream
 directly into R2 without consuming the Worker's memory budget. Called internally
@@ -209,6 +209,14 @@ PR bodies.
 ```bash
 uv run scripts/upload-evidence.py <file> --repo workspaces --pr <number> --name <slug>
 ```
+
+### `scripts/pr-review-page.py`
+
+Builds one PR's review page and, with `--upload`, hosts it here — the store
+serves an uploaded `.html` as `text/html`, so the page is a page rather than a
+download. `--link` then writes `Review page: <url>` under the PR body's byline.
+The page shows the evidence the body already carries; it does not stand in for
+capturing any.
 
 ## What counts as evidence
 

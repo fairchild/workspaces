@@ -1,0 +1,34 @@
+[
+  {
+    "comments": {
+      "nodes": [
+        {
+          "author": {
+            "login": "bench-reviewer"
+          },
+          "body": "Should the message name every missing key, or only the first?"
+        }
+      ]
+    },
+    "isOutdated": false,
+    "isResolved": false,
+    "line": 12,
+    "path": "src/config.py"
+  },
+  {
+    "comments": {
+      "nodes": [
+        {
+          "author": {
+            "login": "bench-reviewer"
+          },
+          "body": "Typo in the note."
+        }
+      ]
+    },
+    "isOutdated": false,
+    "isResolved": true,
+    "line": 3,
+    "path": "docs/notes.md"
+  }
+]

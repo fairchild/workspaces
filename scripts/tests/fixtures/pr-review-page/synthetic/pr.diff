@@ -1,0 +1,35 @@
+diff --git a/src/config.py b/src/config.py
+index 1111111..2222222 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -10,8 +10,13 @@ def load(path):
+     return json.loads(Path(path).read_text())
+
+
+-def parse_config(raw):
+-    return Config(raw["name"], raw["root"])
++def parse_config(raw):
++    missing = [key for key in ("name", "root") if key not in raw]
++    if missing:
++        raise ConfigError(f"config is missing {', '.join(missing)}")
++    return Config(raw["name"], raw["root"])
++
++
+
+
+ def dump(config):
+@@ -40,3 +45,4 @@ def dump(config):
+
+ def merge(left, right):
+     return {**left, **right}
++
+diff --git a/docs/notes.md b/docs/notes.md
+index 3333333..4444444 100644
+--- a/docs/notes.md
++++ b/docs/notes.md
+@@ -1,4 +1,5 @@
+ # Notes
+
+-The loader is intentionally strict.
++The loader is intentionally strict, and says which key it wanted.
++
