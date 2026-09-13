@@ -18,6 +18,19 @@ jobs:
       github.event.workflow_run.conclusion == 'timed_out'
     # Transitional fallback while we move toward an explicit Xcode build
     # trigger. Do not run failed PR heads on persistent self-hosted runners.
+    #
+    # This job is a retry of the ordinary build, not a substitute for CI's
+    # `build-and-test`, and no release gate accepts it as one. It skips every
+    # release-shaped step — the `build-release.sh --no-sign` bundling path and
+    # its structure check, the perf-gate runnability probe, the release-harness
+    # absence check, the subprocess-timeout tripwire, the isolated render suite
+    # — and provisions differently: no pinned mise, no Zig from mise.lock, no
+    # uv, and a shallow checkout where ci.yml takes fetch-depth 0 on purpose.
+    #
+    # Its check-runs are also not evidence about the commit they appear on. A
+    # `workflow_run` job executes on the default branch, so GitHub attaches
+    # this job's check-run to main's head even when the CI run that triggered
+    # it was on a pull request branch.
     runs-on: macos-26
     timeout-minutes: 90
     permissions:
