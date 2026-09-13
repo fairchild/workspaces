@@ -39,10 +39,39 @@ custom domain.
 
 ## `GET /<key>`
 
-Public, no token. Served with `Cache-Control: public, max-age=31536000,
-immutable` and `Access-Control-Allow-Origin: *`. Keys are resolved verbatim, so
-objects uploaded before minted keys existed still resolve at their original
-paths. `HEAD` is not implemented and returns `404`.
+Public, no token. Keys are resolved verbatim, so objects uploaded before minted
+keys existed still resolve at their original paths. `HEAD` is not implemented
+and returns `404`.
+
+Every object is served with its stored `Content-Type` (or one inferred from the
+extension) and these five headers, whatever its type:
+
+```http
+Cache-Control: public, max-age=31536000, immutable
+Access-Control-Allow-Origin: *
+Content-Security-Policy: default-src 'none'; img-src 'self' https://evidence.cloudcompute.com https://github.com https://*.githubusercontent.com data:; media-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; sandbox
+X-Content-Type-Options: nosniff
+Referrer-Policy: no-referrer
+```
+
+The policy exists because the store accepts `.html`, and an uploaded page is
+active content on the same origin as every screenshot and log. It lets a page
+show images from this store, GitHub and `data:` URIs, audio and video from this
+store, and inline style, and nothing else: no script, fonts, frames, fetches or
+`<base>`. `media-src 'self'` is there for recordings rather than pages: a
+browser plays a directly opened `.webm` or `.mp4` through a `<video>` element
+the policy governs, so without it every recording link opens to a player that
+never loads. `sandbox` is the part a page cannot grant itself — a `<meta>`
+policy cannot carry it — and it runs the page in an opaque origin with scripts,
+form submission, popups, modals and plugins all off, so a page served here
+cannot act as this origin even if its own markup tries. `nosniff` holds each
+object to its declared type, and `no-referrer` keeps the minted key out of the
+`Referer` a page's links send. The policy is the store's to set; a page's own
+policy can only narrow it.
+
+Under `wrangler dev`, miniflare rewrites the production hostname inside response
+headers to the local address, so the policy there reads
+`https://127.0.0.1:8799` where production reads `https://evidence.cloudcompute.com`.
 
 ## `DELETE /<key>`
 

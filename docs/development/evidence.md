@@ -352,5 +352,6 @@ Three layers, from gentlest to strongest:
 ## Architecture
 
 Evidence files flow through: `evidence.sh` → `upload-evidence.py` (PUT with bearer token) → Cloudflare Worker (`infra/cloudflare-evidence-store/`) → R2 bucket (`evidence-screenshots`) → public URL at `https://evidence.cloudcompute.com/`.
+Every object, uploaded HTML included, is served under a sandboxed content security policy that allows images and inline style and nothing else; the headers are in [the store's contract](../../infra/cloudflare-evidence-store/CONTRACT.md#get-key).
 
 For infrastructure details (Worker deployment, R2 bucket config, runner setup), see [lume-runner-setup.md § Evidence store](lume-runner-setup.md#evidence-store-r2).
