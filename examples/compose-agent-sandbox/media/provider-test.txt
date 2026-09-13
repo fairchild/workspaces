@@ -1,0 +1,37 @@
+[0/1] Planning build
+Building for debugging...
+[0/6] Write swift-version--58304C5D6DBC2206.txt
+[2/5] Emitting module WorkspaceManager
+$WORKSPACES_REPO/Sources/WorkspaceManager/App/WorkspacesAppIntents.swift:382:16: warning: static property 'shortcutTileColor' is not concurrency-safe because it is nonisolated global shared mutable state; this is an error in the Swift 6 language mode [#MutableGlobalVariable]
+380 |
+381 | struct WorkspacesAppShortcutsProvider: AppShortcutsProvider {
+382 |     static var shortcutTileColor: ShortcutTileColor = .teal
+    |                |- warning: static property 'shortcutTileColor' is not concurrency-safe because it is nonisolated global shared mutable state; this is an error in the Swift 6 language mode [#MutableGlobalVariable]
+    |                |- note: convert 'shortcutTileColor' to a 'let' constant to make 'Sendable' shared state immutable
+    |                |- note: add '@MainActor' to make static property 'shortcutTileColor' part of global actor 'MainActor'
+    |                `- note: disable concurrency-safety checks if accesses are protected by an external synchronization mechanism
+383 |
+384 |     static var appShortcuts: [AppShortcut] {
+
+[#MutableGlobalVariable]: <https://docs.swift.org/compiler/documentation/diagnostics/mutable-global-variable>
+[3/4] Emitting module WorkspaceManagerAppTests
+Build complete! (13.00s)
+Test Suite 'Selected tests' started at 2026-09-12 09:58:51.846.
+Test Suite 'WorkspaceManagerPackageTests.xctest' started at 2026-09-12 09:58:51.850.
+Test Suite 'WorkspaceManagerPackageTests.xctest' passed at 2026-09-12 09:58:51.850.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.000) seconds
+Test Suite 'Selected tests' passed at 2026-09-12 09:58:51.850.
+	 Executed 0 tests, with 0 failures (0 unexpected) in 0.000 (0.004) seconds
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+◇ Suite "Compose provider live" started.
+◇ Test "Two provider workspaces survive stop/rebuild and keep deletion scoped" started.
+[LaunchBudget] launch-to-first-response baseline: 0.227s (measured)
+Compose terminal: literal argv launched a PTY, attached guest tmux, and detached without losing the session
+Compose fsmonitor probe: Linux execution confirmed; forbidden host-route mutation detected and cleaned
+Compose stop hook: exit 37 reported after containers stopped; workspace restarted successfully
+Compose live provider: two workspaces, guest setup/Git, tmux, stop/start/rebuild, retained data, scoped deletion, failed setup PASS
+✔ Test "Two provider workspaces survive stop/rebuild and keep deletion scoped" passed after 60.355 seconds.
+✔ Suite "Compose provider live" passed after 60.355 seconds.
+✔ Test run with 1 test in 1 suite passed after 60.356 seconds.

@@ -115,7 +115,8 @@ struct MainWindowLandingActionController {
         name: String,
         nameSource: WorkspaceNameSource,
         providerID: String,
-        guestOS: WorkspaceGuestOS?
+        guestOS: WorkspaceGuestOS?,
+        defaultTerminalCommand: String? = nil
     ) async {
         do {
             guard let provider = dependencies.providerRegistry.provider(for: providerID) else {
@@ -132,7 +133,8 @@ struct MainWindowLandingActionController {
                     name: name,
                     nameSource: nameSource,
                     providerID: providerID,
-                    guestOS: guestOS
+                    guestOS: guestOS,
+                    defaultTerminalCommand: defaultTerminalCommand
                 )
             } perform: {
                 await createWorkspaceReportingFailure(
@@ -140,7 +142,8 @@ struct MainWindowLandingActionController {
                     name: name,
                     nameSource: nameSource,
                     providerID: providerID,
-                    guestOS: guestOS
+                    guestOS: guestOS,
+                    defaultTerminalCommand: defaultTerminalCommand
                 )
             }
         } catch {
@@ -153,7 +156,8 @@ struct MainWindowLandingActionController {
         name: String,
         nameSource: WorkspaceNameSource,
         providerID: String,
-        guestOS: WorkspaceGuestOS?
+        guestOS: WorkspaceGuestOS?,
+        defaultTerminalCommand: String? = nil
     ) async {
         do {
             try await createWorkspace(
@@ -162,6 +166,7 @@ struct MainWindowLandingActionController {
                 nameSource: nameSource,
                 providerID: providerID,
                 guestOS: guestOS,
+                defaultTerminalCommand: defaultTerminalCommand,
                 skipSetup: true
             )
         } catch {
@@ -175,6 +180,7 @@ struct MainWindowLandingActionController {
         nameSource: WorkspaceNameSource,
         providerID: String,
         guestOS: WorkspaceGuestOS?,
+        defaultTerminalCommand: String? = nil,
         skipSetup: Bool
     ) async throws {
         creationLog.info(
@@ -186,6 +192,7 @@ struct MainWindowLandingActionController {
             nameSource: nameSource,
             providerID: providerID,
             guestOS: guestOS,
+            defaultTerminalCommand: defaultTerminalCommand,
             progress: { _ in },
             onPersisted: nil
         )
@@ -206,6 +213,10 @@ struct MainWindowLandingActionController {
     }
 
     func openWorkspaceInDefaultEditor(_ workspace: Workspace) {
+        guard workspace.backendIdentifier != ComposeWorkspaceProvider.identifier else {
+            dependencies.presentLandingError("Edit sandbox files in the workspace terminal.")
+            return
+        }
         do {
             try OpenInEditorShortcutFlow.perform(
                 target: .project(rootURL: workspace.workspaceURL),

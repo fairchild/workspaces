@@ -8,6 +8,34 @@ import Testing
 @MainActor
 @Suite("SurfaceStore")
 struct SurfaceStoreTests {
+    @Test("An old terminal's queued exit cannot close its replacement with the same tile and session IDs")
+    func staleExitCannotCloseRestartedSurface() async throws {
+        let store = SurfaceStore()
+        let tile = TileID()
+        let session = makeSession()
+        var closed = 0
+        let old = store.terminalSurface(for: tile, session: session, onProcessExit: { closed += 1 })
+        let queuedExit = try #require(old.surfaceView.onProcessExit)
+        // Queue before refresh, while still on the main actor, reproducing a late Docker exit.
+        queuedExit()
+        #expect(store.restartTerminalSurface(for: tile))
+        let replacement = store.terminalSurface(for: tile, session: session, onProcessExit: { closed += 1 })
+
+        await Task.yield()
+
+        #expect(closed == 0)
+        #expect(store.surface(for: tile) === replacement)
+        #expect(store.terminal(for: session.id) === replacement.surfaceView)
+        #expect(old.surfaceView.onProcessExit == nil)
+        queuedExit()
+
+        let replacementExit = try #require(replacement.surfaceView.onProcessExit)
+        replacementExit()
+        for _ in 0..<100 where closed == 0 { await Task.yield() }
+        #expect(closed == 1)
+        #expect(store.surface(for: tile) == nil)
+    }
+
     @Test("Creating a terminal surface retains it by tile and fires onSurfaceCreated once")
     func createTerminalSurfaceRetainsAndNotifies() {
         let store = SurfaceStore()

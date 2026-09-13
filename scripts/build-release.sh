@@ -552,6 +552,11 @@ fi
 SPM_RESOURCES=".build/release/WorkspaceManager_WorkspaceManager.bundle"
 copy_tree_or_fail "$SPM_RESOURCES" "$APP_BUNDLE/Contents/Resources" "Copied SPM resources"
 
+# Ship the same reviewed Compose template used by the standalone reference.
+# The provider snapshots it outside the agent-writable checkout before execution.
+mkdir -p "$APP_BUNDLE/Contents/Resources/ComposeSandbox"
+copy_tree_or_fail "examples/compose-agent-sandbox" "$APP_BUNDLE/Contents/Resources/ComposeSandbox" "Copied Compose sandbox reference"
+
 SPARKLE_FRAMEWORK=".build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 if [[ -d "$SPARKLE_FRAMEWORK" ]]; then
     cp -R "$SPARKLE_FRAMEWORK" "$APP_BUNDLE/Contents/Frameworks/"

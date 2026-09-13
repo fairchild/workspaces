@@ -33,6 +33,7 @@ public enum CLIPlaneComposer {
         public let repoPath: String?
         public let path: String
         public let branch: String?
+        public let backendIdentifier: String
 
         public init(
             workspaceID: UUID,
@@ -40,7 +41,8 @@ public enum CLIPlaneComposer {
             repoName: String?,
             repoPath: String?,
             path: String,
-            branch: String?
+            branch: String?,
+            backendIdentifier: String = "local"
         ) {
             self.workspaceID = workspaceID
             self.name = name
@@ -48,6 +50,7 @@ public enum CLIPlaneComposer {
             self.repoPath = repoPath
             self.path = path
             self.branch = branch
+            self.backendIdentifier = backendIdentifier
         }
     }
 
@@ -230,7 +233,8 @@ public enum CLIPlaneComposer {
             repoName: repo?.name,
             repoPath: repo?.path,
             path: workspace.path,
-            branch: workspace.branch
+            branch: workspace.branch,
+            backendIdentifier: workspace.backend
         )
     }
 }

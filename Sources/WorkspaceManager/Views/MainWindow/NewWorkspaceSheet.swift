@@ -52,10 +52,11 @@ struct NewWorkspaceSheet: View {
     let environmentOptions: [WorkspaceEnvironmentSheetOption]
     let isPreparingEnvironmentOptions: Bool
     let isCreateDisabled: Bool
-    let onCreate: (String, WorkspaceNameSource, String, WorkspaceGuestOS?) -> Void
+    let onCreate: (String, WorkspaceNameSource, String, WorkspaceGuestOS?, String?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
+    @State private var defaultTerminalCommand = ""
     @State private var selectedEnvironmentID = WorkspaceEnvironmentSheetOption.selectionID(
         providerID: LocalWorkspaceProvider.identifier,
         guestOS: nil
@@ -166,6 +167,22 @@ struct NewWorkspaceSheet: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if selectedOption?.providerID == ComposeWorkspaceProvider.identifier {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Default Terminal Command", text: $defaultTerminalCommand, prompt: Text("Optional"))
+                            .textFieldStyle(.roundedBorder)
+                            .accessibilityIdentifier("compose-default-terminal-command")
+
+                        Text(
+                            "Runs inside the container when a new terminal session starts. "
+                                + "Reconnecting keeps the running session."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
                 if let selectedAvailabilityReason,
                     !(selectedOption?.isAvailable ?? true)
                 {
@@ -200,7 +217,10 @@ struct NewWorkspaceSheet: View {
                         trimmedName,
                         nameSource,
                         selectedOption.providerID,
-                        selectedOption.guestOS
+                        selectedOption.guestOS,
+                        selectedOption.providerID == ComposeWorkspaceProvider.identifier
+                            && !defaultTerminalCommand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                            ? defaultTerminalCommand : nil
                     )
                     dismiss()
                 }

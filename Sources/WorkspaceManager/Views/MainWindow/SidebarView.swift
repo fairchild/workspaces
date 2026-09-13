@@ -108,6 +108,7 @@ struct SidebarView: View {
     let onOpenWebNextSession: (Repo) -> Void
     let onWorkspaceCreated: () -> Void
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
+    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Bool
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     /// Seam to the debug-only smoke harness; inert in release builds.
     let smokeDriver: SmokeScenarioDriver
@@ -174,7 +175,8 @@ struct SidebarView: View {
             modelContext: modelContext,
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
-            retireTerminalSessions: retireTerminalSessions
+            retireTerminalSessions: retireTerminalSessions,
+            restartTerminalSurfaces: restartTerminalSurfaces
         )
     }
 
@@ -289,14 +291,15 @@ struct SidebarView: View {
                 environmentOptions: environmentOptions(for: context.repo),
                 isPreparingEnvironmentOptions: isPreparingNewWorkspaceSheet,
                 isCreateDisabled: isCreatingWorkspace(for: context.repo.id)
-            ) { name, nameSource, providerID, guestOS in
+            ) { name, nameSource, providerID, guestOS, defaultTerminalCommand in
                 Task { @MainActor in
                     await createWorkspace(
                         from: context.repo,
                         name: name,
                         nameSource: nameSource,
                         providerID: providerID,
-                        guestOS: guestOS
+                        guestOS: guestOS,
+                        defaultTerminalCommand: defaultTerminalCommand
                     )
                 }
             }
@@ -314,12 +317,18 @@ struct SidebarView: View {
             isPresented: $showingDeleteConfirmation,
             presenting: workspaceToDelete
         ) { workspace in
-            Button("Delete (Keep Files)", role: .destructive) {
+            Button(
+                workspace.backend == .compose ? "Remove (Keep Files and Data)" : "Delete (Keep Files)",
+                role: .destructive
+            ) {
                 Task { @MainActor in
                     await performDelete(workspace, deleteFiles: false)
                 }
             }
-            Button("Delete and Remove Files", role: .destructive) {
+            Button(
+                workspace.backend == .compose ? "Delete Files and Container Data" : "Delete and Remove Files",
+                role: .destructive
+            ) {
                 Task { @MainActor in
                     await performDelete(workspace, deleteFiles: true)
                 }
@@ -328,7 +337,11 @@ struct SidebarView: View {
                 workspaceToDelete = nil
             }
         } message: { workspace in
-            Text("Are you sure you want to delete '\(workspace.name)'?")
+            Text(
+                workspace.backend == .compose
+                    ? "Remove '\(workspace.name)' and its containers? You can keep its files and volumes, or permanently delete them."
+                    : "Are you sure you want to delete '\(workspace.name)'?"
+            )
         }
         .alert(
             "Workspace Note",
@@ -1329,7 +1342,8 @@ struct SidebarView: View {
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
         shouldSelect: Bool = true,
-        fromRef: String? = nil
+        fromRef: String? = nil,
+        defaultTerminalCommand: String? = nil
     ) async -> SidebarWorkspaceCreationResult {
         guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
             let message = "Workspace provider '\(providerID)' is not registered."
@@ -1351,7 +1365,8 @@ struct SidebarView: View {
                     providerID: providerID,
                     guestOS: guestOS,
                     shouldSelect: shouldSelect,
-                    fromRef: fromRef
+                    fromRef: fromRef,
+                    defaultTerminalCommand: defaultTerminalCommand
                 )
             } perform: {
                 createdWorkspace = await createWorkspaceAfterSetup(
@@ -1361,7 +1376,8 @@ struct SidebarView: View {
                     providerID: providerID,
                     guestOS: guestOS,
                     shouldSelect: shouldSelect,
-                    fromRef: fromRef
+                    fromRef: fromRef,
+                    defaultTerminalCommand: defaultTerminalCommand
                 )
             }
             if intercepted {
@@ -1400,7 +1416,8 @@ struct SidebarView: View {
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
         shouldSelect: Bool = true,
-        fromRef: String? = nil
+        fromRef: String? = nil,
+        defaultTerminalCommand: String? = nil
     ) async -> Workspace? {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return nil }
@@ -1437,6 +1454,7 @@ struct SidebarView: View {
                 providerID: providerID,
                 guestOS: guestOS,
                 fromRef: fromRef,
+                defaultTerminalCommand: defaultTerminalCommand,
                 progress: { phase in
                     creationLog.debug("createWorkspaceAfterSetup: progress phase=\(phase)")
                     await MainActor.run {
@@ -1606,9 +1624,13 @@ struct SidebarView: View {
         workspaceAction = WorkspaceActionState(workspaceID: workspace.id, message: "Starting...")
 
         do {
-            try await workspaceController.start(workspace)
+            let refreshedTerminals = try await workspaceController.start(workspace)
             workspaceAction = nil
-            selectedWorkspace = workspace
+            // Reselecting an open Compose workspace would override the refreshed
+            // split pane's focus with the tab's primary terminal.
+            if !refreshedTerminals || selectedWorkspace?.id != workspace.id {
+                selectedWorkspace = workspace
+            }
         } catch {
             workspaceAction = nil
             presentSidebarError("Failed to start workspace: \(error.localizedDescription)")

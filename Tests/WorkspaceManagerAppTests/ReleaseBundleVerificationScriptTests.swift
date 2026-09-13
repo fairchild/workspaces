@@ -224,6 +224,11 @@ struct ReleaseBundleVerificationScriptTests {
         try data.write(to: contents.appendingPathComponent("Info.plist"))
 
         if includeRuntimeResources {
+            let compose = resources.appendingPathComponent("ComposeSandbox", isDirectory: true)
+            try FileManager.default.createDirectory(at: compose, withIntermediateDirectories: true)
+            for name in ["compose.yaml", "Dockerfile", ".dockerignore"] {
+                try Data().write(to: compose.appendingPathComponent(name))
+            }
             let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
             try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
             let executable = macOS.appendingPathComponent("WorkspaceManager")

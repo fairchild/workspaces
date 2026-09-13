@@ -32,18 +32,21 @@ struct SidebarWorkspaceController {
     let workspaceService: any WorkspaceServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
+    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Bool
     private let pinController = SidebarPinController()
 
     init(
         modelContext: ModelContext,
         workspaceService: any WorkspaceServiceProtocol,
         workspaceProviderRegistry: WorkspaceProviderRegistry,
-        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in }
+        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in },
+        restartTerminalSurfaces: @escaping @MainActor (HostTerminalSessionKey) -> Bool = { _ in false }
     ) {
         self.modelContext = modelContext
         self.workspaceService = workspaceService
         self.workspaceProviderRegistry = workspaceProviderRegistry
         self.retireTerminalSessions = retireTerminalSessions
+        self.restartTerminalSurfaces = restartTerminalSurfaces
     }
 
     nonisolated static func preferredRepoForNewWorkspace(
@@ -95,6 +98,7 @@ struct SidebarWorkspaceController {
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
         fromRef: String? = nil,
+        defaultTerminalCommand: String? = nil,
         progress: WorkspaceProviderProgressHandler? = nil,
         onPersisted: (@MainActor @Sendable (WorkspaceProviderCreationResult) async -> Void)? = nil
     ) async throws -> Workspace {
@@ -120,7 +124,8 @@ struct SidebarWorkspaceController {
             repoRemoteURL: repo.remoteURL,
             workspaceName: reservation.resolvedName,
             guestOS: guestOS,
-            fromRef: fromRef
+            fromRef: fromRef,
+            defaultTerminalCommand: providerID == ComposeWorkspaceProvider.identifier ? defaultTerminalCommand : nil
         )
 
         do {
@@ -161,7 +166,13 @@ struct SidebarWorkspaceController {
             return persistedWorkspace
         } catch {
             if let persistedWorkspace {
-                modelContext.delete(persistedWorkspace)
+                // Compose may have created durable files or volumes before startup failed.
+                // Keep the owned identity available for diagnosis and explicit cleanup.
+                if providerID == "compose" {
+                    persistedWorkspace.status = .stopped
+                } else {
+                    modelContext.delete(persistedWorkspace)
+                }
                 do {
                     try saveModelContext(action: "revert failed workspace creation")
                 } catch {
@@ -182,8 +193,10 @@ struct SidebarWorkspaceController {
             try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
         } else {
             let provider = try provider(for: workspace)
-            try await provider.deleteWorkspace(WorkspaceProviderTarget(workspace))
-            if provider.descriptor.usesHostWorkspaceFiles {
+            try await provider.deleteWorkspace(WorkspaceProviderTarget(workspace), deleteFiles: deleteFiles)
+            // Compose owns file deletion too: host teardown and Git must never execute
+            // against a checkout whose scripts and repository metadata an agent controls.
+            if provider.descriptor.usesHostWorkspaceFiles && workspace.backend != .compose {
                 try await workspaceService.deleteWorkspace(at: workspaceURL, deleteFiles: deleteFiles)
             }
         }
@@ -195,16 +208,37 @@ struct SidebarWorkspaceController {
 
     func stop(_ workspace: Workspace) async throws {
         let provider = try provider(for: workspace)
-        try await provider.stopWorkspace(WorkspaceProviderTarget(workspace))
+        do {
+            try await provider.stopWorkspace(WorkspaceProviderTarget(workspace))
+        } catch {
+            // A Compose stop hook can fail after the runtime has successfully stopped.
+            // Preserve that observed transition so Start remains available for recovery.
+            if workspace.backend == .compose,
+                let snapshot = try? await provider.syncStatuses(for: [WorkspaceProviderTarget(workspace)]).first,
+                snapshot.remoteId == workspace.remoteId
+            {
+                workspace.status = snapshot.status
+                try? saveModelContext(action: "reconcile stopped sandbox")
+            }
+            throw error
+        }
         workspace.status = .stopped
         try saveModelContext(action: "stop workspace")
     }
 
-    func start(_ workspace: Workspace) async throws {
+    /// Returns whether existing terminal transports were refreshed, so the caller
+    /// can retain their focus instead of selecting the workspace's first terminal.
+    @discardableResult
+    func start(_ workspace: Workspace) async throws -> Bool {
+        let restartsComposeTerminals = workspace.backend == .compose && workspace.status == .stopped
         let provider = try provider(for: workspace)
         try await provider.startWorkspace(WorkspaceProviderTarget(workspace))
         workspace.status = .active
         try saveModelContext(action: "start workspace")
+        if restartsComposeTerminals {
+            return restartTerminalSurfaces(provider.sessionKey(for: WorkspaceProviderTarget(workspace)))
+        }
+        return false
     }
 
     func archive(_ workspace: Workspace) async throws {

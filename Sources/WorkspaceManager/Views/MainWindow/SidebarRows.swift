@@ -357,6 +357,8 @@ struct WorkspaceRow: View {
         switch workspace.backend {
         case .lume:
             return "desktopcomputer"
+        case .compose:
+            return "shippingbox"
         case .daytona:
             return workspace.status == .active ? "cloud.fill" : "cloud"
         case .local, .ssh, .unknown:
@@ -367,6 +369,8 @@ struct WorkspaceRow: View {
     private var providerIconColor: Color {
         switch workspace.backend {
         case .lume:
+            return workspace.status == .active ? .teal : .secondary
+        case .compose:
             return workspace.status == .active ? .teal : .secondary
         case .daytona:
             return workspace.status == .active ? .blue : .secondary

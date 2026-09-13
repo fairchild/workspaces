@@ -45,6 +45,7 @@ struct AppRuntimeDependencies {
             workspaceProviderRegistry: WorkspaceProviderRegistry(
                 providers: [
                     LocalWorkspaceProvider(),
+                    ComposeWorkspaceProvider.shared,
                     DeferredWorkspaceProvider(
                         descriptor: DaytonaWorkspaceProvider.providerDescriptor,
                         sessionKeyProvider: { workspace in

@@ -464,6 +464,16 @@ final class TileTreeStore: ObservableObject {
     }
 
     @discardableResult
+    func restartTerminalSurfaces(inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
+        // Restart the transports after a sandbox restart, retaining terminal identities,
+        // split layout, and focus. Unopened terminals keep their existing lazy launch.
+        terminalSessionIDs(inScope: scopeKey).filter { sessionID in
+            guard let tileID = tileIDBySessionID[sessionID] else { return false }
+            return surfaceStore.restartTerminalSurface(for: tileID)
+        }
+    }
+
+    @discardableResult
     func retireSessions(inScope scopeKey: HostTerminalSessionKey) -> [UUID] {
         let primarySessionIDs = coordinator.sessions(inScope: scopeKey).map(\.id)
         guard !primarySessionIDs.isEmpty else { return [] }
@@ -688,6 +698,7 @@ final class TileTreeStore: ObservableObject {
             id: splitSessionID,
             key: primarySession.key,
             directory: primarySession.directoryURL,
+            customCommand: primarySession.customCommand,
             tmuxSessionNameOverride: TmuxSessionNaming.splitPaneName(
                 for: primarySession.directoryURL,
                 paneSessionID: splitSessionID

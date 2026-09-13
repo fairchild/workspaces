@@ -801,6 +801,7 @@ struct ContentView: View {
                 retireTerminalSessions: { key in
                     try await retireTerminalSessions(inScope: key)
                 },
+                restartTerminalSurfaces: restartTerminalSurfaces,
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
                 smokeDriver: smokeDriver,
                 automationWorkspaceCreateBridge: automationWorkspaceCreateBridge
@@ -1026,7 +1027,7 @@ struct ContentView: View {
             .onReceive(agentSessionRegistry.statusesDidChange) { _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
             }
-            .onChange(of: tileTreeStore.sessions) { _, _ in
+            .onChange(of: tileTreeStore.allLiveSessions) { _, _ in
                 scheduleWorkspaceStatusAggregatorRefresh()
                 terminalContinuityController.persistSnapshot()
             }
@@ -1266,14 +1267,15 @@ struct ContentView: View {
                     environmentOptions: environmentOptions(for: repo),
                     isPreparingEnvironmentOptions: isPreparingLandingNewWorkspaceSheet,
                     isCreateDisabled: false
-                ) { name, nameSource, providerID, guestOS in
+                ) { name, nameSource, providerID, guestOS, defaultTerminalCommand in
                     Task { @MainActor in
                         await landingActionController.createWorkspace(
                             repo: repo,
                             name: name,
                             nameSource: nameSource,
                             providerID: providerID,
-                            guestOS: guestOS
+                            guestOS: guestOS,
+                            defaultTerminalCommand: defaultTerminalCommand
                         )
                     }
                 }
@@ -1592,7 +1594,7 @@ struct ContentView: View {
     private func applySurfaceResolutionAction(_ action: MainWindowSurfaceResolutionAction) -> Bool {
         launchActionHandler.apply(
             action,
-            state: &viewState,
+            state: $viewState,
             environment: ProcessInfo.processInfo.environment,
             pendingRequest: deepLinkState.pendingRequest,
             bootstrapController: bootstrapController,
@@ -1746,6 +1748,18 @@ struct ContentView: View {
             )
         else { return }
         applyTerminalSessionResult(result)
+    }
+
+    @MainActor
+    private func restartTerminalSurfaces(inScope scopeKey: HostTerminalSessionKey) -> Bool {
+        let focusedSessionID = (TerminalFocusManager.shared.focusedTerminal as? GhosttySurfaceView).flatMap {
+            tileTreeStore.surfaceStore.sessionID(for: $0)
+        }
+        let restarted = tileTreeStore.restartTerminalSurfaces(inScope: scopeKey)
+        if let focusedSessionID, restarted.contains(focusedSessionID) {
+            focusTerminalTab(focusedSessionID)
+        }
+        return !restarted.isEmpty
     }
 
     @MainActor
@@ -2278,10 +2292,10 @@ struct ContentView: View {
         // session on the same key (issue #783 #3). The default-home fallback below
         // still seeds one shell so the window isn't empty pre-restore, and
         // executeRestore retires that shell if the plan claims its key.
-        if !restoreSessionsOnLaunchEnabled,
-            !tileTreeStore.hasSessions,
-            let snapshot = TerminalContinuityManifest.decode(from: terminalContinuityManifestRawValue)?
-                .hostSessionSnapshot(excludingScopeKeys: terminalContinuityController.archivedWorkspaceScopeKeys)
+        if !tileTreeStore.hasSessions,
+            let snapshot = terminalContinuityController.restoredHostSessionSnapshot(
+                includeHostSessions: !restoreSessionsOnLaunchEnabled
+            )
         {
             tileTreeStore.restoreSessions(
                 snapshot.sessions,

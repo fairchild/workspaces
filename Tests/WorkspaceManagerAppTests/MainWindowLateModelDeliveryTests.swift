@@ -13,6 +13,7 @@
 //  real.
 //
 import Foundation
+import SwiftUI
 import Testing
 import WorkspaceManagerCore
 
@@ -120,7 +121,7 @@ struct MainWindowLateModelDeliveryTests {
         // Pass one: repos delivered, web sources not.
         handler.apply(
             action(rawValue: persisted, repos: [repo], webSources: []),
-            state: &state,
+            state: Binding(get: { state }, set: { state = $0 }),
             environment: [:],
             pendingRequest: nil,
             bootstrapController: bootstrapController,
@@ -135,7 +136,7 @@ struct MainWindowLateModelDeliveryTests {
         // Pass two: the web sources land and the saved surface restores.
         handler.apply(
             action(rawValue: persisted, repos: [repo], webSources: [source]),
-            state: &state,
+            state: Binding(get: { state }, set: { state = $0 }),
             environment: [:],
             pendingRequest: nil,
             bootstrapController: bootstrapController,

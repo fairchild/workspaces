@@ -1,6 +1,7 @@
 // swift-format-ignore-file: NeverForceUnwrap
 // Test fixtures/helpers force-unwrap known-good literals or generator output; a failure here is a loud test crash, not a user-facing risk.
 import Foundation
+import SwiftUI
 import Testing
 import WorkspaceManagerCore
 
@@ -10,6 +11,44 @@ import WorkspaceManagerCore
 @Suite("MainWindowLaunchActionHandler")
 struct MainWindowLaunchActionHandlerTests {
     private let handler = MainWindowLaunchActionHandler()
+
+    @Test("Synchronous restore retains workspace selection alongside launch flags")
+    func synchronousRestoreRetainsSelection() throws {
+        let box = ViewStateBox()
+        let state = Binding(get: { box.value }, set: { box.value = $0 })
+        let repo = Repo(name: "alpha", localPath: URL(fileURLWithPath: "/tmp/alpha"))
+        let workspace = Workspace(
+            name: "sandbox", path: URL(fileURLWithPath: "/tmp/sandbox"), sourceRepo: repo,
+            backendIdentifier: "compose", remoteId: "ws-test"
+        )
+        box.value.selectedRepoForLandingID = repo.id
+        let navigation = MainWindowNavigationStateController()
+
+        // Match ContentView: the handler and synchronous selection callback both
+        // reach the same @State storage through independent accessor paths.
+        let shouldContinue = handler.apply(
+            .restore(.workspace(workspace)),
+            state: state,
+            environment: [:],
+            pendingRequest: nil,
+            bootstrapController: MainWindowBootstrapController(),
+            actions: makeActions(
+                applyLaunchSurface: { surface in
+                    guard case .workspace(let selected) = surface else {
+                        Issue.record("Expected the restored workspace")
+                        return
+                    }
+                    navigation.apply(navigation.transition(to: .workspaceTerminal(selected)), to: &state.wrappedValue)
+                }
+            )
+        )
+
+        #expect(!shouldContinue)
+        #expect(box.value.didResolveInitialSurface)
+        #expect(box.value.selectedWorkspace?.workspaceID == workspace.id)
+        #expect(box.value.selectedWorkspace?.repoID == repo.id)
+        #expect(box.value.selectedRepoForLandingID == nil)
+    }
 
     @Test("Deep linked workspace action clears request selects workspace and focuses window")
     func deepLinkedWorkspaceActionAppliesSideEffects() throws {
@@ -29,7 +68,7 @@ struct MainWindowLaunchActionHandlerTests {
 
         let shouldContinue = handler.apply(
             .selectDeepLinkedWorkspace(request, workspace),
-            state: &state,
+            state: Binding(get: { state }, set: { state = $0 }),
             environment: [:],
             pendingRequest: request,
             bootstrapController: MainWindowBootstrapController(),
@@ -69,7 +108,7 @@ struct MainWindowLaunchActionHandlerTests {
                 repo,
                 selection
             ),
-            state: &state,
+            state: Binding(get: { state }, set: { state = $0 }),
             environment: [:],
             pendingRequest: nil,
             bootstrapController: MainWindowBootstrapController(),
@@ -97,7 +136,7 @@ struct MainWindowLaunchActionHandlerTests {
 
         let shouldContinue = handler.apply(
             .clearInvalidLastSurface,
-            state: &state,
+            state: Binding(get: { state }, set: { state = $0 }),
             environment: [:],
             pendingRequest: nil,
             bootstrapController: MainWindowBootstrapController(),
@@ -116,7 +155,7 @@ struct MainWindowLaunchActionHandlerTests {
 
         let shouldContinue = handler.apply(
             .fallback(.repoOverview(repo)),
-            state: &state,
+            state: Binding(get: { state }, set: { state = $0 }),
             environment: [:],
             pendingRequest: nil,
             bootstrapController: MainWindowBootstrapController(),
@@ -143,7 +182,7 @@ struct MainWindowLaunchActionHandlerTests {
 
         let shouldContinue = handler.apply(
             .perfAutoSelect(repo),
-            state: &state,
+            state: Binding(get: { state }, set: { state = $0 }),
             environment: [
                 "WORKSPACES_PERF_AUTO_SELECT_FIRST_REPO": "1",
                 "WORKSPACES_PERF_AUTO_OPEN_NEW_WORKSPACE": "1",
@@ -199,5 +238,9 @@ struct MainWindowLaunchActionHandlerTests {
         let repoRootQuery = encodedRepoRoot.map { "&repo_root=\($0)" } ?? ""
         let url = URL(string: "workspaces://focus?cwd=\(encodedCWD)\(repoRootQuery)")!
         return WorkspaceDeepLink(url: url)
+    }
+
+    private final class ViewStateBox {
+        var value = MainWindowViewState()
     }
 }

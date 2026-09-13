@@ -12,6 +12,7 @@ struct WorkspaceProviderTests {
         #expect(
             registry.providers.map { $0.descriptor.id } == [
                 LocalWorkspaceProvider.identifier,
+                ComposeWorkspaceProvider.identifier,
                 DaytonaWorkspaceProvider.identifier,
                 LumeWorkspaceProvider.identifier,
             ])

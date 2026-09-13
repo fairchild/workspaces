@@ -99,6 +99,7 @@ private final class CLIApp {
             isDirectory.boolValue
             ? resolvedURL
             : resolvedURL.deletingLastPathComponent()
+        try requireHostExecution(at: launchDirectory)
         return try AppLaunchRequest(launchDirectory: launchDirectory)
     }
 
@@ -150,6 +151,7 @@ private final class CLIApp {
                 throw CLIError("Usage: workspaces repo add <path>")
             }
             let repoURL = normalizePath(arguments[1])
+            try requireHostExecution(at: repoURL)
             try validateGitRepository(at: repoURL)
 
             if let existingIndex = state.repos.firstIndex(where: { $0.path == repoURL.path }) {
@@ -327,6 +329,7 @@ private final class CLIApp {
         }
 
         var workspace = try resolveWorkspace(token: workspaceToken, state: &state)
+        try requireHostExecution(for: workspace)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
         let config = loadWorkspaceLocalConfig(at: workspaceURL)
         let command = commandOverride ?? workspace.defaultCommand ?? config.defaultCommand
@@ -408,7 +411,7 @@ private final class CLIApp {
         }
 
         let control = tmuxControl()
-        let handle = await resolveSessionHandle(token: token, control: control, state: &state)
+        let handle = try await resolveSessionHandle(token: token, control: control, state: &state)
         let text: String
         do {
             text = try await control.read(handle: handle, lines: lines)
@@ -465,7 +468,7 @@ private final class CLIApp {
         }
 
         let control = tmuxControl()
-        let handle = await resolveSessionHandle(token: token, control: control, state: &state)
+        let handle = try await resolveSessionHandle(token: token, control: control, state: &state)
         let report: TmuxSessionControl.SendReport
         do {
             report = try await control.send(handle: handle, text: text, submit: submit)
@@ -517,13 +520,14 @@ private final class CLIApp {
         token: String,
         control: TmuxSessionControl,
         state: inout CLIState
-    ) async -> String {
+    ) async throws -> String {
         if await control.isLive(handle: token) {
             return token
         }
         guard let workspace = try? resolveWorkspace(token: token, state: &state) else {
             return token
         }
+        try requireHostExecution(for: workspace)
         return TmuxSessionNaming.defaultName(for: URL(fileURLWithPath: workspace.path))
     }
 
@@ -733,6 +737,7 @@ private final class CLIApp {
         }
 
         var workspace = try resolveWorkspace(token: workspaceToken, state: &state)
+        try requireHostExecution(for: workspace)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
         let config = loadWorkspaceLocalConfig(at: workspaceURL)
         let command = commandOverride ?? workspace.defaultCommand ?? config.defaultCommand
@@ -755,6 +760,7 @@ private final class CLIApp {
 
         let workspaceToken = arguments[0]
         let workspace = try resolveWorkspace(token: workspaceToken, state: &state)
+        try requireHostExecution(for: workspace)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
 
         let commandString: String
@@ -812,6 +818,7 @@ private final class CLIApp {
             throw CLIError("Last workspace is no longer tracked. Use 'workspaces ws list'.")
         }
 
+        try requireHostExecution(for: workspace)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
         let config = loadWorkspaceLocalConfig(at: workspaceURL)
         let command = lastSession.command ?? workspace.defaultCommand ?? config.defaultCommand
@@ -866,6 +873,7 @@ private final class CLIApp {
         }
 
         let workspace = try resolveWorkspace(token: workspaceToken, state: &state)
+        try requireHostExecution(for: workspace)
         let workspaceURL = URL(fileURLWithPath: workspace.path)
 
         repeat {
@@ -1421,7 +1429,10 @@ private final class CLIApp {
             credential: credential,
             method: "POST",
             path: "/v1/workspace/create",
-            body: body
+            body: body,
+            // The first Compose workspace builds its trusted image and runs setup.
+            // Keep the socket alive through that bounded provider operation.
+            timeout: providerID == ComposeWorkspaceProvider.identifier ? 1_800 : nil
         )
 
         if json {
@@ -1973,6 +1984,7 @@ private final class CLIApp {
     /// app tracks the repo instead, the error explains the plane split and both ways out.
     private func resolveLocalRepoOrExplain(token: String, state: CLIState) throws -> RepoRecord {
         if let repo = resolveRepo(token: token, state: state) {
+            try requireHostExecution(at: URL(fileURLWithPath: repo.path))
             return repo
         }
         if let inventory = appInventory(),
@@ -1995,10 +2007,11 @@ private final class CLIApp {
     /// path) so flows that persist access records (`open`, `run`) keep working; callers
     /// that never save (`ws path`, `status`) leave the adoption in memory only.
     private func resolveWorkspace(token: String, state: inout CLIState) throws -> WorkspaceRecord {
+        let inventory = appInventory()
         if let uuid = UUID(uuidString: token),
             let byID = state.workspaces.first(where: { $0.id == uuid })
         {
-            return byID
+            return retainingProviderIdentity(byID, inventory: inventory)
         }
 
         if token.contains("/") {
@@ -2006,20 +2019,20 @@ private final class CLIApp {
             if parts.count == 2,
                 let exact = state.workspaces.first(where: { $0.repoName == parts[0] && $0.name == parts[1] })
             {
-                return exact
+                return retainingProviderIdentity(exact, inventory: inventory)
             }
         }
 
         let matches = state.workspaces.filter { $0.name == token }
         if matches.count == 1, let workspace = matches.first {
-            return workspace
+            return retainingProviderIdentity(workspace, inventory: inventory)
         }
         if matches.count > 1 {
             let candidates = matches.map(workspaceDisplayName).joined(separator: ", ")
             throw CLIError("Workspace name is ambiguous: \(token). Candidates: \(candidates)")
         }
 
-        if let inventory = appInventory() {
+        if let inventory {
             switch CLIPlaneComposer.matchWorkspace(token: token, in: inventory) {
             case .match(let match):
                 let now = Date()
@@ -2036,7 +2049,8 @@ private final class CLIApp {
                     gitBranch: match.branch ?? "",
                     createdAt: superseded?.createdAt ?? now,
                     lastAccessedAt: now,
-                    defaultCommand: superseded?.defaultCommand
+                    defaultCommand: superseded?.defaultCommand,
+                    backendIdentifier: match.backendIdentifier
                 )
                 state.workspaces.removeAll { $0.path == record.path }
                 state.workspaces.append(record)
@@ -2052,6 +2066,30 @@ private final class CLIApp {
         }
 
         throw CLIError("Workspace not found: \(token)")
+    }
+
+    private func retainingProviderIdentity(
+        _ workspace: WorkspaceRecord, inventory: AutomationWorkspaceInventory?
+    ) -> WorkspaceRecord {
+        var result = workspace
+        if let match = inventory?.workspaces.first(where: {
+            $0.workspaceID == workspace.id || normalizePath($0.path).path == normalizePath(workspace.path).path
+        }) {
+            result.backendIdentifier = match.backend
+        }
+        return result
+    }
+
+    private func requireHostExecution(for workspace: WorkspaceRecord) throws {
+        try requireHostExecution(
+            at: URL(fileURLWithPath: workspace.path), backendIdentifier: workspace.backendIdentifier)
+    }
+
+    private func requireHostExecution(at path: URL, backendIdentifier: String? = nil) throws {
+        let providerPaths = appInventory()?.workspaces.filter { $0.backend == "compose" }.map(\.path) ?? []
+        try CLIWorkspaceExecutionPolicy.requireHostExecution(
+            at: path, backendIdentifier: backendIdentifier, composeWorkspacePaths: providerPaths
+        )
     }
 
     /// The running app's repo/workspace inventory via the operator socket, or nil when the
@@ -2269,6 +2307,8 @@ private struct WorkspaceRecord: Codable {
     var createdAt: Date
     var lastAccessedAt: Date
     var defaultCommand: String?
+    // Optional preserves decoding of CLI state written before provider identity was retained.
+    var backendIdentifier: String? = nil
 }
 
 private struct RaceGroupRecord: Codable {

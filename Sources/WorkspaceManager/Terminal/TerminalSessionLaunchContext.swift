@@ -52,9 +52,21 @@ struct TerminalSessionLaunchContext: Equatable, Sendable {
         automationEnvironment: AutomationTerminalEnvironment? = nil
     ) -> TerminalSessionLaunchContext {
         if let customCommand = session.customCommand {
+            // The provider creates a reusable command before a terminal ID exists.
+            // Bind it only at launch so restored sessions reconnect and new tiles
+            // create independent guest tmux sessions.
+            let resolvedCommand: String
+            if case .backendSession(let providerID, _) = session.key, providerID == "compose" {
+                resolvedCommand = customCommand.replacingOccurrences(
+                    of: ComposeWorkspaceProvider.terminalSessionPlaceholder,
+                    with: session.id.uuidString.lowercased()
+                )
+            } else {
+                resolvedCommand = customCommand
+            }
             return TerminalSessionLaunchContext(
                 workingDirectory: session.directoryURL,
-                commandMode: .customCommand(customCommand),
+                commandMode: .customCommand(resolvedCommand),
                 hostSessionID: session.id,
                 hooksSocketPath: hooksSocketPath,
                 automationEnvironment: nil,
