@@ -366,6 +366,40 @@ class MacOSLaneCoexistenceTests(unittest.TestCase):
         self.assertIn("- [complete] swift build", reconciled)
 
 
+class EvidenceStatusHeadingCaseTests(unittest.TestCase):
+    """The lane finds `## evidence status` where it finds `## Evidence Status` (#1609).
+
+    The readiness gate reads a status section under either spelling, so a
+    writer that looks only for the exact one leaves a lower-case section's
+    `pending-ci` lines pending after the lane has run.
+    """
+
+    def test_the_lane_resolves_pending_lines_under_a_lower_case_heading(self) -> None:
+        body = "## evidence status\n- [pending-ci] swift build -- macOS lane will build\n"
+        reconciled = run_contributor.reconcile_pending_ci_evidence(
+            body,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+        self.assertIn("- [complete] swift build", reconciled)
+        self.assertTrue(reconciled.startswith("## evidence status\n"))
+
+    def test_metadata_lands_above_a_lower_case_heading_and_keeps_its_case(self) -> None:
+        body = (
+            "## Summary\nx\n\n"
+            "## Evidence Status\n- [complete] item -- proof\n\n"
+            "## Validation\n- ran it\n"
+        )
+        payload: dict[str, object] = {"entries": []}
+        canonical = run_contributor._insert_evidence_metadata(body, payload)
+        self.assertLess(canonical.index("<!-- evidence-status:"), canonical.index("## Evidence Status"))
+        lower = run_contributor._insert_evidence_metadata(
+            body.replace("## Evidence Status", "## evidence status"), payload
+        )
+        self.assertEqual(lower, canonical.replace("## Evidence Status", "## evidence status"))
+
+
 class ClassifierBlastRadiusTests(unittest.TestCase):
     """A kind is not a label — it decides which lane completes the item.
 

@@ -115,7 +115,7 @@ def load_json(path: str | None, default: Any) -> Any:
 
 def extract_section(body: str, heading: str) -> str:
     pattern = re.compile(
-        rf"(?ms)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
+        rf"(?msi)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""
@@ -161,7 +161,9 @@ def evidence_status_heading_failure(body: str) -> str | None:
         r"(?im)^#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
         body,
     )
-    exact_count = sum(heading == "## Evidence Status" for heading in headings)
+    exact_count = sum(
+        re.fullmatch(r"(?i)## Evidence Status", heading) is not None for heading in headings
+    )
     variant_count = len(headings) - exact_count
     if exact_count > 1 or variant_count:
         return (

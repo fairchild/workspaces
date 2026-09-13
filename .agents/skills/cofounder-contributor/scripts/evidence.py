@@ -688,13 +688,12 @@ def _insert_evidence_metadata(body: str, payload: dict[str, object]) -> str:
         f"-->"
     )
     cleaned = _strip_evidence_metadata(body).strip()
-    pattern = r"(?m)^## Evidence Status\s*$"
+    pattern = r"(?mi)^(## Evidence Status)\s*$"
     if re.search(pattern, cleaned):
         # A function replacement, not a string: the metadata carries `\uXXXX`
         # escapes now, and `re.sub` reads a backslash in a replacement string
-        # as one of its own.
-        replacement = f"{metadata}\n\n## Evidence Status"
-        return re.sub(pattern, lambda _: replacement, cleaned, count=1)
+        # as one of its own. The heading stays as it was written.
+        return re.sub(pattern, lambda match: f"{metadata}\n\n{match.group(1)}", cleaned, count=1)
     if cleaned:
         return f"{cleaned}\n\n{metadata}"
     return metadata
@@ -2586,7 +2585,7 @@ def reconcile_pending_ci_evidence(
 
     for line in lines:
         if line.startswith("## "):
-            in_evidence_status = line.strip() == "## Evidence Status"
+            in_evidence_status = re.fullmatch(r"(?i)## Evidence Status", line.strip()) is not None
             updated.append(line)
             continue
         if in_evidence_status:
