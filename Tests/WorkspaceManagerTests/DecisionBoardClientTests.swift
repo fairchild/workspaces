@@ -64,7 +64,7 @@ struct DecisionBoardClientTests {
         #expect(captured.method == "PATCH")
         #expect(
             Set(body.keys) == ["status", "answer", "note", "answeredAt", "settleAt", "answeredVia"],
-            "the board page sends exactly these fields; an extra one is a second source of truth"
+            "the tap shape, locked deliberately: the page sends the first five, and the sixth names the channel, which is what lets a tap and a click be compared head to head"
         )
         #expect(body["status"] as? String == "answered")
         #expect(body["answer"] as? String == "ship it")
@@ -109,8 +109,8 @@ struct DecisionBoardClientTests {
         #expect(captured.body["answer"] as? String == "")
     }
 
-    @Test("Open decisions are read; answered, untitled and optionless ones are not")
-    func openDecisionsFilters() async throws {
+    @Test("An answered card still comes back; one with nothing to ask does not")
+    func decisionsKeepStatusAndDropTheUnaskable() async throws {
         let docs: [[String: Any]] = [
             [
                 "id": "open-one",
@@ -127,11 +127,20 @@ struct DecisionBoardClientTests {
             "/api/collection/decisions": (json: ["collection": "decisions", "docs": docs], statusCode: 200)
         ])
         let client = DecisionBoardClient(baseURL: Self.base, session: session)
-        let cards = try await client.openDecisions()
+        let cards = try await client.decisions()
 
-        #expect(cards.map(\.id) == ["open-one"])
+        // The answered card is kept on purpose: a card leaving the open set is
+        // how the surface learns to withdraw, and "answered elsewhere" and
+        // "deleted" are different reasons it should be able to tell apart.
+        #expect(cards.map(\.id) == ["open-one", "answered"])
+        #expect(cards.first?.isOpen == true)
+        #expect(cards.last?.isOpen == false)
+        // An untitled or optionless card is dropped: there is nothing a
+        // notification could say about it that anyone could act on.
+        #expect(!cards.map(\.id).contains("untitled"))
+        #expect(!cards.map(\.id).contains("optionless"))
         #expect(cards.first?.order == 10)
-        #expect(cards.first?.askedAt != nil)
+        #expect(cards.first?.askedAt != nil, "whole-second askedAt must parse")
     }
 
     @Test("A card with no order takes the card writer's default")
@@ -143,14 +152,14 @@ struct DecisionBoardClientTests {
             "/api/collection/decisions": (json: ["collection": "decisions", "docs": docs], statusCode: 200)
         ])
         let client = DecisionBoardClient(baseURL: Self.base, session: session)
-        #expect(try await client.openDecisions().first?.order == 50)
+        #expect(try await client.decisions().first?.order == 50)
     }
 
     @Test("A refused read is an error, not an empty queue")
     func refusedReadThrows() async {
         let session = MockURLProtocol.session(handlers: [:])
         let client = DecisionBoardClient(baseURL: Self.base, session: session)
-        await #expect(throws: DecisionBoardError.self) { try await client.openDecisions() }
+        await #expect(throws: DecisionBoardError.self) { try await client.decisions() }
     }
 
     @Test("A rejected measurement never reaches the caller")

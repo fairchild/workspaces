@@ -10,6 +10,9 @@
 
 import Foundation
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "DecisionNotifications")
 
 #if canImport(AppKit)
     import AppKit
@@ -24,8 +27,8 @@ public final class DecisionNotificationLifecycle {
     private var terminationObserver: NSObjectProtocol?
     private var defaults: UserDefaults = LaunchPreferences.defaults
     private var environment: [String: String] = ProcessInfo.processInfo.environment
-    private var surfaceFactory: @MainActor () -> DecisionNotificationSurface = {
-        DecisionNotificationSurface()
+    private var surfaceFactory: @MainActor (URL?) -> DecisionNotificationSurface = { board in
+        DecisionNotificationSurface(boardURL: board)
     }
 
     private init() {}
@@ -44,10 +47,27 @@ public final class DecisionNotificationLifecycle {
     public func start() {
         guard !didStart else { return }
         didStart = true
-        guard isEnabled else { return }
 
-        let surface = surfaceFactory()
+        // An isolated run that did not name its board gets no board at all.
+        // Answering against the default would write a real verdict into the owner's
+        // real store and look like it worked, and there is no undo for that
+        // beyond editing the card by hand.
+        let board = DecisionBoardConstants.resolvedBoardURL(environment: environment)
+        let surface = surfaceFactory(board)
         self.surface = surface
+
+        // Claimed even when the surface will not post: with no delegate at all
+        // macOS suppresses every notification while the app is frontmost, which
+        // is #1623 and predates this feature.
+        surface.claimDelegate()
+
+        guard isEnabled else { return }
+        guard board != nil else {
+            log.error(
+                "decision notifications stay off: \(DecisionBoardConstants.boardURLEnvironmentKey, privacy: .public) must be set under a synthetic root"
+            )
+            return
+        }
         startupTask = Task { @MainActor in
             surface.start()
         }
@@ -77,7 +97,7 @@ public final class DecisionNotificationLifecycle {
     func _configureForTesting(
         defaults: UserDefaults,
         environment: [String: String],
-        surfaceFactory: @escaping @MainActor () -> DecisionNotificationSurface
+        surfaceFactory: @escaping @MainActor (URL?) -> DecisionNotificationSurface
     ) {
         self.defaults = defaults
         self.environment = environment

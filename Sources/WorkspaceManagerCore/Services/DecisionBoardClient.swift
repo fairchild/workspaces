@@ -36,6 +36,31 @@ public enum DecisionBoardConstants {
     /// The board's undo window. An answer is final once it passes, and the
     /// agent reads only answers whose `settleAt` is already behind it.
     public static let undoWindow: TimeInterval = 8
+
+    /// Where this launch is allowed to answer decisions, or nothing.
+    ///
+    /// The default is the live board, which is right for the shipped surface and
+    /// wrong for every isolated run — and an isolated run that silently falls
+    /// back to it writes a real answer into the real store, stamps the alignment
+    /// record with a verdict nobody gave, and looks like it worked. There
+    /// is no undo for that beyond editing the card by hand.
+    ///
+    /// `WORKSPACES_SYNTHETIC_ROOT` already means "this run must not touch the
+    /// owner's real roots". The board is one, so under a synthetic root the
+    /// board URL must be named outright or the surface does not run at all.
+    public static func resolvedBoardURL(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL? {
+        let explicit = environment[boardURLEnvironmentKey]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let explicit, !explicit.isEmpty, let url = URL(string: explicit) {
+            return url
+        }
+        let isolated = (environment[LaunchPreferencesEnvironment.syntheticRootKey] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isolated.isEmpty else { return nil }
+        return boardBaseURL
+    }
 }
 
 public enum DecisionBoardError: Error, LocalizedError {
@@ -54,17 +79,6 @@ public actor DecisionBoardClient {
     private let baseURL: URL
     private let session: URLSession
 
-    /// The board's stamps carry milliseconds and a literal `Z`. Matching the
-    /// page's format is what keeps a tapped answer indistinguishable from a
-    /// clicked one everywhere downstream.
-    private static let stamp: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'"
-        return formatter
-    }()
-
     public init(
         baseURL: URL = DecisionBoardConstants.boardBaseURL,
         session: URLSession = .shared
@@ -73,10 +87,11 @@ public actor DecisionBoardClient {
         self.session = session
     }
 
-    /// Every card still waiting for an answer. A card with no title or no options is
-    /// dropped rather than rendered: there is nothing a notification could say
-    /// about it that anyone could act on.
-    public func openDecisions() async throws -> [DecisionCard] {
+    /// Every decision the board holds, answered ones included — the surface needs
+    /// to see a card leave the open set to know it should withdraw. A card with
+    /// no title or no options is dropped, because there is nothing a notification
+    /// could say about it that anyone could act on.
+    public func decisions() async throws -> [DecisionCard] {
         let request = URLRequest(url: baseURL.appendingPathComponent("api/collection/decisions"))
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw DecisionBoardError.invalidResponse }
@@ -95,8 +110,8 @@ public actor DecisionBoardClient {
     /// fields, plus the channel. The server derives `agreed` from this write, so
     /// nothing here may derive it too.
     public func answer(id: String, option: String, at: Date) async throws {
-        let answeredAt = Self.stamp.string(from: at)
-        let settleAt = Self.stamp.string(from: at.addingTimeInterval(DecisionBoardConstants.undoWindow))
+        let answeredAt = BoardTimestamp.write(at)
+        let settleAt = BoardTimestamp.write(at.addingTimeInterval(DecisionBoardConstants.undoWindow))
         try await patchDecision(
             id: id,
             body: [
@@ -165,7 +180,6 @@ public actor DecisionBoardClient {
         else { return nil }
 
         let status = (data["status"] as? String ?? "open").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard status.isEmpty || status == "open" else { return nil }
 
         let title = (data["title"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty else { return nil }
@@ -182,17 +196,9 @@ public actor DecisionBoardClient {
             recommended: (data["recommended"] as? String).flatMap { $0.isEmpty ? nil : $0 },
             topic: (data["topic"] as? String).flatMap { $0.isEmpty ? nil : $0 },
             order: data["order"] as? Int ?? 50,
-            askedAt: (data["askedAt"] as? String).flatMap(parseStamp(_:))
+            askedAt: (data["askedAt"] as? String).flatMap(BoardTimestamp.read(_:)),
+            status: status
         )
     }
 
-    /// The board writes `Z`-suffixed stamps with or without fractional seconds.
-    private static func parseStamp(_ raw: String) -> Date? {
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFraction.date(from: raw) { return date }
-        let plain = ISO8601DateFormatter()
-        plain.formatOptions = [.withInternetDateTime]
-        return plain.date(from: raw)
-    }
 }

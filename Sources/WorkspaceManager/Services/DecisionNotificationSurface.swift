@@ -30,8 +30,10 @@ public final class DecisionNotificationSurface: NSObject {
     private static let userInfoCardKey = "cardID"
     private static let userInfoOptionsKey = "options"
 
-    private let client: DecisionBoardClient
-    private let boardURL: URL
+    /// Absent when this launch has no board it is allowed to answer against. The
+    /// surface still claims the delegate in that case; it just never posts.
+    private let client: DecisionBoardClient?
+    private let boardURL: URL?
     private let pollInterval: Duration
     private let inlineLimit: Int
     private let visit: String
@@ -47,14 +49,14 @@ public final class DecisionNotificationSurface: NSObject {
     private static let coalescingWindow: TimeInterval = 30
 
     public init(
-        client: DecisionBoardClient = DecisionBoardClient(),
-        boardURL: URL = DecisionBoardConstants.boardBaseURL,
+        boardURL: URL? = DecisionBoardConstants.resolvedBoardURL(),
+        client: DecisionBoardClient? = nil,
         pollInterval: Duration = .seconds(30),
         inlineLimit: Int = DecisionNotificationProjection.defaultInlineLimit,
         visit: String = UUID().uuidString
     ) {
-        self.client = client
         self.boardURL = boardURL
+        self.client = client ?? boardURL.map { DecisionBoardClient(baseURL: $0) }
         self.pollInterval = pollInterval
         self.inlineLimit = inlineLimit
         self.visit = visit
@@ -62,13 +64,25 @@ public final class DecisionNotificationSurface: NSObject {
         super.init()
     }
 
-    /// Claims the notification delegate and starts polling.
+    /// Claims the notification delegate, whether or not this surface is going to
+    /// post anything.
     ///
     /// The delegate has to be claimed before the app finishes launching, or a tap
-    /// that launches the app arrives with nobody listening and is lost.
+    /// that launches the app arrives with nobody listening. Claiming it also
+    /// repairs a defect that predates this surface (#1623): with no delegate at
+    /// all, macOS suppresses every notification while WorkSpaces is frontmost, so
+    /// the agent-permission notifications were being dropped in exactly the case
+    /// they exist for — someone working in a tile while an agent waits on them.
+    /// `willPresent` below answers for every notification the app posts, not only
+    /// for decisions.
+    public func claimDelegate() {
+        notifications?.delegate = self
+    }
+
+    /// Starts asking the board what needs an answer.
     public func start() {
-        guard let notifications else { return }
-        notifications.delegate = self
+        claimDelegate()
+        guard client != nil, let notifications else { return }
         Task { [weak self] in
             guard let self else { return }
             _ = try? await notifications.requestAuthorization(options: [.alert, .sound])
@@ -96,7 +110,7 @@ public final class DecisionNotificationSurface: NSObject {
 
     /// One pass over the board: what earns the slot now, and what should leave it.
     func tick() async {
-        guard let cards = try? await client.openDecisions() else { return }
+        guard let client, let cards = try? await client.decisions() else { return }
         guard let top = DecisionNotificationProjection.topCard(from: cards) else {
             // Nothing is waiting, so nothing should be on screen. Silence has to
             // mean silence or the channel stops being worth reading.
@@ -138,7 +152,7 @@ public final class DecisionNotificationSurface: NSObject {
 
         deliveredCardID = card.id
         lastPostedAt = Date()
-        await client.recordNotifySent(id: card.id, queued: queued, visit: visit)
+        await client?.recordNotifySent(id: card.id, queued: queued, visit: visit)
     }
 
     private static func category(options: [String], recommended: String?) -> UNNotificationCategory {
@@ -192,18 +206,15 @@ public final class DecisionNotificationSurface: NSObject {
     }
 
     private func openBoard() {
+        guard let boardURL else { return }
         // The board root, not a fragment: the page injects its cards after an
         // async fetch, so an anchor resolves against a document that does not yet
         // hold the element and lands at the top regardless.
         NSWorkspace.shared.open(boardURL)
     }
 
-    /// True only inside a real `.app` bundle. `UNUserNotificationCenter.current()`
-    /// raises through the runloop and terminates the process when the main bundle
-    /// is not a code-signed application, which is every raw `swift run` launch.
     private static func availableCenter() -> UNUserNotificationCenter? {
-        guard let bundleID = Bundle.main.bundleIdentifier, !bundleID.isEmpty else { return nil }
-        guard Bundle.main.bundleURL.pathExtension == "app" else { return nil }
+        guard UserNotificationsAvailability.isAvailable else { return nil }
         return UNUserNotificationCenter.current()
     }
 }
@@ -235,7 +246,7 @@ extension DecisionNotificationSurface: UNUserNotificationCenterDelegate {
         case UNNotificationDefaultActionIdentifier:
             openBoard()
         case Self.undoActionIdentifier:
-            try? await client.undo(id: cardID)
+            try? await client?.undo(id: cardID)
             confirmationDismissal?.cancel()
             notifications?.removeDeliveredNotifications(withIdentifiers: [Self.confirmationIdentifier])
             deliveredCardID = nil
@@ -244,7 +255,7 @@ extension DecisionNotificationSurface: UNUserNotificationCenterDelegate {
             guard let index = Int(raw), options.indices.contains(index) else { return }
             let option = options[index]
             do {
-                try await client.answer(id: cardID, option: option, at: Date())
+                try await client?.answer(id: cardID, option: option, at: Date())
                 withdrawSlot()
                 confirm(option: option, cardID: cardID)
             } catch {

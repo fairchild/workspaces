@@ -28,6 +28,10 @@ public struct DecisionCard: Sendable, Equatable {
     /// The board's priority. Lower comes first. 50 is the card writer's default.
     public let order: Int
     public let askedAt: Date?
+    /// Kept rather than filtered away at decode. "Answered elsewhere" and
+    /// "deleted" are different withdrawal reasons and the surface needs to tell
+    /// them apart without a second read.
+    public let status: String
 
     public init(
         id: String,
@@ -37,7 +41,8 @@ public struct DecisionCard: Sendable, Equatable {
         recommended: String? = nil,
         topic: String? = nil,
         order: Int = 50,
-        askedAt: Date? = nil
+        askedAt: Date? = nil,
+        status: String = "open"
     ) {
         self.id = id
         self.title = title
@@ -47,6 +52,14 @@ public struct DecisionCard: Sendable, Equatable {
         self.topic = topic
         self.order = order
         self.askedAt = askedAt
+        self.status = status
+    }
+
+    /// Still waiting for an answer. The board writes an empty status on a card that has
+    /// never been touched, so absence reads as open.
+    public var isOpen: Bool {
+        let trimmed = status.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty || trimmed == "open"
     }
 }
 
@@ -61,7 +74,7 @@ public enum DecisionNotificationProjection {
     /// the oldest ask, then the id so two equal cards never swap places between
     /// polls and restate themselves as a new notification.
     public static func topCard(from cards: [DecisionCard]) -> DecisionCard? {
-        cards.min { left, right in
+        cards.filter(\.isOpen).min { left, right in
             if left.order != right.order { return left.order < right.order }
             switch (left.askedAt, right.askedAt) {
             case let (leftDate?, rightDate?) where leftDate != rightDate:
@@ -80,7 +93,7 @@ public enum DecisionNotificationProjection {
     /// The rest of the queue. It is a count in the body, never a second
     /// notification — the queue depth is information, an interruption is a cost.
     public static func queuedCount(from cards: [DecisionCard]) -> Int {
-        max(0, cards.count - 1)
+        max(0, cards.filter(\.isOpen).count - 1)
     }
 
     /// Every option, or none of them.

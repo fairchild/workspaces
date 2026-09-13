@@ -91,4 +91,82 @@ struct DecisionNotificationProjectionTests {
         let bare = card("a", title: "Should the release publish itself?", detail: "   ")
         #expect(DecisionNotificationProjection.body(for: bare, queued: 0) == "Should the release publish itself?")
     }
+
+    @Test("An answered card is not offered, and is not counted in the queue")
+    func answeredCardsAreNotOffered() {
+        let open = DecisionCard(id: "open", title: "Open", options: ["a"], order: 20, status: "open")
+        let answered = DecisionCard(
+            id: "done", title: "Done", options: ["a"], order: 10, status: "answered")
+        #expect(DecisionNotificationProjection.topCard(from: [answered, open])?.id == "open")
+        #expect(DecisionNotificationProjection.queuedCount(from: [answered, open]) == 0)
+    }
+
+    @Test("A card with no status yet is open")
+    func absentStatusIsOpen() {
+        #expect(DecisionCard(id: "a", title: "A", options: ["x"], status: "").isOpen)
+    }
+}
+
+@Suite("BoardTimestamp")
+struct BoardTimestampTests {
+    @Test("Both stamp shapes the store actually holds are read")
+    func readsBothShapes() throws {
+        // The page writes fractional seconds; the card writer writes whole ones.
+        // A reader that took only one would return nil for half the store and
+        // quietly reorder which decision interrupts first, failing no test.
+        let fractional = try #require(BoardTimestamp.read("2026-09-13T19:39:04.857Z"))
+        let whole = try #require(BoardTimestamp.read("2026-09-13T04:32:45Z"))
+        #expect(fractional > whole)
+    }
+
+    @Test("Nothing is not a time")
+    func readsNothing() {
+        #expect(BoardTimestamp.read("") == nil)
+        #expect(BoardTimestamp.read("   ") == nil)
+        #expect(BoardTimestamp.read("not a stamp") == nil)
+    }
+
+    @Test("A written stamp is the shape the board page writes, and reads back")
+    func writesThePageShape() throws {
+        let at = Date(timeIntervalSince1970: 1_789_000_000.5)
+        let written = BoardTimestamp.write(at)
+        #expect(written.hasSuffix("Z"))
+        #expect(written.contains("."))
+        let round = try #require(BoardTimestamp.read(written))
+        #expect(abs(round.timeIntervalSince(at)) < 0.002)
+    }
+}
+
+@Suite("Board URL resolution")
+struct DecisionBoardURLTests {
+    private let key = DecisionBoardConstants.boardURLEnvironmentKey
+    private let syntheticKey = LaunchPreferencesEnvironment.syntheticRootKey
+
+    @Test("An ordinary launch answers against the live board")
+    func defaultsToLive() {
+        #expect(
+            DecisionBoardConstants.resolvedBoardURL(environment: [:])?.absoluteString
+                == "http://127.0.0.1:8791")
+    }
+
+    @Test("An isolated run with no board named gets no board at all")
+    func isolatedWithoutOverrideFailsClosed() {
+        // The default is production. A synthetic run that fell back to it would
+        // write a real verdict into the real store and look like it worked.
+        #expect(
+            DecisionBoardConstants.resolvedBoardURL(environment: [syntheticKey: "/tmp/scratch"]) == nil)
+    }
+
+    @Test("An isolated run that names its board uses it")
+    func isolatedWithOverride() {
+        let url = DecisionBoardConstants.resolvedBoardURL(
+            environment: [syntheticKey: "/tmp/scratch", key: "http://127.0.0.1:8850"])
+        #expect(url?.absoluteString == "http://127.0.0.1:8850")
+    }
+
+    @Test("A named board wins over the default even without isolation")
+    func overrideWinsAnyway() {
+        let url = DecisionBoardConstants.resolvedBoardURL(environment: [key: "http://127.0.0.1:9999"])
+        #expect(url?.absoluteString == "http://127.0.0.1:9999")
+    }
 }
