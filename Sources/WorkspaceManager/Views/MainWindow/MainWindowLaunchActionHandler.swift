@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import WorkspaceManagerCore
 import os.log
 
@@ -24,10 +25,12 @@ struct MainWindowLaunchActionHandler {
         let focusWorkspaceWindow: () -> Void
     }
 
+    /// Selection callbacks also update this state. A binding commits each flag
+    /// immediately, avoiding an inout copy-out that would erase their selection.
     @discardableResult
     func apply(
         _ action: MainWindowSurfaceResolutionAction,
-        state: inout MainWindowViewState,
+        state: Binding<MainWindowViewState>,
         environment: [String: String],
         pendingRequest: WorkspaceDeepLink?,
         bootstrapController: MainWindowBootstrapController,
@@ -52,7 +55,7 @@ struct MainWindowLaunchActionHandler {
                 URL(fileURLWithPath: request.cwd, isDirectory: true)
             )
             actions.clearDeepLink()
-            state.didResolveInitialSurface = true
+            state.wrappedValue.didResolveInitialSurface = true
             actions.focusWorkspaceWindow()
             return false
 
@@ -66,7 +69,7 @@ struct MainWindowLaunchActionHandler {
                 URL(fileURLWithPath: request.cwd, isDirectory: true)
             )
             actions.clearDeepLink()
-            state.didResolveInitialSurface = true
+            state.wrappedValue.didResolveInitialSurface = true
             actions.focusWorkspaceWindow()
             return false
 
@@ -88,50 +91,50 @@ struct MainWindowLaunchActionHandler {
                 URL(fileURLWithPath: request.cwd, isDirectory: true)
             )
             actions.clearDeepLink()
-            state.didResolveInitialSurface = true
+            state.wrappedValue.didResolveInitialSurface = true
             actions.focusWorkspaceWindow()
             return false
 
         case .perfAutoSelect(let repo):
             let shouldAutoOpenNewWorkspace = bootstrapController.shouldPerfAutoOpenNewWorkspace(
                 environment: environment,
-                didRun: state.didRunPerfAutoOpenNewWorkspace,
+                didRun: state.wrappedValue.didRunPerfAutoOpenNewWorkspace,
                 pendingRequest: pendingRequest
             )
-            state.didRunPerfAutoSelection = true
+            state.wrappedValue.didRunPerfAutoSelection = true
             if shouldAutoOpenNewWorkspace {
-                state.didRunPerfAutoOpenNewWorkspace = true
+                state.wrappedValue.didRunPerfAutoOpenNewWorkspace = true
             }
             actions.schedulePerfAutoSelect(repo, shouldAutoOpenNewWorkspace)
             return false
 
         case .recordMissingPreviewBootstrap(let configuration):
-            state.didApplyFixturePreviewBootstrap = true
+            state.wrappedValue.didApplyFixturePreviewBootstrap = true
             log.error(
                 "[UIFixture] Preview bootstrap skipped (repo=\(configuration.repoName, privacy: .public) path=\(configuration.relativePath, privacy: .public))"
             )
             return true
 
         case .applyPreviewBootstrap(_, let repo, let selection):
-            state.didApplyFixturePreviewBootstrap = true
-            state.didResolveInitialSurface = true
+            state.wrappedValue.didApplyFixturePreviewBootstrap = true
+            state.wrappedValue.didResolveInitialSurface = true
             actions.selectRepoTerminal(repo, nil)
-            state.selectedCodePreview = selection
-            state.isTerminalPanelVisible = true
-            state.isRightPaneVisible = true
+            state.wrappedValue.selectedCodePreview = selection
+            state.wrappedValue.isTerminalPanelVisible = true
+            state.wrappedValue.isRightPaneVisible = true
             log.info(
                 "[UIFixture] Preview bootstrap applied (repo=\(repo.name, privacy: .public) file=\(selection.relativePath, privacy: .public))"
             )
             return false
 
         case .recordMissingWebBootstrap(let targetName):
-            state.didApplyFixtureWebBootstrap = true
+            state.wrappedValue.didApplyFixtureWebBootstrap = true
             log.error("[UIFixture] Web bootstrap skipped (target=\(targetName, privacy: .public))")
             return true
 
         case .applyWebBootstrap(let targetName, let selectedSource):
-            state.didApplyFixtureWebBootstrap = true
-            state.didResolveInitialSurface = true
+            state.wrappedValue.didApplyFixtureWebBootstrap = true
+            state.wrappedValue.didResolveInitialSurface = true
             actions.selectWebSource(selectedSource)
             log.info(
                 "[UIFixture] Web bootstrap applied (target=\(targetName, privacy: .public) selected=\(selectedSource.name, privacy: .public))"
@@ -143,12 +146,12 @@ struct MainWindowLaunchActionHandler {
             return true
 
         case .restore(let surface):
-            state.didResolveInitialSurface = true
+            state.wrappedValue.didResolveInitialSurface = true
             actions.applyLaunchSurface(surface)
             return false
 
         case .fallback(let surface):
-            state.didResolveInitialSurface = true
+            state.wrappedValue.didResolveInitialSurface = true
             actions.applyLaunchSurface(surface)
             return false
 

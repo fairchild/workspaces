@@ -1594,7 +1594,7 @@ struct ContentView: View {
     private func applySurfaceResolutionAction(_ action: MainWindowSurfaceResolutionAction) -> Bool {
         launchActionHandler.apply(
             action,
-            state: &viewState,
+            state: $viewState,
             environment: ProcessInfo.processInfo.environment,
             pendingRequest: deepLinkState.pendingRequest,
             bootstrapController: bootstrapController,
