@@ -124,6 +124,12 @@ MERMAID_LABEL_FORBIDDEN = ("<", ">")
 # Mermaid's own entity spelling, which it rewrites as `&#47;` or `&lt;` for the
 # browser to finish decoding.
 MERMAID_ENTITY_RE = re.compile(r"#([A-Za-z0-9_]+);")
+# Mermaid keeps `fill:#047;` on a `style` or `classDef` line as the colour it
+# is and draws it as written. Everywhere else, `linkStyle` and `class` lines
+# included, the same run is its entity for `/`, so only a colour value straight
+# after its property on those two lines is taken out before decoding.
+MERMAID_STYLE_LINE_RE = re.compile(r"^\s*(?:style|classDef)\s")
+MERMAID_COLOUR_RE = re.compile(r"(?<=:)(\s*)#[0-9A-Fa-f]+;?(?=[\s,]|$)")
 MERMAID_SKELETON_RE = re.compile(r"^[A-Za-z0-9_ \t.,:;!?=<>|~^*&+#()\[\]{}\"'-]*$")
 
 PR_FIELDS = (
@@ -562,6 +568,18 @@ def _decode_entities(text: str) -> str:
         text = decoded
 
 
+def _without_style_colours(source: str) -> str:
+    """The source with each colour value on a style line taken out.
+
+    Only the colour is CSS. The rest of a style line is decoded like any other,
+    so a style line is no place to spell `/` as an entity.
+    """
+    return "\n".join(
+        MERMAID_COLOUR_RE.sub(r"\1", line) if MERMAID_STYLE_LINE_RE.match(line) else line
+        for line in source.splitlines()
+    )
+
+
 def is_renderable_mermaid(source: str) -> bool:
     """Whether an authored fence is in the subset this page will draw.
 
@@ -576,7 +594,7 @@ def is_renderable_mermaid(source: str) -> bool:
 
     # The parser reads the source as written and the browser reads it decoded,
     # so a token is refused in either reading.
-    readings = (source.lower(), _decode_entities(source).lower())
+    readings = (source.lower(), _decode_entities(_without_style_colours(source)).lower())
     if any(token in reading for reading in readings for token in MERMAID_FORBIDDEN):
         return False
 

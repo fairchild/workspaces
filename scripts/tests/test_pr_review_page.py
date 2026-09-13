@@ -451,6 +451,14 @@ class AuthoredDiagramAllowlist(GeneratorTestCase):
             "sequenceDiagram\n  Alice->>Bob: &#60;&#105;&#109;&#103; src=x&#62;",
             "stateDiagram-v2\n  note right of A : #60;#105;#109;#103; src=x#62;",
             'graph LR\n  a["#38;#35;47;etc#38;#35;47;hosts"] --> b',
+            "sequenceDiagram\n  Alice->>Bob: #47;etc#47;hosts",
+            # A style line's colour is CSS; the rest of the line is still read decoded.
+            "graph LR\n  a --> b\n  style a fill:url(#102;ile:#47;#47;#47;etc#47;hosts)",
+            "graph LR\n  a --> b\n  linkStyle 0 stroke:#47;#47;#47;etc",
+            # Mermaid keeps a colour only on `style` and `classDef` lines, and
+            # only straight after its property.
+            "graph LR\n  a --> b\n  linkStyle 0 stroke:#047;",
+            "graph LR\n  a --> b\n  style a fill:,#047;,#047;,#047;",
             "not a diagram at all",
         ):
             with self.subTest(diagram=diagram.splitlines()[0]):
@@ -466,12 +474,33 @@ class AuthoredDiagramAllowlist(GeneratorTestCase):
             "sequenceDiagram\n  Alice->>Bob: asks\n  Bob-->>Alice: answers",
             "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running",
             'graph LR\n  fix["fix #35;1619 #amp; its tests"] --> done',
+            # A colour in a style line is CSS, even when its digits spell an
+            # entity that would be `/` or `\` in a label.
+            "graph LR\n  a --> b\n  style a fill:#047;",
+            "graph LR\n  a --> b\n  style a fill:#0047;",
+            "graph LR\n  a --> b\n  style b fill:#000047, stroke:#92;",
+            "flowchart TD\n  a --> b\n  classDef calm fill:#f9f,stroke:#047;\n  class a calm",
+            "stateDiagram-v2\n  [*] --> Idle\n  classDef calm fill:#047;\n  class Idle calm",
+            "graph LR\n  a --> b\n  style a fill:#f9f,stroke:#f66;",
         ):
             with self.subTest(diagram=diagram.splitlines()[0]):
                 self.assertTrue(
                     pr_review_page.is_renderable_mermaid(diagram),
                     f"allowlist refused an ordinary diagram: {diagram!r}",
                 )
+
+    @requires_renderer
+    def test_a_style_colour_whose_digits_spell_an_entity_is_drawn(self) -> None:
+        """`fill:#047;` is a colour to mermaid, which draws it as written.
+
+        Read as the entity `#047;` it is `/`, and a colour an author reasonably
+        writes would cost the diagram.
+        """
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = self.body_with("graph LR\n  a --> b\n  style a fill:#047;\n  style b stroke:#92;")
+        page = pr_review_page.build_page(source)
+        shape = page[page.index('id="shape"') : page.index('<section id="diff"')]
+        self.assertIn("data:image/png;base64,", shape)
 
     @requires_renderer
     def test_the_generated_graph_still_renders_though_its_labels_hold_slashes(self) -> None:
