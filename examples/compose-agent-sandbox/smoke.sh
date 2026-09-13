@@ -34,6 +34,7 @@ compose() {
     files+=(-f "$trusted_dir/compose.postgres.yaml")
   fi
   WORKSPACE_DIR="$test_root/$slot" SANDBOX_IMAGE="$sandbox_image" \
+    SANDBOX_TERMINAL_COMMAND='printf "started\n" >> "$HOME/terminal-starts"' \
     docker --context "$docker_context" compose --env-file /dev/null \
     --project-name "$run_id-$slot" "${files[@]}" "$@"
 }
@@ -177,15 +178,29 @@ compose a exec -T agent bash -lc 'echo only-a > /workspace/only-a; echo only-a >
 compose b exec -T agent bash -lc 'test ! -e /workspace/only-a; test ! -e "$HOME/only-a"'
 pass 'working copies and home volumes are separate'
 
-# A real PTY attaches twice to the same guest tmux session and detaches each time.
+# A real PTY re-enters a configured session twice without rerunning its command.
 compose a exec -T agent python3 - <<'PY'
 import os, pty, select, subprocess, time
-subprocess.run(["tmux", "new-session", "-d", "-s", "smoke", "bash"], check=True)
+from pathlib import Path
+helper = "/usr/local/bin/workspaces-terminal"
+starts = Path.home() / "terminal-starts"
+assert not starts.exists(), "container startup ran the interactive terminal command"
+def wait_for(predicate, message):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.1)
+    raise AssertionError(message)
+def count():
+    return len(starts.read_text().splitlines()) if starts.exists() else 0
+subprocess.run(["tmux", "new-session", "-d", "-s", "smoke", helper], check=True)
+wait_for(lambda: count() == 1, "new terminal did not run its configured command")
 original = subprocess.check_output(["tmux", "display-message", "-p", "-t", "smoke", "#{pane_pid}"])
 for attempt in range(2):
     pid, fd = pty.fork()
     if pid == 0:
-        os.execvp("tmux", ["tmux", "attach-session", "-t", "smoke"])
+        os.execvp("tmux", ["tmux", "new-session", "-A", "-s", "smoke", "-c", "/workspace", helper])
     deadline = time.monotonic() + 10
     attached = False
     while time.monotonic() < deadline:
@@ -207,9 +222,28 @@ for attempt in range(2):
         raise AssertionError("tmux did not detach")
     os.close(fd)
     assert original == subprocess.check_output(["tmux", "display-message", "-p", "-t", "smoke", "#{pane_pid}"])
+    assert count() == 1, "reattaching repeated the terminal command"
+subprocess.run(["tmux", "new-session", "-d", "-s", "smoke-second", helper], check=True)
+wait_for(lambda: count() == 2, "a second terminal did not get its own command")
+subprocess.run(["tmux", "new-session", "-d", "-s", "smoke-failed",
+                "-e", "SANDBOX_TERMINAL_COMMAND=exit 23", helper], check=True)
+def pane_text(target="smoke-failed"):
+    return subprocess.check_output(["tmux", "capture-pane", "-p", "-t", target], text=True)
+wait_for(lambda: "exited with status 23" in pane_text(), "failed command did not leave a shell")
+subprocess.run(["tmux", "send-keys", "-t", "smoke-failed", "-l", "touch /tmp/failure-shell-works"], check=True)
+subprocess.run(["tmux", "send-keys", "-t", "smoke-failed", "Enter"], check=True)
+wait_for(lambda: Path("/tmp/failure-shell-works").exists(), "fallback shell cannot accept input")
+subprocess.run(["tmux", "new-session", "-d", "-s", "smoke-interrupted", "-e",
+                "SANDBOX_TERMINAL_COMMAND=printf 'interrupt-ready\\n'; exec sleep 600", helper], check=True)
+wait_for(lambda: "interrupt-ready" in pane_text("smoke-interrupted"), "long-running command did not start")
+subprocess.run(["tmux", "send-keys", "-t", "smoke-interrupted", "C-c"], check=True)
+wait_for(lambda: "exited with status 130" in pane_text("smoke-interrupted"), "Ctrl-C did not return to a shell")
+subprocess.run(["tmux", "send-keys", "-t", "smoke-interrupted", "-l", "touch /tmp/interrupt-shell-works"], check=True)
+subprocess.run(["tmux", "send-keys", "-t", "smoke-interrupted", "Enter"], check=True)
+wait_for(lambda: Path("/tmp/interrupt-shell-works").exists(), "interrupted command left an unusable shell")
 subprocess.run(["tmux", "kill-session", "-t", "smoke"], check=True)
 PY
-pass 'real PTY detach and reattach preserve the tmux shell process'
+pass 'default commands run per new terminal, reattachment does not repeat, and failure or Ctrl-C leaves a usable shell'
 
 if "$with_postgres"; then
   compose a exec -T postgres psql -U sandbox -d sandbox -v ON_ERROR_STOP=1 \
@@ -234,6 +268,17 @@ fi
 compose a stop > "$test_root/stop.log" 2>&1
 compose a start --wait --wait-timeout 90 > "$test_root/start.log" 2>&1
 compose a exec -T agent bash -lc 'test -e "$HOME/home-marker"; test -e /workspace/workspace-marker; test ! -e /tmp/temporary-marker'
+compose a exec -T agent python3 - <<'PY'
+import subprocess, time
+from pathlib import Path
+starts = Path.home() / "terminal-starts"
+assert len(starts.read_text().splitlines()) == 2, "container restart reran the terminal command before attach"
+subprocess.run(["tmux", "new-session", "-d", "-s", "smoke", "/usr/local/bin/workspaces-terminal"], check=True)
+deadline = time.monotonic() + 10
+while len(starts.read_text().splitlines()) != 3:
+    assert time.monotonic() < deadline, "terminal command did not run after stop/start"
+    time.sleep(0.1)
+PY
 pass 'stop and start preserve files while temporary runtime data is cleared'
 
 compose a up -d --force-recreate --wait --wait-timeout 90 > "$test_root/recreate.log" 2>&1

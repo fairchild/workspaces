@@ -32,18 +32,21 @@ struct SidebarWorkspaceController {
     let workspaceService: any WorkspaceServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
+    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Void
     private let pinController = SidebarPinController()
 
     init(
         modelContext: ModelContext,
         workspaceService: any WorkspaceServiceProtocol,
         workspaceProviderRegistry: WorkspaceProviderRegistry,
-        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in }
+        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in },
+        restartTerminalSurfaces: @escaping @MainActor (HostTerminalSessionKey) -> Void = { _ in }
     ) {
         self.modelContext = modelContext
         self.workspaceService = workspaceService
         self.workspaceProviderRegistry = workspaceProviderRegistry
         self.retireTerminalSessions = retireTerminalSessions
+        self.restartTerminalSurfaces = restartTerminalSurfaces
     }
 
     nonisolated static func preferredRepoForNewWorkspace(
@@ -95,6 +98,7 @@ struct SidebarWorkspaceController {
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
         fromRef: String? = nil,
+        defaultTerminalCommand: String? = nil,
         progress: WorkspaceProviderProgressHandler? = nil,
         onPersisted: (@MainActor @Sendable (WorkspaceProviderCreationResult) async -> Void)? = nil
     ) async throws -> Workspace {
@@ -120,7 +124,8 @@ struct SidebarWorkspaceController {
             repoRemoteURL: repo.remoteURL,
             workspaceName: reservation.resolvedName,
             guestOS: guestOS,
-            fromRef: fromRef
+            fromRef: fromRef,
+            defaultTerminalCommand: providerID == ComposeWorkspaceProvider.identifier ? defaultTerminalCommand : nil
         )
 
         do {
@@ -222,10 +227,14 @@ struct SidebarWorkspaceController {
     }
 
     func start(_ workspace: Workspace) async throws {
+        let restartsComposeTerminals = workspace.backend == .compose && workspace.status == .stopped
         let provider = try provider(for: workspace)
         try await provider.startWorkspace(WorkspaceProviderTarget(workspace))
         workspace.status = .active
         try saveModelContext(action: "start workspace")
+        if restartsComposeTerminals {
+            restartTerminalSurfaces(provider.sessionKey(for: WorkspaceProviderTarget(workspace)))
+        }
     }
 
     func archive(_ workspace: Workspace) async throws {

@@ -801,6 +801,7 @@ struct ContentView: View {
                 retireTerminalSessions: { key in
                     try await retireTerminalSessions(inScope: key)
                 },
+                restartTerminalSurfaces: restartTerminalSurfaces,
                 workspaceProviderSetupCoordinator: workspaceProviderSetupCoordinator,
                 smokeDriver: smokeDriver,
                 automationWorkspaceCreateBridge: automationWorkspaceCreateBridge
@@ -1266,14 +1267,15 @@ struct ContentView: View {
                     environmentOptions: environmentOptions(for: repo),
                     isPreparingEnvironmentOptions: isPreparingLandingNewWorkspaceSheet,
                     isCreateDisabled: false
-                ) { name, nameSource, providerID, guestOS in
+                ) { name, nameSource, providerID, guestOS, defaultTerminalCommand in
                     Task { @MainActor in
                         await landingActionController.createWorkspace(
                             repo: repo,
                             name: name,
                             nameSource: nameSource,
                             providerID: providerID,
-                            guestOS: guestOS
+                            guestOS: guestOS,
+                            defaultTerminalCommand: defaultTerminalCommand
                         )
                     }
                 }
@@ -1746,6 +1748,17 @@ struct ContentView: View {
             )
         else { return }
         applyTerminalSessionResult(result)
+    }
+
+    @MainActor
+    private func restartTerminalSurfaces(inScope scopeKey: HostTerminalSessionKey) {
+        let focusedSessionID = (TerminalFocusManager.shared.focusedTerminal as? GhosttySurfaceView).flatMap {
+            tileTreeStore.surfaceStore.sessionID(for: $0)
+        }
+        let restarted = tileTreeStore.restartTerminalSurfaces(inScope: scopeKey)
+        if let focusedSessionID, restarted.contains(focusedSessionID) {
+            focusTerminalTab(focusedSessionID)
+        }
     }
 
     @MainActor

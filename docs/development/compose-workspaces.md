@@ -36,6 +36,23 @@ into `agent`, with `/workspace` as the guest working directory. Git, Bash, tmux,
 Node.js/npm, and Python tooling are available there. Install and authenticate an
 agent inside that workspace as described in the standalone reference.
 
+The Compose option also offers **Default Terminal Command**. An empty value opens
+Bash. A configured command runs in a guest login shell when each new terminal
+session starts, then leaves an interactive shell available when it exits, fails,
+or is interrupted. Required tools must already be installed in the image or guest
+setup. Reattaching to an existing session does not run it again. A split creates a
+new session and runs its own copy; Stop ends all sessions, so a terminal opened
+after Start runs it afresh. The app reconnects already-open terminal panes after
+Start, preserving their identities and split layout. Starting the container
+alone does not run the command.
+
+The value is saved in the workspace's trusted metadata and passed into its
+container environment for creation and restart. It is excluded from the host
+terminal launch string. The image's shared `workspaces-terminal` helper performs
+the execution inside the guest; the standalone reference uses the same helper.
+Older workspace records without a command continue to open Bash. This is a
+creation setting limited to 16 KiB of UTF-8 text, with no existing-workspace editor or repo/global fallback.
+
 ## Files, changes, and terminal continuity
 
 The Files tab reads the host-visible clone using directory-relative file
@@ -110,7 +127,7 @@ remain outside the mounted clone. The build context excludes repository contents
 
 `ComposeSandboxMetadata` records the project name, Docker context and endpoint,
 host path, configuration directory, terminal service, guest working directory,
-template version, and template hashes. Operations validate that identity and the
+template version, template hashes, and optional default terminal command. Operations validate that identity and the
 saved snapshot before using explicit Compose file and project arguments. The
 container receives neither the configuration snapshot nor the Docker socket.
 Repository Compose files and `.env` files are not imported. Supporting custom

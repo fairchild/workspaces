@@ -52,6 +52,7 @@ public actor ComposeWorkspaceProvider: WorkspaceProviderProtocol {
             throw ComposeSandboxError.unavailable("Docker Compose workspaces support Linux only.")
         }
         let remote = try Self.sandboxRemote(request.repoRemoteURL)
+        let terminalCommand = try Self.normalizedTerminalCommand(request.defaultTerminalCommand)
         let workspaceName = WorkspaceService.sanitizeWorkspaceNameComponent(request.workspaceName)
         let repoName = WorkspaceService.sanitizeWorkspaceNameComponent(request.repoName)
         guard Self.validName(workspaceName), Self.validName(repoName) else {
@@ -87,7 +88,8 @@ public actor ComposeWorkspaceProvider: WorkspaceProviderProtocol {
             dockerEndpoint: try await runtime.localEndpoint(context: context),
             hostPath: destination.path,
             configDirectory: runtime.runtimeRoot.appendingPathComponent(projectName).path,
-            templateHashes: ComposeWorkspaceRuntime.hashes(for: template)
+            templateHashes: ComposeWorkspaceRuntime.hashes(for: template),
+            defaultTerminalCommand: terminalCommand
         )
         try runtime.validateMetadata(metadata)
         let branch = "workspace/\(workspaceName)"
@@ -173,6 +175,17 @@ public actor ComposeWorkspaceProvider: WorkspaceProviderProtocol {
             throw ComposeSandboxError.unavailable("Start this Docker Compose workspace before opening its terminal.")
         }
         return try reattachmentLaunchSpec(for: workspace)
+    }
+
+    static func normalizedTerminalCommand(_ value: String?) throws -> String? {
+        guard let value, !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        guard !value.contains("\0") else {
+            throw ComposeSandboxError.invalidMetadata("The terminal command cannot contain a null character.")
+        }
+        guard value.utf8.count <= ComposeWorkspaceRuntime.maximumTerminalCommandBytes else {
+            throw ComposeSandboxError.invalidMetadata("Terminal command must be 16 KiB or smaller.")
+        }
+        return value
     }
 
     /// Restores a terminal command from trusted workspace metadata, never from a saved shell string.

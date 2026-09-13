@@ -114,6 +114,7 @@ public struct WorkspaceProviderCreationRequest: Sendable {
     public let workspaceName: String
     public let guestOS: WorkspaceGuestOS?
     public let fromRef: String?
+    public let defaultTerminalCommand: String?
 
     public init(
         repoName: String,
@@ -121,7 +122,8 @@ public struct WorkspaceProviderCreationRequest: Sendable {
         repoRemoteURL: String?,
         workspaceName: String,
         guestOS: WorkspaceGuestOS? = nil,
-        fromRef: String? = nil
+        fromRef: String? = nil,
+        defaultTerminalCommand: String? = nil
     ) {
         self.repoName = repoName
         self.repoLocalURL = repoLocalURL
@@ -129,6 +131,7 @@ public struct WorkspaceProviderCreationRequest: Sendable {
         self.workspaceName = workspaceName
         self.guestOS = guestOS
         self.fromRef = fromRef
+        self.defaultTerminalCommand = defaultTerminalCommand
     }
 }
 

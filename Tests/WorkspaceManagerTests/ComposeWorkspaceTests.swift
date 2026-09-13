@@ -8,6 +8,117 @@ import Testing
 
 @Suite("Compose sandbox")
 struct ComposeWorkspaceTests {
+    @Test("Old metadata keeps Bash and blank commands preserve the default")
+    func legacyTerminalCommand() throws {
+        let fixture = try ComposeTestFixture()
+        defer { fixture.cleanup() }
+        let metadata = fixture.metadata()
+        let encoded = try JSONEncoder().encode(metadata)
+        let object = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(object["defaultTerminalCommand"] == nil)
+        #expect(try JSONDecoder().decode(ComposeSandboxMetadata.self, from: encoded).defaultTerminalCommand == nil)
+        try fixture.runtime.installSnapshot(fixture.template, metadata: metadata)
+        try fixture.runtime.markReady(metadata)
+        let launch = try #require(fixture.provider.reattachmentLaunchSpec(for: fixture.target(metadata)).customCommand)
+        #expect(launch.contains("/bin/bash -l"))
+        #expect(!launch.contains("workspaces-terminal"))
+        for value in [nil, "", " \t\n"] as [String?] {
+            #expect(try ComposeWorkspaceProvider.normalizedTerminalCommand(value) == nil)
+        }
+    }
+
+    @Test("Terminal commands persist verbatim and reach Compose without entering the host launch string")
+    func configuredTerminalCommandBoundary() async throws {
+        let fixture = try ComposeTestFixture()
+        defer { fixture.cleanup() }
+        let source = try TestGitRepository.create()
+        defer { source.cleanup() }
+        try source.createFile("README", content: "fixture")
+        try source.commit(message: "fixture")
+        let command =
+            " \nprintf '%s\\n' \"$(uname -s) $HOME\" '\(ComposeWorkspaceProvider.terminalSessionPlaceholder)'; exit 37\n"
+        let persistence = await MainActor.run { ComposeResultRecorder() }
+        let result = try await fixture.provider.createWorkspace(
+            request: fixture.request(source: source.url, defaultTerminalCommand: command),
+            workspaceService: fixture.workspaceService, progress: nil,
+            persist: { persistence.results.append($0) }
+        )
+        for result in await persistence.results {
+            let metadata = try JSONDecoder().decode(
+                ComposeSandboxMetadata.self, from: Data(result.backendMetadataRaw.utf8)
+            )
+            #expect(metadata.defaultTerminalCommand == command)
+        }
+        let commands = await fixture.recorder.commands
+        let start = try #require(commands.first { $0.arguments.contains("up") })
+        #expect(start.environment["SANDBOX_TERMINAL_COMMAND"] == command)
+        #expect(commands.allSatisfy { !$0.arguments.contains(command) })
+        #expect(
+            commands.filter { $0.executable == "/usr/bin/git" }
+                .allSatisfy { $0.environment["SANDBOX_TERMINAL_COMMAND"] == nil }
+        )
+        let target = fixture.target(result)
+        let spec = try await fixture.provider.terminalLaunchSpec(for: target)
+        let launch = try #require(spec.customCommand)
+        #expect(launch.contains("/usr/local/bin/workspaces-terminal"))
+        #expect(!launch.contains("SANDBOX_TERMINAL_COMMAND"))
+        #expect(!launch.contains("uname"))
+        #expect(!launch.contains("$HOME"))
+        #expect(launch.components(separatedBy: ComposeWorkspaceProvider.terminalSessionPlaceholder).count == 2)
+        #expect(try fixture.provider.reattachmentLaunchSpec(for: target) == spec)
+
+        var object = try #require(
+            JSONSerialization.jsonObject(with: Data(result.backendMetadataRaw.utf8)) as? [String: Any]
+        )
+        object["defaultTerminalCommand"] = "different-command"
+        let changed = try JSONDecoder().decode(
+            ComposeSandboxMetadata.self, from: JSONSerialization.data(withJSONObject: object)
+        )
+        #expect(throws: ComposeSandboxError.self) { try fixture.runtime.validateSnapshot(changed) }
+    }
+
+    @Test("Unrepresentable terminal commands fail before persistence or external commands")
+    func rejectsNullTerminalCommandBeforeSideEffects() async throws {
+        let fixture = try ComposeTestFixture()
+        defer { fixture.cleanup() }
+        let persistence = await MainActor.run { ComposeResultRecorder() }
+        await #expect(throws: ComposeSandboxError.self) {
+            try await fixture.provider.createWorkspace(
+                request: fixture.request(source: fixture.root, defaultTerminalCommand: "echo before\0after"),
+                workspaceService: fixture.workspaceService, progress: nil,
+                persist: { persistence.results.append($0) }
+            )
+        }
+        #expect(await persistence.results.isEmpty)
+        #expect(await fixture.recorder.commands.isEmpty)
+    }
+
+    @Test("Terminal commands are limited to 16 KiB of UTF-8 before side effects", arguments: ["a", "é"])
+    func terminalCommandSizeLimit(character: String) async throws {
+        let fixture = try ComposeTestFixture()
+        defer { fixture.cleanup() }
+        let accepted = String(repeating: character, count: 16 * 1024 / character.utf8.count)
+        let oversized = accepted + "x"
+        #expect(accepted.utf8.count == 16 * 1024)
+        #expect(try ComposeWorkspaceProvider.normalizedTerminalCommand(accepted) == accepted)
+        try fixture.runtime.validateMetadata(fixture.metadata(defaultTerminalCommand: accepted))
+        #expect(throws: ComposeSandboxError.self) {
+            try fixture.runtime.validateMetadata(fixture.metadata(defaultTerminalCommand: oversized))
+        }
+        let persistence = await MainActor.run { ComposeResultRecorder() }
+        await #expect(
+            throws: ComposeSandboxError.invalidMetadata("Terminal command must be 16 KiB or smaller.")
+        ) {
+            try await fixture.provider.createWorkspace(
+                request: fixture.request(source: fixture.root, defaultTerminalCommand: oversized),
+                workspaceService: fixture.workspaceService, progress: nil,
+                persist: { persistence.results.append($0) }
+            )
+        }
+        #expect(await persistence.results.isEmpty)
+        #expect(await fixture.recorder.commands.isEmpty)
+    }
+
     @Test("Repository remotes never forward embedded host credentials")
     func rejectsRemoteCredentials() throws {
         for remote in [
@@ -315,20 +426,23 @@ private final class ComposeTestFixture: @unchecked Sendable {
         )
     }
 
-    func metadata(hostPath: String? = nil) -> ComposeSandboxMetadata {
+    func metadata(hostPath: String? = nil, defaultTerminalCommand: String? = nil) -> ComposeSandboxMetadata {
         let name = "ws-\(UUID().uuidString.lowercased())"
         return ComposeSandboxMetadata(
             projectName: name, dockerContext: "test-local", dockerEndpoint: "unix:///private/tmp/docker.sock",
             hostPath: hostPath ?? root.appendingPathComponent("clone").path,
             configDirectory: runtime.runtimeRoot.appendingPathComponent(name).path,
-            templateHashes: ComposeWorkspaceRuntime.hashes(for: template)
+            templateHashes: ComposeWorkspaceRuntime.hashes(for: template),
+            defaultTerminalCommand: defaultTerminalCommand
         )
     }
 
-    func request(source: URL, name: String = "sandbox") -> WorkspaceProviderCreationRequest {
+    func request(
+        source: URL, name: String = "sandbox", defaultTerminalCommand: String? = nil
+    ) -> WorkspaceProviderCreationRequest {
         WorkspaceProviderCreationRequest(
             repoName: "fixture", repoLocalURL: source, repoRemoteURL: "https://example.com/repository.git",
-            workspaceName: name, guestOS: .linux
+            workspaceName: name, guestOS: .linux, defaultTerminalCommand: defaultTerminalCommand
         )
     }
 

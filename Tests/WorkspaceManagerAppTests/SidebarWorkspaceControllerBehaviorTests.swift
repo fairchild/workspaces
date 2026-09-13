@@ -7,6 +7,95 @@ import WorkspaceManagerCore
 
 @Suite("SidebarWorkspaceControllerBehavior")
 struct SidebarWorkspaceControllerBehaviorTests {
+    @Test(
+        "Starting reconnects open terminals only after a stopped Compose workspace becomes active",
+        arguments: ["compose", "daytona"], [WorkspaceStatus.stopped, .active]
+    )
+    @MainActor
+    func startReconnectsOnlyStoppedCompose(providerID: String, initialStatus: WorkspaceStatus) async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "sandbox", localPath: URL(fileURLWithPath: "/tmp/sandbox-source"))
+        let workspace = Workspace(
+            name: "agent", path: URL(fileURLWithPath: "/tmp/sandbox-clone"), sourceRepo: repo,
+            status: initialStatus, backendIdentifier: providerID, remoteId: "ws-test"
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(id: providerID, displayName: providerID, description: "Test"))
+        var restartedScopes: [HostTerminalSessionKey] = []
+        let controller = makeController(
+            context: context, workspaceService: MockWorkspaceService(), providers: [provider],
+            restartTerminalSurfaces: { key in
+                #expect(workspace.status == .active)
+                #expect(!context.hasChanges)
+                restartedScopes.append(key)
+            }
+        )
+
+        try await controller.start(workspace)
+
+        #expect(await provider.startCallCount() == 1)
+        #expect(workspace.status == .active)
+        let expected: [HostTerminalSessionKey] =
+            providerID == "compose" && initialStatus == .stopped
+            ? [.backendSession(providerID: "compose", instanceID: "ws-test")] : []
+        #expect(restartedScopes == expected)
+    }
+
+    @Test("A failed Compose start leaves existing terminals and stopped state intact")
+    @MainActor
+    func failedComposeStartDoesNotReconnect() async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "sandbox", localPath: URL(fileURLWithPath: "/tmp/sandbox-source"))
+        let workspace = Workspace(
+            name: "agent", path: URL(fileURLWithPath: "/tmp/sandbox-clone"), sourceRepo: repo,
+            status: .stopped, backendIdentifier: "compose", remoteId: "ws-test"
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+        let provider = MockWorkspaceProvider(descriptor: ComposeWorkspaceProvider.providerDescriptor)
+        await provider.setStartFailure()
+        let controller = makeController(
+            context: context, workspaceService: MockWorkspaceService(), providers: [provider],
+            restartTerminalSurfaces: { _ in Issue.record("Failed startup must not replace terminal surfaces") }
+        )
+
+        await #expect(throws: TestWorkspaceProviderError.self) { try await controller.start(workspace) }
+
+        #expect(await provider.startCallCount() == 1)
+        #expect(workspace.status == .stopped)
+    }
+
+    @Test("Only Compose creation forwards the explicit terminal command", arguments: ["compose", "local", "daytona"])
+    @MainActor
+    func composeTerminalCommandIsForwardedOnlyToCompose(providerID: String) async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "sandbox", localPath: URL(fileURLWithPath: "/tmp/sandbox-source"))
+        context.insert(repo)
+        let provider = MockWorkspaceProvider(
+            descriptor: WorkspaceProviderDescriptor(
+                id: providerID, displayName: providerID, description: "Test provider")
+        )
+        let controller = makeController(
+            context: context, workspaceService: MockWorkspaceService(), providers: [provider])
+        let command = "printf '%s\\n' '$HOME'; agent --name \"two words\""
+
+        let workspace = try await controller.createWorkspace(
+            from: repo, name: "agent", providerID: providerID, defaultTerminalCommand: command)
+
+        let requests = await provider.createRequestsSnapshot()
+        let request = try #require(requests.first)
+        #expect(requests.count == 1)
+        #expect(request.defaultTerminalCommand == (providerID == "compose" ? command : nil))
+        #expect(workspace.defaultAgentCommand == nil)
+    }
+
     @Test("Compose stop errors preserve the observed runtime state", arguments: [true, false])
     @MainActor
     func composeStopErrorReconcilesActualState(statusAvailable: Bool) async throws {
@@ -1195,13 +1284,15 @@ struct SidebarWorkspaceControllerBehaviorTests {
         context: ModelContext,
         workspaceService: MockWorkspaceService,
         providers: [any WorkspaceProviderProtocol],
-        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in }
+        retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in },
+        restartTerminalSurfaces: @escaping @MainActor (HostTerminalSessionKey) -> Void = { _ in }
     ) -> SidebarWorkspaceController {
         SidebarWorkspaceController(
             modelContext: context,
             workspaceService: workspaceService,
             workspaceProviderRegistry: WorkspaceProviderRegistry(providers: providers),
-            retireTerminalSessions: retireTerminalSessions
+            retireTerminalSessions: retireTerminalSessions,
+            restartTerminalSurfaces: restartTerminalSurfaces
         )
     }
 
@@ -1449,6 +1540,10 @@ private actor MockWorkspaceProvider: WorkspaceProviderProtocol {
         self.observedStatus = observedStatus
     }
 
+    func setStartFailure() {
+        startError = TestWorkspaceProviderError.startFailed
+    }
+
     func syncStatuses(for workspaces: [WorkspaceProviderTarget]) async throws -> [WorkspaceProviderStatusSnapshot] {
         guard let observedStatus else { throw ComposeSandboxError.unavailable("Fixture daemon unavailable") }
         return workspaces.compactMap { workspace in
@@ -1491,4 +1586,5 @@ private enum TestWorkspaceProviderError: Error {
     case deleteFailed
     case createFailed
     case stopFailed
+    case startFailed
 }

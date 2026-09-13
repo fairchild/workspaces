@@ -135,8 +135,46 @@ Choose another name for a second terminal.
 
 ```bash
 docker compose --env-file /dev/null -f compose.yaml exec agent \
-  tmux new-session -A -s terminal-1 -c /workspace /bin/bash -l
+  tmux new-session -A -s terminal-1 -c /workspace /usr/local/bin/workspaces-terminal
 ```
+
+## Open directly into a command
+
+Set an optional default before starting the environment. This example prints a
+greeting from inside the guest; replace it with your installed agent or another
+interactive tool:
+
+```bash
+export SANDBOX_TERMINAL_COMMAND='printf "Ready in %s\n" "$PWD"'
+docker compose --env-file /dev/null -f compose.yaml up -d --wait
+docker compose --env-file /dev/null -f compose.yaml exec agent \
+  tmux new-session -A -s terminal-1 -c /workspace /usr/local/bin/workspaces-terminal
+```
+
+The Dockerfile installs `workspaces-terminal`, which runs the configured command
+in a guest login shell and then leaves an interactive Bash shell available.
+Command failure or interruption also returns to that shell. An empty default
+opens Bash immediately. Install required tools in the image or guest setup first.
+
+The command belongs to a **terminal session**, not container startup. Each new
+tmux session runs it once; returning to the same session keeps its existing
+process. A second terminal name runs its own copy. Stop ends those processes, so
+opening a terminal after restarting runs the command in a fresh session. Merely
+starting the container does not launch the terminal command.
+
+Keep the same environment setting for later Compose operations. Changing it and
+running `up` recreates the container, ending its processes while retaining saved
+data. The service's own `command: ["sleep", "infinity"]` keeps the environment
+available; it is separate from the terminal command.
+
+In WorkSpaces, **Default Terminal Command** appears when you choose Docker Compose
+in New Workspace. Leave it empty for Bash. The app stores the value with that
+workspace's trusted configuration and executes it only inside the guest. This
+setting is limited to 16 KiB of UTF-8 text and currently applies at creation;
+there is no command editor for an existing Compose workspace.
+The app's Start action reconnects existing terminal panes and preserves their
+split layout. Since Stop ended their guest sessions, the command runs again in
+those fresh sessions.
 
 Automated commands use `exec -T`, which disables the interactive TTY. For example,
 run setup or inspect changes without executing repository code on the host:

@@ -9,6 +9,86 @@ import Testing
 @Suite("Compose provider live", .serialized)
 struct ComposeWorkspaceLiveTests {
     @Test(
+        "Configured commands run only in new guest terminals and leave Bash after failure",
+        .enabled(if: ProcessInfo.processInfo.environment["WORKSPACES_COMPOSE_LIVE_TESTS"] == "1")
+    )
+    @MainActor
+    func configuredTerminalCommandLifecycle() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "compose-command-live-\(UUID().uuidString)"
+        ).standardizedFileURL.resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = try TestGitRepository.create()
+        defer { source.cleanup() }
+        try source.createFile("README.md", content: "Terminal command fixture\n")
+        try source.commit(message: "Terminal command fixture")
+        let hostMarker = root.appendingPathComponent("command-must-not-run-on-host")
+        let placeholder = ComposeWorkspaceProvider.terminalSessionPlaceholder
+        let quotedValue = "single'quote \"double\""
+        let command = """
+            printf '%s|%s|%s|%s\\n' "$(uname -s)" "$HOME" '\(placeholder)' \(ComposeWorkspaceRuntime.shellQuote(quotedValue)) >> /workspace/terminal-command-events
+            touch \(ComposeWorkspaceRuntime.shellQuote(hostMarker.path)) 2>/dev/null || true
+            exit 37
+            """
+        let runtime = ComposeWorkspaceRuntime(runtimeRoot: root.appendingPathComponent("runtime"))
+        let provider = ComposeWorkspaceProvider(runtime: runtime)
+        let service = WorkspaceService(
+            materializer: GitCloneWorkspaceMaterializer(),
+            environment: [SyntheticRunRoot.environmentKey: root.appendingPathComponent("workspaces").path]
+        )
+        var owned: WorkspaceProviderTarget?
+        do {
+            let result = try await provider.createWorkspace(
+                request: request(source: source.url, name: "command", defaultTerminalCommand: command),
+                workspaceService: service, progress: nil, persist: { owned = target($0) }
+            )
+            let workspace = target(result)
+            let events = result.path.appendingPathComponent("terminal-command-events")
+            let expectedEvent = "Linux|/home/agent|\(placeholder)|\(quotedValue)\n"
+            #expect(!FileManager.default.fileExists(atPath: events.path))
+            #expect(!FileManager.default.fileExists(atPath: hostMarker.path))
+            let spec = try await provider.terminalLaunchSpec(for: workspace)
+            let firstID = UUID().uuidString.lowercased()
+            let firstSession = try await verifyLiteralCommandWithPTY(
+                provider, workspace, spec: spec, terminalID: firstID
+            )
+            try await verifyTerminalCommandEvent(
+                provider, workspace, sessionName: firstSession, events: events,
+                expected: expectedEvent, proofName: "first"
+            )
+            let restored = try provider.reattachmentLaunchSpec(for: workspace)
+            _ = try await verifyLiteralCommandWithPTY(provider, workspace, spec: restored, terminalID: firstID)
+            try await verifyTerminalCommandEvent(
+                provider, workspace, sessionName: firstSession, events: events,
+                expected: expectedEvent, proofName: "reattached"
+            )
+            let splitSession = try await verifyLiteralCommandWithPTY(provider, workspace, spec: spec)
+            try await verifyTerminalCommandEvent(
+                provider, workspace, sessionName: splitSession, events: events,
+                expected: String(repeating: expectedEvent, count: 2), proofName: "split"
+            )
+            try await provider.stopWorkspace(workspace)
+            try await provider.startWorkspace(workspace)
+            #expect(try String(contentsOf: events, encoding: .utf8) == String(repeating: expectedEvent, count: 2))
+            _ = try await verifyLiteralCommandWithPTY(provider, workspace, spec: restored, terminalID: firstID)
+            try await verifyTerminalCommandEvent(
+                provider, workspace, sessionName: firstSession, events: events,
+                expected: String(repeating: expectedEvent, count: 3), proofName: "restarted"
+            )
+            #expect(!FileManager.default.fileExists(atPath: hostMarker.path))
+            try await provider.deleteWorkspace(workspace, deleteFiles: true)
+            owned = nil
+            print(
+                "Compose terminal command: guest-only exact text, once per new session, same-session reattachment, fresh split/restart, and Bash after exit 37 PASS"
+            )
+        } catch {
+            if let owned { try? await provider.deleteWorkspace(owned, deleteFiles: true) }
+            throw error
+        }
+    }
+
+    @Test(
         "Two provider workspaces survive stop/rebuild and keep deletion scoped",
         .enabled(if: ProcessInfo.processInfo.environment["WORKSPACES_COMPOSE_LIVE_TESTS"] == "1")
     )
@@ -196,10 +276,11 @@ struct ComposeWorkspaceLiveTests {
         }
     }
 
+    @discardableResult
     private func verifyLiteralCommandWithPTY(
-        _ provider: ComposeWorkspaceProvider, _ workspace: WorkspaceProviderTarget, spec: TerminalLaunchSpec
-    ) async throws {
-        let terminalID = UUID().uuidString.lowercased()
+        _ provider: ComposeWorkspaceProvider, _ workspace: WorkspaceProviderTarget, spec: TerminalLaunchSpec,
+        terminalID: String = UUID().uuidString.lowercased()
+    ) async throws -> String {
         let sessionName = "ws-\(terminalID)"
         let command = try #require(spec.customCommand).replacingOccurrences(
             of: ComposeWorkspaceProvider.terminalSessionPlaceholder, with: terminalID
@@ -263,12 +344,38 @@ struct ComposeWorkspaceLiveTests {
         print(
             "Compose terminal: literal argv launched a PTY, attached guest tmux, and detached without losing the session"
         )
+        return sessionName
     }
 
-    private func request(source: URL, name: String) -> WorkspaceProviderCreationRequest {
+    private func verifyTerminalCommandEvent(
+        _ provider: ComposeWorkspaceProvider, _ workspace: WorkspaceProviderTarget,
+        sessionName: String, events: URL, expected: String, proofName: String
+    ) async throws {
+        let timeout = await LaunchBudget.deadline(launches: 4, floor: 15, ceiling: 90)
+        let commandCompleted = await waitUntil(timeout: timeout) {
+            (try? String(contentsOf: events, encoding: .utf8)) == expected
+        }
+        #expect(commandCompleted, "Each new session must execute the command once with its original guest values.")
+        let proof = "/workspace/shell-proof-\(proofName)"
+        _ = try await checkedExec(
+            provider, workspace,
+            ["tmux", "send-keys", "-t", sessionName, "-l", "printf 'usable shell\\n' > \(proof)"]
+        )
+        _ = try await checkedExec(provider, workspace, ["tmux", "send-keys", "-t", sessionName, "Enter"])
+        let proofURL = URL(fileURLWithPath: workspace.path).appendingPathComponent("shell-proof-\(proofName)")
+        let shellUsable = await waitUntil(timeout: timeout) {
+            (try? String(contentsOf: proofURL, encoding: .utf8)) == "usable shell\n"
+        }
+        #expect(shellUsable, "A failed or exited command must leave an interactive Bash shell.")
+        #expect(try String(contentsOf: events, encoding: .utf8) == expected)
+    }
+
+    private func request(
+        source: URL, name: String, defaultTerminalCommand: String? = nil
+    ) -> WorkspaceProviderCreationRequest {
         WorkspaceProviderCreationRequest(
             repoName: "fixture", repoLocalURL: source, repoRemoteURL: "https://example.com/compose-fixture.git",
-            workspaceName: name, guestOS: .linux
+            workspaceName: name, guestOS: .linux, defaultTerminalCommand: defaultTerminalCommand
         )
     }
 
