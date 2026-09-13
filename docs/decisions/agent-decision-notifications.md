@@ -231,6 +231,27 @@ credential the running app minted, which the running app cannot observe. The dem
 bundle in place with an isolated data directory and an isolated automation support directory, and without
 binding the hook listener socket.
 
+## What building it turned up
+
+**The app had no notification delegate at all, and that was already costing it something.** With no delegate,
+macOS suppresses every notification while the app is frontmost — so the agent-permission notifications that
+predate this work were being dropped in exactly the case they exist for: someone working in a tile while an
+agent waits on them (#1623). This surface claims the delegate whether or not the feature is switched on, and
+its `willPresent` answers for every notification the app posts, so that defect closes as a side effect.
+
+**Asking for authorization in front of the poll is a deadlock.** `requestAuthorization` suspends until the
+person answers a system prompt, and a prompt can sit unanswered indefinitely behind another window. Waiting on
+it meant the surface never read the board at all. Authorization is now asked for alongside the first poll.
+
+**A silent surface and a broken one look identical from outside.** Every reason this surface does nothing — no
+board, no notification centre, an unreadable board, a refused post — now says so, and a refusal names the
+authorization status beside it, because "notifications are not allowed" with a `notDetermined` status is an
+unanswered prompt rather than a defect.
+
+**First evidence that the channel is worth having**: the orchestrating agent sent one notification by hand on
+2026-09-13 at 19:43:39Z and it was answered at 19:56:24Z. Thirteen minutes, against the 6.7-hour baseline this
+is measured against.
+
 ## What this does not build
 
 - No decision model, ranking, or priority logic in the app. The board's `order` is the priority.
