@@ -171,12 +171,13 @@ jobs:
       # proves no regression and this one is the only place the bug is
       # visible. Seven of the cases also need PlistBuddy and skip there.
       #
-      # The test file is deliberately not added to this workflow's path filter:
-      # `release-preflight.sh` hand-duplicates that filter and its parity test
-      # reads it with a regex that stops at the first `/` after `scripts`, so a
-      # nested path would silently half-register in the gate that keeps the two
-      # lists honest. The filter already lists the script these tests guard,
-      # which is the trigger that matters; a test-only change reaches Linux only.
+      # The test file is deliberately not added to this workflow's path filter.
+      # `release-preflight.sh` mirrors that filter to report which build inputs
+      # changed since the last green build, and its parity test holds the two
+      # lists identical, so every entry added here has to be added there too.
+      # That is worth doing for a build input and not for a test file: the
+      # filter already lists the script these tests guard, which is the trigger
+      # that matters, and a test-only change reaches the Linux lane anyway.
       - name: Run verifier script tests (macOS shell)
         run: uv run --script scripts/tests/test_verify_release_bundle.py
 
