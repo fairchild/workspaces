@@ -450,10 +450,10 @@ class TolerantFieldMatchingTests(unittest.TestCase):
 class SectionHeadingCaseTests(unittest.TestCase):
     """A heading's case does not decide whether its section exists (#1609).
 
-    GitHub renders `## mergeability` and `## Mergeability` alike, so an author
-    cannot see a difference the gate would act on. A missing Mergeability
-    section fails loud; a `[pending-ci]` line under a status heading the gate
-    cannot see would pass without a word.
+    GitHub renders `## evidence status` and `## Evidence Status` alike, so the
+    gate reads either spelling as the section and reports what is wrong with
+    the body itself: a missing Mergeability field, or a line still pending.
+    Two status headings together are ambiguous whatever their case.
     """
 
     FILES = ["Sources/WorkspaceManager/Foo.swift"]
@@ -480,7 +480,21 @@ class SectionHeadingCaseTests(unittest.TestCase):
         )
         self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, [])
 
-    def test_pending_evidence_under_a_lower_case_heading_still_fails(self) -> None:
+    def test_a_lone_lower_case_status_heading_is_not_refused_as_ambiguous(self) -> None:
+        # The heading is never the failure on its own: an empty or complete
+        # section passes, and a pending one fails as pending.
+        pending = "Requested evidence is blocked or still pending CI."
+        for section, expected in (
+            ("", []),
+            ("- [complete] swift test -- 1992 tests passed\n", []),
+            ("- [pending-ci] swift test -- awaiting proof\n", [pending]),
+        ):
+            with self.subTest(section=section):
+                body = GOOD_BODY + f"\n## evidence status\n{section}"
+                self.assertIsNone(pr_readiness.evidence_status_heading_failure(body))
+                self.assertEqual(pr_readiness.evaluate(pr(body), self.FILES).failures, expected)
+
+    def test_a_pending_line_under_a_lower_case_heading_is_reported_as_pending(self) -> None:
         for status in ("pending-ci", "blocked"):
             with self.subTest(status=status):
                 body = GOOD_BODY + f"\n## evidence status\n- [{status}] swift test -- awaiting proof\n"
@@ -489,9 +503,9 @@ class SectionHeadingCaseTests(unittest.TestCase):
                     pr_readiness.evaluate(pr(body), self.FILES).failures,
                 )
 
-    def test_status_headings_that_differ_only_in_case_are_still_two_headings(self) -> None:
-        # The gate reads the first one, so a `[complete]` line above could
-        # hide a `[blocked]` line below.
+    def test_two_spellings_of_the_status_heading_together_are_still_ambiguous(self) -> None:
+        # The gate reads only the first section, and the two can disagree
+        # about the same item.
         for first, second in (
             ("## evidence status", "## Evidence Status"),
             ("## Evidence Status", "## EVIDENCE STATUS"),
