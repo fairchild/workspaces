@@ -20,6 +20,7 @@ public struct ComposeSandboxMetadata: Codable, Sendable, Equatable {
     public let containerWorkingDirectory: String
     public let templateVersion: Int
     public let templateHashes: [String: String]
+    public let defaultTerminalCommand: String?
 
     public init(
         projectName: String,
@@ -31,7 +32,8 @@ public struct ComposeSandboxMetadata: Codable, Sendable, Equatable {
         version: Int = 1,
         templateVersion: Int = 1,
         terminalService: String = "agent",
-        containerWorkingDirectory: String = "/workspace"
+        containerWorkingDirectory: String = "/workspace",
+        defaultTerminalCommand: String? = nil
     ) {
         self.version = version
         self.projectName = projectName
@@ -43,6 +45,7 @@ public struct ComposeSandboxMetadata: Codable, Sendable, Equatable {
         self.containerWorkingDirectory = containerWorkingDirectory
         self.templateVersion = templateVersion
         self.templateHashes = templateHashes
+        self.defaultTerminalCommand = defaultTerminalCommand
     }
 }
 
@@ -74,6 +77,7 @@ public enum ComposeSandboxError: Error, LocalizedError, Equatable {
 public struct ComposeWorkspaceRuntime: Sendable {
     public typealias CommandRunner = @Sendable (ComposeSandboxCommand) async throws -> ProcessResult
     public static let templateFiles = ["compose.yaml", "Dockerfile", ".dockerignore"]
+    static let maximumTerminalCommandBytes = 16 * 1024
     public let runtimeRoot: URL
     public let executablePath: String
 
@@ -141,6 +145,7 @@ public struct ComposeWorkspaceRuntime: Sendable {
         if let metadata {
             environment["WORKSPACE_DIR"] = metadata.hostPath
             environment["SANDBOX_IMAGE"] = "\(metadata.projectName)-agent:v\(metadata.templateVersion)"
+            environment["SANDBOX_TERMINAL_COMMAND"] = metadata.defaultTerminalCommand
         }
         return environment
     }
@@ -247,6 +252,8 @@ public struct ComposeWorkspaceRuntime: Sendable {
             metadata.dockerEndpoint.hasPrefix("unix:///"),
             metadata.dockerEndpoint.rangeOfCharacter(from: .controlCharacters) == nil,
             metadata.containerWorkingDirectory == "/workspace",
+            metadata.defaultTerminalCommand?.contains("\0") != true,
+            (metadata.defaultTerminalCommand?.utf8.count ?? 0) <= Self.maximumTerminalCommandBytes,
             Set(metadata.templateHashes.keys) == Set(Self.templateFiles)
         else {
             throw ComposeSandboxError.invalidMetadata("Docker Compose workspace metadata is invalid or unsupported.")
@@ -350,14 +357,20 @@ public struct ComposeWorkspaceRuntime: Sendable {
 
     func terminalCommand(_ metadata: ComposeSandboxMetadata, sessionID: String) throws -> String {
         try requireReady(metadata)
-        let environment = cleanEnvironment(metadata: metadata).sorted { $0.key < $1.key }
+        var terminalEnvironment = cleanEnvironment(metadata: metadata)
+        // Compose exec inherits the command from the existing container. Keeping it
+        // out of this host shell also protects literal terminal-ID placeholders.
+        terminalEnvironment.removeValue(forKey: "SANDBOX_TERMINAL_COMMAND")
+        let environment = terminalEnvironment.sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
+        let guestCommand =
+            metadata.defaultTerminalCommand == nil ? "/bin/bash -l" : "/usr/local/bin/workspaces-terminal"
         let arguments = composeArguments(
             metadata,
             arguments: [
                 "exec", "--env", "TERM=xterm-256color", "--env", "COLORTERM=truecolor",
                 "--workdir", metadata.containerWorkingDirectory, metadata.terminalService,
-                "tmux", "new-session", "-A", "-s", "ws-\(sessionID)", "-c", "/workspace", "/bin/bash -l",
+                "tmux", "new-session", "-A", "-s", "ws-\(sessionID)", "-c", "/workspace", guestCommand,
             ]
         )
         let prefix = [executablePath]

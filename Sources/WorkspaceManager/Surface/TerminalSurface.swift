@@ -100,10 +100,11 @@ final class TerminalSurface: Surface {
     private var inFlightRetirementClose: Task<Void, Error>?
 
     func tearDown() {
-        // Detach the view and drop the title hook; the libghostty C handle frees via ARC/`deinit`
-        // (no explicit free exists today). The title hook holds a strong `self`-capture into the
-        // store's callback, so clearing it lets the surface deallocate promptly under a `sync` storm.
+        // Drop callbacks before detaching so a replaced view cannot issue new close requests.
+        // The libghostty C handle frees via ARC/`deinit` once the renderer releases the old view.
         surfaceView.onTerminalTitleChanged = nil
+        surfaceView.onProcessExit = nil
+        surfaceView.onCloseConfirmationRequired = nil
         surfaceView.removeFromSuperview()
     }
 }

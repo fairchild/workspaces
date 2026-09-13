@@ -108,6 +108,7 @@ struct SidebarView: View {
     let onOpenWebNextSession: (Repo) -> Void
     let onWorkspaceCreated: () -> Void
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
+    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Void
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     /// Seam to the debug-only smoke harness; inert in release builds.
     let smokeDriver: SmokeScenarioDriver
@@ -174,7 +175,8 @@ struct SidebarView: View {
             modelContext: modelContext,
             workspaceService: workspaceService,
             workspaceProviderRegistry: workspaceProviderRegistry,
-            retireTerminalSessions: retireTerminalSessions
+            retireTerminalSessions: retireTerminalSessions,
+            restartTerminalSurfaces: restartTerminalSurfaces
         )
     }
 
@@ -289,14 +291,15 @@ struct SidebarView: View {
                 environmentOptions: environmentOptions(for: context.repo),
                 isPreparingEnvironmentOptions: isPreparingNewWorkspaceSheet,
                 isCreateDisabled: isCreatingWorkspace(for: context.repo.id)
-            ) { name, nameSource, providerID, guestOS in
+            ) { name, nameSource, providerID, guestOS, defaultTerminalCommand in
                 Task { @MainActor in
                     await createWorkspace(
                         from: context.repo,
                         name: name,
                         nameSource: nameSource,
                         providerID: providerID,
-                        guestOS: guestOS
+                        guestOS: guestOS,
+                        defaultTerminalCommand: defaultTerminalCommand
                     )
                 }
             }
@@ -1339,7 +1342,8 @@ struct SidebarView: View {
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
         shouldSelect: Bool = true,
-        fromRef: String? = nil
+        fromRef: String? = nil,
+        defaultTerminalCommand: String? = nil
     ) async -> SidebarWorkspaceCreationResult {
         guard let provider = workspaceProviderRegistry.provider(for: providerID) else {
             let message = "Workspace provider '\(providerID)' is not registered."
@@ -1361,7 +1365,8 @@ struct SidebarView: View {
                     providerID: providerID,
                     guestOS: guestOS,
                     shouldSelect: shouldSelect,
-                    fromRef: fromRef
+                    fromRef: fromRef,
+                    defaultTerminalCommand: defaultTerminalCommand
                 )
             } perform: {
                 createdWorkspace = await createWorkspaceAfterSetup(
@@ -1371,7 +1376,8 @@ struct SidebarView: View {
                     providerID: providerID,
                     guestOS: guestOS,
                     shouldSelect: shouldSelect,
-                    fromRef: fromRef
+                    fromRef: fromRef,
+                    defaultTerminalCommand: defaultTerminalCommand
                 )
             }
             if intercepted {
@@ -1410,7 +1416,8 @@ struct SidebarView: View {
         providerID: String,
         guestOS: WorkspaceGuestOS? = nil,
         shouldSelect: Bool = true,
-        fromRef: String? = nil
+        fromRef: String? = nil,
+        defaultTerminalCommand: String? = nil
     ) async -> Workspace? {
         let repoID = repo.id
         guard !isCreatingWorkspace(for: repoID) else { return nil }
@@ -1447,6 +1454,7 @@ struct SidebarView: View {
                 providerID: providerID,
                 guestOS: guestOS,
                 fromRef: fromRef,
+                defaultTerminalCommand: defaultTerminalCommand,
                 progress: { phase in
                     creationLog.debug("createWorkspaceAfterSetup: progress phase=\(phase)")
                     await MainActor.run {

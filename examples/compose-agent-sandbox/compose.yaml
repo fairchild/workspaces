@@ -10,6 +10,8 @@ services:
     user: "1000:1000"
     working_dir: /workspace
     command: ["sleep", "infinity"]
+    environment:
+      SANDBOX_TERMINAL_COMMAND: ${SANDBOX_TERMINAL_COMMAND:-}
     init: true
     read_only: true
     cap_drop: [ALL]

@@ -89,7 +89,7 @@ struct GhosttyTerminalRepresentable: NSViewRepresentable {
 struct PersistentHostTerminalContainerView: View {
     let tileID: TileID
     let session: HostTerminalSession
-    let surfaceStore: SurfaceStore
+    @ObservedObject var surfaceStore: SurfaceStore
     var onProcessExit: (() -> Void)?
     var onCloseConfirmationRequired: (() -> Void)?
     var contextMenuProvider: (() -> NSMenu?)?
@@ -121,6 +121,7 @@ struct PersistentHostTerminalContainerView: View {
 
     var body: some View {
         terminalSurface
+            .id(surfaceStore.terminalRenderGeneration(for: tileID))
             .id(Self.identityToken(for: session.id))
     }
 }

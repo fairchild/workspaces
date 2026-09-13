@@ -22,6 +22,8 @@ struct CodePreviewSelection: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) {
         hasher.combine(rootURL)
         hasher.combine(relativePath)
+        // The target is Equatable, not Hashable. Equal targets always share an ID,
+        // so hashing that ID preserves the contract with the full comparison above.
         hasher.combine(composeWorkspace?.id)
     }
 

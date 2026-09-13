@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import WebKit
 import WorkspaceManagerCore
 import os.log
@@ -11,12 +12,13 @@ private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "Su
 /// `HostTerminalSession.id` — the focus coordinator, OSC routing, and the tab strip.
 ///
 /// The live surface owner of the main terminal column: the recursive renderer vends every tile's
-/// surface here, and `sync(activeLeafIDs:)` is the single eviction authority — `TileTreeStore`
-/// calls it after each tree mutation, so a leaf leaving the tree is the one trigger for surface
-/// teardown (the agent-domain teardown bundle stays paired in the store via `syncRegistry`).
+/// surface here, and `sync(activeLeafIDs:)` evicts leaves removed by `TileTreeStore` mutations.
+/// A runtime restart can also replace a terminal's transport while preserving its tile and session;
+/// agent-domain retirement remains paired with tree removal via `syncRegistry`.
 @MainActor
-final class SurfaceStore {
+final class SurfaceStore: ObservableObject {
     private var surfaces: [TileID: any Surface] = [:]
+    @Published private var terminalRenderGenerations: [TileID: Int] = [:]
 
     /// Shared-per-source web view stores (the Phase 6 decision from the PR #633 review): a
     /// `WebSurfaceStore` — and its `WKWebView` — belongs to the `WebSource`, not to any one tile
@@ -83,16 +85,9 @@ final class SurfaceStore {
         onCloseConfirmationRequired: (() -> Void)? = nil,
         contextMenuProvider: (() -> NSMenu?)? = nil
     ) -> TerminalSurface {
-        let wrappedOnProcessExit: () -> Void = { [weak self] in
-            Task { @MainActor in
-                self?.invalidate(tileID: tileID)
-                onProcessExit?()
-            }
-        }
-
         if let existing = surfaces[tileID] as? TerminalSurface, existing.session.id == session.id {
             existing.update(
-                onProcessExit: wrappedOnProcessExit,
+                onProcessExit: processExitHandler(for: existing, onProcessExit: onProcessExit),
                 onCloseConfirmationRequired: onCloseConfirmationRequired,
                 contextMenuProvider: contextMenuProvider
             )
@@ -108,7 +103,12 @@ final class SurfaceStore {
             session: session,
             hooksSocketPath: hooksSocketPath,
             automationEnvironment: automationEnvironmentProvider?(session),
-            onProcessExit: wrappedOnProcessExit,
+            onProcessExit: nil,
+            onCloseConfirmationRequired: onCloseConfirmationRequired,
+            contextMenuProvider: contextMenuProvider
+        )
+        created.update(
+            onProcessExit: processExitHandler(for: created, onProcessExit: onProcessExit),
             onCloseConfirmationRequired: onCloseConfirmationRequired,
             contextMenuProvider: contextMenuProvider
         )
@@ -121,6 +121,35 @@ final class SurfaceStore {
         onTerminalSurfaceCreated?(sessionID)
         deliverLaunchWorkIfNeeded(created)
         return created
+    }
+
+    private func processExitHandler(
+        for surface: TerminalSurface,
+        onProcessExit: (() -> Void)?
+    ) -> () -> Void {
+        { [weak self, weak surface] in
+            Task { @MainActor in
+                // A queued exit from a replaced view must not evict its replacement or
+                // close the preserved session. A restart keeps both tile and session IDs.
+                guard let self, let surface, self.surfaces[surface.tileID] === surface else { return }
+                self.invalidate(tileID: surface.tileID)
+                onProcessExit?()
+            }
+        }
+    }
+
+    func terminalRenderGeneration(for tileID: TileID) -> Int {
+        terminalRenderGenerations[tileID, default: 0]
+    }
+
+    /// Evict a realized terminal and change its render identity so SwiftUI replaces the
+    /// mounted NSView. The next render uses the same trusted session launch contract.
+    @discardableResult
+    func restartTerminalSurface(for tileID: TileID) -> Bool {
+        guard surfaces[tileID] is TerminalSurface else { return false }
+        invalidate(tileID: tileID)
+        terminalRenderGenerations[tileID, default: 0] += 1
+        return true
     }
 
     /// Sessions whose post-creation launch work has run. Once per session, never per
@@ -578,6 +607,10 @@ final class SurfaceStore {
         let stale = surfaces.keys.filter { !active.contains($0) }
         for tileID in stale {
             invalidate(tileID: tileID)
+        }
+        let staleGenerations = terminalRenderGenerations.keys.filter { !active.contains($0) }
+        for tileID in staleGenerations {
+            terminalRenderGenerations.removeValue(forKey: tileID)
         }
     }
 }

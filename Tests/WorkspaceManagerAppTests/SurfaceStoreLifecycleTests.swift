@@ -19,6 +19,66 @@ import Testing
 @MainActor
 @Suite("SurfaceStore lifecycle parity")
 struct SurfaceStoreLifecycleTests {
+    @Test("Sandbox restart replaces only realized terminals, preserving tabs, splits, identity, and focus")
+    func restartScopePreservesSessionTreeAndReplacesRealizedSurfaces() throws {
+        let harness = makeHarness()
+        let store = harness.store
+        let home = store.activateSession(key: .defaultHome, directory: URL(fileURLWithPath: "/tmp")).session
+        let homeTile = store.renderTileID(forSession: home)
+        let homeSurface = store.surfaceStore.terminalSurface(for: homeTile, session: home)
+        let scope = HostTerminalSessionKey.backendSession(providerID: "compose", instanceID: "ws-test")
+        let command = "docker compose exec agent tmux new-session -A -s ws-__WORKSPACES_COMPOSE_TERMINAL_SESSION_ID__"
+        let primary = store.activateSession(
+            key: scope, directory: URL(fileURLWithPath: "/tmp"), customCommand: command
+        ).session
+        let hiddenTab = try #require(store.createTab())
+        let unopenedTab = try #require(store.createTab())
+        let split = try #require(store.splitFocusedTile(inTabContaining: primary.id))
+        let deeperSplit = try #require(store.splitFocusedTile(inTabContaining: split.id))
+        #expect(store.activateExistingSession(sessionID: primary.id))
+        let originalSessions = store.allLiveSessions
+        let originalTree = try #require(store.tileTree(forPrimarySessionID: primary.id))
+        let realized = [primary, split, deeperSplit, hiddenTab]
+        let tiles = realized.map { store.renderTileID(forSession: $0) }
+        let oldSurfaces = zip(tiles, realized).map { tile, session in
+            store.surfaceStore.terminalSurface(for: tile, session: session)
+        }
+        let unopenedTile = store.renderTileID(forSession: unopenedTab)
+        let handles = realized.map { store.automationEnvironment(for: $0) }
+
+        let restarted = store.restartTerminalSurfaces(inScope: scope)
+
+        #expect(Set(restarted) == Set(realized.map(\.id)))
+        #expect(store.allLiveSessions == originalSessions)
+        #expect(store.tileTree(forPrimarySessionID: primary.id) == originalTree)
+        #expect(store.activeSessionID == primary.id)
+        #expect(realized.map { store.renderTileID(forSession: $0) } == tiles)
+        #expect(store.surfaceStore.surface(for: homeTile) === homeSurface)
+        #expect(store.surfaceStore.terminalRenderGeneration(for: homeTile) == 0)
+        #expect(store.surfaceStore.surface(for: unopenedTile) == nil)
+        #expect(store.surfaceStore.terminalRenderGeneration(for: unopenedTile) == 0)
+
+        for (index, session) in realized.enumerated() {
+            let tile = tiles[index]
+            #expect(store.surfaceStore.surface(for: tile) == nil)
+            #expect(store.surfaceStore.terminalRenderGeneration(for: tile) == 1)
+            let replacement = store.surfaceStore.terminalSurface(for: tile, session: session)
+            #expect(replacement !== oldSurfaces[index])
+            #expect(replacement.session == session)
+            #expect(replacement.session.customCommand == command)
+            #expect(store.automationEnvironment(for: session) == handles[index])
+            assertRegistered(harness, session.id, "restart keeps the terminal registered")
+        }
+
+        // Rendering and an unrelated tree publication do not restart the guest again.
+        let primaryReplacement = store.surfaceStore.surface(for: tiles[0])
+        #expect(store.surfaceStore.terminalSurface(for: tiles[0], session: primary) === primaryReplacement)
+        store.surfaceStore.sync(activeLeafIDs: [homeTile, unopenedTile] + tiles)
+        #expect(store.surfaceStore.terminalRenderGeneration(for: tiles[0]) == 1)
+        _ = store.retireSessions(inScope: scope)
+        #expect(tiles.allSatisfy { store.surfaceStore.terminalRenderGeneration(for: $0) == 0 })
+    }
+
     /// A store wired with the same registries the app attaches, so teardown parity is observable.
     private struct Harness {
         let store: TileTreeStore
