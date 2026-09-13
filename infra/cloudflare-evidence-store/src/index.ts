@@ -11,6 +11,30 @@ interface Env {
   EVIDENCE_UPLOAD_TOKEN: string;
 }
 
+// An uploaded HTML file is an active page on the origin every screenshot is
+// served from, so every object carries a policy that lets it show images, this
+// store's own video, and inline style, and nothing more. A browser plays a
+// directly opened recording through a <video> element this policy governs, so
+// `media-src 'self'` is what keeps a .webm link from opening a dead player.
+// `sandbox` must arrive as a header — a page's own <meta> policy cannot set it —
+// and it runs the page in an opaque origin with no script, form submission,
+// popups, or plugins, whatever the page says.
+const SERVED_OBJECT_HEADERS = {
+  "Cache-Control": "public, max-age=31536000, immutable",
+  "Access-Control-Allow-Origin": "*",
+  "Content-Security-Policy": [
+    "default-src 'none'",
+    "img-src 'self' https://evidence.cloudcompute.com https://github.com https://*.githubusercontent.com data:",
+    "media-src 'self'",
+    "style-src 'unsafe-inline'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "sandbox",
+  ].join("; "),
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+};
+
 function isAuthorized(request: Request, env: Env): boolean {
   const auth = request.headers.get("Authorization");
   return !!auth && timingSafeEqual(auth, `Bearer ${env.EVIDENCE_UPLOAD_TOKEN}`);
@@ -34,8 +58,7 @@ export default {
         headers: {
           "Content-Type":
             object.httpMetadata?.contentType ?? contentTypeFromPath(path),
-          "Cache-Control": "public, max-age=31536000, immutable",
-          "Access-Control-Allow-Origin": "*",
+          ...SERVED_OBJECT_HEADERS,
         },
       });
     }

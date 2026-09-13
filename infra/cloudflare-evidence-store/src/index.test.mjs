@@ -264,3 +264,49 @@ test("keeps DELETE out of the CORS method allowlist", async () => {
 		"GET, OPTIONS",
 	);
 });
+
+const SERVED_HEADERS = {
+	"Content-Security-Policy":
+		"default-src 'none'; img-src 'self' https://evidence.cloudcompute.com https://github.com https://*.githubusercontent.com data:; media-src 'self'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; sandbox",
+	"X-Content-Type-Options": "nosniff",
+	"Referrer-Policy": "no-referrer",
+	"Cache-Control": "public, max-age=31536000, immutable",
+	"Access-Control-Allow-Origin": "*",
+};
+
+function getObject(key, httpMetadata) {
+	return worker.fetch(
+		new Request(`https://evidence.example/${key}`),
+		env({
+			EVIDENCE_BUCKET: {
+				get: async () => ({ body: "bytes", httpMetadata }),
+			},
+		}),
+	);
+}
+
+test("serves an uploaded HTML page inert: sandboxed, sniff-proof, no referrer", async () => {
+	const response = await getObject(
+		"workspaces/pr-1602/jGQMzcy4LMmZuJzoJACaZw/pr-review-1602.html",
+		{ contentType: "text/html; charset=utf-8" },
+	);
+
+	assert.equal(response.status, 200);
+	assert.equal(response.headers.get("Content-Type"), "text/html; charset=utf-8");
+	for (const [name, value] of Object.entries(SERVED_HEADERS)) {
+		assert.equal(response.headers.get(name), value, name);
+	}
+});
+
+test("serves an image under the same headers as a page", async () => {
+	const response = await getObject(
+		"workspaces/pr-1602/abcdefghijklmnopqrstuv/shot.png",
+		undefined,
+	);
+
+	assert.equal(response.status, 200);
+	assert.equal(response.headers.get("Content-Type"), "image/png");
+	for (const [name, value] of Object.entries(SERVED_HEADERS)) {
+		assert.equal(response.headers.get(name), value, name);
+	}
+});
