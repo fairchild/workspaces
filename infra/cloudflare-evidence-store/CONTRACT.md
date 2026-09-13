@@ -63,11 +63,23 @@ browser plays a directly opened `.webm` or `.mp4` through a `<video>` element
 the policy governs, so without it every recording link opens to a player that
 never loads. `sandbox` is the part a page cannot grant itself — a `<meta>`
 policy cannot carry it — and it runs the page in an opaque origin with scripts,
-form submission, popups, modals and plugins all off, so a page served here
-cannot act as this origin even if its own markup tries. `nosniff` holds each
-object to its declared type, and `no-referrer` keeps the minted key out of the
-`Referer` a page's links send. The policy is the store's to set; a page's own
-policy can only narrow it.
+form submission, popups, modals, plugins and downloads all off, so a page
+served here cannot act as this origin even if its own markup tries. Withholding
+`allow-downloads` means a link on such a page to an object the browser would
+download does nothing, though the same object still downloads when opened
+directly. Every extension `upload-evidence.py` accepts has a type the browser
+renders, so only a hand-rolled upload lands in that state. `no-referrer` keeps the
+minted key out of the `Referer` a page's links send. The policy is the store's
+to set; a page's own policy can only narrow it.
+
+`nosniff` is narrower than its name. A browser will not run an object as script
+or style under any type but its declared one, and it will not sniff a
+cross-origin load of an object declared as HTML, JSON, XML or plain text. Images
+and media under any other type, `application/octet-stream` included, are still
+sniffed. The cost falls on an image stored under one of those protected types:
+it no longer renders when a page embeds it, and a page served here always embeds
+cross-origin, because `sandbox` gives it an opaque origin. `upload-evidence.py`
+types every upload by its extension, so its uploads never land in that state.
 
 Under `wrangler dev`, miniflare rewrites the production hostname inside response
 headers to the local address, so the policy there reads

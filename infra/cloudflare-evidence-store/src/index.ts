@@ -18,7 +18,7 @@ interface Env {
 // `media-src 'self'` is what keeps a .webm link from opening a dead player.
 // `sandbox` must arrive as a header — a page's own <meta> policy cannot set it —
 // and it runs the page in an opaque origin with no script, form submission,
-// popups, or plugins, whatever the page says.
+// popups, plugins, or downloads, whatever the page says.
 const SERVED_OBJECT_HEADERS = {
   "Cache-Control": "public, max-age=31536000, immutable",
   "Access-Control-Allow-Origin": "*",
