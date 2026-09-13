@@ -108,7 +108,7 @@ struct SidebarView: View {
     let onOpenWebNextSession: (Repo) -> Void
     let onWorkspaceCreated: () -> Void
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
-    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Void
+    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Bool
     let workspaceProviderSetupCoordinator: WorkspaceProviderSetupCoordinator
     /// Seam to the debug-only smoke harness; inert in release builds.
     let smokeDriver: SmokeScenarioDriver
@@ -1624,9 +1624,13 @@ struct SidebarView: View {
         workspaceAction = WorkspaceActionState(workspaceID: workspace.id, message: "Starting...")
 
         do {
-            try await workspaceController.start(workspace)
+            let refreshedTerminals = try await workspaceController.start(workspace)
             workspaceAction = nil
-            selectedWorkspace = workspace
+            // Reselecting an open Compose workspace would override the refreshed
+            // split pane's focus with the tab's primary terminal.
+            if !refreshedTerminals || selectedWorkspace?.id != workspace.id {
+                selectedWorkspace = workspace
+            }
         } catch {
             workspaceAction = nil
             presentSidebarError("Failed to start workspace: \(error.localizedDescription)")

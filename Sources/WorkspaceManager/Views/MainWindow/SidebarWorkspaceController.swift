@@ -32,7 +32,7 @@ struct SidebarWorkspaceController {
     let workspaceService: any WorkspaceServiceProtocol
     let workspaceProviderRegistry: WorkspaceProviderRegistry
     let retireTerminalSessions: @MainActor (HostTerminalSessionKey) async throws -> Void
-    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Void
+    let restartTerminalSurfaces: @MainActor (HostTerminalSessionKey) -> Bool
     private let pinController = SidebarPinController()
 
     init(
@@ -40,7 +40,7 @@ struct SidebarWorkspaceController {
         workspaceService: any WorkspaceServiceProtocol,
         workspaceProviderRegistry: WorkspaceProviderRegistry,
         retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in },
-        restartTerminalSurfaces: @escaping @MainActor (HostTerminalSessionKey) -> Void = { _ in }
+        restartTerminalSurfaces: @escaping @MainActor (HostTerminalSessionKey) -> Bool = { _ in false }
     ) {
         self.modelContext = modelContext
         self.workspaceService = workspaceService
@@ -226,15 +226,19 @@ struct SidebarWorkspaceController {
         try saveModelContext(action: "stop workspace")
     }
 
-    func start(_ workspace: Workspace) async throws {
+    /// Returns whether existing terminal transports were refreshed, so the caller
+    /// can retain their focus instead of selecting the workspace's first terminal.
+    @discardableResult
+    func start(_ workspace: Workspace) async throws -> Bool {
         let restartsComposeTerminals = workspace.backend == .compose && workspace.status == .stopped
         let provider = try provider(for: workspace)
         try await provider.startWorkspace(WorkspaceProviderTarget(workspace))
         workspace.status = .active
         try saveModelContext(action: "start workspace")
         if restartsComposeTerminals {
-            restartTerminalSurfaces(provider.sessionKey(for: WorkspaceProviderTarget(workspace)))
+            return restartTerminalSurfaces(provider.sessionKey(for: WorkspaceProviderTarget(workspace)))
         }
+        return false
     }
 
     func archive(_ workspace: Workspace) async throws {
