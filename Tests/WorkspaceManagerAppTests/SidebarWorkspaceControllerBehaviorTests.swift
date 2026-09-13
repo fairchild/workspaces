@@ -32,10 +32,11 @@ struct SidebarWorkspaceControllerBehaviorTests {
                 #expect(workspace.status == .active)
                 #expect(!context.hasChanges)
                 restartedScopes.append(key)
+                return true
             }
         )
 
-        try await controller.start(workspace)
+        let refreshedTerminals = try await controller.start(workspace)
 
         #expect(await provider.startCallCount() == 1)
         #expect(workspace.status == .active)
@@ -43,6 +44,43 @@ struct SidebarWorkspaceControllerBehaviorTests {
             providerID == "compose" && initialStatus == .stopped
             ? [.backendSession(providerID: "compose", instanceID: "ws-test")] : []
         #expect(restartedScopes == expected)
+        #expect(refreshedTerminals == !expected.isEmpty)
+    }
+
+    @Test("Compose Start reports whether it refreshed a realized terminal", arguments: [false, true])
+    @MainActor
+    func composeStartReportsActualSurfaceRefresh(realized: Bool) async throws {
+        let fixture = try makeModelContext()
+        let context = fixture.context
+        let repo = Repo(name: "sandbox", localPath: URL(fileURLWithPath: "/tmp/sandbox-source"))
+        let workspace = Workspace(
+            name: "agent", path: URL(fileURLWithPath: "/tmp/sandbox-clone"), sourceRepo: repo,
+            status: .stopped, backendIdentifier: "compose", remoteId: "ws-test"
+        )
+        context.insert(repo)
+        context.insert(workspace)
+        try context.save()
+        let provider = MockWorkspaceProvider(descriptor: ComposeWorkspaceProvider.providerDescriptor)
+        let store = TileTreeStore()
+        let session = store.activateSession(
+            key: .backendSession(providerID: "compose", instanceID: "ws-test"),
+            directory: workspace.workspaceURL, customCommand: "docker compose exec agent bash"
+        ).session
+        let tile = store.renderTileID(forSession: session)
+        if realized {
+            _ = store.terminalSurfaceView(for: session)
+        }
+        let controller = makeController(
+            context: context, workspaceService: MockWorkspaceService(), providers: [provider],
+            restartTerminalSurfaces: { !store.restartTerminalSurfaces(inScope: $0).isEmpty }
+        )
+
+        let refreshedTerminals = try await controller.start(workspace)
+
+        #expect(refreshedTerminals == realized)
+        #expect(store.sessions == [session])
+        #expect(store.surfaceStore.terminalRenderGeneration(for: tile) == (realized ? 1 : 0))
+        #expect(workspace.status == .active)
     }
 
     @Test("A failed Compose start leaves existing terminals and stopped state intact")
@@ -62,7 +100,10 @@ struct SidebarWorkspaceControllerBehaviorTests {
         await provider.setStartFailure()
         let controller = makeController(
             context: context, workspaceService: MockWorkspaceService(), providers: [provider],
-            restartTerminalSurfaces: { _ in Issue.record("Failed startup must not replace terminal surfaces") }
+            restartTerminalSurfaces: { _ in
+                Issue.record("Failed startup must not replace terminal surfaces")
+                return false
+            }
         )
 
         await #expect(throws: TestWorkspaceProviderError.self) { try await controller.start(workspace) }
@@ -1285,7 +1326,7 @@ struct SidebarWorkspaceControllerBehaviorTests {
         workspaceService: MockWorkspaceService,
         providers: [any WorkspaceProviderProtocol],
         retireTerminalSessions: @escaping @MainActor (HostTerminalSessionKey) async throws -> Void = { _ in },
-        restartTerminalSurfaces: @escaping @MainActor (HostTerminalSessionKey) -> Void = { _ in }
+        restartTerminalSurfaces: @escaping @MainActor (HostTerminalSessionKey) -> Bool = { _ in false }
     ) -> SidebarWorkspaceController {
         SidebarWorkspaceController(
             modelContext: context,

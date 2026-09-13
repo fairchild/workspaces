@@ -1751,7 +1751,7 @@ struct ContentView: View {
     }
 
     @MainActor
-    private func restartTerminalSurfaces(inScope scopeKey: HostTerminalSessionKey) {
+    private func restartTerminalSurfaces(inScope scopeKey: HostTerminalSessionKey) -> Bool {
         let focusedSessionID = (TerminalFocusManager.shared.focusedTerminal as? GhosttySurfaceView).flatMap {
             tileTreeStore.surfaceStore.sessionID(for: $0)
         }
@@ -1759,6 +1759,7 @@ struct ContentView: View {
         if let focusedSessionID, restarted.contains(focusedSessionID) {
             focusTerminalTab(focusedSessionID)
         }
+        return !restarted.isEmpty
     }
 
     @MainActor
