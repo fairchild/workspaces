@@ -13,6 +13,9 @@ import AppKit
 import Foundation
 import UserNotifications
 import WorkspaceManagerCore
+import os.log
+
+private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "DecisionNotifications")
 
 @MainActor
 public final class DecisionNotificationSurface: NSObject {
@@ -82,12 +85,27 @@ public final class DecisionNotificationSurface: NSObject {
     /// Starts asking the board what needs an answer.
     public func start() {
         claimDelegate()
-        guard client != nil, let notifications else { return }
-        Task { [weak self] in
-            guard let self else { return }
-            _ = try? await notifications.requestAuthorization(options: [.alert, .sound])
-            self.beginPolling()
+        guard client != nil else {
+            log.error("decision notifications: no board to answer against, so nothing will be posted")
+            return
         }
+        guard let notifications else {
+            // Every reason this happens is a launch that is not a real .app, and
+            // silence here reads exactly like a working surface with nothing to say.
+            log.error(
+                "decision notifications: no notification centre — bundle=\(Bundle.main.bundleIdentifier ?? "none", privacy: .public) url=\(Bundle.main.bundleURL.path, privacy: .public)"
+            )
+            return
+        }
+        log.info("decision notifications: polling \(self.boardURL?.absoluteString ?? "nowhere", privacy: .public)")
+
+        // Authorization is asked for alongside the poll, never in front of it.
+        // The request suspends until the person answers the system prompt, and a
+        // prompt can sit unanswered indefinitely behind another window — waiting
+        // on it would mean the surface never even reads the board, which is a
+        // silence indistinguishable from having nothing to say.
+        Task { _ = try? await notifications.requestAuthorization(options: [.alert, .sound]) }
+        beginPolling()
     }
 
     public func stop() {
@@ -110,7 +128,16 @@ public final class DecisionNotificationSurface: NSObject {
 
     /// One pass over the board: what earns the slot now, and what should leave it.
     func tick() async {
-        guard let client, let cards = try? await client.decisions() else { return }
+        guard let client else { return }
+        let cards: [DecisionCard]
+        do {
+            cards = try await client.decisions()
+        } catch {
+            // A board that cannot be read is a silent surface, which is the right
+            // behaviour and the wrong thing to be unable to see.
+            log.error("decision notifications: board unreadable — \(String(describing: error), privacy: .public)")
+            return
+        }
         guard let top = DecisionNotificationProjection.topCard(from: cards) else {
             // Nothing is waiting, so nothing should be on screen. Silence has to
             // mean silence or the channel stops being worth reading.
@@ -148,8 +175,22 @@ public final class DecisionNotificationSurface: NSObject {
 
         let request = UNNotificationRequest(
             identifier: Self.slotIdentifier, content: content, trigger: nil)
-        guard (try? await notifications.add(request)) != nil else { return }
-
+        do {
+            try await notifications.add(request)
+        } catch {
+            // Worth naming the authorization state beside the refusal: "not
+            // allowed" with a notDetermined status is an unanswered system
+            // prompt, not a bug in the surface, and the two look identical from
+            // the outside — both are simply no notification.
+            let settings = await notifications.notificationSettings()
+            log.error(
+                "decision notifications: post refused — \(String(describing: error), privacy: .public) authorization=\(settings.authorizationStatus.rawValue, privacy: .public)"
+            )
+            return
+        }
+        log.info(
+            "decision notifications: posted \(card.id, privacy: .public) with \(options.count, privacy: .public) buttons, \(queued, privacy: .public) queued"
+        )
         deliveredCardID = card.id
         lastPostedAt = Date()
         await client?.recordNotifySent(id: card.id, queued: queued, visit: visit)
