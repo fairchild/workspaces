@@ -140,15 +140,19 @@ That belongs in the agent's card-writing guidance, and this document is the reas
 
 ### A tap writes exactly what a click writes
 
-`PATCH /api/doc/decisions/<id>` with the five fields the board page sends, and no others:
+`PATCH /api/doc/decisions/<id>` with the fields the board page sends, plus the channel:
 
 ```json
 {"status": "answered", "answer": "<the option, verbatim>", "note": "",
- "answeredAt": "<ISO 8601>", "settleAt": "<answeredAt + 8s, ISO 8601>"}
+ "answeredAt": "<ISO 8601>", "settleAt": "<answeredAt + 8s, ISO 8601>", "answeredVia": "tap"}
 ```
 
-The app does not send `answeredVia`; neither does the page, and the server's default for an absent one is
-`board`. The app never computes `agreed` — the server does, on this write, exactly as it does for a click.
+The app never computes `agreed` — the server does, on this write, exactly as it does for a click.
+
+`tap` is a real answer channel on the board rather than an inference. An earlier draft of this document had the
+app send nothing and let the channel be recovered by correlating a `notify-sent` and an `answer` on the same
+card id. That join breaks the first time two notifications go out close together, and the hypothesis being
+tested compares the channels head to head, so the channel has to be a field rather than a guess.
 
 The default tap, meaning the notification body rather than a button, opens the board. That is the link to click
 to see more.
@@ -188,10 +192,14 @@ is the one-at-a-time rule making itself measurable.
 The `answer` record line the board writes on the PATCH supplies the latency. The pair, matched on the card id,
 is what the latency hypothesis reads.
 
-One known gap: the board's accepted `answeredVia` values are `board` and `chat`, so a tapped answer records as
-`board` and is told apart from a click only by correlating against a `notify-sent` on the same id. A third
-value would make it direct. That is a change to the board server, which this app does not own, so it is
-recommended here and left for the board's owner.
+The `answer` record line carries `via: tap`, so the two channels are compared directly rather than by a join
+that would break the first time two notifications went out close together.
+
+A card writer is expected to warn when a card carries more than two options, saying at the moment of writing
+that the card cannot be sent as a one-tap notification and will wait on the board. A warning rather than a
+refusal, because some decisions genuinely have three options and the board can still carry them; the point is
+that the cost is stated where the card is written rather than discovered when the notification arrives without
+its buttons.
 
 ## Shape in this codebase
 
