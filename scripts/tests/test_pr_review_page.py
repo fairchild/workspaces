@@ -412,11 +412,6 @@ class AuthoredDiagramAllowlist(GeneratorTestCase):
         ))
         return probe
 
-    def assertShownAsSource(self, page: str, needle: str) -> None:
-        self.assertNotIn("data:image/png", page, "a refused diagram was rendered anyway")
-        self.assertIn("No renderer", page + "not rendered")  # tolerated wording check below
-        self.assertIn(html.escape(needle, quote=True), page)
-
     @requires_renderer
     def test_an_image_shape_naming_a_local_file_is_not_rendered(self) -> None:
         probe = self.probe_png()
@@ -445,6 +440,17 @@ class AuthoredDiagramAllowlist(GeneratorTestCase):
             'graph LR\n  a["<a href=\'x\'>y</a>"] --> b',
             '%%{init: {"securityLevel": "loose"}}%%\ngraph LR\n  a --> b',
             'graph LR\n  a["/absolute/path.png"] --> b',
+            # A character is refused however it is spelled: mermaid reads `#47;`
+            # as `&#47;`, and the browser reads that and `&sol;` as `/`.
+            'graph LR\n  a["#47;etc#47;hosts"] --> b',
+            'graph LR\n  a["&#47;etc&#x2F;hosts"] --> b',
+            'graph LR\n  a["&sol;etc&sol;hosts"] --> b',
+            'graph LR\n  a["#46;#46;#92;secret.png"] --> b',
+            'graph LR\n  a["#lt;b#gt;"] --> b',
+            'graph LR\n  a["&lt;b&gt;"] --> b',
+            "sequenceDiagram\n  Alice->>Bob: &#60;&#105;&#109;&#103; src=x&#62;",
+            "stateDiagram-v2\n  note right of A : #60;#105;#109;#103; src=x#62;",
+            'graph LR\n  a["#38;#35;47;etc#38;#35;47;hosts"] --> b',
             "not a diagram at all",
         ):
             with self.subTest(diagram=diagram.splitlines()[0]):
@@ -459,6 +465,7 @@ class AuthoredDiagramAllowlist(GeneratorTestCase):
             "flowchart TD\n  a --> b\n  b -.-> c",
             "sequenceDiagram\n  Alice->>Bob: asks\n  Bob-->>Alice: answers",
             "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Running",
+            'graph LR\n  fix["fix #35;1619 #amp; its tests"] --> done',
         ):
             with self.subTest(diagram=diagram.splitlines()[0]):
                 self.assertTrue(
@@ -707,6 +714,18 @@ class QuotedMarkers(GeneratorTestCase):
         )
         self.assertNotIn("payload", self.diagram_for(body))
 
+    def test_a_line_with_an_info_string_does_not_close_the_fence(self) -> None:
+        """A closing fence is a bare run, so GitHub keeps this example open.
+
+        The `text` line is the example's content, and so is everything down to
+        the bare run at the bottom, the marker included.
+        """
+        body = (
+            "## Summary\n- One thing.\n\n```\n```text\n"
+            f"{pr_review_page.DIAGRAM_MARKER}\n```mermaid\ngraph LR\n  quoted --> payload\n```\n"
+        )
+        self.assertNotIn("payload", self.diagram_for(body))
+
     def test_a_marker_inside_cdata_is_not_drawn(self) -> None:
         body = (
             "## Summary\n- One thing.\n\n<![CDATA[\n"
@@ -770,19 +789,31 @@ class ThreadQuery(GeneratorTestCase):
                 with unittest.mock.patch.object(pr_review_page, "_run", lambda *a, **k: payload):
                     self.assertIsNone(pr_review_page.read_threads(99))
 
-    def test_the_page_says_when_it_read_only_the_first_hundred(self) -> None:
-        source = self.source(SYNTHETIC)
-        source.threads = [
+    def capped_threads(self, *, resolved: bool) -> list[dict]:
+        return [
             {
-                "isResolved": False,
+                "isResolved": resolved,
                 "path": f"src/f{index}.py",
                 "line": index,
                 "comments": {"nodes": [{"author": {"login": "someone"}, "body": "a note"}]},
             }
             for index in range(pr_review_page.THREAD_QUERY_CAP)
         ]
+
+    def test_the_page_says_when_it_read_only_the_first_hundred(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.threads = self.capped_threads(resolved=False)
         page = pr_review_page.build_page(source)
         self.assertIn(f"Only the first {pr_review_page.THREAD_QUERY_CAP} review threads", page)
+
+    def test_a_capped_read_of_resolved_threads_does_not_claim_none_are_open(self) -> None:
+        """The threads past the cap were never read, so any of them may be open."""
+        source = self.source(SYNTHETIC)
+        source.threads = self.capped_threads(resolved=True)
+        page = pr_review_page.build_page(source)
+        stands = page[page.index('<section id="stands"') :]
+        self.assertIn(f"Only the first {pr_review_page.THREAD_QUERY_CAP} review threads", stands)
+        self.assertNotIn("No open review threads", stands)
 
     def test_a_short_list_says_nothing_about_a_cap(self) -> None:
         self.assertNotIn("Only the first", self.page(SYNTHETIC))
@@ -894,6 +925,7 @@ class BodyLink(GeneratorTestCase):
         for hidden in (
             "<!--\nReview page: https://old.test/hidden.html\n-->",
             "```\nReview page: https://old.test/quoted.html\n```",
+            "```\n```text\nReview page: https://old.test/still-quoted.html\n```",
         ):
             with self.subTest(hidden=hidden.splitlines()[0]):
                 body = f"*A Persona, Lead*\n\n{hidden}\n\n## Summary\n- One thing.\n"

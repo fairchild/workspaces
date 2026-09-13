@@ -116,10 +116,14 @@ MERMAID_HEADER_RE = re.compile(
     r"^(?:flowchart|graph)\s+(?:TB|TD|BT|RL|LR)$|^sequenceDiagram$|^stateDiagram(?:-v2)?$"
 )
 MERMAID_LABEL_RE = re.compile(r'"[^"]*"|\[[^\]]*\]|\([^)]*\)|\{[^}]*\}|\|[^|]*\|')
-# Checked against the whole source, lowercased. `<` and `>` are not here because
-# an edge is made of them; they are refused inside labels instead.
+# Checked against the whole source, lowercased, both as written and with its
+# entities decoded. `<` and `>` are not here because an edge is made of them;
+# they are refused inside labels instead.
 MERMAID_FORBIDDEN = ("@{", "%%{", "href", "click", "img", "image", "file:", "/", "\\", "..")
 MERMAID_LABEL_FORBIDDEN = ("<", ">")
+# Mermaid's own entity spelling, which it rewrites as `&#47;` or `&lt;` for the
+# browser to finish decoding.
+MERMAID_ENTITY_RE = re.compile(r"#([A-Za-z0-9_]+);")
 MERMAID_SKELETON_RE = re.compile(r"^[A-Za-z0-9_ \t.,:;!?=<>|~^*&+#()\[\]{}\"'-]*$")
 
 PR_FIELDS = (
@@ -538,6 +542,24 @@ def _node_id(path: str) -> str:
     return "n" + re.sub(r"[^A-Za-z0-9]", "", path)[-24:]
 
 
+def _decode_entities(text: str) -> str:
+    """`text` as it reads once every entity in it has been decoded.
+
+    Mermaid turns `#47;` into `&#47;`, and the browser turns that and `&sol;`
+    into `/`, so a refused character has more spellings than the one the list
+    names. Decoding until nothing changes also covers a renderer that decodes
+    twice.
+    """
+    while True:
+        decoded = html.unescape(MERMAID_ENTITY_RE.sub(
+            lambda entity: f"&#{entity[1]};" if entity[1].isdigit() else f"&{entity[1]};",
+            html.unescape(text),
+        ))
+        if decoded == text:
+            return text
+        text = decoded
+
+
 def is_renderable_mermaid(source: str) -> bool:
     """Whether an authored fence is in the subset this page will draw.
 
@@ -550,13 +572,15 @@ def is_renderable_mermaid(source: str) -> bool:
     if not lines or not MERMAID_HEADER_RE.match(lines[0]):
         return False
 
-    lowered = source.lower()
-    if any(token in lowered for token in MERMAID_FORBIDDEN):
+    # The parser reads the source as written and the browser reads it decoded,
+    # so a token is refused in either reading.
+    readings = (source.lower(), _decode_entities(source).lower())
+    if any(token in reading for reading in readings for token in MERMAID_FORBIDDEN):
         return False
 
     for line in lines:
         for label in MERMAID_LABEL_RE.findall(line):
-            if any(token in label for token in MERMAID_LABEL_FORBIDDEN):
+            if any(token in _decode_entities(label) for token in MERMAID_LABEL_FORBIDDEN):
                 return False
         if not MERMAID_SKELETON_RE.match(MERMAID_LABEL_RE.sub("", line)):
             return False
@@ -607,7 +631,9 @@ def _quoted_line_numbers(body: str) -> set[int]:
         stripped = line.strip()
         if fence:
             quoted.add(number)
-            if stripped.startswith(fence):
+            # A closer is a bare run at least as long as the opener. A line that
+            # carries an info string is content, which is how GitHub reads it.
+            if re.fullmatch(f"{fence}{fence[0]}*", stripped):
                 fence = ""
             continue
         if match := re.match(r"^(`{3,}|~{3,})", stripped):
@@ -1073,16 +1099,24 @@ def build_page(source: Source, head: str | None = None) -> str:
 
     if source.threads is None:
         parts.append(f"<li>Review threads: {UNAVAILABLE}</li>")
-    elif threads := open_threads(source.threads):
+    else:
+        threads = open_threads(source.threads)
         for where, who, text in threads:
             parts.append(f"<li>Open thread on <code>{_esc(where)}</code> — {_esc(who)}: {_esc(text)}</li>")
-        if len(source.threads) >= THREAD_QUERY_CAP:
+        # A capped query knows nothing of the threads it did not return, so
+        # "none open" is said only of the ones it read, and the cap is named
+        # whichever way those fell.
+        capped = len(source.threads) >= THREAD_QUERY_CAP
+        if not threads:
+            parts.append(
+                "<li>Every review thread that was read is resolved.</li>" if capped
+                else "<li>No open review threads.</li>"
+            )
+        if capped:
             parts.append(
                 f"<li>Only the first {THREAD_QUERY_CAP} review threads were read, so "
                 "there may be more.</li>"
             )
-    else:
-        parts.append("<li>No open review threads.</li>")
 
     if pr.get("statusCheckRollup") is None:
         parts.append(f"<li>Checks: {UNAVAILABLE}</li>")

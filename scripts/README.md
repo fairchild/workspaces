@@ -85,6 +85,8 @@ Run `mise tasks` from the repo root for the current catalog. Web dashboard tasks
   - `--upload` puts it in the evidence store and prints the URL; `--link` writes `Review page: <url>` under the PR body's byline and leaves every other byte alone.
   - `--fixture <dir>` builds from a recorded PR instead of `gh`, which is how the tests run.
   - A diagram in the body wins over the generated one: put a ```mermaid fence under a `<!-- review-page:diagram -->` marker, where GitHub renders it too.
+- `uv run --script ./scripts/tests/test_pr_review_page.py`
+  - The script and its tests need Python 3.11 or newer, so run both through `uv run --script`, which reads that floor from the file header. Xcode's `python3` is 3.9, and the renderer-gated tests error under it.
 
 ## Script Test Harnesses
 
