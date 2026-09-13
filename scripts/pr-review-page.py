@@ -547,8 +547,10 @@ def _decode_entities(text: str) -> str:
 
     Mermaid turns `#47;` into `&#47;`, and the browser turns that and `&sol;`
     into `/`, so a refused character has more spellings than the one the list
-    names. Decoding until nothing changes also covers a renderer that decodes
-    twice.
+    names. The browser's forms are decoded both before mermaid's rewrite and
+    after it, until nothing changes, so this reads at least as much as the
+    renderer does: more for `&#x2F;`, which mermaid mangles rather than
+    decodes, and as much as a renderer that decodes twice.
     """
     while True:
         decoded = html.unescape(MERMAID_ENTITY_RE.sub(
