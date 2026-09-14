@@ -1567,10 +1567,10 @@ private final class CLIApp {
 
     /// `workspaces automation workspace note <id> --text "<text>" | --clear [--json]` — sets the
     /// short line the sidebar shows under a workspace, which is what an agent updates at a
-    /// checkpoint. An operator mutation: it enters the app's own note setter (the same one the
-    /// row's "Edit Note…" item writes through), so a note set from a script and one typed into
-    /// the sidebar are the same write, normalization included. The result reports the *stored*
-    /// note, so a caller learns what the row will actually show.
+    /// checkpoint. An operator mutation: it writes the same stored field the row's "Edit Note…"
+    /// item writes, through an independent path normalized the same way (`WorkspaceNote.normalized`),
+    /// so a note set from a script and one typed into the sidebar render the same. The result
+    /// reports the *stored* note, so a caller learns what the row will actually show.
     private func runWorkspaceNote(arguments: [String]) throws -> Int32 {
         let usage = "workspaces automation workspace note <id> --text \"<text>\" | --clear [--json]"
         var json = false
