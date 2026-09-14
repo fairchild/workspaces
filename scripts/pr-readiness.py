@@ -130,9 +130,19 @@ def load_json(path: str | None, default: Any) -> Any:
         return json.load(file)
 
 
+# A body reads the way GitHub renders it. A heading may sit up to three spaces
+# in, and four is a code block, so an example quoted there is not a heading. A
+# list item opens on `-`, `*`, `+`, or a number and `.` or `)`. A CR or CRLF
+# ends a line the way LF does.
+HEADING_INDENT = r" {0,3}"
+LIST_MARKER = r"(?:[-*+]|\d+[.)])"
+LINE_ENDING_RE = re.compile(r"\r\n?")
+
+
 def extract_section(body: str, heading: str) -> str:
     pattern = re.compile(
-        rf"(?msi)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
+        rf"(?msi)^{HEADING_INDENT}## {re.escape(heading)}\n(?P<section>.*?)"
+        rf"(?=^{HEADING_INDENT}## |\n---\n|\Z)"
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""
@@ -200,11 +210,12 @@ def leading_paragraph_failure(body: str) -> str | None:
 
 def evidence_status_heading_failure(body: str) -> str | None:
     headings = re.findall(
-        r"(?im)^#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
+        rf"(?im)^{HEADING_INDENT}#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
         body,
     )
     exact_count = sum(
-        re.fullmatch(r"(?i)## Evidence Status", heading) is not None for heading in headings
+        re.fullmatch(rf"(?i){HEADING_INDENT}## Evidence Status", heading) is not None
+        for heading in headings
     )
     variant_count = len(headings) - exact_count
     if exact_count > 1 or variant_count:
@@ -245,7 +256,7 @@ def label_names(pr: dict[str, Any]) -> list[str]:
 
 
 def has_checked_box(body: str, label: str) -> bool:
-    return bool(re.search(rf"(?im)^\s*[-*]\s*\[x\]\s*{re.escape(label)}\b", body))
+    return bool(re.search(rf"(?im)^\s*{LIST_MARKER}\s*\[x\]\s*{re.escape(label)}\b", body))
 
 
 # A command someone can re-run, and what it printed. Either half alone is not
@@ -454,7 +465,8 @@ def is_docs_only(files: list[str]) -> bool:
 
 
 def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
-    body = pr.get("body") or ""
+    # Every `^`, `$` and `\n` below reads a bare LF.
+    body = LINE_ENDING_RE.sub("\n", pr.get("body") or "")
     title = pr.get("title") or ""
     labels = label_names(pr)
     failures: list[str] = []
@@ -492,7 +504,7 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
     evidence_status = extract_section(body, "Evidence Status")
-    if re.search(r"(?im)^\s*-\s*\[(?:blocked|pending-ci)\]\s+", evidence_status):
+    if re.search(rf"(?im)^\s*{LIST_MARKER}\s*\[(?:blocked|pending-ci)\]\s+", evidence_status):
         failures.append("Requested evidence is blocked or still pending CI.")
 
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):

@@ -524,6 +524,64 @@ class SectionHeadingCaseTests(unittest.TestCase):
                 self.assertIn(self.AMBIGUOUS, pr_readiness.evaluate(pr(body), self.FILES).failures)
 
 
+class PendingLineShapeTests(unittest.TestCase):
+    """A pending line is pending in every shape GitHub renders as one (#1625).
+
+    A CR or CRLF line ending, a heading up to three spaces in, and a list item
+    opened by `*`, `+` or a number all render the way `- [pending-ci]` under
+    `## Evidence Status` does, so each fails the gate as pending.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    PENDING = "Requested evidence is blocked or still pending CI."
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def test_a_crlf_status_section_in_an_lf_body_is_pending(self) -> None:
+        for ending in ("\r\n", "\r"):
+            with self.subTest(ending=repr(ending)):
+                body = GOOD_BODY + f"\n## Evidence Status{ending}- [pending-ci] swift test -- waiting{ending}"
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_crlf_body_fails_for_its_pending_line_not_a_missing_section(self) -> None:
+        body = GOOD_BODY + "\n## Evidence Status\n- [pending-ci] swift test -- waiting\n"
+        self.assertEqual(self.failures(body.replace("\n", "\r\n")), [self.PENDING])
+
+    def test_a_heading_up_to_three_spaces_in_is_the_section(self) -> None:
+        for indent in (" ", "  ", "   "):
+            with self.subTest(indent=len(indent)):
+                status = GOOD_BODY + f"\n{indent}## Evidence Status\n"
+                self.assertEqual(self.failures(status + "- [pending-ci] swift test -- waiting\n"), [self.PENDING])
+                self.assertEqual(self.failures(status + "- [complete] swift test -- 1992 tests passed\n"), [])
+                self.assertEqual(self.failures(GOOD_BODY.replace("## Mergeability", f"{indent}## Mergeability")), [])
+
+    def test_an_indented_heading_ends_the_section_above_it(self) -> None:
+        body = GOOD_BODY.replace("## Validation", "   ## Validation")
+        self.assertEqual(
+            pr_readiness.extract_section(body, "Mergeability"),
+            pr_readiness.extract_section(GOOD_BODY, "Mergeability"),
+        )
+
+    def test_four_spaces_in_is_a_code_block_not_a_heading(self) -> None:
+        body = GOOD_BODY + "\n    ## Evidence Status\n    - [pending-ci] swift test -- quoted example\n"
+        self.assertEqual(pr_readiness.extract_section(body, "Evidence Status"), "")
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_pending_line_opened_by_any_list_marker_is_pending(self) -> None:
+        for heading in ("## Evidence Status", "## evidence status"):
+            for marker in ("*", "+", "1.", "1)"):
+                with self.subTest(heading=heading, marker=marker):
+                    body = GOOD_BODY + f"\n{heading}\n{marker} [pending-ci] swift build -- waiting\n"
+                    self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_blocked_on_evidence_box_under_any_list_marker_is_checked(self) -> None:
+        for marker in ("*", "+", "1."):
+            with self.subTest(marker=marker):
+                body = GOOD_BODY.replace("- [ ] Blocked on evidence", f"{marker} [x] Blocked on evidence")
+                self.assertIn("PR is checked as blocked on evidence.", self.failures(body))
+
+
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
         body = GOOD_BODY.replace("- Residual risk or follow-up: none", "")
