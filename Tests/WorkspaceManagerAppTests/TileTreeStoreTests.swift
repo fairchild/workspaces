@@ -189,17 +189,9 @@ struct TileTreeStoreTests {
     @Test("A test-process freeze does not spend the close wait's budget")
     func closeWaitIgnoresAProcessFreeze() async {
         let teardown = OutcomeLog()
-        let start = Date()
-        // Reads as though the process froze for 40 s about 50 ms into the wait.
-        let freezingOnce: @Sendable () -> Date = {
-            Date().addingTimeInterval(Date().timeIntervalSince(start) > 0.05 ? 40 : 0)
-        }
-        Task {
-            try? await Task.sleep(for: .milliseconds(200))
-            await teardown.append(.notLive)
-        }
+        let polls = FreezeThenOutcome(delivering: .notLive, to: teardown)
 
-        #expect(await teardown.awaitFirst(within: 5, clock: freezingOnce) == .notLive)
+        #expect(await teardown.awaitFirst(within: 5, polling: { await polls.next() }) == .notLive)
     }
 
     /// Which teardown may reclaim a tmux session: only a pane-scoped override (one
@@ -1170,6 +1162,16 @@ private struct TmuxStub {
     private let nameFile: URL
     private let invocationFile: URL
 
+    /// How long one stub-tmux run may take, freezes included, before it counts as no
+    /// answer. Production allows five seconds so a wedged server cannot stall a close; this
+    /// stub always answers, and what outlasts five seconds here is a runner freezing the
+    /// test process mid-run (#1610), which would read a correct close as `socketUnavailable`.
+    static let runTimeout: TimeInterval = 60
+
+    /// The close wait's budget: both of the close's stub runs at their full bound, plus the
+    /// main-actor hops around them, so the wait never gives up on a run still in bounds.
+    static let closeBudget: TimeInterval = 2 * runTimeout + 30
+
     init() throws {
         directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("tmux-stub-\(UUID().uuidString)", isDirectory: true)
@@ -1192,23 +1194,22 @@ private struct TmuxStub {
         try script.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: executable.path)
-        // A stub-tmux run gets a minute before it counts as no answer. Production allows
-        // five seconds so a wedged server cannot stall a close; this stub always answers,
-        // and what outlasts five seconds here is a runner freezing the test process
-        // mid-run (#1610), which would read a correct close as `socketUnavailable`.
-        let runTimeout: TimeInterval = 60
+        // The drain grace gets the run's bound too: a freeze between the stub's exit and the
+        // read of its output would otherwise let the grace finish the run with empty stdout,
+        // which reads as no live session.
+        let runTimeout = Self.runTimeout
         probe = TmuxSessionProbe(
             run: { executable, arguments, environment in
                 try? await ProcessRunner.run(
                     executable: executable, arguments: arguments, environment: environment,
-                    timeout: runTimeout
+                    timeout: runTimeout, pipeDrainGracePeriod: runTimeout
                 ).exitCode
             },
             runForOutput: { executable, arguments, environment in
                 guard
                     let result = try? await ProcessRunner.run(
                         executable: executable, arguments: arguments, environment: environment,
-                        timeout: runTimeout),
+                        timeout: runTimeout, pipeDrainGracePeriod: runTimeout),
                     result.success
                 else { return nil }
                 return result.stdout
@@ -1235,7 +1236,7 @@ private struct TmuxStub {
             switch self {
             case .teardownUnfinished(let seconds):
                 return
-                    "no kill-session reached the stub tmux: the store's pane teardown reported no outcome within \(seconds) s of running time (it never started, or is still waiting on tmux)"
+                    "no kill-session reached the stub tmux: the store's pane teardown reported no outcome within the wait's \(seconds) s budget (it never started, or is still waiting on tmux)"
             case .teardownEndedWithoutKill(let outcome):
                 return "no kill-session reached the stub tmux: the store's pane teardown ended with .\(outcome)"
             }
@@ -1246,7 +1247,7 @@ private struct TmuxStub {
     /// `teardown` holds the close's outcome.
     func awaitKillInvocation(
         reportedBy teardown: OutcomeLog,
-        within budget: TimeInterval = 30
+        within budget: TimeInterval = closeBudget
     ) async throws -> String {
         guard let outcome = await teardown.awaitFirst(within: budget) else {
             throw KillWaitFailure.teardownUnfinished(budgetSeconds: budget)
@@ -1269,24 +1270,29 @@ private actor OutcomeLog {
         outcomes.append(outcome)
     }
 
-    /// The first outcome the close reported, or `nil` once the wait has spent `budget`
-    /// seconds of its own running time without one.
+    /// The first outcome the close reported, or `nil` once the wait has used up `budget`.
     ///
-    /// Running time, not wall time. A hosted runner has frozen this whole test process for
-    /// ~40 s mid-close (#1610), and a wall clock spends that freeze as though the close had
-    /// it: the wait ran out at the thaw, before the close could take its next step. Each
-    /// poll is charged its elapsed time capped at `maxChargePerPoll` (ten poll intervals),
-    /// so a freeze of any length costs one capped poll. A machine slow enough to stretch
-    /// every poll past the cap gets more wall time than `budget`, which only delays a failure.
+    /// Each poll is charged the time it took, capped at `maxChargePerPoll` (ten poll
+    /// intervals). A hosted runner has frozen this whole test process for ~40 s mid-close
+    /// (#1610); charged in wall time, that freeze ran the wait out at the thaw, before the
+    /// close could take its next step. Capped, a freeze of any length costs one cap. The cap
+    /// cannot tell a freeze from heavy contention, so a machine slow enough to stretch every
+    /// poll past it gets more wall time than `budget`, which only delays reporting a close
+    /// that never finishes.
+    ///
+    /// `poll` waits one interval and returns the time after it, so a test can replay a
+    /// freeze without depending on how the machine schedules anything.
     func awaitFirst(
         within budget: TimeInterval = 30,
-        clock now: @Sendable () -> Date = { Date() }
+        polling poll: @Sendable () async -> Date = {
+            try? await Task.sleep(for: .milliseconds(25))
+            return Date()
+        }
     ) async -> TmuxOwnedSessionTerminator.Outcome? {
         var spent: TimeInterval = 0
-        var last = now()
+        var last = Date()
         while outcomes.isEmpty, spent < budget {
-            try? await Task.sleep(for: .milliseconds(25))
-            let current = now()
+            let current = await poll()
             spent += min(current.timeIntervalSince(last), Self.maxChargePerPoll)
             last = current
         }
@@ -1294,4 +1300,25 @@ private actor OutcomeLog {
     }
 
     private static let maxChargePerPoll: TimeInterval = 0.25
+}
+
+/// Replays a close wait that a process freeze interrupts: the first poll comes back 40 s
+/// after the wait began, as a frozen process sees it, and the second delivers the close's
+/// outcome. Nothing depends on real scheduling, so the replay is the same on any machine.
+private actor FreezeThenOutcome {
+    private let outcome: TmuxOwnedSessionTerminator.Outcome
+    private let log: OutcomeLog
+    private let start = Date()
+    private var polls = 0
+
+    init(delivering outcome: TmuxOwnedSessionTerminator.Outcome, to log: OutcomeLog) {
+        self.outcome = outcome
+        self.log = log
+    }
+
+    func next() async -> Date {
+        polls += 1
+        if polls == 2 { await log.append(outcome) }
+        return start.addingTimeInterval(40 + 0.025 * Double(polls - 1))
+    }
 }
