@@ -1361,6 +1361,15 @@ def _owner_written_entries(
     """
     if not _explicit_evidence_contract(requested_evidence) or not published_body.strip():
         return {}
+    # Drift is a person's edit only where the section being read is the one
+    # the machine wrote. A second heading a reader accepts -- a section the
+    # model wrote under a heading the renderer's strip missed, or a fenced
+    # example -- can differ from the metadata with nobody editing anything,
+    # and the readers take whichever section comes first. This matches every
+    # heading `markdown_section` reads and the near-misses it does not, so a
+    # body with more than one preserves nothing.
+    if len(re.findall(r"(?mi)^## Evidence Status[^\S\n]*$", published_body)) != 1:
+        return {}
     rendered = extract_evidence_status_entries(published_body, requested_evidence)
     written = rendered.get("entries")
     if not isinstance(written, dict) or rendered.get("invalid_lines"):
@@ -1470,19 +1479,8 @@ def render_execution_summary_body(
         for _, entry in sorted(evidence_map.items())
     ]
 
-    # Any section the model wrote goes, rather than sitting beside this one.
-    # Readers take the first section they find, and a line that differs from
-    # the metadata reads as a person's edit, so the model's section would pose
-    # as the owner's line. `insert_markdown_section` strips a heading only
-    # when a newline follows it directly, so a CR, a trailing space or a tab
-    # after the heading kept the model's section in place.
-    model_body = re.sub(
-        r"(?mi)^## Evidence Status[^\S\n]*$",
-        "## Evidence Status",
-        _strip_evidence_metadata(MARKDOWN_LINE_ENDING_RE.sub("\n", summary_body)),
-    )
     rendered = insert_markdown_section(
-        model_body,
+        _strip_evidence_metadata(summary_body),
         "Evidence Status",
         "\n".join(evidence_lines),
         before_heading="Validation",

@@ -384,7 +384,9 @@ You complete an `other` item by rewriting its line as
 `- [complete] <item> -- <what you checked>`, and that line is the record for
 the item from the moment it is saved: the factory's accounting, the reviewer's
 gate included, reads it over the hidden metadata beside it, so an approval
-does not wait for a factory turn to copy it across. A `[blocked]` you write
+does not wait for a factory turn to copy it across. That holds while the body
+has one `## Evidence Status` heading; with a second one, even inside a code
+block, no line is read as yours and the metadata decides. A `[blocked]` you write
 there holds the review the same way. Only an `other` line is read at once. A
 `[complete]` written over any other kind reads as the metadata says until a
 factory turn or the lane that owns the item writes it, because nothing but a
