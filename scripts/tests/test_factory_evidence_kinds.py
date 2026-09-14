@@ -2801,6 +2801,87 @@ class OwnerReadFailsClosedTests(unittest.TestCase):
         self.assertIsNone(error)
 
 
+class OwnerLineAsRenderedTests(unittest.TestCase):
+    """The owner's line is read the way GitHub renders it (#1681, round 3).
+
+    Checked against GitHub's own renderer (`gh api markdown`, gfm): a comment
+    hides only what it covers, so the text beside it on the line still shows;
+    a fenced line shows as code; and emphasis around the item shows the item.
+    The read blanked every line a comment touched, did not notice a code
+    block under the heading, and did not see the item through emphasis, so an
+    owner's `[blocked]` a reader could plainly see was lost to the metadata.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = OwnerReadFailsClosedTests.PROOF
+    BLOCKED = f"- [blocked] {OwnerKindHandEditTests.OWNER_ITEM} -- owner found it unsafe"
+    meta = OwnerReadFailsClosedTests.meta
+    gate = OwnerReadFailsClosedTests.gate
+    assert_refused = OwnerReadFailsClosedTests.assert_refused
+
+    def assert_approved(self, body: str) -> None:
+        accounting, error = self.gate(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["complete_items"], [self.OWNER_ITEM])
+        self.assertIsNone(error)
+
+    def test_a_comment_hides_only_what_it_covers(self) -> None:
+        for shape, line in (
+            ("a comment after the owner's line", f"{self.BLOCKED} <!-- x -->"),
+            ("a comment inside the owner's line", self.BLOCKED.replace("whether ", "whether <!-- x --> ", 1)),
+            ("a comment before the owner's line", f"<!-- x --> {self.BLOCKED}"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n{line}\n")
+
+    def test_a_completion_beside_a_comment_is_read(self) -> None:
+        self.assert_approved(
+            self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+            + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF} <!-- checked on the laptop -->\n"
+        )
+
+    def test_a_comment_opened_mid_line_that_runs_on_leaves_the_section_unread(self) -> None:
+        # After a list item GitHub shows the `<!--` as text and the next
+        # bullet as a bullet, so cutting the span out would hide a `[blocked]`
+        # a reader sees. Where it ends depends on blocks the read does not
+        # model, so the section is not read at all.
+        self.assert_refused(
+            self.meta(self.OWNER_ITEM, "complete")
+            + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF} <!--\n{self.BLOCKED}\n-->\n"
+        )
+
+    def test_a_code_block_under_the_heading_leaves_the_section_unread(self) -> None:
+        for shape, body in (
+            ("the owner's line fenced", self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n```\n{self.BLOCKED}\n```\n"),
+            ("a tilde fence left open", self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n~~~\n{self.BLOCKED}\n"),
+            (
+                "a completion beside a fenced blocked line",
+                self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+                + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n```\n{self.BLOCKED}\n```\n",
+            ),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(body)
+
+    def test_emphasis_around_the_item_is_the_same_item(self) -> None:
+        item = self.OWNER_ITEM
+        for wrapped in (f"**{item}**", f"_{item}_", f"*{item}*", f"__{item}__", f"**`{item}`**"):
+            with self.subTest(wrapped=wrapped):
+                self.assert_refused(
+                    self.meta(item, "complete") + f"## Evidence Status\n- [blocked] {wrapped} -- owner found it unsafe\n"
+                )
+                self.assert_approved(
+                    self.meta(item, "blocked", "owner follow-up required")
+                    + f"## Evidence Status\n- [complete] {wrapped} -- {self.PROOF}\n"
+                )
+
+    def test_a_status_line_naming_no_requested_item_leaves_the_section_unread(self) -> None:
+        # A line the read cannot attribute is still a `[blocked]` a reader
+        # sees; ignoring it lets the metadata decide an item the owner may
+        # have answered.
+        misspelt = self.BLOCKED.replace("reachable", "reachble", 1)
+        self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n{misspelt}\n")
+
+
 class DocumentedTestFormTests(unittest.TestCase):
     """The `test` form the docs teach has to survive the parser.
 

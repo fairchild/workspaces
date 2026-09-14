@@ -391,13 +391,17 @@ item nobody runs, a bare status word such as `PASS`, `ok` or `done` is no proof.
 Three things decide whether a line is read as yours. The item has to be one the
 contributor recorded as `other` in the hidden metadata when it wrote the
 section; the kind is not re-read from the item's wording at review, and an item
-with no recorded kind is never read this way. The section has to be readable:
-one `## Evidence Status` heading a reader of the page sees (a heading inside a
-code block or an HTML comment is not one), every line under it an entry, no
-horizontal rule cutting lines off, and one line per item. When it is not, no
-line is read as yours and no owner item counts as complete from the metadata
-either, since the line nobody can read may be your `[blocked]`; fix the section
-and the next review reads it. And only an `other` line is read at once. A
+with no recorded kind is never read this way. The section has to be readable the way GitHub renders it: one
+`## Evidence Status` heading a reader of the page sees (a heading inside a code
+block or an HTML comment is not one), every line under it an entry naming a
+requested item, one line per item, and nothing under the heading that hides or
+cuts off a line: no code block, no horizontal rule, and no comment opened
+mid-line that runs past its line. A comment hides only what it covers, so text
+beside it on a line is read, and emphasis around the item (`**item**`,
+`_item_`) is the same item. When the section is not readable, no line is read
+as yours and no owner item counts as complete from the metadata either, since
+the line nobody can read may be your `[blocked]`; fix the section and the next
+review reads it. And only an `other` line is read at once. A
 `[complete]` written over any other kind reads as the metadata says until a
 factory turn or the lane that owns the item writes it, because nothing but a
 lane or the factory's own reading of the body completes those. Like any hand

@@ -633,51 +633,71 @@ def _wrapped_bullets(section: str) -> list[str]:
 HTML_COMMENT_TERMINATOR_RE = re.compile(r"--!?>")
 
 
-def _leaves_comment_open(line: str, *, inside: bool) -> bool:
-    """Whether an HTML comment is still open at the end of this line."""
-    position = 0
+# What a fenced line reads as. It is not an entry, so a code block under the
+# heading leaves the section unread, and anywhere else it reads as nothing.
+CODE_BLOCK_LINE = "(a line of a code block)"
+
+
+def _cut_comments(line: str, *, inside: bool) -> tuple[str, bool, int | None]:
+    """The line with its comment spans cut out.
+
+    Also whether a comment is still open at the end of the line, and where on
+    this line that comment opened -- None when it opened on an earlier line.
+    """
+    kept: list[str] = []
+    position, opened_at = 0, None
     while True:
         if inside:
             end = HTML_COMMENT_TERMINATOR_RE.search(line, position)
             if end is None:
-                return True
-            position, inside = end.end(), False
+                return "".join(kept), True, opened_at
+            position, inside, opened_at = end.end(), False, None
         opened = line.find("<!--", position)
         if opened == -1:
-            return False
-        position, inside = opened + 4, True
+            return "".join(kept) + line[position:], False, None
+        kept.append(line[position:opened])
+        position, inside, opened_at = opened + 4, True, opened
 
 
-def _visible_markdown(body: str) -> str:
-    """The body with every line a reader sees as code, or never sees, blanked.
+def _visible_markdown(body: str) -> tuple[str, bool]:
+    """The body's text as a reader of the page sees it, line for line.
 
-    A heading inside a fenced block is shown as the characters it is made of,
-    and one inside an HTML comment is not shown at all, so neither is a
-    heading to anyone reading the page. Lines are blanked rather than removed,
-    which keeps every other line where it was. Fences follow the CommonMark
-    rules `_wrapped_bullets` uses, and one left open runs to the end. A comment
-    runs from `<!--` to the first `-->` or `--!>`, the extent a browser gives
-    it, or to the end when nothing closes it; a line it touches is blanked
-    whole, since text sharing a line with a comment belongs to the same HTML
-    block.
+    Checked against GitHub's renderer. An HTML comment hides only what it
+    covers -- `<!--` to the first `-->` or `--!>`, the extent a browser gives
+    it, or to the end when nothing closes it -- so each span is cut out and
+    the text beside it on the line is kept: `- [blocked] item <!-- x -->`
+    shows its `[blocked]`. A fenced line shows as code, never as a status
+    line, so it reads as `CODE_BLOCK_LINE`. Fences follow the CommonMark rules
+    `_wrapped_bullets` uses, and one left open runs to the end.
+
+    The second value says a comment opened mid-line runs past its line.
+    Whether GitHub hides what follows depends on where the block around it
+    ends -- after a list item the `<!--` shows as text and the next bullet
+    shows -- and this does not model blocks, so the caller reads nothing.
     """
     visible: list[str] = []
     fenced: str | None = None
     in_comment = False
+    mid_line_comment_runs_on = False
     for line in MARKDOWN_LINE_ENDING_RE.split(body):
-        if not fenced and (in_comment or "<!--" in line):
-            in_comment = _leaves_comment_open(line, inside=in_comment)
-            visible.append("")
-            continue
-        fence = MARKDOWN_FENCE_RE.fullmatch(line.strip())
-        if fence and _is_fence_line(fence):
-            indent = _fence_indent_columns(line)
-            if indent is not None and indent <= 3 and _fence_toggles(fence, fenced):
-                fenced = None if fenced else fence.group("run")
-            visible.append("")
-            continue
-        visible.append("" if fenced else line)
-    return "\n".join(visible)
+        if not in_comment:
+            fence = MARKDOWN_FENCE_RE.fullmatch(line.strip())
+            if fence and _is_fence_line(fence):
+                indent = _fence_indent_columns(line)
+                if indent is not None and indent <= 3 and _fence_toggles(fence, fenced):
+                    fenced = None if fenced else fence.group("run")
+                visible.append(CODE_BLOCK_LINE)
+                continue
+            if fenced:
+                visible.append(CODE_BLOCK_LINE)
+                continue
+        if in_comment or "<!--" in line:
+            kept, in_comment, opened_at = _cut_comments(line, inside=in_comment)
+            if in_comment and opened_at is not None and not re.fullmatch(r" {0,3}", line[:opened_at]):
+                mid_line_comment_runs_on = True
+            line = kept
+        visible.append(line)
+    return "\n".join(visible), mid_line_comment_runs_on
 
 
 def extract_requested_evidence(body: str) -> list[str]:
@@ -911,6 +931,21 @@ def _normalize_evidence_key(text: str) -> str:
     t = re.sub(r"\s+", " ", t).casefold()
     t = t.rstrip(".,;:)")
     return t
+
+
+EMPHASIS_WRAP_RE = re.compile(r"(\*\*|__|\*|_)(?P<inner>.+)\1", re.DOTALL)
+
+
+def _owner_item_key(text: str) -> str:
+    """`_normalize_evidence_key`, after emphasis around the whole item is unwrapped.
+
+    GitHub renders `**item**` and `_item_` as the item in bold or italics, so a
+    reader sees the same item, and the read has to as well.
+    """
+    stripped = text.strip().strip("`").strip()
+    while match := EMPHASIS_WRAP_RE.fullmatch(stripped):
+        stripped = match.group("inner").strip().strip("`").strip()
+    return _normalize_evidence_key(stripped)
 
 
 def _indistinguishable(texts: list[str]) -> list[str]:
@@ -1467,7 +1502,9 @@ def _read_owner_section(
     # renderer's strip missed -- can differ from the metadata with nobody
     # editing anything. Trailing whitespace after the one heading changes
     # nothing a reader sees, so the read takes it as the heading it is.
-    visible = _visible_markdown(published_body)
+    visible, mid_line_comment_runs_on = _visible_markdown(published_body)
+    if mid_line_comment_runs_on:
+        return {}, "a comment opened mid-line runs past its line, so what GitHub shows after it cannot be told"
     headings = len(re.findall(r"(?mi)^## Evidence Status[^\S\n]*$", visible))
     if headings != 1:
         return {}, f"a reader sees {headings} `## Evidence Status` headings, not one"
@@ -1484,10 +1521,12 @@ def _read_owner_section(
     rendered = extract_evidence_status_entries(visible, requested_evidence)
     written = rendered.get("entries")
     invalid_lines = rendered.get("invalid_lines") or []
+    if CODE_BLOCK_LINE in invalid_lines:
+        return {}, "a code block sits under the heading, and a code block is never read as a status line"
     if not isinstance(written, dict) or invalid_lines:
         return {}, f"a line in it is not an entry: {_truncate(str(invalid_lines[0]) if invalid_lines else '')}"
     positions = {
-        _normalize_evidence_key(item): position
+        _owner_item_key(item): position
         for position, item in enumerate(requested_evidence, start=1)
     }
     # Two lines for one item are two answers, and taking whichever comes first
@@ -1496,16 +1535,22 @@ def _read_owner_section(
     repeated = list(rendered.get("duplicate_items") or [])
     answered: set[int] = set()
     for item in written:
-        position = positions.get(_normalize_evidence_key(item))
+        position = positions.get(_owner_item_key(item))
         if position in answered:
             repeated.append(item)
         if position is not None:
             answered.add(position)
     if repeated:
         return {}, f"it has more than one line for: {_truncate(str(repeated[0]))}"
+    # A status line the read cannot attribute to an item is still a `[blocked]`
+    # or a `[complete]` a reader sees, and ignoring it lets the metadata decide
+    # an item the owner may have answered.
+    unmatched = [item for item in written if _owner_item_key(item) not in positions]
+    if unmatched:
+        return {}, f"a line in it names no requested item: {_truncate(str(unmatched[0]))}"
     preserved: dict[int, dict[str, object]] = {}
     for item, entry in written.items():
-        position = positions.get(_normalize_evidence_key(item))
+        position = positions.get(_owner_item_key(item))
         if position is None:
             continue
         requested = requested_evidence[position - 1]
