@@ -137,8 +137,9 @@ public final class AutomationGestureVerbs {
     /// and report what the UI did.
     private let performArchive:
         (@MainActor (WorkspaceTarget, AutomationWorkspaceArchiveCommand) async -> AutomationWorkspaceArchiveOutcome)?
-    /// Drive the real sidebar note gesture — the same setter the row's "Edit Note…" item
-    /// writes through, normalization included — and report what the app stored.
+    /// Drive the real sidebar note gesture — an independent writer from the row's "Edit Note…"
+    /// item, normalized the same way through `WorkspaceNote.normalized` — and report what the
+    /// app stored.
     private let performNote: (@MainActor (WorkspaceTarget, String?) -> AutomationWorkspaceNoteOutcome)?
     /// Drive the real repo-terminal gesture — the same path a sidebar repo row's terminal takes —
     /// and report the surface it attached.
@@ -223,11 +224,11 @@ public final class AutomationGestureVerbs {
         return await performArchive(target, command)
     }
 
-    /// `workspace.note`: enter the same setter the row's "Edit Note…" item writes through.
-    /// A note is a data write, which is exactly why it routes through a gesture the user
-    /// also has — a verb with no equivalent click is the thing this layer exists to
-    /// prevent. A missing note closure means the live window did not install that path,
-    /// so the verb fails closed.
+    /// `workspace.note`: an independent writer from the row's "Edit Note…" item, not the same
+    /// setter — normalized the same way through `WorkspaceNote.normalized`. A note is a data
+    /// write, which is exactly why it routes through a gesture the user also has — a verb with
+    /// no equivalent click is the thing this layer exists to prevent. A missing note closure
+    /// means the live window did not install that path, so the verb fails closed.
     public func setWorkspaceNote(_ workspaceID: UUID, note: String?) -> AutomationWorkspaceNoteOutcome {
         guard let performNote else {
             return .unsupported("No WorkSpaces sidebar is attached; workspace.note requires a live window.")
