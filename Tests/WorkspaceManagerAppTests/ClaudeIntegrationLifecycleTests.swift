@@ -34,6 +34,53 @@ struct ClaudeIntegrationLifecycleTests {
         func userSettingsModificationDate() async -> Date? { nil }
     }
 
+    actor RefusingInstaller: ClaudeSettingsInstalling {
+        struct WriteRefused: LocalizedError {
+            var errorDescription: String? {
+                "You don’t have permission to save the file “settings.json” in the folder “.claude”."
+            }
+        }
+
+        func renderPreview() async throws -> String { "stub" }
+        func install() async throws { throw WriteRefused() }
+        func isInstalled() async -> Bool { false }
+        func userSettingsURL() async -> URL { URL(fileURLWithPath: "/tmp/stub/.claude/settings.json") }
+        func mostRecentBackupPath() async -> String? { nil }
+        func userSettingsModificationDate() async -> Date? { nil }
+    }
+
+    /// An installer whose `install()` waits, mid-attempt, until the test lets it finish, so a
+    /// test can act while an install that will succeed is still running.
+    actor SuspendingInstaller: ClaudeSettingsInstalling {
+        private var installStarted: CheckedContinuation<Void, Never>?
+        private var installRelease: CheckedContinuation<Void, Never>?
+        private var hasStartedInstall = false
+        private var installed = false
+
+        func renderPreview() async throws -> String { "stub" }
+        func install() async throws {
+            hasStartedInstall = true
+            installStarted?.resume()
+            installStarted = nil
+            await withCheckedContinuation { installRelease = $0 }
+            installed = true
+        }
+        func isInstalled() async -> Bool { installed }
+        func userSettingsURL() async -> URL { URL(fileURLWithPath: "/tmp/stub/.claude/settings.json") }
+        func mostRecentBackupPath() async -> String? { nil }
+        func userSettingsModificationDate() async -> Date? { nil }
+
+        func waitUntilInstallStarts() async {
+            guard !hasStartedInstall else { return }
+            await withCheckedContinuation { installStarted = $0 }
+        }
+
+        func finishInstall() {
+            installRelease?.resume()
+            installRelease = nil
+        }
+    }
+
     /// A per-call socket path so the hook listener never binds the real, machine-wide
     /// `~/Library/Application Support/<bundleID>/hooks.sock` — that path is `flock`-guarded
     /// against any real running app instance on the same machine, which the install-once
@@ -111,6 +158,103 @@ struct ClaudeIntegrationLifecycleTests {
         let stub = try await runStart(optedIn: false)
         let count = await stub.installCallCount
         #expect(count == 0)
+    }
+
+    /// Starts the singleton opted in with `installer` and waits for the startup chain, the
+    /// launch repair included. `beforeStart` runs after reconfiguring, which clears state.
+    private func runOptedInStart(
+        installer: any ClaudeSettingsInstalling,
+        beforeStart: () -> Void = {}
+    ) async throws {
+        let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.set(true, forKey: ClaudeIntegrationDefaults.optedInKey)
+        ClaudeIntegrationLifecycle.shared._configureForTesting(
+            defaults: defaults,
+            installerFactory: { _ in installer },
+            socketURLOverride: Self.ephemeralSocketURL()
+        )
+        beforeStart()
+
+        ClaudeIntegrationLifecycle.shared.start(registry: AgentSessionRegistry())
+        let startup = try #require(ClaudeIntegrationLifecycle.shared.startupTask)
+        await startup.value
+
+        await ClaudeIntegrationLifecycle.shared.stop()
+        UserDefaults().removePersistentDomain(forName: suiteName)
+    }
+
+    /// The failure the Agents status row shows as failed when nobody was looking: the silent
+    /// repair at launch could not write the settings file.
+    @Test("a launch repair that throws leaves its error text for the Agents status row")
+    func failedLaunchRepairRecordsItsError() async throws {
+        try await runOptedInStart(installer: RefusingInstaller())
+        #expect(
+            ClaudeIntegrationLifecycle.shared.lastInstallFailure
+                == RefusingInstaller.WriteRefused().errorDescription
+        )
+    }
+
+    @Test("a launch repair that succeeds clears an earlier install failure")
+    func succeededLaunchRepairClearsTheFailure() async throws {
+        try await runOptedInStart(installer: StubInstaller()) {
+            ClaudeIntegrationLifecycle.shared.recordInstallFailure("an earlier attempt threw")
+        }
+        #expect(ClaudeIntegrationLifecycle.shared.lastInstallFailure == nil)
+    }
+
+    /// The ordering #1673's second review found: a refresh starts and reads the hooks as
+    /// installed, a Try again fails while it is still reading, and the refresh lands last. The
+    /// failure is newer than anything that refresh saw, so it stays; a refresh that starts after
+    /// the failure can settle it.
+    @Test("a refresh that started before an install failure cannot clear it")
+    func staleRefreshCannotClearANewerFailure() throws {
+        let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        let lifecycle = ClaudeIntegrationLifecycle.shared
+        lifecycle._configureForTesting(defaults: defaults, installerFactory: { _ in StubInstaller() })
+
+        let staleRefreshStart = lifecycle.installFailureCount
+        lifecycle.recordInstallFailure("Try again threw")
+        lifecycle.clearInstallFailure(ifRecordedBefore: staleRefreshStart)
+        #expect(lifecycle.lastInstallFailure == "Try again threw")
+
+        lifecycle.clearInstallFailure(ifRecordedBefore: lifecycle.installFailureCount)
+        #expect(lifecycle.lastInstallFailure == nil)
+    }
+
+    /// The ordering #1673's third review found: the launch repair's install is still running when
+    /// a Try again in Settings fails, and then the repair succeeds. The failure is newer than the
+    /// install that started before it, so that success must not clear it. The time limit turns a
+    /// startup chain that never reaches the install into a failure instead of a hang.
+    @Test(
+        "an install that started before a newer failure cannot clear it by succeeding",
+        .timeLimit(.minutes(1))
+    )
+    func staleSuccessfulInstallCannotClearANewerFailure() async throws {
+        let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        defaults.set(true, forKey: ClaudeIntegrationDefaults.optedInKey)
+        let installer = SuspendingInstaller()
+        let lifecycle = ClaudeIntegrationLifecycle.shared
+        lifecycle._configureForTesting(
+            defaults: defaults,
+            installerFactory: { _ in installer },
+            socketURLOverride: Self.ephemeralSocketURL()
+        )
+
+        lifecycle.start(registry: AgentSessionRegistry())
+        let startup = try #require(lifecycle.startupTask)
+        await installer.waitUntilInstallStarts()
+        lifecycle.recordInstallFailure("Try again threw")
+        await installer.finishInstall()
+        await startup.value
+        await lifecycle.stop()
+
+        #expect(await installer.isInstalled())
+        #expect(lifecycle.lastInstallFailure == "Try again threw")
     }
 
     @Test("settings installer publishes after startup for Settings scene injection")

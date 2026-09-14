@@ -9,6 +9,7 @@
 
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import WorkspaceManagerCore
 import os.log
@@ -31,6 +32,15 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private(set) var listener: AgentHookListener?
     private(set) var notificationPoster: AgentNotificationPoster?
     @Published private(set) var settingsInstaller: (any ClaudeSettingsInstalling)?
+    /// The error text of the most recent install attempt that threw, the opted-in repair at
+    /// launch or an install accepted in Settings → Agents. The Agents status row shows it as the
+    /// failed state until an explicit act clears it (turning the integration off, confirming the
+    /// revert) or later work settles it: an install that succeeds, or a refresh that finds the
+    /// hooks installed, started after the failure was recorded.
+    @Published private(set) var lastInstallFailure: String?
+    /// How many install failures have been recorded. A refresh reads it before its first await,
+    /// so a failure recorded while that refresh was still reading is one it cannot clear.
+    private(set) var installFailureCount = 0
     private(set) var socketPath: String?
     private var teardownObserver: Any?
     private var didStart = false
@@ -85,6 +95,8 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         self.listener = nil
         self.notificationPoster = nil
         self.settingsInstaller = nil
+        self.lastInstallFailure = nil
+        self.installFailureCount = 0
         self.socketPath = nil
         self.startupTask = nil
     }
@@ -144,7 +156,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
                     if await installer.isInstalled() {
                         log.info("[ClaudeIntegration] settings already installed; no write needed")
                     } else {
-                        try await installer.install()
+                        try await self.install(using: installer)
                         let backup = await installer.mostRecentBackupPath() ?? "(no prior file)"
                         log.info(
                             "[ClaudeIntegration] settings repair succeeded; backup=\(backup, privacy: .public)"
@@ -165,6 +177,114 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.stop() }
         }
+    }
+
+    func recordInstallFailure(_ message: String) {
+        installFailureCount += 1
+        lastInstallFailure = message
+    }
+
+    func clearInstallFailure() {
+        guard lastInstallFailure != nil else { return }
+        lastInstallFailure = nil
+    }
+
+    /// Clears the failure for a refresh or an install that settled the integration, but only when
+    /// no failure was recorded after `countAtStart`, the `installFailureCount` it read before its
+    /// first await: a Try again that failed while a refresh was reading, or while an older install
+    /// was still running, is newer than anything that work saw.
+    func clearInstallFailure(ifRecordedBefore countAtStart: Int) {
+        guard installFailureCount == countAtStart else { return }
+        clearInstallFailure()
+    }
+
+    /// Runs one install attempt and records its outcome for the Agents status row. A throw is
+    /// recorded as the failure and rethrown; a success clears the failure only when no newer one
+    /// was recorded while the install ran. The launch repair and an install accepted in Settings
+    /// both go through here, so a repair that finishes after a failed Try again leaves it standing.
+    func install(using installer: any ClaudeSettingsInstalling) async throws {
+        let countAtStart = installFailureCount
+        do {
+            try await installer.install()
+        } catch {
+            recordInstallFailure(error.localizedDescription)
+            throw error
+        }
+        clearInstallFailure(ifRecordedBefore: countAtStart)
+    }
+
+    /// How long the Agents status row waits on the hook listener probe before reading it as not
+    /// listening.
+    nonisolated static let hookListenerProbeTimeout: TimeInterval = 3
+
+    /// Runs `probe` on a GCD thread and gives up after `timeout`, so a connect that never returns
+    /// reads as not listening instead of leaving the row checking. GCD rather than a task,
+    /// because the probe blocks in a syscall, and a task group would wait for its stuck child
+    /// before returning. A probe that outlives its timeout keeps that thread and its socket
+    /// descriptor until the connect returns.
+    nonisolated static func hookListenerProbeFailure(
+        socketPath: String?,
+        timeout: TimeInterval,
+        probe: @escaping @Sendable (String?) -> String? = {
+            ClaudeIntegrationLifecycle.hookListenerProbeFailure(socketPath: $0)
+        }
+    ) async -> String? {
+        await withCheckedContinuation { continuation in
+            let answer = ProbeAnswer(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                answer.resume(probe(socketPath))
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                answer.resume("The probe timed out after \(String(format: "%g", timeout)) s.")
+            }
+        }
+    }
+
+    /// Connects to the hook socket, asks the kernel which process accepted, and hangs up without
+    /// sending a request, so the probe reaches none of the listener's counters. Only
+    /// `listenerProcess` accepting counts as this app's listener answering: a dormant instance,
+    /// whose listener lost the socket lock, reaches the process that holds it instead, and the
+    /// hook events from its terminals go there too. Returns why this app's listener didn't
+    /// answer, or nil when it did.
+    nonisolated static func hookListenerProbeFailure(
+        socketPath: String?,
+        listenerProcess: pid_t = getpid()
+    ) -> String? {
+        guard let socketPath else { return "The hook listener hasn't started." }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketPath.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            return "The hook socket path is too long to connect to: \(socketPath)"
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            let code = errno
+            return "Couldn't open a socket to reach the hook listener: \(String(cString: strerror(code)))."
+        }
+        defer { Darwin.close(fd) }
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connected == 0 else {
+            let code = errno
+            return "Nothing answered at \(socketPath): \(String(cString: strerror(code)))."
+        }
+        var peer: pid_t = 0
+        var peerLength = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peer, &peerLength) == 0 else {
+            let code = errno
+            return "Something answered at \(socketPath), but its process couldn't be identified: "
+                + "\(String(cString: strerror(code)))."
+        }
+        guard peer == listenerProcess else {
+            return "Another process (pid \(peer)) holds \(socketPath), so hook events go there instead of this app."
+        }
+        return nil
     }
 
     /// Copy the bundled command hook forwarder to a stable location and chmod it
@@ -342,5 +462,24 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             self.teardownObserver = nil
         }
         didStart = false
+    }
+}
+
+/// Resumes a probe's continuation once, with whichever of the probe's answer and the timeout
+/// arrives first.
+private final class ProbeAnswer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String?, Never>?
+
+    init(_ continuation: CheckedContinuation<String?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ failure: String?) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: failure)
     }
 }
