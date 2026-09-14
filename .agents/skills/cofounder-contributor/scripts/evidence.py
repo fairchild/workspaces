@@ -1470,8 +1470,19 @@ def render_execution_summary_body(
         for _, entry in sorted(evidence_map.items())
     ]
 
+    # Any section the model wrote goes, rather than sitting beside this one.
+    # Readers take the first section they find, and a line that differs from
+    # the metadata reads as a person's edit, so the model's section would pose
+    # as the owner's line. `insert_markdown_section` strips a heading only
+    # when a newline follows it directly, so a CR, a trailing space or a tab
+    # after the heading kept the model's section in place.
+    model_body = re.sub(
+        r"(?mi)^## Evidence Status[^\S\n]*$",
+        "## Evidence Status",
+        _strip_evidence_metadata(MARKDOWN_LINE_ENDING_RE.sub("\n", summary_body)),
+    )
     rendered = insert_markdown_section(
-        _strip_evidence_metadata(summary_body),
+        model_body,
         "Evidence Status",
         "\n".join(evidence_lines),
         before_heading="Validation",
