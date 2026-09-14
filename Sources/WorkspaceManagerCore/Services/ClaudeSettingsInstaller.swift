@@ -21,6 +21,17 @@ public protocol ClaudeSettingsInstalling: Sendable {
     func userSettingsModificationDate() async -> Date?
 }
 
+/// A Claude settings file that exists but is not a JSON object. Its bytes may be
+/// the only copy of a person's settings, so the installer refuses to merge into it.
+public struct MalformedClaudeSettingsError: LocalizedError, Equatable {
+    public let path: String
+    public let reason: String
+
+    public var errorDescription: String? {
+        "WorkSpaces left \(path) unchanged because it is not a JSON object: \(reason)"
+    }
+}
+
 public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     /// Maximum number of `*.workspaces-backup-*` files to retain per settings file.
     /// Older backups beyond this count are deleted on each `install()` call.
@@ -96,39 +107,39 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     public func renderPreview() throws -> String {
         var lines: [String] = []
 
-        let settingsURL = pathFor(target: .userSettingsJSON)
-        let currentSettings = (try? readJSON(at: settingsURL)) ?? [:]
-        let settingsPlan = planSettingsPatch(currentSettings)
-        if !settingsPlan.lines.isEmpty {
+        if isPatched(.userSettingsJSON) {
+            let settingsURL = pathFor(target: .userSettingsJSON)
+            let settingsPlan = planSettingsPatch(try readJSON(at: settingsURL).object)
             lines.append("# \(settingsURL.path)")
             lines.append(contentsOf: settingsPlan.lines.map { "- \($0)" })
             lines.append("")
         }
 
         let claudeURL = pathFor(target: .userClaudeJSON)
-        let currentClaude = (try? readJSON(at: claudeURL)) ?? [:]
-        let notifPlan = planNotificationPatch(currentClaude)
+        let notifPlan = planNotificationPatch(try readJSON(at: claudeURL).object)
         lines.append("# \(claudeURL.path)")
         lines.append(contentsOf: notifPlan.lines.map { "- \($0)" })
 
         return lines.joined(separator: "\n")
     }
 
-    /// Apply the concrete WorkSpaces patch. If a file is already byte-identical
-    /// after merging, no write and no backup occurs.
+    /// Apply the concrete WorkSpaces patch. Every target is read before any is
+    /// written, so a file that is not a JSON object fails the install with no
+    /// write and no backup. If a file is already byte-identical after merging,
+    /// no write and no backup occurs.
     public func install() throws {
-        for target in Target.allCases {
+        let snapshots = try Target.allCases.filter { isPatched($0) }.map { target in
             let url = pathFor(target: target)
+            return (target: target, url: url, file: try readJSON(at: url))
+        }
+        for (target, url, file) in snapshots {
             try ensureParentExists(for: url)
 
-            let current = (try? readJSON(at: url)) ?? [:]
-            let originalData = try? Data(contentsOf: url)
+            let current = file.object
+            let originalData = file.data
             let next: [String: AnyCodable]
             switch target {
             case .userSettingsJSON:
-                guard eventForwarderScriptPath != nil || statusLineForwarderPath != nil else {
-                    continue
-                }
                 next = planSettingsPatch(current).merged
             case .userClaudeJSON:
                 next = planNotificationPatch(current).merged
@@ -166,16 +177,16 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         }
     }
 
+    /// A target that is not a JSON object reads as not installed; `install()` is
+    /// where it becomes an error.
     public func isInstalled() -> Bool {
-        for target in Target.allCases {
-            let url = pathFor(target: target)
-            let current = (try? readJSON(at: url)) ?? [:]
+        for target in Target.allCases where isPatched(target) {
+            guard let current = try? readJSON(at: pathFor(target: target)).object else {
+                return false
+            }
             let merged: [String: AnyCodable]
             switch target {
             case .userSettingsJSON:
-                guard eventForwarderScriptPath != nil || statusLineForwarderPath != nil else {
-                    continue
-                }
                 merged = planSettingsPatch(current).merged
             case .userClaudeJSON:
                 merged = planNotificationPatch(current).merged
@@ -617,10 +628,34 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         )
     }
 
-    private func readJSON(at url: URL) throws -> [String: AnyCodable] {
-        let data = try Data(contentsOf: url)
-        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-        return Self.lift(json)
+    /// settings.json is only patched when there is a forwarder to register.
+    private func isPatched(_ target: Target) -> Bool {
+        target == .userClaudeJSON || eventForwarderScriptPath != nil || statusLineForwarderPath != nil
+    }
+
+    /// A missing or blank file reads as `{}`: there is nothing in it to lose. Any
+    /// other file that is not a JSON object throws instead of reading as empty.
+    private func readJSON(at url: URL) throws -> (object: [String: AnyCodable], data: Data?) {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch CocoaError.fileReadNoSuchFile {
+            return ([:], nil)
+        }
+        if data.allSatisfy({ " \t\n\r".utf8.contains($0) }) {
+            return ([:], data)
+        }
+        let parsed: Any
+        do {
+            parsed = try JSONSerialization.jsonObject(with: data)
+        } catch {
+            let reason = (error as NSError).userInfo[NSDebugDescriptionErrorKey] as? String
+            throw MalformedClaudeSettingsError(path: url.path, reason: reason ?? error.localizedDescription)
+        }
+        guard let object = parsed as? [String: Any] else {
+            throw MalformedClaudeSettingsError(path: url.path, reason: "the top-level value is not an object")
+        }
+        return (Self.lift(object), data)
     }
 
     private func rotateBackups(forSettingsFile url: URL) {
