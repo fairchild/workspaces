@@ -53,9 +53,10 @@ dispatch:
   `.github/pull_request_template.md`, never from memory, and preflight it with
   `uv run --script scripts/pr-readiness.py --body-file <path>` before
   `gh pr create` — same checks, same wording, before the PR exists.
-- Author the Evidence section with a placeholder slot for the hosted CI link
-  so the gate edits the PR body exactly once, at ready-flip (every body
-  update resends the full text).
+- Name the intended reviewer, required artifacts, and delivery route. Assign
+  one agent to publish the batched handoff and respond to findings, following
+  the [review handoff and response workflow](../../../docs/development/mergeability-standard.md#review-handoff-and-response).
+  Keep a local slot for hosted CI results until the handoff is complete.
 
 ## The gate, before a PR leaves draft
 
@@ -70,12 +71,15 @@ adversarial/visual passes below.
   worse than pre-change behavior, signer/verifier secret parity.
 - UI-touching: view the screenshots yourself; run the Playwright `full`
   project yourself (`web-ci.yml` runs `fast` only); when hosted upload is
-  blocked, deliver screenshots to the owner through the session.
+  blocked, deliver screenshots to the owner through the session. This proves
+  owner access, not Factory access; check the intended reviewer's delivery
+  result separately and report unknown access as unknown.
 - Merge mechanics: pre-check with `git merge-tree --write-tree` (the legacy
   three-arg form false-negatives real conflicts); after resolving, re-run the
   full suite on the merged tree, capturing output to a file before filtering.
-- Record a gate note in the PR body (what re-ran, on which commit), then flip
-  to ready.
+- Record the gate note and completed evidence together in the PR body (what
+  re-ran, on which commit). Confirm the reviewer handoff before ready-flip;
+  missing delivery capability remains explicit rather than becoming approval.
 
 ## Sequencing
 
