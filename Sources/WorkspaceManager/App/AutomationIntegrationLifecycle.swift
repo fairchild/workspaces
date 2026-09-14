@@ -16,7 +16,7 @@ private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "Au
 
 @MainActor
 final class AutomationIntegrationLifecycle: ObservableObject {
-    static let shared = AutomationIntegrationLifecycle()
+    static let shared = AutomationIntegrationLifecycle(files: .bundled(bundleIdentifier))
 
     let handleRegistry = AutomationHandleRegistry()
 
@@ -27,7 +27,14 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var experimentObserver: Any?
     private var didStart = false
     private var startTask: Task<String, Error>?
-    private var operatorCredentialURL: URL?
+    /// Where this launch's socket, audit log and operator credential live.
+    let files: AutomationPlaneFiles
+    /// Read by configure passes on the MainActor and by the listener off it, on every request.
+    private let automationAPIOptIn: @Sendable () -> Bool
+    private let operatorOptIn: @MainActor () -> Bool
+    /// The credential this launch minted, and the only one it removes. Every copy of the app keyed
+    /// on one bundle identifier shares the path, so what sits there may be another launch's (#1607).
+    private var mintedCredential: AutomationOperatorCredential?
     /// What the last provisioning pass settled on, reported over `/v1/health`. Read
     /// off the MainActor by the health closure, hence the lock-free copy in
     /// `operatorCredentialOutcomeSnapshot`.
@@ -40,21 +47,33 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private static let appScopeID = "workspaces.local"
 
     /// Stands in for `Bundle.main.bundleIdentifier` when the app runs unbundled (a
-    /// `swift run` launch). Both the socket and the credential live under it, so the
-    /// fallback has to be the same string everywhere it is reached for.
+    /// `swift run` launch). `shared` derives the socket, audit log and credential paths
+    /// from it in one place, so all three agree.
     private static let defaultBundleIdentifier = "com.cloudcompute.workspaces"
 
-    private init() {}
+    private static var bundleIdentifier: String {
+        Bundle.main.bundleIdentifier ?? defaultBundleIdentifier
+    }
+
+    init(
+        files: AutomationPlaneFiles,
+        isAutomationAPIEnabled: @escaping @Sendable () -> Bool = { ExperimentalFeatures.isEnabled(.automationAPI) },
+        isOperatorEnabled: @escaping @MainActor () -> Bool = { ExperimentalFeatures.isEnabled(.automationOperator) }
+    ) {
+        self.files = files
+        self.automationAPIOptIn = isAutomationAPIEnabled
+        self.operatorOptIn = isOperatorEnabled
+    }
 
     var isEnabled: Bool {
-        ExperimentalFeatures.isEnabled(.automationAPI)
+        automationAPIOptIn()
     }
 
     /// Whether this launch opted into operator scope. Both mint paths check it: the socket-side
     /// credential provision (reached only when the listener is enabled) and the App Intents mint,
     /// which has no listener dependency and therefore gates on it explicitly per call.
     private var isOperatorEnabled: Bool {
-        ExperimentalFeatures.isEnabled(.automationOperator)
+        operatorOptIn()
     }
 
     func configure(
@@ -102,7 +121,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
         guard isEnabled else {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
-            // Fail closed: an app without the Automation API leaves no operator credential behind.
+            // Fail closed: an app without the Automation API leaves no operator credential of its own behind.
             clearOperatorCredential()
             return
         }
@@ -126,10 +145,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             tileTreeStore.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
             // Every configure pass, not only the one that started the listener: the
             // later passes are the ones that can observe a toggle flipped since launch.
-            refreshOperatorCredential(
-                socketPath: socketPath,
-                bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-            )
+            refreshOperatorCredential(socketPath: socketPath)
         } catch {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             handleRegistry.removeAll()
@@ -226,15 +242,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             uiState: uiState
         )
 
-        let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        let auditLogger = AutomationAuditLogger(
-            auditURL: AutomationAuditLogger.defaultAuditURL(bundleIdentifier: bundleID)
-        )
         let listener = AutomationListener(
-            bundleIdentifier: bundleID,
+            bundleIdentifier: Self.bundleIdentifier,
             controller: controller,
-            auditLogger: auditLogger,
-            isEnabled: { ExperimentalFeatures.isEnabled(.automationAPI) },
+            socketURLOverride: files.socketURL,
+            auditLogger: AutomationAuditLogger(auditURL: files.auditURL),
+            isEnabled: automationAPIOptIn,
             makeHealthServer: { launchedAt in
                 AutomationServerDescriptor.current(
                     launchedAt: launchedAt,
@@ -265,7 +278,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         self.startTask = nil
         log.info("[AutomationIntegration] listener started at \(listener.socketPath, privacy: .public)")
 
-        refreshOperatorCredential(socketPath: startedSocketPath, bundleID: bundleID)
+        refreshOperatorCredential(socketPath: startedSocketPath)
 
         // A toggle flipped in Settings mid-run is the case a configure pass cannot see,
         // because no window reconfigures on it. The comparison is in-memory, so the
@@ -285,14 +298,14 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            // Remove the credential synchronously here: the async stop() Task below may not run
-            // before the process exits, and "dies with the launch" should hold on a clean quit.
+            // Remove the credential synchronously here, while the listener still holds the socket
+            // lock: the async stop() Task below may not run before the process exits, and "dies
+            // with the launch" should hold on a clean quit.
             // (A crash can't clean up, which is why a stale credential also fails closed against the
             // fresh registry — see AutomationOperatorCredentialStore.)
-            let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-            AutomationOperatorCredentialStore.remove(
-                at: AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
-            )
+            MainActor.assumeIsolated {
+                self?.retireOperatorCredential()
+            }
             Task { @MainActor [weak self] in await self?.stop() }
         }
         return listener.socketPath
@@ -441,27 +454,34 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     }
 
     func stop() async {
+        retireOperatorCredential()
         startTask?.cancel()
         startTask = nil
         await listener?.stop()
         listener = nil
         controller = nil
-        socketPath = nil
         didStart = false
         appIntentOperatorHandle = nil
         handleRegistry.removeAll()
-        // The operator handle dies with the launch; remove its credential file on the way out so a
-        // clean exit leaves nothing readable (a crash can't, which is why stale credentials fail
-        // closed against the fresh registry — see AutomationOperatorCredentialStore).
-        clearOperatorCredential()
         if let teardownObserver {
             NotificationCenter.default.removeObserver(teardownObserver)
             self.teardownObserver = nil
         }
+    }
+
+    /// The operator handle dies with the launch; its credential file goes on the way out so a clean
+    /// exit leaves nothing readable (a crash can't, which is why stale credentials fail closed against
+    /// the fresh registry — see AutomationOperatorCredentialStore). This runs synchronously, before
+    /// the listener releases the socket lock, so no other launch can mint between the comparison and
+    /// the removal. It first ends the ways this launch could mint again behind the clear while the
+    /// listener shuts down: the defaults observer, and any refresh that still finds a socket path.
+    private func retireOperatorCredential() {
         if let experimentObserver {
             NotificationCenter.default.removeObserver(experimentObserver)
             self.experimentObserver = nil
         }
+        socketPath = nil
+        clearOperatorCredential()
     }
 
     /// Brings the operator credential in line with the launch's current opt-in state.
@@ -493,25 +513,18 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     /// activation costs a load and a comparison.
     func refreshOperatorCredentialOnActivation() {
         guard isOperatorEnabled, let socketPath else { return }
-        refreshOperatorCredential(
-            socketPath: socketPath,
-            bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        )
+        refreshOperatorCredential(socketPath: socketPath)
     }
 
     private func refreshOperatorCredentialIfOptInChanged() {
         guard let socketPath else { return }
         let credentialAvailable = operatorCredentialOutcome?.isCredentialAvailable ?? false
         guard isOperatorEnabled != credentialAvailable else { return }
-        refreshOperatorCredential(
-            socketPath: socketPath,
-            bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        )
+        refreshOperatorCredential(socketPath: socketPath)
     }
 
-    private func refreshOperatorCredential(socketPath: String, bundleID: String) {
-        let credentialURL = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
-        operatorCredentialURL = credentialURL
+    private func refreshOperatorCredential(socketPath: String) {
+        let credentialURL = files.credentialURL
         let result = AutomationOperatorProvisioning.refresh(
             optedIn: isOperatorEnabled,
             registry: handleRegistry,
@@ -519,6 +532,13 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             appScopeID: Self.appScopeID,
             credentialURL: credentialURL
         )
+        switch result.outcome {
+        case .minted, .reused:
+            // A reused credential is this launch's too: its handle resolves only in this registry.
+            mintedCredential = result.credential
+        case .notOptedIn, .mintFailed:
+            mintedCredential = nil
+        }
         noteOperatorCredentialOutcome(result.outcome, credentialURL: credentialURL)
     }
 
@@ -569,12 +589,41 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         }
     }
 
+    /// Removes the credential only while the file still holds the one this launch minted. Every
+    /// launch keyed on one bundle identifier shares the path, and the installed app's credential sits
+    /// there when `swift test` runs beside it. Only a launch holding the socket lock mints, and every
+    /// caller clears before this launch's listener releases it, so the file compared is the file
+    /// removed. A file a crashed launch left behind is safe to leave, because it fails closed against
+    /// the fresh registry.
     private func clearOperatorCredential() {
-        let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        let url = operatorCredentialURL ?? AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
-        AutomationOperatorCredentialStore.remove(at: url)
-        operatorCredentialURL = nil
+        let credentialURL = files.credentialURL
+        if let mintedCredential, AutomationOperatorCredentialStore.load(from: credentialURL) == mintedCredential {
+            AutomationOperatorCredentialStore.remove(at: credentialURL)
+        } else if FileManager.default.fileExists(atPath: credentialURL.path) {
+            log.notice(
+                "[AutomationIntegration] left the operator credential at \(credentialURL.path, privacy: .public) in place: it is not the one this launch minted"
+            )
+        }
+        mintedCredential = nil
         operatorCredentialOutcome = nil
         Self.operatorCredentialOutcomeSnapshot.value = nil
+    }
+}
+
+/// Where one launch's automation plane lives: the socket it listens on, the audit log it appends
+/// to, and the operator credential it mints. The app derives all three from its bundle identifier;
+/// a test passes paths under a scratch directory, so a lifecycle it configures and stops never
+/// reaches the installed app's (#1607).
+struct AutomationPlaneFiles {
+    let socketURL: URL
+    let auditURL: URL
+    let credentialURL: URL
+
+    static func bundled(_ bundleIdentifier: String) -> AutomationPlaneFiles {
+        AutomationPlaneFiles(
+            socketURL: AutomationListener.defaultSocketURL(bundleIdentifier: bundleIdentifier),
+            auditURL: AutomationAuditLogger.defaultAuditURL(bundleIdentifier: bundleIdentifier),
+            credentialURL: AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleIdentifier)
+        )
     }
 }
