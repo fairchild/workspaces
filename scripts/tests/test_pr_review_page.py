@@ -17,10 +17,13 @@ test here reaches the network, `gh`, or a live PR.
 from __future__ import annotations
 
 import base64
+import contextlib
 import html
 import http.server
 import importlib.util
+import io
 import json
+import os
 import re
 import subprocess
 import shutil
@@ -313,7 +316,11 @@ class Diagram(GeneratorTestCase):
         run, or fetch anything.
         """
         source = self.source(SYNTHETIC)
-        with unittest.mock.patch.object(pr_review_page.shutil, "which", return_value=None):
+        errors = io.StringIO()
+        with (
+            unittest.mock.patch.object(pr_review_page.shutil, "which", return_value=None),
+            contextlib.redirect_stderr(errors),
+        ):
             page = pr_review_page.build_page(source)
 
         shape = page[page.index('id="shape"') : page.index('<section id="diff"')]
@@ -325,6 +332,56 @@ class Diagram(GeneratorTestCase):
             self.assertNotIn(markup, shape, f"{markup} in a block that only shows source")
         self.assertNotIn("<script", page)
         self.assertNotIn("<svg", page)
+        self.assertIn("[pr-review-page] diagram not rendered: no renderer", errors.getvalue())
+
+    def shape_behind_stub_renderer(self, script: str) -> tuple[str, str]:
+        """The shape section and the build's stderr, drawn by an `mmdc` that only runs `script`.
+
+        A stub first on PATH rather than the real renderer, so the failure path
+        is held on the hosted runner too, where there is no `mmdc` to fail.
+        """
+        stub_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        stub = stub_dir / "mmdc"
+        stub.write_text(f"#!/bin/sh\n{script}\n")
+        stub.chmod(0o755)
+        errors = io.StringIO()
+        with (
+            unittest.mock.patch.dict(os.environ, {"PATH": f"{stub_dir}{os.pathsep}{os.environ.get('PATH', '')}"}),
+            contextlib.redirect_stderr(errors),
+        ):
+            page = pr_review_page.build_page(self.source(SYNTHETIC))
+        return page[page.index('id="shape"') : page.index('<section id="diff"')], errors.getvalue()
+
+    def test_a_renderer_that_fails_is_reported_as_failing_not_as_missing(self) -> None:
+        """Absent and failed are different facts, for the reader and for whoever fixes the build.
+
+        mmdc's stderr opens with a blank line and runs on into a stack trace, so
+        the page quotes the first line with anything on it, as text.
+        """
+        shape, errors = self.shape_behind_stub_renderer(
+            "printf '\\nError: <b>Parse</b> error on line 3:\\nParser3.parseError (mermaid.js)\\n' >&2\nexit 1"
+        )
+        self.assertNotIn("No renderer was available", shape)
+        self.assertIn("The renderer failed", shape)
+        self.assertIn("Error: &lt;b&gt;Parse&lt;/b&gt; error on line 3:", shape)
+        self.assertNotIn("<b>", shape)
+        self.assertNotIn("parseError", shape, "only the first line of the renderer's stderr belongs on the page")
+        self.assertIn("<pre>graph LR", shape)
+        self.assertIn("[pr-review-page] diagram render failed: Error: <b>Parse</b> error on line 3:", errors)
+
+    def test_a_renderer_that_fails_without_a_word_is_still_reported_as_failing(self) -> None:
+        shape, errors = self.shape_behind_stub_renderer("exit 3")
+        self.assertIn("The renderer failed with no message", shape)
+        self.assertNotIn("No renderer was available", shape)
+        self.assertIn("[pr-review-page] diagram render failed: no message", errors)
+
+    def test_a_renderer_that_runs_past_its_timeout_is_reported_as_failing(self) -> None:
+        self.enterContext(unittest.mock.patch.object(pr_review_page, "MMDC_TIMEOUT", 0.5))
+        shape, errors = self.shape_behind_stub_renderer("exec sleep 30")
+        self.assertIn("The renderer failed", shape)
+        self.assertIn("timed out after 0.5 seconds", shape)
+        self.assertNotIn("No renderer was available", shape)
+        self.assertIn("[pr-review-page] diagram render failed: timed out after 0.5 seconds", errors)
 
     @requires_renderer
     def test_the_renderer_reaches_no_network_during_a_build(self) -> None:
