@@ -188,10 +188,10 @@ DIAGRAM_MARKER = "<!-- review-page:diagram -->"
 DIAGRAM_MARKER_RE = re.compile(
     r"<!--\s*review-page:diagram\s*-->\s*```mermaid\n(.*?)```", re.DOTALL
 )
-# Both terminators, so a comment's extent here is the extent a browser gives it.
-# Used to find the marker that is a comment of its own and reject the one that
-# is merely inside somebody else's.
-COMMENT_RE = re.compile(r"<!--.*?(?:-->|--!>)", re.DOTALL)
+# The shared reader's pattern, so the page and the gate agree where a comment
+# ends. Used to find the marker that is a comment of its own and reject the one
+# that is merely inside somebody else's.
+COMMENT_RE = pr_body.COMMENT_RE
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"(])")
 
 

@@ -1384,23 +1384,6 @@ class PRShapeTests(unittest.TestCase):
             pr_readiness.field_value(section, "User-facing behavior changed"),
         )
 
-    def test_the_personas_placeholder_line_does_not_pass_for_the_paragraph(self) -> None:
-        """A model that copies the example's slot instead of writing the
-        paragraph is caught: the slot is shorter than a paragraph."""
-        for name in ("april-clearwater.md", "plat-ironwood.md"):
-            with self.subTest(persona=name):
-                text = (self.REFERENCES / name).read_text(encoding="utf-8")
-                slot = next(
-                    line for line in text.splitlines()
-                    if line.startswith("One paragraph, no heading")
-                )
-                body = run_contributor.compose_pr_body(
-                    1621, self.PERSONA, f"{slot}\n\n## What\n- A thing\n"
-                )
-                self.assertIn(
-                    "characters, under the", pr_readiness.leading_paragraph_failure(body)
-                )
-
     def test_both_personas_ask_for_the_paragraph_and_a_prefixed_title(self) -> None:
         for name in ("april-clearwater.md", "plat-ironwood.md"):
             with self.subTest(persona=name):

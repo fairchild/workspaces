@@ -31,19 +31,25 @@ OPENING_NAMES: dict[str, str] = {
     "empty": "nothing",
 }
 
-COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+# A browser ends a comment at `--!>` as well as at `-->`, so a comment's extent
+# here is the extent a reader's browser gives it. The review page reads comments
+# through this same pattern.
+COMMENT_RE = re.compile(r"<!--.*?(?:-->|--!>)", re.DOTALL)
 # A whole line in italics is a byline: `*April Clearwater, Application Lead*`.
 BYLINE_RE = re.compile(r"(?:\*[^*\s][^*]*\*|_[^_\s][^_]*_)")
 # A labeled link on its own line: `Review page: https://…`.
 LINK_LINE_RE = re.compile(r"(?i)^[A-Za-z][A-Za-z /-]{0,24}:\s*<?https?://\S+>?$")
+HEADING_RE = re.compile(r"^#{1,6}\s")
 
 _KIND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("heading", re.compile(r"^#{1,6}\s")),
+    ("heading", HEADING_RE),
     ("fence", re.compile(r"^(?:```|~~~)")),
     ("list", re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s)")),
     ("table", re.compile(r"^\s*\|")),
     ("quote", re.compile(r"^\s*>")),
-    ("markup", re.compile(r"^\s*<")),
+    # A tag, comment, declaration or processing instruction. An autolink such as
+    # `<https://…>` is not one: it is a paragraph that opens on a link.
+    ("markup", re.compile(r"^\s*<(?:[!?/]|[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$))")),
 )
 
 
@@ -96,7 +102,7 @@ def read_opening(body: str) -> Opening:
 
     collected: list[str] = []
     for line in lines[index:]:
-        if not line.strip() or line.startswith("## "):
+        if not line.strip() or HEADING_RE.match(line):
             break
         collected.append(line.strip())
     return Opening(kind=PROSE, text=" ".join(collected).strip())

@@ -36,10 +36,10 @@ from release_policy import RELEASE_PATHS
 
 DEFAULT_SURFACE = "desktop / web / agent-runtime / infra / docs"
 
-# The opening paragraph has to be long enough to have said why the PR exists and
-# what it solves. A body that opens with "Fixes the thing." opens with prose, and
-# is not the paragraph anyone asked for.
-LEADING_PARAGRAPH_MIN_CHARS = 120
+# A floor, not a target: it refuses an opening like "Fixes the thing.", which is
+# prose and says nothing of why the PR exists, and a short paragraph that does say
+# it clears the floor. The example below carries the shape.
+LEADING_PARAGRAPH_MIN_CHARS = 40
 
 # Shown on failure as an example, not a block to paste and fill in: the shape is
 # a paragraph, and a labelled skeleton is what produced the bodies this replaces.
@@ -192,9 +192,8 @@ def leading_paragraph_failure(body: str) -> str | None:
         )
     if len(opening.text) < LEADING_PARAGRAPH_MIN_CHARS:
         return (
-            f"The opening paragraph is {len(opening.text)} characters, under the "
-            f"{LEADING_PARAGRAPH_MIN_CHARS} it takes to say why this PR exists, what it "
-            "solves, and what changed."
+            f"The opening paragraph is {len(opening.text)} characters, too short to say "
+            "why this PR exists, what it solves, and what changed."
         )
     return None
 

@@ -881,7 +881,26 @@ class LeadingParagraphTests(unittest.TestCase):
 
     def test_a_one_line_opening_is_too_short_to_be_the_paragraph(self) -> None:
         rest = GOOD_BODY[GOOD_BODY.index("## What") :]
-        self.assertIn("characters, under the", self.only_paragraph_failure(f"Fixes the thing.\n\n{rest}"))
+        self.assertIn("is 16 characters", self.only_paragraph_failure(f"Fixes the thing.\n\n{rest}"))
+
+    def test_a_short_paragraph_that_says_why_is_enough(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        opening = "Nil userdata crashed one Ghostty callback and not the next; one helper now decides it. Two files."
+        self.assertEqual(self.failures(f"{opening}\n\n{rest}"), [])
+
+    def test_a_paragraph_that_opens_on_an_autolink_is_prose(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        self.assertEqual(self.failures(f"<https://example.com> explains the crash. {GOOD_BODY}"), [])
+        self.assertIn("an HTML block", self.only_paragraph_failure(f"<details>\n\n{rest}"))
+
+    def test_a_comment_a_browser_closes_at_bang_is_skipped_too(self) -> None:
+        self.assertEqual(self.failures(f"<!-- contributor:issue=1621 --!>\n\n{GOOD_BODY}"), [])
+
+    def test_a_heading_under_the_opening_line_ends_the_paragraph(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        opening = GOOD_BODY[: GOOD_BODY.index("\n\n## What")]
+        body = f"Fixes.\n### Details\n{opening}\n\n{rest}"
+        self.assertIn("is 6 characters", self.only_paragraph_failure(body))
 
     def test_the_persona_byline_and_the_review_page_link_sit_above_it(self) -> None:
         body = (
