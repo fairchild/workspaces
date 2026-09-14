@@ -16,7 +16,7 @@ private let log = Logger(subsystem: "com.cloudcompute.workspaces", category: "Au
 
 @MainActor
 final class AutomationIntegrationLifecycle: ObservableObject {
-    static let shared = AutomationIntegrationLifecycle()
+    static let shared = AutomationIntegrationLifecycle(files: .bundled(bundleIdentifier))
 
     let handleRegistry = AutomationHandleRegistry()
 
@@ -27,7 +27,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var experimentObserver: Any?
     private var didStart = false
     private var startTask: Task<String, Error>?
-    private var operatorCredentialURL: URL?
+    /// Where this launch's socket, audit log and operator credential live.
+    let files: AutomationPlaneFiles
+    private let operatorOptIn: @MainActor () -> Bool
+    /// The credential this launch minted, and the only one it removes: every copy of the app keyed
+    /// on one bundle identifier shares the path (#1607).
+    private var mintedCredentialURL: URL?
     /// What the last provisioning pass settled on, reported over `/v1/health`. Read
     /// off the MainActor by the health closure, hence the lock-free copy in
     /// `operatorCredentialOutcomeSnapshot`.
@@ -40,11 +45,21 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private static let appScopeID = "workspaces.local"
 
     /// Stands in for `Bundle.main.bundleIdentifier` when the app runs unbundled (a
-    /// `swift run` launch). Both the socket and the credential live under it, so the
-    /// fallback has to be the same string everywhere it is reached for.
+    /// `swift run` launch). `shared` derives the socket, audit log and credential paths
+    /// from it in one place, so all three agree.
     private static let defaultBundleIdentifier = "com.cloudcompute.workspaces"
 
-    private init() {}
+    private static var bundleIdentifier: String {
+        Bundle.main.bundleIdentifier ?? defaultBundleIdentifier
+    }
+
+    init(
+        files: AutomationPlaneFiles,
+        isOperatorEnabled: @escaping @MainActor () -> Bool = { ExperimentalFeatures.isEnabled(.automationOperator) }
+    ) {
+        self.files = files
+        self.operatorOptIn = isOperatorEnabled
+    }
 
     var isEnabled: Bool {
         ExperimentalFeatures.isEnabled(.automationAPI)
@@ -54,7 +69,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     /// credential provision (reached only when the listener is enabled) and the App Intents mint,
     /// which has no listener dependency and therefore gates on it explicitly per call.
     private var isOperatorEnabled: Bool {
-        ExperimentalFeatures.isEnabled(.automationOperator)
+        operatorOptIn()
     }
 
     func configure(
@@ -102,7 +117,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
         guard isEnabled else {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
-            // Fail closed: an app without the Automation API leaves no operator credential behind.
+            // Fail closed: an app without the Automation API leaves no operator credential of its own behind.
             clearOperatorCredential()
             return
         }
@@ -126,10 +141,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             tileTreeStore.configureAutomation(handleRegistry: handleRegistry, socketPath: socketPath)
             // Every configure pass, not only the one that started the listener: the
             // later passes are the ones that can observe a toggle flipped since launch.
-            refreshOperatorCredential(
-                socketPath: socketPath,
-                bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-            )
+            refreshOperatorCredential(socketPath: socketPath)
         } catch {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             handleRegistry.removeAll()
@@ -226,14 +238,11 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             uiState: uiState
         )
 
-        let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        let auditLogger = AutomationAuditLogger(
-            auditURL: AutomationAuditLogger.defaultAuditURL(bundleIdentifier: bundleID)
-        )
         let listener = AutomationListener(
-            bundleIdentifier: bundleID,
+            bundleIdentifier: Self.bundleIdentifier,
             controller: controller,
-            auditLogger: auditLogger,
+            socketURLOverride: files.socketURL,
+            auditLogger: AutomationAuditLogger(auditURL: files.auditURL),
             isEnabled: { ExperimentalFeatures.isEnabled(.automationAPI) },
             makeHealthServer: { launchedAt in
                 AutomationServerDescriptor.current(
@@ -265,7 +274,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         self.startTask = nil
         log.info("[AutomationIntegration] listener started at \(listener.socketPath, privacy: .public)")
 
-        refreshOperatorCredential(socketPath: startedSocketPath, bundleID: bundleID)
+        refreshOperatorCredential(socketPath: startedSocketPath)
 
         // A toggle flipped in Settings mid-run is the case a configure pass cannot see,
         // because no window reconfigures on it. The comparison is in-memory, so the
@@ -289,10 +298,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             // before the process exits, and "dies with the launch" should hold on a clean quit.
             // (A crash can't clean up, which is why a stale credential also fails closed against the
             // fresh registry — see AutomationOperatorCredentialStore.)
-            let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-            AutomationOperatorCredentialStore.remove(
-                at: AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
-            )
+            MainActor.assumeIsolated {
+                self?.clearOperatorCredential()
+            }
             Task { @MainActor [weak self] in await self?.stop() }
         }
         return listener.socketPath
@@ -493,25 +501,18 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     /// activation costs a load and a comparison.
     func refreshOperatorCredentialOnActivation() {
         guard isOperatorEnabled, let socketPath else { return }
-        refreshOperatorCredential(
-            socketPath: socketPath,
-            bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        )
+        refreshOperatorCredential(socketPath: socketPath)
     }
 
     private func refreshOperatorCredentialIfOptInChanged() {
         guard let socketPath else { return }
         let credentialAvailable = operatorCredentialOutcome?.isCredentialAvailable ?? false
         guard isOperatorEnabled != credentialAvailable else { return }
-        refreshOperatorCredential(
-            socketPath: socketPath,
-            bundleID: Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        )
+        refreshOperatorCredential(socketPath: socketPath)
     }
 
-    private func refreshOperatorCredential(socketPath: String, bundleID: String) {
-        let credentialURL = AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
-        operatorCredentialURL = credentialURL
+    private func refreshOperatorCredential(socketPath: String) {
+        let credentialURL = files.credentialURL
         let result = AutomationOperatorProvisioning.refresh(
             optedIn: isOperatorEnabled,
             registry: handleRegistry,
@@ -519,6 +520,14 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             appScopeID: Self.appScopeID,
             credentialURL: credentialURL
         )
+        switch result.outcome {
+        case .minted:
+            mintedCredentialURL = credentialURL
+        case .reused:
+            break
+        case .notOptedIn, .mintFailed:
+            mintedCredentialURL = nil
+        }
         noteOperatorCredentialOutcome(result.outcome, credentialURL: credentialURL)
     }
 
@@ -569,12 +578,38 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         }
     }
 
+    /// A credential file this launch did not mint belongs to another launch sharing the path —
+    /// the installed app's, when `swift test` runs beside it — so it stays. One a crashed launch
+    /// left behind is safe to leave too: it fails closed against the fresh registry.
     private func clearOperatorCredential() {
-        let bundleID = Bundle.main.bundleIdentifier ?? Self.defaultBundleIdentifier
-        let url = operatorCredentialURL ?? AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleID)
-        AutomationOperatorCredentialStore.remove(at: url)
-        operatorCredentialURL = nil
+        if let mintedCredentialURL {
+            AutomationOperatorCredentialStore.remove(at: mintedCredentialURL)
+        } else if FileManager.default.fileExists(atPath: files.credentialURL.path) {
+            let path = files.credentialURL.path
+            log.notice(
+                "[AutomationIntegration] left the operator credential at \(path, privacy: .public) in place: this launch did not mint it"
+            )
+        }
+        mintedCredentialURL = nil
         operatorCredentialOutcome = nil
         Self.operatorCredentialOutcomeSnapshot.value = nil
+    }
+}
+
+/// Where one launch's automation plane lives: the socket it listens on, the audit log it appends
+/// to, and the operator credential it mints. The app derives all three from its bundle identifier;
+/// a test passes paths under a scratch directory, so a lifecycle it configures and stops never
+/// reaches the installed app's (#1607).
+struct AutomationPlaneFiles {
+    let socketURL: URL
+    let auditURL: URL
+    let credentialURL: URL
+
+    static func bundled(_ bundleIdentifier: String) -> AutomationPlaneFiles {
+        AutomationPlaneFiles(
+            socketURL: AutomationListener.defaultSocketURL(bundleIdentifier: bundleIdentifier),
+            auditURL: AutomationAuditLogger.defaultAuditURL(bundleIdentifier: bundleIdentifier),
+            credentialURL: AutomationOperatorCredentialStore.defaultURL(bundleIdentifier: bundleIdentifier)
+        )
     }
 }
