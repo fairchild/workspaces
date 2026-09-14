@@ -1011,14 +1011,22 @@ def _esc(text: object) -> str:
 def _safe_image_url(url: str) -> str | None:
     """An image address worth putting in an `<img>`.
 
-    Narrower than a link: `http:` and any host outside `IMAGE_HOSTS` would be
-    refused by the page's own policy anyway, and a blocked image reads as the
-    page being broken rather than as the body having named somewhere odd.
+    Narrower than a link: `http:`, any host outside `IMAGE_HOSTS`, and any
+    explicit non-default port would be refused by the page's own policy
+    anyway (and by the store's, which names the same default-port origins),
+    and a blocked image reads as the page being broken rather than as the
+    body having named somewhere odd.
     """
     parts = urlsplit(url)
     if parts.scheme.lower() not in IMAGE_SCHEMES:
         return None
-    return url if parts.hostname in IMAGE_HOSTS else None
+    if parts.hostname not in IMAGE_HOSTS:
+        return None
+    try:
+        port = parts.port
+    except ValueError:
+        return None
+    return url if port is None or port == 443 else None
 
 
 def _safe_url(url: str) -> str | None:

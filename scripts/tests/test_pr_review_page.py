@@ -1033,6 +1033,30 @@ class ImageHosts(GeneratorTestCase):
         self.assertIn("Image not shown", page)
         self.assertIn("tracker.example.test/pixel.png", page)
 
+    def test_an_explicit_port_is_named_not_fetched_even_on_a_listed_host(self) -> None:
+        # Both CSPs (the page's <meta> and the store's header, EvidenceStoreCSP
+        # below) name default-port origins only, so a port-bearing URL would be
+        # admitted here and then blocked there -- the image blanks silently.
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n## Evidence\n"
+            "- ![evidence](https://evidence.cloudcompute.com:8443/x.png)\n"
+        )
+        page = pr_review_page.build_page(source)
+        self.assertNotIn('<img src="https://evidence.cloudcompute.com:8443', page)
+        self.assertIn("Image not shown", page)
+        self.assertIn("evidence.cloudcompute.com:8443/x.png", page)
+
+    def test_the_default_port_written_out_still_embeds(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "## Summary\n- One thing.\n\n## Evidence\n"
+            "- ![evidence](https://evidence.cloudcompute.com:443/x.png)\n"
+        )
+        page = pr_review_page.build_page(source)
+        self.assertIn('<img src="https://evidence.cloudcompute.com:443/x.png"', page)
+        self.assertNotIn("Image not shown", page)
+
 
 WORKER_SOURCE = REPO_ROOT / "infra" / "cloudflare-evidence-store" / "src" / "index.ts"
 
