@@ -951,6 +951,7 @@ class FactoryReviewTests(unittest.TestCase):
         client.pull_request.return_value = self.ready_pull_request()
         client.pull_request_files.return_value = []
         client.pull_request_reviews.return_value = list(reviews)
+        client.pull_request_comments.return_value = []
         return client
 
     def test_the_body_edit_requirement_reaches_the_decision_through_main(self) -> None:
@@ -1203,6 +1204,91 @@ class FactoryReviewTests(unittest.TestCase):
         self.assertIn("FACTORY_REVIEW_DAILY_CAP", executor)
         self.assertIn("FACTORY_REVIEW_RUNAWAY_CAP", executor)
         self.assertIn("factory-review.py --authorize", executor)
+
+
+class PreparationRecoveryTests(unittest.TestCase):
+    HEAD = "a" * 40
+
+    def setUp(self):
+        self.pr = {
+            "number": 1620, "state": "open", "draft": False,
+            "user": {"login": "fairchild"}, "labels": [{"name": "author:codex"}],
+            "head": {"sha": self.HEAD, "repo": {"full_name": "fairchild/workspaces"}},
+            "base": {"sha": "b" * 40, "repo": {"full_name": "fairchild/workspaces"}},
+        }
+        self.receipt = {
+            "version": 1, "pr_number": 1620, "head_sha": self.HEAD, "base_sha": "b" * 40,
+            "input_digest": "c" * 64, "status": "unavailable", "reason_code": "missing_image",
+            "retryable": False, "attempt_count": 1, "capability_version": "raster-read-v1",
+            "resume_condition": "Deliver the required screenshot",
+        }
+        self.comment = {"id": 100, "user": {"login": "april-clearwater[bot]"},
+                        "body": factory_review.review_state.preparation_comment(self.receipt)}
+
+    def pending(self, comments):
+        return factory_review.preparation_pending_for_head(
+            comments, head_sha=self.HEAD, pr_number=1620, reviewer="april"
+        )
+
+    def test_body_edit_can_reprepare_after_failure_without_inventing_a_review(self):
+        self.assertTrue(self.pending([self.comment]))
+        admitted = factory_review.evaluate_review(
+            self.pr, [{"filename": "Sources/View.swift"}], [], force=False,
+            require_stale_refresh=True, preparation_pending=self.pending([self.comment]),
+        )
+        self.assertEqual(admitted.action, "review")
+        # Admission permits preparation, not another full model invocation.
+        unchanged = factory_review.review_state.preparation_retry_decision(
+            self.receipt, [self.comment], reviewer="april"
+        )
+        self.assertEqual((unchanged.action, unchanged.publish), ("pause", False))
+        self.assertIsNone(factory_review.standing_rejection_id([], reviewer="april", head_sha=self.HEAD))
+
+    def test_a_resolved_or_forged_receipt_does_not_admit_arbitrary_body_edits(self):
+        resolved = {**self.comment, "id": 101, "body": factory_review.review_state.preparation_comment(
+            {**self.receipt, "status": "ready", "reason_code": "ready"}
+        )}
+        self.assertFalse(self.pending([self.comment, resolved]))
+        for forged in (
+            {**self.comment, "user": {"login": "fairchild"}},
+            {**self.comment, "id": None},
+            {**self.comment, "body": factory_review.review_state.preparation_comment({**self.receipt, "head_sha": "d" * 40})},
+        ):
+            with self.subTest(forged=forged):
+                self.assertFalse(self.pending([forged]))
+
+    def test_preparation_recovery_does_not_bypass_review_or_repository_guards(self):
+        reviewed = [{"user": {"login": "april-clearwater[bot]"}, "commit_id": self.HEAD, "state": "APPROVED"}]
+        self.assertEqual(factory_review.evaluate_review(
+            self.pr, [], reviewed, force=False, require_stale_refresh=True, preparation_pending=True,
+        ).action, "skip")
+        for changes in (
+            {"state": "closed"}, {"labels": [{"name": "skip-review"}]},
+            {"user": {"login": "april-clearwater[bot]"}},
+            {"head": {"sha": self.HEAD, "repo": {"full_name": "stranger/repo"}}},
+        ):
+            with self.subTest(changes=changes):
+                self.assertEqual(factory_review.evaluate_review(
+                    {**self.pr, **changes}, [{"filename": "Sources/View.swift"}], [], force=False,
+                    require_stale_refresh=True, preparation_pending=True,
+                ).action, "skip")
+
+    def test_main_fetches_trusted_receipt_and_keeps_the_expected_head_guard(self):
+        client = mock.Mock()
+        client.pull_request.return_value = self.pr
+        client.pull_request_files.return_value = [{"filename": "Sources/View.swift"}]
+        client.pull_request_reviews.return_value = []
+        client.pull_request_comments.return_value = [self.comment]
+        for expected, matched in ((self.HEAD, "true"), ("e" * 40, "false")):
+            with self.subTest(expected=expected):
+                output = io.StringIO()
+                with (mock.patch.object(factory_review, "GitHubClient", return_value=client),
+                      mock.patch.dict("os.environ", {"GITHUB_REPOSITORY": "fairchild/workspaces", "GH_TOKEN": "token", "GITHUB_OUTPUT": ""}),
+                      mock.patch.object(sys, "argv", ["factory-review.py", "--pr", "1620", "--body-edit-review", "--expected-head", expected]),
+                      contextlib.redirect_stdout(output)):
+                    self.assertEqual(factory_review.main(), 0)
+                self.assertIn(f"matched={matched}", output.getvalue())
+        client.pull_request_comments.assert_called_with(1620)
 
 
 if __name__ == "__main__":

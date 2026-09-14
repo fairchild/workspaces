@@ -472,6 +472,50 @@ class AdmissionEscalationTests(QuietTest):
         self.assertIn("runaway guard", decision.reason)
 
 
+class EscalationFindingsTests(QuietTest):
+    HEAD = "a" * 40
+
+    def escalate(self, live_head: str) -> str:
+        findings = {
+            "version": 1,
+            "head_sha": self.HEAD,
+            "findings": [
+                {"category": "code-defect", "target": "Sources/Terminal.swift",
+                 "requested_change": "Preserve the terminal session when reconnecting."},
+                {"category": "missing-evidence", "target": "split terminal capture",
+                 "requested_change": "Show both panes after reconnecting."},
+                {"category": "policy-discrepancy", "target": "evidence hosting",
+                 "requested_change": "Follow the documented evidence-host policy.",
+                 "rule": "docs/development/evidence.md",
+                 "conflicting_fact": "The requested host is absent from the documented policy."},
+            ],
+        }
+        blocking = {**review(), "commit_id": self.HEAD, "body":
+                    "Review findings follow.\n\n" + response.factory_review.review_state.findings_marker(findings)}
+        client = FakeClient(pull_request(head_sha=live_head), [blocking])
+        self.assertTrue(revise.force_escalate(
+            client, 1377, 900, OWNER, reason="revision job failed", run_url=RUN_URL,
+        ))
+        self.assertEqual(len(client.posted), 1)
+        return client.posted[0]
+
+    def test_failed_revision_preserves_current_head_findings_and_policy(self) -> None:
+        text = self.escalate(self.HEAD)
+        for category in ("code-defect", "missing-evidence", "policy-discrepancy"):
+            self.assertIn(f"Review category: {category}.", text)
+        self.assertIn("`Preserve the terminal session when reconnecting.`", text)
+        self.assertIn("Cited rule: `docs/development/evidence.md`", text)
+        self.assertIn("Conflicting fact reported by the reviewer: `The requested host is absent from the documented policy.`", text)
+        self.assertNotIn("Review category: unknown", text)
+
+    def test_failed_revision_uses_live_pr_head_to_reject_stale_findings(self) -> None:
+        text = self.escalate("b" * 40)
+        self.assertIn("Review category: unknown", text)
+        self.assertNotIn("Review category: code-defect.", text)
+        self.assertNotIn("Review category: policy-discrepancy.", text)
+        self.assertNotIn("Cited rule:", text)
+
+
 class BudgetTests(unittest.TestCase):
     def test_a_spent_turn_is_read_off_the_step_not_the_job(self) -> None:
         # A job whose preflight declined still concludes success, and must not

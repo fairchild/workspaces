@@ -10,11 +10,9 @@ CHANGES_REQUESTED review on a factory-authored PR simply stopped the loop and
 the owner became the default advancing party, indistinguishable from a
 stranded PR. This lane reads the blocking review, inventories what actually
 blocks the PR, and posts exactly one response per review naming what the
-owner has to do. Every response is an escalation: the lane cannot read the
-review's prose, so it can never prove an objection is fully covered by
-something that clears on its own, and claiming otherwise would recreate the
-silent park it exists to remove. Blockers it does expect to clear are still
-listed, as context under the ask.
+owner has to do. Legacy review prose is quoted as an ask with an unknown
+category. Exact-head typed findings retain their category; preparation failures
+belong to the runtime's separate receipt and never imply a code defect.
 
 Deterministic by construction -- no model, no tools, no untrusted text
 reaching an executor. It only reads PR state the factory already writes
@@ -403,7 +401,7 @@ def evidence_entries(body: str) -> list[dict[str, Any]]:
     return [entry for entry in entries if isinstance(entry, dict)]
 
 
-def _quotable(text: str) -> str:
+def _quotable(text: str, limit: int = ITEM_QUOTE_LIMIT) -> str:
     """PR-controlled text, flattened and bounded, for use inside a code span.
 
     Backticks and newlines come out, so a quoted item cannot break out of the
@@ -414,9 +412,9 @@ def _quotable(text: str) -> str:
     flattened = " ".join(text.replace("`", "").split())
     while "<!--" in flattened or "-->" in flattened:
         flattened = flattened.replace("<!--", "").replace("-->", "")
-    if len(flattened) <= ITEM_QUOTE_LIMIT:
+    if len(flattened) <= limit:
         return flattened
-    return flattened[: ITEM_QUOTE_LIMIT - 1].rstrip() + "…"
+    return flattened[: limit - 1].rstrip() + "…"
 
 
 def _inert(text: str) -> str:
@@ -659,18 +657,41 @@ def revision_lane_covers(pull_request: dict[str, Any]) -> bool:
     return author.casefold() == RESPONDER_BOT.casefold()
 
 
-def revision_required_blocker(reason: str) -> Blocker:
-    """The diff has to change and the revision lane is not the one changing it."""
+def interactive_session_authored(pull_request: dict[str, Any], repository_owner: str) -> bool:
+    """Recognize the Owner's documented harness attribution, not every non-April PR.
+
+    Author labels identify a harness or persona, not a lane (triage-labels.md).
+    Shared CLI-worker bots can also run Factory work (github-app-identities.md),
+    so unknown authors retain a generic implementer handoff.
+    """
+    author = str((pull_request.get("user") or {}).get("login") or "")
+    return (
+        bool(repository_owner)
+        and author.casefold() == repository_owner.casefold()
+        and factory_review.author_label(pull_request) in {"author:codex", "author:claude-code"}
+    )
+
+
+def revision_required_blocker(reason: str, *, interactive: bool = False) -> Blocker:
+    """Name who can answer without inventing the reviewer's classification."""
+    if interactive:
+        detail = (
+            "Return the review's actual ask below to the implementing Interactive Lane session. "
+            "That session owns revisions to this laptop-authored branch. "
+            "This response does not dispatch to a session, and session delivery is not verified. "
+            "If the session is unavailable, the repository owner must hand the ask to an implementer. "
+            f"The automatic revision loop ({REVISION_LOOP_ISSUE}) {reason}."
+        )
+    else:
+        detail = (
+            "Address the review's actual ask below, or hand it back to the implementer. "
+            "The evidence entries and labels do not establish what change the reviewer requested. "
+            f"The revision loop ({REVISION_LOOP_ISSUE}) cannot take this turn because {reason}."
+        )
     return Blocker(
         key="revision-required",
         owner_required=True,
-        detail=(
-            "Push the revision, or re-release the linked issue with the review's "
-            "feedback folded in. The review asks for a change to the code or "
-            "prose: nothing in this PR's evidence entries or labels accounts for "
-            f"it. The revision loop ({REVISION_LOOP_ISSUE}) could take that turn, "
-            f"but {reason}."
-        ),
+        detail=detail,
     )
 
 
@@ -679,8 +700,8 @@ def revision_exhausted_blocker(attempts: int) -> Blocker:
         key="revision-attempts-exhausted",
         owner_required=True,
         detail=(
-            "Push the revision, or re-release the linked issue with the review's "
-            "feedback folded in. The revision loop has spent its "
+            "Address the review's actual ask below, or hand it to an implementer. "
+            "The revision loop has spent its "
             f"{REVISION_ATTEMPT_CEILING} turns on this PR ({attempts} reviews "
             "answered with a revision) and a reviewer is still blocking. Another "
             "turn reads the same code against the same objection."
@@ -718,8 +739,9 @@ def evaluate_response(
     evidence = evidence_blockers(entries)
     blockers = evidence + label_blockers(labels, evidence_accounted=bool(evidence))
     if not any(blocker.owner_required for blocker in blockers):
-        # Nothing owner-required explains the objection, so the requested
-        # change is to the diff itself. A self-clearing blocker is not proof
+        # Nothing owner-required explains the objection. Its category remains
+        # unknown unless the trusted review carries typed findings. A
+        # self-clearing blocker is not proof
         # the review is covered: the lane never reads the review's prose, and
         # a `pending-ci` entry can also sit forever (the named check may not
         # exist, may fail, or the verifier may be off or already past its last
@@ -727,15 +749,16 @@ def evaluate_response(
         # -- a needless ask costs the owner a glance; a false "you are not
         # needed" costs a parked PR, which is the failure this lane exists to
         # remove.
-        if not revise_enabled:
-            blockers.append(
-                revision_required_blocker(f"`{REVISION_LANE_SWITCH}` is off")
-            )
-        elif not revision_lane_covers(pull_request):
+        if not revision_lane_covers(pull_request):
             blockers.append(
                 revision_required_blocker(
-                    f"it revises only pull requests `{RESPONDER_BOT}` authored"
+                    f"revises only pull requests `{RESPONDER_BOT}` authored",
+                    interactive=interactive_session_authored(pull_request, repository_owner),
                 )
+            )
+        elif not revise_enabled:
+            blockers.append(
+                revision_required_blocker(f"`{REVISION_LANE_SWITCH}` is off")
             )
         elif revision_in_flight:
             return ResponseDecision(
@@ -835,6 +858,7 @@ def response_comment(
     repository_owner: str,
     pr_number: int,
     labelled: bool = True,
+    head_sha: str = "",
 ) -> str:
     """What the owner reads: the ask, then the steps in the order they are done.
 
@@ -850,8 +874,29 @@ def response_comment(
         owner_blocks[0] = f"@{repository_owner} — {owner_blocks[0]}"
 
     blocks = owner_blocks + self_clearing
+    findings = factory_review.review_state.findings_from_review(review, expected_head=head_sha)
+    if findings:
+        for finding in findings:
+            description = (
+                f"Review category: {finding['category']}. "
+                f"Affected claim or location: {_inert(_quotable(finding['target'], 240))}. "
+                f"Requested change: {_inert(_quotable(finding['requested_change'], 800))}"
+            )
+            if finding["category"] == "policy-discrepancy":
+                description += (
+                    f". Cited rule: {_inert(_quotable(finding['rule'], 240))}. "
+                    f"Conflicting fact reported by the reviewer: {_inert(_quotable(finding['conflicting_fact'], 400))}"
+                )
+            blocks.append(description)
+    else:
+        ask = _quotable(str(review.get("body") or ""), 800)
+        blocks.append(
+            "Review category: unknown. "
+            + (f"Reviewer ask, quoted as text: {_inert(ask)}" if ask else
+               "Requested-change text is unavailable in the review body; inspect the original review and its inline comments.")
+        )
     blocks.append(
-        "After that, run a fresh review: Actions → Factory Review → Run workflow "
+        "After the blocking condition changes, run a fresh review: Actions → Factory Review → Run workflow "
         f"→ enter {pr_number}."
     )
     if not labelled:
@@ -1044,6 +1089,7 @@ def respond(
             repository_owner=repository_owner,
             pr_number=pr_number,
             labelled=labelled,
+            head_sha=str((pull_request.get("head") or {}).get("sha") or ""),
         ),
     )
     print(

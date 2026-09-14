@@ -42,6 +42,21 @@ def _load_pr_readiness():
 pr_readiness = _load_pr_readiness()
 
 
+def _load_review_state():
+    import importlib.util
+
+    name = "factory_review_state"
+    spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(f"{name}.py"))
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+review_state = _load_review_state()
+
+
 # Recusal, and the only thing an author label still decides. A persona must not
 # review its own work, and when that work lands under a login other than the
 # persona's own app the label is the only signal that says whose it is.
@@ -132,6 +147,9 @@ class GitHubClient:
 
     def pull_request_reviews(self, number: int) -> list[dict[str, Any]]:
         return self._paginated(f"/repos/{self.repository}/pulls/{number}/reviews")
+
+    def pull_request_comments(self, number: int) -> list[dict[str, Any]]:
+        return self._paginated(f"/repos/{self.repository}/issues/{number}/comments")
 
     def workflow_runs_on(self, workflow: str, day: str) -> list[dict[str, Any]]:
         runs: list[dict[str, Any]] = []
@@ -624,6 +642,7 @@ def evaluate_review(
     force: bool,
     stale_refresh: bool = False,
     require_stale_refresh: bool = False,
+    preparation_pending: bool = False,
 ) -> ReviewDecision:
     if str(pull_request.get("state") or "").casefold() != "open":
         return ReviewDecision("skip", "pull request is not open")
@@ -653,17 +672,19 @@ def evaluate_review(
     # fires `ready_for_review`, which brings the per-push cadence back.
     if bool(pull_request.get("draft")) and not force and reviewed_any_head(reviews, reviewer=reviewer):
         return ReviewDecision("skip", f"{reviewer} already reviewed this draft")
-    # A body edit is admitted for one reason only: it answers a rejection that
-    # is still standing (#1509). Without the requirement the edit would fall
+    # A body edit answers a standing rejection (#1509), or retries a trusted
+    # preparation failure that submitted no review. The latter still goes
+    # through the runtime's prepared-input retry guard before any model runs.
+    # Without either requirement the edit would fall
     # through to the dedup below, which passes whenever nothing was reviewed on
     # this head -- so every body edit on every open pull request would buy a
     # review. `stale_refresh` is the same live re-derivation the Evidence
     # Verify lane's request goes through; this only makes it mandatory. `force`
     # still overrides, as it does the draft and dedup skips below: the owner's
     # dispatch reviews outright, whatever else is asking.
-    if require_stale_refresh and not force and not stale_refresh:
+    if require_stale_refresh and not force and not stale_refresh and not preparation_pending:
         return ReviewDecision(
-            "skip", "body edit answers no standing changes-requested verdict"
+            "skip", "body edit has no standing changes-requested verdict or unavailable preparation to answer"
         )
     if (
         not force
@@ -672,6 +693,24 @@ def evaluate_review(
     ):
         return ReviewDecision("skip", f"{reviewer} already reviewed head {head_sha}")
     return ReviewDecision("review", f"route to {reviewer}", reviewer)
+
+
+def preparation_pending_for_head(
+    comments: list[dict[str, Any]], *, head_sha: str, pr_number: int, reviewer: str,
+) -> bool:
+    """A prior trusted preparation failure permits re-preparation on a body edit.
+
+    This admits no model work: the runtime's prepared-input retry gate still pauses
+    unchanged failures. It lets new evidence repair a never-submitted review.
+    """
+    receipts = [
+        (comment.get("id", 0), review_state.preparation_from_comment(
+            comment, expected_head=head_sha, pr_number=pr_number, reviewer=reviewer
+        )) for comment in comments
+        if type(comment.get("id")) is int and comment["id"] > 0
+    ]
+    receipts = [(identifier, receipt) for identifier, receipt in receipts if receipt is not None]
+    return bool(receipts) and max(receipts, key=lambda pair: pair[0])[1]["status"] == "unavailable"
 
 
 def write_output(name: str, value: str) -> None:
@@ -705,9 +744,9 @@ def parse_args() -> argparse.Namespace:
         help=(
             "This run was triggered by a pull request body edit. Consider "
             "re-reviewing a head this reviewer already reviewed, exactly as "
-            "--refresh-stale-review does, and review only if that same "
-            "derivation holds: an edit answering nothing standing is a skip, "
-            "not a fresh review."
+            "--refresh-stale-review does, or recheck a trusted unavailable "
+            "preparation receipt on this head. The runtime still suppresses "
+            "unchanged preparation failures before invoking the reviewer."
         ),
     )
     parser.add_argument("--expected-head", default="")
@@ -758,6 +797,7 @@ def main() -> int:
     reviews = client.pull_request_reviews(args.pr)
     head_sha = str((pull_request.get("head") or {}).get("sha") or "")
     stale_refresh = False
+    preparation_pending = False
     # Two callers ask the same question of live state. The Evidence Verify
     # lane asks permissively (#1379); a body edit asks and is bound by the
     # answer (#1509).
@@ -776,6 +816,12 @@ def main() -> int:
                     "(no standing changes-requested verdict on this head, or the "
                     "readiness gate still fails)"
                 )
+        if args.body_edit_review and not stale_refresh:
+            preparation_pending = preparation_pending_for_head(
+                client.pull_request_comments(args.pr), head_sha=head_sha, pr_number=args.pr, reviewer=reviewer
+            )
+            if preparation_pending:
+                print(f"Factory review preparation recovery for #{args.pr}: recheck the recorded unavailable preparation")
     decision = evaluate_review(
         pull_request,
         files,
@@ -783,6 +829,7 @@ def main() -> int:
         force=args.force,
         stale_refresh=stale_refresh,
         require_stale_refresh=args.body_edit_review,
+        preparation_pending=preparation_pending,
     )
     if args.expected_head and args.expected_head != head_sha:
         decision = ReviewDecision("skip", "pull request head changed after admission")

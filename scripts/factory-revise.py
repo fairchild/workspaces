@@ -515,6 +515,7 @@ def force_escalate(
             repository_owner=repository_owner,
             pr_number=pr_number,
             labelled=labelled,
+            head_sha=head_sha(pull_request),
         ),
     )
     print(
