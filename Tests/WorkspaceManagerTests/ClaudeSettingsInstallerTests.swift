@@ -601,6 +601,32 @@ struct ClaudeSettingsInstallerTests {
         #expect(await installer.isInstalled() == false)
     }
 
+    @Test("Install does not write over a target another writer changed after it was read")
+    func targetChangedDuringInstallKeepsTheNewContent() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeJSONURL = home.appendingPathComponent(".claude.json")
+        try Data("{\"numStartups\": 3}".utf8).write(to: claudeJSONURL)
+        let concurrentUpdate = Data("{\"numStartups\": 4}".utf8)
+
+        let installer = installer(home: home)
+        await installer.setBeforeWrite { url in
+            guard url.lastPathComponent == "settings.json" else { return }
+            try? concurrentUpdate.write(to: claudeJSONURL)
+        }
+        let error = await #expect(throws: MalformedClaudeSettingsError.self) {
+            try await installer.install()
+        }
+
+        #expect(error?.path == claudeJSONURL.path)
+        #expect(error?.reason.contains("changed during install") == true)
+        #expect(try Data(contentsOf: claudeJSONURL) == concurrentUpdate)
+        let backups =
+            (try? FileManager.default.contentsOfDirectory(atPath: backupDirectory(for: home).path)) ?? []
+        #expect(backups.contains { $0.hasPrefix(".claude.json.workspaces-backup-") } == false)
+    }
+
     @Test("renderPreview reports malformed settings instead of planning over them")
     func renderPreviewRefusesMalformedSettings() async throws {
         let home = makeTempHome()
