@@ -1275,8 +1275,9 @@ private actor OutcomeLog {
     /// Running time, not wall time. A hosted runner has frozen this whole test process for
     /// ~40 s mid-close (#1610), and a wall clock spends that freeze as though the close had
     /// it: the wait ran out at the thaw, before the close could take its next step. Each
-    /// poll is charged at most `maxChargePerPoll`, ten times its interval, so a freeze of
-    /// any length costs that much while a machine that is merely slow is charged in full.
+    /// poll is charged its elapsed time capped at `maxChargePerPoll` (ten poll intervals),
+    /// so a freeze of any length costs one capped poll. A machine slow enough to stretch
+    /// every poll past the cap gets more wall time than `budget`, which only delays a failure.
     func awaitFirst(
         within budget: TimeInterval = 30,
         clock now: @Sendable () -> Date = { Date() }
