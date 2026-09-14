@@ -1839,7 +1839,9 @@ class RouteActionCallDisciplineTests(unittest.TestCase):
                 "--message", "@fairchild mentioned you in PR #42\n---\ndirected body\n---\n",
             ]):
                 with mock.patch.dict(os.environ, self._patched_env(tmp), clear=True):
-                    with mock.patch.object(run_contributor, "detect_bot_login", return_value=""):
+                    with (mock.patch.object(run_contributor, "detect_bot_login", return_value="april-clearwater[bot]"),
+                          mock.patch.object(run_contributor, "prepare_action_review", return_value=run_contributor.ReviewPreparation(42, "a" * 40, "b" * 40, "c" * 64)),
+                          mock.patch.object(run_contributor, "current_review_identity")):
                         with mock.patch.object(
                             run_contributor, "repo_owner_name", return_value=("fairchild", "workspaces")
                         ):
@@ -1966,6 +1968,8 @@ class DirectedRevisionRoutingTests(unittest.TestCase):
                 ]),
                 mock.patch.dict(os.environ, env, clear=True),
                 mock.patch.object(run_contributor, "detect_bot_login", return_value="april-clearwater[bot]"),
+                mock.patch.object(run_contributor, "prepare_action_review", return_value=run_contributor.ReviewPreparation(77, "a" * 40, "b" * 40, "c" * 64)),
+                mock.patch.object(run_contributor, "current_review_identity"),
                 mock.patch.object(run_contributor, "repo_owner_name", return_value=("fairchild", "workspaces")),
                 mock.patch.object(run_contributor, "recent_commit_summary", return_value={}),
                 mock.patch.object(run_contributor, "gather_backlog_state", return_value=""),

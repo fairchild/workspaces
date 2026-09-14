@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["pillow==12.3.0"]
 # ///
 """Run a contributor agent from a prompt file."""
 
@@ -80,6 +80,20 @@ from _helpers import (  # noqa: E402, F401
     slugify,
     strip_markdown_section,
 )
+
+# Shared typed receipts live with the repository's trusted workflow scripts.
+_repo_scripts_dir = str(REPO_ROOT / "scripts")
+if _repo_scripts_dir not in sys.path:
+    sys.path.insert(0, _repo_scripts_dir)
+from factory_review_state import (  # noqa: E402
+    REVIEWER_LOGINS, findings_marker, preparation_comment, preparation_retry_decision,
+    validate_findings,
+)
+from review_evidence import (  # noqa: E402
+    EvidencePreparationError, ReviewPreparation, prepare_review_evidence,
+    record_image_reads, validate_image_observations, normalized_commit_facts,
+)
+from github_state import fetch_review_checks  # noqa: E402
 
 from evidence import (  # noqa: E402, F401
     CARRIED_FORWARD_NOTE,
@@ -858,6 +872,7 @@ def run_claude(
     cwd: Path | None = None,
     write_scope: Path | None = None,
     phase: str = "action",
+    review_preparation: ReviewPreparation | None = None,
 ) -> str:
     prompt_text = (
         system_prompt.read_text(encoding="utf-8")
@@ -915,6 +930,8 @@ def run_claude(
         # Timeouts and nonzero exits still leave a (partial) durable record.
         on_failure_output=lambda partial: record_run_telemetry(partial, phase=phase),
     ).stdout
+    if review_preparation is not None:
+        record_image_reads(review_preparation, raw_output)
     summary = summarize_stream_json(raw_output)
     emit_stream_telemetry(summary)
     record_run_telemetry(raw_output, phase=phase)
@@ -1265,6 +1282,13 @@ def _discussion_untrusted_payload(discussion: dict[str, Any], owner_login: str) 
 
 
 def _pull_request_untrusted_payload(pr: dict[str, Any], owner_login: str) -> list[UntrustedGitHubPayload]:
+    # Commit headlines are PR-authored text, not trusted task instructions.
+    headlines = []
+    for node in (pr.get("commits") or {}).get("nodes", [])[:30]:
+        commit = node.get("commit") if isinstance(node, dict) else None
+        if isinstance(commit, dict):
+            headlines.append({"oid": str(commit.get("oid", ""))[:64],
+                              "messageHeadline": str(commit.get("messageHeadline", ""))[:500]})
     author = str((pr.get("author") or {}).get("login", ""))
     payloads = [
         UntrustedGitHubPayload(
@@ -1283,6 +1307,7 @@ def _pull_request_untrusted_payload(pr: dict[str, Any], owner_login: str) -> lis
             metadata={
                 "review_decision": str(pr.get("reviewDecision", "")),
                 "head_ref_name": str(pr.get("headRefName", "")),
+                "commits": headlines,
             },
         )
     ]
@@ -1398,6 +1423,12 @@ def build_action_phase_inputs(
         pr = fetch_detailed_pull_request(owner, name, pr_number, env)
         if pr is None:
             raise ValueError(f"pull request #{pr_number} not found")
+        if choice.selection_kind in {"review_followup_pr", "review_pr"}:
+            task_envelope["review_head_sha"] = pr.get("headRefOid", "")
+            task_envelope["review_base_sha"] = pr.get("baseRefOid", "")
+            task_envelope["review_body_digest"] = hashlib.sha256(str(pr.get("body", "")).encode()).hexdigest()
+            # The trusted source checkout's recent commits describe a different tree.
+            task_envelope["recent_commit_summary"] = normalized_commit_facts(pr)
         payloads.extend(_pull_request_untrusted_payload(pr, owner))
         if choice.selection_kind in {"review_followup_pr", "review_pr"}:
             diff_text = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_MAX_LINES)
@@ -1537,6 +1568,7 @@ def run_action_phase(
     write_scope: Path | None,
     max_attempts: int,
     timeout: int | None = None,
+    review_preparation: ReviewPreparation | None = None,
 ) -> tuple[str, int, str | None, str]:
     """Run the model and validate its output, retrying transient failures once.
 
@@ -1576,6 +1608,10 @@ def run_action_phase(
         remaining = max_attempts - attempt
         phase = "action" if attempt == 1 else f"action-retry-{attempt}"
         try:
+            image_kwargs = {}
+            if review_preparation is not None:
+                review_preparation.successful_reads.clear()
+                image_kwargs["review_preparation"] = review_preparation
             raw_output = run_claude(
                 system_prompt,
                 task,
@@ -1586,6 +1622,7 @@ def run_action_phase(
                 write_scope=write_scope,
                 timeout=timeout,
                 phase=phase,
+                **image_kwargs,
             )
         except SystemExit as exc:
             log(f"action attempt {attempt}/{max_attempts} crashed (exit {exc.code})")
@@ -1608,6 +1645,110 @@ def run_action_phase(
         log(f"retrying ({remaining} attempt(s) left) after a transient output failure")
 
     return raw_output, exit_code, validated_json, error_text
+
+
+def review_comments(pr_number: int, env: dict[str, str]) -> list[dict]:
+    owner, name = repo_owner_name(env)
+    raw = run_checked(
+        ["gh", "api", "--paginate", "--slurp", f"repos/{owner}/{name}/issues/{pr_number}/comments?per_page=100"],
+        cwd=REPO_ROOT, env=env, timeout=GITHUB_API_TIMEOUT,
+    ).stdout
+    pages = json.loads(raw)
+    if not isinstance(pages, list) or any(not isinstance(page, list) for page in pages):
+        raise ValueError("review preparation comments unavailable")
+    return [comment for page in pages for comment in page if isinstance(comment, dict)]
+
+
+def current_review_identity(prepared: ReviewPreparation, env: dict[str, str]) -> None:
+    owner, name = repo_owner_name(env)
+    current = fetch_detailed_pull_request(owner, name, prepared.pr_number, env)
+    if current is None or current.get("headRefOid") != prepared.head_sha:
+        raise EvidencePreparationError("stale_head")
+    if current.get("baseRefOid") != prepared.base_sha:
+        raise EvidencePreparationError("stale_base")
+    body_digest = prepared.facts.get("body_digest")
+    if body_digest and hashlib.sha256(str(current.get("body", "")).encode()).hexdigest() != body_digest:
+        raise EvidencePreparationError("invalid_evidence")
+
+
+def publish_review_preparation(prepared: ReviewPreparation, decision, env: dict[str, str], *, dry_run: bool, attempt: int = 1) -> None:
+    log(f"Review preparation: {prepared.status} ({prepared.reason_code}); {decision.reason}")
+    if dry_run or not decision.publish:
+        return
+    current_review_identity(prepared, env)
+    owner, name = repo_owner_name(env)
+    path = (f"repos/{owner}/{name}/issues/comments/{decision.comment_id}" if decision.comment_id
+            else f"repos/{owner}/{name}/issues/{prepared.pr_number}/comments")
+    run_checked(
+        ["gh", "api", "--method", "PATCH" if decision.comment_id else "POST", path, "--input", "-"],
+        input=json.dumps({"body": preparation_comment(prepared.outcome(attempt))}),
+        cwd=REPO_ROOT, env=env, timeout=GITHUB_API_TIMEOUT,
+    )
+
+
+def prepare_action_review(task_envelope: str, payloads: list[UntrustedGitHubPayload],
+                          env: dict[str, str], cwd: Path, *, reviewer: str, dry_run: bool) -> ReviewPreparation:
+    task = json.loads(task_envelope)
+    number = int(task["selected_item"]["number"])
+    owner, name = repo_owner_name(env)
+    comments = review_comments(number, env)
+    requested = [item for payload in payloads if payload.source_type == "issue"
+                 for item in extract_requested_evidence(payload.body)]
+    for attempt in (1, 2):
+        pr = fetch_detailed_pull_request(owner, name, number, env)
+        if pr is None:
+            raise ValueError("review PR is unavailable")
+        checks = fetch_review_checks(number, env)
+        prepared = prepare_review_evidence(pr, checks, cwd,
+            expected_head=env.get("FACTORY_EXPECTED_PR_HEAD_SHA") or task.get("review_head_sha", ""),
+            requested_evidence=requested, capability_version=f"raster-read-v1;claude-code-{CLAUDE_CODE_VERSION}")
+        try:
+            if pr.get("baseRefOid") != task.get("review_base_sha"):
+                raise EvidencePreparationError("stale_base")
+            if pr.get("headRefOid") != task.get("review_head_sha"):
+                raise EvidencePreparationError("stale_head")
+            if task.get("review_body_digest") and task["review_body_digest"] != prepared.facts.get("body_digest"):
+                raise EvidencePreparationError("invalid_evidence")
+            current_review_identity(prepared, env)
+            decision = preparation_retry_decision(prepared.outcome(attempt), comments, reviewer=reviewer,
+                owner_retry=env.get("FACTORY_OWNER_REVIEW_RETRY") == "true")
+            if decision.action == "retry":
+                prepared.cleanup()
+                continue
+            # A previous inspection failure cannot be cleared by downloading the same bytes.
+            if decision.action == "pause" and prepared.status == "ready":
+                prepared.fail(EvidencePreparationError("inspection_unverified"))
+            publish_review_preparation(prepared, decision, env, dry_run=dry_run, attempt=attempt)
+            return prepared
+        except BaseException:
+            prepared.cleanup()
+            raise
+    raise AssertionError("bounded preparation retry did not terminate")
+
+
+def finalize_review_images(prepared: ReviewPreparation, validated_json: str, env: dict[str, str],
+                           *, reviewer: str, dry_run: bool) -> str | None:
+    data = json.loads(validated_json)
+    try:
+        observations = validate_image_observations(prepared, data)
+    except EvidencePreparationError:
+        prepared.fail(EvidencePreparationError("inspection_unverified"))
+        decision = preparation_retry_decision(prepared.outcome(), review_comments(prepared.pr_number, env), reviewer=reviewer)
+        publish_review_preparation(prepared, decision, env, dry_run=dry_run)
+        return None
+    current_review_identity(prepared, env)
+    if observations:
+        artifacts = {item["id"]: item for item in prepared.artifacts}
+        lines = ["", "<details><summary>Images inspected by Factory</summary>", ""]
+        for observation in observations:
+            item = artifacts[observation["artifact_id"]]
+            lines.append(f"- [{item['id']}]({item['url']}) (SHA-256 `{item['sha256']}`): {observation['observation']}")
+        lines.extend(["", "Successful local image Read results were verified. Artifact provenance remains an author claim.", "", "</details>"])
+        data["body"] = str(data.get("body", "")) + "\n".join(lines)
+    if data.get("verdict") == "request_changes" and "review_findings" in data:
+        findings = validate_findings(data["review_findings"], expected_head=prepared.head_sha)
+        data["body"] = str(data.get("body", "")) + "\n\n" + findings_marker(findings)
+    return json.dumps(data)
 
 
 def parse_args() -> argparse.Namespace:
@@ -1642,6 +1783,8 @@ def main() -> int:
     if bot_login:
         log(f"Authenticated as {bot_login}")
     scratch_workspace: ScratchPatchArtifact | None = None
+    review_preparation: ReviewPreparation | None = None
+    reviewer = persona_slug(persona).split("-", 1)[0]
 
     if args.message:
         directed = parse_directed_message(args.message)
@@ -1720,6 +1863,16 @@ def main() -> int:
             # construction. Review checkouts of PR heads are never seeded.
             ensure_claude_project_trust(claude_cwd, claude_env)
         is_retryable_review = choice.selection_kind in REVIEW_RETRYABLE_SELECTION_KINDS
+        if is_retryable_review:
+            if REVIEWER_LOGINS.get(reviewer) != bot_login:
+                raise ValueError("review preparation requires the assigned reviewer identity")
+            review_preparation = prepare_action_review(task_envelope, payloads, env, claude_cwd,
+                                                       reviewer=reviewer, dry_run=args.dry_run)
+            if review_preparation.status != "ready":
+                return 0
+            envelope = json.loads(task_envelope)
+            envelope["review_evidence"] = review_preparation.model_context()
+            task_envelope = json.dumps(envelope)
         max_attempts = REVIEW_RETRY_ATTEMPTS if is_retryable_review else 1
         raw_output, exit_code, validated_json, error_text = run_action_phase(
             compose_system_prompt(prompt_file.read_text(encoding="utf-8")),
@@ -1734,6 +1887,7 @@ def main() -> int:
             ),
             max_attempts=max_attempts,
             timeout=REVIEW_RETRY_ATTEMPT_TIMEOUT_SECONDS if is_retryable_review else None,
+            **({"review_preparation": review_preparation} if review_preparation is not None else {}),
         )
 
         if exit_code == 2 and error_text.startswith("duplicate:"):
@@ -1770,11 +1924,22 @@ def main() -> int:
             )
             apply_scratch_patch_artifact(artifact, env)
 
-        result = route_action(validated_json, args.dry_run, env)
+        if review_preparation is not None:
+            validated_json = finalize_review_images(review_preparation, validated_json, env,
+                                                   reviewer=reviewer, dry_run=args.dry_run)
+            if validated_json is None:
+                return 0
+        result = route_action(validated_json, args.dry_run, env,
+                              **({"images_inspected": True} if review_preparation and review_preparation.artifacts else {}))
         if result == 0:
             log("Completed successfully")
         return result
+    except EvidencePreparationError as error:
+        log(json.dumps({"review_preparation": "unavailable", "reason_code": error.reason_code}))
+        return 1
     finally:
+        if review_preparation is not None:
+            review_preparation.cleanup()
         if scratch_workspace is not None:
             shutil.rmtree(scratch_workspace.temp_root, ignore_errors=True)
 

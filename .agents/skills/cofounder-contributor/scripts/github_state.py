@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -303,15 +304,17 @@ query($owner: String!, $name: String!, $num: Int!) {
       isDraft
       reviewDecision
       headRefName
+      headRefOid
+      baseRefOid
       createdAt
       updatedAt
       author {
         login
       }
       authorAssociation
-      commits(last: 1) {
+      commits(last: 30) {
         nodes {
-          commit { committedDate }
+          commit { oid committedDate messageHeadline }
         }
       }
       reviews(last: 50) {
@@ -875,7 +878,7 @@ def find_pr_review_state(pr_number: int, env: dict[str, str]) -> dict[str, objec
     if pr is None:
         return None
 
-    issue_number, _ = extract_pr_issue_reference(str(pr.get("body", "")))
+    issue_number, contributor = extract_pr_issue_reference(str(pr.get("body", "")))
     issue = None
     requested_evidence: list[str] = []
     if issue_number is not None:
@@ -883,7 +886,9 @@ def find_pr_review_state(pr_number: int, env: dict[str, str]) -> dict[str, objec
         if issue is not None:
             requested_evidence = extract_requested_evidence(str(issue.get("body", "")))
 
-    accounting, errors = validate_evidence_accounting(str(pr.get("body", "")), requested_evidence)
+    accounting, errors = validate_evidence_accounting(
+        str(pr.get("body", "")), requested_evidence if contributor else []
+    )
     return {
         "pr": pr,
         "issue_number": issue_number,
@@ -892,3 +897,27 @@ def find_pr_review_state(pr_number: int, env: dict[str, str]) -> dict[str, objec
         "evidence_accounting": accounting,
         "evidence_errors": errors,
     }
+
+
+def fetch_review_checks(pr_number: int, env: dict[str, str]) -> list[dict] | None:
+    """Read live required checks; pending/red/none/unavailable remain distinct facts."""
+    try:
+        result = subprocess.run(
+            ["gh", "pr", "checks", str(pr_number), "--required", "--json", "name,state,bucket,link"],
+            cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=GITHUB_API_TIMEOUT,
+        )
+        if result.returncode not in {0, 1, 8}:
+            return None
+        # gh uses this response when the repository config has no required checks.
+        if result.returncode == 1 and result.stderr.strip().startswith("no required checks reported"):
+            return []
+        checks = json.loads(result.stdout)
+        if not isinstance(checks, list) or len(checks) > 100:
+            return None
+        if any(not isinstance(check, dict) or not isinstance(check.get("name"), str)
+               or check.get("bucket") not in {"pass", "fail", "pending", "skipping", "cancel"}
+               for check in checks):
+            return None
+        return sorted(checks, key=lambda check: (check["name"], str(check.get("link", ""))))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None

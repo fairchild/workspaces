@@ -1464,7 +1464,7 @@ def validate_output(raw_output: str, env: dict[str, str]) -> tuple[int, str | No
     return result.returncode, None, error_text
 
 
-def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int:
+def route_action(validated_json: str, dry_run: bool, env: dict[str, str], *, images_inspected: bool = False) -> int:
     data = json.loads(validated_json)
     action = data["action"]
 
@@ -1558,6 +1558,7 @@ def route_action(validated_json: str, dry_run: bool, env: dict[str, str]) -> int
                     verdict,
                     review_state["evidence_accounting"],
                     review_state["evidence_errors"],
+                    images_inspected=images_inspected,
                 )
                 if evidence_gate_error is not None:
                     print(
