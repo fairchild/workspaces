@@ -394,8 +394,27 @@ class Diagram(GeneratorTestCase):
     def test_a_renderer_that_exits_cleanly_without_an_image_is_reported_as_failing(self) -> None:
         """A missing image is the renderer's failure, not a missing file somewhere on the build host."""
         shape, errors = self.shape_behind_stub_renderer("exit 0")
-        self.assertIn("The renderer failed (&quot;exited without writing an image&quot;)", shape)
-        self.assertIn("[pr-review-page] diagram render failed: exited without writing an image", errors)
+        self.assertIn("The renderer failed (&quot;exited without writing a PNG image&quot;)", shape)
+        self.assertIn("[pr-review-page] diagram render failed: exited without writing a PNG image", errors)
+
+    # mmdc takes the image's path after `-o`; a stub finds it the same way.
+    WRITE_TO_OUTPUT = 'while [ "$#" -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done\n'
+
+    def assert_failed_without_an_image(self, shape: str, errors: str) -> None:
+        self.assertIn("The renderer failed (&quot;exited without writing a PNG image&quot;)", shape)
+        self.assertIn("<pre>graph LR", shape)
+        self.assertNotIn('data:image/png;base64,"', shape)
+        self.assertNotIn("<img", shape)
+        self.assertIn("[pr-review-page] diagram render failed: exited without writing a PNG image", errors)
+
+    def test_a_renderer_that_writes_an_empty_file_is_reported_as_failing(self) -> None:
+        """An empty file is not an image; shown as one, it is a broken picture that says nothing."""
+        shape, errors = self.shape_behind_stub_renderer(f'{self.WRITE_TO_OUTPUT}: > "$out"\nexit 0')
+        self.assert_failed_without_an_image(shape, errors)
+
+    def test_a_renderer_that_writes_something_other_than_a_png_is_reported_as_failing(self) -> None:
+        shape, errors = self.shape_behind_stub_renderer(f"{self.WRITE_TO_OUTPUT}printf '<svg/>' > \"$out\"\nexit 0")
+        self.assert_failed_without_an_image(shape, errors)
 
     def test_a_renderer_that_cannot_start_is_reported_as_failing(self) -> None:
         shape, errors = self.shape_behind_stub_renderer("exit 0", interpreter="/nonexistent/interpreter")
