@@ -536,4 +536,99 @@ struct ClaudeSettingsInstallerTests {
         #expect(hooks["PostToolUse"] != nil)
         #expect(await installer.isInstalled())
     }
+
+    @Test(
+        "Install refuses a settings.json that is not a JSON object and writes nothing",
+        arguments: [
+            ("{\"theme\": \"dark\",", "line 1, column 16"),
+            ("[\"theme\"]", "not an object"),
+        ]
+    )
+    func malformedSettingsIsAnInstallError(fixture: String, reasonFragment: String) async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+        let malformed = Data(fixture.utf8)
+        try malformed.write(to: settingsURL)
+
+        let backups = backupDirectory(for: home)
+        try FileManager.default.createDirectory(at: backups, withIntermediateDirectories: true)
+        let priorBackup = "settings.json.workspaces-backup-prior"
+        try Data("{\"theme\":\"dark\"}".utf8).write(to: backups.appendingPathComponent(priorBackup))
+
+        let installer = installer(home: home)
+        let error = await #expect(throws: MalformedClaudeSettingsError.self) {
+            try await installer.install()
+        }
+
+        #expect(error?.path == settingsURL.path)
+        #expect(error?.reason.contains(reasonFragment) == true)
+        #expect(error?.localizedDescription.contains(settingsURL.path) == true)
+        #expect(error.map { $0.localizedDescription.contains($0.reason) } == true)
+        #expect(try Data(contentsOf: settingsURL) == malformed)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: backups.path) == [priorBackup])
+        #expect(await installer.mostRecentBackupPath() == nil)
+        #expect(FileManager.default.fileExists(atPath: home.appendingPathComponent(".claude.json").path) == false)
+        #expect(await installer.isInstalled() == false)
+    }
+
+    @Test("Install refuses a malformed .claude.json before writing settings.json")
+    func malformedClaudeJSONBlocksEveryWrite() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+        let settingsData = Data("{\"theme\":\"dark\"}".utf8)
+        try settingsData.write(to: settingsURL)
+        let claudeJSONURL = home.appendingPathComponent(".claude.json")
+        let malformed = Data("{\"numStartups\": 3,".utf8)
+        try malformed.write(to: claudeJSONURL)
+
+        let installer = installer(home: home)
+        let error = await #expect(throws: MalformedClaudeSettingsError.self) {
+            try await installer.install()
+        }
+
+        #expect(error?.path == claudeJSONURL.path)
+        #expect(try Data(contentsOf: settingsURL) == settingsData)
+        #expect(try Data(contentsOf: claudeJSONURL) == malformed)
+        #expect(FileManager.default.fileExists(atPath: backupDirectory(for: home).path) == false)
+        #expect(await installer.isInstalled() == false)
+    }
+
+    @Test("renderPreview reports malformed settings instead of planning over them")
+    func renderPreviewRefusesMalformedSettings() async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        let settingsURL = claudeDir.appendingPathComponent("settings.json")
+        try Data("{ hooks: {} }".utf8).write(to: settingsURL)
+
+        let installer = installer(home: home)
+        let error = await #expect(throws: MalformedClaudeSettingsError.self) {
+            try await installer.renderPreview()
+        }
+        #expect(error?.path == settingsURL.path)
+    }
+
+    @Test("A blank settings file holds nothing to lose and installs as empty", arguments: ["", " \n"])
+    func blankSettingsInstallAsEmpty(fixture: String) async throws {
+        let home = makeTempHome()
+        defer { try? FileManager.default.removeItem(at: home) }
+
+        let claudeDir = home.appendingPathComponent(".claude", isDirectory: true)
+        try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
+        try Data(fixture.utf8).write(to: claudeDir.appendingPathComponent("settings.json"))
+
+        let installer = installer(home: home)
+        try await installer.install()
+        #expect(await installer.isInstalled())
+    }
 }
