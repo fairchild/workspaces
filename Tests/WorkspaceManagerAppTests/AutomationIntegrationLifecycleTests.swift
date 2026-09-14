@@ -20,11 +20,6 @@ struct AutomationIntegrationLifecycleTests {
     private func makeScratchPlane() throws -> (root: URL, files: AutomationPlaneFiles) {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("ws-lc-\(UUID().uuidString.prefix(8))", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: root,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
         let installed = AutomationPlaneFiles.bundled("com.cloudcompute.workspaces")
         func inRoot(_ url: URL) -> URL { root.appendingPathComponent(url.lastPathComponent) }
         let files = AutomationPlaneFiles(
@@ -35,6 +30,11 @@ struct AutomationIntegrationLifecycleTests {
         try #require(
             files.socketURL.path.utf8.count < AutomationSupportDirectory.maximumSocketPathLength,
             "TMPDIR is too deep for a bindable socket: \(files.socketURL.path) overruns sun_path"
+        )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
         )
         return (root, files)
     }
