@@ -59,6 +59,7 @@ CI_RELEVANT_PATH_PATTERNS=(
     "XcodeCloudHarness/*"
     "WorkSpacesCloudCI.xcodeproj/*"
     "ci_scripts/*"
+    "examples/compose-agent-sandbox/*"
     ".github/workflows/ci.yml"
     ".github/workflows/ci-fallback.yml"
     ".github/workflows/release.yml"
