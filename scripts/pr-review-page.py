@@ -730,9 +730,14 @@ def render_diagram(mermaid: str, *, authored: bool = False) -> str:
     whatever the renderer put in it into every reader's browser: remote images,
     foreign objects, fonts. A raster image carries pixels.
 
-    When there is no renderer the page shows the escaped source and says it did
-    not draw it. There is no browser-side fallback: source this build refused is
-    not source to hand a second engine in someone else's browser.
+    Otherwise the page shows the escaped source and says which of three things
+    kept it from being drawn: the source is outside the syntax this page will
+    draw, and no renderer sees it; there is no `mmdc` on PATH; or the renderer
+    failed -- it exited non-zero, ran past its timeout, or could not start --
+    and the page quotes the first line of what the failure said. The last two
+    also leave a line on stderr for whoever reads the build. There is no
+    browser-side fallback: source this build refused is not source to hand a
+    second engine in someone else's browser.
     """
     if authored and not is_renderable_mermaid(mermaid):
         return _diagram_source_block(
@@ -765,7 +770,12 @@ def render_diagram(mermaid: str, *, authored: bool = False) -> str:
                 drawn = out_file.read_bytes()
                 encoded = base64.b64encode(drawn).decode("ascii")
             except (subprocess.SubprocessError, OSError) as error:
-                print(f"[pr-review-page] diagram not rendered: {error}", file=sys.stderr)
+                message = _render_failure(error)
+                print(f"[pr-review-page] diagram render failed: {message or 'no message'}", file=sys.stderr)
+                failed = f'The renderer failed ("{message}")' if message else "The renderer failed with no message"
+                return _diagram_source_block(
+                    mermaid, f"{failed}, so this is the diagram's source rather than the diagram."
+                )
             else:
                 # Drawn at 2x for a screen that wants it, shown at 1x so a small
                 # graph stays small: a fixed width taken from the image rather
@@ -776,10 +786,28 @@ def render_diagram(mermaid: str, *, authored: bool = False) -> str:
                     f'alt="Diagram of the change" '
                     f'src="data:image/png;base64,{encoded}"></div>'
                 )
+    print("[pr-review-page] diagram not rendered: no renderer (mmdc) on PATH", file=sys.stderr)
     return _diagram_source_block(
         mermaid, "No renderer was available, so this is the diagram's source rather "
         "than the diagram."
     )
+
+
+def _render_failure(error: subprocess.SubprocessError | OSError) -> str:
+    """The one line of a failed render worth quoting, or "" when it said nothing.
+
+    mmdc's stderr opens with a blank line and closes on a stack trace, so the
+    quote is its first line with text on it. A timeout or a launch error has no
+    stderr to quote, and its message leaves out the build's paths, which say
+    nothing to a reader and do not belong on a published page.
+    """
+    if isinstance(error, subprocess.CalledProcessError):
+        return next((line.strip() for line in (error.stderr or "").splitlines() if line.strip()), "")
+    if isinstance(error, subprocess.TimeoutExpired):
+        return f"timed out after {error.timeout:g} seconds"
+    if isinstance(error, OSError) and error.strerror:
+        return error.strerror
+    return str(error)
 
 
 def _diagram_source_block(mermaid: str, note: str) -> str:
