@@ -92,9 +92,10 @@ Before another review attempt, name the changed input that can clear its
 blocker: code, evidence content or delivery, reviewer capability, relevant
 policy, or an Owner decision. A new review ID or rewritten explanation is not
 a changed blocking condition. If nothing relevant changed, stop retriggering
-review and report the owner and resume event once. Pause a bounded watch when
-no machine work is progressing and the next action requires that event. An
-explicit Owner request can authorize another attempt; record that reason.
+review. Tell the Owner once which component or agent owns the blocker and what
+event permits another attempt. Pause a bounded watch when no machine work is
+progressing and the next action requires that event. An explicit Owner request
+can authorize another attempt; record that reason.
 
 Report implementation validation, evidence availability to the intended
 reviewer, and review approval separately, including unknowns. Review approval

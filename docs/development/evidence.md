@@ -231,11 +231,12 @@ prove which source produced a binary or screenshot. Refresh evidence after a
 relevant code change, or explain why an unchanged artifact still applies.
 
 Inspect the rendered PR for human review. For Factory image review, verify
-delivery through a result tied to the same PR and evidence, then require actual inspection by
-the reviewer. Until such a result exists, reviewer access is unknown. An HTTP
-success, decoded image, or matching digest establishes delivery properties,
-not visual correctness. A local path and digest establish local provenance,
-not remote availability. The [review handoff and response workflow](mergeability-standard.md#review-handoff-and-response)
+delivery through a result tied to the same PR and evidence, then require the
+Factory reviewer to inspect the images. Until such a result exists, reviewer
+access is unknown. An HTTP success, decoded image, or matching digest
+establishes delivery properties, not visual correctness. A local path and
+digest establish local provenance, not remote availability. The
+[review handoff and response workflow](mergeability-standard.md#review-handoff-and-response)
 handles failed delivery or unavailable reviewer capabilities.
 
 For recordings, check what the reviewer can inspect. If playback is
