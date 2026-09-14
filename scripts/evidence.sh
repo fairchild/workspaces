@@ -268,11 +268,11 @@ echo "Uploaded: $URL" >&2
 echo "" >&2
 echo "Markdown:" >&2
 FILE_EXT="${FILE##*.}"
-# Images embed; everything else (pages, video, logs, text, structured data)
-# links -- a page or a webm rendered as `![]()` shows a broken image icon,
-# not the thing itself.
+# Images embed; the page, video, and text types the uploader admits (html,
+# webm, mp4, txt) link -- a page or a webm rendered as `![]()` shows a
+# broken image icon, not the thing itself.
 case "$FILE_EXT" in
-  [Ww][Ee][Bb][Mm]|[Mm][Pp]4|[Tt][Xx][Tt]|[Hh][Tt][Mm][Ll]|[Hh][Tt][Mm]|[Mm][Dd]|[Jj][Ss][Oo][Nn]|[Ll][Oo][Gg]) echo "[${NAME}](${URL})" >&2 ;;
+  [Ww][Ee][Bb][Mm]|[Mm][Pp]4|[Tt][Xx][Tt]|[Hh][Tt][Mm][Ll]) echo "[${NAME}](${URL})" >&2 ;;
   *) echo "![${NAME}](${URL})" >&2 ;;
 esac
 echo "" >&2
