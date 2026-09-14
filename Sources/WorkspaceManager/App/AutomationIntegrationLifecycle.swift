@@ -26,7 +26,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var teardownObserver: Any?
     private var experimentObserver: Any?
     private var didStart = false
-    private var startTask: Task<String, Error>?
+    /// The start still binding. `stop()` cancels it, waits for it and stops the listener it bound, so
+    /// both of its waiters in `startIfNeeded` publish nothing once it is cancelled (#1665).
+    private var startTask: Task<AutomationListener, Error>?
     /// Where this launch's socket, audit log and operator credential live.
     let files: AutomationPlaneFiles
     /// Read by configure passes on the MainActor and by the listener off it, on every request.
@@ -188,7 +190,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             }
 
         if let startTask {
-            let socketPath = try await startTask.value
+            let socketPath = try await startTask.value.socketPath
+            guard !startTask.isCancelled else { throw CancellationError() }
             controller?.update(
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
@@ -257,19 +260,22 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             }
         )
 
-        let startTask = Task<String, Error> {
+        let startTask = Task<AutomationListener, Error> {
             try await listener.start()
-            return listener.socketPath
+            return listener
         }
         self.startTask = startTask
 
         let startedSocketPath: String
         do {
-            startedSocketPath = try await startTask.value
+            startedSocketPath = try await startTask.value.socketPath
         } catch {
             self.startTask = nil
             throw error
         }
+        // A stop() that landed during the bind has stopped this listener already; publishing it would
+        // leave a socket path and a credential behind a stop that has returned.
+        guard !startTask.isCancelled else { throw CancellationError() }
 
         self.controller = controller
         self.listener = listener
@@ -455,8 +461,15 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
     func stop() async {
         retireOperatorCredential()
-        startTask?.cancel()
-        startTask = nil
+        if let startTask {
+            // A cancelled start publishes nothing, so the listener it bound is this call's to stop. The
+            // task stays in place until then, so a start requested meanwhile joins it and is refused.
+            startTask.cancel()
+            if let bound = try? await startTask.value {
+                await bound.stop()
+            }
+            self.startTask = nil
+        }
         await listener?.stop()
         listener = nil
         controller = nil

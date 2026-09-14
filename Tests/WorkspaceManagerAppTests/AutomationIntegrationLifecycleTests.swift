@@ -3,7 +3,8 @@
 //  Verifies the App Intents operator gate (Shortcuts mint an operator handle only while the operator
 //  experiment is on, re-checked on every call) and where the plane's files live: a lifecycle given a
 //  scratch root keeps its socket and credential there, and never removes a credential another launch
-//  minted — the path by which `swift test` deleted the installed app's (#1607).
+//  minted — the path by which `swift test` deleted the installed app's (#1607). A stop, including one
+//  that lands while a start is still binding, leaves no listener or credential of its own behind.
 //
 
 import Foundation
@@ -146,6 +147,93 @@ struct AutomationIntegrationLifecycleTests {
 
         #expect(minted != nil)
         #expect(AutomationOperatorCredentialStore.load(from: plane.files.credentialURL) == nil)
+    }
+
+    /// `stop()` can land while `startIfNeeded` is still waiting on the bind. Once both have settled, that
+    /// start may not have published the listener it bound or minted a credential for it (#1665).
+    @Test("A stop while a start is still binding leaves no listener or credential behind")
+    func stopDuringStartLeavesNothingBehind() async throws {
+        let plane = try makeScratchPlane()
+        defer { try? FileManager.default.removeItem(at: plane.root) }
+        let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+
+        // The start runs to its first suspension, waiting on the bind, and stop() lands there.
+        let starting = Task {
+            try await lifecycle.startIfNeeded(
+                tileTreeStore: TileTreeStore(),
+                focusTerminal: { _ in },
+                requestCloseTerminal: { _ in }
+            )
+        }
+        await Task.yield()
+        await lifecycle.stop()
+        let started = await starting.result
+        let left = await leftovers(of: lifecycle, files: plane.files)
+        // Stop again before asserting, so a start that published anyway cannot leave its listener bound.
+        await lifecycle.stop()
+
+        #expect((try? started.get()) == nil)
+        #expect(left == .nothing)
+    }
+
+    /// A configure pass that joined the start refreshes the credential once the start settles, so the
+    /// stop has to turn that pass away as well as the one that started the listener.
+    @Test("A configure pass waiting on a start that stop cancelled mints no credential")
+    func stopDuringJoinedStartLeavesNothingBehind() async throws {
+        let plane = try makeScratchPlane()
+        defer { try? FileManager.default.removeItem(at: plane.root) }
+        let lifecycle = AutomationIntegrationLifecycle(
+            files: plane.files,
+            isAutomationAPIEnabled: { true },
+            isOperatorEnabled: { true }
+        )
+        let store = TileTreeStore()
+
+        // The first pass starts the listener and the second joins that start; both are waiting on the
+        // bind when stop() lands.
+        let starting = Task {
+            await lifecycle.configure(tileTreeStore: store, focusTerminal: { _ in }, requestCloseTerminal: { _ in })
+        }
+        let joining = Task {
+            await lifecycle.configure(tileTreeStore: store, focusTerminal: { _ in }, requestCloseTerminal: { _ in })
+        }
+        await Task.yield()
+        await lifecycle.stop()
+        await starting.value
+        await joining.value
+        let left = await leftovers(of: lifecycle, files: plane.files)
+        await lifecycle.stop()
+
+        #expect(left == .nothing)
+    }
+
+    /// What a stop left on its plane: the credential, the published socket path, and whether the socket
+    /// lock is still held, which a fresh launch finds by trying to take the plane. The socket file is no
+    /// signal: Network.framework creates it when the bind lands on its own queue, which can be after the
+    /// listener's stop removed it, leaving a file with nothing listening behind it.
+    private struct Leftovers: Equatable {
+        var credential: AutomationOperatorCredential?
+        var socketPath: String?
+        var lockHeld: Bool
+
+        static let nothing = Leftovers(credential: nil, socketPath: nil, lockHeld: false)
+    }
+
+    private func leftovers(
+        of lifecycle: AutomationIntegrationLifecycle,
+        files: AutomationPlaneFiles
+    ) async -> Leftovers {
+        let credential = AutomationOperatorCredentialStore.load(from: files.credentialURL)
+        let socketPath = lifecycle.socketPath
+        let probe = AutomationIntegrationLifecycle(files: files, isOperatorEnabled: { false })
+        let probeBound =
+            (try? await probe.startIfNeeded(
+                tileTreeStore: TileTreeStore(),
+                focusTerminal: { _ in },
+                requestCloseTerminal: { _ in }
+            )) != nil
+        await probe.stop()
+        return Leftovers(credential: credential, socketPath: socketPath, lockHeld: !probeBound)
     }
 
     /// #1607 inside a scratch root: the installed app's credential sits at the path this lifecycle
