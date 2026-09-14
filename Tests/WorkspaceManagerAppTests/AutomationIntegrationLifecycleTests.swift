@@ -39,7 +39,7 @@ struct AutomationIntegrationLifecycleTests {
     func appIntentMintGate() async throws {
         let plane = try makeScratchPlane()
         defer { try? FileManager.default.removeItem(at: plane.root) }
-        let lifecycle = AutomationIntegrationLifecycle(files: plane.files)
+        let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isAutomationAPIEnabled: { false })
         await lifecycle.configure(
             tileTreeStore: TileTreeStore(),
             focusTerminal: { _ in },
@@ -86,25 +86,48 @@ struct AutomationIntegrationLifecycleTests {
             focusTerminal: { _ in },
             requestCloseTerminal: { _ in }
         )
-        #expect(socketPath == plane.files.socketURL.path)
-        let minted = try #require(AutomationOperatorCredentialStore.load(from: plane.files.credentialURL))
-        #expect(minted.socketPath == socketPath)
-
+        let minted = AutomationOperatorCredentialStore.load(from: plane.files.credentialURL)
+        // Stop before asserting, so a failed expectation cannot leave the listener bound.
         await lifecycle.stop()
+
+        #expect(socketPath == plane.files.socketURL.path)
+        #expect(minted?.socketPath == socketPath)
         #expect(AutomationOperatorCredentialStore.load(from: plane.files.credentialURL) == nil)
     }
 
+    /// `stop()` releases the socket lock before it clears the credential, so another launch can take
+    /// the lock and mint at the same path in between. What this launch removes has to be the
+    /// credential it minted, not whatever sits at that path by then.
+    @Test("Stopping leaves a credential another launch wrote over the one this launch minted")
+    func leavesAReplacedCredential() async throws {
+        let plane = try makeScratchPlane()
+        defer { try? FileManager.default.removeItem(at: plane.root) }
+        let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+
+        let socketPath = try await lifecycle.startIfNeeded(
+            tileTreeStore: TileTreeStore(),
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in }
+        )
+        let minted = AutomationOperatorCredentialStore.load(from: plane.files.credentialURL)
+        let replacement = AutomationOperatorCredential(socketPath: socketPath, handle: "another-launch")
+        try? AutomationOperatorCredentialStore.write(replacement, to: plane.files.credentialURL)
+        await lifecycle.stop()
+
+        #expect(minted != nil)
+        #expect(AutomationOperatorCredentialStore.load(from: plane.files.credentialURL) == replacement)
+    }
+
     /// #1607 inside a scratch root: the installed app's credential sits at the path this lifecycle
-    /// resolves, and the test process configures and stops a lifecycle with the Automation API off.
-    /// Neither pass may remove a file this launch did not mint.
+    /// resolves, and the lifecycle is configured and stopped with the Automation API off, as it is in
+    /// the test process. Neither pass may remove a file this launch did not mint.
     @Test("Configuring and stopping leaves a credential this launch did not mint")
     func leavesAnotherLaunchsCredential() async throws {
         let plane = try makeScratchPlane()
         defer { try? FileManager.default.removeItem(at: plane.root) }
         let installedAppsCredential = Data(#"{"handle":"installed-app"}"#.utf8)
         try installedAppsCredential.write(to: plane.files.credentialURL)
-        let lifecycle = AutomationIntegrationLifecycle(files: plane.files)
-        try #require(!lifecycle.isEnabled, "Models the test process, where the Automation API is off.")
+        let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isAutomationAPIEnabled: { false })
 
         await lifecycle.configure(
             tileTreeStore: TileTreeStore(),

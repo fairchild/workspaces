@@ -29,10 +29,11 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var startTask: Task<String, Error>?
     /// Where this launch's socket, audit log and operator credential live.
     let files: AutomationPlaneFiles
+    private let automationAPIOptIn: @MainActor () -> Bool
     private let operatorOptIn: @MainActor () -> Bool
-    /// The credential this launch minted, and the only one it removes: every copy of the app keyed
-    /// on one bundle identifier shares the path (#1607).
-    private var mintedCredentialURL: URL?
+    /// The credential this launch minted, and the only one it removes. Every copy of the app keyed
+    /// on one bundle identifier shares the path, so what sits there may be another launch's (#1607).
+    private var mintedCredential: AutomationOperatorCredential?
     /// What the last provisioning pass settled on, reported over `/v1/health`. Read
     /// off the MainActor by the health closure, hence the lock-free copy in
     /// `operatorCredentialOutcomeSnapshot`.
@@ -55,14 +56,16 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
     init(
         files: AutomationPlaneFiles,
+        isAutomationAPIEnabled: @escaping @MainActor () -> Bool = { ExperimentalFeatures.isEnabled(.automationAPI) },
         isOperatorEnabled: @escaping @MainActor () -> Bool = { ExperimentalFeatures.isEnabled(.automationOperator) }
     ) {
         self.files = files
+        self.automationAPIOptIn = isAutomationAPIEnabled
         self.operatorOptIn = isOperatorEnabled
     }
 
     var isEnabled: Bool {
-        ExperimentalFeatures.isEnabled(.automationAPI)
+        automationAPIOptIn()
     }
 
     /// Whether this launch opted into operator scope. Both mint paths check it: the socket-side
@@ -521,12 +524,11 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             credentialURL: credentialURL
         )
         switch result.outcome {
-        case .minted:
-            mintedCredentialURL = credentialURL
-        case .reused:
-            break
+        case .minted, .reused:
+            // A reused credential is this launch's too: its handle resolves only in this registry.
+            mintedCredential = result.credential
         case .notOptedIn, .mintFailed:
-            mintedCredentialURL = nil
+            mintedCredential = nil
         }
         noteOperatorCredentialOutcome(result.outcome, credentialURL: credentialURL)
     }
@@ -578,19 +580,21 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         }
     }
 
-    /// A credential file this launch did not mint belongs to another launch sharing the path —
-    /// the installed app's, when `swift test` runs beside it — so it stays. One a crashed launch
-    /// left behind is safe to leave too: it fails closed against the fresh registry.
+    /// Removes the credential only while the file still holds the one this launch minted. Every
+    /// launch keyed on one bundle identifier shares the path: the installed app's credential sits
+    /// there when `swift test` runs beside it, and another launch can mint there once `stop()` has
+    /// released the socket lock. A file a crashed launch left behind is safe to leave, because it
+    /// fails closed against the fresh registry.
     private func clearOperatorCredential() {
-        if let mintedCredentialURL {
-            AutomationOperatorCredentialStore.remove(at: mintedCredentialURL)
-        } else if FileManager.default.fileExists(atPath: files.credentialURL.path) {
-            let path = files.credentialURL.path
+        let credentialURL = files.credentialURL
+        if let mintedCredential, AutomationOperatorCredentialStore.load(from: credentialURL) == mintedCredential {
+            AutomationOperatorCredentialStore.remove(at: credentialURL)
+        } else if FileManager.default.fileExists(atPath: credentialURL.path) {
             log.notice(
-                "[AutomationIntegration] left the operator credential at \(path, privacy: .public) in place: this launch did not mint it"
+                "[AutomationIntegration] left the operator credential at \(credentialURL.path, privacy: .public) in place: it is not the one this launch minted"
             )
         }
-        mintedCredentialURL = nil
+        mintedCredential = nil
         operatorCredentialOutcome = nil
         Self.operatorCredentialOutcomeSnapshot.value = nil
     }
