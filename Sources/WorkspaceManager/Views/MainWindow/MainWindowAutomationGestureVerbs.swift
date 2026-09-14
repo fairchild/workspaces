@@ -84,8 +84,9 @@ struct MainWindowAutomationGestureVerbs {
         )
     }
 
-    /// Enters the same setter the row's "Edit Note…" item writes through — normalization
-    /// included, so a note set over the socket renders exactly as a typed one.
+    /// An independent writer from the sidebar's "Edit Note…" setter, not the same code path —
+    /// each normalizes through `WorkspaceNote.normalized` and assigns `workspace.note`, so a
+    /// note set over the socket renders exactly as a typed one by construction, not by sharing.
     private func performNote(
         _ target: AutomationGestureVerbs.WorkspaceTarget,
         note: String?
