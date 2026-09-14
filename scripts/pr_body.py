@@ -39,7 +39,11 @@ COMMENT_RE = re.compile(r"<!--.*?(?:-->|--!>)", re.DOTALL)
 BYLINE_RE = re.compile(r"(?:\*[^*\s][^*]*\*|_[^_\s][^_]*_)")
 # A labeled link on its own line: `Review page: https://…`.
 LINK_LINE_RE = re.compile(r"(?i)^[A-Za-z][A-Za-z /-]{0,24}:\s*<?https?://\S+>?$")
-HEADING_RE = re.compile(r"^#{1,6}\s")
+# CommonMark: an ATX heading is up to three spaces of indent, one to six `#`,
+# then a space/tab or end of line — an empty heading (`###` with no text) is
+# still a heading. Four spaces of indent is a code block, not a heading, and
+# indented code can't interrupt a paragraph, so it stays out of this pattern.
+HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
 
 _KIND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("heading", HEADING_RE),
