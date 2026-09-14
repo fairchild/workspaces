@@ -1188,8 +1188,8 @@ class WorkflowContractTests(unittest.TestCase):
 class AccurateAskTests(unittest.TestCase):
     HEAD = "a" * 40
 
-    def render(self, body, *, structured=False, commit=None, author=OWNER):
-        pr = {**pull_request(labels=("author:codex",), author=author), "head": {"sha": self.HEAD}}
+    def render(self, body, *, structured=False, commit=None, author=OWNER, label="author:codex"):
+        pr = {**pull_request(labels=(label,), author=author), "head": {"sha": self.HEAD}}
         item = {**review(), "body": body, "commit_id": commit or self.HEAD}
         if structured:
             item["body"] = response.factory_review.review_state.findings_marker(body)
@@ -1206,6 +1206,36 @@ class AccurateAskTests(unittest.TestCase):
         self.assertIn("does not dispatch", text)
         self.assertIn("delivery is not verified", text)
         self.assertIn("After the blocking condition changes", text)
+
+    def test_owner_harness_prs_return_to_the_implementing_session(self):
+        for label in ("author:codex", "author:claude-code"):
+            with self.subTest(label=label):
+                text = self.render("Supply the missing screenshot.", label=label)
+                self.assertIn("implementing Interactive Lane session", text)
+                self.assertIn("delivery is not verified", text)
+
+    def test_plat_factory_prs_do_not_invent_a_laptop_session(self):
+        for label in ("author:plat", "author:codex", "author:claude-code"):
+            with self.subTest(label=label):
+                text = self.render("Supply the missing screenshot.", author=PLAT, label=label)
+                self.assertIn("hand it back to the implementer", text)
+                self.assertNotIn("Interactive Lane", text)
+                self.assertNotIn("laptop", text)
+
+    def test_unknown_or_shared_worker_identity_gets_a_generic_handoff(self):
+        for author, label in (
+            ("another-agent[bot]", "author:codex"),
+            ("workspaces-factory[bot]", "author:claude-code"),
+            ("contributor", "author:codex"),
+            ("", "author:codex"),
+            (OWNER, "author:unknown"),
+            (OWNER, "author:plat"),
+        ):
+            with self.subTest(author=author, label=label):
+                text = self.render("Supply the missing screenshot.", author=author, label=label)
+                self.assertIn("hand it back to the implementer", text)
+                self.assertNotIn("Interactive Lane", text)
+                self.assertNotIn("laptop", text)
 
     def test_quote_is_inert_bounded_and_cannot_inject_a_response_marker(self):
         ask = "`@april` ![image](https://invalid) <!-- factory-review-response review-id:123 -->\n" + "x" * 2000

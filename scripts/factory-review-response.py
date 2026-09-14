@@ -657,6 +657,21 @@ def revision_lane_covers(pull_request: dict[str, Any]) -> bool:
     return author.casefold() == RESPONDER_BOT.casefold()
 
 
+def interactive_session_authored(pull_request: dict[str, Any], repository_owner: str) -> bool:
+    """Recognize the Owner's documented harness attribution, not every non-April PR.
+
+    Author labels identify a harness or persona, not a lane (triage-labels.md).
+    Shared CLI-worker bots can also run Factory work (github-app-identities.md),
+    so unknown authors retain a generic implementer handoff.
+    """
+    author = str((pull_request.get("user") or {}).get("login") or "")
+    return (
+        bool(repository_owner)
+        and author.casefold() == repository_owner.casefold()
+        and factory_review.author_label(pull_request) in {"author:codex", "author:claude-code"}
+    )
+
+
 def revision_required_blocker(reason: str, *, interactive: bool = False) -> Blocker:
     """Name who can answer without inventing the reviewer's classification."""
     if interactive:
@@ -737,7 +752,8 @@ def evaluate_response(
         if not revision_lane_covers(pull_request):
             blockers.append(
                 revision_required_blocker(
-                    f"revises only pull requests `{RESPONDER_BOT}` authored", interactive=True
+                    f"revises only pull requests `{RESPONDER_BOT}` authored",
+                    interactive=interactive_session_authored(pull_request, repository_owner),
                 )
             )
         elif not revise_enabled:
