@@ -226,7 +226,20 @@ def compose_pr_body(
 # and a marker written before validation attests to a push the branch may not
 # carry. Model text is neutralized below for the same reason: no line of it
 # may parse as a marker.
-REVISION_COMMENT_SECTIONS = ("Summary", "Validation", "Risks")
+REVISION_COMMENT_SECTIONS = ("What", "Validation", "Risks")
+
+# `Summary` is what the section explaining the change was called before the
+# opening paragraph took over the explaining. Bodies written under it are still
+# open, and a turn that advances one must not drop its own reply on the floor.
+WHAT_HEADINGS = ("What", "Summary")
+
+
+def what_section(body: str) -> str:
+    """The section that says what changed, under either name it has had."""
+    for heading in WHAT_HEADINGS:
+        if section := markdown_section(body, heading):
+            return section
+    return ""
 
 
 def _neutralized_model_text(text: str) -> str:
@@ -288,10 +301,14 @@ def compose_revision_comment(
 ) -> str:
     """April's reply on the PR after a revision turn: what she did, bound to
     the review that asked for it. Markerless -- the lane attests separately."""
-    sections = [
-        f"## {heading}\n{_neutralized_model_text(markdown_section(body, heading))}"
+    found = {
+        heading: what_section(body) if heading == "What" else markdown_section(body, heading)
         for heading in REVISION_COMMENT_SECTIONS
-        if markdown_section(body, heading)
+    }
+    sections = [
+        f"## {heading}\n{_neutralized_model_text(content)}"
+        for heading, content in found.items()
+        if content
     ]
     return "\n".join(
         [
@@ -317,8 +334,7 @@ def compose_revision_escalation_comment(
     reasoning next to it.
     """
     reason = _neutralized_model_text(
-        markdown_section(body, "Summary")
-        or "No reason was recorded; see the workflow run."
+        what_section(body) or "No reason was recorded; see the workflow run."
     )
     return "\n".join(
         [
@@ -478,7 +494,7 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
 
     The field list comes from the PR template; the values come from what the
     runtime actually knows — changed paths for Surface, the agent's own
-    Summary/Validation/Risks sections for the rest — with honest
+    What/Validation/Risks sections for the rest — with honest
     author-must-confirm placeholders where it knows nothing, so the gate's
     structural checks pass at PR-open time without inventing claims. An
     agent-authored Mergeability section is kept verbatim.
@@ -486,13 +502,13 @@ def seed_mergeability_section(summary_body: str, *, changed_files: list[str]) ->
     if has_markdown_section(summary_body, "Mergeability"):
         return summary_body
 
-    summary_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Summary")))
+    what_line = _mergeability_clip(_first_content_line(what_section(summary_body)))
     validation_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Validation")))
     risks_line = _mergeability_clip(_first_content_line(markdown_section(summary_body, "Risks")))
 
     behavior = (
-        f"Per the summary: {summary_line}"
-        if summary_line
+        f"Per the What section: {what_line}"
+        if what_line
         else "Not stated by the author; confirm against the diff"
     )
     non_happy = (

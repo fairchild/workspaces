@@ -104,8 +104,9 @@ workspaces/
 1. Keep scope focused and prefer incremental, testable changes.
 2. Add or update tests when behavior changes.
 3. Run local checks (`mise run check`, or focused build/test commands when appropriate).
-4. Include a concise summary of behavior changes and verification results in the PR.
-5. Write the body from `.github/pull_request_template.md` rather than from memory, and check it before publishing:
+4. Title the PR with its motive. After the conventional-commit prefix, say why the reader cares — what it solved, why this PR exists — not what is in it.
+5. Open the body with one paragraph and no heading above it: why this PR exists, what it solves, then what changed and how big it is. Ordinary prose, written for whoever decides whether to care, and short — the opening is often the only part read. `## What` and the sections under it carry the rest, including the validation and its evidence.
+6. Write the body from `.github/pull_request_template.md` rather than from memory, and check it before publishing:
 
    ```bash
    cp .github/pull_request_template.md /tmp/pr-body.md   # then fill it in
@@ -113,7 +114,7 @@ workspaces/
    gh pr create --body-file /tmp/pr-body.md
    ```
 
-   The preflight runs the same checks as the `PR Readiness` gate and prints the same failures, so a missing `## Mergeability` section costs one re-edit instead of a CI round trip.
+   The preflight runs the same checks as the `PR Readiness` gate and prints the same failures, so a body that opens on a heading, or a missing `## Mergeability` section, costs one re-edit instead of a CI round trip.
 
 ## CI Runner Lanes
 
