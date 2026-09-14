@@ -130,21 +130,17 @@ def load_json(path: str | None, default: Any) -> Any:
         return json.load(file)
 
 
-# A body reads the way GitHub renders it. A heading may sit up to three spaces
-# in, and four is a code block, so an example quoted there is not a heading. A
-# list item opens on `-`, `*`, `+`, or one to nine digits and `.` or `)`. A CR
-# or CRLF ends a line the way LF does.
+# A body reads the way GitHub renders it. A CR or CRLF ends a line the way LF
+# does. A heading may sit up to three spaces in, and four is a code block. A
+# list item opens on `-`, `*`, `+`, or one to nine digits and `.` or `)`.
 HEADING_INDENT = r" {0,3}"
 LIST_MARKER = r"(?:[-*+]|[0-9]{1,9}[.)])"
 LINE_ENDING_RE = re.compile(r"\r\n?")
 
 
 def extract_section(body: str, heading: str) -> str:
-    # A section ends at the next `## ` at column 0. An indented one can sit
-    # inside a list item, and there it belongs to the section around it.
     pattern = re.compile(
-        rf"(?msi)^{HEADING_INDENT}## {re.escape(heading)}\n(?P<section>.*?)"
-        r"(?=^## |\n---\n|\Z)"
+        rf"(?msi)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""
@@ -211,10 +207,10 @@ def leading_paragraph_failure(body: str) -> str | None:
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
-    # Exact means `## Evidence Status` at column 0, in any letter case. The
-    # factory's writer finds its section by that heading and cannot find an
-    # indented one, so an indented heading is a variant: accepted, it would sit
-    # beside a second section the factory adds on its next turn.
+    # Exact is `## Evidence Status` at column 0, in any letter case: the only
+    # heading `extract_section` reads and the factory's writer can replace. One
+    # indented up to three spaces renders the same and counts as a variant, so a
+    # status line under it fails the gate instead of going unread.
     headings = re.findall(
         rf"(?im)^{HEADING_INDENT}#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
         body,
@@ -260,8 +256,12 @@ def label_names(pr: dict[str, Any]) -> list[str]:
     return [item.get("name", "") for item in pr.get("labels", []) if isinstance(item, dict)]
 
 
-def has_checked_box(body: str, label: str) -> bool:
-    return bool(re.search(rf"(?im)^\s*{LIST_MARKER}\s*\[x\]\s*{re.escape(label)}\b", body))
+def has_checked_box(body: str, label: str, *, rendered_only: bool = False) -> bool:
+    # A box that holds a PR back is read as leniently as a pending line. A box
+    # that excuses one from evidence counts only as GitHub renders it, with a
+    # space or tab after its marker.
+    gap = r"[ \t]+" if rendered_only else r"\s*"
+    return bool(re.search(rf"(?im)^\s*{LIST_MARKER}{gap}\[x\]\s*{re.escape(label)}\b", body))
 
 
 # A command someone can re-run, and what it printed. Either half alone is not
@@ -452,7 +452,7 @@ def has_any_evidence(body: str, files: list[str] | None = None) -> bool:
             bool(EVIDENCE_STORE_LOG_RE.search(body)),
             has_image_evidence(body) and visual,
             bool(EVIDENCE_STORE_RE.search(body)) and visual,
-            has_checked_box(body, "Not a testable change"),
+            has_checked_box(body, "Not a testable change", rendered_only=True),
         )
     )
 

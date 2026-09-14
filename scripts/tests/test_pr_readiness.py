@@ -549,20 +549,20 @@ class PendingLineShapeTests(unittest.TestCase):
         body = GOOD_BODY + "\n## Evidence Status\n- [pending-ci] swift test -- waiting\n"
         self.assertEqual(self.failures(body.replace("\n", "\r\n")), [self.PENDING])
 
-    def test_a_heading_up_to_three_spaces_in_is_the_section(self) -> None:
+    def test_a_status_heading_up_to_three_spaces_in_is_a_variant(self) -> None:
+        # It renders as the heading, but the factory's writer cannot find it and
+        # would add a second section beside it, so it fails whatever it holds.
         for indent in (" ", "  ", "   "):
-            with self.subTest(indent=len(indent)):
-                pending = GOOD_BODY + f"\n{indent}## Evidence Status\n- [pending-ci] swift test -- waiting\n"
-                self.assertIn(self.PENDING, self.failures(pending))
-                self.assertEqual(self.failures(GOOD_BODY.replace("## Mergeability", f"{indent}## Mergeability")), [])
+            for line in ("- [pending-ci] swift test -- waiting", "- [complete] swift test -- 1992 tests passed"):
+                with self.subTest(indent=len(indent), line=line):
+                    body = GOOD_BODY + f"\n{indent}## Evidence Status\n{line}\n"
+                    self.assertEqual(self.failures(body), [self.AMBIGUOUS])
 
-    def test_an_indented_status_heading_is_a_variant(self) -> None:
-        # The factory's writer cannot find an indented status heading and adds
-        # its own section beside it, so the gate refuses the indent before then.
-        body = GOOD_BODY + "\n   ## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
-        self.assertEqual(self.failures(body), [self.AMBIGUOUS])
-
-    def test_a_heading_nested_in_a_list_item_stays_inside_its_section(self) -> None:
+    def test_an_indented_heading_neither_opens_nor_ends_a_section(self) -> None:
+        # A regex cannot tell a heading nested in a list item from a top-level
+        # one, so a section opens and closes at a column-0 heading only.
+        indented = GOOD_BODY.replace("## Mergeability", "   ## Mergeability")
+        self.assertIn("Missing ## Mergeability section from the PR body.", self.failures(indented))
         nested = "- Supporting context:\n\n   ## Nested detail\n\n   Inside the list item.\n\n"
         body = GOOD_BODY.replace("## Mergeability\n\n", "## Mergeability\n\n" + nested, 1)
         self.assertEqual(self.failures(body), [])
@@ -585,17 +585,25 @@ class PendingLineShapeTests(unittest.TestCase):
                 self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}"), [self.PENDING])
 
     def test_a_blocked_on_evidence_box_under_any_list_marker_is_checked(self) -> None:
-        for marker in ("*", "+", "1.", "123456789."):
-            with self.subTest(marker=marker):
-                body = GOOD_BODY.replace("- [ ] Blocked on evidence", f"{marker} [x] Blocked on evidence")
+        # A box that holds a PR back is read as leniently as a pending line.
+        for box in ("* [x]", "+ [x]", "1. [x]", "123456789. [x]", "-[x]"):
+            with self.subTest(box=box):
+                body = GOOD_BODY.replace("- [ ] Blocked on evidence", f"{box} Blocked on evidence")
                 self.assertIn("PR is checked as blocked on evidence.", self.failures(body))
 
-    def test_ten_digits_do_not_open_a_list_item(self) -> None:
+    def test_only_a_checkbox_github_renders_excuses_evidence(self) -> None:
+        evidence = "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed"
+        untested = GOOD_BODY.replace(evidence, "-")
+        for line in (
+            "1234567890. [x] Not a testable change",
+            "123456789.[x] Not a testable change",
+            "-[x] Not a testable change",
+        ):
+            with self.subTest(line=line):
+                self.assertIn("No test/evidence signal found in PR body.", self.failures(untested + f"\n{line}\n"))
+        self.assertEqual(self.failures(untested + "\n123456789. [x] Not a testable change\n"), [])
         blocked = GOOD_BODY + "\n## Notes\n\n1234567890. [x] Blocked on evidence\n"
         self.assertNotIn("PR is checked as blocked on evidence.", self.failures(blocked))
-        evidence = "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed"
-        untested = GOOD_BODY.replace(evidence, "-") + "\n1234567890. [x] Not a testable change\n"
-        self.assertIn("No test/evidence signal found in PR body.", self.failures(untested))
 
 
 class ReadinessCommentTests(unittest.TestCase):
