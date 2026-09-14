@@ -332,5 +332,39 @@ class ParseMultiDocumentTests(unittest.TestCase):
             fm.parse_multi_document("plain text with no delimiters")
 
 
+class ReviewMetadataTests(unittest.TestCase):
+    def test_block_mappings_lists_and_json_flow_are_review_only(self):
+        for field, value, expected in (
+            ("image_observations", '\n  - artifact_id: image-1\n    observation: "The label says: ready."',
+             [{"artifact_id": "image-1", "observation": "The label says: ready."}]),
+            ("image_observations", ' [{"artifact_id": "image-1", "observation": "Ready"}]',
+             [{"artifact_id": "image-1", "observation": "Ready"}]),
+            ("review_findings", '\n  version: 1\n  head_sha: abc\n  findings:\n    - category: code-defect\n      target: sample.py:4\n      requested_change: Keep focus',
+             {"version": 1, "head_sha": "abc", "findings": [{"category": "code-defect", "target": "sample.py:4", "requested_change": "Keep focus"}]}),
+        ):
+            with self.subTest(field=field, value=value):
+                metadata, _ = fm.parse_frontmatter(f"---\n{field}:{value}\n---\nReview")
+                self.assertEqual(metadata[field], expected)
+        metadata, _ = fm.parse_frontmatter('---\nlabels: [bug, "area: ui"]\n---')
+        self.assertEqual(metadata["labels"], ["bug", "area: ui"])
+
+    def test_duplicate_keys_indentation_and_bounds_fail_closed(self):
+        values = [
+            '\n  version: 1\n  version: 2',
+            ' {"version": 1, "version": 2}',
+            '\n  version: 1\n   head_sha: abc',
+            '\n\tversion: 1',
+            ' ' + '[' * 8 + '0' + ']' * 8,
+            '\n' + '\n'.join('  ' * (i + 1) + f'level_{i}:' for i in range(8)),
+            ' ' + '{"observation": "' + 'a' * 65536 + '"}',
+            '\n' + '\n'.join('  key_%d: value' % i for i in range(257)),
+        ]
+        for value in values:
+            with self.subTest(value=value[:80]), self.assertRaises(ValueError):
+                fm.parse_frontmatter(f"---\nreview_findings:{value}\n---\nReview")
+        with self.assertRaises(ValueError):
+            fm.parse_frontmatter('---\nimage_observations: []\nimage_observations: []\n---')
+
+
 if __name__ == "__main__":
     unittest.main()

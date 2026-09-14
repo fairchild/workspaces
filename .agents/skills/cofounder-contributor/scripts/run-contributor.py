@@ -91,7 +91,7 @@ from factory_review_state import (  # noqa: E402
 )
 from review_evidence import (  # noqa: E402
     EvidencePreparationError, ReviewPreparation, prepare_review_evidence,
-    record_image_reads, validate_image_observations,
+    record_image_reads, validate_image_observations, normalized_commit_facts,
 )
 from github_state import fetch_review_checks  # noqa: E402
 
@@ -1282,6 +1282,13 @@ def _discussion_untrusted_payload(discussion: dict[str, Any], owner_login: str) 
 
 
 def _pull_request_untrusted_payload(pr: dict[str, Any], owner_login: str) -> list[UntrustedGitHubPayload]:
+    # Commit headlines are PR-authored text, not trusted task instructions.
+    headlines = []
+    for node in (pr.get("commits") or {}).get("nodes", [])[:30]:
+        commit = node.get("commit") if isinstance(node, dict) else None
+        if isinstance(commit, dict):
+            headlines.append({"oid": str(commit.get("oid", ""))[:64],
+                              "messageHeadline": str(commit.get("messageHeadline", ""))[:500]})
     author = str((pr.get("author") or {}).get("login", ""))
     payloads = [
         UntrustedGitHubPayload(
@@ -1300,6 +1307,7 @@ def _pull_request_untrusted_payload(pr: dict[str, Any], owner_login: str) -> lis
             metadata={
                 "review_decision": str(pr.get("reviewDecision", "")),
                 "head_ref_name": str(pr.get("headRefName", "")),
+                "commits": headlines,
             },
         )
     ]
@@ -1420,7 +1428,7 @@ def build_action_phase_inputs(
             task_envelope["review_base_sha"] = pr.get("baseRefOid", "")
             task_envelope["review_body_digest"] = hashlib.sha256(str(pr.get("body", "")).encode()).hexdigest()
             # The trusted source checkout's recent commits describe a different tree.
-            task_envelope["recent_commit_summary"] = (pr.get("commits") or {}).get("nodes", [])
+            task_envelope["recent_commit_summary"] = normalized_commit_facts(pr)
         payloads.extend(_pull_request_untrusted_payload(pr, owner))
         if choice.selection_kind in {"review_followup_pr", "review_pr"}:
             diff_text = fetch_pr_diff(pr_number, env, max_lines=PR_DIFF_MAX_LINES)
