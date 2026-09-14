@@ -21,14 +21,15 @@ public protocol ClaudeSettingsInstalling: Sendable {
     func userSettingsModificationDate() async -> Date?
 }
 
-/// A Claude settings file that exists but is not a JSON object. Its bytes may be
-/// the only copy of a person's settings, so the installer refuses to merge into it.
+/// A Claude settings file the installer will not write over: it is not a JSON
+/// object, or it changed after the installer read it. Its bytes may be the only
+/// copy of a person's settings, so they stay as they are.
 public struct MalformedClaudeSettingsError: LocalizedError, Equatable {
     public let path: String
     public let reason: String
 
     public var errorDescription: String? {
-        "WorkSpaces left \(path) unchanged because it is not a JSON object: \(reason)"
+        "WorkSpaces left \(path) unchanged: \(reason)"
     }
 }
 
@@ -73,6 +74,7 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
     private let backupDirectory: URL
     private let preferredNotifChannel = "iterm2"
     private var lastBackupPath: String?
+    private var beforeWrite: (@Sendable (URL) -> Void)?
 
     public init(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
@@ -125,7 +127,11 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
 
     /// Apply the concrete WorkSpaces patch. Every target is read before any is
     /// written, so a file that is not a JSON object fails the install with no
-    /// write and no backup. If a file is already byte-identical after merging,
+    /// write and no backup. Just before its backup and write, each target is read
+    /// again; if its bytes no longer match the first read, another writer landed in
+    /// between, and the install throws without writing it or any later target. A
+    /// target already written stays written, and the recheck narrows the window
+    /// rather than closing it. If a file is already byte-identical after merging,
     /// no write and no backup occurs.
     public func install() throws {
         let snapshots = try Target.allCases.filter { isPatched($0) }.map { target in
@@ -156,6 +162,11 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
 
             if let originalData, originalData == mergedData {
                 continue
+            }
+
+            beforeWrite?(url)
+            guard (try? Data(contentsOf: url)) == originalData else {
+                throw MalformedClaudeSettingsError(path: url.path, reason: "it changed during install")
             }
 
             if let originalData {
@@ -649,13 +660,20 @@ public actor ClaudeSettingsInstaller: ClaudeSettingsInstalling {
         do {
             parsed = try JSONSerialization.jsonObject(with: data)
         } catch {
-            let reason = (error as NSError).userInfo[NSDebugDescriptionErrorKey] as? String
-            throw MalformedClaudeSettingsError(path: url.path, reason: reason ?? error.localizedDescription)
+            let detail = (error as NSError).userInfo[NSDebugDescriptionErrorKey] as? String
+            throw MalformedClaudeSettingsError(
+                path: url.path, reason: "it is not valid JSON (\(detail ?? error.localizedDescription))")
         }
         guard let object = parsed as? [String: Any] else {
-            throw MalformedClaudeSettingsError(path: url.path, reason: "the top-level value is not an object")
+            throw MalformedClaudeSettingsError(path: url.path, reason: "its top-level value is not an object")
         }
         return (Self.lift(object), data)
+    }
+
+    /// Test seam: runs just before a target is read again and written, the window
+    /// another writer's change can land in.
+    func setBeforeWrite(_ hook: (@Sendable (URL) -> Void)?) {
+        beforeWrite = hook
     }
 
     private func rotateBackups(forSettingsFile url: URL) {
