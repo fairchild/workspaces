@@ -4,7 +4,8 @@
 //  experiment is on, re-checked on every call) and where the plane's files live: a lifecycle given a
 //  scratch root keeps its socket and credential there, and never removes a credential another launch
 //  minted — the path by which `swift test` deleted the installed app's (#1607). A stop, including one
-//  that lands while a start is still binding, leaves no listener or credential of its own behind.
+//  that lands while a start is still binding or one whose bind fails, leaves no listener or credential of
+//  its own behind, and two stops at once finish together, so the plane started after them survives both.
 //
 
 import Foundation
@@ -157,7 +158,6 @@ struct AutomationIntegrationLifecycleTests {
         defer { try? FileManager.default.removeItem(at: plane.root) }
         let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
 
-        // The start runs to its first suspension, waiting on the bind, and stop() lands there.
         let starting = Task {
             try await lifecycle.startIfNeeded(
                 tileTreeStore: TileTreeStore(),
@@ -165,13 +165,15 @@ struct AutomationIntegrationLifecycleTests {
                 requestCloseTerminal: { _ in }
             )
         }
-        await Task.yield()
+        // stop() lands once the start is waiting on the bind.
+        let binding = await yield(until: { lifecycle.startWaiters == 1 })
         await lifecycle.stop()
         let started = await starting.result
         let left = await leftovers(of: lifecycle, files: plane.files)
         // Stop again before asserting, so a start that published anyway cannot leave its listener bound.
         await lifecycle.stop()
 
+        #expect(binding)
         // A cancellation, not merely a failure: a start that failed to bind would also leave nothing behind.
         #expect(throws: CancellationError.self) { try started.get() }
         #expect(left == .nothing)
@@ -198,7 +200,7 @@ struct AutomationIntegrationLifecycleTests {
         let joining = Task {
             await lifecycle.configure(tileTreeStore: store, focusTerminal: { _ in }, requestCloseTerminal: { _ in })
         }
-        await Task.yield()
+        let joined = await yield(until: { lifecycle.startWaiters == 2 })
         // Nothing published yet means the stop below lands on the start, not on an ordinary shutdown.
         let publishedBeforeStop = lifecycle.socketPath
         await lifecycle.stop()
@@ -207,8 +209,110 @@ struct AutomationIntegrationLifecycleTests {
         let left = await leftovers(of: lifecycle, files: plane.files)
         await lifecycle.stop()
 
+        #expect(joined)
         #expect(publishedBeforeStop == nil)
         #expect(left == .nothing)
+    }
+
+    /// A start whose bind fails while a stop waits on it belongs to that stop as well. Its waiters get the
+    /// stop's cancellation rather than the bind error, so a configure pass among them takes the path that
+    /// leaves the plane to the stop instead of the one that clears the tile store and the handle registry.
+    @Test("A start that fails while a stop waits on it hands every waiter the stop's cancellation")
+    func failedStartDuringStopCancelsItsWaiters() async throws {
+        let plane = try makeScratchPlane()
+        defer { try? FileManager.default.removeItem(at: plane.root) }
+        // Another launch holds the plane's socket lock, so this lifecycle's bind throws.
+        let otherLaunch = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { false })
+        _ = try await otherLaunch.startIfNeeded(
+            tileTreeStore: TileTreeStore(),
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in }
+        )
+        let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+
+        func start() -> Task<String, Error> {
+            Task {
+                try await lifecycle.startIfNeeded(
+                    tileTreeStore: TileTreeStore(),
+                    focusTerminal: { _ in },
+                    requestCloseTerminal: { _ in }
+                )
+            }
+        }
+        let starting = start()
+        let joining = start()
+        let joined = await yield(until: { lifecycle.startWaiters == 2 })
+        await lifecycle.stop()
+        let results = [await starting.result, await joining.result]
+        await otherLaunch.stop()
+        let left = await leftovers(of: lifecycle, files: plane.files)
+        await lifecycle.stop()
+
+        #expect(joined)
+        for result in results {
+            #expect(throws: CancellationError.self) { try result.get() }
+        }
+        #expect(left == .nothing)
+    }
+
+    /// Two stops can wait on the same start. The second finishes with the first instead of tearing down
+    /// again, so what a caller sets up once either stop has returned, a tile's handle and a fresh start,
+    /// is still in place after both have (#1679).
+    @Test("A second stop finishes with the first, so the plane started after them survives both")
+    func concurrentStopsLeaveTheNextPlaneIntact() async throws {
+        let plane = try makeScratchPlane()
+        defer { try? FileManager.default.removeItem(at: plane.root) }
+        let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+
+        let starting = Task {
+            try await lifecycle.startIfNeeded(
+                tileTreeStore: TileTreeStore(),
+                focusTerminal: { _ in },
+                requestCloseTerminal: { _ in }
+            )
+        }
+        let binding = await yield(until: { lifecycle.startWaiters == 1 })
+        // Each caller stops, then at once registers a handle and starts again, as a window would.
+        func stopThenRestart() -> Task<(handle: String, socketPath: String), Error> {
+            Task {
+                await lifecycle.stop()
+                let handle = lifecycle.handleRegistry.registerOperator(appScopeID: "test").handle
+                let socketPath = try await lifecycle.startIfNeeded(
+                    tileTreeStore: TileTreeStore(),
+                    focusTerminal: { _ in },
+                    requestCloseTerminal: { _ in }
+                )
+                return (handle, socketPath)
+            }
+        }
+        let first = stopThenRestart()
+        let second = stopThenRestart()
+        let cancelled = await starting.result
+        let restarts = [await first.result, await second.result]
+        let handlesResolve = restarts.compactMap { try? $0.get().handle }.map {
+            lifecycle.handleRegistry.resolve($0) != nil
+        }
+        let running = await leftovers(of: lifecycle, files: plane.files)
+        await lifecycle.stop()
+        let left = await leftovers(of: lifecycle, files: plane.files)
+
+        #expect(binding)
+        #expect(throws: CancellationError.self) { try cancelled.get() }
+        #expect(restarts.map { try? $0.get().socketPath } == [plane.files.socketURL.path, plane.files.socketURL.path])
+        #expect(handlesResolve == [true, true])
+        #expect(running.socketPath == plane.files.socketURL.path)
+        #expect(running.credential?.socketPath == plane.files.socketURL.path)
+        #expect(running.lockHeld)
+        #expect(left == .nothing)
+    }
+
+    /// Yields until `condition` holds, so a test acts on the state it needs rather than on how far one
+    /// yield happened to get. Bounded by a count of yields, not a clock.
+    private func yield(until condition: () -> Bool) async -> Bool {
+        for _ in 0..<1_000 where !condition() {
+            await Task.yield()
+        }
+        return condition()
     }
 
     /// What a stop left on its plane: the credential, the published socket path, and whether the socket

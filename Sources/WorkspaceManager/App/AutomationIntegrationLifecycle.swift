@@ -32,6 +32,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var startTask: (task: Task<AutomationListener, Error>, stops: Int)?
     /// Advanced by every `stop()` before its first suspension.
     private var stops = 0
+    /// Callers of a `stop()` already tearing down, resumed when it finishes, or nil while no stop is. A
+    /// second stop returns with the first instead of tearing down again behind a start that followed it.
+    private var stopWaiters: [CheckedContinuation<Void, Never>]?
+    /// Callers suspended on the start in flight. Exists for tests that must land a stop while a start
+    /// is still binding, rather than trusting a yield to get them there.
+    private(set) var startWaiters = 0
     /// Where this launch's socket, audit log and operator credential live.
     let files: AutomationPlaneFiles
     /// Read by configure passes on the MainActor and by the listener off it, on every request.
@@ -196,8 +202,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             }
 
         if let startTask {
-            let socketPath = try await startTask.task.value.socketPath
-            guard stops == startTask.stops else { throw CancellationError() }
+            let socketPath = try await waitForStart(startTask).socketPath
             controller?.update(
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
@@ -277,15 +282,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
         let startedSocketPath: String
         do {
-            startedSocketPath = try await startTask.task.value.socketPath
+            startedSocketPath = try await waitForStart(startTask).socketPath
         } catch {
             // A stop begun during the bind keeps the slot until its wait ends, so nothing starts behind it.
             if stops == startTask.stops { self.startTask = nil }
             throw error
         }
-        // A stop begun during the bind stops this listener itself; publishing it would leave a socket
-        // path and a credential behind a stop that has returned.
-        guard stops == startTask.stops else { throw CancellationError() }
 
         self.controller = controller
         self.listener = listener
@@ -325,6 +327,20 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             Task { @MainActor [weak self] in await self?.stop() }
         }
         return listener.socketPath
+    }
+
+    /// The listener a start bound, or `CancellationError` once a stop has begun since that start did,
+    /// whether the bind succeeded or failed. That stop stops the listener itself, and publishing it would
+    /// leave a socket path and a credential behind a stop that has returned; a bind error handed out
+    /// instead would send a configure pass down the path that clears the tile store and the registry.
+    private func waitForStart(
+        _ start: (task: Task<AutomationListener, Error>, stops: Int)
+    ) async throws -> AutomationListener {
+        startWaiters += 1
+        defer { startWaiters -= 1 }
+        let bound = await start.task.result
+        guard stops == start.stops else { throw CancellationError() }
+        return try bound.get()
     }
 
     @discardableResult
@@ -472,6 +488,15 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     func stop() async {
         retireOperatorCredential()
         stops += 1
+        guard stopWaiters == nil else {
+            await withCheckedContinuation { stopWaiters?.append($0) }
+            return
+        }
+        stopWaiters = []
+        defer {
+            stopWaiters?.forEach { $0.resume() }
+            stopWaiters = nil
+        }
         if let startTask {
             // The start's waiters see `stops` move and publish nothing, so the listener it bound is this
             // call's to stop. The start keeps its slot until then, so a start requested meanwhile joins it
