@@ -249,7 +249,7 @@ PERF_EVIDENCE_RE = re.compile(
 # stay `other`, where a person is asked for them.
 MANUAL_JUDGEMENT_RE = re.compile(
     r"(?i)\bmanual(?:ly)?\s+(?:run|ran|test\w*|check\w*|verif\w+|inspect\w+|exercis\w+"
-    r"|step\w*|pass|walkthrough|qa)\b"
+    r"|step\w*|pass|walkthrough|qa|approv\w*|sign[- ]?off)\b"
     r"|\b(?:run|ran|verified|checked|tested|inspected|exercised|driven|confirmed"
     r"|followed|performed|executed|walked|reproduced|observed|watched)"
     r"\s+(?:it\s+)?(?:manually|by hand|by eye|interactively|live|in person)\b"
@@ -1502,12 +1502,21 @@ def _needs_a_person_to_look(item: str) -> bool:
     )
 
 
-def review_evidence_gate_error(verdict: str, accounting: dict[str, object], errors: list[str]) -> str | None:
+def _image_read_satisfies_item(item: str) -> bool:
+    """Image inspection never substitutes for a requested human/external act."""
+    return _evidence_item_kind(item) == "screenshot" and not any(
+        pattern.search(item)
+        for pattern in (OWNER_ATTESTED_RE, MANUAL_JUDGEMENT_RE, EXTERNAL_VERIFICATION_RE)
+    )
+
+
+def review_evidence_gate_error(verdict: str, accounting: dict[str, object], errors: list[str], *, images_inspected: bool = False) -> str | None:
     if verdict == "request_changes":
         return None
     if errors:
         return "; ".join(errors)
-    blocked_items = accounting["blocked_items"]
+    blocked_items = [item for item in accounting["blocked_items"]
+                     if not (images_inspected and _image_read_satisfies_item(str(item)))]
     if blocked_items:
         # A blocked item that needs a person to look at something is not
         # approvable: no amount of reading replaces looking. A blocked item
@@ -1544,6 +1553,7 @@ def review_evidence_gate_error(verdict: str, accounting: dict[str, object], erro
         item
         for item in accounting.get("pending_ci_items", [])
         if _evidence_item_kind(str(item)) != "diff"
+        and not (images_inspected and _image_read_satisfies_item(str(item)))
     ]
     if pending_ci_items:
         preview = "; ".join(str(item) for item in pending_ci_items[:3])

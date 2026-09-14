@@ -223,6 +223,7 @@ jobs:
           CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
           FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
           FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          FACTORY_OWNER_REVIEW_RETRY: ${{ needs.admit.outputs.force_review }}
           FACTORY_TELEMETRY_DIR: ${{ runner.temp }}/factory-telemetry
           FACTORY_TELEMETRY_LANE: review
           FACTORY_TELEMETRY_REVIEWER: april
@@ -328,6 +329,7 @@ jobs:
           CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
           FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
           FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
+          FACTORY_OWNER_REVIEW_RETRY: ${{ needs.admit.outputs.force_review }}
           FACTORY_TELEMETRY_DIR: ${{ runner.temp }}/factory-telemetry
           FACTORY_TELEMETRY_LANE: review
           FACTORY_TELEMETRY_REVIEWER: plat
