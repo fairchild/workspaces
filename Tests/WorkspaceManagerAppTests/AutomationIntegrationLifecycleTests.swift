@@ -122,6 +122,32 @@ struct AutomationIntegrationLifecycleTests {
         #expect(AutomationOperatorCredentialStore.load(from: plane.files.credentialURL) == replacement)
     }
 
+    /// The credential is cleared before the listener shuts down, and a defaults change can land while
+    /// it does. Nothing may mint a fresh credential behind the clear and leave it on disk once `stop()`
+    /// has returned.
+    @Test("A defaults change while stopping does not mint a credential that outlives the stop")
+    func defaultsChangeDuringStopLeavesNoCredential() async throws {
+        let plane = try makeScratchPlane()
+        defer { try? FileManager.default.removeItem(at: plane.root) }
+        let lifecycle = AutomationIntegrationLifecycle(files: plane.files, isOperatorEnabled: { true })
+
+        _ = try await lifecycle.startIfNeeded(
+            tileTreeStore: TileTreeStore(),
+            focusTerminal: { _ in },
+            requestCloseTerminal: { _ in }
+        )
+        let minted = AutomationOperatorCredentialStore.load(from: plane.files.credentialURL)
+
+        // Let stop() run to its first suspension, the listener shutting down, then change defaults.
+        let stopping = Task { await lifecycle.stop() }
+        await Task.yield()
+        NotificationCenter.default.post(name: UserDefaults.didChangeNotification, object: nil)
+        await stopping.value
+
+        #expect(minted != nil)
+        #expect(AutomationOperatorCredentialStore.load(from: plane.files.credentialURL) == nil)
+    }
+
     /// #1607 inside a scratch root: the installed app's credential sits at the path this lifecycle
     /// resolves, and the lifecycle is configured and stopped with the Automation API off, as it is in
     /// the test process. Neither pass may remove a file this launch did not mint.

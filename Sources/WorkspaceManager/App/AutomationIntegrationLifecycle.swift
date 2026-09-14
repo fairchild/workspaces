@@ -304,7 +304,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             // (A crash can't clean up, which is why a stale credential also fails closed against the
             // fresh registry — see AutomationOperatorCredentialStore.)
             MainActor.assumeIsolated {
-                self?.clearOperatorCredential()
+                self?.retireOperatorCredential()
             }
             Task { @MainActor [weak self] in await self?.stop() }
         }
@@ -454,18 +454,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     }
 
     func stop() async {
-        // The operator handle dies with the launch; remove its credential file on the way out so a
-        // clean exit leaves nothing readable (a crash can't, which is why stale credentials fail
-        // closed against the fresh registry — see AutomationOperatorCredentialStore). It goes first,
-        // before the listener releases the socket lock, so no other launch can mint at the shared
-        // path between the comparison and the removal.
-        clearOperatorCredential()
+        retireOperatorCredential()
         startTask?.cancel()
         startTask = nil
         await listener?.stop()
         listener = nil
         controller = nil
-        socketPath = nil
         didStart = false
         appIntentOperatorHandle = nil
         handleRegistry.removeAll()
@@ -473,10 +467,21 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             NotificationCenter.default.removeObserver(teardownObserver)
             self.teardownObserver = nil
         }
+    }
+
+    /// The operator handle dies with the launch; its credential file goes on the way out so a clean
+    /// exit leaves nothing readable (a crash can't, which is why stale credentials fail closed against
+    /// the fresh registry — see AutomationOperatorCredentialStore). This runs synchronously, before
+    /// the listener releases the socket lock, so no other launch can mint between the comparison and
+    /// the removal. It first ends the ways this launch could mint again behind the clear while the
+    /// listener shuts down: the defaults observer, and any refresh that still finds a socket path.
+    private func retireOperatorCredential() {
         if let experimentObserver {
             NotificationCenter.default.removeObserver(experimentObserver)
             self.experimentObserver = nil
         }
+        socketPath = nil
+        clearOperatorCredential()
     }
 
     /// Brings the operator credential in line with the launch's current opt-in state.
