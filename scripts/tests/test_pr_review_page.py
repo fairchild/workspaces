@@ -334,7 +334,7 @@ class Diagram(GeneratorTestCase):
         self.assertNotIn("<svg", page)
         self.assertIn("[pr-review-page] diagram not rendered: no renderer", errors.getvalue())
 
-    def shape_behind_stub_renderer(self, script: str) -> tuple[str, str]:
+    def shape_behind_stub_renderer(self, script: str, *, interpreter: str = "/bin/sh") -> tuple[str, str]:
         """The shape section and the build's stderr, drawn by an `mmdc` that only runs `script`.
 
         A stub first on PATH rather than the real renderer, so the failure path
@@ -342,7 +342,7 @@ class Diagram(GeneratorTestCase):
         """
         stub_dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
         stub = stub_dir / "mmdc"
-        stub.write_text(f"#!/bin/sh\n{script}\n")
+        stub.write_text(f"#!{interpreter}\n{script}\n")
         stub.chmod(0o755)
         errors = io.StringIO()
         with (
@@ -382,6 +382,26 @@ class Diagram(GeneratorTestCase):
         self.assertIn("timed out after 0.5 seconds", shape)
         self.assertNotIn("No renderer was available", shape)
         self.assertIn("[pr-review-page] diagram render failed: timed out after 0.5 seconds", errors)
+
+    def test_a_renderer_whose_stderr_is_not_text_is_still_reported_as_failing(self) -> None:
+        """Bytes that do not decode are the renderer's trouble, not a reason to abandon the page."""
+        shape, errors = self.shape_behind_stub_renderer("printf '\\377 broken\\n' >&2\nexit 1")
+        self.assertIn("The renderer failed", shape)
+        self.assertIn("broken", shape)
+        self.assertNotIn("No renderer was available", shape)
+        self.assertIn("[pr-review-page] diagram render failed:", errors)
+
+    def test_a_renderer_that_exits_cleanly_without_an_image_is_reported_as_failing(self) -> None:
+        """A missing image is the renderer's failure, not a missing file somewhere on the build host."""
+        shape, errors = self.shape_behind_stub_renderer("exit 0")
+        self.assertIn("The renderer failed (&quot;exited without writing an image&quot;)", shape)
+        self.assertIn("[pr-review-page] diagram render failed: exited without writing an image", errors)
+
+    def test_a_renderer_that_cannot_start_is_reported_as_failing(self) -> None:
+        shape, errors = self.shape_behind_stub_renderer("exit 0", interpreter="/nonexistent/interpreter")
+        self.assertIn("The renderer failed", shape)
+        self.assertNotIn("No renderer was available", shape)
+        self.assertIn("[pr-review-page] diagram render failed:", errors)
 
     @requires_renderer
     def test_the_renderer_reaches_no_network_during_a_build(self) -> None:
