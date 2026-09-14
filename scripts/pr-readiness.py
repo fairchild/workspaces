@@ -141,6 +141,7 @@ LINE_ENDING_RE = re.compile(r"\r\n?")
 PENDING_STATUS_RE = re.compile(
     rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
 )
+FENCE_OPENER_RE = re.compile(r" {0,3}(?P<run>`{3,}|~{3,})(?P<info>.*)")
 
 
 def extract_section(body: str, heading: str) -> str:
@@ -151,24 +152,35 @@ def extract_section(body: str, heading: str) -> str:
     return match.group("section").strip() if match else ""
 
 
-def without_fenced_blocks(text: str) -> str:
-    """The text with its fenced code blocks removed: a reader sees their lines as an example.
+def split_fenced_blocks(text: str) -> tuple[str, str | None]:
+    """The text without its fenced code blocks, and the opening line of a fence left unclosed.
 
-    A closer is a bare run of the opener's character at least as long as the
-    opener, and an unclosed fence runs to the end, as GitHub renders both.
+    A reader sees a fenced line as an example, not as status. Fences follow
+    CommonMark: an opener sits at most three spaces in, since four is an
+    indented code block, and a backtick opener's info string holds no backtick,
+    so a line that opens on a code span opens nothing. A closer is a run of the
+    opener's character at least as long, at most three spaces in. An unclosed
+    fence keeps its lines, so nothing after it goes unread.
     """
     kept: list[str] = []
-    fence = ""
+    fenced: list[str] = []
+    run = ""
     for line in text.split("\n"):
-        stripped = line.strip()
-        if fence:
-            if re.fullmatch(f"{fence}{fence[0]}*", stripped):
-                fence = ""
-        elif match := re.match(r"(`{3,}|~{3,})", stripped):
-            fence = match.group(1)
+        if run:
+            fenced.append(line)
+            if re.fullmatch(rf" {{0,3}}{re.escape(run[0])}{{{len(run)},}}[ \t]*", line):
+                fenced.clear()
+                run = ""
+        elif (opener := FENCE_OPENER_RE.fullmatch(line)) and not (
+            opener["run"].startswith("`") and "`" in opener["info"]
+        ):
+            run = opener["run"]
+            fenced.append(line)
         else:
             kept.append(line)
-    return "\n".join(kept)
+    if run:
+        return "\n".join(kept + fenced), fenced[0].strip()
+    return "\n".join(kept), None
 
 
 def template_body(path: Path | None = None) -> str:
@@ -533,7 +545,12 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
 
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
-    evidence_status = without_fenced_blocks(extract_section(body, "Evidence Status"))
+    evidence_status, unclosed_fence = split_fenced_blocks(extract_section(body, "Evidence Status"))
+    if unclosed_fence:
+        failures.append(
+            f'Evidence Status opens a code fence that never closes: "{unclosed_fence}". '
+            "Close it so the status lines after it are read."
+        )
     if PENDING_STATUS_RE.search(evidence_status):
         failures.append("Requested evidence is blocked or still pending CI.")
 

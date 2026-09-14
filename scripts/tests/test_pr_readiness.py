@@ -642,6 +642,43 @@ class PendingLineShapeTests(unittest.TestCase):
                     self.assertEqual(self.failures(complete + f"\n{fence}markdown\n{line}\n{fence}\n"), [])
                     self.assertEqual(self.failures(complete + f"\n{line}\n"), [self.PENDING])
 
+    def unclosed(self, opener: str) -> str:
+        return f'Evidence Status opens a code fence that never closes: "{opener}". Close it so the status lines after it are read.'
+
+    def test_a_fence_line_four_spaces_in_is_not_a_fence(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        for opener in ("    ```", "    ~~~"):
+            with self.subTest(opener=opener):
+                body = complete + f"\n{opener}\n- [pending-ci] swift build -- waiting\n"
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_line_that_opens_on_a_code_span_is_not_a_fence(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        body = complete + "```swift test``` ran clean\n- [pending-ci] swift build -- waiting\n"
+        self.assertEqual(self.failures(body), [self.PENDING])
+        # Only a backtick fence refuses a backtick in its info string.
+        self.assertEqual(self.failures(complete + "\n~~~ a`b\n- [pending-ci] example\n~~~\n"), [])
+
+    def test_a_fence_up_to_three_spaces_in_holds_its_example(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        for indent in ("", "   "):
+            with self.subTest(indent=len(indent)):
+                body = complete + f"\n{indent}````markdown\n- [pending-ci] example\n```\n{indent}````\n"
+                self.assertEqual(self.failures(body), [])
+
+    def test_an_unclosed_fence_fails_with_its_own_message(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        self.assertEqual(self.failures(complete + "\n```\n"), [self.unclosed("```")])
+        self.assertEqual(
+            self.failures(complete + "\n```markdown\n- [pending-ci] example\n"),
+            [self.unclosed("```markdown"), self.PENDING],
+        )
+        # A closer four spaces in does not close the fence.
+        self.assertEqual(
+            self.failures(complete + "\n```\n- [complete] example -- ok\n    ```\n"),
+            [self.unclosed("```")],
+        )
+
 
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
