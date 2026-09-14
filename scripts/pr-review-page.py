@@ -68,6 +68,8 @@ UPLOAD_TIMEOUT = 300
 # every reader's browser call on any host it named, with nothing in between --
 # on the body itself GitHub's camo proxy is what stands there. An image from
 # anywhere else is shown as its address in text instead of fetched.
+# infra/cloudflare-evidence-store's img-src must stay a superset of this list;
+# EvidenceStoreCSP in scripts/tests/test_pr_review_page.py binds the two.
 IMAGE_HOSTS = (
     "evidence.cloudcompute.com",
     "user-images.githubusercontent.com",

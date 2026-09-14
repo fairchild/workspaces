@@ -24,6 +24,8 @@ const SERVED_OBJECT_HEADERS = {
   "Access-Control-Allow-Origin": "*",
   "Content-Security-Policy": [
     "default-src 'none'",
+    // Must stay a superset of IMAGE_HOSTS in scripts/pr-review-page.py;
+    // EvidenceStoreCSP in scripts/tests/test_pr_review_page.py binds the two.
     "img-src 'self' https://evidence.cloudcompute.com https://github.com https://*.githubusercontent.com data:",
     "media-src 'self'",
     "style-src 'unsafe-inline'",

@@ -1034,6 +1034,41 @@ class ImageHosts(GeneratorTestCase):
         self.assertIn("tracker.example.test/pixel.png", page)
 
 
+WORKER_SOURCE = REPO_ROOT / "infra" / "cloudflare-evidence-store" / "src" / "index.ts"
+
+
+class EvidenceStoreCSP(GeneratorTestCase):
+    """The Worker's img-src must stay a superset of IMAGE_HOSTS.
+
+    A browser enforces the intersection of the two policies: the one this
+    generator writes into the page's own `<meta>`, and the one the Worker
+    at `infra/cloudflare-evidence-store` sends as a header for every object
+    it serves. A host present here and absent there is not an error anywhere
+    -- the image the page names simply never renders when served from the
+    store, which reads as a broken screenshot rather than a policy mismatch.
+    """
+
+    def worker_img_src_entries(self) -> list[str]:
+        source = WORKER_SOURCE.read_text()
+        match = re.search(r'"img-src([^"]*)"', source)
+        self.assertIsNotNone(match, f"no img-src directive found in {WORKER_SOURCE}")
+        return match.group(1).split()
+
+    def test_every_image_host_is_covered_by_the_worker(self) -> None:
+        entries = self.worker_img_src_entries()
+        for host in pr_review_page.IMAGE_HOSTS:
+            origin = f"https://{host}"
+            covered = origin in entries or any(
+                entry.startswith("https://*.") and origin.endswith(entry[len("https://*") :])
+                for entry in entries
+            )
+            self.assertTrue(
+                covered,
+                f"{origin} is in IMAGE_HOSTS ({SCRIPT_PATH.name}) but not in the "
+                f"Worker's img-src ({WORKER_SOURCE.relative_to(REPO_ROOT)}): {entries}",
+            )
+
+
 class BodyLink(GeneratorTestCase):
     URL = "https://evidence.cloudcompute.com/workspaces/pr-1602/abc/1602.html"
 
