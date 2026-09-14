@@ -1039,6 +1039,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
         if (type(index) is not int or not 1 <= index <= len(requested_evidence)
                 or fact.get("item") != requested_evidence[index - 1]
                 or fact.get("status") != "satisfied"
+                or fact.get("automatic_completion") is not True
                 or _review_ci_check_name(requested_evidence[index - 1]) is None):
             continue
         item = requested_evidence[index - 1]
@@ -2516,21 +2517,40 @@ def check_runs_for(
 
 
 def _review_ci_check_name(item: str) -> str | None:
-    """Only a whole, single-check requirement is automatically satisfied in review.
+    """A whole single-check obligation eligible for automatic review accounting.
 
-    The authoring classifier intentionally recognizes CI within broader prose.
-    Review completion is narrower: finding one green name cannot prove a second
-    check, test command, or another obligation appended to the same item.
+    This is separate from verification recognition below. Qualifiers and extra
+    obligations prevent completing the whole item, without hiding its CI checks.
     """
+    name = _ci_check_name(item)
     match = re.fullmatch(
         rf"(?i)(?:(?:CI:?[ \t]+)|(?:The[ \t]+))?`(?P<check>[^`\n]+)`"
-        rf"(?:[ \t]+(?:{CI_EVIDENCE_NOUN}))?[ \t]+"
-        rf"(?:(?:is|must be|stays?)[ \t]+)?(?:green|{CI_EVIDENCE_PASS})"
-        r"(?:[ \t]+on[ \t]+(?:(?:the|this|exact)[ \t]+)?(?:PR(?:[ \t]+head)?|head[ \t]+commit))?\.?",
+        rf"(?:[ \t]+(?:{CI_EVIDENCE_NOUN}))?"
+        r"(?:[ \t]+\(required branch protection\))?[ \t]+"
+        rf"(?:(?:(?:is|must be|stays?)[ \t]+)?(?:green|{CI_EVIDENCE_PASS})"
+        r"(?:[ \t]+on[ \t]+(?:(?:the|this|exact)[ \t]+)?(?:PR(?:[ \t]+head)?|head[ \t]+commit))?"
+        r"|must finish on the exact PR head and stay green)\.?",
         item.strip(),
     )
-    name = _ci_check_name(item)
     return name if match and match.group("check").strip() == name else None
+
+
+def _verification_ci_check_names(item: str) -> list[str]:
+    """Every explicitly named check that must remain live-verified.
+
+    Preserve the established name recognition, including qualified requirements.
+    Coordinated CI lists bind each backticked name, so the last green name cannot
+    hide another check. Test commands in a separate trailing clause are not names.
+    """
+    if not CI_EVIDENCE_KEYWORD_RE.search(item):
+        return []
+    names = {match.group("check").strip() for pattern in CI_EVIDENCE_NAME_RES
+             for match in pattern.finditer(item) if match.group("check").strip()}
+    for match in re.finditer(
+        r"(?i)\bCI:?[ \t]+(?P<names>`[^`\n]+`(?:[ \t]*(?:,[ \t]*(?:and[ \t]+)?|and\b|&)[ \t]*`[^`\n]+`)+)", item
+    ):
+        names.update(name.strip() for name in re.findall(r"`([^`\n]+)`", match.group("names")) if name.strip())
+    return sorted(names)
 
 
 def resolve_named_ci_evidence(requested_evidence: list[str], head_sha: str, env: dict[str, str]) -> list[dict]:
@@ -2542,42 +2562,37 @@ def resolve_named_ci_evidence(requested_evidence: list[str], head_sha: str, env:
     resolved: dict[str, dict] = {}
     facts = []
     for index, item in enumerate(requested_evidence, 1):
-        if _evidence_item_kind(item) != "ci" or any(
-            pattern.search(item) for pattern in (OWNER_ATTESTED_RE, MANUAL_JUDGEMENT_RE, EXTERNAL_VERIFICATION_RE)
-        ):
-            continue
-        check_name = _review_ci_check_name(item)
-        if check_name is None:
-            facts.append({"index": index, "item": item, "check_name": None, "head_sha": head_sha,
-                          "status": "unavailable", "run_id": None, "url": None,
-                          "conclusion": None, "reason": "non_singular_requirement"})
-            continue
-        if check_name not in resolved:
-            fact = {"check_name": check_name, "head_sha": head_sha, "status": "unavailable",
-                    "run_id": None, "url": None, "conclusion": None, "reason": "lookup_unavailable"}
-            runs = check_runs_for(check_name, head_sha, env) if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", head_sha) else None
-            if runs == []:
-                fact.update(status="missing", reason="no_matching_run")
-            elif runs:
-                valid = all(type(run.get("id")) is int and run["id"] > 0
-                            and run.get("head_sha") == head_sha and run.get("name") == check_name
-                            for run in runs)
-                if not valid:
-                    fact["reason"] = "invalid_or_stale_run"
-                else:
-                    run = max(runs, key=lambda value: value["id"])
-                    status, conclusion = run.get("status"), run.get("conclusion")
-                    fact.update(run_id=run["id"], url=run.get("html_url"), conclusion=conclusion)
-                    if status == "completed" and conclusion is None:
-                        fact["reason"] = "conclusion_unavailable"
-                    elif status == "completed":
-                        fact.update(status="satisfied" if conclusion == "success" else "failed", reason="latest_completed")
-                    elif status in {"queued", "in_progress", "requested", "waiting", "pending"}:
-                        fact.update(status="pending", reason="latest_not_completed")
+        check_names = _verification_ci_check_names(item)
+        automatic_name = _review_ci_check_name(item)
+        for check_name in check_names:
+            if check_name not in resolved:
+                fact = {"check_name": check_name, "head_sha": head_sha, "status": "unavailable",
+                        "run_id": None, "url": None, "conclusion": None, "reason": "lookup_unavailable"}
+                runs = check_runs_for(check_name, head_sha, env) if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", head_sha) else None
+                if runs == []:
+                    fact.update(status="missing", reason="no_matching_run")
+                elif runs:
+                    valid = all(type(run.get("id")) is int and run["id"] > 0
+                                and run.get("head_sha") == head_sha and run.get("name") == check_name
+                                for run in runs)
+                    if not valid:
+                        fact["reason"] = "invalid_or_stale_run"
                     else:
-                        fact["reason"] = "unknown_run_status"
-            resolved[check_name] = fact
-        facts.append({"index": index, "item": item, **resolved[check_name]})
+                        run = max(runs, key=lambda value: value["id"])
+                        status, conclusion = run.get("status"), run.get("conclusion")
+                        fact.update(run_id=run["id"], url=run.get("html_url"), conclusion=conclusion)
+                        if status == "completed" and conclusion is None:
+                            fact["reason"] = "conclusion_unavailable"
+                        elif status == "completed":
+                            fact.update(status="satisfied" if conclusion == "success" else "failed", reason="latest_completed")
+                        elif status in {"queued", "in_progress", "requested", "waiting", "pending"}:
+                            fact.update(status="pending", reason="latest_not_completed")
+                        else:
+                            fact["reason"] = "unknown_run_status"
+                resolved[check_name] = fact
+            facts.append({"index": index, "item": item,
+                          "automatic_completion": len(check_names) == 1 and automatic_name == check_name,
+                          **resolved[check_name]})
     return facts
 
 

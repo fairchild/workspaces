@@ -38,8 +38,8 @@ ISSUE = {"number": 99, "body": f"## Requested Evidence\n- {CI}"}
 PR = {"number": 42, "body": PR_BODY, "headRefOid": HEAD, "baseRefOid": BASE}
 
 
-def run(identifier=10, status="completed", conclusion="success", head=HEAD):
-    return {"id": identifier, "name": "Optional Widget CI", "head_sha": head, "status": status,
+def run(identifier=10, status="completed", conclusion="success", head=HEAD, name="Optional Widget CI"):
+    return {"id": identifier, "name": name, "head_sha": head, "status": status,
             "conclusion": conclusion, "html_url": f"https://github.com/fairchild/workspaces/runs/{identifier}"}
 
 
@@ -102,10 +102,11 @@ class NamedCheckTests(unittest.TestCase):
 
     def test_named_ci_does_not_satisfy_compound_human_signoff(self):
         for item in (CI + "; Owner must approve", CI + "; manual approval required"):
-            with mock.patch.object(evidence, "check_runs_for") as fetch:
+            with mock.patch.object(evidence, "check_runs_for", return_value=[run()]) as fetch:
                 facts = evidence.resolve_named_ci_evidence([item], HEAD, {})
-            fetch.assert_not_called()
-            self.assertEqual(facts, [])
+            fetch.assert_called_once()
+            self.assertEqual(facts[0]["status"], "satisfied")
+            self.assertFalse(facts[0]["automatic_completion"])
             self.assertTrue(evidence.validate_evidence_accounting(PR_BODY, [item], review_ci=facts)[1])
 
     def test_runtime_success_does_not_erase_duplicate_contract_errors(self):
@@ -117,18 +118,26 @@ class NamedCheckTests(unittest.TestCase):
     def test_review_completion_accepts_only_a_whole_single_check(self):
         for item, name in ((CI, "Optional Widget CI"), ("The `check-links` check passes on the PR head", "check-links"),
                            ("`Web CI / test` job successful on this PR", "Web CI / test"),
-                           ("`Lint, Test, Build` workflow passed on the head commit", "Lint, Test, Build")):
+                           ("`Lint, Test, Build` workflow passed on the head commit", "Lint, Test, Build"),
+                           ("CI: `Web CI` (required branch protection) is green", "Web CI"),
+                           ("CI: `Web CI` must finish on the exact PR head and stay green", "Web CI")):
             self.assertEqual(evidence._review_ci_check_name(item), name)
         for item in ("CI: `Security CI` and `Optional Widget CI` green on the PR head",
                      CI + "; `swift test` passes", CI + " and local tests pass", CI + ". Also inspect the terminal."):
             self.assertIsNone(evidence._review_ci_check_name(item))
             # Existing authoring classification is intentionally unchanged.
             self.assertEqual(evidence._evidence_item_kind(item), "ci")
-            with mock.patch.object(evidence, "check_runs_for") as fetch:
+            with mock.patch.object(evidence, "check_runs_for", return_value=[run()]) as fetch:
                 facts = evidence.resolve_named_ci_evidence([item], HEAD, {})
-            fetch.assert_not_called()
-            self.assertEqual(facts[0]["reason"], "non_singular_requirement")
-            self.assertEqual(facts[0]["status"], "unavailable")
+            self.assertTrue(fetch.called)
+            self.assertTrue(facts)
+            self.assertTrue(all(not fact["automatic_completion"] for fact in facts))
+
+    def test_verification_collects_coordinated_names_without_treating_tests_as_checks(self):
+        for connector in (" and ", ", ", ", and ", " & "):
+            item = "CI: `Security CI`" + connector + "`Optional Widget CI` green on the PR head"
+            self.assertEqual(evidence._verification_ci_check_names(item), ["Optional Widget CI", "Security CI"])
+        self.assertEqual(evidence._verification_ci_check_names(CI + "; `swift test` passes"), ["Optional Widget CI"])
 
     def test_overlay_does_not_complete_a_compound_from_a_single_check_fact(self):
         item = CI + "; `swift test` passes"
@@ -154,7 +163,7 @@ class ReviewPipelineTests(unittest.TestCase):
     def test_named_nonrequired_check_reaches_model_input_and_stable_digest(self):
         prepared = self.prepared(runs=[run()])
         self.addCleanup(prepared.cleanup)
-        expected = {"index": 1, "item": CI, "check_name": "Optional Widget CI", "head_sha": HEAD,
+        expected = {"index": 1, "item": CI, "automatic_completion": True, "check_name": "Optional Widget CI", "head_sha": HEAD,
                     "status": "satisfied", "run_id": 10, "url": "https://github.com/fairchild/workspaces/runs/10",
                     "conclusion": "success", "reason": "latest_completed"}
         self.assertEqual(prepared.facts["required_checks"], [])
@@ -206,16 +215,64 @@ class ReviewPipelineTests(unittest.TestCase):
                 self.assertEqual(result, 1)
                 post.assert_not_called()
 
-    def test_compound_check_and_mixed_test_requirements_never_approve_from_one_green_run(self):
-        for item in ("CI: `Security CI` and `Optional Widget CI` green on the PR head", CI + "; `swift test` passes"):
-            entries = {"entries": [{"index": 1, "item": item, "status": "complete", "detail": "Optional Widget CI was green"}]}
-            attestation = f'\n\n## Evidence Status\n- [complete] {item} -- Optional Widget CI was green\n\n<!-- evidence-status:v1\n{json.dumps(entries)}\n-->'
-            for body in (PR_BODY, PR_BODY + attestation, "Closes #99" + attestation):
+    def complete_body(self, item):
+        entries = {"entries": [{"index": 1, "item": item, "status": "complete", "detail": "Recorded explicit evidence for every obligation"}]}
+        return PR_BODY + f'\n\n## Evidence Status\n- [complete] {item} -- Recorded explicit evidence for every obligation\n\n<!-- evidence-status:v1\n{json.dumps(entries)}\n-->'
+
+    def test_human_qualification_does_not_hide_a_now_failed_named_check(self):
+        for qualifier in ("manual approval required", "Owner must approve"):
+            item = "CI: `Web CI` green on the PR head; " + qualifier
+            result, post, checks = self.approve(body=self.complete_body(item), requested=[item],
+                                              runs=[run(name="Web CI", conclusion="failure")])
+            self.assertEqual(result, 1)
+            post.assert_not_called()
+            self.assertEqual(checks.call_count, 2)
+            self.assertEqual({call.args[0] for call in checks.call_args_list}, {"Web CI"})
+
+    def test_legacy_single_check_forms_keep_live_verification_and_completion(self):
+        for item in ("CI: `Web CI` (required branch protection) is green",
+                     "CI: `Web CI` must finish on the exact PR head and stay green"):
+            for body in (PR_BODY, self.complete_body(item)):
                 with self.subTest(item=item, body=body):
-                    result, post, checks = self.approve(body=body, runs=[run()], requested=[item])
-                    self.assertEqual(result, 1)
-                    post.assert_not_called()
-                    checks.assert_not_called()
+                    result, post, checks = self.approve(body=body, requested=[item], runs=[run(name="Web CI")])
+                    self.assertEqual(result, 0)
+                    post.assert_called_once()
+                    self.assertEqual(checks.call_count, 2)
+
+    def test_live_verification_does_not_depend_on_automatic_completion_grammar(self):
+        item = "CI: `Web CI` (required branch protection) is green"
+        with mock.patch.object(evidence, "_review_ci_check_name", return_value=None):
+            result, post, checks = self.approve(body=self.complete_body(item), requested=[item], runs=[run(name="Web CI")])
+        self.assertEqual(result, 0)
+        post.assert_called_once()
+        self.assertEqual(checks.call_count, 2)
+
+    def test_two_named_checks_are_both_verified_when_one_is_missing(self):
+        item = "CI: `Security CI` and `Optional Widget CI` green on the PR head"
+        for body in (PR_BODY, self.complete_body(item), self.complete_body(item).replace('<!-- contributor:issue=99;agent=april-clearwater -->', '')):
+            with self.subTest(body=body):
+                result, post, checks = self.approve(body=body, requested=[item],
+                    run_sequence=lambda name, *_: [run()] if name == "Optional Widget CI" else [])
+                self.assertEqual(result, 1)
+                post.assert_not_called()
+                self.assertEqual({call.args[0] for call in checks.call_args_list}, {"Security CI", "Optional Widget CI"})
+
+    def test_silent_mixed_ci_and_test_item_is_not_automatically_completed(self):
+        item = CI + "; `swift test` passes"
+        result, post, checks = self.approve(requested=[item], runs=[run()])
+        self.assertEqual(result, 1)
+        post.assert_not_called()
+        checks.assert_called_once()
+        self.assertEqual(checks.call_args.args[0], "Optional Widget CI")
+
+    def test_complete_mixed_evidence_preserves_live_check_guard(self):
+        item = CI + "; `swift test` passes"
+        for conclusion, expected in (("failure", 1), ("success", 0)):
+            result, post, checks = self.approve(body=self.complete_body(item), requested=[item],
+                                              runs=[run(conclusion=conclusion)])
+            self.assertEqual(result, expected)
+            self.assertEqual(checks.call_count, 2)
+            self.assertEqual(post.call_count, int(expected == 0))
 
     def test_nonci_omission_still_blocks_approval(self):
         result, post, _ = self.approve(runs=[run()], requested=[CI, MANUAL])
