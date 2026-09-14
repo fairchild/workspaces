@@ -200,14 +200,18 @@ the experiment was off, or after it is turned off, fail with
 `capability_denied` — restart WorkSpaces and open a fresh tile after toggling
 it. The audit log records the route and outcome, never the written text.
 
-## Read Created Workspace Terminal Text
+## Read Terminal Text (Operator Scope)
 
-`surface/read` is operator-scoped, not tile-scoped. It is for automation that
-creates a workspace through `workspace.create` and then needs a bounded text
-read-back from that newly attached terminal. It does not grant access to
-arbitrary human-owned terminal tiles.
+`surface/read` is operator-scoped, not tile-scoped. An operator handle reads
+bounded plain text from any terminal surface held by the Automation API's tile
+tree store, which belongs to the WorkSpaces window that configured the
+Automation API most recently. The read is not limited to the terminals the
+handle created through `workspace.create`: terminals a person opened are
+readable too, so the operator credential carries read access to their
+scrollback.
 
-The route body names the `attachedSurfaceID` returned by `workspace.create`:
+The route body names a live surface ID, such as the `attachedSurfaceID` returned
+by `workspace.create` or `workspace.select`:
 
 ```json
 { "surfaceID": "…", "lines": 200 }
@@ -215,13 +219,19 @@ The route body names the `attachedSurfaceID` returned by `workspace.create`:
 
 Rules:
 
-- Only the same operator handle that created the workspace terminal in this app
-  launch can read it. Other operator handles, tile handles, and unattributed
-  surface IDs fail `capability_denied`.
+- A surface is readable while the tile tree store holds it, including after its
+  window has closed: window teardown does not clear the store.
+- A surface the store does not hold, such as one in a window that configured the
+  Automation API earlier, answers `stale_handle`, as does a surface not yet ready
+  to read. With no store configured yet, the request fails `unsupported`.
+- Tile handles fail `capability_denied`.
+- Creation attribution is recorded at `workspace.create` and not consulted on
+  read.
 - Returned text is plain terminal text, with no ANSI styling.
 - `lines` is clamped to 500; the payload is capped at 256 KiB UTF-8.
-- The audit log records route metadata, surface ID, requested lines, returned
-  lines, and allow/deny outcome, never the terminal text.
+- The audit log records each call with the operator flag, the surface ID it
+  read, requested lines, returned lines, and allow/deny outcome, never the
+  terminal text.
 
 ## Operator Workspace Commands
 
@@ -289,7 +299,9 @@ old socket path. Restart WorkSpaces and create a new terminal tile.
 `automation request failed: stale_handle`
 
 The terminal tile that owned the handle was closed or replaced. Run the command
-from a live WorkSpaces terminal tile.
+from a live WorkSpaces terminal tile. From `surface/read`, it can also mean the
+Automation API's tile tree store does not hold the requested surface, or the
+surface is not yet ready to read.
 
 `automation request failed: unsupported`
 
@@ -310,7 +322,8 @@ V1 is intentionally narrow:
   Scope is enabled
 - write into the caller's own PTY (experimental, double-gated — see
   [Automation Input Write Decision](./decisions/automation-input-write.md))
-- read bounded plain text from operator-created workspace terminals
+- read bounded plain text from any terminal surface the Automation API's tile
+  tree store holds (operator scope)
 
 V1 does not support browser mutation, opening URLs, tab metadata changes,
 writing into other tiles, resize/equalize, or global control across
