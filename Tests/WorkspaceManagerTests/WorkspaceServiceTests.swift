@@ -236,9 +236,10 @@ struct WorkspaceServiceTests {
         // Init creates the synthetic root, not a root outside the boundary.
         #expect(FileManager.default.fileExists(atPath: syntheticRoot.path))
 
-        // The isolated domain is a file on disk; cleanup takes the file with it.
+        // The isolated domain is a file on disk; cleanup removes it. (The write
+        // itself is asynchronous per Apple's docs, so this doesn't assert the
+        // file exists beforehand — only that cleanup leaves it gone.)
         let preferencesFile = Self.preferencesFile(forSuite: suiteName)
-        #expect(FileManager.default.fileExists(atPath: preferencesFile.path))
         cleanupPreferences()
         #expect(!FileManager.default.fileExists(atPath: preferencesFile.path))
     }
