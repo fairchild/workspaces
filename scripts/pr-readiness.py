@@ -144,12 +144,16 @@ PENDING_STATUS_RE = re.compile(
 FENCE_OPENER_RE = re.compile(r" {0,3}(?P<run>`{3,}|~{3,})(?P<info>.*)")
 
 
-def extract_section(body: str, heading: str) -> str:
+def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
+    # Stripping takes the first line's indent along with the blank lines around
+    # the section, so a reader that cares about indentation asks for it unstripped.
     pattern = re.compile(
         rf"(?msi)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
     )
     match = pattern.search(body)
-    return match.group("section").strip() if match else ""
+    if not match:
+        return ""
+    return match.group("section").strip() if strip else match.group("section")
 
 
 def split_fenced_blocks(text: str) -> tuple[str, str | None]:
@@ -545,7 +549,8 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
 
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
-    evidence_status, unclosed_fence = split_fenced_blocks(extract_section(body, "Evidence Status"))
+    status_section = extract_section(body, "Evidence Status", strip=False)
+    evidence_status, unclosed_fence = split_fenced_blocks(status_section)
     if unclosed_fence:
         failures.append(
             f'Evidence Status opens a code fence that never closes: "{unclosed_fence}". '

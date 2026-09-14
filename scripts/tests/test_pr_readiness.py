@@ -679,6 +679,28 @@ class PendingLineShapeTests(unittest.TestCase):
             [self.unclosed("```")],
         )
 
+    def test_a_fence_line_four_spaces_in_is_not_a_fence_wherever_it_sits_in_the_section(self) -> None:
+        # Stripping the section takes its first line's indent, so the fence
+        # reader sees the section as the body wrote it.
+        pending = "- [pending-ci] real one -- waiting"
+        complete = "- [complete] swift test -- 1992 tests passed"
+        for position, section in (
+            ("first", f"\n    ```\n{pending}\n"),
+            ("after a status line", f"{complete}\n\n    ```\n{pending}\n"),
+        ):
+            with self.subTest(position=position):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{section}"), [self.PENDING])
+
+    def test_an_indented_code_example_opening_the_section_passes(self) -> None:
+        complete = "- [complete] swift test -- 1992 tests passed"
+        for section in (f"\n    ```\n{complete}\n", f"\n    ```swift\n    swift test\n    ```\n{complete}\n"):
+            with self.subTest(section=section):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{section}"), [])
+
+    def test_a_fence_line_four_spaces_in_inside_a_real_fence_is_content(self) -> None:
+        body = GOOD_BODY + "\n## Evidence Status\n\n```markdown\n    ```\n- [pending-ci] example\n```\n"
+        self.assertEqual(self.failures(body), [])
+
 
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
