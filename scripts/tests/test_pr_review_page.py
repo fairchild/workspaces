@@ -1031,6 +1031,7 @@ class ImageHosts(GeneratorTestCase):
         self.assertNotIn('<img src="https://tracker.example.test', page)
         self.assertNotIn('<img src="http://', page)
         self.assertIn("Image not shown", page)
+        self.assertIn("tracker.example.test/pixel.png", page)
 
     def test_an_explicit_port_is_named_not_fetched_even_on_a_listed_host(self) -> None:
         # Both CSPs (the page's <meta> and the store's header, EvidenceStoreCSP
