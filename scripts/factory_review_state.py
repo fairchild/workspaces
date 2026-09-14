@@ -140,16 +140,20 @@ class RetryDecision:
 
 
 def preparation_retry_decision(
-    preparation: dict[str, Any], comments: list[dict[str, Any]], *, reviewer: str,
+    preparation: dict[str, Any], comments: list[dict[str, Any]], *, reviewer: str, owner_retry: bool = False,
 ) -> RetryDecision:
     """Bound transient preparation to one retry; never retry the model on failure.
 
     Call inside the existing per-PR serialized review job, after fresh preparation
     and before invoking the model. A successful delivery still requires inspection.
+    owner_retry is trusted executor state from an Owner workflow dispatch, never
+    a PR field, model result, receipt, or ordinary refresh request.
     """
     current = validate_preparation(preparation, expected_head=preparation.get("head_sha", ""))
     if reviewer not in REVIEWER_LOGINS:
         raise ValueError("unknown assigned reviewer")
+    if type(owner_retry) is not bool:
+        raise ValueError("owner retry must be a verified boolean from executor admission")
     previous: list[tuple[dict[str, Any], dict[str, Any]]] = []
     for comment in comments:
         receipt = preparation_from_comment(
@@ -164,14 +168,18 @@ def preparation_retry_decision(
     if (
         latest and latest["status"] == "unavailable" and latest["reason_code"] == "inspection_unverified"
         and all(latest[key] == current[key] for key in input_fields)
+        and not (owner_retry and current["status"] == "ready")
     ):
         return RetryDecision("pause", False, comment_id,
                              "delivery alone does not resolve missing inspection; change evidence or reviewer capability")
     if current["status"] == "ready":
         return RetryDecision("review", latest is not None and latest["status"] == "unavailable", comment_id,
+                             "Owner requested another inspection; inspection is not yet verified" if owner_retry else
                              "evidence available; reviewer inspection is not yet verified")
     identity = (*input_fields, "reason_code")
     if latest and latest["status"] == "unavailable" and all(latest[key] == current[key] for key in identity):
+        if owner_retry and current["retryable"] and current["attempt_count"] < MAX_PREPARATION_ATTEMPTS:
+            return RetryDecision("retry", False, comment_id, "Owner requested one bounded preparation retry")
         return RetryDecision("pause", False, comment_id,
                              "unchanged preparation failure; waiting for the recorded resume condition")
     if current["retryable"] and current["attempt_count"] < MAX_PREPARATION_ATTEMPTS:

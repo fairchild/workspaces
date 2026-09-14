@@ -102,6 +102,28 @@ class PreparationReceiptTests(unittest.TestCase):
         ready["capability_version"] = "raster-read-v2"
         self.assertEqual(self.decide(ready, [failed]).action, "review")
 
+    def test_explicit_owner_retry_can_request_one_more_inspection_after_ready(self):
+        failed = comment(preparation(reason_code="inspection_unverified"))
+        ready = preparation(status="ready", reason_code="ready")
+        self.assertEqual(self.decide(ready, [failed]).action, "pause")
+        requested = state.preparation_retry_decision(ready, [failed], reviewer="april", owner_retry=True)
+        self.assertEqual(requested.action, "review")
+        self.assertIn("Owner requested", requested.reason)
+        self.assertIn("not yet verified", requested.reason)
+
+    def test_owner_retry_never_runs_model_on_unavailable_and_remains_bounded(self):
+        failed = preparation(reason_code="download_failed", retryable=True, attempt_count=2)
+        first = {**failed, "attempt_count": 1}
+        self.assertEqual(state.preparation_retry_decision(first, [comment(failed)], reviewer="april", owner_retry=True).action, "retry")
+        self.assertEqual(state.preparation_retry_decision(failed, [comment(failed)], reviewer="april", owner_retry=True).action, "pause")
+        self.assertEqual(state.preparation_retry_decision(preparation(), [comment()], reviewer="april", owner_retry=True).action, "pause")
+
+    def test_owner_override_cannot_arrive_from_receipt_fields_or_truthy_strings(self):
+        with self.assertRaises(ValueError):
+            state.preparation_retry_decision(preparation(owner_retry=True), [], reviewer="april")
+        with self.assertRaises(ValueError):
+            state.preparation_retry_decision(preparation(), [], reviewer="april", owner_retry="true")
+
     def test_other_authors_reviewers_heads_and_prs_cannot_suppress_a_failure(self):
         for forged in (
             comment(user={"login": "fairchild"}), comment(user={"login": "workspace-agents[bot]"}),
