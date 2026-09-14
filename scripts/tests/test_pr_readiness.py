@@ -902,6 +902,30 @@ class LeadingParagraphTests(unittest.TestCase):
         body = f"Fixes.\n### Details\n{opening}\n\n{rest}"
         self.assertIn("is 6 characters", self.only_paragraph_failure(body))
 
+    def test_a_heading_indented_up_to_three_spaces_still_ends_the_paragraph(self) -> None:
+        """CommonMark allows an ATX heading up to three spaces of indent."""
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        opening = GOOD_BODY[: GOOD_BODY.index("\n\n## What")]
+        body = f"Fixes.\n ### Details\n{opening}\n\n{rest}"
+        self.assertIn("is 6 characters", self.only_paragraph_failure(body))
+
+    def test_an_empty_heading_ends_the_paragraph_too(self) -> None:
+        """An ATX heading with no text after the `#`s is still a heading."""
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        opening = GOOD_BODY[: GOOD_BODY.index("\n\n## What")]
+        body = f"Fixes.\n###\n{opening}\n\n{rest}"
+        self.assertIn("is 6 characters", self.only_paragraph_failure(body))
+
+    def test_a_heading_indented_four_spaces_is_a_code_block_not_a_heading(self) -> None:
+        """Four spaces of indent is a code block per CommonMark, and indented
+        code can't interrupt a paragraph — so the line stays part of it."""
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        opening = GOOD_BODY[: GOOD_BODY.index("\n\n## What")]
+        body = f"Fixes.\n    ### not a heading\n{opening}\n\n{rest}"
+        text = pr_readiness.pr_body.read_opening(body).text
+        self.assertTrue(text.startswith("Fixes. ### not a heading "))
+        self.assertNotIn("\n", text)
+
     def test_the_persona_byline_and_the_review_page_link_sit_above_it(self) -> None:
         body = (
             "*April Clearwater, Application Lead*\n\n"
