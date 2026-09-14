@@ -102,8 +102,11 @@ is unchanged.
 ### Operator scope (`[A1]`)
 
 A second handle class for trusted callers *outside* any tile — dev sessions,
-`evidence.sh`, CI — enabling capture-only global reads without living inside a
-WorkSpaces terminal tile. See
+`evidence.sh`, CI — enabling global capture and reads, and the reviewed operator
+mutations `workspace.create`, `workspace.select`, `workspace.archive`,
+`workspace.note`, and `repo.terminal`, without living inside a WorkSpaces
+terminal tile; the **Capture, read, and operator mutations** bullet below lists
+the full capability set. See
 [Automation Operator Scope Decision](../decisions/automation-operator-scope.md).
 
 - **Opt-in launch.** Operator scope exists only when the launch enables it:
@@ -358,8 +361,12 @@ state. For example:
 { "direction": "right" }
 ```
 
-Bodies that try to supply target identifiers such as `tileID`, `surfaceID`, or
-`hostSessionID` are rejected.
+On `tile.focus`, `tile.split`, `tile.close`, `input.write`, and
+`workspace.create`, a body that supplies a target identifier such as `tileID`,
+`surfaceID`, or `hostSessionID` is rejected with `invalid_request`.
+`workspace.select`, `workspace.archive`, `workspace.note`, and `repo.terminal`
+read only their own fields (`workspaceID` or `repoID`, plus `teardownTerminals`
+or `note`) and ignore any other key, target identifiers included.
 
 ## Capabilities
 
@@ -1005,7 +1012,7 @@ state truthfully:
 | `disabled` | The experiment is off for this launch. |
 | `capability_denied` | The handle does not include the required capability. |
 | `missing_handle` | The scoped request omitted `x-workspaces-automation-handle`. |
-| `stale_handle` | The handle is missing or no longer maps to a live terminal tile. |
+| `stale_handle` | The handle is missing or stale or no longer maps to a live terminal tile, or the terminal surface a request needs is gone or not ready: the caller's own surface for `input.write`, or for `surface.read` a requested surface that is not live in the window currently attached to the Automation API (a surface in another window included) or not ready to read. |
 | `invalid_request` | The request shape is not allowed, including caller-supplied target IDs. |
 | `malformed_json` | A JSON body could not be decoded. |
 | `route_not_found` | The route is not part of the API. |
@@ -1209,9 +1216,10 @@ changes, writing into other tiles, resize/equalize, or *arbitrary* global
 cross-workspace mutation. Those capabilities require separate product and safety
 review before they can be added. Read-only global reads are the reviewed
 operator-scope exceptions — window capture (`window.read` listing and
-`window.snapshot` composited snapshots) and the repo/workspace inventory
-(`workspace.read`) — gated behind the opt-in operator scope above, never granted to
-tile handles. Operator mutations are limited to the reviewed gesture verbs —
+`window.snapshot` composited snapshots), the repo/workspace inventory
+(`workspace.read`), terminal text read-back (`surface.read`), and the structural
+UI state (`ui.read`) — gated behind the opt-in operator scope above, never
+granted to tile handles. Operator mutations are limited to the reviewed gesture verbs —
 `workspace.select`, `workspace.create`, `workspace.archive`, `repo.terminal`, and
 `workspace.note` — which enter real UI paths under the verbs-=-clicks contract
 rather than reaching around the UI (see [Verb contract](#verb-contract-verbs--clicks)
