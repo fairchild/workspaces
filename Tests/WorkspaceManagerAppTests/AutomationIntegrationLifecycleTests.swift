@@ -172,7 +172,8 @@ struct AutomationIntegrationLifecycleTests {
         // Stop again before asserting, so a start that published anyway cannot leave its listener bound.
         await lifecycle.stop()
 
-        #expect((try? started.get()) == nil)
+        // A cancellation, not merely a failure: a start that failed to bind would also leave nothing behind.
+        #expect(throws: CancellationError.self) { try started.get() }
         #expect(left == .nothing)
     }
 
@@ -198,12 +199,15 @@ struct AutomationIntegrationLifecycleTests {
             await lifecycle.configure(tileTreeStore: store, focusTerminal: { _ in }, requestCloseTerminal: { _ in })
         }
         await Task.yield()
+        // Nothing published yet means the stop below lands on the start, not on an ordinary shutdown.
+        let publishedBeforeStop = lifecycle.socketPath
         await lifecycle.stop()
         await starting.value
         await joining.value
         let left = await leftovers(of: lifecycle, files: plane.files)
         await lifecycle.stop()
 
+        #expect(publishedBeforeStop == nil)
         #expect(left == .nothing)
     }
 

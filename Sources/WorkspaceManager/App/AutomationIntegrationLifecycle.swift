@@ -26,9 +26,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var teardownObserver: Any?
     private var experimentObserver: Any?
     private var didStart = false
-    /// The start still binding. `stop()` cancels it, waits for it and stops the listener it bound, so
-    /// both of its waiters in `startIfNeeded` publish nothing once it is cancelled (#1665).
-    private var startTask: Task<AutomationListener, Error>?
+    /// The start still binding, with the number of stops begun before it. A stop begun since then waits
+    /// for it and stops the listener it bound, so every waiter on that start publishes and returns
+    /// nothing once `stops` has moved on (#1665).
+    private var startTask: (task: Task<AutomationListener, Error>, stops: Int)?
+    /// Advanced by every `stop()` before its first suspension.
+    private var stops = 0
     /// Where this launch's socket, audit log and operator credential live.
     let files: AutomationPlaneFiles
     /// Read by configure passes on the MainActor and by the listener off it, on every request.
@@ -148,6 +151,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             // Every configure pass, not only the one that started the listener: the
             // later passes are the ones that can observe a toggle flipped since launch.
             refreshOperatorCredential(socketPath: socketPath)
+        } catch is CancellationError {
+            // The stop that refused this pass has torn the plane down, and a start after it configures its own.
+            log.info("[AutomationIntegration] a stop began while this configure pass waited on the listener")
         } catch {
             tileTreeStore.configureAutomation(handleRegistry: nil, socketPath: nil)
             handleRegistry.removeAll()
@@ -190,8 +196,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             }
 
         if let startTask {
-            let socketPath = try await startTask.value.socketPath
-            guard !startTask.isCancelled else { throw CancellationError() }
+            let socketPath = try await startTask.task.value.socketPath
+            guard stops == startTask.stops else { throw CancellationError() }
             controller?.update(
                 tileTreeStore: tileTreeStore,
                 focusTerminal: focusTerminal,
@@ -260,22 +266,26 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             }
         )
 
-        let startTask = Task<AutomationListener, Error> {
-            try await listener.start()
-            return listener
-        }
+        let startTask = (
+            task: Task<AutomationListener, Error> {
+                try await listener.start()
+                return listener
+            },
+            stops: stops
+        )
         self.startTask = startTask
 
         let startedSocketPath: String
         do {
-            startedSocketPath = try await startTask.value.socketPath
+            startedSocketPath = try await startTask.task.value.socketPath
         } catch {
-            self.startTask = nil
+            // A stop begun during the bind keeps the slot until its wait ends, so nothing starts behind it.
+            if stops == startTask.stops { self.startTask = nil }
             throw error
         }
-        // A stop() that landed during the bind has stopped this listener already; publishing it would
-        // leave a socket path and a credential behind a stop that has returned.
-        guard !startTask.isCancelled else { throw CancellationError() }
+        // A stop begun during the bind stops this listener itself; publishing it would leave a socket
+        // path and a credential behind a stop that has returned.
+        guard stops == startTask.stops else { throw CancellationError() }
 
         self.controller = controller
         self.listener = listener
@@ -461,14 +471,17 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
     func stop() async {
         retireOperatorCredential()
+        stops += 1
         if let startTask {
-            // A cancelled start publishes nothing, so the listener it bound is this call's to stop. The
-            // task stays in place until then, so a start requested meanwhile joins it and is refused.
-            startTask.cancel()
-            if let bound = try? await startTask.value {
+            // The start's waiters see `stops` move and publish nothing, so the listener it bound is this
+            // call's to stop. The start keeps its slot until then, so a start requested meanwhile joins it
+            // and is refused.
+            if let bound = try? await startTask.task.value {
                 await bound.stop()
             }
-            self.startTask = nil
+            if self.startTask?.task == startTask.task {
+                self.startTask = nil
+            }
         }
         await listener?.stop()
         listener = nil
