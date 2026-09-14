@@ -136,6 +136,11 @@ def load_json(path: str | None, default: Any) -> Any:
 HEADING_INDENT = r" {0,3}"
 LIST_MARKER = r"(?:[-*+]|[0-9]{1,9}[.)])"
 LINE_ENDING_RE = re.compile(r"\r\n?")
+# A status token is read however a reader sees it written: in code, bold or
+# italics, or behind a task box (`- [ ] [pending-ci]`).
+PENDING_STATUS_RE = re.compile(
+    rf"(?im)^\s*{LIST_MARKER}\s*(?:\[[ x]\]\s*)?[`*_]*\[(?:blocked|pending-ci)\][`*_]*(?:\s|$)"
+)
 
 
 def extract_section(body: str, heading: str) -> str:
@@ -144,6 +149,26 @@ def extract_section(body: str, heading: str) -> str:
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""
+
+
+def without_fenced_blocks(text: str) -> str:
+    """The text with its fenced code blocks removed: a reader sees their lines as an example.
+
+    A closer is a bare run of the opener's character at least as long as the
+    opener, and an unclosed fence runs to the end, as GitHub renders both.
+    """
+    kept: list[str] = []
+    fence = ""
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if fence:
+            if re.fullmatch(f"{fence}{fence[0]}*", stripped):
+                fence = ""
+        elif match := re.match(r"(`{3,}|~{3,})", stripped):
+            fence = match.group(1)
+        else:
+            kept.append(line)
+    return "\n".join(kept)
 
 
 def template_body(path: Path | None = None) -> str:
@@ -259,9 +284,9 @@ def label_names(pr: dict[str, Any]) -> list[str]:
 def has_checked_box(body: str, label: str, *, rendered_only: bool = False) -> bool:
     # A box that holds a PR back is read as leniently as a pending line. A box
     # that excuses one from evidence counts only as GitHub renders it, with a
-    # space or tab after its marker.
+    # space or tab on each side of `[x]`.
     gap = r"[ \t]+" if rendered_only else r"\s*"
-    return bool(re.search(rf"(?im)^\s*{LIST_MARKER}{gap}\[x\]\s*{re.escape(label)}\b", body))
+    return bool(re.search(rf"(?im)^\s*{LIST_MARKER}{gap}\[x\]{gap}{re.escape(label)}\b", body))
 
 
 # A command someone can re-run, and what it printed. Either half alone is not
@@ -508,8 +533,8 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
 
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
-    evidence_status = extract_section(body, "Evidence Status")
-    if re.search(rf"(?im)^\s*{LIST_MARKER}\s*\[(?:blocked|pending-ci)\](?:\s|$)", evidence_status):
+    evidence_status = without_fenced_blocks(extract_section(body, "Evidence Status"))
+    if PENDING_STATUS_RE.search(evidence_status):
         failures.append("Requested evidence is blocked or still pending CI.")
 
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):

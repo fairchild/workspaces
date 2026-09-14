@@ -605,6 +605,43 @@ class PendingLineShapeTests(unittest.TestCase):
         blocked = GOOD_BODY + "\n## Notes\n\n1234567890. [x] Blocked on evidence\n"
         self.assertNotIn("PR is checked as blocked on evidence.", self.failures(blocked))
 
+    def test_a_status_token_in_inline_code_is_pending(self) -> None:
+        for line in ("- `[pending-ci]` swift test -- waiting", "* ``[blocked]`` swift build -- waiting"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}\n"), [self.PENDING])
+        complete = GOOD_BODY + "\n## Evidence Status\n- `[complete]` swift test -- 1992 tests passed\n"
+        self.assertEqual(self.failures(complete), [])
+
+    def test_a_status_token_in_bold_or_italics_is_pending(self) -> None:
+        for line in ("- **[pending-ci]** swift test -- waiting", "- _[blocked]_ swift build -- waiting"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}\n"), [self.PENDING])
+
+    def test_a_status_token_on_a_task_item_is_pending(self) -> None:
+        for line in ("- [ ] [pending-ci] swift test -- waiting", "1. [x] [blocked] swift build -- waiting"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}\n"), [self.PENDING])
+
+    def test_an_excusing_box_needs_a_space_after_it_too(self) -> None:
+        evidence = "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed"
+        untested = GOOD_BODY.replace(evidence, "-")
+        self.assertIn(
+            "No test/evidence signal found in PR body.",
+            self.failures(untested + "\n1. [x]Not a testable change\n"),
+        )
+        self.assertIn(
+            "PR is checked as blocked on evidence.",
+            self.failures(GOOD_BODY + "\n- [x]Blocked on evidence\n"),
+        )
+
+    def test_a_pending_example_inside_a_fence_is_not_a_status_line(self) -> None:
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        for fence in ("```", "~~~"):
+            for line in ("* [pending-ci] example", "1. [pending-ci] example", "- [blocked] example"):
+                with self.subTest(fence=fence, line=line):
+                    self.assertEqual(self.failures(complete + f"\n{fence}markdown\n{line}\n{fence}\n"), [])
+                    self.assertEqual(self.failures(complete + f"\n{line}\n"), [self.PENDING])
+
 
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
