@@ -946,7 +946,7 @@ public struct AutomationSurfaceReadRequest: Codable, Sendable, Equatable {
     }
 }
 
-/// Plain-text read-back for an operator-created terminal surface (`surface.read`). `text` is the
+/// Plain-text read-back for a live terminal surface (`surface.read`). `text` is the
 /// bounded, style-free terminal dump suffix. `requestedLines` is the caller's original request;
 /// `lines` is the effective line cap after clamping to `AutomationAPI.surfaceReadMaxLines`;
 /// `returnedLines` and `byteCount` describe the bounded payload actually returned.
