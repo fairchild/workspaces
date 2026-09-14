@@ -115,10 +115,12 @@ struct WorkspaceServiceTests {
     /// every `WorkspaceService` under test gets its own instead of touching that
     /// shared domain.
     ///
-    /// Cleanup only unlinks the file. A value `set` on the suite is already on disk
-    /// when `set` returns, so nothing is left to write back; emptying the domain first
-    /// (`removePersistentDomain`, `removeObject`) queues a cfprefsd write that lands after
-    /// the unlink, often at process exit, and leaves an empty plist behind anyway.
+    /// Cleanup only unlinks the file. `set` on the suite is documented as an
+    /// asynchronous write (callers that need the file on disk synchronize first);
+    /// emptying the domain first (`removePersistentDomain`, `removeObject`) queues
+    /// a cfprefsd write that lands after the unlink, often at process exit, and
+    /// leaves an empty plist behind anyway. Synchronizing before the unlink here
+    /// guards against a still-pending write recreating the file after cleanup.
     private func makeIsolatedPreferences(
         suiteName: String = "com.cloudcompute.workspaces.tests.\(UUID().uuidString)"
     ) -> (defaults: UserDefaults, cleanup: () -> Void) {
@@ -129,6 +131,7 @@ struct WorkspaceServiceTests {
         return (
             defaults,
             {
+                defaults.synchronize()
                 do {
                     try FileManager.default.removeItem(at: file)
                 } catch CocoaError.fileNoSuchFile {
@@ -236,7 +239,11 @@ struct WorkspaceServiceTests {
         // Init creates the synthetic root, not a root outside the boundary.
         #expect(FileManager.default.fileExists(atPath: syntheticRoot.path))
 
-        // The isolated domain is a file on disk; cleanup takes the file with it.
+        // UserDefaults.set is documented as asynchronous; synchronize() forces the
+        // pending write to disk so the existence check below is deterministic
+        // instead of racing cfprefsd. The isolated domain is then a file on disk;
+        // cleanup removes it.
+        preferences.synchronize()
         let preferencesFile = Self.preferencesFile(forSuite: suiteName)
         #expect(FileManager.default.fileExists(atPath: preferencesFile.path))
         cleanupPreferences()
