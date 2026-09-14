@@ -92,6 +92,7 @@ PUPPETEER_ARGS = (
     "--proxy-bypass-list=<-loopback>",
 )
 DIAGRAM_WIDTH = 760
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 SAFE_SCHEMES = {"http", "https"}
 # An image is only worth fetching from somewhere the policy will also allow.
 IMAGE_SCHEMES = {"https"}
@@ -717,7 +718,7 @@ def _covered_by(test_path: str, paths: list[str]) -> str | None:
 
 def _png_width(data: bytes) -> int | None:
     """Pixel width from a PNG's IHDR, or None if this is not one."""
-    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+    if len(data) < 24 or not data.startswith(PNG_SIGNATURE) or data[12:16] != b"IHDR":
         return None
     return int.from_bytes(data[16:20], "big")
 
@@ -768,9 +769,9 @@ def render_diagram(mermaid: str, *, authored: bool = False) -> str:
                     timeout=MMDC_TIMEOUT,
                     check=True,
                 )
-                if not out_file.is_file():
-                    raise OSError("exited without writing an image")
-                drawn = out_file.read_bytes()
+                drawn = out_file.read_bytes() if out_file.is_file() else b""
+                if not drawn.startswith(PNG_SIGNATURE):
+                    raise OSError("exited without writing a PNG image")
                 encoded = base64.b64encode(drawn).decode("ascii")
             except (subprocess.SubprocessError, OSError) as error:
                 message = _render_failure(error)
