@@ -124,9 +124,11 @@ def main() -> None:
         run("git", "add", *sorted(METADATA), cwd=directory)
         run("git", "commit", "-m", f"release: v{version}", cwd=directory)
         run("git", "push", "-u", "origin", branch, cwd=directory)
-        body = f"""## Summary
+        body = f"""This PR starts the WorkSpaces v{version} release by putting its version and release notes on main. Once it merges, candidate CI builds and validates the signed installer, and publication waits on the single release-publication environment approval. It changes CHANGELOG.md and Info.plist only.
 
-Prepare WorkSpaces v{version}. Candidate CI builds and validates the signed installer after the metadata merge. Publication requires the single release-publication environment approval.
+## What
+
+- Version/build metadata and the v{version} changelog section.
 
 ## Mergeability
 

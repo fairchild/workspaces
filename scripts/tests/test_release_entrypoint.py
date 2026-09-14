@@ -22,6 +22,10 @@ ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("release_entrypoint", ROOT / "scripts/release.py")
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+readiness_spec = importlib.util.spec_from_file_location("pr_readiness", ROOT / "scripts/pr-readiness.py")
+pr_readiness = importlib.util.module_from_spec(readiness_spec)
+sys.modules["pr_readiness"] = pr_readiness
+readiness_spec.loader.exec_module(pr_readiness)
 
 
 class ReleaseEntrypointTests(unittest.TestCase):
@@ -113,6 +117,28 @@ class ReleaseEntrypointTests(unittest.TestCase):
             self.calls.clear()
             self.invoke(option)
             self.assertFalse(any(a[:3] in (("gh", "pr", "create"), ("gh", "pr", "merge")) for a in self.calls))
+
+    def created_request_body(self):
+        self.prs = []
+        bodies = []
+        def execute(*args, **kwargs):
+            if args[:3] == ("git", "rev-parse", "origin/main"):
+                return "a" * 40
+            if args[:3] == ("git", "diff", "--name-only"):
+                return "\n".join(sorted(release.METADATA))
+            if args[:3] == ("gh", "pr", "create"):
+                bodies.append(Path(args[args.index("--body-file") + 1]).read_text())
+            return self.command(*args, **kwargs)
+        with tempfile.TemporaryDirectory() as temp, patch.object(release.tempfile, "mkdtemp", return_value=temp), patch.object(release, "run", side_effect=execute), patch.object(sys, "argv", ["release.py", "--version", "0.28.0"]), contextlib.redirect_stdout(io.StringIO()):
+            release.main()
+        self.assertEqual(len(bodies), 1)
+        return bodies[0]
+
+    def test_new_request_body_passes_the_readiness_gate_main_requires(self):
+        body = self.created_request_body()
+        self.assertIsNone(pr_readiness.leading_paragraph_failure(body))
+        request = {"title": "release: v0.28.0", "body": body, "draft": False, "labels": [{"name": "author:codex"}]}
+        self.assertEqual(pr_readiness.evaluate(request, sorted(release.METADATA)).failures, [])
 
 
 if __name__ == "__main__":
