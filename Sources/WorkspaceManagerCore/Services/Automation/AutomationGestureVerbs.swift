@@ -4,13 +4,14 @@
 //
 //  The gesture-verb layer — the single place the "verbs = clicks" rule is enforced.
 //
-//  Every mutation verb enters the same UI gesture the equivalent user action does. This layer is
-//  constructed with *only* gesture closures — the app's real UI entry points (for `workspace.select`,
-//  the selection binding whose setter attaches the terminal and requests focus) — and holds no
-//  service, backend, or SwiftData handle. That absence is the guarantee: a verb here structurally
-//  cannot reach a data-layer write, so it cannot produce a snapshot that lies or misroute the next
-//  input into a stale PTY. When no window is live the app installs no gesture layer at all and the
-//  controller reports `unsupported`, never a fallback.
+//  Most mutation verbs enter the same UI gesture the equivalent user action does — this layer is
+//  constructed with *only* gesture closures, the app's real UI entry points (for `workspace.select`,
+//  the selection binding whose setter attaches the terminal and requests focus), so those verbs
+//  cannot produce a snapshot that lies or misroute the next input into a stale PTY. `workspace.note`
+//  is the one exception: its installed closure is a direct write of `workspace.note`, equivalent to
+//  the sidebar's Edit Note… write by construction, not by sharing a gesture. When no window is live
+//  the app installs no gesture layer at all and the controller reports `unsupported`, never a
+//  fallback.
 //
 
 import Foundation
@@ -79,8 +80,8 @@ public enum AutomationRepoTerminalOutcome: Sendable, Equatable {
 }
 
 public enum AutomationWorkspaceNoteOutcome: Sendable, Equatable {
-    /// The note gesture ran through its own writer, not the sidebar's; the payload is what
-    /// the app stored after normalization, plus whether that differed from what was there.
+    /// The note verb ran its own writer, not the sidebar's; the payload is what the app
+    /// stored after normalization, plus whether that differed from what was there.
     case completed(note: String?, changed: Bool, workspaceName: String)
     /// The verb cannot run in the current context, most often because no live window is bound.
     case unsupported(String)
@@ -137,9 +138,9 @@ public final class AutomationGestureVerbs {
     /// and report what the UI did.
     private let performArchive:
         (@MainActor (WorkspaceTarget, AutomationWorkspaceArchiveCommand) async -> AutomationWorkspaceArchiveOutcome)?
-    /// Drive the real sidebar note gesture — an independent writer from the row's "Edit Note…"
-    /// item, normalized the same way through `WorkspaceNote.normalized` — and report what the
-    /// app stored.
+    /// Drive the note writer the live window installs — an independent direct write of
+    /// `workspace.note`, normalized through `WorkspaceNote.normalized` like the sidebar's Edit
+    /// Note… item — and report what the app stored.
     private let performNote: (@MainActor (WorkspaceTarget, String?) -> AutomationWorkspaceNoteOutcome)?
     /// Drive the real repo-terminal gesture — the same path a sidebar repo row's terminal takes —
     /// and report the surface it attached.
@@ -225,10 +226,11 @@ public final class AutomationGestureVerbs {
     }
 
     /// `workspace.note`: an independent writer from the row's "Edit Note…" item, not the same
-    /// setter — normalized the same way through `WorkspaceNote.normalized`. A note is a data
-    /// write, which is exactly why it routes through a gesture the user also has — a verb with
-    /// no equivalent click is the thing this layer exists to prevent. A missing note closure
-    /// means the live window did not install that path, so the verb fails closed.
+    /// setter — normalized the same way through `WorkspaceNote.normalized`. The note is a data
+    /// write, the same one the sidebar performs from its Edit Note… item; the verb performs it
+    /// through its own installed closure, so the two stay equivalent by construction — the
+    /// equivalent click is Edit Note…, the code path is simply not shared. A missing note
+    /// closure means the live window did not install a writer, so the verb fails closed.
     public func setWorkspaceNote(_ workspaceID: UUID, note: String?) -> AutomationWorkspaceNoteOutcome {
         guard let performNote else {
             return .unsupported("No WorkSpaces sidebar is attached; workspace.note requires a live window.")
