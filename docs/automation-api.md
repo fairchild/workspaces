@@ -203,10 +203,12 @@ it. The audit log records the route and outcome, never the written text.
 ## Read Terminal Text (Operator Scope)
 
 `surface/read` is operator-scoped, not tile-scoped. An operator handle reads
-bounded plain text from any live terminal surface in the window currently
-attached to the Automation API, not only the terminals it created through
-`workspace.create`. That includes terminals a person opened, so the operator
-credential carries read access to their scrollback.
+bounded plain text from any terminal surface held by the Automation API's tile
+tree store, which belongs to the WorkSpaces window that configured the
+Automation API most recently. The read is not limited to the terminals the
+handle created through `workspace.create`: terminals a person opened are
+readable too, so the operator credential carries read access to their
+scrollback.
 
 The route body names a live surface ID, such as the `attachedSurfaceID` returned
 by `workspace.create` or `workspace.select`:
@@ -217,9 +219,11 @@ by `workspace.create` or `workspace.select`:
 
 Rules:
 
-- Any live terminal surface in the attached window is readable. A surface in
-  another window, or one that is closed or not yet ready to read, answers
-  `stale_handle`.
+- A surface is readable while the tile tree store holds it, including after its
+  window has closed: window teardown does not clear the store.
+- A surface the store does not hold, such as one in a window that configured the
+  Automation API earlier, answers `stale_handle`, as does a surface not yet ready
+  to read. With no store configured yet, the request fails `unsupported`.
 - Tile handles fail `capability_denied`.
 - Creation attribution is recorded at `workspace.create` and not consulted on
   read.
@@ -296,8 +300,8 @@ old socket path. Restart WorkSpaces and create a new terminal tile.
 
 The terminal tile that owned the handle was closed or replaced. Run the command
 from a live WorkSpaces terminal tile. From `surface/read`, it can also mean the
-requested surface is closed, not yet ready to read, or in a window other than
-the one attached to the Automation API.
+Automation API's tile tree store does not hold the requested surface, or the
+surface is not yet ready to read.
 
 `automation request failed: unsupported`
 
@@ -318,8 +322,8 @@ V1 is intentionally narrow:
   Scope is enabled
 - write into the caller's own PTY (experimental, double-gated — see
   [Automation Input Write Decision](./decisions/automation-input-write.md))
-- read bounded plain text from any live terminal surface in the window
-  currently attached to the Automation API (operator scope)
+- read bounded plain text from any terminal surface the Automation API's tile
+  tree store holds (operator scope)
 
 V1 does not support browser mutation, opening URLs, tab metadata changes,
 writing into other tiles, resize/equalize, or global control across

@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted; widened to any live surface in the attached window by #1265
-(09c84ac8). The amendment below records the widening and its stated reason; the
-decision as first accepted is kept under it.
+Accepted; widened by #1265 (09c84ac8) to any terminal surface the controller's
+tile tree store holds. The amendment below records the widening and its stated
+reason; the decision as first accepted is kept under it.
 
 ## Context
 
@@ -24,13 +24,17 @@ involved.
 ## Decision
 
 `POST /v1/surface/read` is guarded by `surface.read`, granted only to operator
-handles. An operator handle reads bounded plain text from any live terminal
-surface in the window currently attached to the Automation API
+handles. An operator handle reads bounded plain text from any terminal surface
+in the tile tree store `AutomationController` holds, which is the store the most
+recently configured window installed through `configure` or `update`
 (`AutomationController.automationReadSurface`).
 
 - Tile handles fail `capability_denied`.
-- A surface that is closed, not ready to read, or in another window answers
-  `stale_handle`. With no window attached, the request fails `unsupported`.
+- Window teardown detaches only that window's gesture-verb layer and does not
+  clear the store, so a closed window's surfaces stay readable by id until
+  another window configures the controller.
+- A surface the store does not hold, or one not ready to read, answers
+  `stale_handle`. With no store configured, the request fails `unsupported`.
 - `AutomationHandleRegistry` records `operatorHandle -> created hostSessionID`
   attribution when `workspace.create` completes with an attached terminal; the
   read does not consult it.
@@ -57,10 +61,13 @@ lineage only". At beb38b24 the registry's lookup,
 production caller; per-surface lineage comes from the audit event's surface id.
 
 The rule #1265 adopted is the Blanket Operator Read alternative below, bounded
-to the attached window. The concern that alternative's rejection names still
-describes the grant: an operator credential reads the scrollback of terminals a
-person opened. The separate authority boundary the Context asks for is now the
-`surface.read` capability itself, which every operator handle carries.
+to the surfaces in the controller's tile tree store. The concern that
+alternative's rejection names still describes the grant: an operator credential
+reads the scrollback of terminals a person opened. The separate authority
+boundary the Context asks for is now the `surface.read` capability itself, which
+every operator handle carries. Window teardown does not clear the controller's
+store, so a closed window's terminals stay readable by id until another window
+configures it; #1661 tracks that gap.
 
 ### Decision as first accepted
 
@@ -84,9 +91,9 @@ the same app launch.
 
 ### Blanket Operator Read
 
-Adopted in #1265 (09c84ac8), bounded to the window attached to the Automation
-API, on the grounds that the read is "read-only, opt-in, audited"; see the
-amendment above. The rejection as first written:
+Adopted in #1265 (09c84ac8), bounded to the surfaces in the controller's tile
+tree store, on the grounds that the read is "read-only, opt-in, audited"; see
+the amendment above. The rejection as first written:
 
 Rejected. Operator scope is useful for same-user evidence and app orchestration,
 but terminal text read-back is qualitatively different from listing windows or
