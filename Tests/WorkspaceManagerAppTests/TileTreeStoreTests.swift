@@ -1166,11 +1166,11 @@ private struct TmuxStub {
     /// answer. Production allows five seconds so a wedged server cannot stall a close; this
     /// stub always answers, and what outlasts five seconds here is a runner freezing the
     /// test process mid-run (#1610), which would read a correct close as `socketUnavailable`.
-    static let runTimeout: TimeInterval = 60
+    nonisolated static let runTimeout: TimeInterval = 60
 
     /// The close wait's budget: both of the close's stub runs at their full bound, plus the
     /// main-actor hops around them, so the wait never gives up on a run still in bounds.
-    static let closeBudget: TimeInterval = 2 * runTimeout + 30
+    nonisolated static let closeBudget: TimeInterval = 2 * runTimeout + 30
 
     init() throws {
         directory = FileManager.default.temporaryDirectory
