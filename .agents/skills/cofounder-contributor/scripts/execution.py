@@ -51,7 +51,8 @@ from evidence import (
     _needs_macos_evidence,
     _needs_screenshot_evidence,
     classify_evidence_errors,
-    latest_completed_check_run,
+    resolve_named_ci_evidence,
+    extract_requested_evidence,
     render_execution_summary_body,
     review_evidence_gate_error,
     synthesize_initial_execution_evidence,
@@ -64,6 +65,7 @@ from github_state import (
     default_branch,
     detect_bot_login,
     extract_pr_issue_reference,
+    fetch_detailed_issue,
     find_issue_execution_state,
     find_pr_review_state,
     repo_owner_name,
@@ -739,20 +741,23 @@ def _live_ci_evidence_gate_error(pr_number: int, env: dict[str, str]) -> str | N
         return "PR head changed during Factory review"
     if not head_sha:
         return "PR head could not be resolved for live CI verification"
-    for entry in _pr_evidence_entries(body):
-        item = str(entry.get("item", "")).strip()
-        if _evidence_item_kind(item) != "ci":
-            continue
-        check_name = _ci_check_name(item)
-        if check_name is None:
-            return f"ci evidence entry has no extractable check name: {item!r}"
-        run = latest_completed_check_run(check_name, head_sha, env)
-        conclusion = str(run.get("conclusion", "") or "").strip() if isinstance(run, dict) else ""
-        if conclusion != "success":
-            return (
-                f"named check `{check_name}` is not green on head {head_sha[:12]} "
-                f"(live conclusion: {conclusion or 'none'})"
-            )
+    requested = []
+    issue_number, _ = extract_pr_issue_reference(body)
+    if issue_number is not None:
+        owner, name = repo_owner_name(env)
+        issue = fetch_detailed_issue(owner, name, issue_number, env)
+        if issue is None:
+            return "linked issue evidence requirements are unavailable"
+        requested = extract_requested_evidence(str(issue.get("body", "")))
+    # Legacy CI entries remain binding even if the linked issue no longer names
+    # them. Omission from the PR body never hides a requirement in the issue.
+    items = list(dict.fromkeys(requested + [str(entry.get("item", "")).strip()
+                                          for entry in _pr_evidence_entries(body)]))
+    for fact in resolve_named_ci_evidence(items, head_sha, env):
+        if fact["status"] != "satisfied":
+            return (f"named check `{fact['check_name']}` is not green on head {head_sha[:12]} "
+                    f"(live state: {fact['status']}; live conclusion: {fact['conclusion'] or 'none'})")
+
     return None
 
 

@@ -23,6 +23,8 @@ from _helpers import (
 )
 from evidence import (
     extract_requested_evidence,
+    resolve_named_ci_evidence,
+    checks_api_env,
     validate_evidence_accounting,
 )
 
@@ -124,6 +126,7 @@ query($owner: String!, $name: String!) {
         isCrossRepository
         reviewDecision
         headRefName
+        headRefOid
         author { login }
         authorAssociation
         commits(last: 1) {
@@ -886,14 +889,17 @@ def find_pr_review_state(pr_number: int, env: dict[str, str]) -> dict[str, objec
         if issue is not None:
             requested_evidence = extract_requested_evidence(str(issue.get("body", "")))
 
+    named_ci = resolve_named_ci_evidence(requested_evidence, str(pr.get("headRefOid", "")), env)
     accounting, errors = validate_evidence_accounting(
-        str(pr.get("body", "")), requested_evidence if contributor else []
+        str(pr.get("body", "")), requested_evidence if contributor else [],
+        review_ci=named_ci if contributor else None,
     )
     return {
         "pr": pr,
         "issue_number": issue_number,
         "issue": issue,
         "requested_evidence": requested_evidence,
+        "named_ci_evidence": named_ci,
         "evidence_accounting": accounting,
         "evidence_errors": errors,
     }
@@ -904,7 +910,7 @@ def fetch_review_checks(pr_number: int, env: dict[str, str]) -> list[dict] | Non
     try:
         result = subprocess.run(
             ["gh", "pr", "checks", str(pr_number), "--required", "--json", "name,state,bucket,link"],
-            cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=GITHUB_API_TIMEOUT,
+            cwd=REPO_ROOT, env=checks_api_env(env), capture_output=True, text=True, timeout=GITHUB_API_TIMEOUT,
         )
         if result.returncode not in {0, 1, 8}:
             return None

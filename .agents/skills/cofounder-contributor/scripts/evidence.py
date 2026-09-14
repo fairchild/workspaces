@@ -980,7 +980,7 @@ def _match_evidence_entries(
     return matched, contested
 
 
-def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> dict[str, object]:
+def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, review_ci: list[dict] | None = None) -> dict[str, object]:
     if not _explicit_evidence_contract(requested_evidence):
         return {
             "section_present": has_markdown_section(body, "Evidence Status"),
@@ -1030,6 +1030,24 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     else:
         matched, contested_items = _match_evidence_entries(requested_evidence, entries)
 
+    # This overlay exists only in review. Authoring validation still requires
+    # authored accounting; current GitHub check facts can satisfy a named CI item
+    # without inventing a PR-body citation or renumbering the original contract.
+    live_satisfied: set[str] = set()
+    for fact in review_ci or []:
+        index = fact.get("index")
+        if (type(index) is not int or not 1 <= index <= len(requested_evidence)
+                or fact.get("item") != requested_evidence[index - 1]
+                or fact.get("status") != "satisfied"
+                or fact.get("automatic_completion") is not True
+                or _review_ci_check_name(requested_evidence[index - 1]) is None):
+            continue
+        item = requested_evidence[index - 1]
+        key = matched.get(item, item)
+        entries[key] = {"status": "complete", "detail":
+            f"Live named check {fact['check_name']} succeeded on {fact['head_sha']} (run {fact['run_id']}; {fact['url']})."}
+        matched[item] = key
+        live_satisfied.add(item)
     missing_items = [item for item in requested_evidence if item not in matched]
     blocked_items = [
         item
@@ -1056,6 +1074,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str]) -> di
     return {
         **parsed,
         "unproven_items": unproven_items,
+        "live_ci_satisfied": sorted(live_satisfied),
         "missing_items": missing_items,
         "contested_items": contested_items,
         "duplicate_requested_items": _indistinguishable(requested_evidence),
@@ -1159,12 +1178,13 @@ def _format_missing_preview(
     return "; ".join(parts)
 
 
-def validate_evidence_accounting(body: str, requested_evidence: list[str]) -> tuple[dict[str, object], list[str]]:
+def validate_evidence_accounting(body: str, requested_evidence: list[str], *, review_ci: list[dict] | None = None) -> tuple[dict[str, object], list[str]]:
     if not requested_evidence:
         return evaluate_evidence_accounting(body, []), []
-    accounting = evaluate_evidence_accounting(body, requested_evidence)
+    accounting = evaluate_evidence_accounting(body, requested_evidence, review_ci=review_ci)
     errors: list[str] = []
-    if not accounting["section_present"]:
+    body_contract = set(requested_evidence) - set(accounting.get("live_ci_satisfied", []))
+    if not accounting["section_present"] and body_contract:
         errors.append("missing required '## Evidence Status' section")
     invalid_lines = accounting["invalid_lines"]
     if invalid_lines:
@@ -2451,6 +2471,15 @@ def update_evidence_entries(body: str, updates: dict[int, dict[str, object]]) ->
     return _render_structured_entries(body, updated_entries)
 
 
+def checks_api_env(env: dict[str, str]) -> dict[str, str]:
+    """Use the workflow's read-only checks capability without changing publisher identity."""
+    scoped = dict(env)
+    token = scoped.pop("FACTORY_CHECKS_TOKEN", "").strip()
+    if token:
+        scoped["GH_TOKEN"] = token
+    return scoped
+
+
 def check_runs_for(
     check_name: str,
     head_sha: str,
@@ -2474,7 +2503,7 @@ def check_runs_for(
         ],
         timeout=GITHUB_API_TIMEOUT,
         cwd=REPO_ROOT,
-        env=env,
+        env=checks_api_env(env),
         default="",
     )
     try:
@@ -2485,6 +2514,86 @@ def check_runs_for(
     if not isinstance(runs, list):
         return None
     return [run for run in runs if isinstance(run, dict)]
+
+
+def _review_ci_check_name(item: str) -> str | None:
+    """A whole single-check obligation eligible for automatic review accounting.
+
+    This is separate from verification recognition below. Qualifiers and extra
+    obligations prevent completing the whole item, without hiding its CI checks.
+    """
+    name = _ci_check_name(item)
+    match = re.fullmatch(
+        rf"(?i)(?:(?:CI:?[ \t]+)|(?:The[ \t]+))?`(?P<check>[^`\n]+)`"
+        rf"(?:[ \t]+(?:{CI_EVIDENCE_NOUN}))?"
+        r"(?:[ \t]+\(required branch protection\))?[ \t]+"
+        rf"(?:(?:(?:is|must be|stays?)[ \t]+)?(?:green|{CI_EVIDENCE_PASS})"
+        r"(?:[ \t]+on[ \t]+(?:(?:the|this|exact)[ \t]+)?(?:PR(?:[ \t]+head)?|head[ \t]+commit))?"
+        r"|must finish on the exact PR head and stay green)\.?",
+        item.strip(),
+    )
+    return name if match and match.group("check").strip() == name else None
+
+
+def _verification_ci_check_names(item: str) -> list[str]:
+    """Every explicitly named check that must remain live-verified.
+
+    Preserve the established name recognition, including qualified requirements.
+    Coordinated CI lists bind each backticked name, so the last green name cannot
+    hide another check. Test commands in a separate trailing clause are not names.
+    """
+    if not CI_EVIDENCE_KEYWORD_RE.search(item):
+        return []
+    names = {match.group("check").strip() for pattern in CI_EVIDENCE_NAME_RES
+             for match in pattern.finditer(item) if match.group("check").strip()}
+    for match in re.finditer(
+        r"(?i)\bCI:?[ \t]+(?P<names>`[^`\n]+`(?:[ \t]*(?:,[ \t]*(?:and[ \t]+)?|and\b|&)[ \t]*`[^`\n]+`)+)", item
+    ):
+        names.update(name.strip() for name in re.findall(r"`([^`\n]+)`", match.group("names")) if name.strip())
+    return sorted(names)
+
+
+def resolve_named_ci_evidence(requested_evidence: list[str], head_sha: str, env: dict[str, str]) -> list[dict]:
+    """Resolve exact-head named CI independently of author attestations.
+
+    Keep original contract indexes and fetch duplicate names once. A newer queued
+    or running check supersedes an older success; never select completed runs first.
+    """
+    resolved: dict[str, dict] = {}
+    facts = []
+    for index, item in enumerate(requested_evidence, 1):
+        check_names = _verification_ci_check_names(item)
+        automatic_name = _review_ci_check_name(item)
+        for check_name in check_names:
+            if check_name not in resolved:
+                fact = {"check_name": check_name, "head_sha": head_sha, "status": "unavailable",
+                        "run_id": None, "url": None, "conclusion": None, "reason": "lookup_unavailable"}
+                runs = check_runs_for(check_name, head_sha, env) if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", head_sha) else None
+                if runs == []:
+                    fact.update(status="missing", reason="no_matching_run")
+                elif runs:
+                    valid = all(type(run.get("id")) is int and run["id"] > 0
+                                and run.get("head_sha") == head_sha and run.get("name") == check_name
+                                for run in runs)
+                    if not valid:
+                        fact["reason"] = "invalid_or_stale_run"
+                    else:
+                        run = max(runs, key=lambda value: value["id"])
+                        status, conclusion = run.get("status"), run.get("conclusion")
+                        fact.update(run_id=run["id"], url=run.get("html_url"), conclusion=conclusion)
+                        if status == "completed" and conclusion is None:
+                            fact["reason"] = "conclusion_unavailable"
+                        elif status == "completed":
+                            fact.update(status="satisfied" if conclusion == "success" else "failed", reason="latest_completed")
+                        elif status in {"queued", "in_progress", "requested", "waiting", "pending"}:
+                            fact.update(status="pending", reason="latest_not_completed")
+                        else:
+                            fact["reason"] = "unknown_run_status"
+                resolved[check_name] = fact
+            facts.append({"index": index, "item": item,
+                          "automatic_completion": len(check_names) == 1 and automatic_name == check_name,
+                          **resolved[check_name]})
+    return facts
 
 
 def latest_completed_check_run(

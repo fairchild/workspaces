@@ -105,7 +105,10 @@ class LiveCiVerificationTests(unittest.TestCase):
     def gate(self, body: str, *, run: object, env: dict[str, str] | None = None) -> str | None:
         with (
             mock.patch.object(execution, "_pr_body_and_head", return_value=(body, HEAD)),
-            mock.patch.object(execution, "latest_completed_check_run", return_value=run),
+            mock.patch.object(sys.modules["evidence"], "check_runs_for", return_value=
+                              ([{"id": 1, "name": "Web CI", "head_sha": HEAD, "status": "completed", **run}] if isinstance(run, dict) else [])),
+            mock.patch.object(execution, "repo_owner_name", return_value=("fairchild", "workspaces")),
+            mock.patch.object(execution, "fetch_detailed_issue", return_value={"body": ""}),
         ):
             return execution._live_ci_evidence_gate_error(42, env or {})
 
