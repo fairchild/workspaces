@@ -114,6 +114,29 @@ class NamedCheckTests(unittest.TestCase):
         errors = evidence.validate_evidence_accounting(PR_BODY, [CI, CI], review_ci=facts)[1]
         self.assertTrue(any("same item more than once" in error for error in errors))
 
+    def test_review_completion_accepts_only_a_whole_single_check(self):
+        for item, name in ((CI, "Optional Widget CI"), ("The `check-links` check passes on the PR head", "check-links"),
+                           ("`Web CI / test` job successful on this PR", "Web CI / test"),
+                           ("`Lint, Test, Build` workflow passed on the head commit", "Lint, Test, Build")):
+            self.assertEqual(evidence._review_ci_check_name(item), name)
+        for item in ("CI: `Security CI` and `Optional Widget CI` green on the PR head",
+                     CI + "; `swift test` passes", CI + " and local tests pass", CI + ". Also inspect the terminal."):
+            self.assertIsNone(evidence._review_ci_check_name(item))
+            # Existing authoring classification is intentionally unchanged.
+            self.assertEqual(evidence._evidence_item_kind(item), "ci")
+            with mock.patch.object(evidence, "check_runs_for") as fetch:
+                facts = evidence.resolve_named_ci_evidence([item], HEAD, {})
+            fetch.assert_not_called()
+            self.assertEqual(facts[0]["reason"], "non_singular_requirement")
+            self.assertEqual(facts[0]["status"], "unavailable")
+
+    def test_overlay_does_not_complete_a_compound_from_a_single_check_fact(self):
+        item = CI + "; `swift test` passes"
+        fact = {**resolve([run()])[0], "item": item}
+        accounting, errors = evidence.validate_evidence_accounting(PR_BODY, [item], review_ci=[fact])
+        self.assertTrue(errors)
+        self.assertEqual(accounting["complete_items"], [])
+
     def test_skipped_or_neutral_is_not_green(self):
         for conclusion in ("skipped", "neutral", "cancelled"):
             self.assertEqual(resolve([run(conclusion=conclusion)])[0]["status"], "failed")
@@ -182,6 +205,17 @@ class ReviewPipelineTests(unittest.TestCase):
                 result, post, _ = self.approve(body=body, runs=runs)
                 self.assertEqual(result, 1)
                 post.assert_not_called()
+
+    def test_compound_check_and_mixed_test_requirements_never_approve_from_one_green_run(self):
+        for item in ("CI: `Security CI` and `Optional Widget CI` green on the PR head", CI + "; `swift test` passes"):
+            entries = {"entries": [{"index": 1, "item": item, "status": "complete", "detail": "Optional Widget CI was green"}]}
+            attestation = f'\n\n## Evidence Status\n- [complete] {item} -- Optional Widget CI was green\n\n<!-- evidence-status:v1\n{json.dumps(entries)}\n-->'
+            for body in (PR_BODY, PR_BODY + attestation, "Closes #99" + attestation):
+                with self.subTest(item=item, body=body):
+                    result, post, checks = self.approve(body=body, runs=[run()], requested=[item])
+                    self.assertEqual(result, 1)
+                    post.assert_not_called()
+                    checks.assert_not_called()
 
     def test_nonci_omission_still_blocks_approval(self):
         result, post, _ = self.approve(runs=[run()], requested=[CI, MANUAL])

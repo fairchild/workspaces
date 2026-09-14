@@ -754,6 +754,8 @@ def _live_ci_evidence_gate_error(pr_number: int, env: dict[str, str]) -> str | N
     items = list(dict.fromkeys(requested + [str(entry.get("item", "")).strip()
                                           for entry in _pr_evidence_entries(body)]))
     for fact in resolve_named_ci_evidence(items, head_sha, env):
+        if fact["reason"] == "non_singular_requirement":
+            return "CI evidence has compound or ambiguous obligations; split them into separate requested items before automatic verification"
         if fact["status"] != "satisfied":
             return (f"named check `{fact['check_name']}` is not green on head {head_sha[:12]} "
                     f"(live state: {fact['status']}; live conclusion: {fact['conclusion'] or 'none'})")

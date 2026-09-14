@@ -1039,7 +1039,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
         if (type(index) is not int or not 1 <= index <= len(requested_evidence)
                 or fact.get("item") != requested_evidence[index - 1]
                 or fact.get("status") != "satisfied"
-                or _evidence_item_kind(requested_evidence[index - 1]) != "ci"):
+                or _review_ci_check_name(requested_evidence[index - 1]) is None):
             continue
         item = requested_evidence[index - 1]
         key = matched.get(item, item)
@@ -2515,6 +2515,24 @@ def check_runs_for(
     return [run for run in runs if isinstance(run, dict)]
 
 
+def _review_ci_check_name(item: str) -> str | None:
+    """Only a whole, single-check requirement is automatically satisfied in review.
+
+    The authoring classifier intentionally recognizes CI within broader prose.
+    Review completion is narrower: finding one green name cannot prove a second
+    check, test command, or another obligation appended to the same item.
+    """
+    match = re.fullmatch(
+        rf"(?i)(?:(?:CI:?[ \t]+)|(?:The[ \t]+))?`(?P<check>[^`\n]+)`"
+        rf"(?:[ \t]+(?:{CI_EVIDENCE_NOUN}))?[ \t]+"
+        rf"(?:(?:is|must be|stays?)[ \t]+)?(?:green|{CI_EVIDENCE_PASS})"
+        r"(?:[ \t]+on[ \t]+(?:(?:the|this|exact)[ \t]+)?(?:PR(?:[ \t]+head)?|head[ \t]+commit))?\.?",
+        item.strip(),
+    )
+    name = _ci_check_name(item)
+    return name if match and match.group("check").strip() == name else None
+
+
 def resolve_named_ci_evidence(requested_evidence: list[str], head_sha: str, env: dict[str, str]) -> list[dict]:
     """Resolve exact-head named CI independently of author attestations.
 
@@ -2528,7 +2546,12 @@ def resolve_named_ci_evidence(requested_evidence: list[str], head_sha: str, env:
             pattern.search(item) for pattern in (OWNER_ATTESTED_RE, MANUAL_JUDGEMENT_RE, EXTERNAL_VERIFICATION_RE)
         ):
             continue
-        check_name = _ci_check_name(item)
+        check_name = _review_ci_check_name(item)
+        if check_name is None:
+            facts.append({"index": index, "item": item, "check_name": None, "head_sha": head_sha,
+                          "status": "unavailable", "run_id": None, "url": None,
+                          "conclusion": None, "reason": "non_singular_requirement"})
+            continue
         if check_name not in resolved:
             fact = {"check_name": check_name, "head_sha": head_sha, "status": "unavailable",
                     "run_id": None, "url": None, "conclusion": None, "reason": "lookup_unavailable"}
