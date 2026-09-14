@@ -231,8 +231,7 @@ struct AgentsSettingsView: View {
         defer { Task { @MainActor in self.isInstalling = false } }
 
         do {
-            try await installer.install()
-            await MainActor.run { lifecycle.clearInstallFailure() }
+            try await lifecycle.install(using: installer)
             await refresh()
             await MainActor.run {
                 // Persist the opt-in so launch-time settings repair stays active.
@@ -245,9 +244,9 @@ struct AgentsSettingsView: View {
             await MainActor.run { self.transientFeedback = nil }
         } catch {
             await MainActor.run {
-                // The status row turns failed and carries the error text. The persisted
-                // opt-in stays as it was: a user who wasn't opted in still isn't.
-                lifecycle.recordInstallFailure(error.localizedDescription)
+                // The lifecycle recorded the error, so the status row turns failed and carries
+                // its text. The persisted opt-in stays as it was: a user who wasn't opted in
+                // still isn't.
                 self.showPreviewSheet = false
             }
         }
