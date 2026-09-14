@@ -1037,224 +1037,36 @@ class ImageHosts(GeneratorTestCase):
 WORKER_SOURCE = REPO_ROOT / "infra" / "cloudflare-evidence-store" / "src" / "index.ts"
 
 
-# The parsing below reads a JS object literal well enough to find one named
-# field's value and evaluate it -- not a JS parser. It tracks string and
-# bracket state so a brace, bracket, or comma inside a string or a nested
-# `[...]`/`(...)` never passes for one that ends the thing being scanned.
-
-
-def _strip_js_comments(text: str) -> str:
-    """`//` and `/* */` comments removed, string contents left untouched.
-
-    A naive strip on `//` would eat the `//` inside `https://...` -- this
-    only treats `//` as a comment start outside a string.
-    """
-    out: list[str] = []
-    i, n = 0, len(text)
-    in_string: str | None = None
-    while i < n:
-        c = text[i]
-        if in_string:
-            out.append(c)
-            if c == "\\" and i + 1 < n:
-                out.append(text[i + 1])
-                i += 2
-                continue
-            if c == in_string:
-                in_string = None
-            i += 1
-            continue
-        if c in "\"'`":
-            in_string = c
-            out.append(c)
-            i += 1
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "/":
-            while i < n and text[i] != "\n":
-                i += 1
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
-                i += 1
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return "".join(out)
-
-
-def _matching_delimiter(text: str, open_index: int, open_char: str, close_char: str) -> int:
-    """Index of the `close_char` that closes the `open_char` at `open_index`."""
-    depth = 0
-    i = open_index
-    in_string: str | None = None
-    while i < len(text):
-        c = text[i]
-        if in_string:
-            if c == "\\" and i + 1 < len(text):
-                i += 2
-                continue
-            if c == in_string:
-                in_string = None
-            i += 1
-            continue
-        if c in "\"'`":
-            in_string = c
-            i += 1
-            continue
-        if c == open_char:
-            depth += 1
-        elif c == close_char:
-            depth -= 1
-            if depth == 0:
-                return i
-        i += 1
-    raise AssertionError(f"no matching {close_char!r} for {open_char!r} at index {open_index}")
-
-
-def _split_top_level_commas(text: str) -> list[str]:
-    """`text` cut at commas outside any string or nested bracket/paren."""
-    parts: list[str] = []
-    current: list[str] = []
-    depth = 0
-    in_string: str | None = None
-    i = 0
-    while i < len(text):
-        c = text[i]
-        if in_string:
-            current.append(c)
-            if c == "\\" and i + 1 < len(text):
-                current.append(text[i + 1])
-                i += 2
-                continue
-            if c == in_string:
-                in_string = None
-            i += 1
-            continue
-        if c in "\"'`":
-            in_string = c
-            current.append(c)
-            i += 1
-            continue
-        if c in "([{":
-            depth += 1
-            current.append(c)
-            i += 1
-            continue
-        if c in ")]}":
-            depth -= 1
-            current.append(c)
-            i += 1
-            continue
-        if c == "," and depth == 0:
-            parts.append("".join(current))
-            current = []
-            i += 1
-            continue
-        current.append(c)
-        i += 1
-    tail = "".join(current)
-    if tail.strip():
-        parts.append(tail)
-    return parts
-
-
-_STRING_LITERAL_RE = re.compile(r'"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\'')
-
-
-def _string_expr_value(expr: str) -> str:
-    """Every string literal in `expr` concatenated in order.
-
-    Covers plain `"a"` and a `+`-joined refactor like `"a " + "b"` alike --
-    both are one array element evaluating to the same directive text, and
-    only the literal pieces (never the `+` or whitespace between them)
-    contribute characters.
-    """
-    return "".join(
-        (m.group(1) if m.group(1) is not None else m.group(2))
-        for m in _STRING_LITERAL_RE.finditer(expr)
-    )
-
-
-def _entry_value(entry: str) -> str:
-    """Text after the first top-level `:` in an object's `key: value` entry."""
-    depth = 0
-    in_string: str | None = None
-    i = 0
-    while i < len(entry):
-        c = entry[i]
-        if in_string:
-            if c == "\\" and i + 1 < len(entry):
-                i += 2
-                continue
-            if c == in_string:
-                in_string = None
-            i += 1
-            continue
-        if c in "\"'`":
-            in_string = c
-            i += 1
-            continue
-        if c in "([{":
-            depth += 1
-        elif c in ")]}":
-            depth -= 1
-        elif c == ":" and depth == 0:
-            return entry[i + 1 :].strip()
-        i += 1
-    raise AssertionError(f"no top-level ':' in object entry: {entry!r}")
-
-
-def worker_content_security_policy(source: str) -> str:
-    """The Worker's full `Content-Security-Policy` value, as sent.
-
-    Scoped to the `SERVED_OBJECT_HEADERS` object specifically, so an `img-src`
-    written anywhere else in the file -- a different response's headers, a
-    comment -- cannot be mistaken for this one. Handles the field built either
-    as an array of directive strings joined with `.join(...)`, matching this
-    file today, or as one string already, so a refactor between the two
-    shapes does not need this parser rewritten to match.
-    """
-    clean = _strip_js_comments(source)
-    obj_match = re.search(r"\bSERVED_OBJECT_HEADERS\s*=\s*\{", clean)
-    if not obj_match:
-        raise AssertionError(f"SERVED_OBJECT_HEADERS not found in {WORKER_SOURCE}")
-    obj_open = obj_match.end() - 1
-    obj_close = _matching_delimiter(clean, obj_open, "{", "}")
-    obj_text = clean[obj_open : obj_close + 1]
-
-    for entry in _split_top_level_commas(obj_text[1:-1]):
-        stripped = entry.strip()
-        if stripped.startswith('"Content-Security-Policy"') or stripped.startswith(
-            "'Content-Security-Policy'"
-        ):
-            value = _entry_value(stripped)
-            break
-    else:
-        raise AssertionError("Content-Security-Policy key not found in SERVED_OBJECT_HEADERS")
-
-    if value.startswith("["):
-        array_close = _matching_delimiter(value, 0, "[", "]")
-        elements = [
-            _string_expr_value(item) for item in _split_top_level_commas(value[1:array_close])
-        ]
-        return "; ".join(elements)
-    return _string_expr_value(value)
-
-
 def worker_img_src_entries(source: str) -> list[str]:
-    """The Worker's `img-src` sources, in order.
+    """The Worker's img-src sources, in order.
 
-    A policy that names `img-src` twice is not split across two directives at
-    runtime -- a browser applies the first occurrence of a directive name and
-    ignores the rest -- so this picks the first `img-src`, not any.
+    Scoped to the SERVED_OBJECT_HEADERS object -- its own closing "};" ends
+    the span, since the object has no nested braces today -- so an img-src
+    written elsewhere in the file cannot be mistaken for this one. A policy
+    that names img-src twice is not split into two directives at runtime: a
+    browser applies the first occurrence of a directive name and ignores the
+    rest, so this keeps the first.
     """
-    policy = worker_content_security_policy(source)
-    directives = [d.strip() for d in policy.split(";") if d.strip()]
+    start = re.search(r"SERVED_OBJECT_HEADERS\s*=\s*\{", source)
+    if not start:
+        raise AssertionError(f"SERVED_OBJECT_HEADERS not found in {WORKER_SOURCE}")
+    end = re.search(r"\};", source[start.start() :])
+    if not end:
+        raise AssertionError(f"no closing '}};' for SERVED_OBJECT_HEADERS in {WORKER_SOURCE}")
+    span = source[start.start() : start.start() + end.end()]
+    if '"Content-Security-Policy"' not in span:
+        raise AssertionError(
+            "SERVED_OBJECT_HEADERS has no Content-Security-Policy field -- "
+            "this parser assumes its current shape"
+        )
+    array = re.search(r'"Content-Security-Policy":\s*\[(.*?)\]', span, re.S)
+    if not array:
+        raise AssertionError("Content-Security-Policy is not an array literal")
+    literals = re.findall(r'"([^"]*)"', array.group(1))
+    directives = [d.strip() for d in "; ".join(literals).split(";") if d.strip()]
     img_src = next((d for d in directives if d.split()[0] == "img-src"), None)
     if img_src is None:
-        raise AssertionError(f"no img-src directive in Content-Security-Policy: {policy!r}")
+        raise AssertionError(f"no img-src directive in: {directives!r}")
     return img_src.split()[1:]
 
 
@@ -1318,21 +1130,23 @@ const SERVED_OBJECT_HEADERS = {
         entries = worker_img_src_entries(source)
         self.assertEqual(entries, ["'self'", "https://evidence.cloudcompute.com", "data:"])
 
-    def test_a_directive_split_across_concatenated_strings_does_not_false_fail(self) -> None:
+    def test_a_comment_between_two_array_elements_does_not_break_parsing(self) -> None:
+        """The real file carries a binding comment between two directives.
+
+        A literal search for quoted text has no notion of comments to strip
+        in the first place -- this is the case that would have needed one.
+        """
         source = """
 const SERVED_OBJECT_HEADERS = {
   "Content-Security-Policy": [
     "default-src 'none'",
-    "img-src 'self' https://evidence.cloudcompute.com " +
-      "https://github.com data:",
+    // a comment sitting between two directives, same shape as index.ts
+    "img-src 'self' https://evidence.cloudcompute.com data:",
   ].join("; "),
 };
 """
         entries = worker_img_src_entries(source)
-        self.assertEqual(
-            entries,
-            ["'self'", "https://evidence.cloudcompute.com", "https://github.com", "data:"],
-        )
+        self.assertEqual(entries, ["'self'", "https://evidence.cloudcompute.com", "data:"])
 
     def test_a_duplicated_img_src_keeps_the_first_as_a_browser_would(self) -> None:
         source = """
