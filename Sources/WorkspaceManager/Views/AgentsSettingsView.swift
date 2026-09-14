@@ -107,6 +107,11 @@ struct AgentsSettingsView: View {
         }
         // Keyed on the installer arriving: Settings can open before the lifecycle publishes it.
         .task(id: installer != nil) { await refresh() }
+        // Re-read whenever the lifecycle publishes (an installer arriving, a failure recorded or
+        // cleared), so listener health is never only the answer from when the pane appeared.
+        .onReceive(lifecycle.objectWillChange) { _ in
+            Task { await refresh() }
+        }
         .sheet(isPresented: $showPreviewSheet) {
             ClaudeHookPreviewSheet(
                 preview: previewBody,
@@ -128,7 +133,7 @@ struct AgentsSettingsView: View {
                     // on launch and reflect the deopt-in in the toggle. The status
                     // row will refresh on the next .task run.
                     hooksEnabled = false
-                    lifecycle.lastInstallFailure = nil
+                    lifecycle.clearInstallFailure()
                     showRevertSheet = false
                     Task { await refresh() }
                 }
@@ -155,6 +160,7 @@ struct AgentsSettingsView: View {
         }
         refreshGeneration += 1
         let generation = refreshGeneration
+        let failureCountAtStart = lifecycle.installFailureCount
         isLoading = true
         // The launch repair is an install attempt: waiting for it keeps the row from
         // reading the settings file and the failure record before that attempt lands.
@@ -164,9 +170,10 @@ struct AgentsSettingsView: View {
         let modDate = await installer.userSettingsModificationDate()
         let backup = await installer.mostRecentBackupPath()
         let socketPath = lifecycle.socketPath
-        let listenerFailure = await Task.detached {
-            ClaudeIntegrationLifecycle.hookListenerProbeFailure(socketPath: socketPath)
-        }.value
+        let listenerFailure = await ClaudeIntegrationLifecycle.hookListenerProbeFailure(
+            socketPath: socketPath,
+            timeout: ClaudeIntegrationLifecycle.hookListenerProbeTimeout
+        )
         await MainActor.run {
             // A refresh that started later read everything later; its answer is the current one.
             guard generation == refreshGeneration else { return }
@@ -175,8 +182,9 @@ struct AgentsSettingsView: View {
             self.settingsURL = url
             self.settingsModificationDate = modDate
             if let backup { self.lastBackupPath = backup }
-            // Hooks found installed settle whatever attempt the failure record describes.
-            if installed { lifecycle.lastInstallFailure = nil }
+            // Hooks found installed settle a failure this refresh could have seen, never one
+            // recorded while it was still reading.
+            if installed { lifecycle.clearInstallFailure(ifRecordedBefore: failureCountAtStart) }
             self.isLoading = false
             // Important: do NOT auto-flip the opt-in toggle to match the on-disk
             // state. If the user opted in but later edited settings.json by hand
@@ -200,7 +208,7 @@ struct AgentsSettingsView: View {
         } else {
             hooksEnabled = newValue
             // Turning the integration off withdraws the install a failure was reporting on.
-            if !newValue { lifecycle.lastInstallFailure = nil }
+            if !newValue { lifecycle.clearInstallFailure() }
         }
     }
 
@@ -213,7 +221,7 @@ struct AgentsSettingsView: View {
                 self.showPreviewSheet = true
             }
         } catch {
-            await MainActor.run { lifecycle.lastInstallFailure = error.localizedDescription }
+            await MainActor.run { lifecycle.recordInstallFailure(error.localizedDescription) }
         }
     }
 
@@ -224,7 +232,7 @@ struct AgentsSettingsView: View {
 
         do {
             try await installer.install()
-            await MainActor.run { lifecycle.lastInstallFailure = nil }
+            await MainActor.run { lifecycle.clearInstallFailure() }
             await refresh()
             await MainActor.run {
                 // Persist the opt-in so launch-time settings repair stays active.
@@ -239,7 +247,7 @@ struct AgentsSettingsView: View {
             await MainActor.run {
                 // The status row turns failed and carries the error text. The persisted
                 // opt-in stays as it was: a user who wasn't opted in still isn't.
-                lifecycle.lastInstallFailure = error.localizedDescription
+                lifecycle.recordInstallFailure(error.localizedDescription)
                 self.showPreviewSheet = false
             }
         }
@@ -313,10 +321,34 @@ enum AgentsIntegrationStatus: Equatable {
         case .failed: return "Failed: the hooks couldn't be installed"
         }
     }
+
+    enum Action: Hashable {
+        case reinstall
+        case tryAgain
+        case checkAgain
+
+        var title: String {
+            switch self {
+            case .reinstall: return "Re-install"
+            case .tryAgain: return "Try again"
+            case .checkAgain: return "Check again"
+            }
+        }
+    }
+
+    /// The row's buttons, in order. Every state but failed can re-read the integration, since a
+    /// listener can stop answering after any probe; failed offers the install again instead.
+    var actions: [Action] {
+        switch self {
+        case .failed: return [.tryAgain]
+        case .degraded(.hooksMissing): return [.reinstall, .checkAgain]
+        case .checking, .notInstalled, .active, .degraded(.notListening): return [.checkAgain]
+        }
+    }
 }
 
 /// The status row in Settings → Agents: a symbol, colour and title per status, the settings
-/// file the status describes, and the one action a degraded or failed status offers. A
+/// file the status describes, and the buttons that status offers. A
 /// failure's error text sits behind a disclosure, one click away.
 struct AgentsIntegrationStatusRow: View {
     let status: AgentsIntegrationStatus
@@ -354,7 +386,7 @@ struct AgentsIntegrationStatusRow: View {
                     .font(.callout.weight(.medium))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-                action
+                actions
             }
             detail
             if let settingsPath {
@@ -391,20 +423,17 @@ struct AgentsIntegrationStatusRow: View {
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
-    @ViewBuilder
-    private var action: some View {
-        switch status {
-        case .degraded(.hooksMissing):
-            Button("Re-install", action: onInstall)
+    private var actions: some View {
+        HStack(spacing: 6) {
+            ForEach(status.actions, id: \.self) { action in
+                Button(action.title) {
+                    switch action {
+                    case .reinstall, .tryAgain: onInstall()
+                    case .checkAgain: onRecheck()
+                    }
+                }
                 .controlSize(.small)
-        case .degraded(.notListening):
-            Button("Check again", action: onRecheck)
-                .controlSize(.small)
-        case .failed:
-            Button("Try again", action: onInstall)
-                .controlSize(.small)
-        case .checking, .notInstalled, .active:
-            EmptyView()
+            }
         }
     }
 

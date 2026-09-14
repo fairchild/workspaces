@@ -166,9 +166,30 @@ struct ClaudeIntegrationLifecycleTests {
     @Test("a launch repair that succeeds clears an earlier install failure")
     func succeededLaunchRepairClearsTheFailure() async throws {
         try await runOptedInStart(installer: StubInstaller()) {
-            ClaudeIntegrationLifecycle.shared.lastInstallFailure = "an earlier attempt threw"
+            ClaudeIntegrationLifecycle.shared.recordInstallFailure("an earlier attempt threw")
         }
         #expect(ClaudeIntegrationLifecycle.shared.lastInstallFailure == nil)
+    }
+
+    /// The ordering #1673's second review found: a refresh starts and reads the hooks as
+    /// installed, a Try again fails while it is still reading, and the refresh lands last. The
+    /// failure is newer than anything that refresh saw, so it stays; a refresh that starts after
+    /// the failure can settle it.
+    @Test("a refresh that started before an install failure cannot clear it")
+    func staleRefreshCannotClearANewerFailure() throws {
+        let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { UserDefaults().removePersistentDomain(forName: suiteName) }
+        let lifecycle = ClaudeIntegrationLifecycle.shared
+        lifecycle._configureForTesting(defaults: defaults, installerFactory: { _ in StubInstaller() })
+
+        let staleRefreshStart = lifecycle.installFailureCount
+        lifecycle.recordInstallFailure("Try again threw")
+        lifecycle.clearInstallFailure(ifRecordedBefore: staleRefreshStart)
+        #expect(lifecycle.lastInstallFailure == "Try again threw")
+
+        lifecycle.clearInstallFailure(ifRecordedBefore: lifecycle.installFailureCount)
+        #expect(lifecycle.lastInstallFailure == nil)
     }
 
     @Test("settings installer publishes after startup for Settings scene injection")

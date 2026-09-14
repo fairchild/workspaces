@@ -33,10 +33,14 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private(set) var notificationPoster: AgentNotificationPoster?
     @Published private(set) var settingsInstaller: (any ClaudeSettingsInstalling)?
     /// The error text of the most recent install attempt that threw, the opted-in repair at
-    /// launch or an install accepted in Settings → Agents. An install that succeeds clears
-    /// it, as do a refresh that finds the hooks installed and turning the integration off. The
-    /// Agents status row shows it as the failed state.
-    @Published var lastInstallFailure: String?
+    /// launch or an install accepted in Settings → Agents. The Agents status row shows it as the
+    /// failed state until an explicit act clears it (a successful install, turning the
+    /// integration off, confirming the revert) or a refresh that started after it finds the
+    /// hooks installed.
+    @Published private(set) var lastInstallFailure: String?
+    /// How many install failures have been recorded. A refresh reads it before its first await,
+    /// so a failure recorded while that refresh was still reading is one it cannot clear.
+    private(set) var installFailureCount = 0
     private(set) var socketPath: String?
     private var teardownObserver: Any?
     private var didStart = false
@@ -92,6 +96,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         self.notificationPoster = nil
         self.settingsInstaller = nil
         self.lastInstallFailure = nil
+        self.installFailureCount = 0
         self.socketPath = nil
         self.startupTask = nil
     }
@@ -152,14 +157,14 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
                         log.info("[ClaudeIntegration] settings already installed; no write needed")
                     } else {
                         try await installer.install()
-                        self.lastInstallFailure = nil
+                        self.clearInstallFailure()
                         let backup = await installer.mostRecentBackupPath() ?? "(no prior file)"
                         log.info(
                             "[ClaudeIntegration] settings repair succeeded; backup=\(backup, privacy: .public)"
                         )
                     }
                 } catch {
-                    self.lastInstallFailure = error.localizedDescription
+                    self.recordInstallFailure(error.localizedDescription)
                     log.error(
                         "[ClaudeIntegration] settings repair failed: \(String(describing: error), privacy: .public); integration settings may be stale"
                     )
@@ -173,6 +178,52 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.stop() }
+        }
+    }
+
+    func recordInstallFailure(_ message: String) {
+        installFailureCount += 1
+        lastInstallFailure = message
+    }
+
+    func clearInstallFailure() {
+        guard lastInstallFailure != nil else { return }
+        lastInstallFailure = nil
+    }
+
+    /// Clears the failure for a refresh that found the hooks installed, but only when no failure
+    /// was recorded after `countAtRefreshStart`, the `installFailureCount` that refresh read before
+    /// its first await: a Try again that failed while the refresh was reading is newer than
+    /// anything the refresh saw.
+    func clearInstallFailure(ifRecordedBefore countAtRefreshStart: Int) {
+        guard installFailureCount == countAtRefreshStart else { return }
+        clearInstallFailure()
+    }
+
+    /// How long the Agents status row waits on the hook listener probe before reading it as not
+    /// listening.
+    nonisolated static let hookListenerProbeTimeout: TimeInterval = 3
+
+    /// Runs `probe` on a GCD thread and gives up after `timeout`, so a connect that never returns
+    /// reads as not listening instead of leaving the row checking. GCD rather than a task,
+    /// because the probe blocks in a syscall, and a task group would wait for its stuck child
+    /// before returning. A probe that outlives its timeout keeps that thread until the syscall
+    /// returns.
+    nonisolated static func hookListenerProbeFailure(
+        socketPath: String?,
+        timeout: TimeInterval,
+        probe: @escaping @Sendable (String?) -> String? = {
+            ClaudeIntegrationLifecycle.hookListenerProbeFailure(socketPath: $0)
+        }
+    ) async -> String? {
+        await withCheckedContinuation { continuation in
+            let answer = ProbeAnswer(continuation)
+            DispatchQueue.global(qos: .userInitiated).async {
+                answer.resume(probe(socketPath))
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                answer.resume("The probe timed out after \(String(format: "%g", timeout)) s.")
+            }
         }
     }
 
@@ -398,5 +449,24 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
             self.teardownObserver = nil
         }
         didStart = false
+    }
+}
+
+/// Resumes a probe's continuation once, with whichever of the probe's answer and the timeout
+/// arrives first.
+private final class ProbeAnswer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String?, Never>?
+
+    init(_ continuation: CheckedContinuation<String?, Never>) {
+        self.continuation = continuation
+    }
+
+    func resume(_ failure: String?) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        pending?.resume(returning: failure)
     }
 }

@@ -89,6 +89,18 @@ struct AgentsIntegrationStatusTests {
         #expect(notListening.title.hasPrefix("Degraded"))
         #expect(notListening.title != degraded.title)
     }
+
+    /// A listener can stop answering after any probe, so no state but failed is final.
+    @Test("Every state but failed offers Check again; missing hooks offer Re-install first, failed offers Try again")
+    func everyStateButFailedOffersCheckAgain() {
+        let reason = "Nothing answered at /tmp/hooks.sock: Connection refused."
+        #expect(AgentsIntegrationStatus.checking.actions == [.checkAgain])
+        #expect(AgentsIntegrationStatus.notInstalled.actions == [.checkAgain])
+        #expect(AgentsIntegrationStatus.active.actions == [.checkAgain])
+        #expect(AgentsIntegrationStatus.degraded(.notListening(reason: reason)).actions == [.checkAgain])
+        #expect(AgentsIntegrationStatus.degraded(.hooksMissing).actions == [.reinstall, .checkAgain])
+        #expect(AgentsIntegrationStatus.failed(error: "threw").actions == [.tryAgain])
+    }
 }
 
 @Suite("Hook listener probe")
@@ -130,6 +142,37 @@ struct HookListenerProbeTests {
             unlink(path)
         }
         #expect(probe(path) == nil)
+    }
+
+    /// A probe stuck in its syscall. The stub blocks until the test ends, so the timeout is the
+    /// only way the probe can answer, and the row leaves Checking with Check again.
+    @Test("A probe that never returns reads as not listening once its timeout passes")
+    func blockedProbeTimesOut() async {
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let failure = await ClaudeIntegrationLifecycle.hookListenerProbeFailure(
+            socketPath: "/tmp/wm-probe-blocked.sock",
+            timeout: 0.1
+        ) { _ in
+            release.wait()
+            return nil
+        }
+        #expect(failure == "The probe timed out after 0.1 s.")
+    }
+
+    @Test("A probe that answers within its timeout passes its answer through")
+    func promptProbePassesItsAnswerThrough() async {
+        let refused = await ClaudeIntegrationLifecycle.hookListenerProbeFailure(
+            socketPath: "/tmp/wm-probe-prompt.sock",
+            timeout: 30
+        ) { _ in "Connection refused" }
+        #expect(refused == "Connection refused")
+
+        let answered = await ClaudeIntegrationLifecycle.hookListenerProbeFailure(
+            socketPath: "/tmp/wm-probe-prompt.sock",
+            timeout: 30
+        ) { _ in nil }
+        #expect(answered == nil)
     }
 
     /// What a dormant instance meets: its hook socket answered by the process that holds the
@@ -242,13 +285,13 @@ struct AgentsIntegrationStatusRowRenderTests {
         print("AgentsIntegrationStatusRow render: \(url.path)")
     }
 
-    @Test("Active renders a green check and no action")
+    @Test("Active renders a green check and Check again")
     func rendersActive() throws {
         try render(row(.active), evidenceName: "agents-status-active.png")
     }
 
     /// The re-install banner's condition, now the degraded row with its Re-install action.
-    @Test("Degraded with the hooks gone renders an orange warning and Re-install")
+    @Test("Degraded with the hooks gone renders an orange warning, Re-install and Check again")
     func rendersDegradedHooksMissing() throws {
         try render(row(.degraded(.hooksMissing)), evidenceName: "agents-status-degraded-hooks-missing.png")
     }
