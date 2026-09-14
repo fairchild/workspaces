@@ -2,11 +2,12 @@ import SwiftData
 import SwiftUI
 import WorkspaceManagerCore
 
-/// Builds the gesture-verb layer backing the automation API's workspace mutations. Every verb
-/// enters the same UI path a click does — `performSelection` writes the selection binding whose
-/// setter attaches the terminal and requests focus — and then reads back what the gesture
-/// actually did. The layer holds closures over the live view state and no backend handle, so a
-/// verb cannot reach past the UI to a service or a SwiftData write.
+/// Builds the gesture-verb layer backing the automation API's workspace mutations. Most verbs
+/// enter the same UI path a click does — `performSelection` writes the selection binding whose
+/// setter attaches the terminal and requests focus, and `performRepoTerminal` takes the same path
+/// a sidebar repo row's terminal does — and then read back what the gesture actually did.
+/// `performNote` is the exception: it is its own writer, assigning `workspace.note` directly, the
+/// same field and normalization the sidebar's "Edit Note…" item uses, not the same code path.
 @MainActor
 struct MainWindowAutomationGestureVerbs {
     struct Dependencies {

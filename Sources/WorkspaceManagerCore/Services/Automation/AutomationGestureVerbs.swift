@@ -79,8 +79,8 @@ public enum AutomationRepoTerminalOutcome: Sendable, Equatable {
 }
 
 public enum AutomationWorkspaceNoteOutcome: Sendable, Equatable {
-    /// The note gesture ran through the real sidebar path; the payload is what the app
-    /// stored after normalization, plus whether that differed from what was there.
+    /// The note gesture ran through its own writer, not the sidebar's; the payload is what
+    /// the app stored after normalization, plus whether that differed from what was there.
     case completed(note: String?, changed: Bool, workspaceName: String)
     /// The verb cannot run in the current context, most often because no live window is bound.
     case unsupported(String)
