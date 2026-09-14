@@ -733,11 +733,11 @@ def render_diagram(mermaid: str, *, authored: bool = False) -> str:
     Otherwise the page shows the escaped source and says which of three things
     kept it from being drawn: the source is outside the syntax this page will
     draw, and no renderer sees it; there is no `mmdc` on PATH; or the renderer
-    failed -- it exited non-zero, ran past its timeout, or could not start --
-    and the page quotes the first line of what the failure said. The last two
-    also leave a line on stderr for whoever reads the build. There is no
-    browser-side fallback: source this build refused is not source to hand a
-    second engine in someone else's browser.
+    failed -- it exited non-zero, ran past its timeout, could not start, or
+    wrote no image -- and the page quotes the first line of what the failure
+    said. The last two also leave a line on stderr for whoever reads the build.
+    There is no browser-side fallback: source this build refused is not source
+    to hand a second engine in someone else's browser.
     """
     if authored and not is_renderable_mermaid(mermaid):
         return _diagram_source_block(
@@ -764,9 +764,12 @@ def render_diagram(mermaid: str, *, authored: bool = False) -> str:
                      "--puppeteerConfigFile", str(config_file)],
                     capture_output=True,
                     text=True,
+                    errors="replace",
                     timeout=MMDC_TIMEOUT,
                     check=True,
                 )
+                if not out_file.is_file():
+                    raise OSError("exited without writing an image")
                 drawn = out_file.read_bytes()
                 encoded = base64.b64encode(drawn).decode("ascii")
             except (subprocess.SubprocessError, OSError) as error:
@@ -797,9 +800,10 @@ def _render_failure(error: subprocess.SubprocessError | OSError) -> str:
     """The one line of a failed render worth quoting, or "" when it said nothing.
 
     mmdc's stderr opens with a blank line and closes on a stack trace, so the
-    quote is its first line with text on it. A timeout or a launch error has no
-    stderr to quote, and its message leaves out the build's paths, which say
-    nothing to a reader and do not belong on a published page.
+    quote is its first line with text on it, as the renderer wrote it. A
+    timeout, a launch error, or a missing image has no stderr to quote, so its
+    message is the reason alone, without the argv's temporary paths, which
+    say nothing to a reader.
     """
     if isinstance(error, subprocess.CalledProcessError):
         return next((line.strip() for line in (error.stderr or "").splitlines() if line.strip()), "")
