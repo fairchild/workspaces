@@ -38,6 +38,7 @@ struct AgentsSettingsView: View {
 
     @State private var isInstalled = false
     @State private var isLoading = true
+    @State private var refreshGeneration = 0
     @State private var listenerFailure: String?
     @State private var showPreviewSheet = false
     @State private var previewBody = ""
@@ -104,7 +105,8 @@ struct AgentsSettingsView: View {
                     .foregroundStyle(.orange)
             }
         }
-        .task { await refresh() }
+        // Keyed on the installer arriving: Settings can open before the lifecycle publishes it.
+        .task(id: installer != nil) { await refresh() }
         .sheet(isPresented: $showPreviewSheet) {
             ClaudeHookPreviewSheet(
                 preview: previewBody,
@@ -126,6 +128,7 @@ struct AgentsSettingsView: View {
                     // on launch and reflect the deopt-in in the toggle. The status
                     // row will refresh on the next .task run.
                     hooksEnabled = false
+                    lifecycle.lastInstallFailure = nil
                     showRevertSheet = false
                     Task { await refresh() }
                 }
@@ -150,8 +153,9 @@ struct AgentsSettingsView: View {
             isLoading = false
             return
         }
+        refreshGeneration += 1
+        let generation = refreshGeneration
         isLoading = true
-        defer { isLoading = false }
         // The launch repair is an install attempt: waiting for it keeps the row from
         // reading the settings file and the failure record before that attempt lands.
         await lifecycle.startupTask?.value
@@ -164,11 +168,16 @@ struct AgentsSettingsView: View {
             ClaudeIntegrationLifecycle.hookListenerProbeFailure(socketPath: socketPath)
         }.value
         await MainActor.run {
+            // A refresh that started later read everything later; its answer is the current one.
+            guard generation == refreshGeneration else { return }
             self.isInstalled = installed
             self.listenerFailure = listenerFailure
             self.settingsURL = url
             self.settingsModificationDate = modDate
             if let backup { self.lastBackupPath = backup }
+            // Hooks found installed settle whatever attempt the failure record describes.
+            if installed { lifecycle.lastInstallFailure = nil }
+            self.isLoading = false
             // Important: do NOT auto-flip the opt-in toggle to match the on-disk
             // state. If the user opted in but later edited settings.json by hand
             // (e.g. removed the http hooks), the status row turns degraded and offers
@@ -249,13 +258,14 @@ enum AgentsIntegrationStatus: Equatable {
     enum Degradation: Equatable {
         /// Opted in, but the Claude settings no longer carry the WorkSpaces hooks.
         case hooksMissing
-        /// The hooks are installed, but nothing answered on the hook socket.
-        case listenerSilent(reason: String)
+        /// The hooks are installed, but this app's listener didn't answer on the hook socket:
+        /// nothing did, or another process holds it.
+        case notListening(reason: String)
     }
 
     /// An install attempt that errored outranks the settings file: the user acted, and the
-    /// row answers that act until an install succeeds. The listener only matters once the
-    /// hooks are installed to call it.
+    /// row answers that act until the lifecycle clears the record. The listener only matters
+    /// once the hooks are installed to call it.
     init(
         isChecking: Bool,
         isOptedIn: Bool,
@@ -268,7 +278,7 @@ enum AgentsIntegrationStatus: Equatable {
         } else if let installFailure {
             self = .failed(error: installFailure)
         } else if isInstalled {
-            self = listenerFailure.map { .degraded(.listenerSilent(reason: $0)) } ?? .active
+            self = listenerFailure.map { .degraded(.notListening(reason: $0)) } ?? .active
         } else {
             self = isOptedIn ? .degraded(.hooksMissing) : .notInstalled
         }
@@ -297,9 +307,9 @@ enum AgentsIntegrationStatus: Equatable {
         switch self {
         case .checking: return "Checking install state…"
         case .notInstalled: return "Hooks not installed"
-        case .active: return "Active: hooks installed and the listener answered"
+        case .active: return "Active: hooks installed and this app's listener answered"
         case .degraded(.hooksMissing): return "Degraded: Claude settings no longer carry the WorkSpaces hooks"
-        case .degraded(.listenerSilent): return "Degraded: hooks installed, but the listener didn't answer"
+        case .degraded(.notListening): return "Degraded: hooks installed, but this app isn't listening for them"
         case .failed: return "Failed: the hooks couldn't be installed"
         }
     }
@@ -387,7 +397,7 @@ struct AgentsIntegrationStatusRow: View {
         case .degraded(.hooksMissing):
             Button("Re-install", action: onInstall)
                 .controlSize(.small)
-        case .degraded(.listenerSilent):
+        case .degraded(.notListening):
             Button("Check again", action: onRecheck)
                 .controlSize(.small)
         case .failed:
@@ -401,7 +411,7 @@ struct AgentsIntegrationStatusRow: View {
     @ViewBuilder
     private var detail: some View {
         switch status {
-        case .degraded(.listenerSilent(let reason)):
+        case .degraded(.notListening(let reason)):
             Text(reason)
                 .font(.caption)
                 .foregroundStyle(.secondary)

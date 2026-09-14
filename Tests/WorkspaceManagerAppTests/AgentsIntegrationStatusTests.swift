@@ -47,11 +47,11 @@ struct AgentsIntegrationStatusTests {
         #expect(status(isInstalled: false, listenerFailure: "silent") == .degraded(.hooksMissing))
     }
 
-    @Test("Installed hooks with a listener that didn't answer are degraded with the probe's reason")
-    func silentListenerIsDegraded() {
+    @Test("Installed hooks this app isn't listening for are degraded with the probe's reason")
+    func notListeningIsDegraded() {
         let reason = "Nothing answered at /tmp/hooks.sock: Connection refused."
-        #expect(status(listenerFailure: reason) == .degraded(.listenerSilent(reason: reason)))
-        #expect(status(isOptedIn: false, listenerFailure: reason) == .degraded(.listenerSilent(reason: reason)))
+        #expect(status(listenerFailure: reason) == .degraded(.notListening(reason: reason)))
+        #expect(status(isOptedIn: false, listenerFailure: reason) == .degraded(.notListening(reason: reason)))
     }
 
     @Test("An install attempt that errored is failed with its error text, whatever the settings file says")
@@ -83,11 +83,11 @@ struct AgentsIntegrationStatusTests {
         #expect(degraded.title.hasPrefix("Degraded"))
         #expect(failed.title.hasPrefix("Failed"))
 
-        let silent = AgentsIntegrationStatus.degraded(.listenerSilent(reason: "refused"))
-        #expect(silent.symbolName == degraded.symbolName)
-        #expect(silent.color == degraded.color)
-        #expect(silent.title.hasPrefix("Degraded"))
-        #expect(silent.title != degraded.title)
+        let notListening = AgentsIntegrationStatus.degraded(.notListening(reason: "refused"))
+        #expect(notListening.symbolName == degraded.symbolName)
+        #expect(notListening.color == degraded.color)
+        #expect(notListening.title.hasPrefix("Degraded"))
+        #expect(notListening.title != degraded.title)
     }
 }
 
@@ -130,6 +130,24 @@ struct HookListenerProbeTests {
             unlink(path)
         }
         #expect(probe(path) == nil)
+    }
+
+    /// What a dormant instance meets: its hook socket answered by the process that holds the
+    /// lock. The test's own listener stands in for that process, checked against the pid of
+    /// the test's parent as the app's.
+    @Test("A socket another process listens on is not this app's listener")
+    func anotherProcessIsNotThisAppsListener() throws {
+        let path = Self.socketPath()
+        let fd = try Self.listen(at: path)
+        defer {
+            close(fd)
+            unlink(path)
+        }
+        let failure = try #require(
+            ClaudeIntegrationLifecycle.hookListenerProbeFailure(socketPath: path, listenerProcess: getppid())
+        )
+        #expect(failure.contains("pid \(getpid())"))
+        #expect(failure.contains(path))
     }
 
     /// A socket file left behind by a listener that exited is the case a crashed app leaves.
@@ -236,13 +254,13 @@ struct AgentsIntegrationStatusRowRenderTests {
     }
 
     /// The reason is the probe's own text for a socket nothing answers on.
-    @Test("Degraded with a silent listener renders the probe's reason and Check again")
-    func rendersDegradedListenerSilent() throws {
+    @Test("Degraded without this app listening renders the probe's reason and Check again")
+    func rendersDegradedNotListening() throws {
         let socketPath = "/Users/me/Library/Application Support/com.cloudcompute.workspaces/hooks.sock"
         let reason = try #require(ClaudeIntegrationLifecycle.hookListenerProbeFailure(socketPath: socketPath))
         try render(
-            row(.degraded(.listenerSilent(reason: reason))),
-            evidenceName: "agents-status-degraded-listener-silent.png"
+            row(.degraded(.notListening(reason: reason))),
+            evidenceName: "agents-status-degraded-not-listening.png"
         )
     }
 

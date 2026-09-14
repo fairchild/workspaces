@@ -34,8 +34,8 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     @Published private(set) var settingsInstaller: (any ClaudeSettingsInstalling)?
     /// The error text of the most recent install attempt that threw, the opted-in repair at
     /// launch or an install accepted in Settings → Agents. An install that succeeds clears
-    /// it, and so does turning the integration off. The Agents status row shows it as the
-    /// failed state.
+    /// it, as do a refresh that finds the hooks installed and turning the integration off. The
+    /// Agents status row shows it as the failed state.
     @Published var lastInstallFailure: String?
     private(set) var socketPath: String?
     private var teardownObserver: Any?
@@ -176,10 +176,16 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         }
     }
 
-    /// Connects to the hook socket and hangs up without sending a request: a listener that
-    /// accepts the connection has answered, and a connection that carries no request reaches
-    /// none of its counters. Returns why nothing answered, or nil when something did.
-    nonisolated static func hookListenerProbeFailure(socketPath: String?) -> String? {
+    /// Connects to the hook socket, asks the kernel which process accepted, and hangs up without
+    /// sending a request, so the probe reaches none of the listener's counters. Only
+    /// `listenerProcess` accepting counts as this app's listener answering: a dormant instance,
+    /// whose listener lost the socket lock, reaches the process that holds it instead, and the
+    /// hook events from its terminals go there too. Returns why this app's listener didn't
+    /// answer, or nil when it did.
+    nonisolated static func hookListenerProbeFailure(
+        socketPath: String?,
+        listenerProcess: pid_t = getpid()
+    ) -> String? {
         guard let socketPath else { return "The hook listener hasn't started." }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -203,6 +209,16 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         guard connected == 0 else {
             let code = errno
             return "Nothing answered at \(socketPath): \(String(cString: strerror(code)))."
+        }
+        var peer: pid_t = 0
+        var peerLength = socklen_t(MemoryLayout<pid_t>.size)
+        guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &peer, &peerLength) == 0 else {
+            let code = errno
+            return "Something answered at \(socketPath), but its process couldn't be identified: "
+                + "\(String(cString: strerror(code)))."
+        }
+        guard peer == listenerProcess else {
+            return "Another process (pid \(peer)) holds \(socketPath), so hook events go there instead of this app."
         }
         return nil
     }
