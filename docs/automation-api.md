@@ -58,8 +58,11 @@ workspaces automation health
 workspaces automation health --json
 ```
 
-Scoped commands also require `WORKSPACES_AUTOMATION_HANDLE`. They are expected
-to fail outside a WorkSpaces terminal tile.
+Tile-scoped commands also require `WORKSPACES_AUTOMATION_HANDLE`, which
+WorkSpaces injects only into a terminal tile's environment, so they are
+expected to fail outside one. Operator-scope commands read a credential file
+instead and run from any same-user shell — see
+[Operator Workspace Commands](#operator-workspace-commands).
 
 ## See The Current Context
 

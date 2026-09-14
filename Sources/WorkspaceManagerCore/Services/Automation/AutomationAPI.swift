@@ -67,10 +67,10 @@ public enum AutomationAPI {
     /// connection slot between rounds.
     public static let waitDefaultTimeoutMS = 5_000
     public static let waitMaxTimeoutMS = 20_000
-    /// How often the wait engine re-evaluates a pending condition. Content conditions
-    /// (`surface_text_matches`, `prompt_ready`) poll on the slower interval: each of their
-    /// ticks costs a full terminal read plus a regex run, where a topology/selection tick is
-    /// a couple of dictionary lookups.
+    /// How often the wait engine re-evaluates a pending condition. `surface_text_matches` costs
+    /// a terminal read plus a regex run; `prompt_ready` reads a latched flag, not the terminal.
+    /// Both poll on the slower interval since callers may pair them; a topology/selection tick
+    /// is a couple of dictionary lookups.
     public static let waitPollIntervalMS = 100
     public static let waitContentPollIntervalMS = 250
     /// Cap on the `surface_text_matches` pattern's own length. This bounds how much pattern
