@@ -10,6 +10,7 @@ on:
 
 permissions:
   actions: read
+  checks: read
   contents: read
   issues: write
   pull-requests: write
@@ -142,6 +143,13 @@ jobs:
 
   april:
     needs: admit
+    # Publishing uses the separate App token. The workflow token only reads CI facts.
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
     if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'april'
     runs-on: ubuntu-latest
     # 45, not 30: run-contributor.py retries a review once on a transient
@@ -221,6 +229,7 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
+          FACTORY_CHECKS_TOKEN: ${{ github.token }}
           FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
           FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
           FACTORY_OWNER_REVIEW_RETRY: ${{ needs.admit.outputs.force_review }}
@@ -248,6 +257,13 @@ jobs:
 
   plat:
     needs: admit
+    # Publishing uses the separate App token. The workflow token only reads CI facts.
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      issues: read
+      pull-requests: read
     if: needs.admit.outputs.matched == 'true' && needs.admit.outputs.reviewer == 'plat'
     runs-on: ubuntu-latest
     # 45, not 30: run-contributor.py retries a review once on a transient
@@ -327,6 +343,7 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           CONTRIBUTOR_MODEL_CWD: ${{ github.workspace }}/model-workspace
+          FACTORY_CHECKS_TOKEN: ${{ github.token }}
           FACTORY_EXPECTED_LINKED_ISSUE: ${{ needs.admit.outputs.linked_issue }}
           FACTORY_EXPECTED_PR_HEAD_SHA: ${{ needs.admit.outputs.head_sha }}
           FACTORY_OWNER_REVIEW_RETRY: ${{ needs.admit.outputs.force_review }}

@@ -145,6 +145,7 @@ from evidence import (  # noqa: E402, F401
     extract_requested_evidence,
     format_requested_evidence_numbered,
     latest_completed_check_run,
+    resolve_named_ci_evidence,
     parse_structured_evidence_updates,
     reconcile_pending_ci_evidence,
     split_evidence_status_line,
@@ -1699,9 +1700,10 @@ def prepare_action_review(task_envelope: str, payloads: list[UntrustedGitHubPayl
         if pr is None:
             raise ValueError("review PR is unavailable")
         checks = fetch_review_checks(number, env)
+        named_ci = resolve_named_ci_evidence(requested, str(pr.get("headRefOid", "")), env)
         prepared = prepare_review_evidence(pr, checks, cwd,
             expected_head=env.get("FACTORY_EXPECTED_PR_HEAD_SHA") or task.get("review_head_sha", ""),
-            requested_evidence=requested, capability_version=f"raster-read-v1;claude-code-{CLAUDE_CODE_VERSION}")
+            requested_evidence=requested, named_ci=named_ci, capability_version=f"raster-read-v1;claude-code-{CLAUDE_CODE_VERSION}")
         try:
             if pr.get("baseRefOid") != task.get("review_base_sha"):
                 raise EvidencePreparationError("stale_base")
