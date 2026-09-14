@@ -437,6 +437,14 @@ class Diagram(GeneratorTestCase):
         shape, errors = self.shape_behind_stub_renderer(f"{self.WRITE_TO_OUTPUT}printf '<svg/>' > \"$out\"\nexit 0")
         self.assert_failed_without_an_image(shape, errors)
 
+    def test_a_renderer_that_writes_only_the_png_signature_is_reported_as_failing(self) -> None:
+        """The eight-byte signature opens every PNG; only the IHDR chunk after it says this one is real."""
+        shape, errors = self.shape_behind_stub_renderer(
+            f"{self.WRITE_TO_OUTPUT}printf '\\211PNG\\r\\n\\032\\n' > \"$out\"\nexit 0"
+        )
+        self.assert_failed_without_an_image(shape, errors)
+        self.assertNotIn("data:image/png;base64,", shape)
+
     def test_a_renderer_that_cannot_start_is_reported_as_failing(self) -> None:
         shape, errors = self.shape_behind_stub_renderer("exit 0", interpreter="/nonexistent/interpreter")
         self.assertIn("The renderer failed", shape)

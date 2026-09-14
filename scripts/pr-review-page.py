@@ -787,7 +787,7 @@ def render_diagram(mermaid: str, *, authored: bool = False) -> str:
                     check=True,
                 )
                 drawn = out_file.read_bytes() if out_file.is_file() else b""
-                if not drawn.startswith(PNG_SIGNATURE):
+                if _png_width(drawn) is None:
                     raise OSError("exited without writing a PNG image")
                 encoded = base64.b64encode(drawn).decode("ascii")
             except (subprocess.SubprocessError, OSError) as error:
