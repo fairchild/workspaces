@@ -1,6 +1,6 @@
 # Mergeability Standard
 
-This is the full review standard behind the compact rule in `AGENTS.md`. Use it when opening, reviewing, or deciding whether to merge a PR.
+This is the full review standard behind the compact rule in `AGENTS.md`. Use it when opening, reviewing, responding to review, or deciding whether to merge a PR.
 
 ## Core Bar
 
@@ -48,6 +48,59 @@ template, so a field added there reaches generated PRs without a second edit.
 PR summary style: prefer concise Markdown links for completed checks and
 artifacts — link the check name, e.g. `Web CI passed`, to the run URL.
 Readability preference, not a merge gate.
+
+## Review handoff and response
+
+This workflow applies to Interactive Lane agents handing work to Factory or a
+human reviewer. Factory's runtime owns its automated response and revision
+routing; an Interactive Lane agent must not impersonate that runtime.
+
+Before requesting review, establish how the intended reviewer will inspect the
+required artifacts. A link that opens on your laptop proves access there. For
+Factory visual evidence, require a delivery result for this PR's artifacts
+before claiming reviewer access; absent that result, access is unknown. Factory should inspect
+images itself. An implementing or independent agent's attestation supplements
+that inspection; a human intervenes when the required capability or judgment is
+unavailable.
+
+Prepare one handoff tied to the reviewed commit: named checks and results,
+artifacts and the claim each proves, and the source state used for capture. See
+[evidence delivery and provenance](evidence.md#delivery-and-provenance).
+Gather related body changes in a local file and run the existing body preflight
+before publishing them together. A preflight pass checks the body contract; it
+does not establish artifact delivery or visual correctness. Keep incomplete
+handoffs in draft. Correct material false statements promptly, but avoid
+cosmetic body edits that trigger another review.
+
+On feedback, refresh the current head, checks, standing reviews, and unresolved
+threads. For each actionable finding, retain its review or thread ID, requested
+outcome, evidence, and next action. Classify the objection before responding:
+
+| Objection | Action |
+| --- | --- |
+| Code defect | Establish the defect, fix it, and run relevant checks. |
+| Missing or stale evidence | Supply the artifact that proves the requested outcome; refresh evidence affected by code changes. |
+| Reviewer capability failure | Identify the failed delivery or inspection step and route it to the tooling owner. |
+| Policy or scope disagreement | Compare the claim with the exact repository-owned rule. Correct a mistaken claim once with that source; involve the Owner when intent, scope, or authority remains unsettled. |
+
+Continue independent authorized fixes while another finding is blocked. Answer
+findings in their original threads with the change or evidence, and publish
+related PR-body updates together. Do not change Factory settings or expand your
+write scope to clear a review unless already authorized.
+
+Before another review attempt, name the changed input that can clear its
+blocker: code, evidence content or delivery, reviewer capability, relevant
+policy, or an Owner decision. A new review ID or rewritten explanation is not
+a changed blocking condition. If nothing relevant changed, stop retriggering
+review. Tell the Owner once which component or agent owns the blocker and what
+event permits another attempt. Pause a bounded watch when no machine work is
+progressing and the next action requires that event. An explicit Owner request
+can authorize another attempt; record that reason.
+
+Report implementation validation, evidence availability to the intended
+reviewer, and review approval separately, including unknowns. Review approval
+does not authorize merge or deployment. Preserve standing review decisions;
+neither the author's own inspection nor a weakened evidence rule clears them.
 
 ## Surface Checklists
 

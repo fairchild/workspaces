@@ -218,6 +218,32 @@ download. `--link` then writes `Review page: <url>` under the PR body's byline.
 The page shows the evidence the body already carries; it does not stand in for
 capturing any.
 
+## Delivery and provenance
+
+Record capture, delivery, and inspection separately. For each artifact, retain
+its hosted URL, digest, source state, and the claim it supports. Use the upload
+command's returned URL. The canonical `evidence.cloudcompute.com` host is
+supported; GitHub-native attachments are not a universal requirement.
+
+Capture should come from the commit under review. If it used dirty source,
+record the patch identity and that limitation; a Git HEAD label alone does not
+prove which source produced a binary or screenshot. Refresh evidence after a
+relevant code change, or explain why an unchanged artifact still applies.
+
+Inspect the rendered PR for human review. For Factory image review, verify
+delivery through a result tied to the same PR and evidence, then require the
+Factory reviewer to inspect the images. Until such a result exists, reviewer
+access is unknown. An HTTP success, decoded image, or matching digest
+establishes delivery properties, not visual correctness. A local path and
+digest establish local provenance, not remote availability. The
+[review handoff and response workflow](mergeability-standard.md#review-handoff-and-response)
+handles failed delivery or unavailable reviewer capabilities.
+
+For recordings, check what the reviewer can inspect. If playback is
+unavailable, representative frames can support visual claims; they do not
+prove timing or interaction. Keep those claims tied to evidence the reviewer
+can inspect, or report the inspection gap.
+
 ## What counts as evidence
 
 A screenshot or a recording for anything a person can see. Numbers for anything
@@ -348,6 +374,7 @@ Three layers, from gentlest to strongest:
 | `operator credential did not appear` | Fixture launch didn't enable operator scope, or the app failed to start | Check `.dev-data/logs/launch-diagnostics-*`; the lane sets `WORKSPACES_AUTOMATION_API=1` + `WORKSPACES_AUTOMATION_OPERATOR=1` for you |
 | Snapshot `unsupported` on a locked screen | Composited capture returns no pixels while locked | Use the local VM fallback lane |
 | URL returns 404 | Upload didn't complete | Re-run `evidence.sh`, check network |
+| Image renders in the PR but the reviewer cannot inspect it | Establish whether delivery, decoding, or image tools are unavailable | Record the failed capability and repair the review route within your authority. Request human help when needed; prose changes or rehosting without a diagnosed cause do not repair access. |
 
 ## Architecture
 
