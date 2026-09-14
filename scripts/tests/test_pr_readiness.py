@@ -21,6 +21,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -635,6 +636,167 @@ class PreflightBodyFileTests(unittest.TestCase):
         )
         self.assertEqual(code, 1)
         self.assertIn("Mergeability field is empty or still default: Surface.", output)
+
+
+class EvidenceDeliveryPreflightTests(unittest.TestCase):
+    """The network mode is explicit, read-only, and cannot stand in for review."""
+
+    HEAD = "a" * 40
+    BASE = "b" * 40
+
+    def setUp(self):
+        self.pr = {
+            "number": 42, "headRefOid": self.HEAD, "baseRefOid": self.BASE,
+            "body": "## Evidence\n![screen](https://evidence.cloudcompute.com/workspaces/pr-42/screen.png)",
+        }
+        self.checks = [{"name": "test", "bucket": "pass"}]
+        self.github = SimpleNamespace(
+            repo_owner_name=mock.Mock(return_value=("fairchild", "workspaces")),
+            fetch_detailed_pull_request=mock.Mock(return_value=self.pr),
+            fetch_review_checks=mock.Mock(return_value=self.checks),
+            extract_pr_issue_reference=mock.Mock(return_value=(None, None)),
+            fetch_detailed_issue=mock.Mock(),
+            extract_requested_evidence=mock.Mock(return_value=["Screenshot of terminal"]),
+        )
+        self.prepared = mock.Mock(status="ready", reason_code="ready", artifacts=[{
+            "id": "image-1", "url": "https://evidence.cloudcompute.com/workspaces/pr-42/screen.png",
+            "sha256": "c" * 64, "local_path": "/private/tmp/staged/image-1.png",
+            "author_claim": "Author-controlled text", "width": 800, "height": 600,
+        }])
+        self.prepared.outcome.side_effect = lambda: {
+            "status": self.prepared.status, "reason_code": self.prepared.reason_code,
+            "head_sha": self.HEAD, "base_sha": self.BASE,
+        }
+
+        class PreparationError(ValueError):
+            def __init__(self, reason_code):
+                self.reason_code = reason_code
+
+        def fail(error):
+            self.prepared.status = "unavailable"
+            self.prepared.reason_code = error.reason_code
+
+        self.prepared.fail.side_effect = fail
+        self.evidence = SimpleNamespace(
+            prepare_review_evidence=mock.Mock(return_value=self.prepared),
+            EvidencePreparationError=PreparationError,
+        )
+
+    def run_delivery(self, *extra):
+        output = io.StringIO()
+        with (
+            mock.patch.object(pr_readiness, "evidence_delivery_modules", return_value=(self.github, self.evidence)),
+            contextlib.redirect_stdout(output),
+        ):
+            code = pr_readiness.main(["--check-evidence-delivery", "42", *extra])
+        return code, json.loads(output.getvalue())
+
+    def test_body_and_event_modes_do_not_load_network_or_image_dependencies(self):
+        with mock.patch.object(pr_readiness, "evidence_delivery_modules", side_effect=AssertionError("offline")):
+            code, _ = preflight(GOOD_BODY, files=["Sources/WorkspaceManager/Foo.swift"])
+            self.assertEqual(code, 0)
+            with tempfile.TemporaryDirectory() as tmp:
+                event = Path(tmp) / "event.json"
+                event.write_text(json.dumps({"pull_request": pr(GOOD_BODY)}))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(pr_readiness.main(["--event", str(event)]), 0)
+
+    def test_explicit_delivery_uses_live_readers_and_shared_preparation_then_cleans_up(self):
+        code, report = self.run_delivery("--expected-head", self.HEAD)
+        self.assertEqual(code, 0)
+        args, kwargs = self.evidence.prepare_review_evidence.call_args
+        self.assertEqual(args, (self.pr, self.checks, pr_readiness.REPO_ROOT))
+        self.assertEqual(kwargs, {"expected_head": self.HEAD, "requested_evidence": []})
+        self.assertEqual(self.github.fetch_detailed_pull_request.call_count, 2)
+        self.assertEqual(report["status"], "delivered")
+        self.assertEqual(report["scope"], "local_evidence_delivery")
+        self.assertEqual(report["factory_inspection"], "not_performed")
+        self.assertEqual(report["review_approval"], "not_evaluated")
+        self.assertEqual(report["artifacts"][0]["sha256"], "c" * 64)
+        self.assertNotIn("local_path", report["artifacts"][0])
+        self.assertNotIn("author_claim", report["artifacts"][0])
+        self.prepared.cleanup.assert_called_once_with()
+
+    def test_linked_issue_requested_evidence_is_forwarded_without_reparsing(self):
+        self.github.extract_pr_issue_reference.return_value = (12, None)
+        self.github.fetch_detailed_issue.return_value = {"body": "## Requested Evidence\n- Screenshot of terminal"}
+        code, _ = self.run_delivery()
+        self.assertEqual(code, 0)
+        self.assertEqual(self.github.fetch_detailed_issue.call_args.args[:3], ("fairchild", "workspaces", 12))
+        self.assertEqual(self.evidence.prepare_review_evidence.call_args.kwargs["requested_evidence"],
+                         ["Screenshot of terminal"])
+
+    def test_missing_live_pr_or_requested_issue_cannot_pass(self):
+        for missing in ("pr", "issue"):
+            with self.subTest(missing=missing):
+                self.setUp()
+                if missing == "pr":
+                    self.github.fetch_detailed_pull_request.return_value = None
+                else:
+                    self.github.extract_pr_issue_reference.return_value = (12, None)
+                    self.github.fetch_detailed_issue.return_value = None
+                code, report = self.run_delivery()
+                self.assertEqual(code, 1)
+                self.assertEqual(report["status"], "unavailable")
+                self.evidence.prepare_review_evidence.assert_not_called()
+
+    def test_preparation_failure_is_not_retried_or_relabelled_success(self):
+        self.prepared.status = "unavailable"
+        self.prepared.reason_code = "disallowed_url"
+        code, report = self.run_delivery()
+        self.assertEqual(code, 1)
+        self.assertEqual(report["preparation"]["reason_code"], "disallowed_url")
+        self.assertEqual(report["status"], "unavailable")
+        self.evidence.prepare_review_evidence.assert_called_once()
+        self.github.fetch_detailed_pull_request.assert_called_once()
+        self.prepared.cleanup.assert_called_once_with()
+
+    def test_changed_live_head_base_or_body_invalidates_the_delivery(self):
+        for field, reason in (("headRefOid", "stale_head"), ("baseRefOid", "stale_base"), ("body", "invalid_evidence")):
+            with self.subTest(field=field):
+                self.setUp()
+                self.github.fetch_detailed_pull_request.side_effect = [self.pr, {**self.pr, field: "changed"}]
+                code, report = self.run_delivery()
+                self.assertEqual(code, 1)
+                self.assertEqual(report["preparation"]["reason_code"], reason)
+                self.prepared.cleanup.assert_called_once_with()
+
+    def test_failed_final_identity_read_cleans_up_and_cannot_pass(self):
+        self.github.fetch_detailed_pull_request.side_effect = [self.pr, None]
+        code, report = self.run_delivery()
+        self.assertEqual(code, 1)
+        self.assertEqual(report["reason_code"], "pr_unavailable")
+        self.prepared.cleanup.assert_called_once_with()
+
+    def test_no_images_is_not_reported_as_delivery_or_inspection(self):
+        self.prepared.artifacts = []
+        self.github.fetch_review_checks.return_value = None
+        code, report = self.run_delivery()
+        self.assertEqual(code, 0)
+        self.assertEqual(report["status"], "no_images_selected")
+        self.assertIsNone(report["required_checks"])
+        self.assertEqual(report["factory_inspection"], "not_performed")
+
+    def test_unexpected_error_still_cleans_staged_files(self):
+        self.github.fetch_detailed_pull_request.side_effect = [self.pr, RuntimeError("API failed")]
+        with self.assertRaisesRegex(RuntimeError, "API failed"):
+            self.run_delivery()
+        self.prepared.cleanup.assert_called_once_with()
+
+    def test_delivery_flags_reject_ambiguous_or_invalid_invocations(self):
+        invalid = [
+            ["--check-evidence-delivery", "0"],
+            ["--check-evidence-delivery", "-1"],
+            ["--check-evidence-delivery", "42", "--body-file", "body.md"],
+            ["--check-evidence-delivery", "42", "--event=event.json"],
+            ["--check-evidence-delivery", "42", "--changed-files", "files.json"],
+            ["--check-evidence-delivery", "42", "--base", "other"],
+            ["--expected-head", self.HEAD],
+        ]
+        for argv in invalid:
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                pr_readiness.parse_args(argv)
+            self.assertEqual(error.exception.code, 2)
 
 
 class TemplateContractTests(unittest.TestCase):

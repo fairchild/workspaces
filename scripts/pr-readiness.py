@@ -8,7 +8,9 @@
 Two entry points, one `evaluate()`: CI feeds it the GitHub `pull_request`
 event, and `--body-file` feeds it a body an author has not published yet, so
 the same failures and the same wording arrive before `gh pr create` instead of
-one CI round trip later.
+one CI round trip later. `--check-evidence-delivery` separately opts into a
+read-only live PR/artifact check using Factory's shared delivery policy. It
+reports laptop delivery, never Factory inspection or approval.
 """
 
 from __future__ import annotations
@@ -606,6 +608,82 @@ def body_file_pr(path: Path, *, title: str, labels: list[str]) -> dict[str, Any]
     }
 
 
+def evidence_delivery_modules():
+    """Load network/image dependencies only for the explicit delivery command."""
+    contributor_scripts = REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts"
+    if str(contributor_scripts) not in sys.path:
+        sys.path.insert(0, str(contributor_scripts))
+    import github_state
+    import review_evidence
+
+    return github_state, review_evidence
+
+
+def check_evidence_delivery(pr_number: int, *, expected_head: str = "") -> int:
+    """Exercise Factory's bounded fetch policy locally, then discard staged files.
+
+    This command never runs the reviewer, posts a receipt, or changes PR state.
+    Live head/base/body revalidation prevents a download from certifying stale
+    PR inputs. Required-check facts remain facts, not an approval decision.
+    """
+    github_state, review_evidence = evidence_delivery_modules()
+    env = os.environ.copy()
+    owner, name = github_state.repo_owner_name(env)
+    report: dict[str, Any] = {
+        "scope": "local_evidence_delivery",
+        "repository": f"{owner}/{name}",
+        "pr_number": pr_number,
+        "factory_inspection": "not_performed",
+        "review_approval": "not_evaluated",
+    }
+    prepared = None
+    try:
+        pr = github_state.fetch_detailed_pull_request(owner, name, pr_number, env)
+        if pr is None:
+            report.update(status="unavailable", reason_code="pr_unavailable")
+            return 1
+        checks = github_state.fetch_review_checks(pr_number, env)
+        requested_evidence = []
+        issue_number, _ = github_state.extract_pr_issue_reference(str(pr.get("body", "")))
+        if issue_number is not None:
+            issue = github_state.fetch_detailed_issue(owner, name, issue_number, env)
+            if issue is None:
+                report.update(status="unavailable", reason_code="requested_evidence_unavailable")
+                return 1
+            requested_evidence = github_state.extract_requested_evidence(str(issue.get("body", "")))
+        prepared = review_evidence.prepare_review_evidence(
+            pr, checks, REPO_ROOT, expected_head=expected_head,
+            requested_evidence=requested_evidence,
+        )
+        if prepared.status == "ready":
+            current = github_state.fetch_detailed_pull_request(owner, name, pr_number, env)
+            if current is None:
+                report.update(status="unavailable", reason_code="pr_unavailable")
+                return 1
+            for field, reason in (("headRefOid", "stale_head"), ("baseRefOid", "stale_base"),
+                                  ("body", "invalid_evidence")):
+                if current.get(field) != pr.get(field):
+                    prepared.fail(review_evidence.EvidencePreparationError(reason))
+                    break
+        report.update(
+            status="delivered" if prepared.status == "ready" and prepared.artifacts else (
+                "no_images_selected" if prepared.status == "ready" else "unavailable"
+            ),
+            preparation=prepared.outcome(),
+            required_checks=checks,
+            artifacts=[
+                {key: value for key, value in artifact.items() if key not in {"local_path", "author_claim"}}
+                for artifact in prepared.artifacts
+            ],
+            note="Staged files are removed after this local check. Factory must independently deliver and inspect the images.",
+        )
+        return 0 if prepared.status == "ready" else 1
+    finally:
+        if prepared is not None:
+            prepared.cleanup()
+        print(json.dumps(report, indent=2, sort_keys=True))
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", default=os.environ.get("GITHUB_EVENT_PATH"))
@@ -617,6 +695,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "same checks CI runs and reports the same failures. Start from "
             ".github/pull_request_template.md."
         ),
+    )
+    parser.add_argument(
+        "--check-evidence-delivery", type=int, metavar="PR",
+        help="Opt in to live read-only evidence delivery for an existing PR; does not inspect images or approve review.",
+    )
+    parser.add_argument(
+        "--expected-head", default="", metavar="SHA",
+        help="Require this head SHA with --check-evidence-delivery.",
     )
     parser.add_argument("--title", default="", help="PR title to check alongside --body-file.")
     parser.add_argument(
@@ -631,11 +717,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default="main",
         help="Base branch --body-file diffs against to infer changed files (default: main).",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.check_evidence_delivery is not None:
+        if args.check_evidence_delivery <= 0:
+            parser.error("--check-evidence-delivery requires a positive PR number")
+        if (args.body_file or args.changed_files or args.label or args.title or args.base != "main"
+                or any(arg == "--event" or arg.startswith("--event=") for arg in argv)):
+            parser.error("--check-evidence-delivery is separate from body/event checks")
+    elif args.expected_head:
+        parser.error("--expected-head requires --check-evidence-delivery")
+    return args
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if args.check_evidence_delivery is not None:
+        return check_evidence_delivery(args.check_evidence_delivery, expected_head=args.expected_head)
     if args.body_file:
         body_path = Path(args.body_file)
         if not body_path.is_file():

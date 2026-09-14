@@ -244,6 +244,35 @@ unavailable, representative frames can support visual claims; they do not
 prove timing or interaction. Keep those claims tied to evidence the reviewer
 can inspect, or report the inspection gap.
 
+### Optional laptop delivery preflight
+
+The ordinary `--body-file` readiness check stays offline. For an existing PR,
+opt into a local artifact download using Factory's same bounded PNG/JPEG
+validation and URL policy:
+
+```bash
+uv run --with pillow==12.3.0 --script scripts/pr-readiness.py \
+  --check-evidence-delivery <PR> --expected-head <full-head-SHA>
+```
+
+The command reads the live PR, linked requested evidence, and required checks
+through `gh`; it writes no GitHub state and runs no reviewer. JSON output binds
+the result to the PR/head/base and downloaded hashes, then staged files are
+removed. A changed head, base, or body during the check prevents success.
+`no_images_selected` means the shared policy selected no images, not that any
+image was inspected. An unavailable check result remains `null`.
+
+This proves delivery on the laptop only. Factory still needs to deliver and
+inspect the artifacts in its own environment before review approval. An
+unavailable delivery exits nonzero; the command does not retry automatically.
+The explicit Pillow dependency applies only to this opt-in command.
+
+The shared policy accepts at most six PNG/JPEG images from this PR's path on
+`evidence.cloudcompute.com`: 8 MiB per image, 24 MiB total, 16 million decoded
+pixels, and 8,192 pixels per dimension. Each fetch/decode has a 20-second hard
+timeout and at most two redirects within the same URL policy. Animated images
+and active formats such as SVG are rejected.
+
 ## What counts as evidence
 
 A screenshot or a recording for anything a person can see. Numbers for anything
