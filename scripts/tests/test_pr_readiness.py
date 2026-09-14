@@ -534,6 +534,7 @@ class PendingLineShapeTests(unittest.TestCase):
 
     FILES = ["Sources/WorkspaceManager/Foo.swift"]
     PENDING = "Requested evidence is blocked or still pending CI."
+    AMBIGUOUS = SectionHeadingCaseTests.AMBIGUOUS
 
     def failures(self, body: str) -> list[str]:
         return pr_readiness.evaluate(pr(body), self.FILES).failures
@@ -551,17 +552,20 @@ class PendingLineShapeTests(unittest.TestCase):
     def test_a_heading_up_to_three_spaces_in_is_the_section(self) -> None:
         for indent in (" ", "  ", "   "):
             with self.subTest(indent=len(indent)):
-                status = GOOD_BODY + f"\n{indent}## Evidence Status\n"
-                self.assertEqual(self.failures(status + "- [pending-ci] swift test -- waiting\n"), [self.PENDING])
-                self.assertEqual(self.failures(status + "- [complete] swift test -- 1992 tests passed\n"), [])
+                pending = GOOD_BODY + f"\n{indent}## Evidence Status\n- [pending-ci] swift test -- waiting\n"
+                self.assertIn(self.PENDING, self.failures(pending))
                 self.assertEqual(self.failures(GOOD_BODY.replace("## Mergeability", f"{indent}## Mergeability")), [])
 
-    def test_an_indented_heading_ends_the_section_above_it(self) -> None:
-        body = GOOD_BODY.replace("## Validation", "   ## Validation")
-        self.assertEqual(
-            pr_readiness.extract_section(body, "Mergeability"),
-            pr_readiness.extract_section(GOOD_BODY, "Mergeability"),
-        )
+    def test_an_indented_status_heading_is_a_variant(self) -> None:
+        # The factory's writer cannot find an indented status heading and adds
+        # its own section beside it, so the gate refuses the indent before then.
+        body = GOOD_BODY + "\n   ## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        self.assertEqual(self.failures(body), [self.AMBIGUOUS])
+
+    def test_a_heading_nested_in_a_list_item_stays_inside_its_section(self) -> None:
+        nested = "- Supporting context:\n\n   ## Nested detail\n\n   Inside the list item.\n\n"
+        body = GOOD_BODY.replace("## Mergeability\n\n", "## Mergeability\n\n" + nested, 1)
+        self.assertEqual(self.failures(body), [])
 
     def test_four_spaces_in_is_a_code_block_not_a_heading(self) -> None:
         body = GOOD_BODY + "\n    ## Evidence Status\n    - [pending-ci] swift test -- quoted example\n"
@@ -575,11 +579,23 @@ class PendingLineShapeTests(unittest.TestCase):
                     body = GOOD_BODY + f"\n{heading}\n{marker} [pending-ci] swift build -- waiting\n"
                     self.assertEqual(self.failures(body), [self.PENDING])
 
+    def test_a_status_marker_with_nothing_after_it_is_pending(self) -> None:
+        for line in ("- [pending-ci]", "+ [blocked]\n"):
+            with self.subTest(line=line):
+                self.assertEqual(self.failures(GOOD_BODY + f"\n## Evidence Status\n{line}"), [self.PENDING])
+
     def test_a_blocked_on_evidence_box_under_any_list_marker_is_checked(self) -> None:
-        for marker in ("*", "+", "1."):
+        for marker in ("*", "+", "1.", "123456789."):
             with self.subTest(marker=marker):
                 body = GOOD_BODY.replace("- [ ] Blocked on evidence", f"{marker} [x] Blocked on evidence")
                 self.assertIn("PR is checked as blocked on evidence.", self.failures(body))
+
+    def test_ten_digits_do_not_open_a_list_item(self) -> None:
+        blocked = GOOD_BODY + "\n## Notes\n\n1234567890. [x] Blocked on evidence\n"
+        self.assertNotIn("PR is checked as blocked on evidence.", self.failures(blocked))
+        evidence = "- `swift test --filter GhosttyCallbackUserdata` -- Test run with 1992 tests in 214 suites passed"
+        untested = GOOD_BODY.replace(evidence, "-") + "\n1234567890. [x] Not a testable change\n"
+        self.assertIn("No test/evidence signal found in PR body.", self.failures(untested))
 
 
 class ReadinessCommentTests(unittest.TestCase):

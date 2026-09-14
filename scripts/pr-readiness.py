@@ -132,17 +132,19 @@ def load_json(path: str | None, default: Any) -> Any:
 
 # A body reads the way GitHub renders it. A heading may sit up to three spaces
 # in, and four is a code block, so an example quoted there is not a heading. A
-# list item opens on `-`, `*`, `+`, or a number and `.` or `)`. A CR or CRLF
-# ends a line the way LF does.
+# list item opens on `-`, `*`, `+`, or one to nine digits and `.` or `)`. A CR
+# or CRLF ends a line the way LF does.
 HEADING_INDENT = r" {0,3}"
-LIST_MARKER = r"(?:[-*+]|\d+[.)])"
+LIST_MARKER = r"(?:[-*+]|[0-9]{1,9}[.)])"
 LINE_ENDING_RE = re.compile(r"\r\n?")
 
 
 def extract_section(body: str, heading: str) -> str:
+    # A section ends at the next `## ` at column 0. An indented one can sit
+    # inside a list item, and there it belongs to the section around it.
     pattern = re.compile(
         rf"(?msi)^{HEADING_INDENT}## {re.escape(heading)}\n(?P<section>.*?)"
-        rf"(?=^{HEADING_INDENT}## |\n---\n|\Z)"
+        r"(?=^## |\n---\n|\Z)"
     )
     match = pattern.search(body)
     return match.group("section").strip() if match else ""
@@ -209,13 +211,16 @@ def leading_paragraph_failure(body: str) -> str | None:
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
+    # Exact means `## Evidence Status` at column 0, in any letter case. The
+    # factory's writer finds its section by that heading and cannot find an
+    # indented one, so an indented heading is a variant: accepted, it would sit
+    # beside a second section the factory adds on its next turn.
     headings = re.findall(
         rf"(?im)^{HEADING_INDENT}#+[ \t]+Evidence[ \t]+Status(?:[ \t]+#+)?[ \t]*$",
         body,
     )
     exact_count = sum(
-        re.fullmatch(rf"(?i){HEADING_INDENT}## Evidence Status", heading) is not None
-        for heading in headings
+        re.fullmatch(r"(?i)## Evidence Status", heading) is not None for heading in headings
     )
     variant_count = len(headings) - exact_count
     if exact_count > 1 or variant_count:
@@ -504,7 +509,7 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
     if heading_failure := evidence_status_heading_failure(body):
         failures.append(heading_failure)
     evidence_status = extract_section(body, "Evidence Status")
-    if re.search(rf"(?im)^\s*{LIST_MARKER}\s*\[(?:blocked|pending-ci)\]\s+", evidence_status):
+    if re.search(rf"(?im)^\s*{LIST_MARKER}\s*\[(?:blocked|pending-ci)\](?:\s|$)", evidence_status):
         failures.append("Requested evidence is blocked or still pending CI.")
 
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):
