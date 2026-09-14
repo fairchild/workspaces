@@ -5,7 +5,7 @@
 //  The gesture-verb layer — the single place the "verbs = clicks" rule is enforced.
 //
 //  Most mutation verbs enter the same UI gesture the equivalent user action does — this layer is
-//  constructed with *only* gesture closures, the app's real UI entry points (for `workspace.select`,
+//  constructed with closures the live window installs, the app's real UI entry points (for `workspace.select`,
 //  the selection binding whose setter attaches the terminal and requests focus), so those verbs
 //  cannot produce a snapshot that lies or misroute the next input into a stale PTY. `workspace.note`
 //  is the one exception: its installed closure is a direct write of `workspace.note`, equivalent to
