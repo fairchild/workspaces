@@ -144,27 +144,53 @@ PENDING_STATUS_RE = re.compile(
 FENCE_OPENER_RE = re.compile(r" {0,3}(?P<run>`{3,}|~{3,})(?P<info>.*)")
 
 
-def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
-    # Stripping takes the first line's indent along with the blank lines around
-    # the section, so a reader that cares about indentation asks for it unstripped.
-    pattern = re.compile(
-        rf"(?msi)^## {re.escape(heading)}\n(?P<section>.*?)(?=^## |\n---\n|\Z)"
-    )
-    match = pattern.search(body)
-    if not match:
+def fence_opener(line: str) -> str:
+    """The run of backticks or tildes a line opens a fence with, or "" when it opens none.
+
+    Fences follow CommonMark: an opener sits at most three spaces in, since four
+    is an indented code block, and a backtick opener's info string holds no
+    backtick, so a line that opens on a code span opens nothing.
+    """
+    opener = FENCE_OPENER_RE.fullmatch(line)
+    if not opener or (opener["run"].startswith("`") and "`" in opener["info"]):
         return ""
-    return match.group("section").strip() if strip else match.group("section")
+    return opener["run"]
+
+
+def closes_fence(line: str, run: str) -> bool:
+    """Whether a line closes the fence `run` opened: the same character, at least as long, at most three spaces in."""
+    return re.fullmatch(rf" {{0,3}}{re.escape(run[0])}{{{len(run)},}}[ \t]*", line) is not None
+
+
+def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
+    # A section runs to the next `## ` heading or `---` rule, and one inside a
+    # fence is the fence's content. Stripping takes the first line's indent along
+    # with the blank lines around the section, so a reader that cares about
+    # indentation asks for it unstripped.
+    start = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
+    if not start:
+        return ""
+    lines = body[start.end():].split("\n")
+    kept: list[str] = []
+    run = ""
+    for index, line in enumerate(lines):
+        if run:
+            if closes_fence(line, run):
+                run = ""
+        elif line.startswith("## ") or (line == "---" and 0 < index < len(lines) - 1):
+            break
+        else:
+            run = fence_opener(line)
+        kept.append(line)
+    section = "\n".join(kept)
+    return section.strip() if strip else section
 
 
 def split_fenced_blocks(text: str) -> tuple[str, str | None]:
     """The text without its fenced code blocks, and the opening line of a fence left unclosed.
 
-    A reader sees a fenced line as an example, not as status. Fences follow
-    CommonMark: an opener sits at most three spaces in, since four is an
-    indented code block, and a backtick opener's info string holds no backtick,
-    so a line that opens on a code span opens nothing. A closer is a run of the
-    opener's character at least as long, at most three spaces in. An unclosed
-    fence keeps its lines, so nothing after it goes unread.
+    A reader sees a fenced line as an example, not as status. An unclosed fence
+    keeps its lines, so nothing after it goes unread.
     """
     kept: list[str] = []
     fenced: list[str] = []
@@ -172,13 +198,10 @@ def split_fenced_blocks(text: str) -> tuple[str, str | None]:
     for line in text.split("\n"):
         if run:
             fenced.append(line)
-            if re.fullmatch(rf" {{0,3}}{re.escape(run[0])}{{{len(run)},}}[ \t]*", line):
+            if closes_fence(line, run):
                 fenced.clear()
                 run = ""
-        elif (opener := FENCE_OPENER_RE.fullmatch(line)) and not (
-            opener["run"].startswith("`") and "`" in opener["info"]
-        ):
-            run = opener["run"]
+        elif run := fence_opener(line):
             fenced.append(line)
         else:
             kept.append(line)

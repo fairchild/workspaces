@@ -701,6 +701,32 @@ class PendingLineShapeTests(unittest.TestCase):
         body = GOOD_BODY + "\n## Evidence Status\n\n```markdown\n    ```\n- [pending-ci] example\n```\n"
         self.assertEqual(self.failures(body), [])
 
+    def test_a_heading_or_rule_inside_a_closed_fence_stays_in_the_section(self) -> None:
+        for opener, closer in (("```markdown", "```"), ("~~~", "~~~")):
+            with self.subTest(opener=opener):
+                fence = f"\n{opener}\n## Example\n---\n- [pending-ci] example\n{closer}\n"
+                status = GOOD_BODY + f"\n## Evidence Status\n{fence}"
+                self.assertEqual(self.failures(status + "- [complete] swift test -- 1992 tests passed\n"), [])
+                self.assertEqual(self.failures(status + "- [pending-ci] swift build -- waiting\n"), [self.PENDING])
+
+    def test_an_unclosed_fence_holding_a_heading_still_fails(self) -> None:
+        body = GOOD_BODY + "\n## Evidence Status\n\n```markdown\n## Example\n- [complete] swift test -- 1992 tests passed\n"
+        self.assertEqual(self.failures(body), [self.unclosed("```markdown")])
+
+    def test_a_heading_after_a_closed_fence_still_ends_the_section(self) -> None:
+        body = GOOD_BODY + (
+            "\n## Evidence Status\n\n```\n## Example\n```\n- [complete] swift test -- 1992 tests passed\n"
+            "\n## Next\n\n- [pending-ci] a later section -- not a status line\n"
+        )
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_rule_outside_a_fence_still_ends_the_section(self) -> None:
+        body = GOOD_BODY + (
+            "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+            "\n---\n\n- [pending-ci] below the rule -- not a status line\n"
+        )
+        self.assertEqual(self.failures(body), [])
+
 
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
