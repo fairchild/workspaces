@@ -17,6 +17,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -1195,12 +1196,18 @@ class ClaudeCodePinTests(unittest.TestCase):
 class MergeabilitySeedTests(unittest.TestCase):
     """Factory-composed PR bodies must clear the pr-readiness Mergeability
     gate at open time (#1119): seeded from changed files and the agent's own
-    Summary/Validation/Risks, honest placeholders where nothing is known."""
+    What/Validation/Risks, honest placeholders where nothing is known."""
 
     maxDiff = None
 
+    OPENING = (
+        "A repo name of nothing but dots reached the URL we interpolate it into, and the\n"
+        "request it produced was against a path nobody meant. This rejects those names at\n"
+        "the validator instead of at the far end. One file plus its test, +31 -4.\n"
+    )
     SUMMARY_BODY = (
-        "## Summary\n"
+        f"{OPENING}\n"
+        "## What\n"
         "- Reject dot-only segments in repo names before URL interpolation\n"
         "- All call sites consume the boolean return unchanged\n\n"
         "## Validation\n"
@@ -1324,6 +1331,89 @@ class MergeabilitySeedTests(unittest.TestCase):
         self.assertLess(
             seeded.index("## Evidence Status"), seeded.index("## Mergeability")
         )
+
+
+class PRShapeTests(unittest.TestCase):
+    """What the runtime and the personas owe the reader of a PR (#1621).
+
+    The title and the opening paragraph are the model's to write, so what is
+    testable here is that the runtime carries them through untouched and that
+    the prompts ask for them.
+    """
+
+    PERSONA = "April Clearwater, Application Lead"
+    REFERENCES = (
+        REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "references"
+    )
+
+    def test_the_composed_body_still_opens_with_the_models_paragraph(self) -> None:
+        """The byline goes above it, and the gate reads past a byline."""
+        body = run_contributor.compose_pr_body(
+            1621, self.PERSONA, MergeabilitySeedTests.SUMMARY_BODY
+        )
+        self.assertTrue(body.startswith(f"*{self.PERSONA}*"))
+        self.assertEqual(
+            pr_readiness.leading_paragraph_failure(body),
+            None,
+            body[:300],
+        )
+
+    def test_a_body_the_model_opened_on_a_heading_is_caught_at_the_gate(self) -> None:
+        summary = MergeabilitySeedTests.SUMMARY_BODY.replace(
+            MergeabilitySeedTests.OPENING + "\n", ""
+        )
+        body = run_contributor.compose_pr_body(1621, self.PERSONA, summary)
+        self.assertIn("it opens with a heading", pr_readiness.leading_paragraph_failure(body))
+
+    def test_the_mergeability_seed_reads_the_what_section(self) -> None:
+        seeded = run_contributor.seed_mergeability_section(
+            MergeabilitySeedTests.SUMMARY_BODY, changed_files=["web-next/src/lib/db/x.ts"]
+        )
+        section = pr_readiness.extract_section(seeded, "Mergeability")
+        self.assertIn(
+            "Reject dot-only segments",
+            pr_readiness.field_value(section, "User-facing behavior changed"),
+        )
+
+    def test_the_seed_still_reads_a_body_written_under_the_old_heading(self) -> None:
+        older = "## Summary\n- Reject dot-only segments in repo names\n"
+        seeded = run_contributor.seed_mergeability_section(older, changed_files=[])
+        section = pr_readiness.extract_section(seeded, "Mergeability")
+        self.assertIn(
+            "Reject dot-only segments",
+            pr_readiness.field_value(section, "User-facing behavior changed"),
+        )
+
+    def test_the_personas_placeholder_line_does_not_pass_for_the_paragraph(self) -> None:
+        """The example's slot is a comment, as the template's guidance is, so a
+        model that copies it instead of writing the paragraph leaves `## What`
+        first and is refused."""
+        for name in ("april-clearwater.md", "plat-ironwood.md"):
+            text = (self.REFERENCES / name).read_text(encoding="utf-8")
+            slots = [line for line in text.splitlines() if "One paragraph, no heading above it" in line]
+            self.assertTrue(slots, f"{name} shows no paragraph slot")
+            for slot in slots:
+                with self.subTest(persona=name, slot=slot):
+                    body = run_contributor.compose_pr_body(
+                        1621, self.PERSONA, f"{slot}\n\n## What\n- A thing\n"
+                    )
+                    self.assertIn(
+                        "it opens with a heading",
+                        pr_readiness.leading_paragraph_failure(body) or "",
+                    )
+
+    def test_both_personas_ask_for_the_paragraph_and_a_prefixed_title(self) -> None:
+        for name in ("april-clearwater.md", "plat-ironwood.md"):
+            with self.subTest(persona=name):
+                text = (self.REFERENCES / name).read_text(encoding="utf-8")
+                self.assertIn("opens with one paragraph and no heading above it", text)
+                self.assertIn("conventional-commit prefix", text)
+                self.assertIn("## What", text)
+                self.assertNotIn("## Summary", text)
+                titles = re.findall(r'^pr_title: "(.+)"$', text, re.MULTILINE)
+                self.assertTrue(titles, "the persona shows no pr_title example")
+                for title in titles:
+                    self.assertRegex(title, r"^[a-z]+(?:\([a-z0-9.-]+\))?: \S")
 
 
 def _stream_transcript(
@@ -2267,7 +2357,7 @@ class RevisionTurnTests(unittest.TestCase):
             "(https://github.com/fairchild/workspaces/pull/77#pullrequestreview-9001).",
             reply,
         )
-        for section in ("## Summary", "## Validation", "## Risks"):
+        for section in ("## What", "## Validation", "## Risks"):
             self.assertIn(section, reply)
         # Markers are the lane's attestation, posted by resolve only after the
         # outcome is validated -- a runtime comment never carries one, so model

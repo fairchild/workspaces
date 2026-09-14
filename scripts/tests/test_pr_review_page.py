@@ -169,7 +169,21 @@ class PlainLanguage(GeneratorTestCase):
             self.assertNotIn("Sources/", line, f"file path survived into plain language: {line}")
             self.assertNotIn("Tests/", line, f"file path survived into plain language: {line}")
 
-    def test_it_opens_from_the_summarys_own_first_sentences(self) -> None:
+    def test_it_opens_from_the_bodys_own_leading_paragraph(self) -> None:
+        source = self.source(SYNTHETIC)
+        source.pr["body"] = (
+            "*Bench Persona, Fixture Lead*\n\n"
+            "Two tests shared one preferences domain, so the second to run read what the\n"
+            "first had written. This gives each its own. One file, +12 -4.\n\n"
+            "## What\n- Gave the tests their own domain\n"
+        )
+        lines = pr_review_page.plain_language(source.pr)
+        self.assertEqual(len(lines), 3)
+        self.assertTrue(lines[0].startswith("Two tests shared one preferences domain"), lines[0])
+        self.assertEqual(lines[1], "This gives each its own.")
+        self.assertNotIn("Gave the tests their own domain", " ".join(lines))
+
+    def test_a_body_written_before_the_paragraph_falls_back_to_its_bullets(self) -> None:
         source = self.source(SPECIMEN)
         lines = pr_review_page.plain_language(source.pr)
         self.assertTrue(lines[0].startswith("Named the shared state"), lines[0])
@@ -187,11 +201,18 @@ class PlainLanguage(GeneratorTestCase):
         self.assertTrue(lines[1].endswith("fails closed."), lines[1])
         self.assertNotIn("-->", lines[1])
 
-    def test_a_body_with_no_summary_falls_back_to_the_title(self) -> None:
+    def test_a_body_with_neither_paragraph_nor_bullets_falls_back_to_the_title(self) -> None:
         source = self.source(SYNTHETIC)
-        source.pr["body"] = "*Bench Persona, Fixture Lead*\n\nNo summary here.\n"
+        source.pr["body"] = "*Bench Persona, Fixture Lead*\n\n## What\n\n## Validation\n"
         lines = pr_review_page.plain_language(source.pr)
         self.assertEqual(lines, [source.pr["title"]])
+
+    def test_a_what_section_claims_the_hunks_a_summary_section_used_to(self) -> None:
+        source = self.source(SPECIMEN)
+        under_summary = pr_review_page.what_bullets(source.pr["body"])
+        renamed = source.pr["body"].replace("## Summary", "## What")
+        self.assertEqual(pr_review_page.what_bullets(renamed), under_summary)
+        self.assertTrue(under_summary, "the specimen has no bullets to compare")
 
 
 class DiffByConcern(GeneratorTestCase):

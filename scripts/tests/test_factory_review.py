@@ -631,7 +631,10 @@ class FactoryReviewTests(unittest.TestCase):
         self.assertEqual(self.decide(closed).action, "skip")
 
     READY_BODY = (
-        "## Summary\n\nA change.\n\n"
+        "The factory review lane declined to refresh a standing rejection even after the\n"
+        "readiness gate went green, so a PR that had answered its review stayed rejected.\n"
+        "This refreshes it on the next event. One file, +18 -6.\n\n"
+        "## What\n\nA change.\n\n"
         "## Evidence Status\n- [complete] CI green -- `Lint, Test, Build` green on this head\n\n"
         "## Validation\n- `uv run --script scripts/tests/test_factory_review.py` -- Ran 12 tests, OK\n\n"
         "## Mergeability\n"

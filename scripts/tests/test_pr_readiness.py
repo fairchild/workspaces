@@ -44,7 +44,12 @@ def pr(body: str, *, labels: list[str] | None = None, draft: bool = False) -> di
     }
 
 
-GOOD_BODY = """## Summary
+GOOD_BODY = """The Ghostty callback helpers each reached for userdata their own way, so a nil
+pointer was a crash in one of them and a no-op in the next. This gives them one
+helper with the nil and zero-address cases decided in a single place, which is
+what the tests below now cover. Two files, +48 -31; no behavior a user sees.
+
+## What
 
 - Improve callback helper maintainability
 
@@ -827,6 +832,101 @@ class TemplateContractTests(unittest.TestCase):
         block = pr_readiness.mergeability_paste_block()
         for label in pr_readiness.mergeability_field_labels():
             self.assertIn(f"- {label}:", block)
+
+
+class LeadingParagraphTests(unittest.TestCase):
+    """The body opens with a paragraph, or the gate says what it opened with.
+
+    Michael, 2026-09-12, on a body that opened with `## Summary` and a bullet:
+    "too dense and hard to follow ... Why do I care about this? why did we open
+    this pr?" The paragraph is where those get answered, and its position is
+    what makes it the first thing read.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def only_paragraph_failure(self, body: str) -> str:
+        failures = self.failures(body)
+        paragraph = [failure for failure in failures if "paragraph" in failure]
+        self.assertEqual(len(paragraph), 1, failures)
+        return paragraph[0]
+
+    def test_the_good_body_opens_with_its_paragraph(self) -> None:
+        self.assertEqual(self.failures(GOOD_BODY), [])
+
+    def test_a_body_that_opens_on_a_heading_is_refused(self) -> None:
+        body = GOOD_BODY[GOOD_BODY.index("## What") :]
+        self.assertIn("it opens with a heading", self.only_paragraph_failure(body))
+
+    def test_a_body_that_opens_on_a_list_is_refused(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        body = f"- Improve callback helper maintainability\n\n{rest}"
+        self.assertIn("it opens with a list", self.only_paragraph_failure(body))
+
+    def test_a_body_that_opens_on_a_table_or_a_fence_is_refused(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        self.assertIn("a table", self.only_paragraph_failure(f"| a | b |\n| - | - |\n\n{rest}"))
+        self.assertIn("a code block", self.only_paragraph_failure(f"```\nswift test\n```\n\n{rest}"))
+
+    def test_the_unedited_template_is_refused(self) -> None:
+        """Its guidance is an HTML comment, so the first thing a reader sees is
+        a heading — which is what the gate refuses."""
+        self.assertIn(
+            "it opens with a heading",
+            self.only_paragraph_failure(pr_readiness.template_body()),
+        )
+
+    def test_a_one_line_opening_is_too_short_to_be_the_paragraph(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        self.assertIn("is 16 characters", self.only_paragraph_failure(f"Fixes the thing.\n\n{rest}"))
+
+    def test_a_short_paragraph_that_says_why_is_enough(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        opening = "Nil userdata crashed one Ghostty callback and not the next; one helper now decides it. Two files."
+        self.assertEqual(self.failures(f"{opening}\n\n{rest}"), [])
+
+    def test_a_paragraph_that_opens_on_an_autolink_is_prose(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        self.assertEqual(self.failures(f"<https://example.com> explains the crash. {GOOD_BODY}"), [])
+        self.assertIn("an HTML block", self.only_paragraph_failure(f"<details>\n\n{rest}"))
+
+    def test_a_comment_a_browser_closes_at_bang_is_skipped_too(self) -> None:
+        self.assertEqual(self.failures(f"<!-- contributor:issue=1621 --!>\n\n{GOOD_BODY}"), [])
+
+    def test_a_heading_under_the_opening_line_ends_the_paragraph(self) -> None:
+        rest = GOOD_BODY[GOOD_BODY.index("## What") :]
+        opening = GOOD_BODY[: GOOD_BODY.index("\n\n## What")]
+        body = f"Fixes.\n### Details\n{opening}\n\n{rest}"
+        self.assertIn("is 6 characters", self.only_paragraph_failure(body))
+
+    def test_the_persona_byline_and_the_review_page_link_sit_above_it(self) -> None:
+        body = (
+            "*April Clearwater, Application Lead*\n\n"
+            "Review page: https://evidence.cloudcompute.com/pr/1621.html\n\n"
+            f"{GOOD_BODY}"
+        )
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_comment_above_the_paragraph_is_not_the_paragraph(self) -> None:
+        self.assertEqual(self.failures(f"<!-- contributor:issue=1621 -->\n\n{GOOD_BODY}"), [])
+
+    def test_a_paragraph_wrapped_over_several_lines_is_one_paragraph(self) -> None:
+        opening = GOOD_BODY[: GOOD_BODY.index("\n\n## What")]
+        self.assertGreater(len(opening.splitlines()), 1)
+        self.assertNotIn("\n", pr_readiness.pr_body.read_opening(GOOD_BODY).text)
+
+    def test_the_guidance_shows_the_shape_by_example(self) -> None:
+        result = pr_readiness.evaluate(pr("## What\n\n- A thing\n"), self.FILES)
+        guidance = pr_readiness.guidance_markdown(result)
+        self.assertIn(pr_readiness.LEADING_PARAGRAPH_EXAMPLE, guidance)
+        self.assertIn("not a block to paste and fill in", guidance)
+
+    def test_a_draft_is_not_held_to_it(self) -> None:
+        result = pr_readiness.evaluate(pr("## What\n", draft=True), self.FILES)
+        self.assertEqual(result.failures, [])
 
 
 if __name__ == "__main__":

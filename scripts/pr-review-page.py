@@ -14,10 +14,10 @@ Reads the PR through `gh` (or a recorded fixture, for tests), writes
 `<out>/<number>.html`, and on request uploads it to the evidence store and
 writes `Review page: <url>` into the PR body.
 
-The prose here is the PR's own: the opening lines are the first sentence of each
-Summary bullet and the group headings are those same sentences, so a factory turn
-that writes better sentences improves the page without touching this file. Every
-text source is `plain_language`.
+The prose here is the PR's own: the opening lines are the sentences of the body's
+opening paragraph, and the group headings are the first sentence of each What
+bullet, so a factory turn that writes better sentences improves the page without
+touching this file. Every text source is `plain_language`.
 
 To draw the shape yourself rather than take the generated graph, put a ```mermaid
 fence under a `<!-- review-page:diagram -->` marker in the PR body. The fence is
@@ -45,6 +45,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
+
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+import pr_body  # noqa: E402  (path set above so this runs as a script anywhere)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUT = REPO_ROOT / "build" / "pr-review"
@@ -182,10 +188,10 @@ DIAGRAM_MARKER = "<!-- review-page:diagram -->"
 DIAGRAM_MARKER_RE = re.compile(
     r"<!--\s*review-page:diagram\s*-->\s*```mermaid\n(.*?)```", re.DOTALL
 )
-# Both terminators, so a comment's extent here is the extent a browser gives it.
-# Used to find the marker that is a comment of its own and reject the one that
-# is merely inside somebody else's.
-COMMENT_RE = re.compile(r"<!--.*?(?:-->|--!>)", re.DOTALL)
+# The shared reader's pattern, so the page and the gate agree where a comment
+# ends. Used to find the marker that is a comment of its own and reject the one
+# that is merely inside somebody else's.
+COMMENT_RE = pr_body.COMMENT_RE
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"(])")
 
 
@@ -214,7 +220,7 @@ class Hunk:
 
 @dataclass
 class Bullet:
-    """A Summary bullet: its whole text claims hunks, its first sentence titles them."""
+    """A What bullet: its whole text claims hunks, its first sentence titles them."""
 
     heading: str
     paths: set[str]
@@ -361,15 +367,19 @@ def body_sections(body: str) -> dict[str, str]:
     return sections
 
 
-def summary_bullets(body: str) -> list[str]:
-    """Top-level `- ` items of the Summary section, continuation lines folded in.
+def what_bullets(body: str) -> list[str]:
+    """Top-level `- ` items of the What section, continuation lines folded in.
 
     A blank line ends the list. Without that, an indented block further down the
     section -- a diagram, a table, a fenced example -- is indented like a
     continuation and lands inside the last bullet, where it becomes prose the
     page then reads out loud.
+
+    `Summary` is the heading this section carried before the opening paragraph
+    took over the explaining, and bodies written under it are still open.
     """
-    section = body_sections(body).get("Summary", "")
+    sections = body_sections(body)
+    section = sections.get("What") or sections.get("Summary", "")
     bullets: list[str] = []
     folding = False
     for line in section.splitlines():
@@ -414,10 +424,17 @@ def first_sentence(text: str) -> str:
 def plain_language(pr: dict) -> list[str]:
     """The five-line opening, and the only place the page's prose comes from.
 
-    First cut: the first sentence of each Summary bullet. A factory turn that
-    writes real plain language replaces this function's body and nothing else.
+    The body's own opening paragraph, one line per sentence: the author already
+    wrote the plain language there, for the same reader this page is for. A body
+    written before that shape falls back to the first sentence of each What
+    bullet, and a body with neither to the title.
     """
-    lines = [first_sentence(readable(bullet)) for bullet in summary_bullets(pr.get("body") or "")]
+    body = pr.get("body") or ""
+    opening = pr_body.read_opening(body)
+    if opening.is_paragraph:
+        lines = [sentence.strip() for sentence in SENTENCE_SPLIT_RE.split(readable(opening.text))]
+    else:
+        lines = [first_sentence(readable(bullet)) for bullet in what_bullets(body)]
     lines = [line for line in lines if line]
     return lines[:5] or [pr.get("title", "").strip()]
 
@@ -510,12 +527,12 @@ def claim_score(bullet: Bullet, hunk: Hunk) -> tuple[int, int, int]:
 
 
 def group_hunks(source: Source) -> list[Group]:
-    """Hunks filed under the Summary sentence that explains them.
+    """Hunks filed under the What sentence that explains them.
 
     Ties go to the earlier bullet, so a body that says the same thing twice files
     the hunk under the first telling rather than splitting it.
     """
-    bullets = [make_bullet(text) for text in summary_bullets(source.pr.get("body") or "")]
+    bullets = [make_bullet(text) for text in what_bullets(source.pr.get("body") or "")]
     claimed: dict[int, list[Hunk]] = {index: [] for index in range(len(bullets))}
     leftovers: list[Hunk] = []
 

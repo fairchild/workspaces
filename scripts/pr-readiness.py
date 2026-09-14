@@ -30,10 +30,25 @@ REPO_ROOT = SCRIPTS_DIR.parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
+import pr_body
 from release_policy import RELEASE_PATHS
 
 
 DEFAULT_SURFACE = "desktop / web / agent-runtime / infra / docs"
+
+# A floor, not a target: it refuses an opening like "Fixes the thing.", which is
+# prose and says nothing of why the PR exists, and a short paragraph that does say
+# it clears the floor. The example below carries the shape.
+LEADING_PARAGRAPH_MIN_CHARS = 40
+
+# Shown on failure as an example, not a block to paste and fill in: the shape is
+# a paragraph, and a labelled skeleton is what produced the bodies this replaces.
+LEADING_PARAGRAPH_EXAMPLE = """\
+Decisions on the steward's board wait hours for a click: on 2026-09-13 nine pull
+requests each waited eleven hours on one. This PR lets a decision be answered
+from a macOS notification, so a tap and a board click are the same event
+everywhere downstream. Off by default behind an experimental feature.
+12 files, +1496 -13."""
 
 # The authored PR body skeleton. Producers derive their sections from this
 # file rather than from copied strings, so adding a field to the template
@@ -156,6 +171,31 @@ def mergeability_paste_block(path: Path | None = None) -> str:
         hint = FIELD_HINTS.get(label, "<fill in>")
         lines.append(f"- {label}: {hint}")
     return "\n".join(lines)
+
+
+def leading_paragraph_failure(body: str) -> str | None:
+    """Whether this body opens the way a reader needs it to.
+
+    The first read of a PR is its opening, and a body that opened on `## Summary`
+    spent that read on a heading and a bullet. What goes there now is one
+    paragraph saying why the PR exists and what it solves. Anything else in that
+    position — a heading, a list, a table, a fence, an unedited template whose
+    guidance is an HTML comment — is what this refuses.
+    """
+    opening = pr_body.read_opening(body)
+    if not opening.is_paragraph:
+        found = pr_body.OPENING_NAMES.get(opening.kind, "something other than a paragraph")
+        return (
+            f"The body does not open with a paragraph; it opens with {found}. "
+            "One paragraph, no heading above it, comes first: why this PR exists, "
+            "what it solves, then what changed."
+        )
+    if len(opening.text) < LEADING_PARAGRAPH_MIN_CHARS:
+        return (
+            f"The opening paragraph is {len(opening.text)} characters, too short to say "
+            "why this PR exists, what it solves, and what changed."
+        )
+    return None
 
 
 def evidence_status_heading_failure(body: str) -> str | None:
@@ -424,6 +464,9 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
         notices.append("Draft PR: readiness gate is advisory until the PR is ready for review.")
         return Result(failures, notices)
 
+    if paragraph_failure := leading_paragraph_failure(body):
+        failures.append(paragraph_failure)
+
     mergeability = extract_section(body, "Mergeability")
     if not mergeability:
         failures.append("Missing ## Mergeability section from the PR body.")
@@ -507,6 +550,17 @@ def guidance_markdown(result: Result) -> str:
         return "✅ **PR readiness gate passed.**\n"
     lines = ["⚠️ **PR readiness gate failed** — this PR body is missing readiness signals:", ""]
     lines += [f"- {failure}" for failure in result.failures]
+    if any("paragraph" in failure for failure in result.failures):
+        lines += [
+            "",
+            "The body opens with one paragraph and no heading — why the PR exists, what it",
+            "solves, then what changed and how big it is. Here is the shape by example; it",
+            "is not a block to paste and fill in:",
+            "",
+            "```markdown",
+            LEADING_PARAGRAPH_EXAMPLE,
+            "```",
+        ]
     if any("Mergeability" in failure for failure in result.failures):
         lines += [
             "",

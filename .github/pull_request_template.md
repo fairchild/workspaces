@@ -1,4 +1,21 @@
-## Summary
+<!--
+Open with one paragraph, here, with no heading above it. Say why this pull
+request exists and what it solves, then what changed and how big it is. Write it
+for the reader deciding whether to care — ordinary prose, not four labelled
+answers, not a bullet list. The title carries the same motive: after the
+conventional-commit prefix, why the reader cares, what it solved, why this pull
+request exists.
+
+An example of the shape, not a template to fill in:
+
+  Decisions on the steward's board wait hours for a click: on 2026-09-13 nine
+  pull requests each waited eleven hours on one. This PR lets a decision be
+  answered from a macOS notification, so a tap and a board click are the same
+  event everywhere downstream. Off by default behind an experimental feature.
+  12 files, +1496 -13.
+-->
+
+## What
 
 -
 
