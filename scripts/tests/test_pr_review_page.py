@@ -1034,6 +1034,133 @@ class ImageHosts(GeneratorTestCase):
         self.assertIn("tracker.example.test/pixel.png", page)
 
 
+WORKER_SOURCE = REPO_ROOT / "infra" / "cloudflare-evidence-store" / "src" / "index.ts"
+
+
+def worker_img_src_entries(source: str) -> list[str]:
+    """The Worker's img-src sources, in order.
+
+    Scoped to the SERVED_OBJECT_HEADERS object -- its own closing "};" ends
+    the span, since the object has no nested braces today -- so an img-src
+    written elsewhere in the file cannot be mistaken for this one. A policy
+    that names img-src twice is not split into two directives at runtime: a
+    browser applies the first occurrence of a directive name and ignores the
+    rest, so this keeps the first.
+    """
+    start = re.search(r"SERVED_OBJECT_HEADERS\s*=\s*\{", source)
+    if not start:
+        raise AssertionError(f"SERVED_OBJECT_HEADERS not found in {WORKER_SOURCE}")
+    end = re.search(r"\};", source[start.start() :])
+    if not end:
+        raise AssertionError(f"no closing '}};' for SERVED_OBJECT_HEADERS in {WORKER_SOURCE}")
+    span = source[start.start() : start.start() + end.end()]
+    if '"Content-Security-Policy"' not in span:
+        raise AssertionError(
+            "SERVED_OBJECT_HEADERS has no Content-Security-Policy field -- "
+            "this parser assumes its current shape"
+        )
+    array = re.search(r'"Content-Security-Policy":\s*\[(.*?)\]', span, re.S)
+    if not array:
+        raise AssertionError("Content-Security-Policy is not an array literal")
+    literals = re.findall(r'"([^"]*)"', array.group(1))
+    directives = [d.strip() for d in "; ".join(literals).split(";") if d.strip()]
+    img_src = next((d for d in directives if d.split()[0] == "img-src"), None)
+    if img_src is None:
+        raise AssertionError(f"no img-src directive in: {directives!r}")
+    return img_src.split()[1:]
+
+
+class EvidenceStoreCSP(GeneratorTestCase):
+    """The Worker's img-src must stay a superset of IMAGE_HOSTS.
+
+    A browser enforces the intersection of the two policies: the one this
+    generator writes into the page's own `<meta>`, and the one the Worker
+    at `infra/cloudflare-evidence-store` sends as a header for every object
+    it serves. A host present here and absent there is not an error anywhere
+    -- the image the page names simply never renders when served from the
+    store, which reads as a broken screenshot rather than a policy mismatch.
+    """
+
+    def test_every_image_host_is_covered_by_the_worker(self) -> None:
+        entries = worker_img_src_entries(WORKER_SOURCE.read_text())
+        for host in pr_review_page.IMAGE_HOSTS:
+            origin = f"https://{host}"
+            covered = origin in entries or any(
+                entry.startswith("https://*.") and origin.endswith(entry[len("https://*") :])
+                for entry in entries
+            )
+            self.assertTrue(
+                covered,
+                f"{origin} is in IMAGE_HOSTS ({SCRIPT_PATH.name}) but not in the "
+                f"Worker's img-src ({WORKER_SOURCE.relative_to(REPO_ROOT)}): {entries}",
+            )
+
+    def test_data_uri_images_are_allowed(self) -> None:
+        """The generator's rendered mermaid diagram is a `data:` image (pr-review-page.py)."""
+        entries = worker_img_src_entries(WORKER_SOURCE.read_text())
+        self.assertIn("data:", entries)
+
+
+class WorkerCSPParsing(unittest.TestCase):
+    """The parser above reads the directive it is pointed at, not the first
+    quoted `img-src`-shaped text anywhere in the file.
+    """
+
+    def test_the_real_file_parses_to_the_documented_hosts(self) -> None:
+        entries = worker_img_src_entries(WORKER_SOURCE.read_text())
+        self.assertIn("https://evidence.cloudcompute.com", entries)
+        self.assertIn("data:", entries)
+
+    def test_an_img_src_in_an_unrelated_object_does_not_false_pass(self) -> None:
+        source = """
+const UNRELATED_HEADERS = {
+  "Content-Security-Policy": [
+    "default-src 'none'",
+    "img-src 'self' https://wrong.example",
+  ].join("; "),
+};
+
+const SERVED_OBJECT_HEADERS = {
+  "Content-Security-Policy": [
+    "default-src 'none'",
+    "img-src 'self' https://evidence.cloudcompute.com data:",
+  ].join("; "),
+};
+"""
+        entries = worker_img_src_entries(source)
+        self.assertEqual(entries, ["'self'", "https://evidence.cloudcompute.com", "data:"])
+
+    def test_a_comment_between_two_array_elements_does_not_break_parsing(self) -> None:
+        """The real file carries a binding comment between two directives.
+
+        A literal search for quoted text has no notion of comments to strip
+        in the first place -- this is the case that would have needed one.
+        """
+        source = """
+const SERVED_OBJECT_HEADERS = {
+  "Content-Security-Policy": [
+    "default-src 'none'",
+    // a comment sitting between two directives, same shape as index.ts
+    "img-src 'self' https://evidence.cloudcompute.com data:",
+  ].join("; "),
+};
+"""
+        entries = worker_img_src_entries(source)
+        self.assertEqual(entries, ["'self'", "https://evidence.cloudcompute.com", "data:"])
+
+    def test_a_duplicated_img_src_keeps_the_first_as_a_browser_would(self) -> None:
+        source = """
+const SERVED_OBJECT_HEADERS = {
+  "Content-Security-Policy": [
+    "img-src 'none'",
+    "img-src 'self' https://evidence.cloudcompute.com",
+  ].join("; "),
+};
+"""
+        entries = worker_img_src_entries(source)
+        self.assertEqual(entries, ["'none'"])
+
+
 class BodyLink(GeneratorTestCase):
     URL = "https://evidence.cloudcompute.com/workspaces/pr-1602/abc/1602.html"
 
