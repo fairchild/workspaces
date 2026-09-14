@@ -384,10 +384,20 @@ You complete an `other` item by rewriting its line as
 `- [complete] <item> -- <what you checked>`, and that line is the record for
 the item from the moment it is saved: the factory's accounting, the reviewer's
 gate included, reads it over the hidden metadata beside it, so an approval
-does not wait for a factory turn to copy it across. That holds while the body
-has one `## Evidence Status` heading; with a second one, even inside a code
-block, no line is read as yours and the metadata decides. A `[blocked]` you write
-there holds the review the same way. Only an `other` line is read at once. A
+does not wait for a factory turn to copy it across. A `[blocked]` you write
+there holds the review the same way. What you checked has to be said: on an
+item nobody runs, a bare status word such as `PASS`, `ok` or `done` is no proof.
+
+Three things decide whether a line is read as yours. The item has to be one the
+contributor recorded as `other` in the hidden metadata when it wrote the
+section; the kind is not re-read from the item's wording at review, and an item
+with no recorded kind is never read this way. The section has to be readable:
+one `## Evidence Status` heading a reader of the page sees (a heading inside a
+code block or an HTML comment is not one), every line under it an entry, no
+horizontal rule cutting lines off, and one line per item. When it is not, no
+line is read as yours and no owner item counts as complete from the metadata
+either, since the line nobody can read may be your `[blocked]`; fix the section
+and the next review reads it. And only an `other` line is read at once. A
 `[complete]` written over any other kind reads as the metadata says until a
 factory turn or the lane that owns the item writes it, because nothing but a
 lane or the factory's own reading of the body completes those. Like any hand

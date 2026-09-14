@@ -630,6 +630,56 @@ def _wrapped_bullets(section: str) -> list[str]:
     return bullets
 
 
+HTML_COMMENT_TERMINATOR_RE = re.compile(r"--!?>")
+
+
+def _leaves_comment_open(line: str, *, inside: bool) -> bool:
+    """Whether an HTML comment is still open at the end of this line."""
+    position = 0
+    while True:
+        if inside:
+            end = HTML_COMMENT_TERMINATOR_RE.search(line, position)
+            if end is None:
+                return True
+            position, inside = end.end(), False
+        opened = line.find("<!--", position)
+        if opened == -1:
+            return False
+        position, inside = opened + 4, True
+
+
+def _visible_markdown(body: str) -> str:
+    """The body with every line a reader sees as code, or never sees, blanked.
+
+    A heading inside a fenced block is shown as the characters it is made of,
+    and one inside an HTML comment is not shown at all, so neither is a
+    heading to anyone reading the page. Lines are blanked rather than removed,
+    which keeps every other line where it was. Fences follow the CommonMark
+    rules `_wrapped_bullets` uses, and one left open runs to the end. A comment
+    runs from `<!--` to the first `-->` or `--!>`, the extent a browser gives
+    it, or to the end when nothing closes it; a line it touches is blanked
+    whole, since text sharing a line with a comment belongs to the same HTML
+    block.
+    """
+    visible: list[str] = []
+    fenced: str | None = None
+    in_comment = False
+    for line in MARKDOWN_LINE_ENDING_RE.split(body):
+        if not fenced and (in_comment or "<!--" in line):
+            in_comment = _leaves_comment_open(line, inside=in_comment)
+            visible.append("")
+            continue
+        fence = MARKDOWN_FENCE_RE.fullmatch(line.strip())
+        if fence and _is_fence_line(fence):
+            indent = _fence_indent_columns(line)
+            if indent is not None and indent <= 3 and _fence_toggles(fence, fenced):
+                fenced = None if fenced else fence.group("run")
+            visible.append("")
+            continue
+        visible.append("" if fenced else line)
+    return "\n".join(visible)
+
+
 def extract_requested_evidence(body: str) -> list[str]:
     evidence_section = markdown_section(body, "Requested Evidence")
     fallback_sentence = EVIDENCE_FALLBACK_SENTENCE.casefold()
@@ -756,6 +806,7 @@ def _structured_evidence_entries(
         }
 
     entries: dict[str, dict[str, str]] = {}
+    kinds: dict[str, str] = {}
     duplicate_items: list[str] = []
     invalid_lines: list[str] = []
     for position, raw_entry in enumerate(raw_entries, start=1):
@@ -797,10 +848,13 @@ def _structured_evidence_entries(
             "status": status,
             "detail": detail,
         }
+        if isinstance(raw_entry.get("kind"), str):
+            kinds[item] = raw_entry["kind"].strip()
 
     return {
         "section_present": has_markdown_section(body, "Evidence Status"),
         "entries": {} if invalid_lines else entries,
+        "kinds": {} if invalid_lines else kinds,
         "invalid_lines": invalid_lines,
         "duplicate_items": duplicate_items,
         "source": "structured-invalid" if invalid_lines else "structured",
@@ -1016,16 +1070,36 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     # factory turn to copy it into the metadata strands the PR instead, since
     # the approval that turn waits on is refused by this accounting.
     #
+    # Which items are the owner's is the kind the contributor wrote into the
+    # metadata when it rendered them, never a fresh reading of the wording:
+    # that reading is a heuristic, and a different answer at review time would
+    # hand a lane's item to a hand edit. With no kind recorded, nothing is.
+    #
     # Every other kind reads as the metadata says. There, the only signal a
     # line was hand-edited is that it differs from the metadata, which any PR
     # author or bot can produce, and reading it would clear an item a lane
     # refused or nothing ran. Authority has to come from who wrote the edit,
     # and nothing in a body string says that; `render_execution_summary_body`
     # carries such a line forward on the next factory turn.
-    for entry in _owner_written_entries(body, requested_evidence).values():
+    #
+    # A section that cannot be read as anyone's -- two headings a reader sees,
+    # a line that is not an entry, two lines for one item -- does not agree
+    # with the metadata by default. An owner item there stays unfinished,
+    # because the unreadable line may be the owner's `[blocked]`.
+    kinds = parsed.get("kinds") or {}
+    owner_items = [item for item in requested_evidence if kinds.get(item) == "other"]
+    written, unreadable = _read_owner_section(body, requested_evidence)
+    for entry in written.values():
         item = str(entry["item"])
-        if _evidence_item_kind(item) == "other":
+        if item in owner_items:
             entries[item] = {"status": str(entry["status"]), "detail": str(entry["detail"])}
+    if unreadable:
+        for item in owner_items:
+            if entries.get(item, {}).get("status") == "complete":
+                entries[item] = {
+                    "status": "blocked",
+                    "detail": f"the Evidence Status section cannot be read as the owner's: {unreadable}",
+                }
 
     matched: dict[str, str]
     contested_items: list[str] = []
@@ -1077,11 +1151,16 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     unproven_items = [
         item
         for item in complete_items
-        if _detail_proves_nothing(item, str(entries[matched[item]].get("detail", "")))
+        if _detail_proves_nothing(
+            item,
+            str(entries[matched[item]].get("detail", "")),
+            owner=item in owner_items or _evidence_item_kind(item) == "other",
+        )
     ]
     return {
         **parsed,
         "unproven_items": unproven_items,
+        "owner_section_unreadable": unreadable if owner_items else None,
         "live_ci_satisfied": sorted(live_satisfied),
         "missing_items": missing_items,
         "contested_items": contested_items,
@@ -1105,6 +1184,12 @@ DETAIL_WORD_RE = re.compile(r"\w+")
 # What a runner prints on its own line. Everything else that fits in one word
 # is a claim rather than a result.
 ONE_WORD_RESULTS = frozenset({"pass", "passed", "passing", "ok", "green", "success"})
+# Words that report a status rather than what was seen. An owner's item has no
+# runner to print a result, so a detail made only of these says the owner
+# looked without saying what they found.
+STATUS_WORDS = ONE_WORD_RESULTS | frozenset(
+    {"okay", "done", "complete", "completed", "yes", "verified", "checked", "confirmed", "lgtm", "fine", "good"}
+)
 # Every way a picture reaches a markdown body, matched without a repeated
 # group around any of them -- the obvious spelling nests a quantifier inside a
 # quantifier, and the detail is PR-controlled text, so a crafted one
@@ -1124,18 +1209,25 @@ DETAIL_IMAGE_RE = re.compile(
 )
 
 
-def _detail_proves_nothing(item: str, detail: str) -> bool:
+def _detail_proves_nothing(item: str, detail: str, *, owner: bool = False) -> bool:
     """Whether a `[complete]` entry's detail says nothing that could be checked.
 
-    Three shapes fail: nothing, one word, and an image standing alone on an
-    item that is not about looking at something. What the detail must not be
-    is the whole rule -- saying what it must contain would mean re-stating the
-    command the item already names, and "all passed" against `swift test` is a
-    perfectly good answer.
+    Four shapes fail: nothing, one word, an image standing alone on an item
+    that is not about looking at something, and -- on an owner's item --
+    nothing but status words. What the detail must not be is the whole rule --
+    saying what it must contain would mean re-stating the command the item
+    already names, and "all passed" against `swift test` is a perfectly good
+    answer. `PASS` is what a runner prints, and on an owner's item there is no
+    runner, so it is a status there and not a result.
     """
     text = detail.strip()
     words = DETAIL_WORD_RE.findall(text)
     if not words:
+        return True
+    if owner and all(
+        word.casefold() in STATUS_WORDS
+        for word in DETAIL_WORD_RE.findall(text.replace(CARRIED_FORWARD_NOTE, " "))
+    ):
         return True
     # "One word" is not a count in every script. A single ASCII word is a
     # non-answer -- "done", "proof", "complete" -- unless it is what a runner
@@ -1334,13 +1426,15 @@ def parse_structured_evidence_updates(
     return parsed, errors
 
 
-def _owner_written_entries(
+def _read_owner_section(
     published_body: str,
     requested_evidence: list[str],
-    *,
-    mark_carried: bool = False,
-) -> dict[int, dict[str, object]]:
-    """Entries in the published PR body that no longer say what the machine wrote.
+) -> tuple[dict[int, dict[str, object]], str | None]:
+    """Entries in the published section that no longer say what the machine wrote.
+
+    Also returns why the section cannot be read as anyone's, or None when it
+    reads cleanly. A section that fails to read is not a section that agrees
+    with the metadata, and the caller has to be able to tell the two apart.
 
     `published_body` is GitHub's copy, never a model's proposed one: a model
     asked to rewrite a PR body can write any line it likes, and reading its
@@ -1357,33 +1451,58 @@ def _owner_written_entries(
     phrasings, which change.
 
     An entry the machine never wrote is not drift, it is a first draft, so a
-    body carrying no metadata preserves nothing.
+    body carrying no metadata has nothing to read.
     """
     if not _explicit_evidence_contract(requested_evidence) or not published_body.strip():
-        return {}
-    # Drift is a person's edit only where the section being read is the one
-    # the machine wrote. A second heading a reader accepts -- a section the
-    # model wrote under a heading the renderer's strip missed, or a fenced
-    # example -- can differ from the metadata with nobody editing anything,
-    # and the readers take whichever section comes first. This matches every
-    # heading `markdown_section` reads and the near-misses it does not, so a
-    # body with more than one preserves nothing.
-    if len(re.findall(r"(?mi)^## Evidence Status[^\S\n]*$", published_body)) != 1:
-        return {}
-    rendered = extract_evidence_status_entries(published_body, requested_evidence)
-    written = rendered.get("entries")
-    if not isinstance(written, dict) or rendered.get("invalid_lines"):
-        return {}
+        return {}, None
     metadata = _structured_evidence_entries(published_body, requested_evidence)
     if not isinstance(metadata, dict) or metadata.get("source") != "structured":
-        return {}
+        return {}, None
     machine = metadata.get("entries")
     if not isinstance(machine, dict) or not machine:
-        return {}
+        return {}, None
+    # Only what a reader of the page sees is read. Drift is a person's edit
+    # only where the section being read is the one the machine wrote, and a
+    # second heading -- a section the model wrote under a heading the
+    # renderer's strip missed -- can differ from the metadata with nobody
+    # editing anything. Trailing whitespace after the one heading changes
+    # nothing a reader sees, so the read takes it as the heading it is.
+    visible = _visible_markdown(published_body)
+    headings = len(re.findall(r"(?mi)^## Evidence Status[^\S\n]*$", visible))
+    if headings != 1:
+        return {}, f"a reader sees {headings} `## Evidence Status` headings, not one"
+    visible = re.sub(r"(?mi)^(## Evidence Status)[^\S\n]+$", r"\1", visible)
+    # A horizontal rule ends the section for `markdown_section`, while a reader
+    # still sees the lines below it under the same heading.
+    through_rule = re.search(r"(?msi)^## Evidence Status\n(.*?)(?=^## |\Z)", visible)
+    section = markdown_section(visible, "Evidence Status")
+    if through_rule and any(
+        line.strip() and not re.fullmatch(r"-{3,}", line.strip())
+        for line in through_rule.group(1).strip()[len(section):].splitlines()
+    ):
+        return {}, "a horizontal rule cuts lines under the heading out of the section"
+    rendered = extract_evidence_status_entries(visible, requested_evidence)
+    written = rendered.get("entries")
+    invalid_lines = rendered.get("invalid_lines") or []
+    if not isinstance(written, dict) or invalid_lines:
+        return {}, f"a line in it is not an entry: {_truncate(str(invalid_lines[0]) if invalid_lines else '')}"
     positions = {
         _normalize_evidence_key(item): position
         for position, item in enumerate(requested_evidence, start=1)
     }
+    # Two lines for one item are two answers, and taking whichever comes first
+    # decides the item by where a bullet sits. Lines whose text differs only
+    # in what the key normalizes away are two lines for one item too.
+    repeated = list(rendered.get("duplicate_items") or [])
+    answered: set[int] = set()
+    for item in written:
+        position = positions.get(_normalize_evidence_key(item))
+        if position in answered:
+            repeated.append(item)
+        if position is not None:
+            answered.add(position)
+    if repeated:
+        return {}, f"it has more than one line for: {_truncate(str(repeated[0]))}"
     preserved: dict[int, dict[str, object]] = {}
     for item, entry in written.items():
         position = positions.get(_normalize_evidence_key(item))
@@ -1402,20 +1521,34 @@ def _owner_written_entries(
             entry.get("detail"),
         ):
             continue
-        detail = str(entry["detail"]).strip()
-        if mark_carried and CARRIED_FORWARD_NOTE not in detail:
-            # Written before this turn, and this turn may change the code
-            # under it. Saying so is the difference between an attestation a
-            # reader can weigh and a green that looks freshly earned. A read
-            # of the body as it stands is not a new turn, so it does not mark.
-            detail = f"{detail} {CARRIED_FORWARD_NOTE}"
         preserved[position] = {
             "index": position,
             "item": requested,
             "status": entry["status"],
-            "detail": detail,
+            "detail": str(entry["detail"]).strip(),
         }
-    return preserved
+    return preserved, None
+
+
+def _owner_written_entries(
+    published_body: str,
+    requested_evidence: list[str],
+    *,
+    mark_carried: bool = False,
+) -> dict[int, dict[str, object]]:
+    """What `_read_owner_section` found, or nothing when the section cannot be read."""
+    written, _ = _read_owner_section(published_body, requested_evidence)
+    if not mark_carried:
+        return written
+    for entry in written.values():
+        detail = str(entry["detail"])
+        if CARRIED_FORWARD_NOTE not in detail:
+            # Written before this turn, and this turn may change the code
+            # under it. Saying so is the difference between an attestation a
+            # reader can weigh and a green that looks freshly earned. A read
+            # of the body as it stands is not a new turn, so it does not mark.
+            entry["detail"] = f"{detail} {CARRIED_FORWARD_NOTE}"
+    return written
 
 
 def render_execution_summary_body(

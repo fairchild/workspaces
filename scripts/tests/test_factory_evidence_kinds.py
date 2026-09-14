@@ -2683,6 +2683,124 @@ class OwnerKindHandEditTests(unittest.TestCase):
                 self.assertIsNotNone(error)
 
 
+class OwnerReadFailsClosedTests(unittest.TestCase):
+    """Where an owner's line cannot be read, nothing it might say is assumed.
+
+    Codex round 1 on #1681. Whenever the section could not be read as the
+    owner's, an owner item fell back to the metadata, so a `[blocked]` the
+    owner wrote was lost and the PR approved. The read also took lines a
+    reader of the page never sees, took the kind from the item's wording,
+    let the first of two lines win, and took a bare `PASS` as proof.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = "checked: the app and the `workspaces` CLI both call `WorkspaceService.shared`"
+
+    def meta(
+        self, item: str, status: str, detail: str = "earlier completion", kind: str | None = "other"
+    ) -> str:
+        entry: dict[str, object] = {"index": 1, "item": item, "status": status, "detail": detail}
+        if kind is not None:
+            entry["kind"] = kind
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n"
+
+    def gate(self, body: str, item: str) -> tuple[dict[str, object], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, [item], review_ci=[])
+        return accounting, run_contributor.review_evidence_gate_error("approve", accounting, errors)
+
+    def assert_refused(self, body: str, item: str | None = None) -> None:
+        item = item or self.OWNER_ITEM
+        accounting, error = self.gate(body, item)
+        self.assertNotIn(item, accounting["complete_items"])
+        self.assertIsNotNone(error)
+
+    def test_an_owner_s_blocked_line_stands_when_the_section_cannot_be_read(self) -> None:
+        blocked = f"- [blocked] {self.OWNER_ITEM} -- owner found it unsafe\n"
+        complete = f"- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        for shape, section in (
+            ("a second heading", f"## Evidence Status\n{blocked}\n## Evidence Status\n- [complete] decoy -- ignored\n"),
+            ("a second heading, both lines complete", f"## Evidence Status\n{complete}\n## Evidence Status\n{complete}"),
+            ("trailing space on the heading", f"## Evidence Status \n{blocked}"),
+            ("a tab after the heading", f"## Evidence Status\t\n{blocked}"),
+            ("a stray line", f"## Evidence Status\n{blocked}Run bare on this head.\n"),
+            ("a rule cutting lines off", f"## Evidence Status\n{complete}\n---\n\n{blocked}"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + section)
+
+    def test_a_line_a_reader_never_sees_is_not_the_owner_s(self) -> None:
+        complete = f"- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        for shape, hidden in (
+            ("backtick fence", f"```markdown\n## Evidence Status\n{complete}## Decoy\n```\n"),
+            ("tilde fence", f"~~~\n## Evidence Status\n{complete}## Decoy\n~~~\n"),
+            ("indented fence", f"   ```\n## Evidence Status\n{complete}## Decoy\n   ```\n"),
+            ("unterminated fence", f"```\n## Evidence Status\n{complete}"),
+            ("HTML comment", f"<!--\n## Evidence Status\n{complete}## Decoy\n-->\n"),
+            ("unterminated HTML comment", f"<!--\n## Evidence Status\n{complete}"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(
+                    self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required") + hidden
+                )
+
+    def test_a_fenced_example_does_not_hide_the_real_section(self) -> None:
+        example = f"```markdown\n## Evidence Status\n- [blocked] {self.OWNER_ITEM} -- an example\n```\n\n"
+        body = (
+            example
+            + self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+            + f"\n## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        )
+        accounting, error = self.gate(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["complete_items"], [self.OWNER_ITEM])
+        self.assertIsNone(error)
+
+    def test_the_kind_that_lets_a_line_count_comes_from_the_metadata(self) -> None:
+        item = "CI must be green on the PR head: `Web CI`"
+        self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+        section = f"## Evidence Status\n- [complete] {item} -- {self.PROOF}\n"
+        for kind in ("ci", None):
+            with self.subTest(metadata_kind=kind):
+                self.assert_refused(self.meta(item, "pending-ci", "waiting for checks", kind=kind) + section, item)
+
+    def test_two_lines_for_one_item_are_refused(self) -> None:
+        complete = f"- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        blocked = f"- [blocked] {self.OWNER_ITEM} -- owner says it remains unsafe\n"
+        for order, lines in (("complete first", complete + blocked), ("blocked first", blocked + complete)):
+            with self.subTest(order=order):
+                self.assert_refused(
+                    self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+                    + "## Evidence Status\n"
+                    + lines
+                )
+
+    def test_a_bare_status_word_is_no_proof_of_an_owner_item(self) -> None:
+        for detail in (
+            "PASS",
+            "pass",
+            "ok",
+            "done",
+            "complete",
+            "yes",
+            "PASS.",
+            f"PASS {run_contributor.CARRIED_FORWARD_NOTE}",
+        ):
+            with self.subTest(detail=detail):
+                body = self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required") + (
+                    f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {detail}\n"
+                )
+                accounting, error = self.gate(body, self.OWNER_ITEM)
+                self.assertEqual(accounting["unproven_items"], [self.OWNER_ITEM])
+                self.assertIsNotNone(error)
+
+    def test_a_sentence_saying_what_was_checked_is_proof(self) -> None:
+        body = self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required") + (
+            f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        )
+        accounting, error = self.gate(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["unproven_items"], [])
+        self.assertIsNone(error)
+
+
 class DocumentedTestFormTests(unittest.TestCase):
     """The `test` form the docs teach has to survive the parser.
 
