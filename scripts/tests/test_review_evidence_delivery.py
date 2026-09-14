@@ -400,6 +400,34 @@ The screenshot is readable; the focus defect needs correction.
         self.assertIn(HEAD, task)
         self.assertNotIn("UNRELATED DEFAULT BRANCH HISTORY", task)
 
+    def test_main_rejects_malformed_findings_without_misreporting_image_inspection(self):
+        valid = validator.validate_data(validator.extract_structured(self.yaml_review()))
+        for findings in (
+            "not a findings mapping",
+            {**valid["review_findings"], "findings": [{"category": "code-defect"}]},
+            {**valid["review_findings"], "head_sha": "c" * 40},
+        ):
+            with self.subTest(findings=findings):
+                prepared = preparation()
+                self.addCleanup(prepared.cleanup)
+                evidence.record_image_reads(prepared, stream(prepared))
+                with mock.patch.object(runner, "log") as log:
+                    code, model, route, publish = self.run_main(
+                        prepared, {**valid, "review_findings": findings})
+                self.assertEqual(code, 1)
+                model.assert_called_once()
+                route.assert_not_called()
+                self.assertEqual(prepared.status, "ready")
+                self.assertEqual(prepared.reason_code, "ready")
+                # Only the initial successful delivery receipt is considered.
+                publish.assert_called_once()
+                logged = [call.args[0] for call in log.call_args_list]
+                failure = next(json.loads(line) for line in logged if line.startswith('{"review_output":'))
+                self.assertEqual(failure["review_output"], "invalid")
+                self.assertEqual(failure["reason_code"], "invalid_review_findings")
+                self.assertNotIn("inspection_unverified", "\n".join(logged))
+                self.assertFalse(prepared.root.exists())
+
     def test_head_and_base_rechecked_after_model_before_any_verdict(self):
         evidence.record_image_reads(self.prepared, stream(self.prepared))
         for field in ("headRefOid", "baseRefOid", "body"):

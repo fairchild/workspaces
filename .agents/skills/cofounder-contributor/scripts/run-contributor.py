@@ -1726,6 +1726,10 @@ def prepare_action_review(task_envelope: str, payloads: list[UntrustedGitHubPayl
     raise AssertionError("bounded preparation retry did not terminate")
 
 
+class InvalidReviewFindingsError(ValueError):
+    """Model-authored findings failed validation after evidence preparation."""
+
+
 def finalize_review_images(prepared: ReviewPreparation, validated_json: str, env: dict[str, str],
                            *, reviewer: str, dry_run: bool) -> str | None:
     data = json.loads(validated_json)
@@ -1746,7 +1750,10 @@ def finalize_review_images(prepared: ReviewPreparation, validated_json: str, env
         lines.extend(["", "Successful local image Read results were verified. Artifact provenance remains an author claim.", "", "</details>"])
         data["body"] = str(data.get("body", "")) + "\n".join(lines)
     if data.get("verdict") == "request_changes" and "review_findings" in data:
-        findings = validate_findings(data["review_findings"], expected_head=prepared.head_sha)
+        try:
+            findings = validate_findings(data["review_findings"], expected_head=prepared.head_sha)
+        except ValueError as error:
+            raise InvalidReviewFindingsError(str(error)) from error
         data["body"] = str(data.get("body", "")) + "\n\n" + findings_marker(findings)
     return json.dumps(data)
 
@@ -1934,6 +1941,9 @@ def main() -> int:
         if result == 0:
             log("Completed successfully")
         return result
+    except InvalidReviewFindingsError as error:
+        log(json.dumps({"review_output": "invalid", "reason_code": "invalid_review_findings", "detail": str(error)}))
+        return 1
     except EvidencePreparationError as error:
         log(json.dumps({"review_preparation": "unavailable", "reason_code": error.reason_code}))
         return 1
