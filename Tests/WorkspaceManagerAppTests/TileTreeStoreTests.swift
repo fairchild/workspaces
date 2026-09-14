@@ -108,17 +108,22 @@ struct TileTreeStoreTests {
                 createdAt: Date(timeIntervalSince1970: 100), serverPID: 4242),
             launchedAt: Date(timeIntervalSince1970: 100)
         )
+        let teardown = OutcomeLog()
         store.terminateOwnedTmuxSession = { [ledger = store.tmuxOwnershipLedger] hostSessionID in
-            await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
+            let outcome = await TmuxOwnedSessionTerminator(ledger: ledger, probe: stub.probe)
                 .terminate(hostSessionID: hostSessionID, requiringCreation: false)
+            await teardown.append(outcome)
+            return outcome
         }
 
         #expect(store.handleProcessExit(for: split.id))
 
-        // The kill is async and crosses a child-process launch, whose round trip
-        // varies by orders of magnitude on loaded runners — wait on the stub's
-        // recorded invocation, not a tuned clock.
-        let invocation = try await stub.awaitKillInvocation()
+        // The kill is async and crosses two child-process launches. Wait on the close
+        // reporting how it ended, not on the stub's record file: a close that never kills
+        // then fails as exactly that, and a runner freezing the test process mid-close
+        // cannot run the wait out while the close is frozen with it (#1610).
+        let invocation = try await stub.awaitKillInvocation(reportedBy: teardown)
+        #expect(await teardown.awaitFirst() == .killed(sessionID: "$7", name: expectedSessionName))
         #expect(invocation.contains("-L workspaces"))
         #expect(invocation.contains("kill-session"))
         #expect(invocation.contains("-t $7"))
@@ -157,6 +162,44 @@ struct TileTreeStoreTests {
 
         #expect(await outcomes.awaitFirst() == .notAttributable)
         #expect(stub.killWasInvoked == false)
+    }
+
+    /// #1610: a kill wait that comes back without a kill says what the close did instead.
+    /// It used to read the stub's record file regardless and fail as that file being
+    /// missing, which points away from the close.
+    @Test("A kill wait without a kill reports the close, not a missing record file")
+    func killWaitWithoutKillReportsTheClose() async throws {
+        let stub = try TmuxStub()
+        defer { stub.cleanUp() }
+
+        await #expect(throws: TmuxStub.KillWaitFailure.teardownUnfinished(budgetSeconds: 0.2)) {
+            try await stub.awaitKillInvocation(reportedBy: OutcomeLog(), within: 0.2)
+        }
+
+        let endedWithoutKill = OutcomeLog()
+        await endedWithoutKill.append(.socketUnavailable)
+        await #expect(throws: TmuxStub.KillWaitFailure.teardownEndedWithoutKill(.socketUnavailable)) {
+            try await stub.awaitKillInvocation(reportedBy: endedWithoutKill, within: 0.2)
+        }
+    }
+
+    /// #1610: a hosted runner froze this test process for ~40 s mid-close, and the kill
+    /// wait's wall clock ran out during the freeze. The close is frozen with the wait, so
+    /// a freeze must not spend the budget the close needs.
+    @Test("A test-process freeze does not spend the close wait's budget")
+    func closeWaitIgnoresAProcessFreeze() async {
+        let teardown = OutcomeLog()
+        let start = Date()
+        // Reads as though the process froze for 40 s about 50 ms into the wait.
+        let freezingOnce: @Sendable () -> Date = {
+            Date().addingTimeInterval(Date().timeIntervalSince(start) > 0.05 ? 40 : 0)
+        }
+        Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            await teardown.append(.notLive)
+        }
+
+        #expect(await teardown.awaitFirst(within: 5, clock: freezingOnce) == .notLive)
     }
 
     /// Which teardown may reclaim a tmux session: only a pane-scoped override (one
@@ -1149,7 +1192,29 @@ private struct TmuxStub {
         try script.write(to: executable, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755], ofItemAtPath: executable.path)
-        probe = TmuxSessionProbe(environment: ["PATH": "\(directory.path):/usr/bin:/bin"])
+        // A stub-tmux run gets a minute before it counts as no answer. Production allows
+        // five seconds so a wedged server cannot stall a close; this stub always answers,
+        // and what outlasts five seconds here is a runner freezing the test process
+        // mid-run (#1610), which would read a correct close as `socketUnavailable`.
+        let runTimeout: TimeInterval = 60
+        probe = TmuxSessionProbe(
+            run: { executable, arguments, environment in
+                try? await ProcessRunner.run(
+                    executable: executable, arguments: arguments, environment: environment,
+                    timeout: runTimeout
+                ).exitCode
+            },
+            runForOutput: { executable, arguments, environment in
+                guard
+                    let result = try? await ProcessRunner.run(
+                        executable: executable, arguments: arguments, environment: environment,
+                        timeout: runTimeout),
+                    result.success
+                else { return nil }
+                return result.stdout
+            },
+            environment: ["PATH": "\(directory.path):/usr/bin:/bin"]
+        )
     }
 
     func publish(sessionName: String) throws {
@@ -1160,11 +1225,33 @@ private struct TmuxStub {
         FileManager.default.fileExists(atPath: invocationFile.path)
     }
 
-    func awaitKillInvocation() async throws -> String {
-        let deadline = Date().addingTimeInterval(30)
-        while !killWasInvoked, Date() < deadline {
-            try await Task.sleep(for: .milliseconds(25))
+    /// What a kill wait saw instead of a kill, worded as what the store's close did so a
+    /// failure points at the close rather than at the stub's record file.
+    enum KillWaitFailure: Error, Equatable, CustomStringConvertible {
+        case teardownUnfinished(budgetSeconds: TimeInterval)
+        case teardownEndedWithoutKill(TmuxOwnedSessionTerminator.Outcome)
+
+        var description: String {
+            switch self {
+            case .teardownUnfinished(let seconds):
+                return
+                    "no kill-session reached the stub tmux: the store's pane teardown reported no outcome within \(seconds) s of running time (it never started, or is still waiting on tmux)"
+            case .teardownEndedWithoutKill(let outcome):
+                return "no kill-session reached the stub tmux: the store's pane teardown ended with .\(outcome)"
+            }
         }
+    }
+
+    /// The `kill-session` argv the store's pane teardown sent this stub, read once
+    /// `teardown` holds the close's outcome.
+    func awaitKillInvocation(
+        reportedBy teardown: OutcomeLog,
+        within budget: TimeInterval = 30
+    ) async throws -> String {
+        guard let outcome = await teardown.awaitFirst(within: budget) else {
+            throw KillWaitFailure.teardownUnfinished(budgetSeconds: budget)
+        }
+        guard killWasInvoked else { throw KillWaitFailure.teardownEndedWithoutKill(outcome) }
         return try String(contentsOf: invocationFile, encoding: .utf8)
     }
 
@@ -1182,11 +1269,28 @@ private actor OutcomeLog {
         outcomes.append(outcome)
     }
 
-    func awaitFirst() async -> TmuxOwnedSessionTerminator.Outcome? {
-        let deadline = Date().addingTimeInterval(30)
-        while outcomes.isEmpty, Date() < deadline {
+    /// The first outcome the close reported, or `nil` once the wait has spent `budget`
+    /// seconds of its own running time without one.
+    ///
+    /// Running time, not wall time. A hosted runner has frozen this whole test process for
+    /// ~40 s mid-close (#1610), and a wall clock spends that freeze as though the close had
+    /// it: the wait ran out at the thaw, before the close could take its next step. Each
+    /// poll is charged at most `maxChargePerPoll`, ten times its interval, so a freeze of
+    /// any length costs that much while a machine that is merely slow is charged in full.
+    func awaitFirst(
+        within budget: TimeInterval = 30,
+        clock now: @Sendable () -> Date = { Date() }
+    ) async -> TmuxOwnedSessionTerminator.Outcome? {
+        var spent: TimeInterval = 0
+        var last = now()
+        while outcomes.isEmpty, spent < budget {
             try? await Task.sleep(for: .milliseconds(25))
+            let current = now()
+            spent += min(current.timeIntervalSince(last), Self.maxChargePerPoll)
+            last = current
         }
         return outcomes.first
     }
+
+    private static let maxChargePerPoll: TimeInterval = 0.25
 }
