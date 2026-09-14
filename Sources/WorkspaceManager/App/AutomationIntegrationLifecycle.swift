@@ -29,7 +29,8 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     private var startTask: Task<String, Error>?
     /// Where this launch's socket, audit log and operator credential live.
     let files: AutomationPlaneFiles
-    private let automationAPIOptIn: @MainActor () -> Bool
+    /// Read by configure passes on the MainActor and by the listener off it, on every request.
+    private let automationAPIOptIn: @Sendable () -> Bool
     private let operatorOptIn: @MainActor () -> Bool
     /// The credential this launch minted, and the only one it removes. Every copy of the app keyed
     /// on one bundle identifier shares the path, so what sits there may be another launch's (#1607).
@@ -56,7 +57,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
 
     init(
         files: AutomationPlaneFiles,
-        isAutomationAPIEnabled: @escaping @MainActor () -> Bool = { ExperimentalFeatures.isEnabled(.automationAPI) },
+        isAutomationAPIEnabled: @escaping @Sendable () -> Bool = { ExperimentalFeatures.isEnabled(.automationAPI) },
         isOperatorEnabled: @escaping @MainActor () -> Bool = { ExperimentalFeatures.isEnabled(.automationOperator) }
     ) {
         self.files = files
@@ -246,7 +247,7 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             controller: controller,
             socketURLOverride: files.socketURL,
             auditLogger: AutomationAuditLogger(auditURL: files.auditURL),
-            isEnabled: { ExperimentalFeatures.isEnabled(.automationAPI) },
+            isEnabled: automationAPIOptIn,
             makeHealthServer: { launchedAt in
                 AutomationServerDescriptor.current(
                     launchedAt: launchedAt,
@@ -297,8 +298,9 @@ final class AutomationIntegrationLifecycle: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            // Remove the credential synchronously here: the async stop() Task below may not run
-            // before the process exits, and "dies with the launch" should hold on a clean quit.
+            // Remove the credential synchronously here, while the listener still holds the socket
+            // lock: the async stop() Task below may not run before the process exits, and "dies
+            // with the launch" should hold on a clean quit.
             // (A crash can't clean up, which is why a stale credential also fails closed against the
             // fresh registry — see AutomationOperatorCredentialStore.)
             MainActor.assumeIsolated {
@@ -452,6 +454,12 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     }
 
     func stop() async {
+        // The operator handle dies with the launch; remove its credential file on the way out so a
+        // clean exit leaves nothing readable (a crash can't, which is why stale credentials fail
+        // closed against the fresh registry — see AutomationOperatorCredentialStore). It goes first,
+        // before the listener releases the socket lock, so no other launch can mint at the shared
+        // path between the comparison and the removal.
+        clearOperatorCredential()
         startTask?.cancel()
         startTask = nil
         await listener?.stop()
@@ -461,10 +469,6 @@ final class AutomationIntegrationLifecycle: ObservableObject {
         didStart = false
         appIntentOperatorHandle = nil
         handleRegistry.removeAll()
-        // The operator handle dies with the launch; remove its credential file on the way out so a
-        // clean exit leaves nothing readable (a crash can't, which is why stale credentials fail
-        // closed against the fresh registry — see AutomationOperatorCredentialStore).
-        clearOperatorCredential()
         if let teardownObserver {
             NotificationCenter.default.removeObserver(teardownObserver)
             self.teardownObserver = nil
@@ -581,10 +585,11 @@ final class AutomationIntegrationLifecycle: ObservableObject {
     }
 
     /// Removes the credential only while the file still holds the one this launch minted. Every
-    /// launch keyed on one bundle identifier shares the path: the installed app's credential sits
-    /// there when `swift test` runs beside it, and another launch can mint there once `stop()` has
-    /// released the socket lock. A file a crashed launch left behind is safe to leave, because it
-    /// fails closed against the fresh registry.
+    /// launch keyed on one bundle identifier shares the path, and the installed app's credential sits
+    /// there when `swift test` runs beside it. Only a launch holding the socket lock mints, and every
+    /// caller clears before this launch's listener releases it, so the file compared is the file
+    /// removed. A file a crashed launch left behind is safe to leave, because it fails closed against
+    /// the fresh registry.
     private func clearOperatorCredential() {
         let credentialURL = files.credentialURL
         if let mintedCredential, AutomationOperatorCredentialStore.load(from: credentialURL) == mintedCredential {
