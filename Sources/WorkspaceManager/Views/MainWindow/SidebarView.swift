@@ -1492,9 +1492,9 @@ struct SidebarView: View {
         showingNoteEditor = true
     }
 
-    /// The one place a note is written. The automation verb enters this same setter, so
-    /// a note set over the socket and a note typed into the sidebar are the same write —
-    /// including the normalization, which is what keeps the row to one line.
+    /// One of two independent writers (the other is the automation verb's `performNote`) —
+    /// not a shared setter. Each normalizes through `WorkspaceNote.normalized` and assigns
+    /// `workspace.note`, so the two stay equivalent by construction, not by shared code.
     @MainActor
     private func setNote(_ rawValue: String?, on workspace: Workspace) {
         workspace.note = WorkspaceNote.normalized(rawValue)
