@@ -1384,6 +1384,24 @@ class PRShapeTests(unittest.TestCase):
             pr_readiness.field_value(section, "User-facing behavior changed"),
         )
 
+    def test_the_personas_placeholder_line_does_not_pass_for_the_paragraph(self) -> None:
+        """The example's slot is a comment, as the template's guidance is, so a
+        model that copies it instead of writing the paragraph leaves `## What`
+        first and is refused."""
+        for name in ("april-clearwater.md", "plat-ironwood.md"):
+            text = (self.REFERENCES / name).read_text(encoding="utf-8")
+            slots = [line for line in text.splitlines() if "One paragraph, no heading above it" in line]
+            self.assertTrue(slots, f"{name} shows no paragraph slot")
+            for slot in slots:
+                with self.subTest(persona=name, slot=slot):
+                    body = run_contributor.compose_pr_body(
+                        1621, self.PERSONA, f"{slot}\n\n## What\n- A thing\n"
+                    )
+                    self.assertIn(
+                        "it opens with a heading",
+                        pr_readiness.leading_paragraph_failure(body) or "",
+                    )
+
     def test_both_personas_ask_for_the_paragraph_and_a_prefixed_title(self) -> None:
         for name in ("april-clearwater.md", "plat-ironwood.md"):
             with self.subTest(persona=name):

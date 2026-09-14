@@ -93,7 +93,7 @@ evidence_blocked:
   - "3 -- This run cannot capture a prior broken-state screenshot from before the PR branch without a separate before-state checkout."
 ---
 
-One paragraph, no heading above it: why this PR exists, what it solves, then what changed and how big it is.
+<!-- One paragraph, no heading above it: why this PR exists, what it solves, then what changed and how big it is. -->
 
 ## What
 - High-level explanation of what changed in response to review
@@ -125,7 +125,7 @@ pr_title: "fix(new-workspace): stop a failed environment reading as ready before
 commit_message: "fix(new-workspace): map environment status to its own severity"
 ---
 
-One paragraph, no heading above it: why this PR exists, what it solves, then what changed and how big it is.
+<!-- One paragraph, no heading above it: why this PR exists, what it solves, then what changed and how big it is. -->
 
 ## What
 - High-level explanation of what changed
