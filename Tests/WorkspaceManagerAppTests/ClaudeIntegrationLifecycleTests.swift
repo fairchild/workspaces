@@ -34,6 +34,21 @@ struct ClaudeIntegrationLifecycleTests {
         func userSettingsModificationDate() async -> Date? { nil }
     }
 
+    actor RefusingInstaller: ClaudeSettingsInstalling {
+        struct WriteRefused: LocalizedError {
+            var errorDescription: String? {
+                "You don’t have permission to save the file “settings.json” in the folder “.claude”."
+            }
+        }
+
+        func renderPreview() async throws -> String { "stub" }
+        func install() async throws { throw WriteRefused() }
+        func isInstalled() async -> Bool { false }
+        func userSettingsURL() async -> URL { URL(fileURLWithPath: "/tmp/stub/.claude/settings.json") }
+        func mostRecentBackupPath() async -> String? { nil }
+        func userSettingsModificationDate() async -> Date? { nil }
+    }
+
     /// A per-call socket path so the hook listener never binds the real, machine-wide
     /// `~/Library/Application Support/<bundleID>/hooks.sock` — that path is `flock`-guarded
     /// against any real running app instance on the same machine, which the install-once
@@ -111,6 +126,49 @@ struct ClaudeIntegrationLifecycleTests {
         let stub = try await runStart(optedIn: false)
         let count = await stub.installCallCount
         #expect(count == 0)
+    }
+
+    /// Starts the singleton opted in with `installer` and waits for the startup chain, the
+    /// launch repair included. `beforeStart` runs after reconfiguring, which clears state.
+    private func runOptedInStart(
+        installer: any ClaudeSettingsInstalling,
+        beforeStart: () -> Void = {}
+    ) async throws {
+        let suiteName = "wm-lifecycle-test-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defaults.set(true, forKey: ClaudeIntegrationDefaults.optedInKey)
+        ClaudeIntegrationLifecycle.shared._configureForTesting(
+            defaults: defaults,
+            installerFactory: { _ in installer },
+            socketURLOverride: Self.ephemeralSocketURL()
+        )
+        beforeStart()
+
+        ClaudeIntegrationLifecycle.shared.start(registry: AgentSessionRegistry())
+        let startup = try #require(ClaudeIntegrationLifecycle.shared.startupTask)
+        await startup.value
+
+        await ClaudeIntegrationLifecycle.shared.stop()
+        UserDefaults().removePersistentDomain(forName: suiteName)
+    }
+
+    /// The failure the Agents status row shows as failed when nobody was looking: the silent
+    /// repair at launch could not write the settings file.
+    @Test("a launch repair that throws leaves its error text for the Agents status row")
+    func failedLaunchRepairRecordsItsError() async throws {
+        try await runOptedInStart(installer: RefusingInstaller())
+        #expect(
+            ClaudeIntegrationLifecycle.shared.lastInstallFailure
+                == RefusingInstaller.WriteRefused().errorDescription
+        )
+    }
+
+    @Test("a launch repair that succeeds clears an earlier install failure")
+    func succeededLaunchRepairClearsTheFailure() async throws {
+        try await runOptedInStart(installer: StubInstaller()) {
+            ClaudeIntegrationLifecycle.shared.lastInstallFailure = "an earlier attempt threw"
+        }
+        #expect(ClaudeIntegrationLifecycle.shared.lastInstallFailure == nil)
     }
 
     @Test("settings installer publishes after startup for Settings scene injection")

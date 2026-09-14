@@ -9,6 +9,7 @@
 
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import WorkspaceManagerCore
 import os.log
@@ -31,6 +32,11 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
     private(set) var listener: AgentHookListener?
     private(set) var notificationPoster: AgentNotificationPoster?
     @Published private(set) var settingsInstaller: (any ClaudeSettingsInstalling)?
+    /// The error text of the most recent install attempt that threw, the opted-in repair at
+    /// launch or an install accepted in Settings → Agents. An install that succeeds clears
+    /// it, and so does turning the integration off. The Agents status row shows it as the
+    /// failed state.
+    @Published var lastInstallFailure: String?
     private(set) var socketPath: String?
     private var teardownObserver: Any?
     private var didStart = false
@@ -85,6 +91,7 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         self.listener = nil
         self.notificationPoster = nil
         self.settingsInstaller = nil
+        self.lastInstallFailure = nil
         self.socketPath = nil
         self.startupTask = nil
     }
@@ -145,12 +152,14 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
                         log.info("[ClaudeIntegration] settings already installed; no write needed")
                     } else {
                         try await installer.install()
+                        self.lastInstallFailure = nil
                         let backup = await installer.mostRecentBackupPath() ?? "(no prior file)"
                         log.info(
                             "[ClaudeIntegration] settings repair succeeded; backup=\(backup, privacy: .public)"
                         )
                     }
                 } catch {
+                    self.lastInstallFailure = error.localizedDescription
                     log.error(
                         "[ClaudeIntegration] settings repair failed: \(String(describing: error), privacy: .public); integration settings may be stale"
                     )
@@ -165,6 +174,37 @@ final class ClaudeIntegrationLifecycle: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in await self?.stop() }
         }
+    }
+
+    /// Connects to the hook socket and hangs up without sending a request: a listener that
+    /// accepts the connection has answered, and a connection that carries no request reaches
+    /// none of its counters. Returns why nothing answered, or nil when something did.
+    nonisolated static func hookListenerProbeFailure(socketPath: String?) -> String? {
+        guard let socketPath else { return "The hook listener hasn't started." }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketPath.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            return "The hook socket path is too long to connect to: \(socketPath)"
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+
+        let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else {
+            let code = errno
+            return "Couldn't open a socket to reach the hook listener: \(String(cString: strerror(code)))."
+        }
+        defer { Darwin.close(fd) }
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        guard connected == 0 else {
+            let code = errno
+            return "Nothing answered at \(socketPath): \(String(cString: strerror(code)))."
+        }
+        return nil
     }
 
     /// Copy the bundled command hook forwarder to a stable location and chmod it

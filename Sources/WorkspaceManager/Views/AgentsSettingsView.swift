@@ -7,7 +7,9 @@
 //  actual on-disk install state so the toggle is self-healing if the user reverts
 //  the install externally.
 //
-//  Installs the command hook and status-line forwarders.
+//  Installs the command hook and status-line forwarders. The status row says whether
+//  the integration is active, degraded or failed, from the settings-file probe, the
+//  hook listener probe, and the last install attempt.
 //
 
 import AppKit
@@ -29,14 +31,19 @@ struct AgentsSettingsView: View {
     /// `EnvironmentObject`) so the preview path doesn't crash.
     @Environment(\.agentSessionRegistry) private var agentSessionRegistry: AgentSessionRegistry?
 
+    /// Owns the hook socket the listener probe connects to and the record of the last
+    /// install attempt that failed, the launch repair included, so a failure outlives
+    /// this pane being closed and reopened.
+    @ObservedObject private var lifecycle = ClaudeIntegrationLifecycle.shared
+
     @State private var isInstalled = false
     @State private var isLoading = true
+    @State private var listenerFailure: String?
     @State private var showPreviewSheet = false
     @State private var previewBody = ""
     @State private var lastBackupPath: String?
     @State private var settingsModificationDate: Date?
     @State private var settingsURL: URL?
-    @State private var pendingError: String?
     @State private var transientFeedback: String?
     @State private var isInstalling = false
     @State private var showRevertSheet = false
@@ -64,7 +71,14 @@ struct AgentsSettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
-            statusRow
+            AgentsIntegrationStatusRow(
+                status: status,
+                settingsPath: settingsURL?.path,
+                settingsModificationDate: settingsModificationDate,
+                backupPath: lastBackupPath,
+                onInstall: { Task { await loadAndShowPreview() } },
+                onRecheck: { Task { await refresh() } }
+            )
 
             if let registry = agentSessionRegistry {
                 AgentStatusFieldsIndicator(registry: registry)
@@ -117,101 +131,17 @@ struct AgentsSettingsView: View {
                 }
             )
         }
-        .alert(
-            "Could Not Update Claude Settings",
-            isPresented: Binding(
-                get: { pendingError != nil },
-                set: { if !$0 { pendingError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { pendingError = nil }
-        } message: {
-            Text(pendingError ?? "Unknown error.")
-        }
     }
 
-    @ViewBuilder
-    private var statusRow: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Image(systemName: statusSymbolName)
-                    .foregroundStyle(statusColor)
-                Text(statusTitle)
-                    .font(.callout.weight(.medium))
-            }
-            if let url = settingsURL {
-                Text(url.path)
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-            if let date = settingsModificationDate {
-                Text("Last modified \(Self.dateFormatter.string(from: date))")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else if isLoading {
-                Text("Checking…")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Not yet created")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            if let backup = lastBackupPath {
-                Text("Backup: \(backup)")
-                    .font(.system(.caption2, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            // Mismatch affordance: user opted in via the toggle, but the on-disk
-            // settings file no longer contains our hooks (likely external edit).
-            // Don't auto-uninstall — offer a re-install instead.
-            if hooksEnabled, !isInstalled, !isLoading {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                    Text("Your Claude config no longer contains our hooks.")
-                        .font(.caption)
-                    Spacer()
-                    Button("Re-install") {
-                        Task { await loadAndShowPreview() }
-                    }
-                    .controlSize(.small)
-                }
-                .padding(.top, 4)
-            }
-        }
-        .padding(8)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(nsColor: .textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 6))
+    private var status: AgentsIntegrationStatus {
+        AgentsIntegrationStatus(
+            isChecking: isLoading,
+            isOptedIn: hooksEnabled,
+            isInstalled: isInstalled,
+            listenerFailure: listenerFailure,
+            installFailure: lifecycle.lastInstallFailure
+        )
     }
-
-    private var statusSymbolName: String {
-        if isLoading { return "circle.dotted" }
-        return isInstalled ? "checkmark.circle.fill" : "circle"
-    }
-
-    private var statusColor: Color {
-        if isLoading { return .secondary }
-        return isInstalled ? .green : .secondary
-    }
-
-    private var statusTitle: String {
-        if isLoading { return "Checking install state…" }
-        return isInstalled ? "Hooks installed" : "Hooks not installed"
-    }
-
-    private static let dateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateStyle = .short
-        f.timeStyle = .short
-        return f
-    }()
 
     // MARK: - Actions
 
@@ -222,19 +152,27 @@ struct AgentsSettingsView: View {
         }
         isLoading = true
         defer { isLoading = false }
+        // The launch repair is an install attempt: waiting for it keeps the row from
+        // reading the settings file and the failure record before that attempt lands.
+        await lifecycle.startupTask?.value
         let installed = await installer.isInstalled()
         let url = await installer.userSettingsURL()
         let modDate = await installer.userSettingsModificationDate()
         let backup = await installer.mostRecentBackupPath()
+        let socketPath = lifecycle.socketPath
+        let listenerFailure = await Task.detached {
+            ClaudeIntegrationLifecycle.hookListenerProbeFailure(socketPath: socketPath)
+        }.value
         await MainActor.run {
             self.isInstalled = installed
+            self.listenerFailure = listenerFailure
             self.settingsURL = url
             self.settingsModificationDate = modDate
             if let backup { self.lastBackupPath = backup }
             // Important: do NOT auto-flip the opt-in toggle to match the on-disk
             // state. If the user opted in but later edited settings.json by hand
-            // (e.g. removed the http hooks), surface a re-install affordance via
-            // the status row rather than silently resetting their preference.
+            // (e.g. removed the http hooks), the status row turns degraded and offers
+            // a re-install rather than silently resetting their preference.
         }
     }
 
@@ -252,6 +190,8 @@ struct AgentsSettingsView: View {
             showRevertSheet = true
         } else {
             hooksEnabled = newValue
+            // Turning the integration off withdraws the install a failure was reporting on.
+            if !newValue { lifecycle.lastInstallFailure = nil }
         }
     }
 
@@ -264,7 +204,7 @@ struct AgentsSettingsView: View {
                 self.showPreviewSheet = true
             }
         } catch {
-            await MainActor.run { self.pendingError = error.localizedDescription }
+            await MainActor.run { lifecycle.lastInstallFailure = error.localizedDescription }
         }
     }
 
@@ -275,6 +215,7 @@ struct AgentsSettingsView: View {
 
         do {
             try await installer.install()
+            await MainActor.run { lifecycle.lastInstallFailure = nil }
             await refresh()
             await MainActor.run {
                 // Persist the opt-in so launch-time settings repair stays active.
@@ -287,13 +228,203 @@ struct AgentsSettingsView: View {
             await MainActor.run { self.transientFeedback = nil }
         } catch {
             await MainActor.run {
-                self.pendingError = error.localizedDescription
+                // The status row turns failed and carries the error text. The persisted
+                // opt-in stays as it was: a user who wasn't opted in still isn't.
+                lifecycle.lastInstallFailure = error.localizedDescription
                 self.showPreviewSheet = false
-                // Install failed — leave the persisted opt-in unchanged. If the
-                // user wasn't opted-in before, they still aren't.
             }
         }
     }
+}
+
+/// What the Agents status row says about the Claude Code integration. Active, degraded and
+/// failed are its health; checking and not installed are the states around them.
+enum AgentsIntegrationStatus: Equatable {
+    case checking
+    case notInstalled
+    case active
+    case degraded(Degradation)
+    case failed(error: String)
+
+    enum Degradation: Equatable {
+        /// Opted in, but the Claude settings no longer carry the WorkSpaces hooks.
+        case hooksMissing
+        /// The hooks are installed, but nothing answered on the hook socket.
+        case listenerSilent(reason: String)
+    }
+
+    /// An install attempt that errored outranks the settings file: the user acted, and the
+    /// row answers that act until an install succeeds. The listener only matters once the
+    /// hooks are installed to call it.
+    init(
+        isChecking: Bool,
+        isOptedIn: Bool,
+        isInstalled: Bool,
+        listenerFailure: String?,
+        installFailure: String?
+    ) {
+        if isChecking {
+            self = .checking
+        } else if let installFailure {
+            self = .failed(error: installFailure)
+        } else if isInstalled {
+            self = listenerFailure.map { .degraded(.listenerSilent(reason: $0)) } ?? .active
+        } else {
+            self = isOptedIn ? .degraded(.hooksMissing) : .notInstalled
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .checking: return "circle.dotted"
+        case .notInstalled: return "circle"
+        case .active: return "checkmark.circle.fill"
+        case .degraded: return "exclamationmark.triangle.fill"
+        case .failed: return "xmark.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .checking, .notInstalled: return .secondary
+        case .active: return .green
+        case .degraded: return .orange
+        case .failed: return .red
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .checking: return "Checking install state…"
+        case .notInstalled: return "Hooks not installed"
+        case .active: return "Active: hooks installed and the listener answered"
+        case .degraded(.hooksMissing): return "Degraded: Claude settings no longer carry the WorkSpaces hooks"
+        case .degraded(.listenerSilent): return "Degraded: hooks installed, but the listener didn't answer"
+        case .failed: return "Failed: the hooks couldn't be installed"
+        }
+    }
+}
+
+/// The status row in Settings → Agents: a symbol, colour and title per status, the settings
+/// file the status describes, and the one action a degraded or failed status offers. A
+/// failure's error text sits behind a disclosure, one click away.
+struct AgentsIntegrationStatusRow: View {
+    let status: AgentsIntegrationStatus
+    let settingsPath: String?
+    let settingsModificationDate: Date?
+    let backupPath: String?
+    let onInstall: () -> Void
+    let onRecheck: () -> Void
+    @State private var showsFailureDetails: Bool
+
+    init(
+        status: AgentsIntegrationStatus,
+        settingsPath: String?,
+        settingsModificationDate: Date?,
+        backupPath: String?,
+        showsFailureDetails: Bool = false,
+        onInstall: @escaping () -> Void,
+        onRecheck: @escaping () -> Void
+    ) {
+        self.status = status
+        self.settingsPath = settingsPath
+        self.settingsModificationDate = settingsModificationDate
+        self.backupPath = backupPath
+        self.onInstall = onInstall
+        self.onRecheck = onRecheck
+        _showsFailureDetails = State(initialValue: showsFailureDetails)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: status.symbolName)
+                    .foregroundStyle(status.color)
+                Text(status.title)
+                    .font(.callout.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                action
+            }
+            detail
+            if let settingsPath {
+                Text(settingsPath)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            if let settingsModificationDate {
+                Text("Last modified \(Self.dateFormatter.string(from: settingsModificationDate))")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else if status == .checking {
+                Text("Checking…")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Not yet created")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let backupPath {
+                Text("Backup: \(backupPath)")
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    @ViewBuilder
+    private var action: some View {
+        switch status {
+        case .degraded(.hooksMissing):
+            Button("Re-install", action: onInstall)
+                .controlSize(.small)
+        case .degraded(.listenerSilent):
+            Button("Check again", action: onRecheck)
+                .controlSize(.small)
+        case .failed:
+            Button("Try again", action: onInstall)
+                .controlSize(.small)
+        case .checking, .notInstalled, .active:
+            EmptyView()
+        }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch status {
+        case .degraded(.listenerSilent(let reason)):
+            Text(reason)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        case .failed(let error):
+            DisclosureGroup("Details", isExpanded: $showsFailureDetails) {
+                Text(error)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .font(.caption)
+        case .checking, .notInstalled, .active, .degraded(.hooksMissing):
+            EmptyView()
+        }
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .short
+        return f
+    }()
 }
 
 private struct ClaudeHookPreviewSheet: View {
