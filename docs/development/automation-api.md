@@ -1,9 +1,11 @@
 # WorkSpaces Automation API V1
 
-The Automation API is a local app-shell control plane for trusted processes
-running inside WorkSpaces terminal tiles. V1 is intentionally narrow: a caller
-can discover its live shell context, list in-scope surfaces, and request core
-tile mutations relative to its own tile.
+The Automation API is a local app-shell control plane for trusted same-user
+processes. V1 is intentionally narrow: a caller inside a WorkSpaces terminal
+tile can discover its live shell context, list in-scope surfaces, and request
+core tile mutations relative to its own tile, while a caller outside any tile
+reads the opt-in operator credential and gets the capture, read, and operator
+mutation verbs listed under [Operator scope](#operator-scope-a1).
 
 This is the wire and maintainer reference. For example-first usage, see
 [Automation API Guide](../automation-api.md). For rationale and future-expansion
@@ -30,11 +32,16 @@ WORKSPACES_AUTOMATION_HANDLE=<opaque capability handle>
 ```
 
 The handle is the authority. Requests for scoped routes send it as
-`x-workspaces-automation-handle`; requests do not get to name their tile,
-surface, or host session. The app resolves the handle against its live mapping
-to recover the caller tile, host session, surface kind, window scope, app
-scope, and capabilities. Missing, stale, disabled, out-of-scope, or
-under-capable handles fail closed. Context responses do not echo the handle.
+`x-workspaces-automation-handle`, and the app resolves the handle against its
+live mapping to recover the caller tile, host session, surface kind, window
+scope, app scope, and capabilities. The caller-relative routes (`tile.focus`,
+`tile.split`, `tile.close`, `input.write`) act on that resolved tile and do not
+get to name a tile, surface, or host session. Operator routes that act on a
+target name it by an id an earlier result returned: `windowID`, `workspaceID`,
+`repoID`, or the `surfaceID` that [Surface read](#surface-read) and the
+surface-targeting [wait](#wait) conditions take. Missing, stale, disabled,
+out-of-scope, or under-capable handles fail closed. Context responses do not
+echo the handle.
 
 Restart WorkSpaces after changing the Automation API experiment. Terminal
 processes only receive automation environment when their surface is created.
@@ -115,9 +122,10 @@ WorkSpaces terminal tile. See
 - **Capture, read, and operator mutations.** The operator capability set is
   `window.read` (list windows), `window.snapshot` (composited PNG of a listed
   window), `workspace.read` (list repos and workspaces), `ui.read` (structural
-  UI-state read), and `surface.read` (bounded terminal text read-back for
-  surfaces this same operator handle created through `workspace.create` this
-  launch), plus `workspace.select`, `workspace.create`, `workspace.archive`,
+  UI-state read), and `surface.read` (bounded terminal text read-back from any
+  live terminal surface in the window currently attached to the Automation API;
+  see [Surface read](#surface-read)), plus
+  `workspace.select`, `workspace.create`, `workspace.archive`,
   and `repo.terminal` — reviewed exceptions that drive real UI gestures rather
   than data-layer writes
   (see [Verb contract](#verb-contract-verbs--clicks)) — and `workspace.note`,
@@ -133,8 +141,11 @@ WorkSpaces terminal tile. See
   connect.
 - Scoped routes require `x-workspaces-automation-handle`.
 - The server resolves caller identity from its live handle registry.
-- Scoped requests must not accept caller-supplied `tileID`, `surfaceID`, or
-  `hostSessionID`.
+- Caller-relative routes (`tile.focus`, `tile.split`, `tile.close`,
+  `input.write`) must not accept caller-supplied `tileID`, `surfaceID`, or
+  `hostSessionID`; operator routes name their targets by ids earlier results
+  returned, including the `surfaceID` that `surface.read` and the
+  surface-targeting wait conditions take.
 - Capabilities are enforced before each scoped operation.
 - Mutation routes are stable product verbs, not raw `TileTreeAction` exposure.
 - The five gesture verbs (`workspace.select`, `workspace.create`,
@@ -144,17 +155,21 @@ WorkSpaces terminal tile. See
   runtime from the controller instead. `workspace.note`'s closure is itself the
   stored write, because the sidebar's own menu item is too. See
   [Verb contract](#verb-contract-verbs--clicks).
-- App Intents are in-process, user-initiated, OS-mediated veneers; they do not
-  require the Automation API or Operator Scope experiments and do not expose a
-  socket or process-readable operator credential.
+- App Intents are in-process, user-initiated, OS-mediated veneers; they require
+  the Operator Scope experiment, re-checked on every call, but not the
+  Automation API experiment, and do not expose a socket or process-readable
+  operator credential. See [App Intents veneer](#app-intents-veneer).
 - Browser **read** (listing WorkSpaces-owned web surfaces) is supported; browser
   **mutation** (navigating, clicking, evaluating JS), resize/equalize, and global
   control remain out of V1.
 - Input injection is caller-scoped only and double-gated behind the
   `Automation Input Write` experiment; see
   [Automation Input Write Decision](../decisions/automation-input-write.md).
-- Terminal text read-back is creation-scoped to the operator handle that created
-  the workspace terminal via `workspace.create` in this launch; see
+- Terminal text read-back is operator-only and reaches any live terminal
+  surface in the window currently attached to the Automation API; a surface in
+  another window answers `stale_handle`. Creation attribution is recorded at
+  `workspace.create` and not consulted on read; the audit event carries the
+  operator flag and the surface id. See [Surface read](#surface-read) and the
   [Automation Surface Read Decision](../decisions/automation-surface-read.md).
 
 ## Verb contract: verbs = clicks
@@ -215,7 +230,7 @@ value:
 their current paths, and `repo.terminal` has no confirmation arm at all, so it can
 only ever answer `completed`.
 
-The other four mutation verbs answer in their own shapes:
+The remaining five mutation verbs answer in their own shapes:
 
 - `tile.focus` and `tile.split` return the tile mutation result with no `outcome`
   field at all: `changed` plus the surface ids the operation touched
@@ -323,7 +338,7 @@ Scoped routes require `x-workspaces-automation-handle`:
 | `POST /v1/workspace/select` | **Operator scope, mutation.** Selects the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the *same* selection gesture a sidebar click takes — the binding whose setter attaches the terminal and requests focus. Returns a structured gesture outcome (`completed`/`confirmation_required`); a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.select`. This is the verbs-=-clicks exemplar — see [Verb contract](#verb-contract-verbs--clicks) and [Workspace select](#workspace-select). |
 | `POST /v1/workspace/create` | **Operator scope, mutation.** Creates a workspace in the repo named by `repoID` (from `workspace.read`) by driving the sidebar's real create helper. Body is `{"repoID":"…","name":"…","providerID":"local","guestOS":null,"select":true,"fromRef":"origin/main"}`; `providerID` defaults to `local`, `select` defaults to `true`, and `fromRef` is omitted by default. Returns `completed` with the created workspace and, when selected, the attached terminal, or `confirmation_required` with provider setup confirmation details. Requires `workspace.create`; tile handles fail `capability_denied`. See [Workspace create](#workspace-create). |
 | `POST /v1/repo/terminal` | **Operator scope, mutation.** Opens the repo terminal for the repo named by the body's `repoID` (a `workspace.read` id) by driving the same selection path the sidebar's "Open Terminal" item takes. Returns the surface it attached, so the caller never has to guess which PTY a following write lands in; a live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `repo.terminal`. See [Repo terminal](#repo-terminal). |
-| `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from any live terminal surface. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is a live host-session id (e.g. the `attachedSurfaceID` from a create/select result). Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles fail `capability_denied`. See [Surface read](#surface-read). |
+| `POST /v1/surface/read` | **Operator scope, content read.** Reads plain text from any live terminal surface in the window currently attached to the Automation API. Body is `{"surfaceID":"…","lines":200}` where `surfaceID` is a live host-session id (e.g. the `attachedSurfaceID` from a create/select result). Requests above 500 lines are clamped; output is capped at 256 KiB UTF-8. Requires `surface.read`; tile handles fail `capability_denied`. See [Surface read](#surface-read). |
 | `POST /v1/wait` | **Operator scope, typed wait.** Evaluates a condition (`surface_attached`, `workspace_selected`, `surface_text_matches`, `prompt_ready`) server-side until satisfied, a bounded timeout elapses, or current state proves it unsatisfiable. Body is `{"for":"…","predicate":{…},"timeoutMS":n}`; the outcome is the typed enum `satisfied` / `timed_out` / `not_applicable`, never a bare boolean. Topology/selection conditions require `workspace.read`; content conditions require `surface.read`. See [Wait](#wait). |
 | `GET /v1/focus` | **Operator scope.** Truthful report of the app's live focus state: `{appIsActive, keyWindowID, firstResponderSurfaceID, focusPossible}`. `focusPossible: false` marks a no-activate (or CI) launch where the app cannot take focus — absent focus is then "unavailable", not a focus failure. Requires `window.read`. See [Focus](#focus). |
 | `POST /v1/workspace/archive` | **Operator scope, mutation.** Archives the workspace named by the body's `workspaceID` (a `workspace.read` id) by driving the same sidebar archive action as the row menu. `{"teardownTerminals":true}` kills the workspace's tmux sessions and retires its terminal tiles first, so a live terminal cannot fail the call. Returns `completed` with the archived workspace id, post-gesture selection state, and (after teardown) a teardown report, or `confirmation_required` if the UI path ever reaches a modal. A live terminal without teardown fails typed: `terminal_active` (`retryable: true`) on the exit-timeout, `close_blocked_by_confirmation` (`retryable: false`) when the close-confirmation blocks. A live-window-less app fails `unsupported`, an unknown/non-UUID id fails `invalid_request`. Requires `workspace.archive`; tile handles fail `capability_denied`. See [Workspace archive](#workspace-archive). |
@@ -362,7 +377,7 @@ handle.
 | `workspace.read` | `GET /v1/workspaces` (list the app's repos and workspaces) and `POST /v1/wait` for the `surface_attached` / `workspace_selected` conditions; granted only to operator handles under the Automation Operator Scope experiment, never to tile handles |
 | `workspace.select` | `POST /v1/workspace/select` (drive the real selection gesture for a workspace); granted only to operator handles, never to tile handles |
 | `workspace.create` | `POST /v1/workspace/create` (drive the real sidebar create helper for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.read` and `workspace.select` so the read/write split stays legible |
-| `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for any live terminal surface) and `POST /v1/wait` for the `surface_text_matches` / `prompt_ready` conditions; granted only to operator handles, never to tile handles |
+| `surface.read` | `POST /v1/surface/read` (bounded plain-text terminal read-back for any live terminal surface in the window currently attached to the Automation API) and `POST /v1/wait` for the `surface_text_matches` / `prompt_ready` conditions; granted only to operator handles, never to tile handles |
 | `repo.terminal` | `POST /v1/repo/terminal` (drive the real repo-terminal selection for a repo); granted only to operator handles, never to tile handles — distinct from `workspace.select` because its target is a repo, not a workspace |
 | `workspace.archive` | `POST /v1/workspace/archive` (drive the real sidebar archive action for a workspace); granted only to operator handles, never to tile handles |
 | `workspace.note` | `POST /v1/workspace/note` (set or clear a workspace's note through the window-bound note verb, which applies the same normalization as the sidebar's own setter and lands in the same stored field — two writers, not one path); granted only to operator handles, never to tile handles — a write, distinct from the read-only `workspace.read`, so a caller granted the inventory read cannot write the line the sidebar shows |
@@ -631,7 +646,8 @@ the surface it attached:
 ## Surface read
 
 `POST /v1/surface/read` (operator scope, `surface.read`) returns bounded plain
-text from any live terminal surface:
+text from any live terminal surface in the window currently attached to the
+Automation API:
 
 ```json
 { "surfaceID": "…", "lines": 200 }
@@ -651,12 +667,15 @@ The success envelope carries the text plus the effective bounds:
 }
 ```
 
-- **Operator-scoped authority.** Any live terminal surface is readable by an
-  operator handle. The grant rests on the read being read-only, operator scope
-  being opt-in per launch, and every call landing in the audit log with the
-  surface id it touched (`surfaceRead.surfaceID`) — never the text. Tile
-  handles never carry `surface.read` and fail `capability_denied`; the
-  creation-attribution registry serves audit lineage, not access control.
+- **Operator-scoped authority.** Any live terminal surface in the window
+  currently attached to the Automation API is readable by an operator handle; a
+  surface in another window answers `stale_handle`. The grant rests on the read
+  being read-only, operator scope being opt-in per launch, and every call
+  landing in the audit log with the surface id it touched
+  (`surfaceRead.surfaceID`) — never the text. Tile handles never carry
+  `surface.read` and fail `capability_denied`. Creation attribution is recorded
+  at `workspace.create` and not consulted on read; the audit event carries the
+  operator flag and the surface id.
 - **Ghostty text API.** The app reads GhosttyKit's plain terminal text through
   `ghostty_surface_read_text` over the whole screen/scrollback selection. No OCR
   or screenshot path is used.
@@ -999,8 +1018,9 @@ state truthfully:
 
 ## CLI
 
-The `workspaces` CLI wraps the socket API. Scoped commands read the same
-environment that WorkSpaces injects into terminal surfaces.
+The `workspaces` CLI wraps the socket API. Tile-scoped commands read the handle
+from the environment WorkSpaces injects into terminal surfaces; operator-scope
+commands read the operator credential file instead, as described below.
 
 Every verb that talks to the socket is spelled `workspaces automation <verb>`,
 which is what `workspaces help` prints and what the examples below use. The bare
