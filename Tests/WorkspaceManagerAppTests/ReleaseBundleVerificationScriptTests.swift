@@ -110,12 +110,11 @@ struct ReleaseBundleVerificationScriptTests {
         #expect(result.stderr.contains("Missing bundled terminfo directory"))
     }
 
-    /// The false positive the directory-only assertions blessed. `build-release.sh:492`
-    /// copies the Ghostty share tree with stderr discarded and exit forced to zero, so a
-    /// partial copy leaves `terminfo/` behind without the compiled entry — and
-    /// `GhosttyResourcesLocator.isUsableResourcesDirectory` calls exactly that bundle
-    /// unusable. Asserting the directory alone would pass the state the gate exists to
-    /// catch.
+    /// The copy goes through `copy_tree_or_fail`, which asks only that the tree be
+    /// non-empty, so a partial tree with `terminfo/` and no compiled entry still
+    /// passes the copy. `GhosttyResourcesLocator.isUsableResourcesDirectory` calls
+    /// that bundle unusable — this test holds the gate to the entry, not the
+    /// directory.
     @Test("Structure-only rejects a terminfo directory with no compiled entry")
     func structureOnlyRejectsTerminfoWithoutSentinel() throws {
         let fixture = try makeFixture(
