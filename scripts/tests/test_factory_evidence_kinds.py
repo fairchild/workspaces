@@ -2235,12 +2235,13 @@ class CompleteDetailTests(unittest.TestCase):
                 self.assertEqual([e for e in errors if "proves nothing" in e], [])
 
     def test_a_hand_edit_does_not_clear_the_gate_by_itself(self) -> None:
-        # Reading a visible edit straight into the accounting sounds like
-        # honouring the documented owner gesture and is instead an
-        # authorization hole: text differing from the metadata is a signal any
-        # PR author or bot with write access can produce, so it would clear an
-        # item the lane refused. The gesture is honoured where provenance is
-        # known -- the next factory turn carries a published line forward.
+        # On an item the factory completes, reading a visible edit straight
+        # into the accounting is an authorization hole: text differing from
+        # the metadata is a signal any PR author or bot with write access can
+        # produce, so it would clear an item the lane refused. The gesture is
+        # honoured where provenance is known -- the next factory turn carries
+        # a published line forward. Only an owner's own item reads the line at
+        # once (`OwnerKindHandEditTests`).
         payload = json.dumps(
             {
                 "entries": [
@@ -2514,6 +2515,125 @@ class OwnerWrittenEvidenceTests(unittest.TestCase):
         self.assertEqual(
             run_contributor._owner_written_entries(rendered, [self.ITEM]), {}
         )
+
+
+class OwnerKindHandEditTests(unittest.TestCase):
+    """An owner's item is completed by the owner's hand, and by nothing else.
+
+    No lane completes an `other` item, so the machine writes it `[blocked]`
+    in the visible list and in the hidden metadata and asks the owner to
+    rewrite the line. The reviewer read the metadata, refused every verdict,
+    and the factory turn that would have copied the line across never came
+    (#1612, on #1602). A line written over an item a lane or the factory's
+    own parser completes is not that gesture, and reads as the metadata says
+    (#1590).
+    """
+
+    OWNER_ITEM = (
+        "A statement of whether the shared state is reachable from production "
+        "code or only from the test fixture"
+    )
+    MACHINE_DETAIL = (
+        "automation cannot reconcile this evidence item automatically; owner "
+        "follow-up required"
+    )
+    PROOF = (
+        "reachable from production code: the app and the `workspaces` CLI both "
+        "use `WorkspaceService.shared`"
+    )
+
+    def body(
+        self, item: str, *, machine_status: str, visible_status: str, visible_detail: str
+    ) -> str:
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": item,
+                        "status": machine_status,
+                        "detail": self.MACHINE_DETAIL,
+                        "kind": run_contributor._evidence_item_kind(item),
+                    }
+                ]
+            },
+            indent=2,
+        )
+        return (
+            "## Summary\n\nA change.\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            "## Evidence Status\n"
+            f"- [{visible_status}] {item} -- {visible_detail}\n\n"
+            "## Validation\n- `uv run --script scripts/tests/test_foo.py`: Ran 3 tests, OK\n"
+        )
+
+    def review(self, body: str, item: str, verdict: str = "approve") -> tuple[dict[str, object], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body, [item], review_ci=[]
+        )
+        return accounting, run_contributor.review_evidence_gate_error(verdict, accounting, errors)
+
+    def test_an_owner_item_completed_by_hand_can_be_approved(self) -> None:
+        self.assertEqual(run_contributor._evidence_item_kind(self.OWNER_ITEM), "other")
+        body = self.body(
+            self.OWNER_ITEM,
+            machine_status="blocked",
+            visible_status="complete",
+            visible_detail=self.PROOF,
+        )
+        for verdict in ("approve", "approve_with_followups"):
+            with self.subTest(verdict=verdict):
+                accounting, error = self.review(body, self.OWNER_ITEM, verdict)
+                self.assertIsNone(error)
+                self.assertEqual(accounting["complete_items"], [self.OWNER_ITEM])
+                self.assertEqual(accounting["blocked_items"], [])
+
+    def test_a_hand_edit_still_has_to_say_what_was_checked(self) -> None:
+        body = self.body(
+            self.OWNER_ITEM,
+            machine_status="blocked",
+            visible_status="complete",
+            visible_detail="done",
+        )
+        accounting, error = self.review(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["unproven_items"], [self.OWNER_ITEM])
+        self.assertIsNotNone(error)
+
+    def test_an_owner_s_blocked_line_holds_the_review_too(self) -> None:
+        body = self.body(
+            self.OWNER_ITEM,
+            machine_status="complete",
+            visible_status="blocked",
+            visible_detail="not reachable after all; the fixture is the only caller",
+        )
+        accounting, error = self.review(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["blocked_items"], [self.OWNER_ITEM])
+        self.assertIsNotNone(error)
+
+    def test_a_hand_edit_over_an_item_a_lane_owns_is_still_refused(self) -> None:
+        # Each of these is completed by a lane, a live check or the factory's
+        # own reading of the body. A `[complete]` line written over one is
+        # not the owner's gesture, and reading it as a completion would clear
+        # an item nothing ran.
+        for item, machine_status in (
+            ("CI: `Web CI` green on the PR head", "pending-ci"),
+            ("`swift test --filter FooTests` passes", "blocked"),
+            ("Screenshots of the new sidebar", "blocked"),
+            ("`pnpm test` in `web-next` passes", "pending-ci"),
+            ("Before/after latency on the same workload", "pending-ci"),
+            ("Diff: the README links the overview page", "blocked"),
+        ):
+            with self.subTest(item=item):
+                self.assertNotEqual(run_contributor._evidence_item_kind(item), "other")
+                body = self.body(
+                    item,
+                    machine_status=machine_status,
+                    visible_status="complete",
+                    visible_detail="Ran 214 tests, all passed on this head",
+                )
+                accounting, error = self.review(body, item)
+                self.assertEqual(accounting["complete_items"], [])
+                self.assertIsNotNone(error)
 
 
 class DocumentedTestFormTests(unittest.TestCase):

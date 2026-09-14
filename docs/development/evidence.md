@@ -380,6 +380,18 @@ Evidence a person has to produce — by looking, by following a protocol, by
 deciding — stays `other` however it is phrased. "A test protocol covering a
 manual production restart" names a test and is still yours.
 
+You complete an `other` item by rewriting its line as
+`- [complete] <item> -- <what you checked>`, and that line is the record for
+the item from the moment it is saved: the factory's accounting, the reviewer's
+gate included, reads it over the hidden metadata beside it, so an approval
+does not wait for a factory turn to copy it across. A `[blocked]` you write
+there holds the review the same way. Only an `other` line is read at once. A
+`[complete]` written over any other kind reads as the metadata says until a
+factory turn or the lane that owns the item writes it, because nothing but a
+lane or the factory's own reading of the body completes those. Like any hand
+edit, the line does not survive the CI verifier or the macOS lane rewriting
+the section.
+
 The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what
 does and does not classify.

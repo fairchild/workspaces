@@ -1007,17 +1007,25 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
         body, requested_evidence
     ) or extract_evidence_status_entries(body, requested_evidence)
     entries = parsed["entries"]
-    # No overlay of the visible lines onto the metadata here, deliberately.
-    # Reading a hand edit straight into the accounting sounds like honouring
-    # the documented owner gesture, and is instead an authorization hole: the
-    # only signal available is that the visible text differs from the
-    # metadata, which any PR author or bot with write access can produce. It
-    # would let them leave a `blocked` entry in the metadata, write
-    # `- [complete] <item> -- PASS` in the section, and clear the gate for an
-    # item the lane refused. Authority has to come from who wrote the edit,
-    # and nothing in a body string says that. The gesture is honoured where
-    # provenance is known instead: `render_execution_summary_body` carries a
-    # published line forward on the next factory turn.
+    # For an owner's item the visible line is the record, as soon as it is
+    # written. No lane completes an `other` item: the machine writes it
+    # blocked and asks the owner to rewrite the line. Anyone with write access
+    # to the body can write that line, and they are also the only way the
+    # item ever completes -- in the line or in the metadata beside it -- so
+    # reading it grants nothing that was not already theirs. Waiting for a
+    # factory turn to copy it into the metadata strands the PR instead, since
+    # the approval that turn waits on is refused by this accounting.
+    #
+    # Every other kind reads as the metadata says. There, the only signal a
+    # line was hand-edited is that it differs from the metadata, which any PR
+    # author or bot can produce, and reading it would clear an item a lane
+    # refused or nothing ran. Authority has to come from who wrote the edit,
+    # and nothing in a body string says that; `render_execution_summary_body`
+    # carries such a line forward on the next factory turn.
+    for entry in _owner_written_entries(body, requested_evidence).values():
+        item = str(entry["item"])
+        if _evidence_item_kind(item) == "other":
+            entries[item] = {"status": str(entry["status"]), "detail": str(entry["detail"])}
 
     matched: dict[str, str]
     contested_items: list[str] = []
