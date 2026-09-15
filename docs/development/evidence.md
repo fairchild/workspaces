@@ -429,17 +429,20 @@ measurements you already wrote. A status line is a list
 item under the one
 `## Evidence Status` heading a reader sees, on a single line, whose text reads
 `[status] item -- proof`, one per requested item. That is the whole of what
-the heading holds: under it a status line is the machine's, and every other
-block -- a note to a reviewer, a link to a run, a pasted log excerpt, a
-`- [x]` box, a bullet carrying a status token with nothing to split it on --
-is a note, which a rewrite moves, in the order written, to a top-level
-`## Evidence Notes` section directly below. Write your note there and it
-stays put; write it under the heading and the next lane run or factory turn
-relocates it. A body carrying no such block gains no such section, and a
-block that opens under the heading and never closes -- a fence with no
-closing line, an HTML block with no closer -- refuses the write rather than
-moving half of one, the same answer and for the same reason as a section
-whose own end is hidden. The section is unreadable,
+the heading holds: under it a bullet opening with a status token is the
+machine's, well-formed or not, and every other block -- a note to a reviewer,
+a link to a run, a pasted log excerpt, a `- [x]` box, a bullet naming no
+status -- is a note, which a rewrite moves, in the order written, to a
+top-level `## Evidence Notes` section directly below. Write your note there
+and it stays put; write it under the heading and the next lane run or factory
+turn relocates it. A body carrying no such block has no such section. Two
+kinds do not move, for one reason -- what is carried has to be a block whose
+end the body states: a fence with no closing line, and raw HTML, where which
+elements are still open is a second renderer's question. Both are deleted by
+the rewrite as they always were, so a `<details>` note belongs under Evidence
+Notes rather than under the heading. And notes that would take the body past
+the 65,536 characters GitHub stores are left behind rather than failing the
+write that carries the status. The section is unreadable,
 with the reason named, when anything else sits under the heading -- a code
 block, fenced or indented; any HTML block, even one holding only a comment; a
 horizontal rule; a paragraph; a nested list; a line naming no requested item --

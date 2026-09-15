@@ -530,6 +530,32 @@ def extract_blocked_by(body: str) -> list[int]:
     return list(dict.fromkeys(numbers))
 
 
+def visible_heading_offset(body: str, heading: str) -> int | None:
+    """Where `## <heading>` starts as the page shows it, or None if the page shows none.
+
+    A writer that places a section "before" a heading has to place it before a
+    heading a reader sees. A `##` line inside a fenced example is code, and a
+    section written in front of one lands inside the fence -- taking the whole
+    status list and the metadata beside it out of the rendered body, which is
+    how a second ordinary write came to leave a PR showing no Evidence Status
+    at all. So every match is walked and the first that is neither inside a
+    code block nor inside raw HTML wins; a body whose only match is code gets
+    None, and the caller appends rather than guessing.
+    """
+    tokens = MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+    line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
+    hidden = [
+        token.map
+        for token in tokens
+        if token.type in {"fence", "code_block", "html_block"} and token.map
+    ]
+    for match in re.finditer(rf"(?mi)^## {re.escape(heading)}[^\S\n]*$", body):
+        line = bisect.bisect_right(line_starts, match.start()) - 1
+        if not any(start <= line < stop for start, stop in hidden):
+            return match.start()
+    return None
+
+
 def insert_markdown_section(
     body: str,
     heading: str,
@@ -537,7 +563,10 @@ def insert_markdown_section(
     *,
     before_heading: str | None = None,
 ) -> str:
-    section = f"## {heading}\n{content.strip()}".rstrip()
+    # `strip("\n")` and not `strip()`: the first line's indentation is content
+    # where a block was written as indented code, and taking four spaces off it
+    # turns the `## Validation` a reviewer pasted as an example into a heading.
+    section = f"## {heading}\n{content.strip(chr(10))}".rstrip()
     # The author's body, untrimmed, because that is the text the cut is made
     # on and the text `section_write_refusal` answers about. Trimming here and
     # not there made the guard name a refusal while the write went ahead.
@@ -549,9 +578,8 @@ def insert_markdown_section(
         log(f"refusing to rewrite the `{heading}` section: {refusal}")
         return body
     cleaned = removed.strip()
-    if before_heading and has_markdown_section(cleaned, before_heading):
-        pattern = rf"(?mi)^(## {re.escape(before_heading)})\s*$"
-        return re.sub(pattern, lambda match: f"{section}\n\n{match.group(1)}", cleaned, count=1)
+    if before_heading and (at := visible_heading_offset(cleaned, before_heading)) is not None:
+        return f"{cleaned[:at]}{section}\n\n{cleaned[at:]}"
     if cleaned:
         return f"{cleaned}\n\n{section}"
     return section
