@@ -3038,23 +3038,90 @@ class SectionFailsClosedOnHtmlAndBreaksTests(unittest.TestCase):
                 # either way it is HTML the read does not interpret.
                 self.assert_unread_because(self.blocked_meta() + f"## Evidence Status\n{line}\n", "HTML")
 
-    def test_html_left_open_before_the_heading_leaves_the_section_unread(self) -> None:
+    def test_html_before_the_heading_leaves_the_section_unread(self) -> None:
         section = f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
         for shape, body in (
             ("<details> around the whole section", f"<details>\n\n{self.blocked_meta()}\n{section}\n</details>\n"),
             ("<details><summary> opened in one block", f"<details><summary>Evidence</summary>\n\n{self.blocked_meta()}\n{section}"),
+            # What not interpreting HTML costs: HTML that closes before the
+            # heading leaves the section unread too, until it moves below the
+            # section or into a code block.
+            ("a balanced paragraph with an image", '<p align="center"><img src="https://evidence.cloudcompute.com/workspaces/pr-1/a.png"></p>\n\n' + self.blocked_meta() + "\n" + section),
+            ("<details> closed before the heading", "<details>\n<summary>Notes</summary>\n\nSome notes.\n\n</details>\n\n" + self.blocked_meta() + "\n" + section),
         ):
             with self.subTest(shape=shape):
-                self.assert_unread_because(body, "still open")
+                self.assert_unread_because(body, "before the heading")
 
-    def test_html_closed_before_the_heading_does_not(self) -> None:
-        section = f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+
+class HtmlBeforeAndInTheHeadingTests(unittest.TestCase):
+    """HTML before or in the Evidence Status heading leaves the section unread (#1704).
+
+    Tracking which elements were still open at the heading meant parsing HTML
+    a second way, and it disagreed with GitHub on self-closing tags and on
+    comments, and by Python version. Before the heading, only the factory's
+    own metadata comment is passed over, recognised by its shape; any other
+    HTML block, any inline HTML, and inline HTML in the heading itself leave
+    the section unread, with the reason named.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = OwnerReadFailsClosedTests.PROOF
+    meta = OwnerReadFailsClosedTests.meta
+    gate = OwnerReadFailsClosedTests.gate
+    assert_refused = OwnerReadFailsClosedTests.assert_refused
+    assert_approved = OwnerLineAsRenderedTests.assert_approved
+    blocked_meta = SectionFailsClosedOnHtmlAndBreaksTests.blocked_meta
+    assert_unread_because = SectionFailsClosedOnHtmlAndBreaksTests.assert_unread_because
+
+    def section(self, heading: str = "## Evidence Status") -> str:
+        return f"{heading}\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+
+    def test_any_html_before_the_heading_leaves_the_section_unread(self) -> None:
         for shape, before in (
-            ("a balanced paragraph with an image", '<p align="center"><img src="https://evidence.cloudcompute.com/workspaces/pr-1/a.png"></p>\n\n'),
-            ("<details> closed before the heading", "<details>\n<summary>Notes</summary>\n\nSome notes.\n\n</details>\n\n"),
+            ("<details/>, which HTML leaves open", "<details/>\n\n"),
+            ("Intro <s/>, striking what follows", "Intro <s/>\n\n"),
+            ("Intro <strike/>", "Intro <strike/>\n\n"),
+            ("<!--> <details> -->, a comment GitHub ends at <!-->", "<!--> <details> -->\n\n"),
+            ("<!-- x --!> <details> -->, a comment a browser ends at --!>", "<!-- x --!> <details> -->\n\n"),
         ):
             with self.subTest(shape=shape):
-                self.assert_approved(before + self.blocked_meta() + "\n" + section)
+                self.assert_unread_because(before + self.blocked_meta() + "\n" + self.section(), "before the heading")
+
+    def test_only_the_machine_s_own_metadata_comment_is_passed_over(self) -> None:
+        meta = self.blocked_meta()
+        for shape, prefix in (
+            # After the real metadata, which the metadata reader takes as the
+            # last complete block; placed before it, these two would run into
+            # it and read as malformed metadata rather than as HTML.
+            ("a metadata-looking comment with a tag after it", meta + '\n<!-- evidence-status:v1\n{"entries": []}\n--> <details>\n\n'),
+            ("a metadata-looking comment carrying --!>", meta + "\n<!-- evidence-status:v1 --!> <details> -->\n\n"),
+            # Opens and ends like the metadata, and a browser ends it at the
+            # first `-->`, which leaves `<details>` open.
+            ("a metadata-looking comment with text between two -->", meta + "\n<!-- evidence-status:v1 --> <details> -->\n\n"),
+            # Before it, since a complete block after it would be read as the
+            # metadata; the `-->` inside the JSON ends the HTML block on that
+            # line, so the block does not end at a `-->` of its own.
+            ("a metadata-looking comment with a second --> in its JSON", '<!-- evidence-status:v1\n{"note": "-->"}\n-->\n\n' + meta + "\n"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_unread_because(prefix + self.section(), "before the heading")
+
+    def test_the_machine_s_metadata_comment_and_a_plain_section_still_read(self) -> None:
+        self.assert_approved("## Summary\n\nA change.\n\n" + self.blocked_meta() + "\n" + self.section())
+
+    def test_inline_html_in_the_heading_leaves_the_section_unread(self) -> None:
+        self.assert_unread_because(self.blocked_meta() + "\n" + self.section("## Evidence Status <s>"), "heading carries inline HTML")
+
+    def test_a_literal_heading_hidden_above_does_not_let_heading_html_through(self) -> None:
+        # GitHub carries the `<s>` past the heading and strikes the list,
+        # while the literal `## Evidence Status` hidden in the comment is what
+        # the section-presence check sees.
+        body = "<!--\n## Evidence Status\n-->\n\n" + self.blocked_meta() + "\n" + self.section("## Evidence Status <s>")
+        self.assert_unread_because(body, "HTML")
+
+    def test_a_comment_only_block_after_the_section_still_leaves_it_unread(self) -> None:
+        body = self.blocked_meta() + "\n" + self.section() + "\n<!-- a note below the list -->\n\n## Validation\n- ok\n"
+        self.assert_unread_because(body, "HTML block")
 
 
 class DocumentedTestFormTests(unittest.TestCase):

@@ -401,8 +401,12 @@ block, fenced or indented; any HTML block, even one holding only a comment; a
 horizontal rule; a paragraph; a nested list; a line naming no requested item --
 or when an item carries inline HTML (a comment or `<del>` included), runs onto
 a second line, or holds a character reference such as `&#10;` that decodes to
-a line break. HTML opened before the heading and still open at it, such as a
-`<details>` around the section, makes it unreadable too. A comment delimiter
+a line break. Inline HTML in the heading makes it unreadable too, and so does
+any HTML before the heading other than the factory's own metadata comment: a
+`<details>`, a centred `<p>`, an `<img>` or a comment above `## Evidence Status`
+leaves the owner's section unread, with the reason named, until the HTML moves
+below the section or into a code block. The read never interprets HTML, since
+working out which elements are still open is a second renderer. A comment delimiter
 inside a code span is text, and emphasis is only what the parser reads as
 emphasis: `**item**` is the item, while `** item **` keeps its asterisks. When the section is not readable, no line is read
 as yours and no owner item counts as complete from the metadata either, since

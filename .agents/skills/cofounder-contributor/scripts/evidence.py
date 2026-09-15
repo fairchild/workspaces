@@ -8,7 +8,6 @@ import re
 import shlex
 import sys
 from collections.abc import Iterable, Iterator
-from html.parser import HTMLParser
 from itertools import groupby, islice
 
 from markdown_it import MarkdownIt
@@ -649,29 +648,21 @@ BLOCK_NAMES = {
     "blockquote_open": "a quote",
     "heading_open": "a sub-heading",
 }
-# Elements HTML never closes, so one left unclosed encloses nothing.
-VOID_ELEMENTS = frozenset(
-    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
-)
+def _is_machine_metadata_comment(content: str) -> bool:
+    """Whether an HTML block is the factory's own evidence metadata comment and nothing else.
 
-
-class _OpenElements(HTMLParser):
-    """The HTML elements still open after the fragments fed so far."""
-
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.open: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag not in VOID_ELEMENTS:
-            self.open.append(tag)
-
-    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        pass
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag in self.open:
-            del self.open[len(self.open) - 1 - self.open[::-1].index(tag)]
+    Recognised by its shape, not by parsing HTML: it opens with
+    `<!-- evidence-status:v1`, ends at its only `-->`, and carries no `--!>`,
+    which a browser also reads as the end of a comment. A block that ends
+    anywhere else, or has anything after its end, is HTML like any other.
+    """
+    stripped = content.strip()
+    return (
+        stripped.startswith(f"<!-- evidence-status:v{EVIDENCE_METADATA_VERSION}")
+        and stripped.endswith("-->")
+        and stripped.count("-->") == 1
+        and "--!>" not in stripped
+    )
 
 
 def _inline_text(children: list[Token] | None) -> str:
@@ -749,8 +740,11 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
     not a list -- an HTML block even when it holds only a comment, a code
     block, a rule, a paragraph, a table, a quote, a sub-heading -- or a nested
     block inside an item; inline HTML or a line break inside an item
-    (`_unreadable_inline`); and HTML opened before the heading and still open
-    at it, which can fold or hide the section.
+    (`_unreadable_inline`); inline HTML in the heading itself; and any HTML
+    before the heading other than the factory's own metadata comment, which
+    can fold, strike or hide the section. HTML is never interpreted: telling
+    which elements are still open is a second renderer, and it disagreed with
+    GitHub.
     """
     tokens = MARKDOWN.parse(body)
     headings = [
@@ -764,16 +758,13 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
     start = headings[0]
     if tokens[start].tag != "h2":
         return [], f"the `Evidence Status` heading is an {tokens[start].tag}, not an h2"
-    enclosing = _OpenElements()
+    if any(child.type == "html_inline" for child in tokens[start + 1].children or []):
+        return [], "the `Evidence Status` heading carries inline HTML, which can strike or hide the section"
     for token in tokens[:start]:
-        if token.type == "html_block":
-            enclosing.feed(token.content)
-        for child in token.children or []:
-            if child.type == "html_inline":
-                enclosing.feed(child.content)
-    enclosing.close()
-    if enclosing.open:
-        return [], f"HTML opened before the heading is still open at it (<{enclosing.open[-1]}>), and it can fold or hide the section"
+        if (token.type == "html_block" and not _is_machine_metadata_comment(token.content)) or any(
+            child.type == "html_inline" for child in token.children or []
+        ):
+            return [], "HTML before the heading can fold or hide the section, so the read does not interpret it"
     lines: list[str] = []
     index = start + 3
     while index < len(tokens):
