@@ -4887,18 +4887,27 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
     # ends at the end of the body and is written, and only a heading the parser
     # reads as code is refused.
     WRITE_SEAM = {
-        # An open block with nothing after it refuses too. Telling it apart
-        # from one hiding a heading means reading text the page does not show,
-        # and an unclosed comment shows nothing at all -- so the answer is the
-        # same either way and the body stands.
+        # The block's kind decides, not where the section sits. A fence shows
+        # the rest of the body as code, so the section really does run to the
+        # end and the cut is right; a comment or a `<pre>` hides what follows,
+        # so the cut is over text nobody can see.
         "a last section with an unclosed fence": (
-            "## Summary\n\nnote\n\n## Evidence Status\n\n```\nthe log, never closed\n", True
+            "## Summary\n\nnote\n\n## Evidence Status\n\n```\nthe log, never closed\n", False
         ),
         "a last section with an unclosed comment": (
             "## Summary\n\nnote\n\n## Evidence Status\n\n<!-- a reviewer note\n", True
         ),
         "a last section with an unclosed <pre>": (
             "## Summary\n\nnote\n\n## Evidence Status\n\n<pre>\nthe log\n", True
+        ),
+        "a last section with an unclosed <script>": (
+            "## Summary\n\nnote\n\n## Evidence Status\n\n<script>\nthe log\n", True
+        ),
+        "a last section with an unclosed CDATA": (
+            "## Summary\n\nnote\n\n## Evidence Status\n\n<![CDATA[\nthe log\n", True
+        ),
+        "a last section ending in a kind-7 tag that starts like <pre": (
+            "## Summary\n\nnote\n\n## Evidence Status\n\n- [x] one\n\n<prefix>\n", False
         ),
         "an unclosed comment hiding the sections below it": (
             "## Evidence Status\n\n- [x] one\n<!-- a reviewer note\n\n## Risks\n\nNone.\n", True
@@ -4908,6 +4917,11 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         ),
         "an unclosed <![CDATA[ hiding the sections below it": (
             "## Evidence Status\n\n- [x] one\n\n<![CDATA[\nx\n\n## Risks\n\nNone.\n", True
+        ),
+        # A CRLF body's page is identical to the LF one, so nothing is hidden
+        # and there is nothing to refuse -- the section just has to be found.
+        "a CRLF body": (
+            "## Summary\r\n\r\nnote\r\n\r\n## Evidence Status\r\n\r\n- [x] one\r\n\r\n## Risks\r\n\r\nNone.\r\n", False
         ),
         "a closed comment above the sections below it": (
             "## Evidence Status\n\n- [x] one\n\n<!-- a reviewer note -->\n\n## Risks\n\nNone.\n", False
@@ -4997,6 +5011,39 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
                 for heading in headings:
                     self.assertTrue(helpers.has_markdown_section(two, heading), heading)
 
+    def test_an_unclosed_fence_at_the_end_writes_for_a_different_reason_than_one_hiding_a_heading(self) -> None:
+        # Two fence shapes that both write, and they must not be one case. A
+        # fence hiding a heading is located by the repair, so the section ends
+        # at that heading. A fence with nothing after it is located by
+        # nothing, and the section runs to the end of the body -- which is
+        # right, because the page shows that text as code.
+        helpers, evidence = sys.modules["_helpers"], sys.modules["evidence"]
+        hiding = "## Evidence Status\n\n```\nthe log, never closed\n\n## Risks\n\nNone.\n"
+        nothing_after = "## Summary\n\nnote\n\n## Evidence Status\n\n```\nthe log, never closed\n"
+        for name, body, keeps_risks in (("hiding a heading", hiding, True), ("nothing after", nothing_after, False)):
+            with self.subTest(case=name):
+                self.assertIsNone(self.write_refusal(helpers, body, "Evidence Status"))
+                written = helpers.insert_markdown_section(body, "Evidence Status", "- [x] written")
+                self.assertEqual(helpers.markdown_section(written, "Evidence Status"), "- [x] written")
+                self.assertEqual(helpers.has_markdown_section(written, "Risks"), keeps_risks)
+        # And the repair is what tells them apart: for the first it reports a
+        # boundary below the heading, for the second there is none to report.
+        for body, boundary_below in ((hiding, True), (nothing_after, False)):
+            lines = helpers.MARKDOWN_LINE_ENDING_RE.split(body)
+            tokens = helpers.MARKDOWN.parse(helpers.MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+            repaired = helpers.reparsed_without_runaway(tokens, lines)
+            self.assertIsNotNone(repaired)
+            heading_line = lines.index("## Evidence Status")
+            found = any(
+                token.map and token.map[0] > heading_line and helpers.is_section_boundary(token)
+                for token in repaired
+            )
+            self.assertEqual(found, boundary_below, body[:40])
+        # Which shows up as the section text: bounded for the first, to the end
+        # of the body for the second.
+        self.assertNotIn("## Risks", helpers.markdown_section(hiding, "Evidence Status"))
+        self.assertIn("never closed", helpers.markdown_section(nothing_after, "Evidence Status"))
+
     def test_a_hidden_completion_does_not_complete_the_item(self) -> None:
         # Invisible text may refuse, never accept. A `[complete]` line below an
         # unclosed comment or `<pre>` is matched by the written reader and
@@ -5038,9 +5085,9 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
 
     def test_a_refused_write_says_so_rather_than_returning_the_body(self) -> None:
         # A refusal that returns the body and logs nothing is a write the
-        # caller believes happened. Two of the three call sites reach the
-        # writer without asking first, so the reason has to come from the
-        # writer, once, on the run's output.
+        # caller believes happened, so the reason comes from the writer, once,
+        # on the run's output. Asserting only that the body came back
+        # unchanged would pass on the silent no-op this is named against.
         helpers = sys.modules["_helpers"]
         captured = io.StringIO()
         with contextlib.redirect_stderr(captured):
@@ -5050,16 +5097,62 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         self.assertEqual(out, self.FENCED_EXAMPLE_BODY)
         self.assertIn("refusing to rewrite the `Mergeability` section", captured.getvalue())
         self.assertIn("inside the code block", captured.getvalue())
-        # And the same reason reaches the runtime's own two writers.
-        for name, call in (
-            ("execution.seed_mergeability_section", lambda body: sys.modules["execution"].seed_mergeability_section(body, changed_files=["docs/x.md"])),
-            ("evidence.reconcile", lambda body: helpers.insert_markdown_section(body, "Mergeability", "- Surface: agent-runtime")),
-        ):
-            with self.subTest(site=name):
-                spoke = io.StringIO()
-                with contextlib.redirect_stderr(spoke):
-                    result = call(self.FENCED_EXAMPLE_BODY)
-                self.assertEqual(result, self.FENCED_EXAMPLE_BODY)
+
+    ITEM_FOR_WRITE = "a note on whether the fixture state survives a relaunch"
+
+    def test_the_runtime_write_surfaces_the_refusal_on_its_own_errors(self) -> None:
+        # The site that really reaches the writer:
+        # `render_execution_summary_body` rewrites Evidence Status on the body
+        # the model wrote. On a body whose only `## Evidence Status` is a
+        # fenced example it returns the body untouched and puts the reason in
+        # the errors it already returns, so the run reports it rather than
+        # believing it wrote.
+        body = (
+            "## Summary\n\nwhat.\n\n```markdown\n## Evidence Status\n- [complete] x -- proof\n```\n\n"
+            "## Validation\n\n- ok\n"
+        )
+        rendered, errors = run_contributor.render_execution_summary_body(
+            body,
+            requested_evidence=[self.ITEM_FOR_WRITE],
+            evidence_complete=["1 -- checked: the fixture survived"],
+            evidence_blocked=None,
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(rendered, body)
+        self.assertTrue(
+            any("Evidence Status section was not rewritten" in error for error in errors), errors
+        )
+        self.assertTrue(any("inside the code block" in error for error in errors), errors)
+        # The control: the same call on an ordinary body does write.
+        ordinary = "## Summary\n\nwhat.\n\n## Validation\n\n- ok\n"
+        written, ok_errors = run_contributor.render_execution_summary_body(
+            ordinary,
+            requested_evidence=[self.ITEM_FOR_WRITE],
+            evidence_complete=["1 -- checked: the fixture survived"],
+            evidence_blocked=None,
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(ok_errors, [])
+        self.assertIn(self.ITEM_FOR_WRITE, sys.modules["_helpers"].markdown_section(written, "Evidence Status"))
+
+    def test_seeding_mergeability_never_reaches_the_writer_on_a_fenced_example(self) -> None:
+        # Not this PR's refusal, and not fixed here: `seed_mergeability_section`
+        # returns early because `has_markdown_section` matches the `##` line
+        # inside the fenced example, so the writer is never called and nothing
+        # is logged. Identical at the merge base. It is a silent no-op of its
+        # own -- the readiness gate then wants a Mergeability section the
+        # runtime believed it had seeded -- and it is pinned here so the site
+        # is not mistaken for one this PR's reason reaches.
+        execution = sys.modules["execution"]
+        helpers = sys.modules["_helpers"]
+        self.assertTrue(helpers.has_markdown_section(self.FENCED_EXAMPLE_BODY, "Mergeability"))
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            result = execution.seed_mergeability_section(
+                self.FENCED_EXAMPLE_BODY, changed_files=["docs/x.md"]
+            )
+        self.assertEqual(result, self.FENCED_EXAMPLE_BODY)
+        self.assertEqual(spoke.getvalue(), "")
 
     STRIP_FLIP_BODY = (
         "## Summary\n\nwhat.\n\n```\nlog opens here and never closes\n\n"
@@ -5081,6 +5174,20 @@ class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):
         self.assertEqual(
             self.write_refusal(helpers, self.STRIP_FLIP_BODY, "Evidence Status") is None,
             self.write_refusal(helpers, self.STRIP_FLIP_BODY.strip(), "Evidence Status") is None,
+        )
+        # Nor on which line ending the client sent. The heading match was
+        # anchored on `\n`, so a CRLF body read as having no section while
+        # `has_markdown_section` said it had one -- and the write then appended
+        # a second copy instead of replacing the first.
+        crlf = "## Summary\r\n\r\nnote\r\n\r\n## Evidence Status\r\n\r\n- [x] one\r\n"
+        self.assertTrue(helpers.has_markdown_section(crlf, "Evidence Status"))
+        self.assertEqual(helpers.markdown_section(crlf, "Evidence Status"), "- [x] one")
+        rewritten = helpers.insert_markdown_section(crlf, "Evidence Status", "- [x] written")
+        self.assertEqual(rewritten.count("## Evidence Status"), 1)
+        self.assertEqual(helpers.markdown_section(rewritten, "Evidence Status"), "- [x] written")
+        self.assertEqual(
+            self.write_refusal(helpers, crlf, "Evidence Status"),
+            self.write_refusal(helpers, crlf.replace("\r\n", "\n"), "Evidence Status"),
         )
 
     def test_a_completion_visible_only_to_the_written_read_never_completes_an_item(self) -> None:

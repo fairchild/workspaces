@@ -292,7 +292,12 @@ def _section_bounds(body: str, heading: str) -> tuple[int, int, int, str | None]
     answer is the worse one, and `reparsed_without_runaway` is that exception --
     whichever boundary comes first ends the section.
     """
-    match = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
+    # `\r?\n`, because GitHub stores a body with whatever endings the client
+    # sent and the rest of this reads through `MARKDOWN_LINE_ENDING_RE`. Anchored
+    # on `\n` alone, a CRLF body read as having no section while
+    # `has_markdown_section` said it had one, and the writer then appended a
+    # second copy of it rather than replacing the first.
+    match = re.search(rf"(?mi)^## {re.escape(heading)}\r?\n", body)
     if match is None:
         return None
     line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
@@ -333,11 +338,15 @@ def _section_bounds(body: str, heading: str) -> tuple[int, int, int, str | None]
 # opening text because the token does not record it -- the parser has already
 # decided this run of lines is one HTML block, and this only asks which of the
 # seven it opened as.
+# Kind 1's start is a tag NAME, not a prefix: `<pre`, `<script`, `<style` or
+# `<textarea` followed by whitespace, `>`, `/` or the end of the line. A
+# `<prefix>` is a kind-7 block, which ends on a blank line and needs no closer;
+# reading its opener as `<pre` refused a write nobody had broken.
+HTML_KIND_1_RE = re.compile(r"^<(pre|script|style|textarea)(?=[\s>/]|$)", re.IGNORECASE)
+# Kinds 2 to 5, each with the end condition the spec gives it. `--!>` is not
+# the kind-2 end -- the spec's end is `-->` -- so a comment closed that way
+# still counts as open, which is the fail-closed answer and the right one.
 HTML_BLOCK_CLOSERS = (
-    ("<pre", "</pre>"),
-    ("<script", "</script>"),
-    ("<style", "</style>"),
-    ("<textarea", "</textarea>"),
     ("<![cdata[", "]]>"),
     ("<!--", "-->"),
     ("<?", "?>"),
@@ -346,9 +355,17 @@ HTML_DECLARATION_RE = re.compile(r"^<![a-z]", re.IGNORECASE)
 
 
 def _missing_html_closer(token: Token) -> str | None:
-    """The closer an HTML block of kinds 1 to 5 opened and never wrote, or None."""
+    """The closer an HTML block of kinds 1 to 5 opened and never wrote, or None.
+
+    Kinds 6 and 7 -- a known tag name, or any other complete tag on its own
+    line -- end on a blank line or at the end of the body, both legitimately,
+    so they have no closer to miss and never appear here.
+    """
     content = token.content.lstrip()
     lowered = content.lower()
+    if (kind_one := HTML_KIND_1_RE.match(content)) is not None:
+        closer = f"</{kind_one.group(1).lower()}>"
+        return None if closer in lowered else closer
     for prefix, closer in HTML_BLOCK_CLOSERS:
         if lowered.startswith(prefix):
             return None if closer in lowered else closer
@@ -389,16 +406,22 @@ def _write_refusal(
     write to any section above the opener takes the rest of the body.
 
     The second: the section has no boundary after it and got there through a
-    block that never closed. Two reasons a section has no boundary want
-    opposite answers -- it is the last section, where the end of the body is
-    right, or a block runs to the end of the body and hides every heading
-    below it, where assuming the end of the body deletes them. The harm is the
-    hidden heading. This refuses in both cases anyway, including an open block
-    with nothing at all after it, because telling those apart means reading
-    text the page does not show: an unclosed comment renders as nothing, and a
-    read that decided from it would be deciding on what no reader can see. A
-    last section whose final block closes, or is a `<details>`, or is indented
-    code, is not this shape and still writes.
+    block that never closed. What decides there is the block's kind, not where
+    the section sits. A fence with no closing line shows the rest of the body
+    as code, so a reader sees that text and the section really does run to the
+    end: cutting to the end is correct, and refusing would cost a write to a
+    body that works, paid by an author who did nothing wrong. A raw HTML block
+    of kinds 1 to 5 hides its contents, so a cut there is over text nobody can
+    see, and that is the one to refuse.
+
+    The two fence cases are told apart by the repair rather than by this: where
+    an unclosed fence hides a heading, `reparsed_without_runaway` finds it and
+    the section ends there, so this never sees the case. Where the repair finds
+    no boundary, nothing below the fence is a section and everything below it
+    is visible as code.
+
+    A last section whose final block closes, or is a `<details>` or any other
+    kind-6 or kind-7 block, or is indented code, is not this shape either.
     """
     holder = next(
         (
@@ -419,7 +442,7 @@ def _write_refusal(
     if located is not None:
         return None
     open_block = unterminated_block(tokens, line_count)
-    if open_block is None:
+    if open_block is None or open_block[0].type == "fence":
         return None
     token, description = open_block
     return (

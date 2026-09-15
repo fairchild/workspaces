@@ -2165,7 +2165,10 @@ def render_execution_summary_body(
     ]
 
     stripped_body = _strip_evidence_metadata(summary_body)
-    write_refusal = section_write_refusal(stripped_body.strip(), "Evidence Status")
+    # Untrimmed, because that is the text the writer cuts and the text the
+    # reason answers about; trimming here and not there is what once let the
+    # guard name a refusal while the write went ahead.
+    write_refusal = section_write_refusal(stripped_body, "Evidence Status")
     if write_refusal is not None:
         # The body stands rather than losing the sections below the fence, and
         # the author is told which line to close.
