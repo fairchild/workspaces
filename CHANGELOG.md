@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.28.0] - 2026-09-14
+
+WorkSpaces adds Docker Compose workspace sandboxes, an Agents status row that
+says whether the Claude integration is active, degraded or failed, and a release
+lane that builds, signs and validates installers before one publication
+approval. Malformed Claude settings are now an install error instead of an empty
+file to overwrite, and stopping the automation plane while it is still starting
+leaves no listener or credential behind.
+
+### Added
+- Docker Compose workspace sandboxes: create a sandboxed workspace from a compose file, with default terminal commands and panes that reconnect after Start; split focus and workspace selection survive a synchronous terminal restore. [5d1feec0](https://github.com/fairchild/workspaces/commit/5d1feec0), [391c5518](https://github.com/fairchild/workspaces/commit/391c5518), [0b694f5d](https://github.com/fairchild/workspaces/commit/0b694f5d), [a1a01095](https://github.com/fairchild/workspaces/commit/a1a01095)
+- The Agents status row in Settings says active, degraded or failed instead of installed or not, and the sidebar points at the Claude integration. [#1673](https://github.com/fairchild/workspaces/pull/1673), [#1528](https://github.com/fairchild/workspaces/pull/1528)
+- Named tests, local runs and performance numbers count as evidence for a pull request; a reviewer can judge a dense PR from one page before the raw diff. [#1582](https://github.com/fairchild/workspaces/pull/1582), [#1615](https://github.com/fairchild/workspaces/pull/1615)
+
+### Fixed
+- Malformed Claude settings are an install error, not an empty file to overwrite, and a settings file another writer changed mid-install is not overwritten with the stale read. [4ec46154](https://github.com/fairchild/workspaces/commit/4ec46154), [7563ea74](https://github.com/fairchild/workspaces/commit/7563ea74)
+- A stop during a still-awaiting automation start leaves no listener or credential behind, and the test suite no longer deletes the running app's operator credential. [#1682](https://github.com/fairchild/workspaces/pull/1682), [#1654](https://github.com/fairchild/workspaces/pull/1654)
+- A truncated `ws send` says so instead of reporting the byte count it was handed. [#1594](https://github.com/fairchild/workspaces/pull/1594)
+- The evidence store serves every object under a sandboxed content security policy with nosniff, and builds evidence URLs from the key. [32a46df6](https://github.com/fairchild/workspaces/commit/32a46df6), [#1569](https://github.com/fairchild/workspaces/pull/1569)
+- Evidence accounting: a red run is not a pass, a hand edit reaches the accounting, the owner is asked only for what only they can write, and an owner's hand-completed item no longer strands the PR. [#1584](https://github.com/fairchild/workspaces/pull/1584), [#1597](https://github.com/fairchild/workspaces/pull/1597), [#1681](https://github.com/fairchild/workspaces/pull/1681)
+- Readiness and factory gates read section headings regardless of case, fail a pending evidence line hidden by CRLF, an indented heading or a `*` bullet, and end the opening paragraph where GitHub renders a heading. [1a5c9b36](https://github.com/fairchild/workspaces/commit/1a5c9b36), [d3f25dcf](https://github.com/fairchild/workspaces/commit/d3f25dcf), [#1670](https://github.com/fairchild/workspaces/pull/1670), [#1687](https://github.com/fairchild/workspaces/pull/1687)
+- Factory lifecycle: a body edit answering a rejection re-enters review, a terminal decline removes ready instead of replacing the label set, and a release the factory cannot take stops looking released. [#1549](https://github.com/fairchild/workspaces/pull/1549), [3157d108](https://github.com/fairchild/workspaces/commit/3157d108), [#1589](https://github.com/fairchild/workspaces/pull/1589)
+- The PR review page reads fences, a capped thread list and entities the way GitHub does, shows an image host with an explicit port as text, treats a PNG without an IHDR chunk as a failed render, and says when the renderer failed. [c88ee7c2](https://github.com/fairchild/workspaces/commit/c88ee7c2), [#1686](https://github.com/fairchild/workspaces/pull/1686), [#1657](https://github.com/fairchild/workspaces/pull/1657), [#1640](https://github.com/fairchild/workspaces/pull/1640)
+- The performance history file is written atomically, so an interrupted append cannot truncate it. [#1587](https://github.com/fairchild/workspaces/pull/1587)
+
+### Changed
+- The release lane prepares tested installers before one publication approval: preflight answers what the signing gate answers, resource copies into the bundle fail the build instead of logging success, the bundle verifier earns its zero exit, and CI path parity is restored. [#1577](https://github.com/fairchild/workspaces/pull/1577), [#1583](https://github.com/fairchild/workspaces/pull/1583), [#1591](https://github.com/fairchild/workspaces/pull/1591), [#1570](https://github.com/fairchild/workspaces/pull/1570), [#1585](https://github.com/fairchild/workspaces/pull/1585), [#1639](https://github.com/fairchild/workspaces/pull/1639)
+- Every macOS lane runs on hosted macos-26; Ghostty tracks upstream trunk on Zig 0.16; the sandbox mise pin is v2026.9.8. [#1571](https://github.com/fairchild/workspaces/pull/1571), [#1564](https://github.com/fairchild/workspaces/pull/1564), [#1580](https://github.com/fairchild/workspaces/pull/1580)
+- Tests stop bleeding state through shared UserDefaults, contain their tmux socket, and run the render-measuring suite in its own process. [#1602](https://github.com/fairchild/workspaces/pull/1602), [#1573](https://github.com/fairchild/workspaces/pull/1573), [#1575](https://github.com/fairchild/workspaces/pull/1575)
+- Automation API docs say what the code does, and the v0.27.0 performance benchmark row is recorded. [#1644](https://github.com/fairchild/workspaces/pull/1644), [#1660](https://github.com/fairchild/workspaces/pull/1660), [#1677](https://github.com/fairchild/workspaces/pull/1677), [#1699](https://github.com/fairchild/workspaces/pull/1699)
+
 ## [0.27.0] - 2026-09-06
 
 WorkSpaces adds QR pairing for mobile access over your tailnet and distinct
