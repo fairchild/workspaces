@@ -252,23 +252,33 @@ def reparsed_without_runaway(tokens: list[Token], lines: list[str]) -> list[Toke
     return parsed if blanked else None
 
 
-def block_states_its_ends(text: str) -> bool:
-    """Whether this text says where each of its own blocks ends, at every level.
+def unmovable_block(text: str) -> str | None:
+    """Why this block cannot be carried somewhere else in the body, or None.
 
-    What a rewrite may move somewhere else. A fence with no closing line and a
-    raw HTML block both fail it: moved, the first shows whatever lands after it
-    as code, and the second can hide it -- and where either ends is then
-    decided by the text it is put next to rather than by the author.
+    What a rewrite may move is a block the parser can end. A fence with no
+    closing line cannot be ended: moved, it shows whatever lands after it as
+    code, and where it stops is decided by the text it is put next to rather
+    than by the author. A raw HTML block of kinds 1 to 5 whose closer never
+    came is the same shape -- CommonMark runs it to the end of the document.
 
-    Every level, because a container carries its contents: an unclosed comment
-    inside a blockquote is the same hazard as one at the top of the body, and a
-    check that looked only at top-level tokens carried the quote whole and hid
-    the section below where it landed.
+    A block that closes is carried, raw HTML included. The parser's map is the
+    end: kinds 6 and 7 end at a blank line, kinds 1 to 5 at the closer they
+    wrote. Deleting a `<details>` note a reader can see, on the grounds that
+    some element INSIDE it might still be open, is #1725 in a narrower form --
+    and an element left open that way hides no more after the move than
+    before, because the block lands directly below the status list rather than
+    above it, so the status becomes visible where it was hidden.
+
+    Asked at every level, because a container carries its contents: an
+    unclosed comment inside a blockquote is the same hazard as one at the top
+    of the body.
     """
-    return not any(
-        token.type == "html_block" or (token.type == "fence" and _fence_never_closed(token))
-        for token in MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", text))
-    )
+    for token in MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", text)):
+        if token.type == "fence" and _fence_never_closed(token):
+            return f"a `{token.markup}` code fence with no closing line"
+        if token.type == "html_block" and (missing := _missing_html_closer(token)) is not None:
+            return f"a raw HTML block with no `{missing}`"
+    return None
 
 
 def section_write_refusal(body: str, heading: str) -> str | None:
@@ -634,10 +644,11 @@ def insert_markdown_section(
     *,
     before_heading: str | None = None,
 ) -> str:
-    # `strip("\n")` and not `strip()`: the first line's indentation is content
-    # where a block was written as indented code, and taking four spaces off it
-    # turns the `## Validation` a reviewer pasted as an example into a heading.
-    section = f"## {heading}\n{content.strip(chr(10))}".rstrip()
+    # Newlines only, at both ends. The first line's indentation is content
+    # where a block was written as indented code -- taking four spaces off it
+    # turns a `## Validation` a reviewer pasted as an example into a heading --
+    # and the trailing spaces on the last line are a line break on the page.
+    section = f"## {heading}\n{content.strip(chr(10))}".rstrip("\n")
     # The author's body, untrimmed, because that is the text the cut is made
     # on and the text `section_write_refusal` answers about. Trimming here and
     # not there made the guard name a refusal while the write went ahead.

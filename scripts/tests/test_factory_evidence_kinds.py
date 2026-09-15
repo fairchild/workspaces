@@ -5317,6 +5317,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         otherwise be read as.
         """
         marker = "## Evidence Notes\n"
+        body = body.replace("\r\n", "\n")
         if marker not in body:
             return []
         rest = body[body.index(marker) + len(marker) :]
@@ -5420,7 +5421,7 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             any("Evidence Status section was not rewritten" in error for error in errors), errors
         )
 
-    def test_a_block_carrying_raw_html_at_any_depth_is_not_carried(self) -> None:
+    def test_a_block_the_parser_cannot_end_is_not_carried_at_any_depth(self) -> None:
         # A container carries its contents. An unclosed comment inside a quote
         # is the same hazard as one at the top of the body: moved, it runs to
         # the end of wherever it lands and takes the sections after it with
@@ -5429,16 +5430,37 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         for label, tail in (
             ("a quoted unclosed comment", "\n> <!-- an author note I never closed\n> keep this\n"),
             ("an unclosed comment in a bullet", "- see below\n  <!-- never closed\n"),
-            ("a quoted closed comment", "\n> <!-- a closed one -->\n> beside it\n"),
         ):
             with self.subTest(block=label):
-                resolved = self.resolved(self.body(f"{tail}\nplain note beside it\n"))
+                spoke = io.StringIO()
+                with contextlib.redirect_stderr(spoke):
+                    resolved = self.resolved(self.body(f"{tail}\nplain note beside it\n"))
                 self.assertNotIn("<!--", self.notes_section(resolved))
-                # The note that has an end still moves.
+                self.assertIn("a raw HTML block with no `-->`", spoke.getvalue())
+                # The note that the parser can end still moves.
                 self.assertIn("plain note beside it", self.notes_section(resolved))
                 # And the section below the block is still a heading a reader
                 # sees, which is what an unclosed comment would swallow.
                 self.assertIn("## Validation", evidence._rendered_lines(resolved))
+
+    def test_a_closed_html_block_is_carried_because_the_parser_ends_it(self) -> None:
+        # The rule is about blocks the parser cannot end, and it does not reach
+        # a block that closes. Kinds 6 and 7 end at a blank line and kinds 1 to
+        # 5 at the closer they wrote, so deleting a `<details>` note a reader
+        # can see -- on the grounds that something inside it might still be
+        # open -- would be this issue again in a narrower form.
+        for label, tail in (
+            ("a closed details block", "\n<details>\n<summary>More</summary>\n\nplain note\n\n</details>\n"),
+            ("a void tag on its own line", "\n<img src=x>\n"),
+            ("a quoted closed comment", "\n> <!-- a closed one -->\n> beside it\n"),
+            ("a closed comment with text beside it", "\n<!-- a closed one -->\nbeside it\n"),
+        ):
+            with self.subTest(block=label):
+                spoke = io.StringIO()
+                with contextlib.redirect_stderr(spoke):
+                    resolved = self.resolved(self.body(tail))
+                self.assertEqual(self.notes_lines(resolved), [l for l in tail.splitlines() if l.strip()])
+                self.assertNotIn("not carried", spoke.getvalue())
 
     def test_an_item_that_opens_with_a_block_is_the_author_s_and_moves_whole(self) -> None:
         # The item's own first line decides, not the first line of whatever it
@@ -5457,17 +5479,33 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         resolved = self.resolved(self.body("\n  [run]: https://example.invalid/1\n"))
         self.assertEqual(self.notes_lines(resolved), ["  [run]: https://example.invalid/1"])
 
-    def test_raw_html_under_the_heading_is_not_carried(self) -> None:
-        # The one block that does not move. Where an element ends is not
-        # something this writer reads, so an opener carried into the notes can
-        # fold the sections between it and a closer left behind -- a `<details>`
-        # that collapses a Validation section nobody asked to hide. It is left
-        # to the rewrite, as at the merge base, and the notes beside it move.
-        body = self.body("\n<details>\n<summary>More</summary>\n\nplain note\n")
-        resolved = self.resolved(body)
-        self.assertNotIn("<details>", resolved)
-        self.assertNotIn("<summary>", resolved)
-        self.assertEqual(self.notes_section(resolved), "plain note")
+    def test_moving_a_block_never_shows_the_reader_less_below_it(self) -> None:
+        # The property a relocation owes the page, over every block below where
+        # the notes land rather than over one heading: a reader sees no less
+        # after the move than before. The shape it is asked of is an element
+        # left open -- a `<details>` with no `</details>` -- which on the page
+        # already folds everything after it where it sits. Carried, it lands
+        # directly below the status list rather than above it, so the status
+        # becomes visible where it was hidden and nothing else stops being.
+        evidence = sys.modules["evidence"]
+
+        def below_the_notes(body: str) -> list[str]:
+            lines = evidence._rendered_lines(body)
+            return lines[lines.index("## Validation") :] if "## Validation" in lines else []
+
+        for label, tail in (
+            ("an element left open", "\n<details>\n<summary>More</summary>\n\nplain note\n"),
+            ("a closed details block", "\n<details>\n<summary>More</summary>\n\nplain note\n\n</details>\n"),
+            ("a fenced excerpt", "\n```\n214 tests passed\n```\n"),
+            ("a quoted note", "\n> a reviewer asked about the fixture\n"),
+        ):
+            with self.subTest(block=label):
+                body = self.body(tail)
+                before, after = below_the_notes(body), below_the_notes(self.resolved(body))
+                self.assertTrue(
+                    set(before) <= set(after),
+                    f"the move hid {sorted(set(before) - set(after))}",
+                )
 
     def test_a_fenced_heading_in_a_moved_note_does_not_swallow_the_next_write(self) -> None:
         # The move puts a note somewhere a later write looks. A `## Validation`
@@ -5600,6 +5638,105 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         huge = f"- [complete] {self.ITEM} -- " + "x" * evidence.PR_BODY_LIMIT
         kept, _ = evidence.write_evidence_status_section(body, [huge])
         self.assertIn("## Evidence Notes", kept)
+
+    def test_a_block_indented_under_a_status_bullet_moves_whole(self) -> None:
+        # The bullet's own line is the machine's; a log pasted beneath it
+        # belongs to the bullet only because the parser folds it there. Left to
+        # the per-line sweep the fence markers came off and the two log lines
+        # came out as separate paragraphs -- text altered rather than carried,
+        # which is worse than text deleted, because it looks like the author's
+        # words with the meaning changed.
+        for label, nested in (
+            ("a fenced excerpt", "  ```\n  log line one\n  log line two\n  ```\n"),
+            ("a nested list", "  - one thing I checked\n  - and another\n"),
+            ("an indented paragraph after a blank line", "\n  a second paragraph of the bullet\n"),
+        ):
+            with self.subTest(block=label):
+                body = self.body(nested)
+                resolved = self.resolved(body)
+                self.assertEqual(
+                    self.notes_lines(resolved), [l for l in nested.splitlines() if l.strip()]
+                )
+                self.assertIn(f"- [complete] {self.ITEM} -- 214 tests passed", resolved)
+                self.assertIsNone(sys.modules["evidence"]._rendered_status_lines(resolved)[1])
+                self.assertEqual(self.resolved(resolved), resolved)
+
+    def test_a_status_line_wrapped_over_several_lines_goes_whole_and_says_so(self) -> None:
+        # A soft-wrapped status line is one line on the page and one sentence
+        # of the author's. The rewrite replaces it from the entries in hand, so
+        # the continuation goes with it -- carrying half a sentence into a
+        # section of its own would be the alteration the case above is against.
+        # What is owed is the saying, not the keeping.
+        body = self.body("  more about it\n  and more\n")
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            resolved = self.resolved(body)
+        self.assertNotIn("more about it", resolved)
+        self.assertNotIn("Evidence Notes", resolved)
+        self.assertIn("2 line(s) continuing the status line", spoke.getvalue())
+
+    def test_every_block_not_carried_is_named_on_the_run_s_output(self) -> None:
+        # A loss nobody can see is the failure this file keeps paying for.
+        for label, tail, expected in (
+            ("an unclosed fence", "\n```\n214 tests passed\n", "code fence with no closing line"),
+            # Nested, because an unclosed comment at the top of the section
+            # hides where the section ends and the whole write refuses first.
+            ("an unclosed comment in a quote", "\n> <!-- a note I never closed\n> keep this\n", "a raw HTML block with no `-->`"),
+            ("a wrapped status line", "  more about it\n", "continuing the status line"),
+        ):
+            with self.subTest(block=label):
+                spoke = io.StringIO()
+                with contextlib.redirect_stderr(spoke):
+                    self.resolved(self.body(tail))
+                said = spoke.getvalue()
+                self.assertIn("not carried to `## Evidence Notes`", said)
+                self.assertIn(expected, said)
+                self.assertIn("of the `Evidence Status` section", said)
+
+    BYTE_FIXTURES = (
+        ("a fence indented under the status bullet", "  ```\n  log line one\n  log line two\n  ```\n"),
+        ("an indented code block", "\n    214 tests passed\n\nand a note under it.\n"),
+        ("a table", "\n| run | result |\n| --- | --- |\n| 1 | green |\n"),
+        ("a closed details note", "\n<details>\n<summary>More</summary>\n\nplain note\n\n</details>\n"),
+        ("a quoted block", "\n> a reviewer asked about the fixture\n> and about the log\n"),
+        ("a line with trailing spaces", "\nthe run printed this:   \n"),
+    )
+
+    def status_section_lines(self, body: str) -> list[str]:
+        """The Evidence Status section's lines, sliced rather than read.
+
+        The same raw slice `notes_lines` takes, for the same reason: a section
+        read through `markdown_section` comes back trimmed, and the trimming is
+        exactly what this property is about.
+        """
+        marker = "## Evidence Status\n"
+        body = body.replace("\r\n", "\n")
+        rest = body[body.index(marker) + len(marker) :]
+        end = re.search(r"(?m)^## ", rest)
+        return [line for line in (rest[: end.start()] if end else rest).splitlines() if line.strip()]
+
+    def test_every_line_carried_is_the_source_line_byte_for_byte(self) -> None:
+        # A mover that reformats is not a mover. Indentation, fence markers and
+        # trailing spaces all survive, in the order they were written -- line
+        # endings excepted, which every writer of this body has always emitted
+        # as `\n` (a CRLF body is mixed after any write, as #1710 records).
+        carried_total = 0
+        for label, tail in self.BYTE_FIXTURES + (("the same body in CRLF", None),):
+            with self.subTest(body=label):
+                raw = self.body(self.BYTE_FIXTURES[0][1] if tail is None else tail)
+                body = raw.replace("\n", "\r\n") if tail is None else raw
+                source = [line.rstrip("\r") for line in self.status_section_lines(body)]
+                carried = [line.rstrip("\r") for line in self.notes_lines(self.resolved(body))]
+                pointer = 0
+                for line in carried:
+                    while pointer < len(source) and source[pointer] != line:
+                        pointer += 1
+                    self.assertLess(
+                        pointer, len(source), f"{line!r} is not a line of the source section"
+                    )
+                    pointer += 1
+                carried_total += len(carried)
+        self.assertGreaterEqual(carried_total, 20, "the fixtures carried almost nothing")
 
     ROUND_TRIP_BODIES = (
         ("a note, a link and an excerpt", NOTES_BODY_TAIL),
