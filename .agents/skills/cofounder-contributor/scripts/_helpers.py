@@ -469,25 +469,40 @@ def has_markdown_section(body: str, heading: str) -> bool:
     return re.search(rf"(?mi)^## {re.escape(heading)}\s*$", body) is not None
 
 
-def _section_removed(body: str, heading: str) -> tuple[str, str | None]:
-    """The body without this section, or the body and the reason it stands.
+def _section_removed(body: str, heading: str) -> tuple[str, str | None, list[str]]:
+    """The body without this section, the text each cut took, or the reason it stands.
 
     Every occurrence goes, not only the first: `markdown_section` reads the
     first, so leaving a later one behind puts the stale copy where the next
     read will find it. The loop re-parses because each cut shortens the body,
     and it terminates because each cut takes at least the heading line.
 
-    The cut and the reason for refusing it come from one call on one text, so
-    a caller cannot be told the write was refused while the write happened, or
-    the reverse. That pair disagreed once, over nothing more than whether the
-    body had been trimmed first.
+    The cut, the text it takes and the reason for refusing it come from one
+    call on one text, so a caller cannot be told the write was refused while
+    the write happened, or the reverse, and a caller that carries some of the
+    old text forward cannot read a different span than the one that goes.
+    That pair disagreed once, over nothing more than whether the body had been
+    trimmed first.
     """
-    stripped = body
+    stripped: str = body
+    taken: list[str] = []
     while (bounds := _section_bounds(stripped, heading)) is not None:
         if bounds[3] is not None:
-            return body, bounds[3]
+            return body, bounds[3], []
+        taken.append(stripped[bounds[1] : bounds[2]])
         stripped = stripped[: bounds[0]] + stripped[bounds[2] :]
-    return re.sub(r"\n{3,}", "\n\n", stripped.strip()), None
+    return re.sub(r"\n{3,}", "\n\n", stripped.strip()), None, taken
+
+
+def removed_section_texts(body: str, heading: str) -> tuple[list[str], str | None]:
+    """What a rewrite of this section would take out, in the order written, or why it stands.
+
+    A caller that keeps part of the old section reads it from the same call
+    that cuts it, so the text it carries forward is exactly the text the
+    write removes.
+    """
+    _, refusal, taken = _section_removed(body, heading)
+    return taken, refusal
 
 
 def strip_markdown_section(body: str, heading: str) -> str:
@@ -497,7 +512,7 @@ def strip_markdown_section(body: str, heading: str) -> str:
     caller wants the body either way; the run's output is where a refusal has
     to be visible.
     """
-    stripped, refusal = _section_removed(body, heading)
+    stripped, refusal, _ = _section_removed(body, heading)
     if refusal is not None:
         log(f"refusing to rewrite the `{heading}` section: {refusal}")
     return stripped
@@ -526,7 +541,7 @@ def insert_markdown_section(
     # The author's body, untrimmed, because that is the text the cut is made
     # on and the text `section_write_refusal` answers about. Trimming here and
     # not there made the guard name a refusal while the write went ahead.
-    removed, refusal = _section_removed(body, heading)
+    removed, refusal, _ = _section_removed(body, heading)
     if refusal is not None:
         # Reported here and only here: appending the new section to a body
         # whose old one could not be removed would leave two, and returning

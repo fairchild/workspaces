@@ -22,10 +22,11 @@ from _helpers import (
     is_section_boundary,
     log,
     markdown_section,
+    removed_section_texts,
     reparsed_without_runaway,
     run_optional,
-    section_write_refusal,
     strip_markdown_section,
+    unterminated_block,
 )
 
 # An item's own text carries em-dashes as a matter of house style, so a
@@ -2103,6 +2104,189 @@ def _owner_written_entries(
     return written
 
 
+# The section's grammar, stated once and enforced by one writer: under the
+# heading, a status line is the machine's and everything else is a note. A
+# note has a section of its own directly below, because the readers refuse any
+# block under the heading that is not a list (#1701, #1709) -- so keeping a
+# reviewer's note where it was written and keeping the section readable are
+# the same choice, and only one of them can be had.
+EVIDENCE_STATUS_HEADING = "Evidence Status"
+EVIDENCE_NOTES_HEADING = "Evidence Notes"
+
+
+def _is_status_list_item(tokens: list[Token], index: int) -> bool:
+    """Whether the list item opening at `index` is a status line rather than a note.
+
+    The shape the owner read accepts (`_rendered_status_lines`, then
+    `split_evidence_status_line`): one list item holding one line of text, with
+    no inline HTML and no break in it, whose text carries a status token and an
+    item/detail boundary. Bulleted or numbered, since a reader reads both.
+
+    Everything else under the heading is a note -- a `- [x]` or `- [ ]` box, a
+    bullet naming no status, a status token with nothing to split on, an item
+    wrapping a nested block. Each is a line the owner read already refuses the
+    whole section over, so calling it a note is what lets the section be read
+    at all once the notes have moved.
+    """
+    shape = [tokens[index + offset].type for offset in range(5) if index + offset < len(tokens)]
+    if shape != ["list_item_open", "paragraph_open", "inline", "paragraph_close", "list_item_close"]:
+        return False
+    children = tokens[index + 2].children
+    if _unreadable_inline(children) is not None:
+        return False
+    return split_evidence_status_line(f"- {_inline_text(children).strip()}") is not None
+
+
+def _list_item_spans(
+    tokens: list[Token], start: int, machine: set[int], notes: list[tuple[int, int]]
+) -> int:
+    """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
+
+    An item is taken as the lines it was written on, nested blocks included,
+    so a bullet carrying an indented excerpt moves whole.
+    """
+    close, level = tokens[start].type.replace("_open", "_close"), tokens[start].level
+    index = start + 1
+    while index < len(tokens) and not (tokens[index].type == close and tokens[index].level == level):
+        token = tokens[index]
+        if token.type != "list_item_open" or token.level != level + 1:
+            index += 1
+            continue
+        if token.map is not None:
+            if _is_status_list_item(tokens, index):
+                machine.update(range(*token.map))
+            else:
+                notes.append((token.map[0], token.map[1]))
+        depth, index = 0, index + 1
+        while index < len(tokens):
+            kind = tokens[index].type
+            if kind == "list_item_open":
+                depth += 1
+            elif kind == "list_item_close":
+                if depth == 0:
+                    index += 1
+                    break
+                depth -= 1
+            index += 1
+    return index + 1
+
+
+def _section_notes(section: str) -> tuple[list[str], str | None]:
+    """The blocks of one Evidence Status section that are not status lines, as written, or why none move.
+
+    Parsed as CommonMark rather than matched line by line, for the reason
+    every read of this section is: a line matched by pattern is not always a
+    line a reader sees. Each block comes back as the source lines it spans, so
+    a fenced excerpt keeps its fence and a table keeps its delimiter row.
+
+    What moves is decided by subtraction, not by collection: the lines the
+    write is about to put back -- the status items and the factory's own
+    metadata comment -- are marked, and every other line of the section is a
+    note. Collecting from the tokens instead would drop whatever the parser
+    emits no token for, and a link reference definition is exactly that.
+
+    A block that opens inside the section and never closes -- a fence with no
+    closing line, an HTML block with no closer -- has no end the body states,
+    so its text is not this section's to carry: moving the opener alone would
+    put every section below it inside the notes. That refuses, which is the
+    same answer the writer gives when the section's own end is hidden (#1729)
+    and for the same reason.
+    """
+    lines = MARKDOWN_LINE_ENDING_RE.split(section)
+    tokens = MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", section))
+    written = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
+    if (open_block := unterminated_block(tokens, written)) is not None:
+        token, description = open_block
+        return [], (
+            f"{description} opened at line {token.map[0] + 1} under `## {EVIDENCE_STATUS_HEADING}` "
+            "and runs to the end of the section, so where the text below it ends is not something "
+            f"the body says; moving it to `## {EVIDENCE_NOTES_HEADING}` would carry whatever "
+            "follows along with it"
+        )
+    machine: set[int] = set()
+    spans: list[tuple[int, int]] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.level != 0 or token.nesting < 0 or token.map is None:
+            index += 1
+            continue
+        if token.type in {"bullet_list_open", "ordered_list_open"}:
+            index = _list_item_spans(tokens, index, machine, spans)
+            continue
+        # The factory's own metadata comment is neither: the writers strip it
+        # and put it back, and carrying a copy into the notes would leave two.
+        if token.type == "html_block" and _is_machine_metadata_comment(token.content):
+            machine.update(range(*token.map))
+        else:
+            spans.append((token.map[0], token.map[1]))
+        index += 1
+    covered = machine.union(line for start, stop in spans for line in range(start, stop))
+    spans.extend(
+        (line, line + 1)
+        for line in range(written)
+        if line not in covered and lines[line].strip()
+    )
+    merged: list[list[int]] = []
+    for start, stop in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], stop)
+        else:
+            merged.append([start, stop])
+    blocks = ["\n".join(lines[start:stop]).strip("\n").rstrip() for start, stop in merged]
+    return [block for block in blocks if block.strip()], None
+
+
+def write_evidence_status_section(
+    body: str, status_lines: Iterable[str]
+) -> tuple[str, str | None]:
+    """The one write of `## Evidence Status`, or the body unchanged and why it stands.
+
+    Both writers of the section come through here -- the structured re-render
+    a lane run makes and the factory turn's own render -- because a pair that
+    has to agree about what a body carries is one function or it is a bug
+    waiting (#1729). What they agree on: the status list is rewritten from the
+    entries in hand, and every other block that was under the heading moves,
+    in the order it was written, to a top-level `## Evidence Notes` directly
+    below. A body that carried no such block gains no such section, and a
+    second write over the first moves nothing, since by then the notes are no
+    longer under the heading.
+
+    The text carried forward is read from the same call that cuts it, so the
+    write cannot take out a span the read did not see.
+    """
+    sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
+    if refusal is not None:
+        return body, refusal
+    notes: list[str] = []
+    for section in sections:
+        found, reason = _section_notes(section)
+        if reason is not None:
+            return body, reason
+        notes.extend(found)
+    written = insert_markdown_section(
+        body, EVIDENCE_STATUS_HEADING, "\n".join(status_lines), before_heading="Validation"
+    )
+    # Appended to what the notes section already holds rather than replacing
+    # it, and rewritten even when this run found nothing to add: both sections
+    # are placed by the same rule on every run, so the notes stay directly
+    # below the status they were written under however many times this runs.
+    # Placing one and not the other is what let a second write leave them in
+    # the opposite order.
+    kept, notes_refusal = removed_section_texts(written, EVIDENCE_NOTES_HEADING)
+    if notes_refusal is not None:
+        return body, notes_refusal
+    blocks = [text.strip() for text in kept if text.strip()] + notes
+    if not blocks:
+        return written, None
+    return (
+        insert_markdown_section(
+            written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), before_heading="Validation"
+        ),
+        None,
+    )
+
+
 def render_execution_summary_body(
     summary_body: str,
     *,
@@ -2168,18 +2352,12 @@ def render_execution_summary_body(
     # Untrimmed, because that is the text the writer cuts and the text the
     # reason answers about; trimming here and not there is what once let the
     # guard name a refusal while the write went ahead.
-    write_refusal = section_write_refusal(stripped_body, "Evidence Status")
+    rendered, write_refusal = write_evidence_status_section(stripped_body, evidence_lines)
     if write_refusal is not None:
         # The body stands rather than losing the sections below the fence, and
         # the author is told which line to close.
         errors.append(f"PR body Evidence Status section was not rewritten: {write_refusal}")
         return summary_body, errors
-    rendered = insert_markdown_section(
-        stripped_body,
-        "Evidence Status",
-        "\n".join(evidence_lines),
-        before_heading="Validation",
-    )
     rendered = _insert_evidence_metadata(
         rendered,
         {
@@ -3197,15 +3375,20 @@ def _render_structured_entries(body: str, updated_entries: list[object]) -> str:
         )
 
     if rendered_entries:
-        reconciled = insert_markdown_section(
+        reconciled, refusal = write_evidence_status_section(
             _strip_evidence_metadata(body),
-            "Evidence Status",
-            "\n".join(
+            [
                 f"- [{entry['status']}] {entry['item']} -- {entry['detail']}"
                 for entry in sorted(rendered_entries, key=lambda entry: int(entry["index"]))
-            ),
-            before_heading="Validation",
+            ],
         )
+        if refusal is not None:
+            # The body stands whole, metadata included: recording entries the
+            # section does not show would leave the record saying one thing
+            # and the page another, which is the divergence the two writers
+            # agreeing is for.
+            log(f"refusing to rewrite the `{EVIDENCE_STATUS_HEADING}` section: {refusal}")
+            return body
     else:
         reconciled = body
     reconciled = _insert_evidence_metadata(
