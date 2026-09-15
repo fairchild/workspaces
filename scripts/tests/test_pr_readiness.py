@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["markdown-it-py==4.2.0"]
 # ///
 """Policy tests for the PR readiness workflow helper.
 
@@ -552,11 +552,19 @@ class PendingLineShapeTests(unittest.TestCase):
     def test_a_status_heading_up_to_three_spaces_in_is_a_variant(self) -> None:
         # It renders as the heading, but the factory's writer cannot find it and
         # would add a second section beside it, so it fails whatever it holds.
+        # A reader still sees the section, so a pending line under it is also
+        # reported as pending: the rendered view reads the heading GitHub shows.
+        # The paragraph closes the list GOOD_BODY ends on, so the heading is at
+        # the top level at each of the three indents rather than nested inside
+        # that list's last item, which two or three spaces would otherwise be.
+        prose = GOOD_BODY + "\nThat is every blocker.\n"
+        pending = "- [pending-ci] swift test -- waiting"
+        complete = "- [complete] swift test -- 1992 tests passed"
         for indent in (" ", "  ", "   "):
-            for line in ("- [pending-ci] swift test -- waiting", "- [complete] swift test -- 1992 tests passed"):
+            for line, expected in ((pending, [self.AMBIGUOUS, self.PENDING]), (complete, [self.AMBIGUOUS])):
                 with self.subTest(indent=len(indent), line=line):
-                    body = GOOD_BODY + f"\n{indent}## Evidence Status\n{line}\n"
-                    self.assertEqual(self.failures(body), [self.AMBIGUOUS])
+                    body = prose + f"\n{indent}## Evidence Status\n{line}\n"
+                    self.assertEqual(self.failures(body), expected)
 
     def test_an_indented_heading_neither_opens_nor_ends_a_section(self) -> None:
         # A regex cannot tell a heading nested in a list item from a top-level
@@ -659,12 +667,22 @@ class PendingLineShapeTests(unittest.TestCase):
         # Only a backtick fence refuses a backtick in its info string.
         self.assertEqual(self.failures(complete + "\n~~~ a`b\n- [pending-ci] example\n~~~\n"), [])
 
-    def test_a_fence_up_to_three_spaces_in_holds_its_example(self) -> None:
+    def test_a_fence_at_the_margin_holds_its_example(self) -> None:
         complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
-        for indent in ("", "   "):
-            with self.subTest(indent=len(indent)):
-                body = complete + f"\n{indent}````markdown\n- [pending-ci] example\n```\n{indent}````\n"
-                self.assertEqual(self.failures(body), [])
+        body = complete + "\n````markdown\n- [pending-ci] example\n```\n````\n"
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_fence_indented_into_a_list_item_does_not_hold_a_dedented_example(self) -> None:
+        # A fence three spaces in, under a list item whose content starts at two,
+        # opens inside that item; the next line at the margin is indented too
+        # little to stay in the item, so the item and its fence both end there
+        # and GitHub renders `[pending-ci] example` as a visible list item. The
+        # line reader cannot see the item the fence sits in, so it reads the
+        # fence as still open; the rendered view is what catches this.
+        complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+        body = complete + "\n   ````markdown\n- [pending-ci] example\n```\n   ````\n"
+        self.assertEqual(pr_readiness.rendered_status_lines(body)[-1], "[pending-ci] example")
+        self.assertEqual(self.failures(body), [self.PENDING])
 
     def test_an_unclosed_fence_fails_with_its_own_message(self) -> None:
         complete = GOOD_BODY + "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
@@ -726,6 +744,125 @@ class PendingLineShapeTests(unittest.TestCase):
             "\n---\n\n- [pending-ci] below the rule -- not a status line\n"
         )
         self.assertEqual(self.failures(body), [])
+
+
+class RenderedStatusLineTests(unittest.TestCase):
+    """A status line is pending in every shape GitHub renders as one (#1706).
+
+    A backslash escape, a character reference and inline HTML around the status
+    token each render as a visible `[pending-ci]` item, and none of the three
+    matches the written view's `PENDING_STATUS_RE`. The gate reads the section
+    a second way, as rendered, and fails when either view sees a pending line;
+    since the two are combined as a conjunction of refusals, the rendered view
+    can only add failures to what the written one already catches.
+
+    The shapes below were confirmed against GitHub's own `POST /markdown`
+    endpoint in `gfm` mode, which renders each as `<li>[pending-ci] item --
+    waiting</li>`.
+    """
+
+    FILES = ["Sources/WorkspaceManager/Foo.swift"]
+    PENDING = PendingLineShapeTests.PENDING
+    # The three writings of `- [pending-ci] item -- waiting` the written view
+    # misses: an escaped bracket, bracket character references, and a tag pair
+    # around the token.
+    SHAPES = (
+        "- \\[pending-ci] item -- waiting",
+        "- &#91;pending-ci&#93; item -- waiting",
+        "- <span>[pending-ci]</span> item -- waiting",
+    )
+
+    def failures(self, body: str) -> list[str]:
+        return pr_readiness.evaluate(pr(body), self.FILES).failures
+
+    def body(self, section: str) -> str:
+        return GOOD_BODY + f"\n## Evidence Status\n{section}"
+
+    def test_each_written_shape_of_a_pending_line_fails(self) -> None:
+        for shape in self.SHAPES:
+            with self.subTest(shape=shape):
+                self.assertEqual(self.failures(self.body(f"{shape}\n")), [self.PENDING])
+
+    def test_a_blocked_token_fails_in_the_same_three_shapes(self) -> None:
+        for shape in self.SHAPES:
+            with self.subTest(shape=shape):
+                self.assertEqual(
+                    self.failures(self.body(f"{shape.replace('pending-ci', 'blocked')}\n")), [self.PENDING]
+                )
+
+    def test_a_crlf_body_fails_on_a_rendered_only_shape(self) -> None:
+        # `evaluate` rewrites CR and CRLF to LF before anything reads the body,
+        # and reads the section from that same normalized text, so the rendered
+        # view sees the shape the author wrote.
+        for shape in self.SHAPES:
+            with self.subTest(shape=shape):
+                body = self.body(f"{shape}\n").replace("\n", "\r\n")
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_the_written_view_still_catches_a_plain_pending_line(self) -> None:
+        self.assertEqual(self.failures(self.body("- [pending-ci] item -- waiting\n")), [self.PENDING])
+
+    def test_a_complete_line_still_passes_in_every_shape(self) -> None:
+        for shape in ("- [complete] item -- proof", *(s.replace("pending-ci", "complete") for s in self.SHAPES)):
+            with self.subTest(shape=shape):
+                self.assertEqual(self.failures(self.body(f"{shape}\n")), [])
+
+    def test_a_rendered_only_shape_inside_a_fence_is_still_an_example(self) -> None:
+        complete = "- [complete] swift test -- 1992 tests passed\n"
+        for shape in self.SHAPES:
+            with self.subTest(shape=shape):
+                self.assertEqual(self.failures(self.body(f"{complete}\n```markdown\n{shape}\n```\n")), [])
+
+    def test_a_task_box_in_front_of_a_rendered_only_shape_still_fails(self) -> None:
+        for box in ("- [ ] ", "- [x] ", "1. [X] "):
+            for shape in self.SHAPES:
+                with self.subTest(box=box, shape=shape):
+                    line = box + shape.split(" ", 1)[1]
+                    self.assertEqual(self.failures(self.body(f"{line}\n")), [self.PENDING])
+
+    def test_the_rendered_view_reads_a_raw_body_without_the_gate(self) -> None:
+        # The check reached directly, on the body as written: each shape
+        # flattens to the text a reader sees.
+        section = "".join(f"{shape}\n" for shape in self.SHAPES)
+        self.assertEqual(
+            pr_readiness.rendered_status_lines(self.body(section)),
+            ["[pending-ci] item -- waiting"] * 3,
+        )
+
+    def test_the_rendered_view_reads_the_section_the_written_view_reads(self) -> None:
+        # Same boundaries: it opens at the `## Evidence Status` heading and
+        # closes at the next h1 or h2 or at a rule, so an item below either one
+        # is not a status line.
+        below = "- \\[pending-ci] a later section -- not a status line\n"
+        for tail in (f"\n## Next\n\n{below}", f"\n---\n\n{below}"):
+            with self.subTest(tail=tail.splitlines()[1]):
+                body = self.body("- [complete] swift test -- 1992 tests passed\n" + tail)
+                self.assertEqual(pr_readiness.rendered_status_lines(body), ["[complete] swift test -- 1992 tests passed"])
+                self.assertEqual(self.failures(body), [])
+
+    def test_a_rule_of_asterisks_does_not_end_the_section_for_either_view(self) -> None:
+        # `extract_section` ends the section at the exact line `---` and reads
+        # past every other rule, so the rendered view breaks on a dash rule
+        # only. A rule the written view reads past that ended the rendered one
+        # would be a gap between them: a shape only the rendered view sees,
+        # below it, would reach neither.
+        for rule in ("***", "___"):
+            with self.subTest(rule=rule):
+                body = self.body(f"- [complete] swift test -- 1992 tests passed\n\n{rule}\n\n- \\[pending-ci] below -- waiting\n")
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_the_gate_normalizes_only_line_endings_before_reading_the_section(self) -> None:
+        # The entry point's first statement rewrites CR and CRLF to LF, and
+        # nothing else touches the body, so both views read what the author
+        # wrote. A body already in LF reaches them unchanged.
+        seen: list[str] = []
+        with mock.patch.object(pr_readiness, "rendered_status_lines", side_effect=lambda body: seen.append(body) or []):
+            body = self.body("- [complete] swift test -- 1992 tests passed\n")
+            pr_readiness.evaluate(pr(body), self.FILES)
+            self.assertEqual(seen, [body])
+            seen.clear()
+            pr_readiness.evaluate(pr(body.replace("\n", "\r\n")), self.FILES)
+            self.assertEqual(seen, [body])
 
 
 class ReadinessCommentTests(unittest.TestCase):
