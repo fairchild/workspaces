@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["markdown-it-py==4.2.0"]
 # ///
 """Validate PR readiness signals: the body contract every non-draft PR owes.
 
@@ -11,6 +11,15 @@ the same failures and the same wording arrive before `gh pr create` instead of
 one CI round trip later. `--check-evidence-delivery` separately opts into a
 read-only live PR/artifact check using Factory's shared delivery policy. It
 reports laptop delivery, never Factory inspection or approval.
+
+The `## Evidence Status` section is read two ways, and a pending line seen by
+either one fails the gate. The written view matches the lines as an author
+typed them; the rendered view parses the body as markdown and reads each list
+item as the text GitHub shows, so an escape, a character reference or inline
+HTML around the status token is resolved rather than hiding it (#1706). The
+two are combined as a conjunction of refusals, never a vote: the rendered view
+can only add failures, so it cannot pass a body the written view fails, and a
+shape only one of them sees is still a shape the gate catches.
 """
 
 from __future__ import annotations
@@ -24,6 +33,9 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPTS_DIR.parent
@@ -184,6 +196,84 @@ def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
         kept.append(line)
     section = "\n".join(kept)
     return section.strip() if strip else section
+
+
+# GitHub renders a PR body as CommonMark, and a status line matched by pattern
+# is not always the line a reader sees: `- \[pending-ci]`, `- &#91;pending-ci&#93;`
+# and `- <span>[pending-ci]</span>` each render as a visible `[pending-ci]` item
+# and none of them match `PENDING_STATUS_RE` (#1706). This second reading takes
+# the section as rendered, so the escape is resolved, the references decode and
+# the tags show nothing.
+MARKDOWN = MarkdownIt("commonmark")
+# CommonMark has no task list, so `- [x] ` reaches the rendered text as the
+# characters `[x] ` in front of the status token -- the same optional box the
+# written view allows for, read here as text rather than as a box.
+RENDERED_PENDING_RE = re.compile(r"(?i)^(?:\[[ x]\]\s*)?\[(?:blocked|pending-ci)\](?:\s|$)")
+
+
+def rendered_inline_text(children: list[Token] | None) -> str:
+    """Inline tokens as the text GitHub renders them.
+
+    The parser has already resolved a backslash escape and decoded a character
+    reference, so both arrive as ordinary text. Inline HTML renders nothing of
+    its own and contributes nothing here; a code span contributes its content
+    without the backticks, the way ``- `[pending-ci]` `` reads as a status
+    line; and a break renders as whitespace between the words it separates.
+    """
+    parts: list[str] = []
+    for token in children or []:
+        if token.type == "html_inline":
+            continue
+        parts.append(" " if token.type in {"softbreak", "hardbreak"} else token.content)
+    return "".join(parts)
+
+
+def rendered_status_lines(body: str) -> list[str]:
+    """The text of every list item a reader sees under `## Evidence Status`.
+
+    The section is the one the written view reads, found by what renders rather
+    than by what was typed: it opens at a top-level h2 whose rendered text is
+    `Evidence Status`, in any letter case, and closes at the next top-level h1
+    or h2 or dash rule -- the `## ` and `---` boundaries `extract_section`
+    reads. A rule of asterisks or underscores is not one of them, so the
+    section runs past it here as it does there, and a line below it stays
+    readable rather than falling into a gap between the two views. Code under
+    the heading, fenced or indented, is a code block to the parser and holds no
+    list items, which is what `split_fenced_blocks` says on the written side.
+    Every matching heading is read, since a body with two of them is already
+    ambiguous (`evidence_status_heading_failure`) and reading both can only add
+    a failure to one that stands.
+    """
+    tokens = MARKDOWN.parse(body)
+    lines: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not (
+            token.type == "heading_open"
+            and token.tag == "h2"
+            and token.level == 0
+            and " ".join(rendered_inline_text(tokens[index + 1].children).split()).casefold()
+            == "evidence status"
+        ):
+            index += 1
+            continue
+        index += 3  # heading_open, its inline, heading_close
+        item_open = False
+        while index < len(tokens):
+            token = tokens[index]
+            if token.level == 0 and (
+                (token.type == "hr" and token.markup.startswith("-"))
+                or (token.type == "heading_open" and token.tag in {"h1", "h2"})
+            ):
+                break
+            if token.type == "list_item_open":
+                item_open = True
+            elif token.type == "inline" and item_open:
+                lines.append(rendered_inline_text(token.children).strip())
+                item_open = False
+            index += 1
+    return lines
 
 
 def split_fenced_blocks(text: str) -> tuple[str, str | None]:
@@ -579,7 +669,9 @@ def evaluate(pr: dict[str, Any], files: list[str]) -> Result:
             f'Evidence Status opens a code fence that never closes: "{unclosed_fence}". '
             "Close it so the status lines after it are read."
         )
-    if PENDING_STATUS_RE.search(evidence_status):
+    if PENDING_STATUS_RE.search(evidence_status) or any(
+        RENDERED_PENDING_RE.match(line) for line in rendered_status_lines(body)
+    ):
         failures.append("Requested evidence is blocked or still pending CI.")
 
     if re.search(r"(?i)\bdo not merge(?:\s+this\s+pr|\s+until|\b)", f"{title}\n{body}"):
