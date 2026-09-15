@@ -5342,6 +5342,16 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertEqual(notes, self.notes_section(self.resolved(body)))
         self.assertIn(f"- [complete] {self.ITEM} -- 214 tests passed", rendered)
 
+    def test_a_note_moves_whatever_line_endings_the_client_sent(self) -> None:
+        # GitHub stores a body with the endings the client sent, and the notes
+        # are sliced out of the stored text rather than a re-render of it, so
+        # a CRLF body is where a slice taken by one reading and cut by another
+        # would show up (#1710).
+        body = self.body(f"\n{self.NOTE}\n").replace("\n", "\r\n")
+        resolved = self.resolved(body)
+        self.assertEqual(self.notes_section(resolved), self.NOTE)
+        self.assertEqual(self.resolved(resolved), resolved)
+
     def test_a_body_with_nothing_but_entries_gains_no_section(self) -> None:
         resolved = self.resolved(self.body(""))
         self.assertNotIn("Evidence Notes", resolved)
