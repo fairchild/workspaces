@@ -14,12 +14,14 @@ reports laptop delivery, never Factory inspection or approval.
 
 The `## Evidence Status` section is read two ways, and a pending line seen by
 either one fails the gate. The written view matches the lines as an author
-typed them; the rendered view parses the body as markdown and reads each list
-item as the text GitHub shows, so an escape, a character reference or inline
-HTML around the status token is resolved rather than hiding it (#1706). The
-two are combined as a conjunction of refusals, never a vote: the rendered view
-can only add failures, so it cannot pass a body the written view fails, and a
-shape only one of them sees is still a shape the gate catches.
+typed them; the rendered view parses the body as GitHub Flavored Markdown and
+reads every line the page shows -- a list item, a paragraph, a table cell, a
+sub-heading -- so an escape, a character reference or inline HTML around the
+status token is resolved rather than hiding it (#1706), and a status outside a
+list item is still a status (#1727). The two are combined as a conjunction of
+refusals, never a vote: the rendered view can only add failures, so it cannot
+pass a body the written view fails, and a shape only one of them sees is still
+a shape the gate catches.
 """
 
 from __future__ import annotations
@@ -198,17 +200,34 @@ def extract_section(body: str, heading: str, *, strip: bool = True) -> str:
     return section.strip() if strip else section
 
 
-# GitHub renders a PR body as CommonMark, and a status line matched by pattern
-# is not always the line a reader sees: `- \[pending-ci]`, `- &#91;pending-ci&#93;`
-# and `- <span>[pending-ci]</span>` each render as a visible `[pending-ci]` item
-# and none of them match `PENDING_STATUS_RE` (#1706). This second reading takes
-# the section as rendered, so the escape is resolved, the references decode and
-# the tags show nothing.
-MARKDOWN = MarkdownIt("commonmark")
+# GitHub renders a PR body as GitHub Flavored Markdown, and a status line
+# matched by pattern is not always the line a reader sees: `- \[pending-ci]`,
+# `- &#91;pending-ci&#93;` and `- <span>[pending-ci]</span>` each render as a
+# visible `[pending-ci]` item and none of them match `PENDING_STATUS_RE`
+# (#1706). This second reading takes the section as rendered, so the escape is
+# resolved, the references decode and the tags show nothing.
+#
+# The parser is CommonMark plus the two GitHub constructs a status line can
+# meet -- a table, whose cell is a line a reader sees, and strikethrough, which
+# withdraws one (#1727). The contributor skill's `_helpers` defines the same
+# parser for the owner read of this same section. It is written twice rather
+# than imported once: this gate runs on every PR in the repo from its own PEP
+# 723 pin, and importing a skill's private module would let a change inside
+# that directory stop the gate repo-wide and would put that directory on
+# `sys.path` for every run, where today only `--check-evidence-delivery`
+# reaches it. `ParserDefinitionTests` fails when the two lines drift.
+MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
 # CommonMark has no task list, so `- [x] ` reaches the rendered text as the
 # characters `[x] ` in front of the status token -- the same optional box the
-# written view allows for, read here as text rather than as a box.
-RENDERED_PENDING_RE = re.compile(r"(?i)^(?:\[[ x]\]\s*)?\[(?:blocked|pending-ci)\](?:\s|$)")
+# written view allows for, read here as text rather than as a box. A list
+# marker can reach the text the same way: a line the parser did not model as a
+# list item carries its own marker as characters, which is what a bulleted row
+# of a table does -- `- [blocked] | x |` above a delimiter row is one table
+# whose first cell reads `- [blocked]`. Marking it optional here keeps a
+# reader's view of that cell and the gate's the same (#1727).
+RENDERED_PENDING_RE = re.compile(
+    rf"(?i)^(?:{LIST_MARKER}\s*)?(?:\[[ x]\]\s*)?\[(?:blocked|pending-ci)\](?:\s|$)"
+)
 
 
 def rendered_inline_text(children: list[Token] | None) -> str:
@@ -218,18 +237,43 @@ def rendered_inline_text(children: list[Token] | None) -> str:
     reference, so both arrive as ordinary text. Inline HTML renders nothing of
     its own and contributes nothing here; a code span contributes its content
     without the backticks, the way ``- `[pending-ci]` `` reads as a status
-    line; and a break renders as whitespace between the words it separates.
+    line; and a break arrives as a newline, because GitHub renders a break in a
+    pull request body as a line break -- `POST /markdown` in `gfm` mode closes
+    the line at `<br>` for a plain newline inside a list item as well as for a
+    trailing backslash. The caller splits there, so what one list item renders
+    as two lines is read as two.
+
+    Strikethrough keeps its tildes, the reading `evidence.py` gives it: a
+    struck-out status is not the status, and `~~[blocked]~~` in front of a line
+    is a line a reader sees withdrawn. Dropping them instead would make the
+    gate refuse a line the owner read accepts, which is the disagreement
+    between the two readers this parser exists to end.
     """
     parts: list[str] = []
     for token in children or []:
         if token.type == "html_inline":
             continue
-        parts.append(" " if token.type in {"softbreak", "hardbreak"} else token.content)
+        if token.type in {"s_open", "s_close"}:
+            parts.append("~~")
+            continue
+        parts.append("\n" if token.type in {"softbreak", "hardbreak"} else token.content)
     return "".join(parts)
 
 
 def rendered_status_lines(body: str) -> list[str]:
-    """The text of every list item a reader sees under `## Evidence Status`.
+    """The text of every line a reader sees under `## Evidence Status`.
+
+    A line is what the page puts on one: an inline run the parser models -- a
+    list item, a paragraph, a table cell, a sub-heading, a line inside a quote
+    -- cut at every break it holds, since one item carrying a break renders as
+    two lines and a status on the second is as visible as one on the first.
+    Reading only list items let a visible `[blocked]` cell through the gate
+    while GitHub rendered it (#1727), and the owner read in the contributor
+    skill refuses a table, a paragraph, a quote and a sub-heading under this
+    heading outright -- so every one of them is a line whose status a reader
+    acts on. Code under the heading, fenced or indented, is a code block and
+    has no inline of its own, which is what `split_fenced_blocks` says on the
+    written side.
 
     The section is the one the written view reads, found by what renders rather
     than by what was typed: it opens at a top-level h2 whose rendered text is
@@ -237,10 +281,8 @@ def rendered_status_lines(body: str) -> list[str]:
     or h2 or dash rule -- the `## ` and `---` boundaries `extract_section`
     reads. A rule of asterisks or underscores is not one of them, so the
     section runs past it here as it does there, and a line below it stays
-    readable rather than falling into a gap between the two views. Code under
-    the heading, fenced or indented, is a code block to the parser and holds no
-    list items, which is what `split_fenced_blocks` says on the written side.
-    Every matching heading is read, since a body with two of them is already
+    readable rather than falling into a gap between the two views. Every
+    matching heading is read, since a body with two of them is already
     ambiguous (`evidence_status_heading_failure`) and reading both can only add
     a failure to one that stands.
     """
@@ -259,7 +301,6 @@ def rendered_status_lines(body: str) -> list[str]:
             index += 1
             continue
         index += 3  # heading_open, its inline, heading_close
-        item_open = False
         while index < len(tokens):
             token = tokens[index]
             if token.level == 0 and (
@@ -267,11 +308,10 @@ def rendered_status_lines(body: str) -> list[str]:
                 or (token.type == "heading_open" and token.tag in {"h1", "h2"})
             ):
                 break
-            if token.type == "list_item_open":
-                item_open = True
-            elif token.type == "inline" and item_open:
-                lines.append(rendered_inline_text(token.children).strip())
-                item_open = False
+            if token.type == "inline":
+                lines.extend(
+                    part.strip() for part in rendered_inline_text(token.children).split("\n")
+                )
             index += 1
     return lines
 
