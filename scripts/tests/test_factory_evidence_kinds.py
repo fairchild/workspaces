@@ -2235,12 +2235,13 @@ class CompleteDetailTests(unittest.TestCase):
                 self.assertEqual([e for e in errors if "proves nothing" in e], [])
 
     def test_a_hand_edit_does_not_clear_the_gate_by_itself(self) -> None:
-        # Reading a visible edit straight into the accounting sounds like
-        # honouring the documented owner gesture and is instead an
-        # authorization hole: text differing from the metadata is a signal any
-        # PR author or bot with write access can produce, so it would clear an
-        # item the lane refused. The gesture is honoured where provenance is
-        # known -- the next factory turn carries a published line forward.
+        # On an item the factory completes, reading a visible edit straight
+        # into the accounting is an authorization hole: text differing from
+        # the metadata is a signal any PR author or bot with write access can
+        # produce, so it would clear an item the lane refused. The gesture is
+        # honoured where provenance is known -- the next factory turn carries
+        # a published line forward. Only an owner's own item reads the line at
+        # once (`OwnerKindHandEditTests`).
         payload = json.dumps(
             {
                 "entries": [
@@ -2514,6 +2515,371 @@ class OwnerWrittenEvidenceTests(unittest.TestCase):
         self.assertEqual(
             run_contributor._owner_written_entries(rendered, [self.ITEM]), {}
         )
+
+
+class OwnerKindHandEditTests(unittest.TestCase):
+    """An owner's item is completed by the owner's hand, and by nothing else.
+
+    No lane completes an `other` item, so the machine writes it `[blocked]`
+    in the visible list and in the hidden metadata and asks the owner to
+    rewrite the line. The reviewer read the metadata, refused every verdict,
+    and the factory turn that would have copied the line across never came
+    (#1612, on #1602). A line written over an item a lane or the factory's
+    own parser completes is not that gesture, and reads as the metadata says
+    (#1590).
+    """
+
+    OWNER_ITEM = (
+        "A statement of whether the shared state is reachable from production "
+        "code or only from the test fixture"
+    )
+    MACHINE_DETAIL = (
+        "automation cannot reconcile this evidence item automatically; owner "
+        "follow-up required"
+    )
+    PROOF = (
+        "reachable from production code: the app and the `workspaces` CLI both "
+        "use `WorkspaceService.shared`"
+    )
+
+    def body(
+        self, item: str, *, machine_status: str, visible_status: str, visible_detail: str
+    ) -> str:
+        payload = json.dumps(
+            {
+                "entries": [
+                    {
+                        "index": 1,
+                        "item": item,
+                        "status": machine_status,
+                        "detail": self.MACHINE_DETAIL,
+                        "kind": run_contributor._evidence_item_kind(item),
+                    }
+                ]
+            },
+            indent=2,
+        )
+        return (
+            "## Summary\n\nA change.\n\n"
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            "## Evidence Status\n"
+            f"- [{visible_status}] {item} -- {visible_detail}\n\n"
+            "## Validation\n- `uv run --script scripts/tests/test_foo.py`: Ran 3 tests, OK\n"
+        )
+
+    def review(self, body: str, item: str, verdict: str = "approve") -> tuple[dict[str, object], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            body, [item], review_ci=[]
+        )
+        return accounting, run_contributor.review_evidence_gate_error(verdict, accounting, errors)
+
+    def test_an_owner_item_completed_by_hand_can_be_approved(self) -> None:
+        self.assertEqual(run_contributor._evidence_item_kind(self.OWNER_ITEM), "other")
+        body = self.body(
+            self.OWNER_ITEM,
+            machine_status="blocked",
+            visible_status="complete",
+            visible_detail=self.PROOF,
+        )
+        for verdict in ("approve", "approve_with_followups"):
+            with self.subTest(verdict=verdict):
+                accounting, error = self.review(body, self.OWNER_ITEM, verdict)
+                self.assertIsNone(error)
+                self.assertEqual(accounting["complete_items"], [self.OWNER_ITEM])
+                self.assertEqual(accounting["blocked_items"], [])
+
+    def test_a_hand_edit_still_has_to_say_what_was_checked(self) -> None:
+        body = self.body(
+            self.OWNER_ITEM,
+            machine_status="blocked",
+            visible_status="complete",
+            visible_detail="done",
+        )
+        accounting, error = self.review(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["unproven_items"], [self.OWNER_ITEM])
+        self.assertIsNotNone(error)
+
+    def test_an_owner_s_blocked_line_holds_the_review_too(self) -> None:
+        body = self.body(
+            self.OWNER_ITEM,
+            machine_status="complete",
+            visible_status="blocked",
+            visible_detail="not reachable after all; the fixture is the only caller",
+        )
+        accounting, error = self.review(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["blocked_items"], [self.OWNER_ITEM])
+        self.assertIsNotNone(error)
+
+    def render(self, model_body: str) -> str:
+        rendered, errors = run_contributor.render_execution_summary_body(
+            model_body,
+            requested_evidence=[self.OWNER_ITEM],
+            evidence_complete=None,
+            evidence_blocked=[f"1 -- {self.MACHINE_DETAIL}"],
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(errors, [])
+        return rendered
+
+    def test_a_section_the_model_wrote_cannot_pose_as_the_owner_s_line(self) -> None:
+        # The line reads as the owner's because only an edit on GitHub makes
+        # it differ from the metadata. A section in the model's own body,
+        # under a heading the renderer does not strip, survives beside the
+        # machine's and is read first -- so a body with more than one section
+        # a reader accepts has no line that is the owner's.
+        forged = f"- [complete] {self.OWNER_ITEM} -- trust me"
+        for shape, model_body in (
+            ("trailing spaces", f"## Summary\n\nFixed it.\n\n## Evidence Status  \n{forged}\n\n## Validation\n- ok\n"),
+            ("CRLF", f"## Summary\r\n\r\nFixed it.\r\n\r\n## Evidence Status\r\n{forged}\r\n\r\n## Validation\r\n- ok\r\n"),
+            ("lower case and a tab", f"## Summary\n\nFixed it.\n\n## evidence status\t\n{forged}\n"),
+            ("fenced, trailing spaces", f"## Summary\n\n```markdown\n## Evidence Status  \n{forged}\n```\n\n## Validation\n- ok\n"),
+        ):
+            with self.subTest(shape=shape):
+                rendered = self.render(model_body)
+                self.assertEqual(
+                    run_contributor._owner_written_entries(rendered, [self.OWNER_ITEM]), {}
+                )
+                accounting, error = self.review(rendered, self.OWNER_ITEM)
+                self.assertEqual(accounting["blocked_items"], [self.OWNER_ITEM])
+                self.assertIsNotNone(error)
+
+    def test_a_fenced_example_in_the_model_s_body_keeps_its_closing_fence(self) -> None:
+        # Stripping a fenced heading as a section runs to the next heading
+        # and takes the closing fence with it, so the machine's metadata and
+        # section render inside the code block, where a reader of the page
+        # cannot see the line the owner has to edit.
+        for fence in ("```", "~~~"):
+            with self.subTest(fence=fence):
+                rendered = self.render(
+                    f"## Summary\n\nThe format:\n\n{fence}markdown\n## Evidence Status  \n"
+                    f"- [complete] {self.OWNER_ITEM} -- an example\n{fence}\n\n"
+                    "## Validation\n- ok\n"
+                )
+                self.assertEqual(rendered.count(fence), 2, rendered)
+
+    def test_a_hand_edit_over_an_item_a_lane_owns_is_still_refused(self) -> None:
+        # Each of these is completed by a lane, a live check or the factory's
+        # own reading of the body. A `[complete]` line written over one is
+        # not the owner's gesture, and reading it as a completion would clear
+        # an item nothing ran.
+        for item, machine_status in (
+            ("CI: `Web CI` green on the PR head", "pending-ci"),
+            ("`swift test --filter FooTests` passes", "blocked"),
+            ("Screenshots of the new sidebar", "blocked"),
+            ("`pnpm test` in `web-next` passes", "pending-ci"),
+            ("Before/after latency on the same workload", "pending-ci"),
+            ("Diff: the README links the overview page", "blocked"),
+        ):
+            with self.subTest(item=item):
+                self.assertNotEqual(run_contributor._evidence_item_kind(item), "other")
+                body = self.body(
+                    item,
+                    machine_status=machine_status,
+                    visible_status="complete",
+                    visible_detail="Ran 214 tests, all passed on this head",
+                )
+                accounting, error = self.review(body, item)
+                self.assertEqual(accounting["complete_items"], [])
+                self.assertIsNotNone(error)
+
+
+class OwnerReadFailsClosedTests(unittest.TestCase):
+    """Where an owner's line cannot be read, nothing it might say is assumed.
+
+    Codex round 1 on #1681. Whenever the section could not be read as the
+    owner's, an owner item fell back to the metadata, so a `[blocked]` the
+    owner wrote was lost and the PR approved. The read also took lines a
+    reader of the page never sees, took the kind from the item's wording,
+    let the first of two lines win, and took a bare `PASS` as proof.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = "checked: the app and the `workspaces` CLI both call `WorkspaceService.shared`"
+
+    def meta(
+        self, item: str, status: str, detail: str = "earlier completion", kind: str | None = "other"
+    ) -> str:
+        entry: dict[str, object] = {"index": 1, "item": item, "status": status, "detail": detail}
+        if kind is not None:
+            entry["kind"] = kind
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n"
+
+    def gate(self, body: str, item: str) -> tuple[dict[str, object], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, [item], review_ci=[])
+        return accounting, run_contributor.review_evidence_gate_error("approve", accounting, errors)
+
+    def assert_refused(self, body: str, item: str | None = None) -> None:
+        item = item or self.OWNER_ITEM
+        accounting, error = self.gate(body, item)
+        self.assertNotIn(item, accounting["complete_items"])
+        self.assertIsNotNone(error)
+
+    def test_an_owner_s_blocked_line_stands_when_the_section_cannot_be_read(self) -> None:
+        blocked = f"- [blocked] {self.OWNER_ITEM} -- owner found it unsafe\n"
+        complete = f"- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        for shape, section in (
+            ("a second heading", f"## Evidence Status\n{blocked}\n## Evidence Status\n- [complete] decoy -- ignored\n"),
+            ("a second heading, both lines complete", f"## Evidence Status\n{complete}\n## Evidence Status\n{complete}"),
+            ("trailing space on the heading", f"## Evidence Status \n{blocked}"),
+            ("a tab after the heading", f"## Evidence Status\t\n{blocked}"),
+            ("a stray line", f"## Evidence Status\n{blocked}Run bare on this head.\n"),
+            ("a rule cutting lines off", f"## Evidence Status\n{complete}\n---\n\n{blocked}"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + section)
+
+    def test_a_line_a_reader_never_sees_is_not_the_owner_s(self) -> None:
+        complete = f"- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        for shape, hidden in (
+            ("backtick fence", f"```markdown\n## Evidence Status\n{complete}## Decoy\n```\n"),
+            ("tilde fence", f"~~~\n## Evidence Status\n{complete}## Decoy\n~~~\n"),
+            ("indented fence", f"   ```\n## Evidence Status\n{complete}## Decoy\n   ```\n"),
+            ("unterminated fence", f"```\n## Evidence Status\n{complete}"),
+            ("HTML comment", f"<!--\n## Evidence Status\n{complete}## Decoy\n-->\n"),
+            ("unterminated HTML comment", f"<!--\n## Evidence Status\n{complete}"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(
+                    self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required") + hidden
+                )
+
+    def test_a_fenced_example_does_not_hide_the_real_section(self) -> None:
+        example = f"```markdown\n## Evidence Status\n- [blocked] {self.OWNER_ITEM} -- an example\n```\n\n"
+        body = (
+            example
+            + self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+            + f"\n## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        )
+        accounting, error = self.gate(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["complete_items"], [self.OWNER_ITEM])
+        self.assertIsNone(error)
+
+    def test_the_kind_that_lets_a_line_count_comes_from_the_metadata(self) -> None:
+        item = "CI must be green on the PR head: `Web CI`"
+        self.assertEqual(run_contributor._evidence_item_kind(item), "other")
+        section = f"## Evidence Status\n- [complete] {item} -- {self.PROOF}\n"
+        for kind in ("ci", None):
+            with self.subTest(metadata_kind=kind):
+                self.assert_refused(self.meta(item, "pending-ci", "waiting for checks", kind=kind) + section, item)
+
+    def test_two_lines_for_one_item_are_refused(self) -> None:
+        complete = f"- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        blocked = f"- [blocked] {self.OWNER_ITEM} -- owner says it remains unsafe\n"
+        for order, lines in (("complete first", complete + blocked), ("blocked first", blocked + complete)):
+            with self.subTest(order=order):
+                self.assert_refused(
+                    self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+                    + "## Evidence Status\n"
+                    + lines
+                )
+
+    def test_a_bare_status_word_is_no_proof_of_an_owner_item(self) -> None:
+        for detail in (
+            "PASS",
+            "pass",
+            "ok",
+            "done",
+            "complete",
+            "yes",
+            "PASS.",
+            f"PASS {run_contributor.CARRIED_FORWARD_NOTE}",
+        ):
+            with self.subTest(detail=detail):
+                body = self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required") + (
+                    f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {detail}\n"
+                )
+                accounting, error = self.gate(body, self.OWNER_ITEM)
+                self.assertEqual(accounting["unproven_items"], [self.OWNER_ITEM])
+                self.assertIsNotNone(error)
+
+    def test_a_sentence_saying_what_was_checked_is_proof(self) -> None:
+        body = self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required") + (
+            f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        )
+        accounting, error = self.gate(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["unproven_items"], [])
+        self.assertIsNone(error)
+
+
+class OwnerLineAsRenderedTests(unittest.TestCase):
+    """The owner's line is read the way GitHub renders it (#1681, round 3).
+
+    Checked against GitHub's own renderer (`gh api markdown`, gfm): a comment
+    hides only what it covers, so the text beside it on the line still shows;
+    a fenced line shows as code; and emphasis around the item shows the item.
+    The read blanked every line a comment touched, did not notice a code
+    block under the heading, and did not see the item through emphasis, so an
+    owner's `[blocked]` a reader could plainly see was lost to the metadata.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = OwnerReadFailsClosedTests.PROOF
+    BLOCKED = f"- [blocked] {OwnerKindHandEditTests.OWNER_ITEM} -- owner found it unsafe"
+    meta = OwnerReadFailsClosedTests.meta
+    gate = OwnerReadFailsClosedTests.gate
+    assert_refused = OwnerReadFailsClosedTests.assert_refused
+
+    def assert_approved(self, body: str) -> None:
+        accounting, error = self.gate(body, self.OWNER_ITEM)
+        self.assertEqual(accounting["complete_items"], [self.OWNER_ITEM])
+        self.assertIsNone(error)
+
+    def test_a_comment_hides_only_what_it_covers(self) -> None:
+        for shape, line in (
+            ("a comment after the owner's line", f"{self.BLOCKED} <!-- x -->"),
+            ("a comment inside the owner's line", self.BLOCKED.replace("whether ", "whether <!-- x --> ", 1)),
+            ("a comment before the owner's line", f"<!-- x --> {self.BLOCKED}"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n{line}\n")
+
+    def test_a_completion_beside_a_comment_is_read(self) -> None:
+        self.assert_approved(
+            self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+            + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF} <!-- checked on the laptop -->\n"
+        )
+
+    def test_a_comment_opened_mid_line_that_runs_on_leaves_the_section_unread(self) -> None:
+        # After a list item GitHub shows the `<!--` as text and the next
+        # bullet as a bullet, so cutting the span out would hide a `[blocked]`
+        # a reader sees. Where it ends depends on blocks the read does not
+        # model, so the section is not read at all.
+        self.assert_refused(
+            self.meta(self.OWNER_ITEM, "complete")
+            + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF} <!--\n{self.BLOCKED}\n-->\n"
+        )
+
+    def test_a_code_block_under_the_heading_leaves_the_section_unread(self) -> None:
+        for shape, body in (
+            ("the owner's line fenced", self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n```\n{self.BLOCKED}\n```\n"),
+            ("a tilde fence left open", self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n~~~\n{self.BLOCKED}\n"),
+            (
+                "a completion beside a fenced blocked line",
+                self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+                + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n```\n{self.BLOCKED}\n```\n",
+            ),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_refused(body)
+
+    def test_emphasis_around_the_item_is_the_same_item(self) -> None:
+        item = self.OWNER_ITEM
+        for wrapped in (f"**{item}**", f"_{item}_", f"*{item}*", f"__{item}__", f"**`{item}`**"):
+            with self.subTest(wrapped=wrapped):
+                self.assert_refused(
+                    self.meta(item, "complete") + f"## Evidence Status\n- [blocked] {wrapped} -- owner found it unsafe\n"
+                )
+                self.assert_approved(
+                    self.meta(item, "blocked", "owner follow-up required")
+                    + f"## Evidence Status\n- [complete] {wrapped} -- {self.PROOF}\n"
+                )
+
+    def test_a_status_line_naming_no_requested_item_leaves_the_section_unread(self) -> None:
+        # A line the read cannot attribute is still a `[blocked]` a reader
+        # sees; ignoring it lets the metadata decide an item the owner may
+        # have answered.
+        misspelt = self.BLOCKED.replace("reachable", "reachble", 1)
+        self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n{misspelt}\n")
 
 
 class DocumentedTestFormTests(unittest.TestCase):
