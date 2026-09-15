@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["markdown-it-py==4.2.0"]
 # ///
 """Policy tests for first-class `ci` and `diff` evidence kinds (#1120).
 
@@ -2833,8 +2833,11 @@ class OwnerLineAsRenderedTests(unittest.TestCase):
             with self.subTest(shape=shape):
                 self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n{line}\n")
 
-    def test_a_completion_beside_a_comment_is_read(self) -> None:
-        self.assert_approved(
+    def test_a_comment_beside_a_completion_leaves_the_section_unread(self) -> None:
+        # Inline HTML inside an item leaves the section unread rather than
+        # being rebuilt, since a tag beside the text can strike it out, and a
+        # comment is inline HTML too.
+        self.assert_refused(
             self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
             + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF} <!-- checked on the laptop -->\n"
         )
@@ -2880,6 +2883,178 @@ class OwnerLineAsRenderedTests(unittest.TestCase):
         # have answered.
         misspelt = self.BLOCKED.replace("reachable", "reachble", 1)
         self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n{misspelt}\n")
+
+
+class SectionReadAsCommonMarkTests(unittest.TestCase):
+    """The section is read by a CommonMark parser, the way GitHub renders it (#1701).
+
+    Four rounds of reading lines by pattern each left a shape the read took
+    as a status line while GitHub rendered something else. These are the
+    three #1701 found on main after #1681 merged, the plain lines that must
+    still read, and the machine's own lines that parsing must not mistake for
+    a person's edit.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = OwnerReadFailsClosedTests.PROOF
+    meta = OwnerReadFailsClosedTests.meta
+    gate = OwnerReadFailsClosedTests.gate
+    assert_refused = OwnerReadFailsClosedTests.assert_refused
+    assert_approved = OwnerLineAsRenderedTests.assert_approved
+
+    def blocked_meta(self) -> str:
+        return self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+
+    def test_an_indented_code_block_is_not_a_status_line(self) -> None:
+        self.assert_refused(
+            self.blocked_meta() + f"## Evidence Status\n\n    - [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        )
+        self.assert_refused(
+            self.meta(self.OWNER_ITEM, "complete")
+            + f"## Evidence Status\n\n    - [blocked] {self.OWNER_ITEM} -- owner found it unsafe\n"
+        )
+
+    def test_comment_delimiters_inside_a_code_span_are_text(self) -> None:
+        self.assert_refused(
+            self.blocked_meta() + f"## Evidence Status\n- [complete] `<!-- -->{self.OWNER_ITEM}` -- {self.PROOF}\n"
+        )
+
+    def test_asterisks_the_parser_does_not_read_as_emphasis_stay_in_the_item(self) -> None:
+        for line in (
+            f"- [complete] ** {self.OWNER_ITEM} ** -- {self.PROOF}",
+            f"- [complete] **{self.OWNER_ITEM} * -- {self.PROOF}",
+        ):
+            with self.subTest(line=line[:24]):
+                self.assert_refused(self.blocked_meta() + f"## Evidence Status\n{line}\n")
+
+    def test_plain_status_lines_still_read(self) -> None:
+        self.assert_approved(self.blocked_meta() + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n")
+        accounting, error = self.gate(
+            self.meta(self.OWNER_ITEM, "complete")
+            + f"## Evidence Status\n- [blocked] {self.OWNER_ITEM} -- owner found it unsafe\n",
+            self.OWNER_ITEM,
+        )
+        self.assertEqual(accounting["blocked_items"], [self.OWNER_ITEM])
+        self.assertIsNotNone(error)
+
+    ATTESTED = "`pnpm test` in `web-next` passes"
+    MACHINE_DETAIL = (
+        "attested by the PR author, **not** run by the factory: `pnpm test` printed 214 tests passed, "
+        "[log](https://evidence.cloudcompute.com/workspaces/pr-1/log.txt)"
+    )
+
+    def attested_body(self, visible_status: str) -> str:
+        payload = json.dumps(
+            {"entries": [{"index": 1, "item": self.ATTESTED, "status": "complete", "detail": self.MACHINE_DETAIL, "kind": "test-attested"}]}
+        )
+        return (
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            f"## Evidence Status\n- [{visible_status}] {self.ATTESTED} -- {self.MACHINE_DETAIL}\n"
+        )
+
+    def test_a_line_the_machine_wrote_is_not_drift_once_parsed(self) -> None:
+        # Parsing drops emphasis markers and rebuilds code spans and links,
+        # so the visible detail is compared with the recorded one read the
+        # same way; comparing it with the raw text would call every machine
+        # line with a `**` in it a person's edit.
+        self.assertEqual(run_contributor._owner_written_entries(self.attested_body("complete"), [self.ATTESTED]), {})
+
+    def test_a_status_changed_by_hand_keeps_the_detail_the_machine_recorded(self) -> None:
+        written = run_contributor._owner_written_entries(self.attested_body("blocked"), [self.ATTESTED])
+        self.assertEqual(written[1]["status"], "blocked")
+        self.assertEqual(written[1]["detail"], self.MACHINE_DETAIL)
+
+
+class SectionFailsClosedOnHtmlAndBreaksTests(unittest.TestCase):
+    """HTML and line breaks under the heading leave the section unread (#1703, round 5).
+
+    The confirmation lane found five ways the parsed read still disagreed with
+    GitHub, each approving against blocked metadata: a `<!-->` block passed
+    over as a comment, a decoded `&#10;` that re-cut the section, a soft break
+    flattened to a space, inline HTML dropped from beside a status, and
+    `<details>` opened before the heading. Rebuilding each rendering is how the
+    earlier rounds went wrong, so each fails closed with its reason named.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = OwnerReadFailsClosedTests.PROOF
+    UNSAFE = "owner found it unsafe"
+    meta = OwnerReadFailsClosedTests.meta
+    gate = OwnerReadFailsClosedTests.gate
+    assert_refused = OwnerReadFailsClosedTests.assert_refused
+    assert_approved = OwnerLineAsRenderedTests.assert_approved
+
+    def blocked_meta(self) -> str:
+        return self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+
+    def assert_unread_because(self, body: str, reason: str) -> None:
+        self.assert_refused(body)
+        unreadable = run_contributor.evaluate_evidence_accounting(body, [self.OWNER_ITEM]).get("owner_section_unreadable")
+        self.assertIsNotNone(unreadable)
+        self.assertIn(reason, unreadable)
+
+    def test_an_html_block_under_the_heading_leaves_the_section_unread(self) -> None:
+        item, proof, unsafe = self.OWNER_ITEM, self.PROOF, self.UNSAFE
+        for shape, section in (
+            ("<!--> block showing a [blocked]", f"<!--> - [blocked] {item} -- {unsafe} -->\n- [complete] {item} -- {proof}\n"),
+            ("<!---> block showing a [blocked]", f"<!---> - [blocked] {item} -- {unsafe} -->\n- [complete] {item} -- {proof}\n"),
+            ("--!> block showing a [blocked]", f"<!-- x --!> - [blocked] {item} -- {unsafe} -->\n- [complete] {item} -- {proof}\n"),
+            ("a comment-only block after the list", f"- [complete] {item} -- {proof}\n<!--\n- [blocked] {item} -- {unsafe}\n-->\n"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_unread_because(self.blocked_meta() + f"## Evidence Status\n{section}", "HTML block")
+
+    def test_a_character_reference_decoding_to_a_line_break_leaves_the_section_unread(self) -> None:
+        item, proof, unsafe = self.OWNER_ITEM, self.PROOF, self.UNSAFE
+        for shape, section in (
+            ("&#10;## re-cutting the section", f"- [complete] {item} -- {proof}&#10;## cut\n- [blocked] {item} -- {unsafe}\n"),
+            ("&#10;--- re-cutting the section", f"- [complete] {item} -- {proof}&#10;---&#10;x\n- [blocked] {item} -- {unsafe}\n"),
+            ("&NewLine;## re-cutting the section", f"- [complete] {item} -- {proof}&NewLine;## cut\n- [blocked] {item} -- {unsafe}\n"),
+            ("&#10; inside one bullet", f"- [complete] {item} -- {proof}&#10;[blocked] {item} -- {unsafe}\n"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_unread_because(self.blocked_meta() + f"## Evidence Status\n{section}", "decodes")
+
+    def test_an_item_running_onto_a_second_line_leaves_the_section_unread(self) -> None:
+        item, proof, unsafe = self.OWNER_ITEM, self.PROOF, self.UNSAFE
+        for shape, section in (
+            ("a [blocked] line continuing a [complete] bullet", f"- [complete] {item} -- {proof}\n[blocked] {item} -- {unsafe}\n"),
+            ("a hard break before a [blocked] line", f"- [complete] {item} -- {proof}  \n[blocked] {item} -- {unsafe}\n"),
+            ("the proof on the next line", f"- [complete] {item}\n-- {proof}\n"),
+            ("table rows continuing a bullet", f"- [complete] {item} -- {proof}\n| [blocked] | {item} |\n|---|---|\n"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_unread_because(self.blocked_meta() + f"## Evidence Status\n{section}", "second line")
+
+    def test_inline_html_inside_an_item_leaves_the_section_unread(self) -> None:
+        item, proof = self.OWNER_ITEM, self.PROOF
+        for shape, line in (
+            ("<del> around the status", f"- <del>[complete]</del> {item} -- {proof}"),
+            ("<del> around the item", f"- [complete] <del>{item}</del> -- {proof}"),
+            ("<title> around the status", f"- <title>[complete]</title> {item} -- {proof}"),
+        ):
+            with self.subTest(shape=shape):
+                # `<title>` opens an HTML block where `<del>` stays inline;
+                # either way it is HTML the read does not interpret.
+                self.assert_unread_because(self.blocked_meta() + f"## Evidence Status\n{line}\n", "HTML")
+
+    def test_html_left_open_before_the_heading_leaves_the_section_unread(self) -> None:
+        section = f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        for shape, body in (
+            ("<details> around the whole section", f"<details>\n\n{self.blocked_meta()}\n{section}\n</details>\n"),
+            ("<details><summary> opened in one block", f"<details><summary>Evidence</summary>\n\n{self.blocked_meta()}\n{section}"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_unread_because(body, "still open")
+
+    def test_html_closed_before_the_heading_does_not(self) -> None:
+        section = f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        for shape, before in (
+            ("a balanced paragraph with an image", '<p align="center"><img src="https://evidence.cloudcompute.com/workspaces/pr-1/a.png"></p>\n\n'),
+            ("<details> closed before the heading", "<details>\n<summary>Notes</summary>\n\nSome notes.\n\n</details>\n\n"),
+        ):
+            with self.subTest(shape=shape):
+                self.assert_approved(before + self.blocked_meta() + "\n" + section)
 
 
 class DocumentedTestFormTests(unittest.TestCase):

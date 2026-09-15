@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pillow==12.3.0"]
+# dependencies = ["markdown-it-py==4.2.0", "pillow==12.3.0"]
 # ///
 """Protect the trusted raster delivery and actual reviewer inspection boundary.
 
