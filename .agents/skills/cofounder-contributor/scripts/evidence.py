@@ -10,17 +10,21 @@ import sys
 from collections.abc import Iterable, Iterator
 from itertools import groupby, islice
 
-from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from _helpers import (
     GITHUB_API_TIMEOUT,
+    MARKDOWN,
+    MARKDOWN_LINE_ENDING_RE,
     REPO_ROOT,
     has_markdown_section,
     insert_markdown_section,
+    is_section_boundary,
     log,
     markdown_section,
+    reparsed_without_runaway,
     run_optional,
+    section_write_refusal,
     strip_markdown_section,
 )
 
@@ -71,11 +75,12 @@ MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?!=))")
 # string cannot itself contain a backtick, which is what separates an opening
 # fence from a line starting with a code span.
 MARKDOWN_FENCE_RE = re.compile(r"(?P<run>`{3,}|~{3,})(?P<info>.*)$")
-# The three line endings markdown has. `str.splitlines` also breaks on a
-# vertical tab, a form feed and four other separators, which markdown renders
-# as ordinary characters -- and a fence pushed onto its own line that way is
-# read as unindented, opening a block that hides every bullet below it.
-MARKDOWN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
+# `MARKDOWN_LINE_ENDING_RE` is the three line endings markdown has, and it
+# comes from `_helpers` beside the parser that shares it. `str.splitlines`
+# also breaks on a vertical tab, a form feed and four other separators, which
+# markdown renders as ordinary characters -- and a fence pushed onto its own
+# line that way is read as unindented, opening a block that hides every bullet
+# below it.
 _EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -636,11 +641,11 @@ def _wrapped_bullets(section: str) -> list[str]:
     return bullets
 
 
-# GitHub renders a PR body as GitHub Flavored Markdown: CommonMark, plus the
-# tables and strikethrough a status line can meet. The owner read parses the
-# body by those rules instead of matching lines, because a line matched by
-# pattern is not always a line a reader sees.
-MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+# `MARKDOWN` is GitHub Flavored Markdown -- CommonMark plus the tables and
+# strikethrough a status line can meet -- and it comes from `_helpers` because
+# the written read of a section boundary parses by the same rules. Both reads
+# parse the body instead of matching lines, because a line matched by pattern
+# is not always a line a reader sees.
 BLOCK_NAMES = {
     "code_block": "a code block",
     "fence": "a code block",
@@ -835,37 +840,55 @@ def _text_after_html_comment(content: str) -> list[str]:
     return [line.strip() for line in stripped[end + 3 :].splitlines() if line.strip()]
 
 
-def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int] | None:
-    """Where the section under `## <heading>` starts and stops in the token stream.
+def _rendered_section_span(
+    tokens: list[Token], heading: str, lines: list[str] | None = None
+) -> tuple[int, int, int | None] | None:
+    """Where the section under `## <heading>` starts and stops, in tokens and in source lines.
 
     The heading is matched on the text a reader sees, at the level
     `markdown_section` matches it: an h2 at the top of the body, not one nested
     inside a list, and the first such heading wins.
 
-    The section ends where `markdown_section`'s lookahead ends it, which is
-    narrower than "any heading or rule": that lookahead stops at an h2 and at a
-    `---` rule, and at neither an h1 nor a `***` or `___` rule. Ending earlier
-    than the written read does would drop a Before or an After that read still
-    sees, and the two views have to agree about where they are looking.
+    The section ends where `is_section_boundary` says it does, which is the
+    same call the written read makes on the same tokens -- so the two views
+    cannot look at different spans. Ending earlier than the written read does
+    would drop a Before or an After that read still sees.
+
+    The third element is a source line to stop at inside the last token, which
+    only an unclosed fence produces: it holds every heading below it, so the
+    boundary is a line rather than a token and `reparsed_without_runaway` --
+    the same call the written read and the writer make -- finds it. `lines`
+    is the body split on its line endings; without it the exception is not
+    applied, which is the reading a caller wanting the whole token span wants.
     """
     wanted = " ".join(heading.split()).casefold()
     for index, token in enumerate(tokens):
         if (
             token.type != "heading_open"
-            or token.tag != "h2"
-            or token.level != 0
+            or not is_section_boundary(token)
             or " ".join(_inline_text(tokens[index + 1].children).split()).casefold() != wanted
         ):
             continue
         start = index + 3
-        for offset in range(start, len(tokens)):
-            other = tokens[offset]
-            if other.level == 0 and (
-                (other.type == "hr" and other.markup.startswith("-"))
-                or (other.type == "heading_open" and other.tag == "h2")
-            ):
-                return start, offset
-        return start, len(tokens)
+        stop = next(
+            (offset for offset in range(start, len(tokens)) if is_section_boundary(tokens[offset])),
+            len(tokens),
+        )
+        swallowed = None
+        if lines is not None and token.map:
+            repaired = reparsed_without_runaway(tokens, lines)
+            if repaired is not None:
+                swallowed = next(
+                    (
+                        other.map[0]
+                        for other in repaired
+                        if other.map
+                        and other.map[0] >= token.map[1]
+                        and is_section_boundary(other)
+                    ),
+                    None,
+                )
+        return start, stop, swallowed
     return None
 
 
@@ -889,13 +912,14 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
     it spans the same statement it spanned when this read the body raw.
     """
     tokens = MARKDOWN.parse(_lf(body))
+    stop_line: int | None = None
     if heading is None:
         start, stop = 0, len(tokens)
     else:
-        span = _rendered_section_span(tokens, heading)
+        span = _rendered_section_span(tokens, heading, MARKDOWN_LINE_ENDING_RE.split(body))
         if span is None:
             return []
-        start, stop = span
+        start, stop, stop_line = span
 
     lines: list[str] = []
     marker: str | None = None
@@ -931,6 +955,18 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
         elif kind == "list_item_close":
             marker = None
         elif kind == "heading_open":
+            # Every heading comes back with hashes, including one the author
+            # underlined rather than wrote with them, and its lines come back
+            # as the one line a heading is.
+            #
+            # Emitting an underlined heading as the author's own plain lines
+            # was tried and reverted (#1723, round 2). It reads as more
+            # faithful and it loosens two gates: splitting the lines pushed a
+            # NOT_RUN disclaimer out of the window that binds a count to the
+            # run above it, and a `Before:` line under an underline became a
+            # measurement while the heading it formed still ended the section.
+            # Hashes on a heading nobody hashed are the smaller wrong: no
+            # reader is shown them, and a statement still ends there.
             text = _inline_text(tokens[index + 1].children)
             emit(token, [f"{'#' * int(token.tag[1:])} {text}".rstrip()])
             index += 3
@@ -940,7 +976,13 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
             index += 3
             continue
         elif kind in {"fence", "code_block"}:
-            emit(token, token.content.splitlines() or [""])
+            code = token.content.splitlines() or [""]
+            if stop_line is not None and token.map:
+                # A fence with no closing line runs to the end of the body, so
+                # the section stops partway through this one token.
+                first = token.map[0] + (1 if kind == "fence" else 0)
+                code = code[: max(stop_line - first, 0)]
+            emit(token, code)
         elif kind == "html_block":
             # The block renders nothing, but text sharing its lines after a
             # closed comment does. Either way the lines it occupied are not a
@@ -1254,6 +1296,15 @@ HAND_COMPLETION_REFUSALS = {
     "test-attested": "state the command and the line it printed in the PR body; the status line alone does not complete it",
     "perf": "fill the Performance section with before and after measurements; the status line alone does not complete it",
 }
+# What to add when the measurements are there and the page does not show them
+# in the section. Nothing is wrong with the numbers, so a refusal that only
+# says the section is unfilled sends the author to the wrong place (#1723).
+PERF_UNDERLINED_MEASUREMENT_NOTE = (
+    "; the line above the rule or underline below it is read as a heading, "
+    "because a run of dashes or equals signs directly under a line of text "
+    "underlines it -- put a blank line between the last measurement and that "
+    "line"
+)
 # How hard each kind is to complete by hand: an `other` item completes from its
 # own line, a `test-attested` or a `perf` item from a proof form elsewhere in
 # the body, and every other kind only from a lane, a check or a review.
@@ -1332,6 +1383,8 @@ def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None
     if _proof_form_completion(body, item, kind):
         return None
     refusal = HAND_COMPLETION_REFUSALS.get(kind, "a hand-written line does not complete this kind of item")
+    if kind == "perf" and _perf_underlined_measurement(body):
+        refusal += PERF_UNDERLINED_MEASUREMENT_NOTE
     return refusal + SPLIT_KIND_NOTE if split else refusal
 
 
@@ -2111,8 +2164,18 @@ def render_execution_summary_body(
         for _, entry in sorted(evidence_map.items())
     ]
 
+    stripped_body = _strip_evidence_metadata(summary_body)
+    # Untrimmed, because that is the text the writer cuts and the text the
+    # reason answers about; trimming here and not there is what once let the
+    # guard name a refusal while the write went ahead.
+    write_refusal = section_write_refusal(stripped_body, "Evidence Status")
+    if write_refusal is not None:
+        # The body stands rather than losing the sections below the fence, and
+        # the author is told which line to close.
+        errors.append(f"PR body Evidence Status section was not rewritten: {write_refusal}")
+        return summary_body, errors
     rendered = insert_markdown_section(
-        _strip_evidence_metadata(summary_body),
+        stripped_body,
         "Evidence Status",
         "\n".join(evidence_lines),
         before_heading="Validation",
@@ -2623,6 +2686,35 @@ def _perf_numbers_in(lines: list[str], wanted: set[str], scenarios: set[str]) ->
         if answer is not None:
             return answer
     return None
+
+
+def _perf_underlined_measurement(body: str) -> bool:
+    """Whether a measurement in the Performance section ran into the rule below it.
+
+    A run of dashes written directly under a line of text underlines that line
+    into a heading, so the page shows a measurement styled as a heading and the
+    read sees a heading rather than a `Before:` line. The numbers are there and
+    correct, which is what makes the plain refusal misleading: it asks for
+    measurements the author already wrote (#1723).
+
+    The underlined heading is the section's own boundary, so it is the token at
+    the end of the span rather than one inside it: the rule the author wrote to
+    close the section off took the line above it along.
+
+    Only the shape is reported, not a repair. Reading the heading back as the
+    lines it was written as is the repair, it was tried, and it loosened two
+    other readers -- see `_rendered_lines`.
+    """
+    tokens = MARKDOWN.parse(_lf(body))
+    span = _rendered_section_span(tokens, "Performance")
+    if span is None:
+        return False
+    return any(
+        tokens[index].type == "heading_open"
+        and not tokens[index].markup.startswith("#")
+        and PERF_FIELD_RE.match(_inline_text(tokens[index + 1].children).strip())
+        for index in range(span[0], min(span[1] + 1, len(tokens) - 1))
+    )
 
 
 def _perf_numbers(body: str, item: str = "") -> str | None:
