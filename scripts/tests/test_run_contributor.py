@@ -1020,27 +1020,6 @@ class LaneProvenanceOnHandWrittenBodiesTests(unittest.TestCase):
             reconciled,
         )
 
-    def test_a_run_that_resolves_nothing_leaves_the_body_exactly_as_it_found_it(self) -> None:
-        """Re-rendering a section to say what it already says is a rewrite with nothing behind it.
-
-        It also moves the section and drops whatever else was under the
-        heading, which on a body the lane did not write is somebody's text.
-        """
-        factory_body, errors = run_contributor.render_execution_summary_body(
-            "## Summary\n- Reordered the sidebar rows\n\n## Validation\n- ran the suite\n",
-            requested_evidence=[self.BUILD],
-            evidence_complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"],
-            evidence_blocked=[],
-            evidence_pending_ci=[],
-        )
-        self.assertEqual(errors, [])
-        edited = factory_body.replace(
-            "## Validation", "- the screenshots are in the comment above\n\n## Validation"
-        )
-        self.assertNotEqual(edited, factory_body)
-
-        self.assertEqual(self.reconcile(edited, [self.BUILD]), edited)
-
     def test_a_body_the_comment_would_push_past_what_github_stores_keeps_its_lines(self) -> None:
         """The edit writes the whole body, so a body too long to store loses the rewrites too."""
         limit = sys.modules["evidence"].PR_BODY_LIMIT
@@ -1077,19 +1056,17 @@ class LaneProvenanceOnHandWrittenBodiesTests(unittest.TestCase):
                     self.assertNotIn("<!-- evidence-status:v1", reconciled)
 
 
-class SkippedReRenderKeepsEveryVerdictTests(unittest.TestCase):
-    """What a run that resolves nothing may skip on a body that carries metadata.
+class MetadataBodyIsAlwaysReRenderedTests(unittest.TestCase):
+    """A body that carries metadata is re-rendered from its entries on every run.
 
-    Re-rendering the section from unchanged entries rewrites bytes to say what
-    they already say, and on a body the lane did not write it moves the section
-    and drops whatever else was under the heading. But that same re-render is
-    the repair that restores a line someone edited by hand and puts back a
-    section someone deleted, and an owner's item is read from its visible line.
-    Skipping it unconditionally made a hand-written `[complete]` stand or not
-    according to whether an unrelated item happened to resolve in the same run.
-
-    So the skip is conditional on the section already reading as the metadata
-    says. These fix which side of that condition each shape falls on.
+    The re-render is the repair: it restores a line someone edited by hand,
+    scrubs a line for an item the metadata has no entry for, and puts back a
+    section someone deleted. Two revisions of this PR tried to skip it on a run
+    that had nothing to add, so as to keep text under the heading the re-render
+    drops -- and each let through an edit a reader could see, because the
+    questions they asked read the section differently from the way a reader
+    does. The skip is gone; the text it was protecting is dropped here exactly
+    as `main` drops it (#1725).
     """
 
     maxDiff = None
@@ -1222,20 +1199,6 @@ class SkippedReRenderKeepsEveryVerdictTests(unittest.TestCase):
         self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
         self.assertEqual(run_contributor.validate_evidence_accounting(reconciled, requested)[1], [])
 
-    def test_a_section_that_already_agrees_is_returned_byte_for_byte(self) -> None:
-        """The case the skip is for: text under the heading that the re-render would drop."""
-        requested = [self.BUILD]
-        body = self.factory_body(
-            requested, complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
-        )
-        edited = body.replace(
-            "## Validation", "- the screenshots are in the comment above\n\n## Validation"
-        )
-        self.assertNotEqual(edited, body)
-        self.assertNotEqual(self.re_rendered(edited), edited)
-
-        self.assertEqual(self.reconcile(edited, requested), edited)
-
     def test_no_contract_means_the_re_render_stands(self) -> None:
         """`_evidence.yml` reconciles with none where the PR closes no single issue here.
 
@@ -1249,55 +1212,92 @@ class SkippedReRenderKeepsEveryVerdictTests(unittest.TestCase):
 
         self.assertIn(f"- [blocked] {self.OWNER} -- the owner has not signed off yet", reconciled)
 
-    def test_every_body_reads_as_the_re_render_would_have(self) -> None:
-        """The invariant over every metadata body these two classes build.
+    def test_the_reconcile_of_a_metadata_body_is_the_re_render(self) -> None:
+        """The invariant as an equation: reconcile IS the re-render, byte for byte.
 
-        A skipped re-render is only sound where a reader says the same things
-        about the body returned and the body the re-render would have made.
-        Where the reconcile re-rendered there is nothing to check -- its output
-        IS that body -- so the count of bodies that skipped is asserted too,
-        and the property cannot pass by skipping nothing. Of the twenty shapes
-        here, eight skip.
+        A run that resolves nothing has nothing to add to the entries, so the
+        body it returns has to be the one `_render_structured_entries` makes
+        from them -- not merely one a reader draws the same conclusions from.
+        The three shapes at the end are the ones a conditional skip let
+        through: each reads as agreeing with the record by one measure or
+        another, and each shows a reader something the record does not say.
         """
+        evidence = sys.modules["evidence"]
         provenance = LaneProvenanceOnHandWrittenBodiesTests()
-        lane_body = provenance.body(
-            f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
-            f"- [pending-ci] {provenance.TEST} -- self-hosted macOS CI will run this",
+        lane = [provenance.BUILD, provenance.TEST]
+        owner = [provenance.BUILD, provenance.OWNER]
+        ci_item = "CI: `Lint, Test, Build, E2E & Perf` green on the PR head"
+        watched = "I watched the run go green in the Actions tab"
+        ci_body = self.factory_body([ci_item], pending=["1 -- the named check has not run yet"])
+        lane_body = self.factory_body(
+            [self.BUILD], complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
         )
-        owner_body = provenance.body(
-            f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
-            f"- [complete] {provenance.OWNER} -- I drove the sheet by hand and the row kept focus",
-        )
-        fixtures: list[tuple[str, list[str]]] = [
-            (provenance.reconcile(lane_body, [provenance.BUILD, provenance.TEST]),
-             [provenance.BUILD, provenance.TEST]),
-            (provenance.reconcile(owner_body, [provenance.BUILD, provenance.OWNER]),
-             [provenance.BUILD, provenance.OWNER]),
-            (self.factory_body([self.BUILD], complete=[f"1 -- `{self.BUILD}` succeeded on CI"]),
-             [self.BUILD]),
-            (self.hand_completed_owner_body([self.BUILD, self.OWNER], []), [self.BUILD, self.OWNER]),
+        bodies: list[tuple[str, str, list[str]]] = [
+            (
+                "a hand-written body the lane gave metadata to",
+                provenance.reconcile(
+                    provenance.body(
+                        f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
+                        f"- [pending-ci] {provenance.TEST} -- self-hosted macOS CI will run this",
+                    ),
+                    lane,
+                ),
+                lane,
+            ),
+            (
+                "one carrying an owner item",
+                provenance.reconcile(
+                    provenance.body(
+                        f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
+                        f"- [complete] {provenance.OWNER} -- I drove the sheet by hand and the row kept focus",
+                    ),
+                    owner,
+                ),
+                owner,
+            ),
+            ("a factory body", lane_body, [self.BUILD]),
+            (
+                "an owner line edited to complete",
+                self.hand_completed_owner_body([self.BUILD, self.OWNER], []),
+                [self.BUILD, self.OWNER],
+            ),
+            (
+                "a fenced copy of the pending line above a visible complete one",
+                ci_body.replace(
+                    f"- [pending-ci] {ci_item} -- the named check has not run yet",
+                    f"```\n- [pending-ci] {ci_item} -- the named check has not run yet\n```\n"
+                    f"- [complete] {ci_item} -- {watched}",
+                ),
+                [ci_item],
+            ),
+            (
+                "a line whose detail was rewritten with its status kept",
+                # The visible line only: rewriting the recorded detail as well
+                # would leave the section agreeing with the record, which is a
+                # body nobody edited.
+                lane_body.replace(
+                    f"- [complete] {self.BUILD} -- `{self.BUILD}` succeeded on self-hosted macOS CI",
+                    f"- [complete] {self.BUILD} -- the owner ran it locally and it was fine",
+                ),
+                [self.BUILD],
+            ),
+            (
+                "a complete line for an item the metadata has no entry for",
+                lane_body.replace(
+                    "## Validation",
+                    f"- [complete] {self.TEST} -- ran it on my laptop\n\n## Validation",
+                ),
+                [self.BUILD, self.TEST],
+            ),
         ]
-        variants: list[tuple[str, Callable[[str], str]]] = [
-            ("as it stands", lambda body: body),
-            ("a line flipped to complete", lambda body: body.replace("- [blocked] ", "- [complete] ").replace("- [pending-ci] ", "- [complete] ")),
-            ("a line flipped to blocked", lambda body: body.replace("- [complete] ", "- [blocked] ")),
-            ("a bullet that is not an entry", lambda body: body.replace("## Validation", "- see the comment above\n\n## Validation")),
-            ("the section deleted", lambda body: re.sub(r"(?ms)^## Evidence Status\n.*?(?=^## )", "", body)),
-        ]
-        skipped = 0
-        for index, (body, requested) in enumerate(fixtures):
-            for name, edit in variants:
-                edited = edit(body)
-                with self.subTest(fixture=index, variant=name):
-                    reconciled = self.reconcile(edited, requested)
-                    if reconciled != edited:
-                        continue
-                    skipped += 1
-                    self.assertEqual(
-                        self.verdict(reconciled, requested),
-                        self.verdict(self.re_rendered(edited), requested),
-                    )
-        self.assertGreaterEqual(skipped, 6)
+        for name, body, requested in bodies:
+            with self.subTest(body=name):
+                metadata = evidence._extract_evidence_metadata(body)
+                self.assertIsInstance(metadata, dict)
+                self.assertEqual(
+                    self.reconcile(body, requested),
+                    evidence._render_structured_entries(body, list(metadata["entries"])),
+                )
 
 
 class EvidenceValidationTests(unittest.TestCase):

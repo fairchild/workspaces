@@ -3373,72 +3373,6 @@ def _gate_verdict(
     )
 
 
-def _section_shows_what_was_recorded(
-    body: str,
-    entries: list[object],
-    requested_evidence: list[str],
-) -> bool:
-    """Whether the visible section carries each entry's item at the status recorded for it.
-
-    The section read as written, which is the text a person edits, through the
-    reader the markdown path already uses. Anything in the section that is not
-    a status line -- a stray bullet, a note, a fenced block -- is not an entry
-    and is not asked about; a line naming its item some other way is a line
-    this cannot match to an entry, and not matching reads as disagreement.
-    """
-    if not has_markdown_section(body, "Evidence Status"):
-        return False
-    shown = extract_evidence_status_entries(body, requested_evidence)["entries"]
-    if not isinstance(shown, dict):
-        return False
-    for entry in entries:
-        if not isinstance(entry, dict):
-            return False
-        line = shown.get(str(entry.get("item", "")).strip())
-        if not isinstance(line, dict) or line.get("status") != str(entry.get("status", "")).strip():
-            return False
-    return True
-
-
-def _reads_as_the_metadata_says(
-    body: str,
-    rendered: str,
-    entries: list[object],
-    requested_evidence: list[str] | None,
-) -> bool:
-    """Whether returning `body` says what re-rendering it into `rendered` would have said.
-
-    A run that resolves nothing has nothing to add, and re-rendering the
-    section from unchanged entries rewrites bytes to say what they already
-    say -- which on a body the lane did not write moves the section and drops
-    whatever else was under the heading. Skipping that rewrite is only free
-    where the section already agrees with the metadata, though: the re-render
-    is also the repair that restores a line someone edited by hand and puts
-    back a section someone deleted, and an owner's item is read from its
-    visible line. Returning the body unconditionally made a hand-written
-    `[complete]` stand or not according to whether some unrelated item
-    happened to resolve in the same run.
-
-    Agreement is asked twice, because the two questions catch different edits.
-    The section has to show each entry at the status recorded for it, which is
-    what a hand edit changes and what the re-render puts back. And the body as
-    it stands and the body re-rendered have to read alike through the gate --
-    the same verdict for every item, the same complaints about the section --
-    which is what a deleted section and an owner's rewritten line change.
-    With no contract in hand there is nothing to read them against, and the
-    re-render stands.
-    """
-    contract = list(requested_evidence or [])
-    if not contract or not _section_shows_what_was_recorded(body, entries, contract):
-        return False
-    nothing: set[str] = set()
-    return _gate_verdict(
-        evaluate_evidence_accounting(body, contract), contract, skip=nothing
-    ) == _gate_verdict(
-        evaluate_evidence_accounting(rendered, contract), contract, skip=nothing
-    )
-
-
 def _lane_written_entries(
     accounting: dict[str, object],
     requested_evidence: list[str],
@@ -3566,16 +3500,17 @@ def reconcile_pending_ci_evidence(
     index only against the contract, so with no contract in hand the body
     keeps today's reading.
 
-    A body that carries metadata is re-rendered from its entries, which is
-    also the repair for a line edited by hand and for a section deleted
-    outright. The one run that skips it is one that resolved nothing AND whose
-    section already reads as the metadata says -- `_reads_as_the_metadata_says`
-    is that condition, and nothing else may turn on it.
+    A body that carries metadata is re-rendered from its entries on every
+    run, whether or not this one resolved anything. The re-render is also the
+    repair: it restores a line edited by hand, scrubs a line for an item the
+    metadata has no entry for, and puts back a section deleted outright. Two
+    attempts at skipping it when there was nothing to add each let through a
+    hand edit a reader could see, so nothing turns on whether a run resolved
+    anything.
     """
     metadata = _extract_evidence_metadata(body)
     if isinstance(metadata, dict) and isinstance(metadata.get("entries"), list):
         updated_entries: list[object] = []
-        resolved_any = False
         for raw_entry in metadata["entries"]:
             if not isinstance(raw_entry, dict):
                 updated_entries.append(raw_entry)
@@ -3600,14 +3535,8 @@ def reconcile_pending_ci_evidence(
                 )
                 entry["status"] = status
                 entry["detail"] = detail
-                resolved_any = True
             updated_entries.append(entry)
-        rendered = _render_structured_entries(body, updated_entries)
-        if resolved_any or not _reads_as_the_metadata_says(
-            body, rendered, updated_entries, requested_evidence
-        ):
-            return rendered
-        return body
+        return _render_structured_entries(body, updated_entries)
 
     lines = body.splitlines()
     updated: list[str] = []
