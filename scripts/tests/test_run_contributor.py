@@ -21,6 +21,7 @@ import re
 import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
@@ -1074,6 +1075,229 @@ class LaneProvenanceOnHandWrittenBodiesTests(unittest.TestCase):
                     reconciled = self.reconcile(body, [self.BUILD])
                     self.assertIn(f"<!-- evidence-status:{version}", reconciled)
                     self.assertNotIn("<!-- evidence-status:v1", reconciled)
+
+
+class SkippedReRenderKeepsEveryVerdictTests(unittest.TestCase):
+    """What a run that resolves nothing may skip on a body that carries metadata.
+
+    Re-rendering the section from unchanged entries rewrites bytes to say what
+    they already say, and on a body the lane did not write it moves the section
+    and drops whatever else was under the heading. But that same re-render is
+    the repair that restores a line someone edited by hand and puts back a
+    section someone deleted, and an owner's item is read from its visible line.
+    Skipping it unconditionally made a hand-written `[complete]` stand or not
+    according to whether an unrelated item happened to resolve in the same run.
+
+    So the skip is conditional on the section already reading as the metadata
+    says. These fix which side of that condition each shape falls on.
+    """
+
+    maxDiff = None
+    BUILD = "swift build"
+    TEST = "swift test --filter SidebarTests"
+    OWNER = "Manual QA sign-off from the owner"
+
+    def factory_body(
+        self,
+        requested: list[str],
+        *,
+        complete: list[str] = [],
+        blocked: list[str] = [],
+        pending: list[str] = [],
+    ) -> str:
+        body, errors = run_contributor.render_execution_summary_body(
+            "## Summary\n- Reordered the sidebar rows\n\n"
+            "## Validation\n- blocked on evidence: waiting on the owner\n",
+            requested_evidence=requested,
+            evidence_complete=complete,
+            evidence_blocked=blocked,
+            evidence_pending_ci=pending,
+        )
+        self.assertEqual(errors, [])
+        return body
+
+    def reconcile(self, body: str, requested: list[str] | None) -> str:
+        return run_contributor.reconcile_pending_ci_evidence(
+            body,
+            requested_evidence=requested,
+            build_succeeded=True,
+            tests_succeeded=True,
+            smoke_succeeded=True,
+        )
+
+    def verdict(self, body: str, requested: list[str]) -> tuple[object, ...]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, requested)
+        return (
+            list(accounting["complete_items"]),
+            list(accounting["blocked_items"]),
+            list(accounting["pending_ci_items"]),
+            list(accounting["missing_items"]),
+            errors,
+        )
+
+    def re_rendered(self, body: str) -> str:
+        """The body the re-render would have produced from the entries it carries."""
+        evidence = sys.modules["evidence"]
+        metadata = evidence._extract_evidence_metadata(body)
+        self.assertIsInstance(metadata, dict)
+        return evidence._render_structured_entries(body, list(metadata["entries"]))
+
+    def hand_completed_owner_body(self, requested: list[str], pending: list[str]) -> str:
+        body = self.factory_body(
+            requested,
+            complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"],
+            blocked=["2 -- the owner has not signed off yet"],
+            pending=pending,
+        )
+        edited = body.replace(f"- [blocked] {self.OWNER}", f"- [complete] {self.OWNER}")
+        self.assertNotEqual(edited, body)
+        return edited
+
+    def test_a_hand_edited_owner_line_is_restored_by_a_run_that_resolves_nothing(self) -> None:
+        requested = [self.BUILD, self.OWNER]
+        edited = self.hand_completed_owner_body(requested, pending=[])
+
+        reconciled = self.reconcile(edited, requested)
+
+        self.assertIn(f"- [blocked] {self.OWNER} -- the owner has not signed off yet", reconciled)
+        accounting, _ = run_contributor.validate_evidence_accounting(reconciled, requested)
+        self.assertEqual(accounting["blocked_items"], [self.OWNER])
+        self.assertEqual(accounting["complete_items"], [self.BUILD])
+
+    def test_an_unrelated_item_resolving_does_not_decide_the_owner_item(self) -> None:
+        """The two paths agree, which is the whole of the invariant.
+
+        The verdict for the owner's item cannot turn on whether some other
+        item happened to be `pending-ci` in the same run.
+        """
+        alone = [self.BUILD, self.OWNER]
+        beside = [self.BUILD, self.OWNER, self.TEST]
+        nothing_resolved = self.reconcile(self.hand_completed_owner_body(alone, []), alone)
+        one_resolved = self.reconcile(
+            self.hand_completed_owner_body(beside, ["3 -- self-hosted macOS CI will run this"]),
+            beside,
+        )
+
+        for body, requested in ((nothing_resolved, alone), (one_resolved, beside)):
+            accounting, _ = run_contributor.validate_evidence_accounting(body, requested)
+            self.assertEqual(accounting["blocked_items"], [self.OWNER])
+            self.assertNotIn(self.OWNER, accounting["complete_items"])
+
+    def test_a_hand_edited_lane_line_is_restored_though_no_verdict_moves(self) -> None:
+        """The section has to say what was recorded, not merely read to the same verdict.
+
+        A lane item is read from the metadata, so flipping its visible line by
+        hand moves nothing the gate reports -- and leaves the page saying the
+        opposite of the record. The repair is what a body carrying metadata
+        gets; the skip is for text the re-render would drop, not for lines it
+        would correct.
+        """
+        requested = [self.BUILD]
+        body = self.factory_body(
+            requested, complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
+        )
+        edited = body.replace(f"- [complete] {self.BUILD}", f"- [blocked] {self.BUILD}")
+        self.assertNotEqual(edited, body)
+        self.assertEqual(
+            self.verdict(edited, requested), self.verdict(self.re_rendered(edited), requested)
+        )
+
+        reconciled = self.reconcile(edited, requested)
+
+        self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
+        self.assertNotIn(f"- [blocked] {self.BUILD}", reconciled)
+
+    def test_a_deleted_section_is_still_repaired(self) -> None:
+        requested = [self.BUILD]
+        body = self.factory_body(
+            requested, complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
+        )
+        without = re.sub(r"(?ms)^## Evidence Status\n.*?(?=^## )", "", body)
+        self.assertNotIn("## Evidence Status", without)
+        accounting, errors = run_contributor.validate_evidence_accounting(without, requested)
+        self.assertIn("missing required '## Evidence Status' section", errors)
+
+        reconciled = self.reconcile(without, requested)
+
+        self.assertIn(f"- [complete] {self.BUILD} -- ", reconciled)
+        self.assertEqual(run_contributor.validate_evidence_accounting(reconciled, requested)[1], [])
+
+    def test_a_section_that_already_agrees_is_returned_byte_for_byte(self) -> None:
+        """The case the skip is for: text under the heading that the re-render would drop."""
+        requested = [self.BUILD]
+        body = self.factory_body(
+            requested, complete=[f"1 -- `{self.BUILD}` succeeded on self-hosted macOS CI"]
+        )
+        edited = body.replace(
+            "## Validation", "- the screenshots are in the comment above\n\n## Validation"
+        )
+        self.assertNotEqual(edited, body)
+        self.assertNotEqual(self.re_rendered(edited), edited)
+
+        self.assertEqual(self.reconcile(edited, requested), edited)
+
+    def test_no_contract_means_the_re_render_stands(self) -> None:
+        """`_evidence.yml` reconciles with none where the PR closes no single issue here.
+
+        There is then nothing to compare the two bodies over, and the repair is
+        what a body keeps.
+        """
+        requested = [self.BUILD, self.OWNER]
+        edited = self.hand_completed_owner_body(requested, pending=[])
+
+        reconciled = self.reconcile(edited, None)
+
+        self.assertIn(f"- [blocked] {self.OWNER} -- the owner has not signed off yet", reconciled)
+
+    def test_every_body_reads_as_the_re_render_would_have(self) -> None:
+        """The invariant over every metadata body these two classes build.
+
+        A skipped re-render is only sound where a reader says the same things
+        about the body returned and the body the re-render would have made.
+        Where the reconcile re-rendered there is nothing to check -- its output
+        IS that body -- so the count of bodies that skipped is asserted too,
+        and the property cannot pass by skipping nothing. Of the twenty shapes
+        here, eight skip.
+        """
+        provenance = LaneProvenanceOnHandWrittenBodiesTests()
+        lane_body = provenance.body(
+            f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
+            f"- [pending-ci] {provenance.TEST} -- self-hosted macOS CI will run this",
+        )
+        owner_body = provenance.body(
+            f"- [pending-ci] {provenance.BUILD} -- self-hosted macOS CI will build this",
+            f"- [complete] {provenance.OWNER} -- I drove the sheet by hand and the row kept focus",
+        )
+        fixtures: list[tuple[str, list[str]]] = [
+            (provenance.reconcile(lane_body, [provenance.BUILD, provenance.TEST]),
+             [provenance.BUILD, provenance.TEST]),
+            (provenance.reconcile(owner_body, [provenance.BUILD, provenance.OWNER]),
+             [provenance.BUILD, provenance.OWNER]),
+            (self.factory_body([self.BUILD], complete=[f"1 -- `{self.BUILD}` succeeded on CI"]),
+             [self.BUILD]),
+            (self.hand_completed_owner_body([self.BUILD, self.OWNER], []), [self.BUILD, self.OWNER]),
+        ]
+        variants: list[tuple[str, Callable[[str], str]]] = [
+            ("as it stands", lambda body: body),
+            ("a line flipped to complete", lambda body: body.replace("- [blocked] ", "- [complete] ").replace("- [pending-ci] ", "- [complete] ")),
+            ("a line flipped to blocked", lambda body: body.replace("- [complete] ", "- [blocked] ")),
+            ("a bullet that is not an entry", lambda body: body.replace("## Validation", "- see the comment above\n\n## Validation")),
+            ("the section deleted", lambda body: re.sub(r"(?ms)^## Evidence Status\n.*?(?=^## )", "", body)),
+        ]
+        skipped = 0
+        for index, (body, requested) in enumerate(fixtures):
+            for name, edit in variants:
+                edited = edit(body)
+                with self.subTest(fixture=index, variant=name):
+                    reconciled = self.reconcile(edited, requested)
+                    if reconciled != edited:
+                        continue
+                    skipped += 1
+                    self.assertEqual(
+                        self.verdict(reconciled, requested),
+                        self.verdict(self.re_rendered(edited), requested),
+                    )
+        self.assertGreaterEqual(skipped, 6)
 
 
 class EvidenceValidationTests(unittest.TestCase):
