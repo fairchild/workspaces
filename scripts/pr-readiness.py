@@ -182,12 +182,15 @@ def closes_fence(line: str, run: str) -> bool:
 # already, and one boundary serves both views (#1674, #1729). Level 3 and below
 # is a sub-heading inside the section, and its lines are the section's. A run of
 # hashes with no text is a heading too: CommonMark ends the run on a space, a
-# tab or the line's end, which is what the trailing group asks for.
+# tab or the line's end, which is what the trailing group asks for -- and on
+# nothing else, since `\s` would take a nonbreaking space or a vertical tab for
+# a heading where the page shows a paragraph, and the lines below one would
+# leave the section for this view while staying in it for the other.
 # Column 0 only, though a heading may sit up to three spaces in: indented, it is
 # a list item's continuation as often as it is a top-level heading, and which
 # one is the parser's answer rather than a line's. Reading past it runs the
 # section long, which can add a refusal and cannot drop one.
-SECTION_BOUNDARY_HEADING_RE = re.compile(r"^#{1,2}(?:\s|$)")
+SECTION_BOUNDARY_HEADING_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
 
 
 def extract_section(body: str, heading: str, *, strip: bool = True) -> str:

@@ -777,6 +777,39 @@ class PendingLineShapeTests(unittest.TestCase):
                 self.assertEqual(self.failures(body), [])
                 self.assertEqual(pr_readiness.rendered_status_lines(body), ["[complete] swift test -- 1992 tests passed"])
 
+    def test_the_marker_opens_a_heading_on_a_space_a_tab_or_nothing_at_all(self) -> None:
+        # CommonMark ends the opening run of hashes on a space, a tab or the
+        # line's end. A nonbreaking space or a vertical tab renders as a
+        # paragraph, and `#Notes` is not a heading either, so the section holds
+        # all three and a status under one is still a status. `\s` took them for
+        # headings and stopped the written view there while the page -- and the
+        # rendered view -- read on (codex, gpt-5.6-sol xhigh).
+        blocked = "- [blocked] the UI lane -- a status line"
+        for name, marker in (
+            ("space", "#" + chr(32)),
+            ("tab", "#" + chr(9)),
+            ("nonbreaking space", "#" + chr(160)),
+            ("vertical tab", "#" + chr(11)),
+            ("nothing", "#"),
+        ):
+            with self.subTest(marker=name):
+                body = GOOD_BODY + (
+                    "\n## Evidence Status\n- [complete] swift test -- 1992 tests passed\n"
+                    f"\n{marker}Notes\n\n{blocked}\n"
+                )
+                ends = name in ("space", "tab")
+                # The written view is asserted on its own reading rather than
+                # through the gate: the conjunction of refusals lets the
+                # rendered view answer for a line the written view stopped
+                # short of, so a verdict alone cannot tell the two apart.
+                section = pr_readiness.extract_section(body, "Evidence Status")
+                self.assertEqual(blocked in section, not ends)
+                self.assertEqual(
+                    any("[blocked]" in line for line in pr_readiness.rendered_status_lines(body)),
+                    not ends,
+                )
+                self.assertEqual(self.failures(body), [] if ends else [self.PENDING])
+
     def test_a_sub_heading_stays_inside_the_section(self) -> None:
         # Level 3 and below is a heading within the section rather than after
         # it, so its lines are read by both views and a status under one is
