@@ -428,7 +428,28 @@ line between the last measurement and the rule -- rather than asking for
 measurements you already wrote. A status line is a list
 item under the one
 `## Evidence Status` heading a reader sees, on a single line, whose text reads
-`[status] item -- proof`, one per requested item. The section is unreadable,
+`[status] item -- proof`, one per requested item. That is the whole of what
+the heading holds: under it a bullet opening with a status token is the
+machine's, well-formed or not, and every other block -- a note to a reviewer,
+a link to a run, a pasted log excerpt, a `- [x]` box, a bullet naming no
+status -- is a note, which a rewrite moves, in the order written, to a
+top-level `## Evidence Notes` section directly below. Write your note there
+and it stays put; write it under the heading and the next lane run or factory
+turn relocates it. A body carrying no such block has no such section. A block
+indented under a status bullet is the author's too and moves whole, since it
+belongs to the bullet only because the parser folds it there; a status line
+soft-wrapped over several source lines is one line on the page and goes with
+the rewrite. What moves, moves byte for byte -- indentation, fence markers and
+trailing spaces all survive, because text altered looks like your words with
+the meaning changed. What does not move is a block the parser cannot end: a
+fence with no closing line, and a raw HTML block of kinds 1 to 5 whose closer
+never came. Those are deleted by the rewrite as they always were, and every
+block not carried is named on the run's output with the line it started on.
+Notes that would take the body past the 65,536 characters GitHub stores are
+left behind rather than failing the write that carries the status. And a rewrite stands the body down, writing nothing
+and naming the line, where a `## Evidence Status` or `## Evidence Notes` line
+sits inside a fenced example: the cut takes every occurrence, so cutting from
+one would take the block's closing line with it. The section is unreadable,
 with the reason named, when anything else sits under the heading -- a code
 block, fenced or indented; any HTML block, even one holding only a comment; a
 horizontal rule; a paragraph; a nested list; a line naming no requested item --
