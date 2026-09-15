@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["markdown-it-py==4.2.0"]
 # ///
 """Fixture and contract tests for the standing-ready-queue sweep (#1148).
 

@@ -10,6 +10,9 @@ import sys
 from collections.abc import Iterable, Iterator
 from itertools import islice
 
+from markdown_it import MarkdownIt
+from markdown_it.token import Token
+
 from _helpers import (
     GITHUB_API_TIMEOUT,
     REPO_ROOT,
@@ -630,74 +633,111 @@ def _wrapped_bullets(section: str) -> list[str]:
     return bullets
 
 
-HTML_COMMENT_TERMINATOR_RE = re.compile(r"--!?>")
+# GitHub renders a PR body as GitHub Flavored Markdown: CommonMark, plus the
+# tables and strikethrough a status line can meet. The owner read parses the
+# body by those rules instead of matching lines, because a line matched by
+# pattern is not always a line a reader sees.
+MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|--!>)", re.DOTALL)
+BLOCK_NAMES = {
+    "code_block": "code block",
+    "fence": "code block",
+    "html_block": "HTML block",
+    "hr": "horizontal rule",
+    "paragraph_open": "paragraph",
+    "table_open": "table",
+    "blockquote_open": "quote",
+    "heading_open": "sub-heading",
+}
 
 
-# What a fenced line reads as. It is not an entry, so a code block under the
-# heading leaves the section unread, and anywhere else it reads as nothing.
-CODE_BLOCK_LINE = "(a line of a code block)"
+def _inline_text(children: list[Token] | None) -> str:
+    """Inline tokens as the text a reader sees, keeping the markup that carries meaning.
 
-
-def _cut_comments(line: str, *, inside: bool) -> tuple[str, bool, int | None]:
-    """The line with its comment spans cut out.
-
-    Also whether a comment is still open at the end of the line, and where on
-    this line that comment opened -- None when it opened on an earlier line.
+    Emphasis is transparent, so `**item**` is the item. A code span keeps its
+    backticks, since requested items name commands in them, and a comment
+    delimiter inside one is text. A link or image keeps its target, since a
+    proof's link is the proof. Inline HTML, comments included, shows nothing,
+    and strikethrough keeps its tildes, since a struck-out item is not the item.
     """
-    kept: list[str] = []
-    position, opened_at = 0, None
-    while True:
-        if inside:
-            end = HTML_COMMENT_TERMINATOR_RE.search(line, position)
-            if end is None:
-                return "".join(kept), True, opened_at
-            position, inside, opened_at = end.end(), False, None
-        opened = line.find("<!--", position)
-        if opened == -1:
-            return "".join(kept) + line[position:], False, None
-        kept.append(line[position:opened])
-        position, inside, opened_at = opened + 4, True, opened
+    parts: list[str] = []
+    targets: list[str] = []
+    for token in children or []:
+        kind = token.type
+        if kind == "text":
+            parts.append(token.content)
+        elif kind == "code_inline":
+            ticks = "`" * (max((len(run) for run in re.findall(r"`+", token.content)), default=0) + 1)
+            pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
+            parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
+        elif kind in {"softbreak", "hardbreak"}:
+            parts.append(" ")
+        elif kind == "link_open":
+            targets.append(str(token.attrGet("href") or ""))
+            parts.append("[")
+        elif kind == "link_close":
+            parts.append(f"]({targets.pop() if targets else ''})")
+        elif kind == "image":
+            parts.append(f"![{token.content}]({token.attrGet('src') or ''})")
+        elif kind in {"s_open", "s_close"}:
+            parts.append("~~")
+        elif kind not in {"em_open", "em_close", "strong_open", "strong_close", "html_inline"}:
+            parts.append(token.content)
+    return "".join(parts)
 
 
-def _visible_markdown(body: str) -> tuple[str, bool]:
-    """The body's text as a reader of the page sees it, line for line.
+def _rendered_inline(text: str) -> str:
+    """Markdown text, such as a requested item or a recorded detail, read as a status line is."""
+    tokens = MARKDOWN.parseInline(text)
+    return _inline_text(tokens[0].children if tokens else None)
 
-    Checked against GitHub's renderer. An HTML comment hides only what it
-    covers -- `<!--` to the first `-->` or `--!>`, the extent a browser gives
-    it, or to the end when nothing closes it -- so each span is cut out and
-    the text beside it on the line is kept: `- [blocked] item <!-- x -->`
-    shows its `[blocked]`. A fenced line shows as code, never as a status
-    line, so it reads as `CODE_BLOCK_LINE`. Fences follow the CommonMark rules
-    `_wrapped_bullets` uses, and one left open runs to the end.
 
-    The second value says a comment opened mid-line runs past its line.
-    Whether GitHub hides what follows depends on where the block around it
-    ends -- after a list item the `<!--` shows as text and the next bullet
-    shows -- and this does not model blocks, so the caller reads nothing.
+def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
+    """The status lines GitHub renders under `## Evidence Status`, or why none can be trusted.
+
+    A status line is a list item, bulleted or numbered, under the one heading
+    whose text reads `Evidence Status`, holding a single paragraph; it comes
+    back as that paragraph's text with a `- ` in front, the shape
+    `split_evidence_status_line` reads. The section runs to the next heading
+    of level one or two. An HTML block that is nothing but comments renders
+    nothing and is passed over. Anything else under the heading -- a code
+    block, other HTML, a rule, a paragraph, a table, a quote, a sub-heading, a
+    nested block inside an item -- is text a reader sees and the read would
+    have to skip, so there are no lines to trust.
     """
-    visible: list[str] = []
-    fenced: str | None = None
-    in_comment = False
-    mid_line_comment_runs_on = False
-    for line in MARKDOWN_LINE_ENDING_RE.split(body):
-        if not in_comment:
-            fence = MARKDOWN_FENCE_RE.fullmatch(line.strip())
-            if fence and _is_fence_line(fence):
-                indent = _fence_indent_columns(line)
-                if indent is not None and indent <= 3 and _fence_toggles(fence, fenced):
-                    fenced = None if fenced else fence.group("run")
-                visible.append(CODE_BLOCK_LINE)
-                continue
-            if fenced:
-                visible.append(CODE_BLOCK_LINE)
-                continue
-        if in_comment or "<!--" in line:
-            kept, in_comment, opened_at = _cut_comments(line, inside=in_comment)
-            if in_comment and opened_at is not None and not re.fullmatch(r" {0,3}", line[:opened_at]):
-                mid_line_comment_runs_on = True
-            line = kept
-        visible.append(line)
-    return "\n".join(visible), mid_line_comment_runs_on
+    tokens = MARKDOWN.parse(body)
+    headings = [
+        index
+        for index, token in enumerate(tokens)
+        if token.type == "heading_open"
+        and re.sub(r"\s+", " ", _inline_text(tokens[index + 1].children)).strip().casefold() == "evidence status"
+    ]
+    if len(headings) != 1:
+        return [], f"a reader sees {len(headings)} `Evidence Status` headings, not one"
+    if tokens[headings[0]].tag != "h2":
+        return [], f"the `Evidence Status` heading is an {tokens[headings[0]].tag}, not an h2"
+    lines: list[str] = []
+    index = headings[0] + 3
+    while index < len(tokens):
+        token = tokens[index]
+        if token.type == "heading_open" and token.tag in {"h1", "h2"}:
+            break
+        if token.type == "html_block" and not HTML_COMMENT_RE.sub("", token.content).strip():
+            index += 1
+            continue
+        if token.type not in {"bullet_list_open", "ordered_list_open"}:
+            name = BLOCK_NAMES.get(token.type, token.type)
+            return [], f"a {name} sits under the heading, and only list items are read as status lines"
+        close, level = token.type.replace("_open", "_close"), token.level
+        index += 1
+        while not (tokens[index].type == close and tokens[index].level == level):
+            item = [tokens[index + offset].type for offset in range(5) if index + offset < len(tokens)]
+            if item != ["list_item_open", "paragraph_open", "inline", "paragraph_close", "list_item_close"]:
+                return [], "a list item under the heading holds something besides one line of text"
+            lines.append("- " + _inline_text(tokens[index + 2].children).strip())
+            index += 5
+        index += 1
+    return lines, None
 
 
 def extract_requested_evidence(body: str) -> list[str]:
@@ -931,21 +971,6 @@ def _normalize_evidence_key(text: str) -> str:
     t = re.sub(r"\s+", " ", t).casefold()
     t = t.rstrip(".,;:)")
     return t
-
-
-EMPHASIS_WRAP_RE = re.compile(r"(\*\*|__|\*|_)(?P<inner>.+)\1", re.DOTALL)
-
-
-def _owner_item_key(text: str) -> str:
-    """`_normalize_evidence_key`, after emphasis around the whole item is unwrapped.
-
-    GitHub renders `**item**` and `_item_` as the item in bold or italics, so a
-    reader sees the same item, and the read has to as well.
-    """
-    stripped = text.strip().strip("`").strip()
-    while match := EMPHASIS_WRAP_RE.fullmatch(stripped):
-        stripped = match.group("inner").strip().strip("`").strip()
-    return _normalize_evidence_key(stripped)
 
 
 def _indistinguishable(texts: list[str]) -> list[str]:
@@ -1496,38 +1521,28 @@ def _read_owner_section(
     machine = metadata.get("entries")
     if not isinstance(machine, dict) or not machine:
         return {}, None
-    # Only what a reader of the page sees is read. Drift is a person's edit
-    # only where the section being read is the one the machine wrote, and a
-    # second heading -- a section the model wrote under a heading the
-    # renderer's strip missed -- can differ from the metadata with nobody
-    # editing anything. Trailing whitespace after the one heading changes
-    # nothing a reader sees, so the read takes it as the heading it is.
-    visible, mid_line_comment_runs_on = _visible_markdown(published_body)
-    if mid_line_comment_runs_on:
-        return {}, "a comment opened mid-line runs past its line, so what GitHub shows after it cannot be told"
-    headings = len(re.findall(r"(?mi)^## Evidence Status[^\S\n]*$", visible))
-    if headings != 1:
-        return {}, f"a reader sees {headings} `## Evidence Status` headings, not one"
-    visible = re.sub(r"(?mi)^(## Evidence Status)[^\S\n]+$", r"\1", visible)
-    # A horizontal rule ends the section for `markdown_section`, while a reader
-    # still sees the lines below it under the same heading.
-    through_rule = re.search(r"(?msi)^## Evidence Status\n(.*?)(?=^## |\Z)", visible)
-    section = markdown_section(visible, "Evidence Status")
-    if through_rule and any(
-        line.strip() and not re.fullmatch(r"-{3,}", line.strip())
-        for line in through_rule.group(1).strip()[len(section):].splitlines()
-    ):
-        return {}, "a horizontal rule cuts lines under the heading out of the section"
-    rendered = extract_evidence_status_entries(visible, requested_evidence)
+    # Only what GitHub renders as a status line is read, parsed as CommonMark
+    # rather than matched line by line. Drift is a person's edit only where the
+    # section being read is the one the machine wrote, and a second heading --
+    # a section the model wrote under a heading the renderer's strip missed --
+    # can differ from the metadata with nobody editing anything.
+    lines, unreadable = _rendered_status_lines(published_body)
+    if unreadable:
+        return {}, unreadable
+    rendered_items = [_rendered_inline(item) for item in requested_evidence]
+    rendered = extract_evidence_status_entries(
+        "## Evidence Status\n" + "\n".join(lines) + "\n", rendered_items
+    )
     written = rendered.get("entries")
     invalid_lines = rendered.get("invalid_lines") or []
-    if CODE_BLOCK_LINE in invalid_lines:
-        return {}, "a code block sits under the heading, and a code block is never read as a status line"
     if not isinstance(written, dict) or invalid_lines:
-        return {}, f"a line in it is not an entry: {_truncate(str(invalid_lines[0]) if invalid_lines else '')}"
+        return {}, f"a list item in it is not an entry: {_truncate(str(invalid_lines[0]) if invalid_lines else '')}"
+    # A requested item goes through the same inline parse as the line, so
+    # `**item**` and `item` share a key; the line's own text is not parsed a
+    # second time, so `** item **` keeps the asterisks a reader sees.
     positions = {
-        _owner_item_key(item): position
-        for position, item in enumerate(requested_evidence, start=1)
+        _normalize_evidence_key(item): position
+        for position, item in enumerate(rendered_items, start=1)
     }
     # Two lines for one item are two answers, and taking whichever comes first
     # decides the item by where a bullet sits. Lines whose text differs only
@@ -1535,7 +1550,7 @@ def _read_owner_section(
     repeated = list(rendered.get("duplicate_items") or [])
     answered: set[int] = set()
     for item in written:
-        position = positions.get(_owner_item_key(item))
+        position = positions.get(_normalize_evidence_key(item))
         if position in answered:
             repeated.append(item)
         if position is not None:
@@ -1545,12 +1560,12 @@ def _read_owner_section(
     # A status line the read cannot attribute to an item is still a `[blocked]`
     # or a `[complete]` a reader sees, and ignoring it lets the metadata decide
     # an item the owner may have answered.
-    unmatched = [item for item in written if _owner_item_key(item) not in positions]
+    unmatched = [item for item in written if _normalize_evidence_key(item) not in positions]
     if unmatched:
         return {}, f"a line in it names no requested item: {_truncate(str(unmatched[0]))}"
     preserved: dict[int, dict[str, object]] = {}
     for item, entry in written.items():
-        position = positions.get(_owner_item_key(item))
+        position = positions.get(_normalize_evidence_key(item))
         if position is None:
             continue
         requested = requested_evidence[position - 1]
@@ -1561,16 +1576,23 @@ def _read_owner_section(
         # all.
         if not isinstance(recorded, dict):
             continue
-        if (recorded.get("status"), recorded.get("detail")) == (
-            entry.get("status"),
-            entry.get("detail"),
-        ):
+        recorded_detail = str(recorded.get("detail", "")).strip()
+        # The visible detail has been through the parser and the recorded one
+        # has not, so they are compared read the same way: a machine line with
+        # a `**` or a link in it is not a person's edit.
+        same_words = re.sub(r"\s+", " ", _rendered_inline(recorded_detail)).strip() == re.sub(
+            r"\s+", " ", str(entry.get("detail", ""))
+        ).strip()
+        if recorded.get("status") == entry.get("status") and same_words:
             continue
         preserved[position] = {
             "index": position,
             "item": requested,
             "status": entry["status"],
-            "detail": str(entry["detail"]).strip(),
+            # A status changed by hand keeps the words the machine recorded,
+            # emphasis and links included; words rewritten by hand are the
+            # person's, as parsed.
+            "detail": recorded_detail if same_words else str(entry["detail"]).strip(),
         }
     return preserved, None
 

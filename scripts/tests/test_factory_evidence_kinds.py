@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["markdown-it-py==4.2.0"]
 # ///
 """Policy tests for first-class `ci` and `diff` evidence kinds (#1120).
 
@@ -2880,6 +2880,86 @@ class OwnerLineAsRenderedTests(unittest.TestCase):
         # have answered.
         misspelt = self.BLOCKED.replace("reachable", "reachble", 1)
         self.assert_refused(self.meta(self.OWNER_ITEM, "complete") + f"## Evidence Status\n{misspelt}\n")
+
+
+class SectionReadAsCommonMarkTests(unittest.TestCase):
+    """The section is read by a CommonMark parser, the way GitHub renders it (#1701).
+
+    Four rounds of reading lines by pattern each left a shape the read took
+    as a status line while GitHub rendered something else. These are the
+    three #1701 found on main after #1681 merged, the plain lines that must
+    still read, and the machine's own lines that parsing must not mistake for
+    a person's edit.
+    """
+
+    OWNER_ITEM = OwnerKindHandEditTests.OWNER_ITEM
+    PROOF = OwnerReadFailsClosedTests.PROOF
+    meta = OwnerReadFailsClosedTests.meta
+    gate = OwnerReadFailsClosedTests.gate
+    assert_refused = OwnerReadFailsClosedTests.assert_refused
+    assert_approved = OwnerLineAsRenderedTests.assert_approved
+
+    def blocked_meta(self) -> str:
+        return self.meta(self.OWNER_ITEM, "blocked", "owner follow-up required")
+
+    def test_an_indented_code_block_is_not_a_status_line(self) -> None:
+        self.assert_refused(
+            self.blocked_meta() + f"## Evidence Status\n\n    - [complete] {self.OWNER_ITEM} -- {self.PROOF}\n"
+        )
+        self.assert_refused(
+            self.meta(self.OWNER_ITEM, "complete")
+            + f"## Evidence Status\n\n    - [blocked] {self.OWNER_ITEM} -- owner found it unsafe\n"
+        )
+
+    def test_comment_delimiters_inside_a_code_span_are_text(self) -> None:
+        self.assert_refused(
+            self.blocked_meta() + f"## Evidence Status\n- [complete] `<!-- -->{self.OWNER_ITEM}` -- {self.PROOF}\n"
+        )
+
+    def test_asterisks_the_parser_does_not_read_as_emphasis_stay_in_the_item(self) -> None:
+        for line in (
+            f"- [complete] ** {self.OWNER_ITEM} ** -- {self.PROOF}",
+            f"- [complete] **{self.OWNER_ITEM} * -- {self.PROOF}",
+        ):
+            with self.subTest(line=line[:24]):
+                self.assert_refused(self.blocked_meta() + f"## Evidence Status\n{line}\n")
+
+    def test_plain_status_lines_still_read(self) -> None:
+        self.assert_approved(self.blocked_meta() + f"## Evidence Status\n- [complete] {self.OWNER_ITEM} -- {self.PROOF}\n")
+        accounting, error = self.gate(
+            self.meta(self.OWNER_ITEM, "complete")
+            + f"## Evidence Status\n- [blocked] {self.OWNER_ITEM} -- owner found it unsafe\n",
+            self.OWNER_ITEM,
+        )
+        self.assertEqual(accounting["blocked_items"], [self.OWNER_ITEM])
+        self.assertIsNotNone(error)
+
+    ATTESTED = "`pnpm test` in `web-next` passes"
+    MACHINE_DETAIL = (
+        "attested by the PR author, **not** run by the factory: `pnpm test` printed 214 tests passed, "
+        "[log](https://evidence.cloudcompute.com/workspaces/pr-1/log.txt)"
+    )
+
+    def attested_body(self, visible_status: str) -> str:
+        payload = json.dumps(
+            {"entries": [{"index": 1, "item": self.ATTESTED, "status": "complete", "detail": self.MACHINE_DETAIL, "kind": "test-attested"}]}
+        )
+        return (
+            f"<!-- evidence-status:v1\n{payload}\n-->\n\n"
+            f"## Evidence Status\n- [{visible_status}] {self.ATTESTED} -- {self.MACHINE_DETAIL}\n"
+        )
+
+    def test_a_line_the_machine_wrote_is_not_drift_once_parsed(self) -> None:
+        # Parsing drops emphasis markers and rebuilds code spans and links,
+        # so the visible detail is compared with the recorded one read the
+        # same way; comparing it with the raw text would call every machine
+        # line with a `**` in it a person's edit.
+        self.assertEqual(run_contributor._owner_written_entries(self.attested_body("complete"), [self.ATTESTED]), {})
+
+    def test_a_status_changed_by_hand_keeps_the_detail_the_machine_recorded(self) -> None:
+        written = run_contributor._owner_written_entries(self.attested_body("blocked"), [self.ATTESTED])
+        self.assertEqual(written[1]["status"], "blocked")
+        self.assertEqual(written[1]["detail"], self.MACHINE_DETAIL)
 
 
 class DocumentedTestFormTests(unittest.TestCase):

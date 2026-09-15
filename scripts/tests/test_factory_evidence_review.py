@@ -1,7 +1,7 @@
 #!/usr/bin/env -S uv run --script
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["markdown-it-py==4.2.0"]
 # ///
 """Policy tests for review-time evidence handling (#1120 step 3).
 

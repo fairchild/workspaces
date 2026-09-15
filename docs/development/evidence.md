@@ -391,14 +391,16 @@ item nobody runs, a bare status word such as `PASS`, `ok` or `done` is no proof.
 Three things decide whether a line is read as yours. The item has to be one the
 contributor recorded as `other` in the hidden metadata when it wrote the
 section; the kind is not re-read from the item's wording at review, and an item
-with no recorded kind is never read this way. The section has to be readable the way GitHub renders it: one
-`## Evidence Status` heading a reader of the page sees (a heading inside a code
-block or an HTML comment is not one), every line under it an entry naming a
-requested item, one line per item, and nothing under the heading that hides or
-cuts off a line: no code block, no horizontal rule, and no comment opened
-mid-line that runs past its line. A comment hides only what it covers, so text
-beside it on a line is read, and emphasis around the item (`**item**`,
-`_item_`) is the same item. When the section is not readable, no line is read
+with no recorded kind is never read this way. The section is read as CommonMark, by a parser rather than by matching lines,
+so a status line is exactly what GitHub renders as one: a list item under the
+one `## Evidence Status` heading a reader sees, whose text reads
+`[status] item -- proof`, one per requested item. Anything else under the
+heading -- a code block, fenced or indented; an HTML block with visible text; a
+horizontal rule; a paragraph; a nested list; a line naming no requested item --
+leaves the section unreadable. A comment hides only what it covers, a comment
+delimiter inside a code span is text, and emphasis is only what the parser
+reads as emphasis: `**item**` is the item, while `** item **` keeps its
+asterisks. When the section is not readable, no line is read
 as yours and no owner item counts as complete from the metadata either, since
 the line nobody can read may be your `[blocked]`; fix the section and the next
 review reads it. And only an `other` line is read at once. A
