@@ -667,6 +667,12 @@ def _is_machine_metadata_comment(content: str) -> bool:
     )
 
 
+# A `<br>` is the one inline tag that renders as something: a line break. It
+# arrives as `html_inline` like every other tag, and the tag name is what
+# identifies it, so attributes and a self-closing slash are all one shape.
+HTML_BREAK_TAG_RE = re.compile(r"(?i)^<br\b[^>]*>$")
+
+
 def _inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
     """Inline tokens as the text a reader sees, keeping the markup that carries meaning.
 
@@ -681,7 +687,10 @@ def _inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
 
     `break_text` is what a line break becomes. A status line is one line, so a
     break there is a space; a body read line by line (`_rendered_lines`) asks
-    for a newline, because a PR body renders a break as a line break.
+    for a newline, because a PR body renders a break as a line break. A `<br>`
+    is one of those breaks and not an invisible tag: dropping it glued the
+    words on either side into one, and `1<br>2 tests passed` then quoted a
+    count nobody wrote.
     """
     parts: list[str] = []
     targets: list[str] = []
@@ -694,7 +703,9 @@ def _inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
             ticks = "`" * (longest + 1)
             pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
             parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
-        elif kind in {"softbreak", "hardbreak"}:
+        elif kind in {"softbreak", "hardbreak"} or (
+            kind == "html_inline" and HTML_BREAK_TAG_RE.match(token.content.strip())
+        ):
             parts.append(break_text)
         elif kind == "link_open":
             targets.append(str(token.attrGet("href") or ""))
@@ -798,14 +809,41 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
     return lines, None
 
 
+def _text_after_html_comment(content: str) -> list[str]:
+    """What a reader sees of an HTML block that is a closed comment with text beside it.
+
+    A comment renders as nothing, but an `html_block` is a run of raw HTML that
+    runs to a blank line and carries whatever shares its lines. GitHub hides the
+    comment and prints the rest, so printing the rest is the only reading that
+    agrees with the page. It comes back as written: markdown is not processed
+    inside a raw HTML block, so a code span there is backticks a reader sees.
+
+    Anything else comes back empty -- an unclosed comment, a `<div>`, an element
+    wrapping its text. Telling which elements are still open is a second
+    renderer, and the file already records that the one we had disagreed with
+    GitHub (`_rendered_status_lines`).
+    """
+    stripped = content.lstrip()
+    if not stripped.startswith("<!--"):
+        return []
+    end = stripped.find("-->")
+    if end < 0:
+        return []
+    return [line.strip() for line in stripped[end + 3 :].splitlines() if line.strip()]
+
+
 def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int] | None:
     """Where the section under `## <heading>` starts and stops in the token stream.
 
     The heading is matched on the text a reader sees, at the level
     `markdown_section` matches it: an h2 at the top of the body, not one nested
-    inside a list. The section runs to the next h1 or h2 or to a horizontal
-    rule, which is where `markdown_section` ends it too, and the first such
-    heading wins, as it does there.
+    inside a list, and the first such heading wins.
+
+    The section ends where `markdown_section`'s lookahead ends it, which is
+    narrower than "any heading or rule": that lookahead stops at an h2 and at a
+    `---` rule, and at neither an h1 nor a `***` or `___` rule. Ending earlier
+    than the written read does would drop a Before or an After that read still
+    sees, and the two views have to agree about where they are looking.
     """
     wanted = " ".join(heading.split()).casefold()
     for index, token in enumerate(tokens):
@@ -820,8 +858,8 @@ def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int]
         for offset in range(start, len(tokens)):
             other = tokens[offset]
             if other.level == 0 and (
-                other.type == "hr"
-                or (other.type == "heading_open" and other.tag in {"h1", "h2"})
+                (other.type == "hr" and other.markup.startswith("-"))
+                or (other.type == "heading_open" and other.tag == "h2")
             ):
                 return start, offset
         return start, len(tokens)
@@ -901,9 +939,13 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
         elif kind in {"fence", "code_block"}:
             emit(token, token.content.splitlines() or [""])
         elif kind == "html_block":
-            # It renders nothing, and the lines it occupied are not a gap
-            # between the blocks around it.
-            if token.map:
+            # The block renders nothing, but text sharing its lines after a
+            # closed comment does. Either way the lines it occupied are not a
+            # gap between the blocks around it.
+            beside = _text_after_html_comment(token.content)
+            if beside:
+                emit(token, beside)
+            elif token.map:
                 source_end = token.map[1]
         elif kind == "tr_open":
             row = []
@@ -2405,25 +2447,8 @@ def _line_names(line: str, tokens: list[str]) -> bool:
     )
 
 
-def _attested_test_statement(body: str, item: str = "") -> str | None:
-    """A statement in the PR body naming a test run and what it printed.
-
-    Both halves are required. A command with no result is a plan; a result
-    with no command is a claim nobody else can re-run. Together they are
-    Michael's fallback bar -- "just stating the tests that ran and covered the
-    feature" -- and they are checkable, which is why this can complete an item
-    the factory has no toolchain to run.
-
-    The statement is read from the rendered body (`_rendered_lines`), so it is
-    one a reader can see: a command and a count written only inside an HTML
-    comment render as nothing and state nothing. The whole body is read, not
-    one section, because that is the text this has always searched.
-    """
-    if not body.strip():
-        return None
-    runners, paths = _item_evidence_tokens(item) if item else ([], [])
-    required = paths or runners
-    lines = _rendered_lines(body)
+def _attested_statement_in(lines: list[str], required: list[str]) -> str | None:
+    """The statement these lines carry, whichever view of the body they came from."""
     for index, line in enumerate(lines):
         if not TEST_RUNNER_MENTION_RE.search(line):
             continue
@@ -2456,6 +2481,41 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
             flattened = flattened[: ATTESTED_TEST_QUOTE_LIMIT - 1].rstrip() + "\u2026"
         return flattened
     return None
+
+
+def _attested_test_statement(body: str, item: str = "") -> str | None:
+    """A statement in the PR body naming a test run and what it printed.
+
+    Both halves are required. A command with no result is a plan; a result
+    with no command is a claim nobody else can re-run. Together they are
+    Michael's fallback bar -- "just stating the tests that ran and covered the
+    feature" -- and they are checkable, which is why this can complete an item
+    the factory has no toolchain to run.
+
+    Two views of the body are consulted and both have to accept: the lines as
+    written, and the lines as GitHub renders them (`_rendered_lines`). The
+    rendered view is the point -- a command and a count written only inside an
+    HTML comment render as nothing and state nothing -- but it is not a
+    superset of the written one. A block renders in fewer lines than it
+    occupies, and the scan below measures its window in lines, so on the
+    rendered view alone it reaches across a gap, a fence or a comment and binds
+    a result the statement does not own. Requiring both makes this reader only
+    ever stricter than the one that read the raw body, whatever the next such
+    shape turns out to be, instead of asking anyone to enumerate them.
+
+    The quotation comes from the rendered view, because it is quoted into a
+    status line a person reads and that person is reading the page.
+    """
+    if not body.strip():
+        return None
+    runners, paths = _item_evidence_tokens(item) if item else ([], [])
+    required = paths or runners
+    rendered = _attested_statement_in(_rendered_lines(body), required)
+    if rendered is None:
+        return None
+    if _attested_statement_in(MARKDOWN_LINE_ENDING_RE.split(body), required) is None:
+        return None
+    return rendered
 
 
 # How a measurement is summarised, as opposed to what it measured.
@@ -2508,33 +2568,10 @@ def _measurement_units(value: str, metrics: set[str] | None) -> set[str]:
     }
 
 
-def _perf_numbers(body: str, item: str = "") -> str | None:
-    """The before and after the PR body's Performance section carries.
-
-    Both, or nothing: one side of a comparison measures nothing. Delta rides
-    along when it is there, since it is the line a reader actually reads.
-
-    The section also has to be about the item. A launch-latency contract is
-    not answered by a section that measured setup, and one Performance
-    section is not four different measurements -- so the metric or the
-    scenario the item names has to appear in it.
-    """
-    # Rendered, so the numbers are ones a reader can see: a Before and After
-    # written only inside an HTML comment measure nothing on the page.
-    lines = _rendered_lines(body, "Performance")
+def _perf_numbers_in(lines: list[str], wanted: set[str], scenarios: set[str]) -> str | None:
+    """The comparison these lines carry, whichever view of the section they came from."""
     if not any(line.strip() for line in lines):
         return None
-    # What is measured has to match, not merely how it is summarised. `p50
-    # setup` shares only "p50" with `p50 launch latency`, and reading that as
-    # enough made them the same measurement. Requiring every token instead
-    # would refuse `p50 launch 1.31s` for want of the word "latency", so the
-    # rule is: something other than the percentile has to line up.
-    wanted = {match.group(0).casefold() for match in PERF_METRIC_RE.finditer(item)}
-    scenarios = {
-        span.group(1).strip().casefold()
-        for span in re.finditer(r"`([^`\n]{1,200})`", item)
-        if span.group(1).strip()
-    }
     lowered = "\n".join(lines).casefold()
     if scenarios and not any(token in lowered for token in scenarios):
         return None
@@ -2578,6 +2615,46 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
         if answer is not None:
             return answer
     return None
+
+
+def _perf_numbers(body: str, item: str = "") -> str | None:
+    """The before and after the PR body's Performance section carries.
+
+    Both, or nothing: one side of a comparison measures nothing. Delta rides
+    along when it is there, since it is the line a reader actually reads.
+
+    The section also has to be about the item. A launch-latency contract is
+    not answered by a section that measured setup, and one Performance
+    section is not four different measurements -- so the metric or the
+    scenario the item names has to appear in it.
+
+    Two views of the section are consulted and both have to accept, for the
+    reason `_attested_test_statement` gives: the rendered view is what a reader
+    sees, and it is not a superset of the written one. `PERF_FIELD_RE` and
+    `PERF_COMPARISON_RE` were shaped against written lines, so on the rendered
+    view alone a bold label, a table cell, a `+` bullet or a quoted block from
+    another PR becomes a measurement this body never made. The quotation comes
+    from the rendered view, because it is quoted into a status line a person
+    reads.
+    """
+    # What is measured has to match, not merely how it is summarised. `p50
+    # setup` shares only "p50" with `p50 launch latency`, and reading that as
+    # enough made them the same measurement. Requiring every token instead
+    # would refuse `p50 launch 1.31s` for want of the word "latency", so the
+    # rule is: something other than the percentile has to line up.
+    wanted = {match.group(0).casefold() for match in PERF_METRIC_RE.finditer(item)}
+    scenarios = {
+        span.group(1).strip().casefold()
+        for span in re.finditer(r"`([^`\n]{1,200})`", item)
+        if span.group(1).strip()
+    }
+    rendered = _perf_numbers_in(_rendered_lines(body, "Performance"), wanted, scenarios)
+    if rendered is None:
+        return None
+    written = MARKDOWN_LINE_ENDING_RE.split(markdown_section(body, "Performance"))
+    if _perf_numbers_in(written, wanted, scenarios) is None:
+        return None
+    return rendered
 
 
 def _perf_comparison(
