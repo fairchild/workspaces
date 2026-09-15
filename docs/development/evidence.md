@@ -392,8 +392,11 @@ Three things decide whether a line is read as yours. The item has to be one the
 contributor recorded as `other` in the hidden metadata when it wrote the
 section, and one whose own wording reads that way too: where the recorded kind
 and the kind the item's rendered text carries disagree, the stricter of the two
-decides, so a lane item recorded `other` is not completed by its line. An item
-with no recorded kind is never read this way. The section is read as CommonMark, by a parser rather than by matching lines,
+decides, so a lane item recorded `other` is not completed by its line. Where
+that stricter reading is a `test-attested` or a `perf` kind, the statement of
+what ran or the Performance section's numbers completes it instead, the same
+form a body without metadata completes it by. An item with no recorded kind is
+never read this way. The section is read as CommonMark, by a parser rather than by matching lines,
 and wherever reading it would mean guessing at how GitHub renders something,
 the read refuses instead. A status line is a list item under the one
 `## Evidence Status` heading a reader sees, on a single line, whose text reads

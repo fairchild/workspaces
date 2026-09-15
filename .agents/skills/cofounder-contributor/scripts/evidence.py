@@ -1077,6 +1077,8 @@ HAND_COMPLETION_REFUSALS = {
 # own line, a `test-attested` or a `perf` item from a proof form elsewhere in
 # the body, and every other kind only from a lane, a check or a review.
 HAND_COMPLETION_STRICTNESS = {"other": 0, "test-attested": 1, "perf": 1}
+# The kinds a form in the body completes, as against a lane, a check or a review.
+PROOF_FORM_KINDS = ("test-attested", "perf")
 SPLIT_KIND_NOTE = "; the item's wording classifies two ways, so the stricter kind decides"
 
 
@@ -1104,6 +1106,26 @@ def _hand_completion_kind(item: str) -> tuple[str, bool]:
     return max(raw, rendered, key=lambda kind: HAND_COMPLETION_STRICTNESS.get(kind, 2)), True
 
 
+def _proof_form_completion(body: str, item: str, kind: str) -> str | None:
+    """The proof in the body that completes an item of this kind, or None.
+
+    A `test-attested` item completes on the statement of what ran and a `perf`
+    item on the Performance section's measurements, the forms the contributor
+    itself accepts. Both read the item as it renders, the text a status line is
+    matched against. Every other kind has a lane, a check or a review, and
+    nothing written in the body stands in for those.
+
+    Both reads of the section come here, so a body that completes an item
+    without its metadata completes it with the metadata too.
+    """
+    rendered = _rendered_inline(item)
+    if kind == "test-attested":
+        return _attested_test_statement(body, rendered)
+    if kind == "perf":
+        return _perf_numbers(body, rendered)
+    return None
+
+
 def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None:
     """Why a hand-written `[complete]` does not complete this item, or None when it does.
 
@@ -1126,9 +1148,7 @@ def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None
         if _normalize_evidence_key(line_item) == _normalize_evidence_key(rendered):
             return None
         return "the line does not name this item as it is written, so a hand-written completion is not read"
-    if kind == "test-attested" and _attested_test_statement(body, rendered):
-        return None
-    if kind == "perf" and _perf_numbers(body, rendered):
+    if _proof_form_completion(body, item, kind):
         return None
     refusal = HAND_COMPLETION_REFUSALS.get(kind, "a hand-written line does not complete this kind of item")
     return refusal + SPLIT_KIND_NOTE if split else refusal
@@ -1339,6 +1359,25 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
                     "status": "blocked",
                     "detail": f"the Evidence Status section cannot be read as the owner's: {unreadable}",
                 }
+
+    # An item the metadata records as the owner's whose wording decides a kind a
+    # proof form completes has no other route left: its line is not read as the
+    # owner's, and no lane owns a kind the contributor never recorded. The
+    # body's own statement or Performance numbers complete it, through the same
+    # call the hand-written read makes. A completion already recorded stands, a
+    # lane or a factory turn having written it.
+    for item in requested_evidence:
+        if kinds.get(item) != "other" or item in owner_items:
+            continue
+        decided, split = _hand_completion_kind(item)
+        if decided not in PROOF_FORM_KINDS or entries.get(item, {}).get("status") == "complete":
+            continue
+        proof = _proof_form_completion(body, item, decided)
+        if proof:
+            entries[item] = {"status": "complete", "detail": proof}
+        else:
+            refusal = HAND_COMPLETION_REFUSALS[decided]
+            entries[item] = {"status": "blocked", "detail": refusal + SPLIT_KIND_NOTE if split else refusal}
 
     matched: dict[str, str]
     contested_items: list[str] = []

@@ -3317,6 +3317,72 @@ class NoMetadataFallbackTests(unittest.TestCase):
         self.assert_unread("<!--\n## Evidence Status\n-->\n\n" + self.section(item).replace("## Evidence Status", "## Evidence Status <s>", 1), item, "HTML")
 
 
+class SplitKindCompletionRouteTests(unittest.TestCase):
+    """An item that classifies two ways completes the way its decided kind does, metadata or not (#1693).
+
+    The contributor records the kind from the item as the issue writes it, so a
+    split item is recorded `other` and seeded blocked. Its decided kind is not
+    `other`, so its visible line is not read as the owner's, and no lane owns
+    it either. What is left is the body's own proof form, the route the
+    hand-written read already uses.
+    """
+
+    ATTESTED = "**`pnpm test` in `web-next` passes**"
+    STATEMENT = "`pnpm test` in `web-next`: 214 tests passed"
+    PERF_ITEM = "Sidebar render be<span></span>fore and after latency"
+    PERF_SECTION = "## Performance\n\n- Before Summary: latency 120 ms\n- After Summary: latency 80 ms\n\n"
+    LANE_ITEM = "**`swift test --filter FooTests` passes**"
+
+    def recorded(self, item: str, status: str = "blocked", kind: str = "other", detail: str = "owner follow-up required") -> str:
+        entry = {"index": 1, "item": item, "status": status, "detail": detail, "kind": kind}
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+
+    def gate(self, body: str, item: str) -> tuple[dict[str, object], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, [item], review_ci=[])
+        return accounting, run_contributor.review_evidence_gate_error("approve", accounting, errors)
+
+    def section(self, item: str, detail: str) -> str:
+        return f"## Evidence Status\n- [complete] {item} -- {detail}\n"
+
+    def test_an_attested_item_recorded_other_completes_from_the_statement(self) -> None:
+        line = self.section("`pnpm test` in `web-next` passes", self.STATEMENT)
+        body = f"## Validation\n\n- {self.STATEMENT}\n\n" + line
+        for shape, whole in (("metadata seeds it blocked", self.recorded(self.ATTESTED) + body), ("no metadata", body)):
+            with self.subTest(shape=shape):
+                accounting, error = self.gate(whole, self.ATTESTED)
+                self.assertEqual(accounting["complete_items"], [self.ATTESTED])
+                self.assertIsNone(error)
+
+    def test_without_the_statement_it_stays_blocked_and_says_what_to_write(self) -> None:
+        body = self.recorded(self.ATTESTED) + self.section("`pnpm test` in `web-next` passes", "checked by hand")
+        accounting, error = self.gate(body, self.ATTESTED)
+        self.assertEqual(accounting["blocked_items"], [self.ATTESTED])
+        detail = accounting["entries"][self.ATTESTED]["detail"]
+        self.assertIn("state the command and the line it printed", detail)
+        self.assertIn("classifies two ways", detail)
+        self.assertIsNotNone(error)
+
+    def test_a_perf_item_recorded_other_completes_from_the_performance_section(self) -> None:
+        line = self.section("Sidebar render before and after latency", "measured it")
+        accounting, error = self.gate(self.recorded(self.PERF_ITEM) + self.PERF_SECTION + line, self.PERF_ITEM)
+        self.assertEqual(accounting["complete_items"], [self.PERF_ITEM])
+        self.assertIsNone(error)
+        measured_something_else = "## Performance\n\n- Before Summary: memory 400 MB\n- After Summary: memory 380 MB\n\n"
+        accounting, error = self.gate(self.recorded(self.PERF_ITEM) + measured_something_else + line, self.PERF_ITEM)
+        self.assertEqual(accounting["blocked_items"], [self.PERF_ITEM])
+        self.assertIn("before and after measurements", accounting["entries"][self.PERF_ITEM]["detail"])
+        self.assertIsNotNone(error)
+
+    def test_a_lane_item_recorded_other_is_not_completed_by_a_statement(self) -> None:
+        # `swift test` is run by the evidence lane, so no form in the body
+        # completes it; the statement route belongs to the attested kinds.
+        body = (self.recorded(self.LANE_ITEM) + "## Validation\n\n- `swift test --filter FooTests`: 12 tests passed\n\n"
+                + self.section("`swift test --filter FooTests` passes", "12 tests passed"))
+        accounting, error = self.gate(body, self.LANE_ITEM)
+        self.assertEqual(accounting["complete_items"], [])
+        self.assertIsNotNone(error)
+
+
 class DocumentedTestFormTests(unittest.TestCase):
     """The `test` form the docs teach has to survive the parser.
 
