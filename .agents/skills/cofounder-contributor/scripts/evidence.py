@@ -653,10 +653,12 @@ def _is_machine_metadata_comment(content: str) -> bool:
 
     Recognised by its shape, not by parsing HTML: it opens with
     `<!-- evidence-status:v1`, ends at its only `-->`, and carries no `--!>`,
-    which a browser also reads as the end of a comment. A block that ends
+    which a browser also reads as the end of a comment. It starts in the first
+    column, where the factory writes it and where `EVIDENCE_METADATA_RE` reads
+    it, so an indented copy is not the metadata. A block that starts or ends
     anywhere else, or has anything after its end, is HTML like any other.
     """
-    stripped = content.strip()
+    stripped = content.rstrip()
     return (
         stripped.startswith(f"<!-- evidence-status:v{EVIDENCE_METADATA_VERSION}")
         and stripped.endswith("-->")
@@ -1018,6 +1020,140 @@ def extract_evidence_status_entries(
     }
 
 
+def _rendered_markdown_entries(
+    body: str,
+    requested_evidence: list[str],
+) -> tuple[dict[str, object], str | None]:
+    """Evidence Status entries from a body with no evidence metadata, read as GitHub renders them.
+
+    Also returns why the section cannot be read, when a section is there. The
+    lines come from `_rendered_status_lines`, so every refusal the owner read
+    has applies without metadata too: HTML before or in the heading, an HTML
+    block, inline HTML, a line break or a decoded newline in an item, and any
+    block that is not a list. An unreadable section yields no entries, so
+    nothing in it completes. The line grammar and the entry shape are the ones
+    `extract_evidence_status_entries` produces.
+    """
+    section_present = has_markdown_section(body, "Evidence Status")
+    entries: dict[str, dict[str, str]] = {}
+    invalid_lines: list[str] = []
+    duplicate_items: list[str] = []
+    lines, unreadable = _rendered_status_lines(body)
+    if unreadable is None:
+        rendered_items = [_rendered_inline(item) for item in requested_evidence]
+        for text in lines:
+            line = f"- {text}"
+            split = split_evidence_status_line(line, rendered_items)
+            if not split or (is_numeric_evidence_item(split[1]) and not _is_requested_item(split[1], rendered_items)):
+                invalid_lines.append(line)
+                continue
+            status, item, detail = split
+            if item in entries:
+                duplicate_items.append(item)
+                continue
+            entries[item] = {"status": status, "detail": detail}
+    parsed = {
+        "section_present": section_present,
+        "entries": entries,
+        "invalid_lines": invalid_lines,
+        "duplicate_items": duplicate_items,
+        "source": "markdown",
+    }
+    return parsed, unreadable if section_present else None
+
+
+# What completes each kind when there is no metadata, for the item a hand-written
+# `[complete]` line cannot complete by itself.
+HAND_COMPLETION_REFUSALS = {
+    "ci": "its named check completes it once green on the PR head; a hand-written line does not",
+    "diff": "the approving review completes it; a hand-written line does not",
+    "test": "the evidence lane completes it by running the command; a hand-written line does not",
+    "build": "the evidence lane completes it by running the build; a hand-written line does not",
+    "screenshot": "the evidence lane or an inspected screenshot completes it; a hand-written line does not",
+    "test-attested": "state the command and the line it printed in the PR body; the status line alone does not complete it",
+    "perf": "fill the Performance section with before and after measurements; the status line alone does not complete it",
+}
+# How hard each kind is to complete by hand: an `other` item completes from its
+# own line, a `test-attested` or a `perf` item from a proof form elsewhere in
+# the body, and every other kind only from a lane, a check or a review.
+HAND_COMPLETION_STRICTNESS = {"other": 0, "test-attested": 1, "perf": 1}
+# The kinds a form in the body completes, as against a lane, a check or a review.
+PROOF_FORM_KINDS = ("test-attested", "perf")
+SPLIT_KIND_NOTE = "; the item's wording classifies two ways, so the stricter kind decides"
+
+
+def _hand_completion_kind(item: str) -> tuple[str, bool]:
+    """The kind that decides whether a hand-written line completes this item, and whether its wording classifies two ways.
+
+    Two texts are read for one item. The contributor records the kind from the
+    item as the issue writes it, and a status line is matched against the item
+    as it renders, which drops inline HTML and emphasis. `<span
+    title="screenshots"></span>The new sidebar renders` is a screenshot to the
+    first reading and an owner's item to the second; a bold `swift test` item
+    is the owner's to the first and a lane's to the second.
+
+    Neither reading is the true one, so where they disagree the stricter one
+    decides: a kind only a lane, a check or a review completes over one a
+    statement or the Performance section completes, and either over `other`.
+    Two kinds of equal strictness are both proof-bearing, and the recorded
+    reading is kept. The caller says so in its refusal, since the fix is to
+    write the item one way.
+    """
+    raw = _evidence_item_kind(item)
+    rendered = _evidence_item_kind(_rendered_inline(item))
+    if raw == rendered:
+        return raw, False
+    return max(raw, rendered, key=lambda kind: HAND_COMPLETION_STRICTNESS.get(kind, 2)), True
+
+
+def _proof_form_completion(body: str, item: str, kind: str) -> str | None:
+    """The proof in the body that completes an item of this kind, or None.
+
+    A `test-attested` item completes on the statement of what ran and a `perf`
+    item on the Performance section's measurements, the forms the contributor
+    itself accepts. Both read the item as it renders, the text a status line is
+    matched against. Every other kind has a lane, a check or a review, and
+    nothing written in the body stands in for those.
+
+    Both reads of the section come here, so a body that completes an item
+    without its metadata completes it with the metadata too.
+    """
+    rendered = _rendered_inline(item)
+    if kind == "test-attested":
+        return _attested_test_statement(body, rendered)
+    if kind == "perf":
+        return _perf_numbers(body, rendered)
+    return None
+
+
+def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None:
+    """Why a hand-written `[complete]` does not complete this item, or None when it does.
+
+    With no metadata there is no recorded kind, so the item is classified the
+    way the contributor classifies it when it records one and as the line was
+    matched against it, with the stricter reading deciding where the two
+    disagree (`_hand_completion_kind`): emphasis around a command does not make
+    a lane item the owner's, and inline HTML the render drops does not either.
+    Only an owner's
+    `other` item completes from its line, and only a line that names it as it
+    is written, the key the owner read uses: a loosely restated line can be a
+    different item to a reader. A `test-attested` item completes on the
+    statement of what ran and a `perf` item on its measurements, the forms the
+    contributor itself accepts; every other kind has a lane, a check or a
+    review that completes it, and a hand-written line is none of those.
+    """
+    rendered = _rendered_inline(item)
+    kind, split = _hand_completion_kind(item)
+    if kind == "other":
+        if _normalize_evidence_key(line_item) == _normalize_evidence_key(rendered):
+            return None
+        return "the line does not name this item as it is written, so a hand-written completion is not read"
+    if _proof_form_completion(body, item, kind):
+        return None
+    refusal = HAND_COMPLETION_REFUSALS.get(kind, "a hand-written line does not complete this kind of item")
+    return refusal + SPLIT_KIND_NOTE if split else refusal
+
+
 def _normalize_evidence_key(text: str) -> str:
     t = text.strip().strip("`").strip()
     t = re.sub(r"\s+", " ", t).casefold()
@@ -1147,6 +1283,11 @@ def _match_evidence_entries(
 
 
 def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, review_ci: list[dict] | None = None) -> dict[str, object]:
+    # Every read below takes `\n` line endings. The metadata pattern matches no
+    # other, and a CRLF or CR metadata comment it misses would send the body to
+    # the hand-written read, where a lane item the metadata records as pending
+    # completes from its visible line.
+    body = MARKDOWN_LINE_ENDING_RE.sub("\n", body)
     if not _explicit_evidence_contract(requested_evidence):
         return {
             "section_present": has_markdown_section(body, "Evidence Status"),
@@ -1167,11 +1308,12 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
         }
 
     # _structured_evidence_entries returns a non-None dict even when metadata is malformed
-    # (source="structured-invalid"). The `or` only triggers when there is no hidden metadata
-    # at all, falling back to markdown parsing.
-    parsed = _structured_evidence_entries(
-        body, requested_evidence
-    ) or extract_evidence_status_entries(body, requested_evidence)
+    # (source="structured-invalid"). Only with no hidden metadata at all does the read fall
+    # back to the visible section, and then it reads it as GitHub renders it.
+    parsed = _structured_evidence_entries(body, requested_evidence)
+    fallback_unreadable: str | None = None
+    if parsed is None:
+        parsed, fallback_unreadable = _rendered_markdown_entries(body, requested_evidence)
     entries = parsed["entries"]
     # For an owner's item the visible line is the record, as soon as it is
     # written. No lane completes an `other` item: the machine writes it
@@ -1198,8 +1340,13 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     # a line that is not an entry, two lines for one item -- does not agree
     # with the metadata by default. An owner item there stays unfinished,
     # because the unreadable line may be the owner's `[blocked]`.
+    #
+    # The recorded kind is read from the item as the issue writes it, and this
+    # section is read as it renders. An item whose two readings disagree is
+    # taken at its stricter one, so a lane item recorded `other` is not the
+    # owner's to complete from a line.
     kinds = parsed.get("kinds") or {}
-    owner_items = [item for item in requested_evidence if kinds.get(item) == "other"]
+    owner_items = [item for item in requested_evidence if kinds.get(item) == "other" and _hand_completion_kind(item)[0] == "other"]
     written, unreadable = _read_owner_section(body, requested_evidence)
     for entry in written.values():
         item = str(entry["item"])
@@ -1213,6 +1360,25 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
                     "detail": f"the Evidence Status section cannot be read as the owner's: {unreadable}",
                 }
 
+    # An item the metadata records as the owner's whose wording decides a kind a
+    # proof form completes has no other route left: its line is not read as the
+    # owner's, and no lane owns a kind the contributor never recorded. The
+    # body's own statement or Performance numbers complete it, through the same
+    # call the hand-written read makes. A completion already recorded stands, a
+    # lane or a factory turn having written it.
+    for item in requested_evidence:
+        if kinds.get(item) != "other" or item in owner_items:
+            continue
+        decided, split = _hand_completion_kind(item)
+        if decided not in PROOF_FORM_KINDS or entries.get(item, {}).get("status") == "complete":
+            continue
+        proof = _proof_form_completion(body, item, decided)
+        if proof:
+            entries[item] = {"status": "complete", "detail": proof}
+        else:
+            refusal = HAND_COMPLETION_REFUSALS[decided]
+            entries[item] = {"status": "blocked", "detail": refusal + SPLIT_KIND_NOTE if split else refusal}
+
     matched: dict[str, str]
     contested_items: list[str] = []
     if parsed["source"] == "structured":
@@ -1222,7 +1388,27 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
             if item in entries
         }
     else:
-        matched, contested_items = _match_evidence_entries(requested_evidence, entries)
+        # The lines were read as rendered text, so each item is matched as
+        # rendered too: `**item**` and `item` share a key. Two items that render
+        # alike are one requirement to the matcher; the one written without
+        # markup takes the line, then the canonical order, never contract order.
+        rendered: dict[str, str] = {}
+        for item in sorted(requested_evidence, key=lambda item: (_rendered_inline(item) != item, _normalize_evidence_key(item), item)):
+            rendered.setdefault(_rendered_inline(item), item)
+        by_rendered, contested = _match_evidence_entries(list(rendered), entries)
+        matched = {rendered[text]: key for text, key in by_rendered.items()}
+        contested_items = [rendered[text] for text in contested]
+        # Every line in a body with no metadata is hand-written, so the kind rule
+        # decides what a `[complete]` there completes (`_hand_completion_refusal`).
+        # Matching still assigns each line to one item; this only decides whether
+        # the line completes it.
+        for item, key in matched.items():
+            if entries[key]["status"] != "complete":
+                continue
+            refusal = _hand_completion_refusal(body, item, key)
+            if refusal:
+                status = "blocked" if _hand_completion_kind(item)[0] == "other" else "pending-ci"
+                entries[key] = {"status": status, "detail": refusal}
 
     # This overlay exists only in review. Authoring validation still requires
     # authored accounting; current GitHub check facts can satisfy a named CI item
@@ -1272,7 +1458,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     return {
         **parsed,
         "unproven_items": unproven_items,
-        "owner_section_unreadable": unreadable if owner_items else None,
+        "owner_section_unreadable": unreadable if owner_items else fallback_unreadable,
         "live_ci_satisfied": sorted(live_satisfied),
         "missing_items": missing_items,
         "contested_items": contested_items,
@@ -1398,6 +1584,8 @@ def validate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     body_contract = set(requested_evidence) - set(accounting.get("live_ci_satisfied", []))
     if not accounting["section_present"] and body_contract:
         errors.append("missing required '## Evidence Status' section")
+    if accounting["source"] == "markdown" and accounting.get("owner_section_unreadable"):
+        errors.append(f"the Evidence Status section cannot be read: {accounting['owner_section_unreadable']}")
     invalid_lines = accounting["invalid_lines"]
     if invalid_lines:
         preview = _format_malformed_preview(invalid_lines)

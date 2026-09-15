@@ -390,8 +390,13 @@ item nobody runs, a bare status word such as `PASS`, `ok` or `done` is no proof.
 
 Three things decide whether a line is read as yours. The item has to be one the
 contributor recorded as `other` in the hidden metadata when it wrote the
-section; the kind is not re-read from the item's wording at review, and an item
-with no recorded kind is never read this way. The section is read as CommonMark, by a parser rather than by matching lines,
+section, and one whose own wording reads that way too: where the recorded kind
+and the kind the item's rendered text carries disagree, the stricter of the two
+decides, so a lane item recorded `other` is not completed by its line. Where
+that stricter reading is a `test-attested` or a `perf` kind, the statement of
+what ran or the Performance section's numbers completes it instead, the same
+form a body without metadata completes it by. An item with no recorded kind is
+never read this way. The section is read as CommonMark, by a parser rather than by matching lines,
 and wherever reading it would mean guessing at how GitHub renders something,
 the read refuses instead. A status line is a list item under the one
 `## Evidence Status` heading a reader sees, on a single line, whose text reads
@@ -417,6 +422,18 @@ factory turn or the lane that owns the item writes it, because nothing but a
 lane or the factory's own reading of the body completes those. Like any hand
 edit, the line does not survive the CI verifier or the macOS lane rewriting
 the section.
+
+A body with no evidence metadata -- a PR written by hand, or one whose metadata
+comment is missing or indented -- is read as CommonMark the same way, so every
+refusal above applies to it too. What a hand-written body can complete depends
+on the item's kind, classified as the contributor classifies it, from the item
+as the issue writes it and as it renders, the stricter of the two where they
+differ: an `other` item completes from a `[complete]` line that names it
+as the issue writes it; a `test-attested` item completes from the statement of
+the command and the line it printed, and a `perf` item from the Performance
+section's before and after numbers. A `ci`, `diff`, `test`, `build` or
+`screenshot` item never completes from a hand-written line: its named check, the
+approving review or the evidence lane completes it.
 
 The classifier lives in `_evidence_item_kind` (`.agents/skills/cofounder-contributor/scripts/evidence.py`);
 `scripts/tests/test_factory_evidence_kinds.py` is the readable corpus of what

@@ -879,10 +879,12 @@ class EvidenceValidationTests(unittest.TestCase):
         self.assertNotIn("y" * 200, error)
 
     def test_all_complete_no_errors(self) -> None:
-        requested = ["`swift test`", "`swift build`"]
+        # Items a hand-written body can complete: with no metadata, a
+        # `swift test` or `swift build` line reads as pending for its lane.
+        requested = ["The shared state is named in the PR body", "The fixture boundary is explained"]
         body = self._make_body([
-            "- [complete] `swift test` -- all passed",
-            "- [complete] `swift build` -- built ok",
+            "- [complete] The shared state is named in the PR body -- the Summary's first bullet names it",
+            "- [complete] The fixture boundary is explained -- the Risks section says which tests read it",
         ])
         _, errors = run_contributor.validate_evidence_accounting(body, requested)
         self.assertEqual(errors, [])
