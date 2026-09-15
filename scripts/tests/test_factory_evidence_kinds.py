@@ -3227,6 +3227,44 @@ class NoMetadataFallbackTests(unittest.TestCase):
         accounting, _, _ = self.gate(body, attested)
         self.assertEqual(accounting["complete_items"], [attested])
 
+    SPLIT_ITEM = '<span title="screenshots"></span>The new sidebar renders'
+    SPLIT_LINE = "## Evidence Status\n- [complete] The new sidebar renders -- looked at it\n"
+
+    def recorded(self, item: str, kind: str, status: str = "pending-ci") -> str:
+        entry = {"index": 1, "item": item, "status": status, "detail": "the lane runs it", "kind": kind}
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+
+    def test_an_item_that_classifies_two_ways_takes_the_stricter_kind(self) -> None:
+        # The contributor records the kind from the item as the issue writes it,
+        # and a line is matched against the item as it renders. Inline HTML is
+        # in the first text and not the second, so the two readings disagree.
+        accounting, _, error = self.gate(self.SPLIT_LINE, self.SPLIT_ITEM)
+        self.assertNotIn(self.SPLIT_ITEM, accounting["complete_items"])
+        self.assertEqual(accounting["pending_ci_items"], [self.SPLIT_ITEM])
+        self.assertIn("classifies two ways", accounting["entries"]["The new sidebar renders"]["detail"])
+        self.assertIsNotNone(error)
+
+    def test_a_recorded_kind_does_not_let_a_split_item_complete_from_its_line(self) -> None:
+        for kind in ("screenshot", "other"):
+            with self.subTest(recorded=kind):
+                body = self.recorded(self.SPLIT_ITEM, kind) + self.SPLIT_LINE
+                accounting, _, error = self.gate(body, self.SPLIT_ITEM)
+                self.assertEqual(accounting["source"], "structured")
+                self.assertNotIn(self.SPLIT_ITEM, accounting["complete_items"])
+                self.assertIsNotNone(error)
+
+    def test_a_lane_item_recorded_other_does_not_complete_from_its_line(self) -> None:
+        # The mirror: the recorded kind reads `other` from the raw item, while
+        # the item renders as a lane item, so its visible line is not the
+        # owner's to complete.
+        item = "**`swift test --filter FooTests` passes**"
+        body = self.recorded(item, "other") + "## Evidence Status\n- [complete] `swift test --filter FooTests` passes -- hand-written result text\n"
+        accounting, _, error = self.gate(body, item)
+        self.assertEqual(accounting["source"], "structured")
+        self.assertEqual(accounting["complete_items"], [])
+        self.assertEqual(accounting["pending_ci_items"], [item])
+        self.assertIsNotNone(error)
+
     def test_metadata_is_read_whatever_the_line_endings(self) -> None:
         # A metadata comment with CRLF or CR endings went unmatched, so the body
         # fell to the hand-written read and a lane item recorded pending

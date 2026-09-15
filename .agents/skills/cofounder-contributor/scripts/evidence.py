@@ -1073,15 +1073,46 @@ HAND_COMPLETION_REFUSALS = {
     "test-attested": "state the command and the line it printed in the PR body; the status line alone does not complete it",
     "perf": "fill the Performance section with before and after measurements; the status line alone does not complete it",
 }
+# How hard each kind is to complete by hand: an `other` item completes from its
+# own line, a `test-attested` or a `perf` item from a proof form elsewhere in
+# the body, and every other kind only from a lane, a check or a review.
+HAND_COMPLETION_STRICTNESS = {"other": 0, "test-attested": 1, "perf": 1}
+SPLIT_KIND_NOTE = "; the item's wording classifies two ways, so the stricter kind decides"
+
+
+def _hand_completion_kind(item: str) -> tuple[str, bool]:
+    """The kind that decides whether a hand-written line completes this item, and whether its wording classifies two ways.
+
+    Two texts are read for one item. The contributor records the kind from the
+    item as the issue writes it, and a status line is matched against the item
+    as it renders, which drops inline HTML and emphasis. `<span
+    title="screenshots"></span>The new sidebar renders` is a screenshot to the
+    first reading and an owner's item to the second; a bold `swift test` item
+    is the owner's to the first and a lane's to the second.
+
+    Neither reading is the true one, so where they disagree the stricter one
+    decides: a kind only a lane, a check or a review completes over one a
+    statement or the Performance section completes, and either over `other`.
+    Two kinds of equal strictness are both proof-bearing, and the recorded
+    reading is kept. The caller says so in its refusal, since the fix is to
+    write the item one way.
+    """
+    raw = _evidence_item_kind(item)
+    rendered = _evidence_item_kind(_rendered_inline(item))
+    if raw == rendered:
+        return raw, False
+    return max(raw, rendered, key=lambda kind: HAND_COMPLETION_STRICTNESS.get(kind, 2)), True
 
 
 def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None:
     """Why a hand-written `[complete]` does not complete this item, or None when it does.
 
     With no metadata there is no recorded kind, so the item is classified the
-    way the contributor classifies it when it records one, from the text it
-    renders as: that is the text the line was matched against, and emphasis
-    around a command does not make a lane item the owner's. Only an owner's
+    way the contributor classifies it when it records one and as the line was
+    matched against it, with the stricter reading deciding where the two
+    disagree (`_hand_completion_kind`): emphasis around a command does not make
+    a lane item the owner's, and inline HTML the render drops does not either.
+    Only an owner's
     `other` item completes from its line, and only a line that names it as it
     is written, the key the owner read uses: a loosely restated line can be a
     different item to a reader. A `test-attested` item completes on the
@@ -1090,7 +1121,7 @@ def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None
     review that completes it, and a hand-written line is none of those.
     """
     rendered = _rendered_inline(item)
-    kind = _evidence_item_kind(rendered)
+    kind, split = _hand_completion_kind(item)
     if kind == "other":
         if _normalize_evidence_key(line_item) == _normalize_evidence_key(rendered):
             return None
@@ -1099,7 +1130,8 @@ def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None
         return None
     if kind == "perf" and _perf_numbers(body, rendered):
         return None
-    return HAND_COMPLETION_REFUSALS.get(kind, "a hand-written line does not complete this kind of item")
+    refusal = HAND_COMPLETION_REFUSALS.get(kind, "a hand-written line does not complete this kind of item")
+    return refusal + SPLIT_KIND_NOTE if split else refusal
 
 
 def _normalize_evidence_key(text: str) -> str:
@@ -1288,8 +1320,13 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
     # a line that is not an entry, two lines for one item -- does not agree
     # with the metadata by default. An owner item there stays unfinished,
     # because the unreadable line may be the owner's `[blocked]`.
+    #
+    # The recorded kind is read from the item as the issue writes it, and this
+    # section is read as it renders. An item whose two readings disagree is
+    # taken at its stricter one, so a lane item recorded `other` is not the
+    # owner's to complete from a line.
     kinds = parsed.get("kinds") or {}
-    owner_items = [item for item in requested_evidence if kinds.get(item) == "other"]
+    owner_items = [item for item in requested_evidence if kinds.get(item) == "other" and _hand_completion_kind(item)[0] == "other"]
     written, unreadable = _read_owner_section(body, requested_evidence)
     for entry in written.values():
         item = str(entry["item"])
@@ -1331,7 +1368,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
                 continue
             refusal = _hand_completion_refusal(body, item, key)
             if refusal:
-                status = "blocked" if _evidence_item_kind(_rendered_inline(item)) == "other" else "pending-ci"
+                status = "blocked" if _hand_completion_kind(item)[0] == "other" else "pending-ci"
                 entries[key] = {"status": status, "detail": refusal}
 
     # This overlay exists only in review. Authoring validation still requires
