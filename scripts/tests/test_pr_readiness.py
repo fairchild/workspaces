@@ -759,6 +759,11 @@ class RenderedStatusLineTests(unittest.TestCase):
     The shapes below were confirmed against GitHub's own `POST /markdown`
     endpoint in `gfm` mode, which renders each as `<li>[pending-ci] item --
     waiting</li>`.
+
+    A list item is not the only line a reader sees, and since #1727 it is not
+    the only line read: a table cell, a paragraph and a sub-heading under the
+    heading are lines too, and the owner read in the contributor skill refuses
+    every one of them rather than tolerating it.
     """
 
     FILES = ["Sources/WorkspaceManager/Foo.swift"]
@@ -771,6 +776,15 @@ class RenderedStatusLineTests(unittest.TestCase):
         "- &#91;pending-ci&#93; item -- waiting",
         "- <span>[pending-ci]</span> item -- waiting",
     )
+
+    # #1727. The issue's own reproduction: a section whose list item is
+    # complete and whose table cell is not.
+    TABLE = (
+        "| artifact     | status      |\n"
+        "| ------------ | ----------- |\n"
+        "| release log  | {status}   |\n"
+    )
+    COMPLETE = "- [complete] swift test -- 1992 tests passed\n"
 
     def failures(self, body: str) -> list[str]:
         return pr_readiness.evaluate(pr(body), self.FILES).failures
@@ -863,6 +877,184 @@ class RenderedStatusLineTests(unittest.TestCase):
             seen.clear()
             pr_readiness.evaluate(pr(body.replace("\n", "\r\n")), self.FILES)
             self.assertEqual(seen, [body])
+
+    def test_a_status_in_a_table_cell_is_pending(self) -> None:
+        # A cell is a line a reader sees, and the section it sits in is the
+        # one the gate reads (#1727). Neither view saw it before: the written
+        # view's markers do not include `|`, and the rendered view had no
+        # table plugin, so the cell was not a token with text of its own.
+        for status in ("[blocked]", "[pending-ci]"):
+            with self.subTest(status=status):
+                section = self.COMPLETE + "\n" + self.TABLE.format(status=status)
+                self.assertEqual(self.failures(self.body(section)), [self.PENDING])
+
+    def test_a_status_in_a_paragraph_is_pending(self) -> None:
+        # The table is the instance the issue reports; the class is a visible
+        # status under the heading that is not a list item.
+        for status in ("[blocked]", "[pending-ci]"):
+            with self.subTest(status=status):
+                section = self.COMPLETE + f"\n{status} release log\n"
+                self.assertEqual(self.failures(self.body(section)), [self.PENDING])
+
+    def test_a_status_in_a_sub_heading_or_a_quote_is_pending(self) -> None:
+        # A sub-heading is inside the section: the read closes at the next h1
+        # or h2, so an h3 is a line under the heading like any other, and the
+        # owner read in the contributor skill refuses one outright rather than
+        # tolerating it.
+        for shape in ("### [blocked] release log", "> [blocked] release log"):
+            with self.subTest(shape=shape):
+                self.assertEqual(self.failures(self.body(self.COMPLETE + f"\n{shape}\n")), [self.PENDING])
+
+    def test_a_table_of_complete_cells_passes(self) -> None:
+        section = self.COMPLETE + "\n" + self.TABLE.format(status="[complete]")
+        self.assertEqual(self.failures(self.body(section)), [])
+
+    def test_a_table_inside_a_fence_is_still_an_example(self) -> None:
+        # A fenced table is a code block to the parser and holds no inline of
+        # its own, which is what the written view says of a fenced line. The
+        # cell is asserted absent from what the read returns, not only absent
+        # from the failures, so the case cannot pass by reading nothing.
+        section = self.COMPLETE + "\n```markdown\n" + self.TABLE.format(status="[blocked]") + "```\n"
+        body = self.body(section)
+        self.assertEqual(pr_readiness.rendered_status_lines(body), [self.COMPLETE.strip()[2:]])
+        self.assertEqual(self.failures(body), [])
+
+    def test_a_status_in_a_table_below_the_section_is_not_a_status_line(self) -> None:
+        for tail in ("\n## Notes\n\n", "\n---\n\n"):
+            with self.subTest(tail=tail.splitlines()[1]):
+                body = self.body(self.COMPLETE + tail + self.TABLE.format(status="[blocked]"))
+                self.assertEqual(pr_readiness.rendered_status_lines(body), [self.COMPLETE.strip()[2:]])
+                self.assertEqual(self.failures(body), [])
+
+    def test_a_struck_status_is_not_the_status_wherever_it_sits(self) -> None:
+        # Strikethrough is read the way the owner read reads it: the tildes
+        # stay, so a struck token is not a status token. The page shows it
+        # struck, and a struck line is a line withdrawn. The line is asserted
+        # to come back struck, so the case cannot pass by not reading it.
+        for shape, read in (
+            ("- ~~[blocked] release log~~\n", "~~[blocked] release log~~"),
+            ("\n" + self.TABLE.format(status="~~[blocked]~~"), "~~[blocked]~~"),
+        ):
+            with self.subTest(shape=shape.strip().splitlines()[-1]):
+                body = self.body(self.COMPLETE + shape)
+                self.assertIn(read, pr_readiness.rendered_status_lines(body))
+                self.assertEqual(self.failures(body), [])
+
+    def test_a_bulleted_row_that_became_a_table_keeps_its_marker_and_is_still_pending(self) -> None:
+        # A bullet written above a delimiter row is not a list item at all: the
+        # whole thing is one table, and the marker reaches the first cell as
+        # the characters `- `. Without the optional marker in
+        # `RENDERED_PENDING_RE` this widening LOSES a refusal the parser with
+        # no table plugin made -- the escaped form below is invisible to the
+        # written view, so nothing else catches it, and the gate passed a body
+        # the merge base failed. Found by codex (gpt-5.6-sol, xhigh).
+        items = ("- [blocked] | x |", "- \\[blocked] | x |", "* [pending-ci] | x |", "1. [blocked] | x |")
+        for item in items:
+            with self.subTest(item=item):
+                body = self.body(f"{item}\n  | --- | --- |\n")
+                cell = item.split("|")[0].strip().replace("\\", "")
+                self.assertEqual(pr_readiness.rendered_status_lines(body)[0], cell)
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_a_break_inside_one_item_makes_two_lines_and_the_second_is_read(self) -> None:
+        # GitHub renders a break in a pull request body as a line break: `POST
+        # /markdown` in `gfm` mode returns `<del>…</del><br>[blocked] item --
+        # waiting` for both shapes below, so the status is on its own rendered
+        # line and the struck text above it is not in front of it. Flattening
+        # the item to one string put them on one line and the anchor missed
+        # the status. Found by codex (gpt-5.6-sol, xhigh).
+        withdrawn = "- ~~[complete] old -- withdrawn~~"
+        for tail in ("\\\n  \\[blocked] item -- waiting", "\n  \\[blocked] item -- waiting"):
+            with self.subTest(tail=tail.splitlines()[-1].strip()):
+                body = self.body(withdrawn + tail + "\n")
+                self.assertEqual(
+                    pr_readiness.rendered_status_lines(body),
+                    ["~~[complete] old -- withdrawn~~", "[blocked] item -- waiting"],
+                )
+                self.assertEqual(self.failures(body), [self.PENDING])
+
+    def test_the_rendered_view_reads_every_line_under_the_heading(self) -> None:
+        # The read reached directly: each cell of a table is its own line, and
+        # a paragraph and a sub-heading are lines too.
+        section = self.COMPLETE + "\n" + self.TABLE.format(status="[blocked]") + "\n### note\n\nprose\n"
+        self.assertEqual(
+            pr_readiness.rendered_status_lines(self.body(section)),
+            [
+                "[complete] swift test -- 1992 tests passed",
+                "artifact", "status",
+                "release log", "[blocked]",
+                "note",
+                "prose",
+            ],
+        )
+
+
+class ParserDefinitionTests(unittest.TestCase):
+    """The gate and the contributor skill read one section by one definition of markdown.
+
+    `pr-readiness.py` writes its `MarkdownIt` line rather than importing the
+    skill's, so the gate every PR runs through keeps its own PEP 723 pin and
+    its own import graph; the cost of that is two places to change, and this
+    is what makes forgetting one of them fail here (#1727).
+    """
+
+    HELPERS_PATH = (
+        REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
+    )
+    # Every construct the two definitions can differ on, beside a status line,
+    # so a dropped plugin shows as a missing token type rather than as nothing.
+    # A drifted parser need not change this body's shape, though -- disabling
+    # `escape` does not -- so the rules and options are compared as well.
+    SAMPLE = """## Evidence Status
+
+- [complete] swift test -- 1992 tests passed
+- ~~[blocked] release log~~
+- \\[pending-ci] &#91;escaped&#93; `code` **bold** <span>tag</span> [link](https://example.com)
+- an item that runs on\\
+  to a second line
+
+| artifact    | status    |
+| ----------- | --------- |
+| release log | [blocked] |
+"""
+
+    def owner_parser(self):
+        """The skill's parser, loaded by path so the test does not put its directory on `sys.path`."""
+        spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.MARKDOWN
+
+    def test_the_gate_and_the_owner_read_parse_a_body_the_same_way(self) -> None:
+        def shape(tokens):
+            return [
+                (part.type, part.tag, part.level, part.markup, part.content, part.attrs)
+                for token in tokens
+                for part in [token, *(token.children or [])]
+            ]
+
+        owner = self.owner_parser()
+        self.assertEqual(
+            shape(pr_readiness.MARKDOWN.parse(self.SAMPLE)),
+            shape(owner.parse(self.SAMPLE)),
+        )
+
+    def test_the_gate_and_the_owner_read_enable_the_same_rules(self) -> None:
+        # A parser can drift without moving a token on any one body -- codex
+        # (gpt-5.6-sol, xhigh) showed `.disable("escape")` leaving the sample
+        # above unchanged. What the two parsers are configured to do is
+        # compared directly, so a difference does not have to be witnessed.
+        owner = self.owner_parser()
+        self.assertEqual(pr_readiness.MARKDOWN.get_active_rules(), owner.get_active_rules())
+        self.assertEqual(pr_readiness.MARKDOWN.options, owner.options)
+
+    def test_the_gate_parses_gfm_and_not_bare_commonmark(self) -> None:
+        # The equality above holds for two parsers that have both lost a
+        # plugin, so what the gate's parser reads is also named outright.
+        self.assertIn("table_open", {token.type for token in pr_readiness.MARKDOWN.parse(self.SAMPLE)})
+        inline = pr_readiness.MARKDOWN.parseInline("~~[blocked]~~")
+        self.assertIn("s_open", {token.type for token in inline[0].children or []})
 
 
 class ReadinessCommentTests(unittest.TestCase):
