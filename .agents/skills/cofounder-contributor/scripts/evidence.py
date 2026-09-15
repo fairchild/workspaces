@@ -1304,7 +1304,16 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
             if item in entries
         }
     else:
-        matched, contested_items = _match_evidence_entries(requested_evidence, entries)
+        # The lines were read as rendered text, so each item is matched as
+        # rendered too: `**item**` and `item` share a key. Two items that render
+        # alike are one requirement to the matcher; the one written without
+        # markup takes the line, then the canonical order, never contract order.
+        rendered: dict[str, str] = {}
+        for item in sorted(requested_evidence, key=lambda item: (_rendered_inline(item) != item, _normalize_evidence_key(item), item)):
+            rendered.setdefault(_rendered_inline(item), item)
+        by_rendered, contested = _match_evidence_entries(list(rendered), entries)
+        matched = {rendered[text]: key for text, key in by_rendered.items()}
+        contested_items = [rendered[text] for text in contested]
         # Every line in a body with no metadata is hand-written, so the kind rule
         # decides what a `[complete]` there completes (`_hand_completion_refusal`).
         # Matching still assigns each line to one item; this only decides whether

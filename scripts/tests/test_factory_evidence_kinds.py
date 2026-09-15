@@ -3204,6 +3204,25 @@ class NoMetadataFallbackTests(unittest.TestCase):
         self.assertEqual(errors, [])
         self.assertIsNone(error)
 
+    def test_an_item_written_with_emphasis_completes_from_a_line_naming_it(self) -> None:
+        # The line is read as rendered text, so the item is matched as rendered too.
+        for item in ("**The launch state is captured**", "The *launch* state is captured"):
+            with self.subTest(item=item):
+                accounting, errors, error = self.gate(self.section(item), item)
+                self.assertEqual(accounting["complete_items"], [item])
+                self.assertEqual(accounting["missing_items"], [])
+                self.assertEqual(errors, [])
+                self.assertIsNone(error)
+
+    def test_two_items_that_render_alike_do_not_share_one_line(self) -> None:
+        items = ["**The launch state is captured**", "The launch state is captured"]
+        body = self.section(items[1])
+        for contract in (items, items[::-1]):
+            with self.subTest(contract=contract):
+                accounting, _ = run_contributor.validate_evidence_accounting(body, contract, review_ci=[])
+                self.assertEqual(accounting["complete_items"], [items[1]])
+                self.assertEqual(accounting["missing_items"], [items[0]])
+
     def test_a_line_that_does_not_name_the_item_does_not_complete_it(self) -> None:
         accounting, _, error = self.gate(self.section(self.OWNER_ITEM + " on macOS"), self.OWNER_ITEM)
         self.assertNotIn(self.OWNER_ITEM, accounting["complete_items"])
