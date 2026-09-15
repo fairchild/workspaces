@@ -440,9 +440,12 @@ kinds do not move, for one reason -- what is carried has to be a block whose
 end the body states: a fence with no closing line, and raw HTML, where which
 elements are still open is a second renderer's question. Both are deleted by
 the rewrite as they always were, so a `<details>` note belongs under Evidence
-Notes rather than under the heading. And notes that would take the body past
-the 65,536 characters GitHub stores are left behind rather than failing the
-write that carries the status. The section is unreadable,
+Notes rather than under the heading. Notes that would take the body past the
+65,536 characters GitHub stores are left behind rather than failing the write
+that carries the status. And a rewrite stands the body down, writing nothing
+and naming the line, where a `## Evidence Status` or `## Evidence Notes` line
+sits inside a fenced example: the cut takes every occurrence, so cutting from
+one would take the block's closing line with it. The section is unreadable,
 with the reason named, when anything else sits under the heading -- a code
 block, fenced or indented; any HTML block, even one holding only a comment; a
 horizontal rule; a paragraph; a nested list; a line naming no requested item --

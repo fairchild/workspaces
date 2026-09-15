@@ -22,7 +22,7 @@ from _helpers import (
     is_section_boundary,
     log,
     markdown_section,
-    heading_shown_as_code,
+    heading_cut_hits_an_example,
     removed_section_texts,
     reparsed_without_runaway,
     run_optional,
@@ -2253,25 +2253,6 @@ def _section_notes(section: str) -> list[str]:
     return [block for block in blocks if block.strip()]
 
 
-def _example_heading_refusal(body: str, heading: str) -> str | None:
-    """Why rewriting this section would cut into a fenced example of it, or None.
-
-    The cut takes every `## <heading>` line, and one written inside a fenced
-    example is code rather than a heading: cutting from it takes the fence's
-    closing line along, and the body a reader sees afterwards has a fence that
-    never opened and a section that does not end. The writer's own guard sees
-    the shape only where the fence closes before the end of the body, which is
-    the case it was filed on; this is the same shape where it does not.
-    """
-    if not heading_shown_as_code(body, heading):
-        return None
-    return (
-        f"a `## {heading}` line in the body is inside a code block, so it is an example rather "
-        "than a heading; a rewrite takes every occurrence and would take the block's closing "
-        "line with it"
-    )
-
-
 def write_evidence_status_section(
     body: str, status_lines: Iterable[str]
 ) -> tuple[str, str | None]:
@@ -2289,40 +2270,44 @@ def write_evidence_status_section(
     heading.
 
     The text carried forward is read from the same call that cuts it, so the
-    write cannot take out a span the read did not see. The only refusals are
-    the ones the section cut already gives: a `##` line the page shows as code,
-    and a section whose end an unclosed HTML block hides.
+    write cannot take out a span the read did not see. It stands the body down
+    on two shapes and writes nothing: a section whose end an unclosed HTML
+    block hides, and a `## <heading>` line the page shows as code.
     """
+    # Newline-terminated throughout, because the cut's pattern ends on one: a
+    # heading on the last line with nothing after it is a section to a reader
+    # and none to the cut, and the write then appends a second copy beside it.
+    source, body = body, body if body.endswith("\n") else f"{body}\n"
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
     if refusal is None:
-        refusal = _example_heading_refusal(body, EVIDENCE_STATUS_HEADING)
+        refusal = heading_cut_hits_an_example(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
-        return body, refusal
+        return source, refusal
     notes = [block for section in sections for block in _section_notes(section)]
-    written = insert_markdown_section(
-        body, EVIDENCE_STATUS_HEADING, "\n".join(status_lines), before_heading="Validation"
-    )
-    # The notes section is placed by the same rule on every run, whether or
-    # not this run found anything to add, so it stays directly below the
-    # status it was written under however many times this runs. Placing one
-    # and not the other is what let a second write leave them in the opposite
-    # order.
-    # Newline-terminated, because a heading on the last line with nothing
-    # after it is a section to `has_markdown_section` and none to the cut, and
-    # the empty one left behind is what a reader then finds above the status.
-    padded = f"{written}\n"
-    kept, notes_refusal = removed_section_texts(padded, EVIDENCE_NOTES_HEADING)
+    # The notes section comes out before the status section goes in, so that
+    # neither is standing when the other is placed and both land by the same
+    # rule. Placing the status around a notes section still in the body put
+    # the two in one order on the first write and the other on the second.
+    kept, notes_refusal = removed_section_texts(body, EVIDENCE_NOTES_HEADING)
     if notes_refusal is None:
-        notes_refusal = _example_heading_refusal(padded, EVIDENCE_NOTES_HEADING)
+        notes_refusal = heading_cut_hits_an_example(body, EVIDENCE_NOTES_HEADING)
     if notes_refusal is not None:
-        return body, notes_refusal
+        return source, notes_refusal
+    # Appended to what that section already held rather than replacing it.
     blocks = [text.strip() for text in kept if text.strip()] + notes
+    written = insert_markdown_section(
+        strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
+        EVIDENCE_STATUS_HEADING,
+        "\n".join(status_lines),
+        before_heading="Validation",
+    )
     if not blocks:
-        # Nothing to hold. A heading left behind is a section this writer
-        # would place next run and a reader would find above the status now.
-        return (strip_markdown_section(padded, EVIDENCE_NOTES_HEADING) if kept else written), None
+        # Nothing to hold, and no heading left behind: an empty one is a
+        # section this writer would place next run and a reader would find
+        # above the status now.
+        return written, None
     with_notes = insert_markdown_section(
-        padded, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), before_heading="Validation"
+        written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), before_heading="Validation"
     )
     if len(with_notes) > PR_BODY_LIMIT:
         # A body GitHub will not store is not a body: the write that carries

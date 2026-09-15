@@ -558,17 +558,31 @@ def _visible_offsets(body: str, offsets: list[int]) -> list[int]:
     ]
 
 
-def heading_shown_as_code(body: str, heading: str) -> bool:
-    """Whether a `## <heading>` line the cut would take is one the page shows as code.
+def heading_cut_hits_an_example(body: str, heading: str) -> str | None:
+    """Why rewriting this section would cut into a fenced example of it, or None.
 
-    A cut takes every occurrence, so one such line is enough for it to take a
-    fenced example's closing line with it -- and where that fence runs to the
-    end of the body, the section's end is inside the fence and the write guard
-    has no shape to see. A caller about to rewrite the section asks this first
-    and stands the body down instead.
+    The cut takes every line matching `_heading_pattern`, and one written
+    inside a fenced example is code rather than a heading: cutting from it
+    takes the block's closing line along, and the body a reader is left with
+    carries a fence that never opened. The writer's own guard sees that shape
+    only where the fence closes before the end of the body, which is the case
+    it was filed on; this is the same shape where it does not.
+
+    The other direction -- a heading the page shows that the cut cannot match,
+    so the write leaves it standing and appends a second copy -- is not one of
+    these. A body carrying two sections a reader accepts has no line that is
+    the owner's, which is the reading that keeps a forged section from posing
+    as one, and standing the write down there would leave the forgery alone in
+    the body with nothing beside it.
     """
-    offsets = [match.start() for match in re.finditer(_heading_pattern(heading), body)]
-    return len(offsets) != len(_visible_offsets(body, offsets))
+    taken = [match.start() for match in re.finditer(_heading_pattern(heading), body)]
+    if len(taken) == len(_visible_offsets(body, taken)):
+        return None
+    return (
+        f"a `## {heading}` line in the body is inside a code block, so it is an example rather "
+        "than a heading; a rewrite takes every occurrence and would take the block's closing "
+        "line with it"
+    )
 
 
 def visible_heading_offset(body: str, heading: str) -> int | None:

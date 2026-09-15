@@ -5476,6 +5476,28 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             spaced,
         )
 
+    def test_a_fenced_example_of_the_placement_heading_is_not_placed_in_front_of(self) -> None:
+        # A body quoting the format shows `## Validation` as code somewhere
+        # above its real one. A writer that places its section before the
+        # first matching line writes it inside that fence, taking the status
+        # list and the metadata out of the rendered body -- so the placement
+        # walks to the first match the page shows as a heading.
+        evidence = sys.modules["evidence"]
+        body = (
+            self.meta()
+            + "## Summary\n\nThe format:\n\n```markdown\n## Validation\n- ran it\n```\n\n"
+            + f"## Evidence Status\n\n- [pending-ci] {self.ITEM} -- the lane has not run yet\n"
+            + "\nA note.\n\n## Validation\n\n- ran the suite on this head\n"
+        )
+        resolved = self.resolved(body)
+        self.assertEqual(resolved.count("```"), 2)
+        self.assertLess(resolved.index("```markdown"), resolved.index("## Evidence Status"))
+        lines, unreadable = evidence._rendered_status_lines(resolved)
+        self.assertIsNone(unreadable)
+        self.assertEqual(lines, [f"[complete] {self.ITEM} -- 214 tests passed"])
+        self.assertEqual(self.notes_section(resolved), "A note.")
+        self.assertEqual(self.resolved(resolved), resolved)
+
     def test_an_empty_notes_section_goes_rather_than_outliving_the_status(self) -> None:
         # A heading with nothing under it is a section this writer would place
         # next run and a reader finds above the status now: leaving it is what
@@ -5484,6 +5506,24 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         resolved = self.resolved(body)
         self.assertNotIn("Evidence Notes", resolved)
         self.assertEqual(self.resolved(resolved), resolved)
+
+    def test_a_notes_heading_the_cut_cannot_match_leaves_the_order_it_found(self) -> None:
+        # The recorded limit, not a claim about it: a heading line carrying
+        # trailing spaces is one a reader sees and the cut passes over, so it
+        # stands where it was and the status is placed below it rather than
+        # above. Widening the cut to match it is not free -- the same
+        # looseness would let a section the model wrote pose as the owner's
+        # (`OwnerKindHandEditTests`) -- so what is asked of this shape is that
+        # it settle: the second write moves nothing and the section still
+        # reads.
+        evidence = sys.modules["evidence"]
+        body = self.body("\nA note.\n\n## Evidence Notes   \n\nolder note\n")
+        once = self.resolved(body)
+        self.assertEqual(self.resolved(once), once)
+        self.assertLess(once.index("## Evidence Notes   "), once.index("## Evidence Status"))
+        self.assertIsNone(evidence._rendered_status_lines(once)[1])
+        # The note still moved, into a section of its own.
+        self.assertEqual(self.notes_section(once), "A note.")
 
     def test_a_body_at_the_limit_keeps_the_status_it_cannot_keep_the_notes_with(self) -> None:
         # A body GitHub will not store is not a body. Carrying the notes past
