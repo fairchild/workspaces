@@ -1079,7 +1079,9 @@ def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None
     """Why a hand-written `[complete]` does not complete this item, or None when it does.
 
     With no metadata there is no recorded kind, so the item is classified the
-    way the contributor classifies it when it records one. Only an owner's
+    way the contributor classifies it when it records one, from the text it
+    renders as: that is the text the line was matched against, and emphasis
+    around a command does not make a lane item the owner's. Only an owner's
     `other` item completes from its line, and only a line that names it as it
     is written, the key the owner read uses: a loosely restated line can be a
     different item to a reader. A `test-attested` item completes on the
@@ -1087,14 +1089,15 @@ def _hand_completion_refusal(body: str, item: str, line_item: str) -> str | None
     contributor itself accepts; every other kind has a lane, a check or a
     review that completes it, and a hand-written line is none of those.
     """
-    kind = _evidence_item_kind(item)
+    rendered = _rendered_inline(item)
+    kind = _evidence_item_kind(rendered)
     if kind == "other":
-        if _normalize_evidence_key(line_item) == _normalize_evidence_key(_rendered_inline(item)):
+        if _normalize_evidence_key(line_item) == _normalize_evidence_key(rendered):
             return None
         return "the line does not name this item as it is written, so a hand-written completion is not read"
-    if kind == "test-attested" and _attested_test_statement(body, item):
+    if kind == "test-attested" and _attested_test_statement(body, rendered):
         return None
-    if kind == "perf" and _perf_numbers(body, item):
+    if kind == "perf" and _perf_numbers(body, rendered):
         return None
     return HAND_COMPLETION_REFUSALS.get(kind, "a hand-written line does not complete this kind of item")
 
@@ -1228,6 +1231,11 @@ def _match_evidence_entries(
 
 
 def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, review_ci: list[dict] | None = None) -> dict[str, object]:
+    # Every read below takes `\n` line endings. The metadata pattern matches no
+    # other, and a CRLF or CR metadata comment it misses would send the body to
+    # the hand-written read, where a lane item the metadata records as pending
+    # completes from its visible line.
+    body = MARKDOWN_LINE_ENDING_RE.sub("\n", body)
     if not _explicit_evidence_contract(requested_evidence):
         return {
             "section_present": has_markdown_section(body, "Evidence Status"),
@@ -1323,7 +1331,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
                 continue
             refusal = _hand_completion_refusal(body, item, key)
             if refusal:
-                status = "blocked" if _evidence_item_kind(item) == "other" else "pending-ci"
+                status = "blocked" if _evidence_item_kind(_rendered_inline(item)) == "other" else "pending-ci"
                 entries[key] = {"status": status, "detail": refusal}
 
     # This overlay exists only in review. Authoring validation still requires

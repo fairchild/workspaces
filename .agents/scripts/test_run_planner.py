@@ -2794,11 +2794,13 @@ class RunContributorTests(unittest.TestCase):
         self.assertNotIn("[complete]", reconciled)
 
     def test_linux_runner_pending_ci_resolves_correctly(self) -> None:
-        """[pending-ci] items written by a Linux runner ARE resolved by the macOS evidence job.
+        """[pending-ci] items a Linux runner wrote are rewritten by the macOS evidence job.
 
-        This is the correct path: Linux runner writes evidence_pending_ci for
-        build/test items; macOS evidence job calls reconcile_pending_ci_evidence
-        and replaces them with [complete] or [blocked].
+        The Linux runner writes evidence_pending_ci for build and test items;
+        the macOS evidence job calls reconcile_pending_ci_evidence, which
+        rewrites those lines as [complete] or [blocked]. In a body with no
+        evidence metadata the accounting still reads the rewritten items as
+        pending-ci, since nothing in such a body records that the lane wrote them.
         """
         body = (
             "## Evidence Status\n"

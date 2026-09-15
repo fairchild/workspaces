@@ -3214,6 +3214,37 @@ class NoMetadataFallbackTests(unittest.TestCase):
                 self.assertEqual(errors, [])
                 self.assertIsNone(error)
 
+    def test_an_item_written_with_emphasis_is_classified_as_it_renders(self) -> None:
+        # Emphasis around a command does not make a lane item the owner's.
+        item = "**`swift test --filter FooTests` passes**"
+        body = "## Evidence Status\n- [complete] `swift test --filter FooTests` passes -- hand-written result text\n"
+        accounting, _, error = self.gate(body, item)
+        self.assertNotIn(item, accounting["complete_items"])
+        self.assertEqual(accounting["pending_ci_items"], [item])
+        self.assertIsNotNone(error)
+        attested = "**`pnpm test` in `web-next` passes**"
+        body = "## Evidence Status\n- [complete] `pnpm test` in `web-next` passes -- `pnpm test` in `web-next`: 214 tests passed\n"
+        accounting, _, _ = self.gate(body, attested)
+        self.assertEqual(accounting["complete_items"], [attested])
+
+    def test_metadata_is_read_whatever_the_line_endings(self) -> None:
+        # A metadata comment with CRLF or CR endings went unmatched, so the body
+        # fell to the hand-written read and a lane item recorded pending
+        # completed from its visible line.
+        item = "`pnpm test` in `web-next` passes"
+        entry = {"index": 1, "item": item, "status": "pending-ci", "detail": "the evidence lane runs it", "kind": "test-attested"}
+        body = (
+            "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n## Evidence Status\n"
+            f"- [complete] {item} -- `pnpm test` in `web-next`: 214 tests passed\n"
+        )
+        for name, ending in (("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")):
+            with self.subTest(ending=name):
+                accounting, _, error = self.gate(body.replace("\n", ending), item)
+                self.assertEqual(accounting["source"], "structured")
+                self.assertEqual(accounting["complete_items"], [])
+                self.assertEqual(accounting["pending_ci_items"], [item])
+                self.assertIsNotNone(error)
+
     def test_two_items_that_render_alike_do_not_share_one_line(self) -> None:
         items = ["**The launch state is captured**", "The launch state is captured"]
         body = self.section(items[1])
