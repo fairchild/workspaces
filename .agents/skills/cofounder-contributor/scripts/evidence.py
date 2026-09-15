@@ -20,6 +20,7 @@ from _helpers import (
     has_markdown_section,
     insert_markdown_section,
     is_section_boundary,
+    is_section_heading,
     log,
     markdown_section,
     heading_cut_hits_an_example,
@@ -850,7 +851,10 @@ def _rendered_section_span(
 
     The heading is matched on the text a reader sees, at the level
     `markdown_section` matches it: an h2 at the top of the body, not one nested
-    inside a list, and the first such heading wins.
+    inside a list, and the first such heading wins. `is_section_heading` is
+    that level and `is_section_boundary` is where the section stops, which are
+    two questions rather than one -- an h1 ends a section without being a
+    section this addresses (#1734).
 
     The section ends where `is_section_boundary` says it does, which is the
     same call the written read makes on the same tokens -- so the two views
@@ -867,8 +871,7 @@ def _rendered_section_span(
     wanted = " ".join(heading.split()).casefold()
     for index, token in enumerate(tokens):
         if (
-            token.type != "heading_open"
-            or not is_section_boundary(token)
+            not is_section_heading(token)
             or " ".join(_inline_text(tokens[index + 1].children).split()).casefold() != wanted
         ):
             continue

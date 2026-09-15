@@ -2488,14 +2488,15 @@ class MonotoneStatementReadTests(unittest.TestCase):
                 self.assertIsNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
 
     def test_the_section_ends_where_the_written_read_ends_it(self) -> None:
-        # `markdown_section`'s lookahead is `(?=^## |\n---\n|\Z)`. Ending the
-        # rendered section at an h1 or at a `***` rule truncated it where the
-        # written read did not, and the item stopped completing.
+        # One boundary for both reads, which is what makes an item complete or
+        # not for a single reason. An h1 ends a section for both of them, the
+        # way the page ends one there (#1734); `***` and `___` end one for
+        # neither, and a `---` rule ends one for both.
         fields = (
             "- Before Summary: p50 launch latency 900 ms\n\n{divider}\n\n"
             "- After Summary: p50 launch latency 410 ms\n"
         )
-        for divider, still_reads in (("# Aside", True), ("***", True), ("___", True), ("---", False)):
+        for divider, still_reads in (("# Aside", False), ("***", True), ("___", True), ("---", False)):
             body = "## Performance\n\n" + fields.format(divider=divider)
             with self.subTest(divider=divider):
                 read = run_contributor._perf_numbers(body, self.PERF_ITEM)
@@ -4361,7 +4362,7 @@ class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
             return False
         if token.type == "hr":
             return token.markup.startswith("-")
-        return token.type == "heading_open" and token.tag == "h2"
+        return token.type == "heading_open" and token.tag in {"h1", "h2"}
 
     def views(self, body: str, heading: str = "Performance") -> tuple[list[str], list[str]]:
         """The written lines and the rendered lines of one section."""
@@ -4475,18 +4476,17 @@ class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
         # an underline becomes a measurement. A heading is one line with
         # hashes, whatever made it one, so a statement still ends there.
         #
-        # An `===` underline makes an h1, which ends no section, so it is the
-        # one that stays inside a section to be read at all.
+        # Both underlines end a section now -- `===` makes an h1 and `---` an
+        # h2, and a section ends at either (#1734) -- so the hashes are read on
+        # the whole body: no setext heading sits inside a section to be read
+        # there.
         body = (
             "## Performance\n\nTwo lines\nunder one rule\n===\n\nplain text\n\n"
             "## Aside\n\n### Hashed\n"
         )
-        self.assertEqual(
-            self.evidence()._rendered_lines(body, "Performance"),
-            ["# Two lines under one rule", "", "plain text"],
-        )
+        self.assertIn("# Two lines under one rule", self.evidence()._rendered_lines(body))
+        self.assertEqual(self.evidence()._rendered_lines(body, "Performance"), [])
         self.assertEqual(self.evidence()._rendered_lines(body, "Aside"), ["### Hashed"])
-        # And an `---` underline makes an h2, which does end the section.
         underlined = "## Performance\n\nUnderlined heading\n---\n\nbelow\n"
         self.assertEqual(self.evidence()._rendered_lines(underlined, "Performance"), [])
 
@@ -4613,6 +4613,240 @@ class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
             ],
             ["_helpers"],
         )
+
+
+class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
+    """A top-level h1 ends a section, so a rewrite of the one above it leaves it alone (#1734).
+
+    `is_section_boundary` answered `False` for an h1, and every reader and
+    writer of a section asks it, so they were consistent and wrong together:
+    an author's `# Release blockers` under `## Evidence Status` read as a block
+    inside that section. The rewrite then carried the heading into
+    `## Evidence Notes` and dropped the `- [blocked]` bullet under it, which a
+    status rewrite replaces with the entries in hand -- #1725's harm, back for
+    any h1 section after Evidence Status, and silent.
+
+    The predicate is two questions rather than one. `is_section_heading` is the
+    level a section is addressed at, a top-level h2, because `markdown_section`
+    finds its heading with a literal `^## ` anchor; `is_section_boundary` is
+    where a section stops, a top-level h1 or h2 or a dash rule. Answering the
+    first with the second would match `# Evidence Status` as the section for
+    the rendered read while the written read found nothing under that name.
+    """
+
+    ITEM = "unit tests"
+    BLOCKERS = (
+        "# Release blockers\n"
+        "- [blocked] the signing profile is missing\n\n"
+        "The profile lives on the laptop and the hosted lane cannot see it."
+    )
+
+    def meta(self) -> str:
+        entry = {
+            "index": 1,
+            "item": self.ITEM,
+            "status": "pending-ci",
+            "detail": "the lane has not run yet",
+            "kind": "test",
+        }
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+
+    def status(self) -> str:
+        return f"## Evidence Status\n\n- [pending-ci] {self.ITEM} -- the lane has not run yet\n\n"
+
+    def body(self) -> str:
+        return (
+            self.meta()
+            + self.status()
+            + self.BLOCKERS
+            + "\n\n## Validation\n- local unit tests passed\n"
+        )
+
+    def evidence(self):
+        return sys.modules["evidence"]
+
+    def assert_h1_section_survives(self, written: str) -> None:
+        """The author's section, byte for byte, and no notes section holding it."""
+        self.assertIn(self.BLOCKERS, written)
+        self.assertNotIn("## Evidence Notes", written)
+
+    def test_the_lane_writer_leaves_the_h1_section_and_its_blocked_bullet_alone(self) -> None:
+        # The reproduction from the issue, through the writer a lane run uses.
+        # At the merge base the bullet is gone from the output entirely.
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            written = self.evidence().update_evidence_entries(
+                self.body(), {1: {"status": "complete", "detail": "10 passed"}}
+            )
+        self.assertEqual(spoke.getvalue(), "")
+        self.assert_h1_section_survives(written)
+        self.assertIn(f"- [complete] {self.ITEM} -- 10 passed", written)
+        # A second write over the first moves nothing.
+        self.assertEqual(
+            self.evidence().update_evidence_entries(
+                written, {1: {"status": "complete", "detail": "10 passed"}}
+            ),
+            written,
+        )
+
+    def test_the_factory_writer_leaves_the_h1_section_and_its_blocked_bullet_alone(self) -> None:
+        # The same body through the other writer of this section. Both come
+        # through `write_evidence_status_section`, and a test on one of them is
+        # a test that the pair was routed, not that the pair agrees.
+        model_body = (
+            "## Summary\n\n- did the thing\n\n"
+            + self.status()
+            + self.BLOCKERS
+            + "\n\n## Validation\n- local unit tests passed\n"
+        )
+        written, errors = run_contributor.render_execution_summary_body(
+            model_body,
+            requested_evidence=[self.ITEM],
+            evidence_complete=["1 -- 10 passed"],
+            evidence_blocked=None,
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(errors, [])
+        self.assert_h1_section_survives(written)
+        self.assertIn(f"- [complete] {self.ITEM} -- 10 passed", written)
+
+    def test_the_write_leaves_the_h1_where_the_author_put_it(self) -> None:
+        # What the write does move is its own section: cut from above the h1 and
+        # placed back at the heading it is placed before, `## Evidence Status`
+        # lands below the author's section rather than above it. The author's
+        # heading keeps its line and its blocks; the machine's section is the
+        # one that travels, which is the trade for not touching the h1 at all.
+        written = self.evidence().update_evidence_entries(
+            self.body(), {1: {"status": "complete", "detail": "10 passed"}}
+        )
+        self.assertLess(written.index("# Release blockers"), written.index("## Evidence Status"))
+        self.assertLess(written.index("## Evidence Status"), written.index("## Validation"))
+
+    def test_the_written_read_stops_before_a_top_level_h1(self) -> None:
+        self.assertEqual(
+            sys.modules["_helpers"].markdown_section(self.body(), "Evidence Status"),
+            f"- [pending-ci] {self.ITEM} -- the lane has not run yet",
+        )
+
+    def test_the_rendered_span_ends_at_the_h1(self) -> None:
+        evidence = self.evidence()
+        body = self.body()
+        lines = evidence.MARKDOWN_LINE_ENDING_RE.split(body)
+        tokens = evidence.MARKDOWN.parse(body)
+        span = evidence._rendered_section_span(tokens, "Evidence Status", lines)
+        self.assertIsNotNone(span)
+        stop = tokens[span[1]]
+        self.assertEqual((stop.type, stop.tag), ("heading_open", "h1"))
+        self.assertEqual(lines[stop.map[0]], "# Release blockers")
+
+    BOUNDARIES = {
+        "an atx h1": ("# Release blockers\n", True),
+        "an atx h2": ("## Release blockers\n", True),
+        "a setext h1": ("Release blockers\n===\n", True),
+        "a setext h2": ("Release blockers\n---\n", True),
+        "a dash rule": ("---\n", True),
+        "a long dash rule": ("-----\n", True),
+        "an atx h3": ("### Release blockers\n", False),
+        "a star rule": ("***\n", False),
+        "an underscore rule": ("___\n", False),
+        "an h1 in a closed fence": ("```markdown\n# Release blockers\n```\n", False),
+        "an h1 inside a list item": ("- a bullet\n\n  # Release blockers\n", False),
+    }
+
+    def test_the_predicate_answers_for_every_shape_a_section_can_end_on(self) -> None:
+        helpers = sys.modules["_helpers"]
+        for name, (markup, ends_it) in self.BOUNDARIES.items():
+            body = f"## Evidence Status\n\nunit tests passed.\n\n{markup}\nafter\n"
+            with self.subTest(shape=name):
+                tokens = helpers.MARKDOWN.parse(body)
+                self.assertEqual(
+                    any(
+                        token.map
+                        and token.map[0] >= 4
+                        and helpers.is_section_boundary(token)
+                        for token in tokens
+                    ),
+                    ends_it,
+                )
+                self.assertEqual(
+                    helpers.markdown_section(body, "Evidence Status") == "unit tests passed.",
+                    ends_it,
+                )
+
+    def test_the_h1_shapes_end_a_section_exactly_where_the_h2_shapes_do(self) -> None:
+        # The pair rule, asserted as a symmetry rather than a list: for every
+        # way of writing a heading, the read's answer for the h1 form is the
+        # answer it gives for the h2 form. A predicate that grew a special case
+        # for one level fails here even where no fixture below names the shape.
+        helpers = sys.modules["_helpers"]
+        for name, one, two in (
+            ("atx at column 0", "# Release blockers", "## Release blockers"),
+            ("atx indented three spaces", "   # Release blockers", "   ## Release blockers"),
+            ("atx with no space after the hashes", "#Release blockers", "##Release blockers"),
+            ("setext underline", "Release blockers\n===", "Release blockers\n---"),
+            ("inside a closed fence", "```\n# Release blockers\n```", "```\n## Release blockers\n```"),
+        ):
+            with self.subTest(shape=name):
+                sections = [
+                    helpers.markdown_section(
+                        f"## Evidence Status\n\nunit tests passed.\n\n{markup}\n\nafter\n",
+                        "Evidence Status",
+                    )
+                    for markup in (one, two)
+                ]
+                self.assertEqual(
+                    sections[0] == "unit tests passed.", sections[1] == "unit tests passed."
+                )
+
+    def test_an_h1_a_runaway_fence_hides_still_ends_the_section(self) -> None:
+        # The third place the boundary is asked: a fence with no closing line
+        # holds every heading below it, so the section's end is a line the
+        # repaired parse finds rather than a token this one carries. Both reads
+        # stop at the author's h1, which is what keeps the section the writer
+        # rewrites the section the reader reported.
+        evidence = self.evidence()
+        body = (
+            "## Evidence Status\n\n- [pending-ci] unit tests -- the lane has not run yet\n\n"
+            "```\nan excerpt whose fence never closes\n\n"
+            "# Release blockers\n- [blocked] the signing profile is missing\n"
+        )
+        lines = evidence.MARKDOWN_LINE_ENDING_RE.split(body)
+        span = evidence._rendered_section_span(evidence.MARKDOWN.parse(body), "Evidence Status", lines)
+        self.assertIsNotNone(span)
+        self.assertEqual(lines[span[2]], "# Release blockers")
+        written = sys.modules["_helpers"].markdown_section(body, "Evidence Status")
+        self.assertNotIn("# Release blockers", written)
+        self.assertNotIn("[blocked]", written)
+
+    def test_an_h1_named_like_the_section_is_not_the_section_for_either_read(self) -> None:
+        # Why the predicate is two and not one. `markdown_section` finds its
+        # heading with a literal `^## ` anchor, so a rendered read that took
+        # `is_section_boundary` for the level would match `# Evidence Status`
+        # as the section while the written read found nothing -- the split the
+        # pair exists to prevent, arriving by way of the fix for it.
+        evidence = self.evidence()
+        body = "# Evidence Status\n\n- [complete] unit tests -- 10 passed\n\n## Validation\n- ran it\n"
+        self.assertEqual(sys.modules["_helpers"].markdown_section(body, "Evidence Status"), "")
+        self.assertIsNone(
+            evidence._rendered_section_span(
+                evidence.MARKDOWN.parse(body),
+                "Evidence Status",
+                evidence.MARKDOWN_LINE_ENDING_RE.split(body),
+            )
+        )
+
+    def test_the_two_predicates_are_asked_for_the_two_questions(self) -> None:
+        # The call sites, named: the rendered read asks for the level once, to
+        # decide the heading is its own, and for the boundary where the section
+        # stops. Swapping either reintroduces one of the two bugs, so the
+        # source is checked rather than only the behaviour.
+        source = (
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "evidence.py"
+        ).read_text(encoding="utf-8")
+        span = source[source.index("def _rendered_section_span") :]
+        span = span[: span.index("\ndef ", 1)]
+        self.assertEqual(span.count("is_section_heading("), 1)
+        self.assertEqual(span.count("is_section_boundary("), 2)
 
 
 class NoReaderGainsAnAcceptanceFromABoundaryTests(unittest.TestCase):

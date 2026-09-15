@@ -1134,6 +1134,94 @@ class ParserDefinitionTests(unittest.TestCase):
         self.assertIn("s_open", {token.type for token in inline[0].children or []})
 
 
+class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
+    """The gate and the contributor skill end `## Evidence Status` in the same place (#1734).
+
+    Two files answer this, and neither can import the other: the gate runs on
+    every PR in the repo from its own PEP 723 pin, and the skill's reader is a
+    private module in a skill directory. So the rule is written twice -- a line
+    scanner here, a parser predicate there -- and agreement is a property to
+    assert rather than a thing the code structure gives. Where they part
+    company, a body is one section to the gate and another to the reader that
+    rewrites it, which is how a `# Release blockers` after the section came to
+    be carried into `## Evidence Notes` with its `- [blocked]` bullet dropped.
+
+    The fixtures are one per boundary kind the gate names, so a level removed
+    from either side is caught here and not only in that side's own tests: drop
+    the h1 from `SECTION_BOUNDARY_HEADING_RE` and the gate reads past the h1
+    fixture; drop it from the skill's `is_section_boundary` and the reader does.
+    """
+
+    HELPERS_PATH = (
+        REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "_helpers.py"
+    )
+    STATUS = "## Evidence Status\n\n- [complete] unit tests -- 10 passed\n\n"
+    FIXTURES = {
+        "an h1 after the section": STATUS
+        + "# Release blockers\n- [blocked] the signing profile is missing\n\n## Validation\n- ran it\n",
+        "an h2 after the section": STATUS + "## Validation\n- ran it\n",
+        "a dash rule after the section": STATUS + "---\n\nafter the rule\n",
+        "a body title h1 above the section": "# Pull request\n\n" + STATUS + "## Validation\n- ran it\n",
+        "an h3 inside the section": STATUS + "### How it was run\n- on this head\n\n## Validation\n- ran it\n",
+        "an h1 inside a closed fence": STATUS
+        + "```markdown\n# Release blockers\n```\n\nstill inside\n\n## Validation\n- ran it\n",
+        "an h2 inside a closed fence": STATUS
+        + "```markdown\n## Validation\n```\n\nstill inside\n\n## Validation\n- ran it\n",
+        # Neither side addresses a section by an h1, so neither finds one here.
+        # The fix for the boundary could have widened the level a section is
+        # matched at, which would make this body a section to one and not the
+        # other.
+        "the heading itself written as an h1": "# Evidence Status\n\n- [complete] unit tests -- 10 passed\n\n## Validation\n- ran it\n",
+    }
+
+    def owner_reader(self):
+        """The skill's reader, loaded by path so the test does not put its directory on `sys.path`."""
+        spec = importlib.util.spec_from_file_location("contributor_helpers", self.HELPERS_PATH)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_both_files_bound_the_section_identically_on_every_boundary_kind(self) -> None:
+        owner = self.owner_reader()
+        for name, body in self.FIXTURES.items():
+            with self.subTest(fixture=name):
+                self.assertEqual(
+                    pr_readiness.extract_section(body, "Evidence Status"),
+                    owner.markdown_section(body, "Evidence Status"),
+                )
+
+    def test_the_h1_fixture_is_the_one_the_boundary_level_is_witnessed_on(self) -> None:
+        # The property above passes for two sides that both read past an h1,
+        # which is the state this arc started from. So what the shared answer
+        # is on that fixture is named outright: the section is the status line
+        # and nothing below the h1.
+        owner = self.owner_reader()
+        body = self.FIXTURES["an h1 after the section"]
+        self.assertEqual(
+            pr_readiness.extract_section(body, "Evidence Status"),
+            "- [complete] unit tests -- 10 passed",
+        )
+        self.assertEqual(
+            owner.markdown_section(body, "Evidence Status"),
+            "- [complete] unit tests -- 10 passed",
+        )
+        # The rendered view reads the text of a line, so the list marker is
+        # the parser's rather than the line's.
+        self.assertEqual(pr_readiness.rendered_status_lines(body), ["[complete] unit tests -- 10 passed"])
+
+    def test_the_gate_s_two_views_take_the_h1_boundary_together(self) -> None:
+        # The gate reads this section twice, once as written and once as
+        # rendered, and a status line the page shows outside the section must
+        # be outside it for both -- otherwise the `[blocked]` under the h1
+        # fails the PR on one view while the other has already excluded it.
+        body = self.FIXTURES["an h1 after the section"]
+        self.assertNotIn("[blocked]", pr_readiness.extract_section(body, "Evidence Status"))
+        self.assertEqual(
+            [line for line in pr_readiness.rendered_status_lines(body) if "[blocked]" in line], []
+        )
+
+
 class ReadinessCommentTests(unittest.TestCase):
     def test_failure_comment_names_failures_and_pastes_template(self) -> None:
         body = GOOD_BODY.replace("- Residual risk or follow-up: none", "")

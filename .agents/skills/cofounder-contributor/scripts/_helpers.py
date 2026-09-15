@@ -159,14 +159,37 @@ def issue_label_presence(issue: dict[str, object]) -> set[str]:
     return issue_label_names(issue)
 
 
+def is_section_heading(token: Token) -> bool:
+    """Whether a parsed token opens a heading at the level a section is addressed by.
+
+    A top-level h2, however the author made it one. This answers "is this the
+    section I was asked for", which is a narrower question than "does this end
+    the section above it": `markdown_section` finds its heading with a literal
+    `^## ` anchor, so a read that accepted an h1 here would match
+    `# Evidence Status` as the section while the written read found nothing
+    under that name -- the written/rendered split these two predicates exist
+    to prevent (#1734).
+    """
+    return token.level == 0 and token.type == "heading_open" and token.tag == "h2"
+
+
 def is_section_boundary(token: Token) -> bool:
     """Whether a parsed token starts something other than the section above it.
 
-    A section ends at a top-level h2 or a top-level `---` rule -- one nested in
-    a list or a quote is inside the section rather than after it. The h2 counts
-    however the author made it one, hashes or an underline: an underline is
-    what turns the line above it into a heading, and the page then shows a
-    heading there whatever the author meant.
+    A section ends at a top-level heading of level 1 or 2 or a top-level `---`
+    rule -- one nested in a list or a quote is inside the section rather than
+    after it. The heading counts however the author made it one, hashes or an
+    underline: an underline is what turns the line above it into a heading, and
+    the page then shows a heading there whatever the author meant.
+
+    An h1 ends a section because the page ends one there: a `# Release
+    blockers` under `## Evidence Status` is the author's own top-level section,
+    not a block inside this one. Read as inside it, the rewrite of Evidence
+    Status carried that heading into `## Evidence Notes` and dropped the status
+    bullet under it, since a status line inside the section is the machine's
+    and is replaced by the entries in hand (#1734). The readiness gate ends a
+    section at a heading of either level on both its views (#1674), and this is
+    the predicate that keeps this reader's answer the same as the gate's.
 
     This is the rule the rendered read always applied; what changed is that the
     written read asks it too, on the same tokens, so neither can place a
@@ -176,8 +199,8 @@ def is_section_boundary(token: Token) -> bool:
     inside a code fence, which the page shows as code -- so a fenced rule could
     truncate a section for the reader while a person saw it whole.
 
-    Its answers for `***`, `___`, an h1 and an h3 are the answers the readers
-    already gave: none of those ends a section.
+    Its answers for `***`, `___` and an h3 are the answers the readers already
+    gave: none of those ends a section.
 
     A fence that never closes is the exception, and it is the line rather than
     the token that carries it -- see `reparsed_without_runaway`.
@@ -186,7 +209,7 @@ def is_section_boundary(token: Token) -> bool:
         return False
     if token.type == "hr":
         return token.markup.startswith("-")
-    return token.type == "heading_open" and token.tag == "h2"
+    return token.type == "heading_open" and token.tag in {"h1", "h2"}
 
 
 
