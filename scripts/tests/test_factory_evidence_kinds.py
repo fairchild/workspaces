@@ -5479,34 +5479,6 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         resolved = self.resolved(self.body("\n  [run]: https://example.invalid/1\n"))
         self.assertEqual(self.notes_lines(resolved), ["  [run]: https://example.invalid/1"])
 
-    def test_moving_a_block_never_shows_the_reader_less_below_it(self) -> None:
-        # The property a relocation owes the page, over every block below where
-        # the notes land rather than over one heading: a reader sees no less
-        # after the move than before. The shape it is asked of is an element
-        # left open -- a `<details>` with no `</details>` -- which on the page
-        # already folds everything after it where it sits. Carried, it lands
-        # directly below the status list rather than above it, so the status
-        # becomes visible where it was hidden and nothing else stops being.
-        evidence = sys.modules["evidence"]
-
-        def below_the_notes(body: str) -> list[str]:
-            lines = evidence._rendered_lines(body)
-            return lines[lines.index("## Validation") :] if "## Validation" in lines else []
-
-        for label, tail in (
-            ("an element left open", "\n<details>\n<summary>More</summary>\n\nplain note\n"),
-            ("a closed details block", "\n<details>\n<summary>More</summary>\n\nplain note\n\n</details>\n"),
-            ("a fenced excerpt", "\n```\n214 tests passed\n```\n"),
-            ("a quoted note", "\n> a reviewer asked about the fixture\n"),
-        ):
-            with self.subTest(block=label):
-                body = self.body(tail)
-                before, after = below_the_notes(body), below_the_notes(self.resolved(body))
-                self.assertTrue(
-                    set(before) <= set(after),
-                    f"the move hid {sorted(set(before) - set(after))}",
-                )
-
     def test_a_fenced_heading_in_a_moved_note_does_not_swallow_the_next_write(self) -> None:
         # The move puts a note somewhere a later write looks. A `## Validation`
         # inside a fenced example is code, not a heading, and a writer placing
@@ -5737,6 +5709,92 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
                     pointer += 1
                 carried_total += len(carried)
         self.assertGreaterEqual(carried_total, 20, "the fixtures carried almost nothing")
+
+    PLACEMENT_FIXTURES = BYTE_FIXTURES + (
+        # The case the order is really for: an element left open folds what
+        # follows it on GitHub's page, so where the write puts it is the whole
+        # question, and no parser-based oracle can see that.
+        ("an element left open", "\n<details>\n<summary>More</summary>\n\nplain note\n"),
+        ("a fenced excerpt", "\n```\n214 tests passed\n```\n"),
+        ("a quoted note", "\n> a reviewer asked about the fixture\n"),
+    )
+
+    def test_a_carried_block_lands_below_every_line_the_machine_writes(self) -> None:
+        """The order the page-level safety of a move rests on, in the form a test can check.
+
+        A block that may fold what follows it -- a `<details>` with no
+        `</details>` is the shape -- is safe to move only if it lands below
+        everything the machine writes and above the next heading. Then the
+        status list is visible where the block used to hide it, and the block
+        folds no more than it folded where the author put it.
+
+        Asserted by offset, over every carried line of every fixture, because
+        the rendering oracle below cannot see it: put the notes above the
+        status and `_rendered_lines` reports exactly what it reported before.
+        """
+        carried_total = 0
+        for label, tail in self.PLACEMENT_FIXTURES:
+            with self.subTest(block=label):
+                resolved = self.resolved(self.body(tail))
+                carried = set(self.notes_lines(resolved))
+                # Anti-vacuity first, so a fixture that carries nothing fails
+                # here saying so rather than erroring on the missing heading.
+                self.assertTrue(carried, f"{label} carried nothing")
+                heading = "## Evidence Notes\n"
+                notes_at = resolved.index(heading)
+                below = re.search(r"(?m)^## ", resolved[notes_at + len(heading) :])
+                self.assertIsNotNone(below, "no heading survives below the notes")
+                boundary = notes_at + len(heading) + below.start()
+                # Located by searching the whole body for the carried text, not
+                # by slicing the section: a slice would put every line inside
+                # the section by construction and assert nothing.
+                status_at, carried_at, offset = [], [], 0
+                for line in resolved.split("\n"):
+                    if self.ENTRY_LINE_RE.match(line):
+                        status_at.append(offset)
+                    elif line in carried:
+                        carried_at.append(offset)
+                    offset += len(line) + 1
+                self.assertTrue(status_at, "the write left no status line")
+                self.assertEqual(len(carried_at), len(self.notes_lines(resolved)))
+                self.assertLess(max(status_at), min(carried_at), "a carried block sits above the status")
+                self.assertLess(max(carried_at), boundary, "a carried block sits below the next heading")
+                carried_total += len(carried_at)
+        self.assertGreaterEqual(carried_total, 20, "the fixtures carried almost nothing")
+
+    def test_the_parser_s_rendering_shows_no_less_below_the_notes_after_the_move(self) -> None:
+        """What the parser's rendering can check about a move, and no more.
+
+        The oracle is `_rendered_lines`, and it never interprets HTML -- that
+        is the file's standing rule, since telling which elements are still
+        open is a second renderer and the one we had disagreed with GitHub. So
+        an element left open folds the blocks after it on the page and folds
+        nothing here, and this test cannot fail on that case. It does not claim
+        to: what makes the move safe there is the order, which the test above
+        asserts.
+
+        What this does check is the rest of the body: no block the parser DOES
+        model stops rendering because the write moved something above it.
+        """
+        checked = 0
+        for label, tail in self.PLACEMENT_FIXTURES:
+            with self.subTest(block=label):
+                body = self.body(tail)
+                before, after = self.rendered_below(body), self.rendered_below(self.resolved(body))
+                # Anti-vacuity: a comparison over nothing proves nothing, and
+                # nothing else here pins that the fixture renders anything.
+                self.assertTrue(before, f"{label} renders nothing below the notes to compare")
+                self.assertTrue(
+                    set(before) <= set(after), f"the move hid {sorted(set(before) - set(after))}"
+                )
+                checked += len(before)
+        self.assertGreaterEqual(checked, 20, "the fixtures rendered almost nothing below")
+
+    @staticmethod
+    def rendered_below(body: str) -> list[str]:
+        """The lines the parser renders from `## Validation` on, or none if it renders no such heading."""
+        lines = sys.modules["evidence"]._rendered_lines(body)
+        return lines[lines.index("## Validation") :] if "## Validation" in lines else []
 
     ROUND_TRIP_BODIES = (
         ("a note, a link and an excerpt", NOTES_BODY_TAIL),
