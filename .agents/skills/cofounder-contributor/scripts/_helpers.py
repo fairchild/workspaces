@@ -321,18 +321,84 @@ def _section_bounds(body: str, heading: str) -> tuple[int, int, int, str | None]
             located = hidden_boundary
     stop = len(line_starts) if located is None else located
     end = line_starts[stop] if stop < len(line_starts) else len(body)
-    return match.start(), match.end(), end, _write_refusal(tokens, heading_line, stop, len(lines))
+    # The number of lines the author wrote, which is what a block's span reaches
+    # when it runs to the end of the body.
+    written_lines = len(lines) - 1 if lines and lines[-1] == "" else len(lines)
+    return match.start(), match.end(), end, _write_refusal(tokens, heading_line, located, written_lines)
 
 
-def _write_refusal(tokens: list[Token], heading_line: int, stop: int, line_count: int) -> str | None:
+# What each raw-HTML block kind CommonMark ends on. Kinds 1 to 5 end on a
+# condition of their own; kinds 6 and 7 end on a blank line, which is why they
+# carry no entry and never count as unterminated. The kind is read off the
+# opening text because the token does not record it -- the parser has already
+# decided this run of lines is one HTML block, and this only asks which of the
+# seven it opened as.
+HTML_BLOCK_CLOSERS = (
+    ("<pre", "</pre>"),
+    ("<script", "</script>"),
+    ("<style", "</style>"),
+    ("<textarea", "</textarea>"),
+    ("<![cdata[", "]]>"),
+    ("<!--", "-->"),
+    ("<?", "?>"),
+)
+HTML_DECLARATION_RE = re.compile(r"^<![a-z]", re.IGNORECASE)
+
+
+def _missing_html_closer(token: Token) -> str | None:
+    """The closer an HTML block of kinds 1 to 5 opened and never wrote, or None."""
+    content = token.content.lstrip()
+    lowered = content.lower()
+    for prefix, closer in HTML_BLOCK_CLOSERS:
+        if lowered.startswith(prefix):
+            return None if closer in lowered else closer
+    if HTML_DECLARATION_RE.match(content):
+        return None if ">" in content[2:] else ">"
+    return None
+
+
+def unterminated_block(tokens: list[Token], line_count: int) -> tuple[Token, str] | None:
+    """The top-level block that opened, never closed, and so runs to the last line.
+
+    A fence with no closing line and a raw-HTML block of kinds 1 to 5 with no
+    closer are the same shape: CommonMark runs both to the end of the document,
+    so every heading the author wrote below one is inside it. A `<details>`
+    (kind 6) and a bare tag (kind 7) end on a blank line and end at the end of
+    the body legitimately, so neither is one of these; nor is the factory's own
+    metadata comment, which is a kind-2 block that closes.
+    """
+    for token in tokens:
+        if token.level != 0 or token.map is None or token.map[1] < line_count:
+            continue
+        if token.type == "fence" and _fence_never_closed(token):
+            return token, f"a `{token.markup}` code fence with no closing line"
+        if token.type == "html_block" and (missing := _missing_html_closer(token)) is not None:
+            return token, f"a raw HTML block with no `{missing}`"
+    return None
+
+
+def _write_refusal(
+    tokens: list[Token], heading_line: int, located: int | None, line_count: int
+) -> str | None:
     """Why replacing this section would corrupt the body, or None.
 
-    The heading a literal match found may be a `##` line inside a fenced
-    example, which is code rather than a heading. Cutting from there to the
-    section's end then takes the fence's closing line along and leaves the
-    fence open, and the next write to any section above the opener takes the
-    rest of the body. The block the heading sits in is where that starts, so a
-    cut reaching past it is the thing to refuse.
+    Two shapes, and both come down to a cut whose far end the author did not
+    write. The first: the heading a literal match found is a `##` line inside a
+    fenced example, which is code rather than a heading, so cutting from there
+    to the section's end takes the fence's closing line along and the next
+    write to any section above the opener takes the rest of the body.
+
+    The second: the section has no boundary after it and got there through a
+    block that never closed. Two reasons a section has no boundary want
+    opposite answers -- it is the last section, where the end of the body is
+    right, or a block runs to the end of the body and hides every heading
+    below it, where assuming the end of the body deletes them. The harm is the
+    hidden heading. This refuses in both cases anyway, including an open block
+    with nothing at all after it, because telling those apart means reading
+    text the page does not show: an unclosed comment renders as nothing, and a
+    read that decided from it would be deciding on what no reader can see. A
+    last section whose final block closes, or is a `<details>`, or is indented
+    code, is not this shape and still writes.
     """
     holder = next(
         (
@@ -344,12 +410,22 @@ def _write_refusal(tokens: list[Token], heading_line: int, stop: int, line_count
         ),
         None,
     )
-    if holder is None or stop <= holder.map[1] or holder.map[1] >= line_count:
+    if holder is not None and holder.map[1] < line_count and (located is None or located > holder.map[1]):
+        return (
+            f"the `##` line at line {heading_line + 1} is inside the code block opened at line "
+            f"{holder.map[0] + 1}, so it is an example rather than a heading; replacing it would "
+            "take the block's closing line with it"
+        )
+    if located is not None:
         return None
+    open_block = unterminated_block(tokens, line_count)
+    if open_block is None:
+        return None
+    token, description = open_block
     return (
-        f"the `##` line at line {heading_line + 1} is inside the code block opened at line "
-        f"{holder.map[0] + 1}, so it is an example rather than a heading; replacing it would "
-        "take the block's closing line with it"
+        f"{description} opened at line {token.map[0] + 1} and runs to the end of the body, so "
+        "where this section ends is not something the body says; a rewrite would take every "
+        "heading below that line with it"
     )
 
 
@@ -370,21 +446,38 @@ def has_markdown_section(body: str, heading: str) -> bool:
     return re.search(rf"(?mi)^## {re.escape(heading)}\s*$", body) is not None
 
 
-def strip_markdown_section(body: str, heading: str) -> str:
-    """The body without the section under `## <heading>`, heading included.
+def _section_removed(body: str, heading: str) -> tuple[str, str | None]:
+    """The body without this section, or the body and the reason it stands.
 
     Every occurrence goes, not only the first: `markdown_section` reads the
     first, so leaving a later one behind puts the stale copy where the next
     read will find it. The loop re-parses because each cut shortens the body,
     and it terminates because each cut takes at least the heading line.
+
+    The cut and the reason for refusing it come from one call on one text, so
+    a caller cannot be told the write was refused while the write happened, or
+    the reverse. That pair disagreed once, over nothing more than whether the
+    body had been trimmed first.
     """
     stripped = body
     while (bounds := _section_bounds(stripped, heading)) is not None:
         if bounds[3] is not None:
-            log(f"refusing to rewrite the `{heading}` section: {bounds[3]}")
-            return body
+            return body, bounds[3]
         stripped = stripped[: bounds[0]] + stripped[bounds[2] :]
-    return re.sub(r"\n{3,}", "\n\n", stripped.strip())
+    return re.sub(r"\n{3,}", "\n\n", stripped.strip()), None
+
+
+def strip_markdown_section(body: str, heading: str) -> str:
+    """The body without the section under `## <heading>`, heading included.
+
+    A refused cut is reported here rather than passed back, because every
+    caller wants the body either way; the run's output is where a refusal has
+    to be visible.
+    """
+    stripped, refusal = _section_removed(body, heading)
+    if refusal is not None:
+        log(f"refusing to rewrite the `{heading}` section: {refusal}")
+    return stripped
 
 
 def extract_blocked_by(body: str) -> list[int]:
@@ -407,11 +500,17 @@ def insert_markdown_section(
     before_heading: str | None = None,
 ) -> str:
     section = f"## {heading}\n{content.strip()}".rstrip()
-    if section_write_refusal(body.strip(), heading) is not None:
-        # `strip_markdown_section` has already said why. Appending the new
-        # section to a body whose old one could not be removed would leave two.
+    # The author's body, untrimmed, because that is the text the cut is made
+    # on and the text `section_write_refusal` answers about. Trimming here and
+    # not there made the guard name a refusal while the write went ahead.
+    removed, refusal = _section_removed(body, heading)
+    if refusal is not None:
+        # Reported here and only here: appending the new section to a body
+        # whose old one could not be removed would leave two, and returning
+        # the body without saying so let a caller believe it had written.
+        log(f"refusing to rewrite the `{heading}` section: {refusal}")
         return body
-    cleaned = strip_markdown_section(body.strip(), heading).strip()
+    cleaned = removed.strip()
     if before_heading and has_markdown_section(cleaned, before_heading):
         pattern = rf"(?mi)^(## {re.escape(before_heading)})\s*$"
         return re.sub(pattern, lambda match: f"{section}\n\n{match.group(1)}", cleaned, count=1)

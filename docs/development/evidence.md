@@ -415,7 +415,12 @@ it stay in the section they were written in, and a rewrite of that section
 replaces exactly what the read counted. A `##` or `---` inside a code fence is
 code, not a boundary -- unless the fence never closes, which runs it to the end
 of the body and would put every section below it inside the first; there the
-first `##` or `---` line inside the fence ends the section. What the page then shows is a heading,
+opener is set aside and the section ends at the first boundary the parser then
+reports. A raw HTML block that never closes -- a `<!--` with no `-->`, a
+`<pre>` or `<script>` with no end tag, a `<?`, `<!X` or `<![CDATA[` -- runs to
+the end of the body the same way, and a rewrite of a section whose end is
+hidden that way is refused rather than guessed: the body stands and the run
+says which line to close. What the page then shows is a heading,
 not a measurement: a Performance section whose last measurement line is
 followed immediately by `---` still reads as carrying no numbers and still
 refuses. The refusal says so -- it names the underline and asks for a blank
