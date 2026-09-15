@@ -101,6 +101,55 @@ class ApproveGateDiffExemptionTests(unittest.TestCase):
         )
 
 
+class DiffCompletionCallerTests(unittest.TestCase):
+    """`_pr_evidence_entries` answers a writer as well as the live CI gate.
+
+    `_complete_diff_evidence_after_approval` picks `pending-ci` diff entries
+    from that read and then writes completions by index through
+    `update_evidence_entries`, which resolves an index against the body's last
+    block. So the read has to be the same block the write lands in. When it
+    ranged wider, an earlier block's `pending-ci` entry keyed `"02"` survived
+    beside a later block's `blocked` entry keyed `"2"` -- two keys to the
+    selector -- and then `int("02") == 2` collapsed them at the update step,
+    so a reviewer's recorded refusal was flipped to complete and signed with
+    the review URL.
+    """
+
+    REVIEWER_DETAIL = "the reviewer read the diff and found the claim false"
+
+    def block(self, entries: list[dict[str, object]], ending: str = "\n") -> str:
+        text = "<!-- evidence-status:v1\n" + json.dumps({"entries": entries}) + "\n-->\n"
+        return text.replace("\n", ending)
+
+    def body(self) -> str:
+        earlier = self.block([
+            {"index": "02", "item": DIFF_ITEM, "status": "pending-ci", "detail": "awaiting the review"}
+        ])
+        later = self.block([
+            {"index": 2, "item": DIFF_ITEM, "status": "blocked", "detail": self.REVIEWER_DETAIL}
+        ])
+        return (f"*Persona*\n\n## Summary\n- change\n\n{earlier}\n"
+                f"## Evidence Status\n- [blocked] {DIFF_ITEM} -- {self.REVIEWER_DETAIL}\n\n{later}")
+
+    def test_a_reviewers_blocked_diff_entry_is_not_rewritten_to_complete(self) -> None:
+        body = self.body()
+        edited: list[str] = []
+        with (
+            mock.patch.object(execution, "_pr_body_and_head", return_value=(body, HEAD)),
+            mock.patch.object(execution, "_latest_approving_review",
+                              return_value={"html_url": "https://github.test/r/1"}),
+            mock.patch.object(execution, "_edit_pr_body", side_effect=lambda *a, **k: edited.append(a[1])),
+        ):
+            execution._complete_diff_evidence_after_approval(42, {})
+        self.assertEqual(edited, [])
+        entry = run_contributor._extract_evidence_metadata(body)["entries"][0]
+        self.assertEqual(entry["status"], "blocked")
+        # Byte-for-byte: a status kept while the sentence is overwritten with
+        # "diff-verified by the counterpart approving review" is the same bug.
+        self.assertEqual(entry["detail"], self.REVIEWER_DETAIL)
+        self.assertNotIn("diff-verified", body)
+
+
 class LiveCiVerificationTests(unittest.TestCase):
     def gate(self, body: str, *, run: object, env: dict[str, str] | None = None) -> str | None:
         with (
@@ -134,6 +183,66 @@ class LiveCiVerificationTests(unittest.TestCase):
         error = self.gate(body, run=None)
         self.assertIsNotNone(error)
         self.assertIn("live conclusion: none", error)
+
+    def test_a_red_check_is_caught_whatever_the_body_s_line_endings(self) -> None:
+        # The metadata comment is the only place this CI item is named, so a
+        # body the extractor cannot read leaves its check un-reverified (#1710).
+        body = body_with_entries(
+            [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}]
+        )
+        for name, ending in (("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")):
+            with self.subTest(endings=name):
+                error = self.gate(body.replace("\n", ending), run={"conclusion": "failure"})
+                self.assertIsNotNone(error)
+                self.assertIn("`Web CI`", error)
+
+    def test_a_rewritten_crlf_body_still_has_its_named_check_reverified(self) -> None:
+        # What a lane turn makes of a CRLF body. The rewrite strips the block
+        # it read, so one block comes out and the entry is still there to
+        # re-verify -- which is where the empty-block-last problem is solved,
+        # rather than in how this gate reads.
+        evidence = sys.modules["evidence"]
+        crlf = body_with_entries(
+            [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}]
+        ).replace("\n", "\r\n")
+        rewritten = evidence.update_evidence_entries(
+            crlf, {1: {"status": "complete", "detail": "the lane saw it green"}}
+        )
+        self.assertEqual(rewritten.count("<!-- evidence-status:"), 1)
+        error = self.gate(rewritten, run={"conclusion": "failure"})
+        self.assertIsNotNone(error)
+        self.assertIn("`Web CI`", error)
+
+    def test_a_body_carrying_two_blocks_is_read_at_its_last(self) -> None:
+        # Pinned because it is the one shape this change makes read
+        # differently: main could not see the trailing CRLF block and found
+        # the CI entry in the block ahead of it, so it refused. Both blocks
+        # are visible now and the last decides, as it already did for two LF
+        # blocks, so the gate approves. Widening this read to reach the
+        # earlier block is what round 2 tried, and it changed what a writer
+        # downstream selects; the repair for such a body belongs elsewhere.
+        empty_block_last = (
+            body_with_entries(
+                [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}]
+            )
+            + "\n"
+            + ("<!-- evidence-status:v1\n" + json.dumps({"entries": []}) + "\n-->\n").replace("\n", "\r\n")
+        )
+        self.assertEqual(execution._pr_evidence_entries(empty_block_last), [])
+        self.assertIsNone(self.gate(empty_block_last, run={"conclusion": "failure"}))
+
+    def test_a_rewrite_of_a_crlf_body_leaves_one_metadata_block(self) -> None:
+        evidence = sys.modules["evidence"]
+        crlf = body_with_entries(
+            [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}]
+        ).replace("\n", "\r\n")
+        updates = {1: {"status": "blocked", "detail": "the lane refused it"}}
+        once = evidence.update_evidence_entries(crlf, updates)
+        self.assertEqual(once.count("<!-- evidence-status:"), 1)
+        self.assertNotIn("\r", once)
+        # Idempotent: a second turn applying the same updates writes the same
+        # bytes, rather than stacking another block on what it could not strip.
+        self.assertEqual(evidence.update_evidence_entries(once, updates), once)
 
     def test_expected_head_mismatch_blocks_approve(self) -> None:
         body = body_with_entries(

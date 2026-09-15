@@ -740,6 +740,15 @@ def _pr_body_and_head(pr_number: int, env: dict[str, str]) -> tuple[str, str]:
 
 
 def _pr_evidence_entries(body: str) -> list[dict[str, object]]:
+    """The entries the body's authoritative metadata block records.
+
+    Two callers ask different things of this, so it answers the narrower one.
+    The live CI gate reads it for the checks it re-verifies;
+    `_complete_diff_evidence_after_approval` reads it to pick entries it then
+    writes completions onto, through `update_evidence_entries`, which resolves
+    an index against the last block. A read that ranged wider than that writer
+    would select an entry from one block and update the same index in another.
+    """
     metadata = _extract_evidence_metadata(body)
     entries = metadata.get("entries") if isinstance(metadata, dict) else None
     if not isinstance(entries, list):

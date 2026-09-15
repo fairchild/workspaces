@@ -3421,6 +3421,64 @@ class ScreenshotRequestNeedsAPersonTests(unittest.TestCase):
         accounting, errors = run_contributor.validate_evidence_accounting(body, [self.SPLIT_ITEM], review_ci=[])
         self.assertEqual(accounting["unproven_items"], [self.SPLIT_ITEM])
         self.assertIsNotNone(run_contributor.review_evidence_gate_error("approve", accounting, errors))
+class MetadataLineEndingsTests(unittest.TestCase):
+    """Every function that reads or rewrites the metadata sees the same blocks, whatever the body's line endings (#1710).
+
+    `_EVIDENCE_METADATA_RE` is anchored on `\n`, and GitHub stores a body with
+    whatever endings the client sent. Normalising in one reader is worse than
+    normalising in none: a reader that sees a CRLF block beside a writer that
+    cannot strip it leaves two blocks behind, and which one is authoritative
+    then decides whether a named check is re-verified. So each of these
+    normalises, and these are the guards on that.
+
+    What none of them changes is which block decides. A body carrying several
+    is read at its last, as it is on main, and the writer below is why that
+    stays safe: a rewrite now strips what it read, so no new two-block body is
+    made. One already stored that way is a migration question, not a reason to
+    widen a read.
+    """
+
+    ITEM = "CI: `Web CI` green on the PR head"
+
+    def body(self, ending: str = "\n", *, status: str = "complete", detail: str = "claims green") -> str:
+        entry = {"index": 1, "item": self.ITEM, "status": status, "detail": detail, "kind": "ci"}
+        text = ("<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+                f"## Evidence Status\n- [{status}] {self.ITEM} -- {detail}\n")
+        return text.replace("\n", ending)
+
+    def test_the_extractor_reads_every_ending(self) -> None:
+        for name, ending in (("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")):
+            with self.subTest(endings=name):
+                metadata = run_contributor._extract_evidence_metadata(self.body(ending))
+                self.assertIsNotNone(metadata)
+                self.assertEqual([entry["item"] for entry in metadata["entries"]], [self.ITEM])
+
+    def test_the_stripper_removes_a_block_in_every_ending(self) -> None:
+        evidence = sys.modules["evidence"]
+        for name, ending in (("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")):
+            with self.subTest(endings=name):
+                self.assertNotIn("evidence-status", evidence._strip_evidence_metadata(self.body(ending)))
+
+    def test_the_writer_rewrites_a_crlf_body_once_and_only_once(self) -> None:
+        evidence = sys.modules["evidence"]
+        updates = {1: {"status": "blocked", "detail": "the lane refused it"}}
+        once = evidence.update_evidence_entries(self.body("\r\n"), updates)
+        self.assertEqual(once.count("<!-- evidence-status:"), 1)
+        self.assertEqual(evidence.update_evidence_entries(once, updates), once)
+        entries = run_contributor._extract_evidence_metadata(once)["entries"]
+        self.assertEqual([(e["status"], e["detail"]) for e in entries], [("blocked", "the lane refused it")])
+
+    def test_a_body_with_several_blocks_is_read_at_its_last(self) -> None:
+        # Last-block-wins is unchanged; which blocks are visible is not. Main
+        # could not see a trailing CRLF block and so read the LF block ahead
+        # of it. Both are visible now, and the last decides -- the rule main
+        # already applies when both blocks are LF. So this shape reads
+        # differently than it did, and that is the migration question: the
+        # writer below no longer makes such a body, and repairing one already
+        # stored is not something a read should do quietly.
+        second = ("<!-- evidence-status:v1\n" + json.dumps({"entries": []}) + "\n-->\n").replace("\n", "\r\n")
+        metadata = run_contributor._extract_evidence_metadata(self.body("\n") + "\n" + second)
+        self.assertEqual(metadata["entries"], [])
 
 
 class DocumentedTestFormTests(unittest.TestCase):
