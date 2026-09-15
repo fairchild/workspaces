@@ -412,7 +412,10 @@ the same call for every reader and every writer of the body: at the next `##`
 heading or `---` rule the page shows. A run of dashes written directly under a
 line of text is that line's underline rather than a rule, so the lines around
 it stay in the section they were written in, and a rewrite of that section
-replaces exactly what the read counted. What the page then shows is a heading,
+replaces exactly what the read counted. A `##` or `---` inside a code fence is
+code, not a boundary -- unless the fence never closes, which runs it to the end
+of the body and would put every section below it inside the first; there the
+first `##` or `---` line inside the fence ends the section. What the page then shows is a heading,
 not a measurement: a Performance section whose last measurement line is
 followed immediately by `---` still reads as carrying no numbers and still
 refuses. The refusal says so -- it names the underline and asks for a blank

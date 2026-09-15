@@ -178,6 +178,9 @@ def is_section_boundary(token: Token) -> bool:
 
     Its answers for `***`, `___`, an h1 and an h3 are the answers the readers
     already gave: none of those ends a section.
+
+    A fence that never closes is the exception, and it is the line rather than
+    the token that carries it -- see `reparsed_without_runaway`.
     """
     if token.level != 0:
         return False
@@ -186,7 +189,94 @@ def is_section_boundary(token: Token) -> bool:
     return token.type == "heading_open" and token.tag == "h2"
 
 
-def _section_bounds(body: str, heading: str) -> tuple[int, int, int] | None:
+
+
+def _fence_never_closed(token: Token) -> bool:
+    """Whether the parser found no closing line for this fence.
+
+    From the token rather than by re-deriving the closing rule: a closed
+    fence's span covers its content plus an opening and a closing line, an
+    unclosed one's covers content plus the opening line alone. Matching the
+    markup against a later line instead gets a fence closed by a run too short
+    to close it wrong.
+    """
+    return token.map is not None and len(token.content.splitlines()) > token.map[1] - token.map[0] - 2
+
+
+def runaway_fence(tokens: list[Token], lines: list[str]) -> Token | None:
+    """The top-level fence, if any, that never closes and so runs to the end of the body."""
+    return next(
+        (
+            token
+            for token in tokens
+            if token.type == "fence" and token.level == 0 and _fence_never_closed(token)
+        ),
+        None,
+    )
+
+
+def reparsed_without_runaway(tokens: list[Token], lines: list[str]) -> list[Token] | None:
+    """The body parsed again with an unclosed fence's opening line blanked, or None.
+
+    CommonMark runs a fence with no closing line to the end of the document, so
+    a section holding one holds every heading written below it and the readers
+    take a later section's lines for this one's: a Performance section with a
+    runaway fence completed an item on measurements written under a later
+    `## Validation` (#1723, round 3). Nobody reads a body that way, and a
+    rewrite of such a section deletes every section below it.
+
+    What the author meant below the fence is a question only a parse answers,
+    so the opener is blanked and the parser asked again. Blanking keeps the
+    line count, so every heading below reports its own line, and it finds the
+    ones a pattern cannot -- a heading indented three spaces, or one made by an
+    underline. `None` when no fence runs away, which is the ordinary case.
+
+    A fence that DOES close and holds a `##` or a `---` is code the page shows
+    as code, and the section runs past it: that is the one acceptance this
+    change adds, and it is the closed case only.
+    """
+    if runaway_fence(tokens, lines) is None:
+        return None
+    # Blanking one opener can uncover another -- a fence opened with four
+    # backticks and "closed" with three leaves the three-backtick line opening
+    # a fence of its own -- so it repeats until no fence runs away. Each pass
+    # blanks one line, so the loop is bounded by the body.
+    blanked, parsed, current = set(), tokens, list(lines)
+    while (runaway := runaway_fence(parsed, current)) is not None:
+        opened = runaway.map[0]
+        if opened in blanked or opened >= len(current):
+            break
+        blanked.add(opened)
+        current[opened] = ""
+        parsed = MARKDOWN.parse("\n".join(current))
+    return parsed if blanked else None
+
+
+def section_write_refusal(body: str, heading: str) -> str | None:
+    """Why a rewrite of this section would be guessing, or None when it would not.
+
+    A writer replaces the text between a heading and the section's end, so it
+    has to know where the end is. A section with no boundary after it may be
+    the last one in the body, where the end of the body is the right answer.
+    Or the heading the writer matched may not be a heading at all: a `##` line
+    inside a fenced example is code, and replacing the "section" under it
+    takes the fence's closing line with it -- which is how two ordinary writes
+    to a body carrying a fenced `## Evidence Status` example came to delete
+    three sections, the first eating the closer and the second taking the rest
+    of the body for the section it was replacing (#1723, round 3).
+
+    So a write whose heading the parser reads as code, and whose end falls
+    outside the block that heading sits in, refuses: the body stands and the
+    caller is told which line to close. Guessing costs the sections below it,
+    and a writer that writes too much has already destroyed the evidence of
+    having done so, where a reader that reads too much reports too much and is
+    visible.
+    """
+    bounds = _section_bounds(body, heading)
+    return bounds[3] if bounds else None
+
+
+def _section_bounds(body: str, heading: str) -> tuple[int, int, int, str | None] | None:
     """Where `## <heading>` begins, where its text begins, and where the section ends.
 
     One answer for the reader and the writer. `markdown_section` returns the
@@ -198,17 +288,69 @@ def _section_bounds(body: str, heading: str) -> tuple[int, int, int] | None:
     The boundary is asked of the parser because matching a three-dash line is
     not the rule the page applies: three dashes directly under a line of text
     are that line's setext underline, and a section read as ending there is
-    empty on the page and whole here.
+    empty on the page and whole here. An unclosed fence is where the parser's
+    answer is the worse one, and `reparsed_without_runaway` is that exception --
+    whichever boundary comes first ends the section.
     """
     match = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
     if match is None:
         return None
     line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
     heading_line = bisect.bisect_right(line_starts, match.start()) - 1
-    for token in MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body)):
-        if token.map and token.map[0] > heading_line and is_section_boundary(token):
-            return match.start(), match.end(), line_starts[token.map[0]]
-    return match.start(), match.end(), len(body)
+    lines = MARKDOWN_LINE_ENDING_RE.split(body)
+    tokens = MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+
+    def first_boundary_after(parsed: list[Token]) -> int | None:
+        return next(
+            (
+                token.map[0]
+                for token in parsed
+                if token.map and token.map[0] > heading_line and is_section_boundary(token)
+            ),
+            None,
+        )
+
+    located = first_boundary_after(tokens)
+    repaired = reparsed_without_runaway(tokens, lines)
+    if repaired is not None:
+        # A runaway fence hides every heading below it. Whichever boundary
+        # comes first is the section's end, and the repaired parse is the only
+        # one that can see the hidden ones.
+        hidden_boundary = first_boundary_after(repaired)
+        if hidden_boundary is not None and (located is None or hidden_boundary < located):
+            located = hidden_boundary
+    stop = len(line_starts) if located is None else located
+    end = line_starts[stop] if stop < len(line_starts) else len(body)
+    return match.start(), match.end(), end, _write_refusal(tokens, heading_line, stop, len(lines))
+
+
+def _write_refusal(tokens: list[Token], heading_line: int, stop: int, line_count: int) -> str | None:
+    """Why replacing this section would corrupt the body, or None.
+
+    The heading a literal match found may be a `##` line inside a fenced
+    example, which is code rather than a heading. Cutting from there to the
+    section's end then takes the fence's closing line along and leaves the
+    fence open, and the next write to any section above the opener takes the
+    rest of the body. The block the heading sits in is where that starts, so a
+    cut reaching past it is the thing to refuse.
+    """
+    holder = next(
+        (
+            token
+            for token in tokens
+            if token.type in {"fence", "code_block"}
+            and token.map
+            and token.map[0] <= heading_line < token.map[1]
+        ),
+        None,
+    )
+    if holder is None or stop <= holder.map[1] or holder.map[1] >= line_count:
+        return None
+    return (
+        f"the `##` line at line {heading_line + 1} is inside the code block opened at line "
+        f"{holder.map[0] + 1}, so it is an example rather than a heading; replacing it would "
+        "take the block's closing line with it"
+    )
 
 
 def markdown_section(body: str, heading: str) -> str:
@@ -238,6 +380,9 @@ def strip_markdown_section(body: str, heading: str) -> str:
     """
     stripped = body
     while (bounds := _section_bounds(stripped, heading)) is not None:
+        if bounds[3] is not None:
+            log(f"refusing to rewrite the `{heading}` section: {bounds[3]}")
+            return body
         stripped = stripped[: bounds[0]] + stripped[bounds[2] :]
     return re.sub(r"\n{3,}", "\n\n", stripped.strip())
 
@@ -262,6 +407,10 @@ def insert_markdown_section(
     before_heading: str | None = None,
 ) -> str:
     section = f"## {heading}\n{content.strip()}".rstrip()
+    if section_write_refusal(body.strip(), heading) is not None:
+        # `strip_markdown_section` has already said why. Appending the new
+        # section to a body whose old one could not be removed would leave two.
+        return body
     cleaned = strip_markdown_section(body.strip(), heading).strip()
     if before_heading and has_markdown_section(cleaned, before_heading):
         pattern = rf"(?mi)^(## {re.escape(before_heading)})\s*$"

@@ -22,7 +22,9 @@ from _helpers import (
     is_section_boundary,
     log,
     markdown_section,
+    reparsed_without_runaway,
     run_optional,
+    section_write_refusal,
     strip_markdown_section,
 )
 
@@ -838,8 +840,10 @@ def _text_after_html_comment(content: str) -> list[str]:
     return [line.strip() for line in stripped[end + 3 :].splitlines() if line.strip()]
 
 
-def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int] | None:
-    """Where the section under `## <heading>` starts and stops in the token stream.
+def _rendered_section_span(
+    tokens: list[Token], heading: str, lines: list[str] | None = None
+) -> tuple[int, int, int | None] | None:
+    """Where the section under `## <heading>` starts and stops, in tokens and in source lines.
 
     The heading is matched on the text a reader sees, at the level
     `markdown_section` matches it: an h2 at the top of the body, not one nested
@@ -849,6 +853,13 @@ def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int]
     same call the written read makes on the same tokens -- so the two views
     cannot look at different spans. Ending earlier than the written read does
     would drop a Before or an After that read still sees.
+
+    The third element is a source line to stop at inside the last token, which
+    only an unclosed fence produces: it holds every heading below it, so the
+    boundary is a line rather than a token and `reparsed_without_runaway` --
+    the same call the written read and the writer make -- finds it. `lines`
+    is the body split on its line endings; without it the exception is not
+    applied, which is the reading a caller wanting the whole token span wants.
     """
     wanted = " ".join(heading.split()).casefold()
     for index, token in enumerate(tokens):
@@ -859,10 +870,25 @@ def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int]
         ):
             continue
         start = index + 3
-        for offset in range(start, len(tokens)):
-            if is_section_boundary(tokens[offset]):
-                return start, offset
-        return start, len(tokens)
+        stop = next(
+            (offset for offset in range(start, len(tokens)) if is_section_boundary(tokens[offset])),
+            len(tokens),
+        )
+        swallowed = None
+        if lines is not None and token.map:
+            repaired = reparsed_without_runaway(tokens, lines)
+            if repaired is not None:
+                swallowed = next(
+                    (
+                        other.map[0]
+                        for other in repaired
+                        if other.map
+                        and other.map[0] >= token.map[1]
+                        and is_section_boundary(other)
+                    ),
+                    None,
+                )
+        return start, stop, swallowed
     return None
 
 
@@ -886,13 +912,14 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
     it spans the same statement it spanned when this read the body raw.
     """
     tokens = MARKDOWN.parse(_lf(body))
+    stop_line: int | None = None
     if heading is None:
         start, stop = 0, len(tokens)
     else:
-        span = _rendered_section_span(tokens, heading)
+        span = _rendered_section_span(tokens, heading, MARKDOWN_LINE_ENDING_RE.split(body))
         if span is None:
             return []
-        start, stop = span
+        start, stop, stop_line = span
 
     lines: list[str] = []
     marker: str | None = None
@@ -949,7 +976,13 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
             index += 3
             continue
         elif kind in {"fence", "code_block"}:
-            emit(token, token.content.splitlines() or [""])
+            code = token.content.splitlines() or [""]
+            if stop_line is not None and token.map:
+                # A fence with no closing line runs to the end of the body, so
+                # the section stops partway through this one token.
+                first = token.map[0] + (1 if kind == "fence" else 0)
+                code = code[: max(stop_line - first, 0)]
+            emit(token, code)
         elif kind == "html_block":
             # The block renders nothing, but text sharing its lines after a
             # closed comment does. Either way the lines it occupied are not a
@@ -1267,9 +1300,10 @@ HAND_COMPLETION_REFUSALS = {
 # in the section. Nothing is wrong with the numbers, so a refusal that only
 # says the section is unfilled sends the author to the wrong place (#1723).
 PERF_UNDERLINED_MEASUREMENT_NOTE = (
-    "; the line before the `---` is read as a heading, because a rule directly "
-    "under a line of text underlines it -- put a blank line between the last "
-    "measurement and the rule"
+    "; the line above the rule or underline below it is read as a heading, "
+    "because a run of dashes or equals signs directly under a line of text "
+    "underlines it -- put a blank line between the last measurement and that "
+    "line"
 )
 # How hard each kind is to complete by hand: an `other` item completes from its
 # own line, a `test-attested` or a `perf` item from a proof form elsewhere in
@@ -2130,8 +2164,15 @@ def render_execution_summary_body(
         for _, entry in sorted(evidence_map.items())
     ]
 
+    stripped_body = _strip_evidence_metadata(summary_body)
+    write_refusal = section_write_refusal(stripped_body.strip(), "Evidence Status")
+    if write_refusal is not None:
+        # The body stands rather than losing the sections below the fence, and
+        # the author is told which line to close.
+        errors.append(f"PR body Evidence Status section was not rewritten: {write_refusal}")
+        return summary_body, errors
     rendered = insert_markdown_section(
-        _strip_evidence_metadata(summary_body),
+        stripped_body,
         "Evidence Status",
         "\n".join(evidence_lines),
         before_heading="Validation",
