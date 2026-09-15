@@ -25,6 +25,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "_evidence.yml"
 PIN = "markdown-it-py==4.2.0"
+# One minor version, so the reading does not vary with the interpreter uv picks.
+PYTHON_PIN = "--python 3.12"
 LOAD_LINES = {"import evidence", "spec.loader.exec_module(module)"}
 
 
@@ -76,7 +78,8 @@ class EvidenceLoaderTests(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=600,
-            env={**os.environ, "PYTHONNOUSERSITE": "1"},
+            # No cached environment: a loader has to resolve its own pins.
+            env={**os.environ, "PYTHONNOUSERSITE": "1", "UV_NO_CACHE": "1"},
         )
 
     def assert_loads(self, result: subprocess.CompletedProcess[str]) -> None:
@@ -100,6 +103,7 @@ class EvidenceLoaderTests(unittest.TestCase):
                 # The runner's own python3 has no markdown-it-py, so the pin has
                 # to be in the command itself.
                 self.assertIn(PIN, command)
+                self.assertIn(PYTHON_PIN, command)
                 self.assert_loads(self.run_loader(shlex.split(command), stdin=prologue))
 
 

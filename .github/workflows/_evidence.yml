@@ -97,7 +97,7 @@ jobs:
         env:
           TEST_COMMANDS_JSON: ${{ inputs.test_commands_json }}
         run: |
-          uv run --python '>=3.11' --with markdown-it-py==4.2.0 python3 - <<'PY'
+          uv run --python 3.12 --with markdown-it-py==4.2.0 python3 - <<'PY'
           import json
           import os
           import shlex
@@ -323,7 +323,7 @@ jobs:
           else
             echo "::warning title=Evidence reconcile has no contract::the PR closes no single issue in this repository; ambiguous status lines will be left pending"
           fi
-          uv run --python '>=3.11' --with markdown-it-py==4.2.0 python3 - <<'PY'
+          uv run --python 3.12 --with markdown-it-py==4.2.0 python3 - <<'PY'
           import importlib.util
           import os
           import sys
