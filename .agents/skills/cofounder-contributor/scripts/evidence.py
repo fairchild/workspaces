@@ -10,14 +10,16 @@ import sys
 from collections.abc import Iterable, Iterator
 from itertools import groupby, islice
 
-from markdown_it import MarkdownIt
 from markdown_it.token import Token
 
 from _helpers import (
     GITHUB_API_TIMEOUT,
+    MARKDOWN,
+    MARKDOWN_LINE_ENDING_RE,
     REPO_ROOT,
     has_markdown_section,
     insert_markdown_section,
+    is_section_boundary,
     log,
     markdown_section,
     run_optional,
@@ -71,11 +73,12 @@ MARKDOWN_BLOCK_OPENER_RE = re.compile(r"(?:[-*+]\s|\d+[.)]\s|>(?!=))")
 # string cannot itself contain a backtick, which is what separates an opening
 # fence from a line starting with a code span.
 MARKDOWN_FENCE_RE = re.compile(r"(?P<run>`{3,}|~{3,})(?P<info>.*)$")
-# The three line endings markdown has. `str.splitlines` also breaks on a
-# vertical tab, a form feed and four other separators, which markdown renders
-# as ordinary characters -- and a fence pushed onto its own line that way is
-# read as unindented, opening a block that hides every bullet below it.
-MARKDOWN_LINE_ENDING_RE = re.compile(r"\r\n|\r|\n")
+# `MARKDOWN_LINE_ENDING_RE` is the three line endings markdown has, and it
+# comes from `_helpers` beside the parser that shares it. `str.splitlines`
+# also breaks on a vertical tab, a form feed and four other separators, which
+# markdown renders as ordinary characters -- and a fence pushed onto its own
+# line that way is read as unindented, opening a block that hides every bullet
+# below it.
 _EVIDENCE_METADATA_RE = re.compile(
     r"^<!-- evidence-status:v(?P<version>[^\n]+)\n(?P<payload>.*?)\n-->[ \t]*(?:\n|$)",
     re.MULTILINE | re.DOTALL,
@@ -636,11 +639,11 @@ def _wrapped_bullets(section: str) -> list[str]:
     return bullets
 
 
-# GitHub renders a PR body as GitHub Flavored Markdown: CommonMark, plus the
-# tables and strikethrough a status line can meet. The owner read parses the
-# body by those rules instead of matching lines, because a line matched by
-# pattern is not always a line a reader sees.
-MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+# `MARKDOWN` is GitHub Flavored Markdown -- CommonMark plus the tables and
+# strikethrough a status line can meet -- and it comes from `_helpers` because
+# the written read of a section boundary parses by the same rules. Both reads
+# parse the body instead of matching lines, because a line matched by pattern
+# is not always a line a reader sees.
 BLOCK_NAMES = {
     "code_block": "a code block",
     "fence": "a code block",
@@ -842,28 +845,22 @@ def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int]
     `markdown_section` matches it: an h2 at the top of the body, not one nested
     inside a list, and the first such heading wins.
 
-    The section ends where `markdown_section`'s lookahead ends it, which is
-    narrower than "any heading or rule": that lookahead stops at an h2 and at a
-    `---` rule, and at neither an h1 nor a `***` or `___` rule. Ending earlier
-    than the written read does would drop a Before or an After that read still
-    sees, and the two views have to agree about where they are looking.
+    The section ends where `is_section_boundary` says it does, which is the
+    same call the written read makes on the same tokens -- so the two views
+    cannot look at different spans. Ending earlier than the written read does
+    would drop a Before or an After that read still sees.
     """
     wanted = " ".join(heading.split()).casefold()
     for index, token in enumerate(tokens):
         if (
             token.type != "heading_open"
-            or token.tag != "h2"
-            or token.level != 0
+            or not is_section_boundary(token)
             or " ".join(_inline_text(tokens[index + 1].children).split()).casefold() != wanted
         ):
             continue
         start = index + 3
         for offset in range(start, len(tokens)):
-            other = tokens[offset]
-            if other.level == 0 and (
-                (other.type == "hr" and other.markup.startswith("-"))
-                or (other.type == "heading_open" and other.tag == "h2")
-            ):
+            if is_section_boundary(tokens[offset]):
                 return start, offset
         return start, len(tokens)
     return None
@@ -931,8 +928,18 @@ def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
         elif kind == "list_item_close":
             marker = None
         elif kind == "heading_open":
-            text = _inline_text(tokens[index + 1].children)
-            emit(token, [f"{'#' * int(token.tag[1:])} {text}".rstrip()])
+            # A heading the author wrote with hashes keeps them, so a statement
+            # still ends at the next heading. A setext heading has none to
+            # keep: the author wrote lines of text and a rule under them, and
+            # the rule is what makes the block a heading. Giving those lines
+            # hashes they were never written with is the one place this read
+            # would put characters on the page that no reader sees, and it
+            # emptied a Performance section the written read still had whole
+            # (#1723). They come back as the lines they are.
+            atx = token.markup.startswith("#")
+            text = _inline_text(tokens[index + 1].children, break_text=" " if atx else "\n")
+            prefix = f"{'#' * int(token.tag[1:])} " if atx else ""
+            emit(token, [f"{prefix}{part}".rstrip() for part in text.split("\n")])
             index += 3
             continue
         elif kind == "paragraph_open":

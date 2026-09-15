@@ -14,11 +14,13 @@ flip entries without hand-editing markdown.
 from __future__ import annotations
 
 import ast
+import bisect
 import importlib.util
 import itertools
 import os
 import json
 import random
+import re
 import sys
 import time
 import unittest
@@ -4311,6 +4313,239 @@ class LaneWrittenMetadataMatchesTheFactoryShapeTests(unittest.TestCase):
         self.assertEqual(accounting["complete_items"], self.REQUESTED[:3])
         self.assertEqual(accounting["pending_ci_items"], self.REQUESTED[3:7])
         self.assertEqual(accounting["blocked_items"], [self.OWNER_ITEM])
+
+
+class OneSectionBoundaryForBothViewsTests(unittest.TestCase):
+    """A section stops in one place, and both views ask the same question (#1723).
+
+    The written read matched a literal three-dash line; the page applies
+    CommonMark, where three dashes directly under a line of text underline it
+    into a heading instead of ruling a section off. A Performance section closed that
+    way was whole to the written read and empty to the rendered one, and the
+    item stopped completing with nothing saying why.
+
+    Both reads now take their boundary from `is_section_boundary` over the same
+    tokens, so neither can place one the other does not. What that leaves for a
+    setext heading is a block of lines an author wrote plain and a rule under
+    them: not a section of its own, and not a heading whose hashes the read may
+    invent.
+    """
+
+    PERF_ITEM = "p50 launch latency before and after"
+    READER_HEADINGS = (
+        "Evidence Status",
+        "Requested Evidence",
+        "Validation",
+        "Performance",
+        "Blockers",
+        "Blocked By",
+        "Execution",
+        "Mergeability",
+        "Risks",
+        "What",
+        "Summary",
+        "Evidence",
+    )
+
+    def evidence(self):
+        """The reader module. Every name these tests use it for predates this
+        change, so the properties below run on the merge base as written."""
+        return sys.modules["evidence"]
+
+    @staticmethod
+    def closes_a_section(token) -> bool:
+        """The boundary condition spelled out, rather than asked of the code under test."""
+        if token.level != 0:
+            return False
+        if token.type == "hr":
+            return token.markup.startswith("-")
+        return token.type == "heading_open" and token.tag == "h2" and token.markup.startswith("#")
+
+    def views(self, body: str, heading: str = "Performance") -> tuple[list[str], list[str]]:
+        """The written lines and the rendered lines of one section."""
+        evidence = self.evidence()
+        written = evidence.MARKDOWN_LINE_ENDING_RE.split(evidence.markdown_section(body, heading))
+        return [line for line in written if line.strip()], evidence._rendered_lines(body, heading)
+
+    PARAGRAPH_FIELDS = (
+        "Before Summary: p50 launch latency 900 ms\n"
+        "After Summary: p50 launch latency 410 ms\n"
+    )
+
+    def test_a_dash_rule_written_against_the_measurements_still_reads(self) -> None:
+        # The #1723 shape and every underline that makes it: three dashes, more
+        # than three, an indented run, and the equals sign that underlines an
+        # h1. `- - -` is a rule rather than an underline -- dashes with spaces
+        # between them cannot underline anything -- and it reads because both
+        # views end the section at it, above the measurements it is not.
+        for underline in ("---", "-----", "  ---", "===", "- - -"):
+            body = f"## Performance\n\n{self.PARAGRAPH_FIELDS}{underline}\n\n## Risks\n\nNone.\n"
+            with self.subTest(underline=underline):
+                self.assertIsNotNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
+                written, rendered = self.views(body)
+                self.assertEqual([line for line in written if line.strip() != underline.strip()], rendered)
+                self.assertIn("After Summary: p50 launch latency 410 ms", rendered)
+
+    def test_a_dash_rule_a_blank_line_below_the_measurements_still_ends_the_section(self) -> None:
+        # The other half of the same rule: with a blank line above it the run of
+        # dashes underlines nothing and is the rule the author meant. Dropping
+        # an After that sits below it is what both views did before this and
+        # what both views do now.
+        for underline in ("---", "-----", "- - -"):
+            body = (
+                f"## Performance\n\nBefore Summary: p50 launch latency 900 ms\n\n{underline}\n\n"
+                "After Summary: p50 launch latency 410 ms\n"
+            )
+            with self.subTest(underline=underline):
+                self.assertIsNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
+                written, rendered = self.views(body)
+                self.assertEqual(written, rendered)
+                self.assertNotIn("After Summary: p50 launch latency 410 ms", "\n".join(written))
+
+    def test_a_rule_or_heading_inside_a_block_does_not_end_the_section(self) -> None:
+        # A rule under a bullet and a heading inside a quote belong to the
+        # block that holds them. Reading either as the end of the section
+        # drops the measurement below it, which is the direction that refuses
+        # a body a reader can see whole.
+        for name, nested in (
+            ("a rule under a bullet", "- a note\n\n  ---\n\n- another note\n"),
+            ("a rule inside a quote", "> quoting an older PR\n>\n> ---\n"),
+            ("a heading inside a quote", "> quoting an older PR\n>\n> ## Performance\n"),
+        ):
+            body = (
+                "## Performance\n\n- Before Summary: p50 launch latency 900 ms\n\n"
+                f"{nested}\n- After Summary: p50 launch latency 410 ms\n"
+            )
+            with self.subTest(case=name):
+                self.assertIsNotNone(run_contributor._perf_numbers(body, self.PERF_ITEM))
+                written, _ = self.views(body)
+                self.assertIn("- After Summary: p50 launch latency 410 ms", written)
+
+    def test_a_setext_heading_reads_as_the_lines_it_was_written_as(self) -> None:
+        # A heading written with hashes keeps them, so a statement still ends
+        # at the next heading. An underlined one has none to keep, and giving
+        # it any is the read putting characters on the page that no reader
+        # sees.
+        body = (
+            "## Performance\n\nUnderlined heading\n---\n\n"
+            "Two lines\nunder one rule\n===\n\n## Aside\n\n### Hashed\n"
+        )
+        self.assertEqual(
+            self.evidence()._rendered_lines(body, "Performance"),
+            ["Underlined heading", "", "Two lines", "under one rule"],
+        )
+        self.assertEqual(self.evidence()._rendered_lines(body, "Aside"), ["### Hashed"])
+
+    # The shapes above, written out, because the properties below read this
+    # file's string literals and an f-string built at run time is not one.
+    UNDERLINED = (
+        "## Performance\n\nBefore: 900 ms\nAfter: 410 ms\n---\n\n## Risks\n\nNone.\n",
+        "## Performance\n\nBefore: 900 ms\nAfter: 410 ms\n-----\n\n## Risks\n\nNone.\n",
+        "## Performance\n\nBefore: 900 ms\n\n-----\n\nAfter: 410 ms\n",
+        "## Validation\n\n`swift test` passed\n===\n\n## Risks\n\nNone.\n",
+        "## Evidence Status\n\n- [complete] one -- proof\n- - -\n\n## Risks\n\nNone.\n",
+    )
+
+    def source_bodies(self) -> list[str]:
+        """Every string literal in this file that carries a section heading."""
+        return sorted(
+            {
+                node.value
+                for node in ast.walk(ast.parse(Path(__file__).read_text(encoding="utf-8")))
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+                and "## " in node.value
+            }
+        )
+
+    def rendered_boundary_section(self, body: str, heading: str) -> str | None:
+        """The section text the rendered span's boundary implies, sliced from the body.
+
+        Built out of the rendered read and nothing else, so asserting the
+        written read returns the same string is a check that one boundary
+        serves both rather than a restatement of one of them.
+
+        `None` where the question does not arise: no rendered section, no
+        literal `## <heading>` line for the written read to find, or the two
+        reads finding their heading on different lines -- which is a
+        difference about where a section starts, not where it ends.
+        """
+        evidence = self.evidence()
+        tokens = evidence.MARKDOWN.parse(evidence.MARKDOWN_LINE_ENDING_RE.sub("\n", body))
+        span = evidence._rendered_section_span(tokens, heading)
+        literal = re.search(rf"(?mi)^## {re.escape(heading)}\n", body)
+        if span is None or literal is None:
+            return None
+        line_starts = [0] + [end.end() for end in evidence.MARKDOWN_LINE_ENDING_RE.finditer(body)]
+        opened = tokens[span[0] - 3]
+        if opened.map[0] != bisect.bisect_right(line_starts, literal.start()) - 1:
+            return None
+        stop = tokens[span[1]].map[0] if span[1] < len(tokens) else len(line_starts)
+        begin, end = (
+            line_starts[line] if line < len(line_starts) else len(body)
+            for line in (opened.map[1], stop)
+        )
+        return body[begin:end].strip()
+
+    def test_the_written_read_ends_every_section_where_the_rendered_span_does(self) -> None:
+        # The property, over this file's own fixtures: hundreds of bodies
+        # people wrote to exercise these readers, each read at every heading a
+        # reader reads. On main the literal and the parser part company on the
+        # setext shapes above; here they cannot.
+        bodies, checked = self.source_bodies(), 0
+        self.assertGreater(len(bodies), 100)
+        for body in bodies:
+            for heading in self.READER_HEADINGS:
+                expected = self.rendered_boundary_section(body, heading)
+                if expected is None:
+                    continue
+                checked += 1
+                with self.subTest(body=body[:50], heading=heading):
+                    self.assertEqual(self.evidence().markdown_section(body, heading), expected)
+        self.assertGreater(checked, 100)
+
+    def test_no_section_a_reader_reads_carries_a_boundary_of_its_own(self) -> None:
+        # The same property from the other side, and the one a caller depends
+        # on: whatever comes back is one section. A run of dashes left inside
+        # it is a rule the read was meant to stop at.
+        evidence = self.evidence()
+        for body in self.source_bodies():
+            for heading in self.READER_HEADINGS:
+                section = evidence.markdown_section(body, heading)
+                if not section:
+                    continue
+                with self.subTest(body=body[:50], heading=heading):
+                    self.assertEqual(
+                        [
+                            token.type
+                            for token in evidence.MARKDOWN.parse(section)
+                            if self.closes_a_section(token)
+                        ],
+                        [],
+                    )
+
+    def test_the_raster_delivery_script_keeps_its_helpers_import_inside_a_function(self) -> None:
+        # `_helpers` imports the markdown parser now. The delivery script's own
+        # entry point declares no pin for it and does not need one: its
+        # `--fetch` path never reaches `evidence_section`, and that holds only
+        # while the import stays where it is.
+        source = (
+            REPO_ROOT / ".agents" / "skills" / "cofounder-contributor" / "scripts" / "review_evidence.py"
+        ).read_text(encoding="utf-8")
+        module_level = {
+            name.name
+            for node in ast.parse(source).body
+            for name in (node.names if isinstance(node, (ast.Import, ast.ImportFrom)) else [])
+        }
+        self.assertNotIn("_helpers", module_level)
+        self.assertEqual(
+            [
+                node.module
+                for node in ast.walk(ast.parse(source))
+                if isinstance(node, ast.ImportFrom) and node.module == "_helpers"
+            ],
+            ["_helpers"],
+        )
 
 
 if __name__ == "__main__":
