@@ -1191,6 +1191,26 @@ class SectionBoundaryAgreementBetweenTheGateAndTheSkillTests(unittest.TestCase):
                     owner.markdown_section(body, "Evidence Status"),
                 )
 
+    def test_the_contract_section_is_bounded_alike_too(self) -> None:
+        # The boundary is not particular to one heading, and the section it
+        # matters most for after Evidence Status is the contract: read long, it
+        # holds an item the author wrote under their own h1, and a PR is then
+        # asked to prove something the page does not list. Both files end it at
+        # the h1.
+        owner = self.owner_reader()
+        body = (
+            "## Requested Evidence\n\n- `swift test` passes\n\n"
+            "# Reviewer notes\n\n- a screenshot of the narrowed row\n\n"
+            "## Evidence Status\n\n- [complete] `swift test` passes -- 1992 tests passed\n"
+        )
+        self.assertEqual(
+            pr_readiness.extract_section(body, "Requested Evidence"),
+            owner.markdown_section(body, "Requested Evidence"),
+        )
+        self.assertEqual(
+            owner.markdown_section(body, "Requested Evidence"), "- `swift test` passes"
+        )
+
     def test_the_h1_fixture_is_the_one_the_boundary_level_is_witnessed_on(self) -> None:
         # The property above passes for two sides that both read past an h1,
         # which is the state this arc started from. So what the shared answer

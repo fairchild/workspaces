@@ -4798,6 +4798,29 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
                     sections[0] == "unit tests passed.", sections[1] == "unit tests passed."
                 )
 
+    def test_an_h1_after_the_requested_evidence_section_is_not_part_of_the_contract(self) -> None:
+        # The one direction where the wider boundary buys an approval rather
+        # than costing one. A shorter Evidence Status section holds fewer
+        # completions, which can only cost one; a shorter `## Requested
+        # Evidence` section is a shorter contract, so an item the author wrote
+        # under their own h1 is no longer something the PR has to prove. That is
+        # what the page shows -- the bullet is under `# Reviewer notes`, not
+        # under the contract -- and it is the read the gate has taken since
+        # #1674, so this is the reader catching up to it rather than a new
+        # looseness.
+        owner = "a note on whether the fixture state survives a relaunch"
+        body = (
+            f"## Requested Evidence\n\n- {owner}\n\n"
+            "# Reviewer notes\n\n- a screenshot of the narrowed row\n\n"
+            f"## Evidence Status\n\n- [complete] {owner} -- checked: the fixture survived\n\n"
+            "## Validation\n\n- ran the suite on this head\n"
+        )
+        requested = self.evidence().extract_requested_evidence(body)
+        self.assertEqual(requested, [owner])
+        accounting, errors = run_contributor.validate_evidence_accounting(body, requested, review_ci=[])
+        self.assertEqual(accounting["missing_items"], [])
+        self.assertIsNone(run_contributor.review_evidence_gate_error("APPROVE", accounting, errors))
+
     def test_an_h1_a_runaway_fence_hides_still_ends_the_section(self) -> None:
         # The third place the boundary is asked: a fence with no closing line
         # holds every heading below it, so the section's end is a line the
