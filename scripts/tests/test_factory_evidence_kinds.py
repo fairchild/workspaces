@@ -5448,6 +5448,34 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertIsNone(unreadable)
         self.assertEqual(lines, [f"[complete] {self.ITEM} -- 214 tests passed"])
 
+    def test_a_fenced_notes_example_stands_the_write_down_rather_than_cutting_into_it(self) -> None:
+        # The cut takes every `## Evidence Notes` line, and one inside a fenced
+        # example is code: cutting from it takes the fence's closing line, and
+        # the body a reader is left with has a fence that never opened. The
+        # writer's own guard sees that shape only where the fence closes before
+        # the end of the body; this is the same shape where it does not.
+        evidence = sys.modules["evidence"]
+        body = (
+            self.meta() + f"## Evidence Status\n\n- [pending-ci] {self.ITEM} -- the lane has not"
+            " run yet\n\nA note.\n\n## Validation\n\n```markdown\n## Evidence Notes\nexample\n```\n"
+        )
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            resolved = evidence.update_evidence_entries(
+                body, {1: {"status": "complete", "detail": "214 tests passed"}}
+            )
+        self.assertEqual(resolved, body)
+        self.assertIn("is an example rather than a heading", spoke.getvalue())
+        # A heading line the cut does not match -- trailing spaces on it -- is
+        # not one of these, and the write goes ahead.
+        spaced = body.replace("## Evidence Notes\nexample", "## Evidence Notes  \nexample")
+        self.assertNotEqual(
+            evidence.update_evidence_entries(
+                spaced, {1: {"status": "complete", "detail": "214 tests passed"}}
+            ),
+            spaced,
+        )
+
     def test_an_empty_notes_section_goes_rather_than_outliving_the_status(self) -> None:
         # A heading with nothing under it is a section this writer would place
         # next run and a reader finds above the status now: leaving it is what

@@ -22,6 +22,7 @@ from _helpers import (
     is_section_boundary,
     log,
     markdown_section,
+    heading_shown_as_code,
     removed_section_texts,
     reparsed_without_runaway,
     run_optional,
@@ -2252,6 +2253,25 @@ def _section_notes(section: str) -> list[str]:
     return [block for block in blocks if block.strip()]
 
 
+def _example_heading_refusal(body: str, heading: str) -> str | None:
+    """Why rewriting this section would cut into a fenced example of it, or None.
+
+    The cut takes every `## <heading>` line, and one written inside a fenced
+    example is code rather than a heading: cutting from it takes the fence's
+    closing line along, and the body a reader sees afterwards has a fence that
+    never opened and a section that does not end. The writer's own guard sees
+    the shape only where the fence closes before the end of the body, which is
+    the case it was filed on; this is the same shape where it does not.
+    """
+    if not heading_shown_as_code(body, heading):
+        return None
+    return (
+        f"a `## {heading}` line in the body is inside a code block, so it is an example rather "
+        "than a heading; a rewrite takes every occurrence and would take the block's closing "
+        "line with it"
+    )
+
+
 def write_evidence_status_section(
     body: str, status_lines: Iterable[str]
 ) -> tuple[str, str | None]:
@@ -2274,6 +2294,8 @@ def write_evidence_status_section(
     and a section whose end an unclosed HTML block hides.
     """
     sections, refusal = removed_section_texts(body, EVIDENCE_STATUS_HEADING)
+    if refusal is None:
+        refusal = _example_heading_refusal(body, EVIDENCE_STATUS_HEADING)
     if refusal is not None:
         return body, refusal
     notes = [block for section in sections for block in _section_notes(section)]
@@ -2290,6 +2312,8 @@ def write_evidence_status_section(
     # the empty one left behind is what a reader then finds above the status.
     padded = f"{written}\n"
     kept, notes_refusal = removed_section_texts(padded, EVIDENCE_NOTES_HEADING)
+    if notes_refusal is None:
+        notes_refusal = _example_heading_refusal(padded, EVIDENCE_NOTES_HEADING)
     if notes_refusal is not None:
         return body, notes_refusal
     blocks = [text.strip() for text in kept if text.strip()] + notes

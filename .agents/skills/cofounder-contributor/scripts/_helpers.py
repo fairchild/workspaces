@@ -292,12 +292,10 @@ def _section_bounds(body: str, heading: str) -> tuple[int, int, int, str | None]
     answer is the worse one, and `reparsed_without_runaway` is that exception --
     whichever boundary comes first ends the section.
     """
-    # `\r?\n`, because GitHub stores a body with whatever endings the client
-    # sent and the rest of this reads through `MARKDOWN_LINE_ENDING_RE`. Anchored
-    # on `\n` alone, a CRLF body read as having no section while
+    # Anchored on `\n` alone, a CRLF body read as having no section while
     # `has_markdown_section` said it had one, and the writer then appended a
-    # second copy of it rather than replacing the first.
-    match = re.search(rf"(?mi)^## {re.escape(heading)}\r?\n", body)
+    # second copy of it rather than replacing the first (`_heading_pattern`).
+    match = re.search(_heading_pattern(heading), body)
     if match is None:
         return None
     line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
@@ -530,18 +528,20 @@ def extract_blocked_by(body: str) -> list[int]:
     return list(dict.fromkeys(numbers))
 
 
-def visible_heading_offset(body: str, heading: str) -> int | None:
-    """Where `## <heading>` starts as the page shows it, or None if the page shows none.
+def _heading_pattern(heading: str) -> str:
+    r"""How the section cut matches this heading's line.
 
-    A writer that places a section "before" a heading has to place it before a
-    heading a reader sees. A `##` line inside a fenced example is code, and a
-    section written in front of one lands inside the fence -- taking the whole
-    status list and the metadata beside it out of the rendered body, which is
-    how a second ordinary write came to leave a PR showing no Evidence Status
-    at all. So every match is walked and the first that is neither inside a
-    code block nor inside raw HTML wins; a body whose only match is code gets
-    None, and the caller appends rather than guessing.
+    `\r?\n`, because GitHub stores a body with whatever endings the client
+    sent. One definition, because a guard that asks which lines the cut would
+    take has to ask in the cut's own terms: matched more loosely, it refused a
+    body whose heading line carries trailing spaces -- a line the cut does not
+    take at all.
     """
+    return rf"(?mi)^## {re.escape(heading)}\r?\n"
+
+
+def _visible_offsets(body: str, offsets: list[int]) -> list[int]:
+    """Those of `offsets` whose line the page shows as itself rather than as code or raw HTML."""
     tokens = MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
     line_starts = [0] + [end.end() for end in MARKDOWN_LINE_ENDING_RE.finditer(body)]
     hidden = [
@@ -549,11 +549,49 @@ def visible_heading_offset(body: str, heading: str) -> int | None:
         for token in tokens
         if token.type in {"fence", "code_block", "html_block"} and token.map
     ]
-    for match in re.finditer(rf"(?mi)^## {re.escape(heading)}[^\S\n]*$", body):
-        line = bisect.bisect_right(line_starts, match.start()) - 1
-        if not any(start <= line < stop for start, stop in hidden):
-            return match.start()
-    return None
+    return [
+        offset
+        for offset in offsets
+        if not any(
+            start <= bisect.bisect_right(line_starts, offset) - 1 < stop for start, stop in hidden
+        )
+    ]
+
+
+def heading_shown_as_code(body: str, heading: str) -> bool:
+    """Whether a `## <heading>` line the cut would take is one the page shows as code.
+
+    A cut takes every occurrence, so one such line is enough for it to take a
+    fenced example's closing line with it -- and where that fence runs to the
+    end of the body, the section's end is inside the fence and the write guard
+    has no shape to see. A caller about to rewrite the section asks this first
+    and stands the body down instead.
+    """
+    offsets = [match.start() for match in re.finditer(_heading_pattern(heading), body)]
+    return len(offsets) != len(_visible_offsets(body, offsets))
+
+
+def visible_heading_offset(body: str, heading: str) -> int | None:
+    """Where the page's first `## <heading>` heading starts, or None if the page shows none.
+
+    A writer that places a section "before" a heading has to place it before a
+    heading a reader sees. A `##` line inside a fenced example is code, and a
+    section written in front of one lands inside the fence -- taking the whole
+    status list and the metadata beside it out of the rendered body, which is
+    how a second ordinary write came to leave a PR showing no Evidence Status
+    at all. So a match inside a code block or inside raw HTML is not one of
+    these, and a body whose only match is code gets None: the caller appends
+    rather than guessing.
+
+    Matched more loosely than the cut -- trailing spaces on the line, and a
+    heading on the last line with nothing after it -- because a reader sees
+    both as headings, and this answers where a reader sees one.
+    """
+    offsets = [
+        match.start()
+        for match in re.finditer(rf"(?mi)^## {re.escape(heading)}[^\S\n]*$", body)
+    ]
+    return next(iter(_visible_offsets(body, offsets)), None)
 
 
 def insert_markdown_section(
