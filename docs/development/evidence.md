@@ -361,6 +361,11 @@ complete a `pytest` item beside it.
 A `perf` item completes on a filled-in `Before Summary` and `After Summary` in
 the body's Performance section, each carrying a measurement with a unit.
 
+Both are read as the body renders, so they count only where a reader can see
+them: a statement or a measurement written inside an HTML comment states
+nothing, while one inside a fenced block counts, because that is where
+`scripts/pr-evidence.sh` pastes the comparison numbers.
+
 Both complete as an attestation, and the status line says so: "attested by the
 PR author, not run by the factory". Nothing in the pipeline re-runs the command
 to check. That is deliberate — it is the bar for a change nobody has to look at

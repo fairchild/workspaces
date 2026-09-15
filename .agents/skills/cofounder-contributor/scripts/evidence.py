@@ -667,7 +667,7 @@ def _is_machine_metadata_comment(content: str) -> bool:
     )
 
 
-def _inline_text(children: list[Token] | None) -> str:
+def _inline_text(children: list[Token] | None, *, break_text: str = " ") -> str:
     """Inline tokens as the text a reader sees, keeping the markup that carries meaning.
 
     Emphasis is transparent, so `**item**` is the item. A code span keeps its
@@ -678,6 +678,10 @@ def _inline_text(children: list[Token] | None) -> str:
     inline HTML or a break in it (`_unreadable_inline`); a requested item or a
     recorded detail can, and there inline HTML shows nothing and a break is a
     space.
+
+    `break_text` is what a line break becomes. A status line is one line, so a
+    break there is a space; a body read line by line (`_rendered_lines`) asks
+    for a newline, because a PR body renders a break as a line break.
     """
     parts: list[str] = []
     targets: list[str] = []
@@ -691,7 +695,7 @@ def _inline_text(children: list[Token] | None) -> str:
             pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
             parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
         elif kind in {"softbreak", "hardbreak"}:
-            parts.append(" ")
+            parts.append(break_text)
         elif kind == "link_open":
             targets.append(str(token.attrGet("href") or ""))
             parts.append("[")
@@ -792,6 +796,124 @@ def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
             index += 5
         index += 1
     return lines, None
+
+
+def _rendered_section_span(tokens: list[Token], heading: str) -> tuple[int, int] | None:
+    """Where the section under `## <heading>` starts and stops in the token stream.
+
+    The heading is matched on the text a reader sees, at the level
+    `markdown_section` matches it: an h2 at the top of the body, not one nested
+    inside a list. The section runs to the next h1 or h2 or to a horizontal
+    rule, which is where `markdown_section` ends it too, and the first such
+    heading wins, as it does there.
+    """
+    wanted = " ".join(heading.split()).casefold()
+    for index, token in enumerate(tokens):
+        if (
+            token.type != "heading_open"
+            or token.tag != "h2"
+            or token.level != 0
+            or " ".join(_inline_text(tokens[index + 1].children).split()).casefold() != wanted
+        ):
+            continue
+        start = index + 3
+        for offset in range(start, len(tokens)):
+            other = tokens[offset]
+            if other.level == 0 and (
+                other.type == "hr"
+                or (other.type == "heading_open" and other.tag in {"h1", "h2"})
+            ):
+                return start, offset
+        return start, len(tokens)
+    return None
+
+
+def _rendered_lines(body: str, heading: str | None = None) -> list[str]:
+    """The body as the lines a reader sees, or only the section under `heading`.
+
+    The statement of what ran and the Performance measurements are read from
+    here, so the factory and the reader are looking at the same text. An HTML
+    block or an inline tag renders nothing and contributes nothing; a code
+    block renders and contributes its content, because `pr-evidence.sh` writes
+    `perf-compare.py`'s comparison lines inside a fence and those lines are the
+    numbers.
+
+    Everything the readers read structurally survives. A heading keeps its
+    hashes, so a statement still ends at the next heading; a list item keeps
+    its marker, so a comparison line still starts with a bullet; a line break
+    inside a paragraph stays a line break, which is what a PR body renders one
+    as. Blank lines come from the source map rather than from a rule about
+    what usually separates blocks, so two bullets written one under the next
+    stay one under the next: the window that binds a result to the run above
+    it spans the same statement it spanned when this read the body raw.
+    """
+    tokens = MARKDOWN.parse(_lf(body))
+    if heading is None:
+        start, stop = 0, len(tokens)
+    else:
+        span = _rendered_section_span(tokens, heading)
+        if span is None:
+            return []
+        start, stop = span
+
+    lines: list[str] = []
+    marker: str | None = None
+    counters: list[int] = []
+    row: list[str] | None = None
+    source_end: int | None = None
+
+    def emit(token: Token, texts: list[str]) -> None:
+        nonlocal marker, source_end
+        if token.map:
+            if source_end is not None and token.map[0] > source_end:
+                lines.append("")
+            source_end = token.map[1]
+        prefix, marker = marker or "", None
+        for offset, text in enumerate(texts):
+            lines.append(f"{prefix if offset == 0 else ' ' * len(prefix)}{text}".rstrip())
+
+    index = start
+    while index < stop:
+        token = tokens[index]
+        kind = token.type
+        if kind == "ordered_list_open":
+            counters.append(int(token.attrGet("start") or 1) - 1)
+        elif kind == "bullet_list_open":
+            counters.append(0)
+        elif kind in {"bullet_list_close", "ordered_list_close"}:
+            if counters:
+                counters.pop()
+        elif kind == "list_item_open":
+            if counters:
+                counters[-1] += 1
+            marker = f"{counters[-1]}. " if token.markup not in {"-", "*", "+"} and counters else "- "
+        elif kind == "list_item_close":
+            marker = None
+        elif kind == "heading_open":
+            text = _inline_text(tokens[index + 1].children)
+            emit(token, [f"{'#' * int(token.tag[1:])} {text}".rstrip()])
+            index += 3
+            continue
+        elif kind == "paragraph_open":
+            emit(token, _inline_text(tokens[index + 1].children, break_text="\n").split("\n"))
+            index += 3
+            continue
+        elif kind in {"fence", "code_block"}:
+            emit(token, token.content.splitlines() or [""])
+        elif kind == "html_block":
+            # It renders nothing, and the lines it occupied are not a gap
+            # between the blocks around it.
+            if token.map:
+                source_end = token.map[1]
+        elif kind == "tr_open":
+            row = []
+        elif kind == "tr_close":
+            emit(token, [" | ".join(row or [])])
+            row = None
+        elif kind == "inline" and row is not None:
+            row.append(_inline_text(token.children).strip())
+        index += 1
+    return lines
 
 
 def extract_requested_evidence(body: str) -> list[str]:
@@ -2291,12 +2413,17 @@ def _attested_test_statement(body: str, item: str = "") -> str | None:
     Michael's fallback bar -- "just stating the tests that ran and covered the
     feature" -- and they are checkable, which is why this can complete an item
     the factory has no toolchain to run.
+
+    The statement is read from the rendered body (`_rendered_lines`), so it is
+    one a reader can see: a command and a count written only inside an HTML
+    comment render as nothing and state nothing. The whole body is read, not
+    one section, because that is the text this has always searched.
     """
     if not body.strip():
         return None
     runners, paths = _item_evidence_tokens(item) if item else ([], [])
     required = paths or runners
-    lines = MARKDOWN_LINE_ENDING_RE.split(body)
+    lines = _rendered_lines(body)
     for index, line in enumerate(lines):
         if not TEST_RUNNER_MENTION_RE.search(line):
             continue
@@ -2392,8 +2519,10 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
     section is not four different measurements -- so the metric or the
     scenario the item names has to appear in it.
     """
-    section = markdown_section(body, "Performance")
-    if not section:
+    # Rendered, so the numbers are ones a reader can see: a Before and After
+    # written only inside an HTML comment measure nothing on the page.
+    lines = _rendered_lines(body, "Performance")
+    if not any(line.strip() for line in lines):
         return None
     # What is measured has to match, not merely how it is summarised. `p50
     # setup` shares only "p50" with `p50 launch latency`, and reading that as
@@ -2406,13 +2535,13 @@ def _perf_numbers(body: str, item: str = "") -> str | None:
         for span in re.finditer(r"`([^`\n]{1,200})`", item)
         if span.group(1).strip()
     }
-    lowered = section.casefold()
+    lowered = "\n".join(lines).casefold()
     if scenarios and not any(token in lowered for token in scenarios):
         return None
 
     candidates: list[dict[str, str]] = []
     fields: dict[str, str] = {}
-    for line in MARKDOWN_LINE_ENDING_RE.split(section):
+    for line in lines:
         # A comparison line carries both sides at once. `pr-evidence.sh`
         # promotes one metric into the Before/After fields and lists the rest
         # here, so an item about any other metric would never find its numbers
