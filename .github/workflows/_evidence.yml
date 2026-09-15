@@ -97,7 +97,7 @@ jobs:
         env:
           TEST_COMMANDS_JSON: ${{ inputs.test_commands_json }}
         run: |
-          python3 - <<'PY'
+          uv run --python '>=3.11' --with markdown-it-py==4.2.0 python3 - <<'PY'
           import json
           import os
           import shlex
@@ -323,15 +323,19 @@ jobs:
           else
             echo "::warning title=Evidence reconcile has no contract::the PR closes no single issue in this repository; ambiguous status lines will be left pending"
           fi
-          python3 - <<'PY'
+          uv run --python '>=3.11' --with markdown-it-py==4.2.0 python3 - <<'PY'
           import importlib.util
           import os
+          import sys
           from pathlib import Path
 
           module_path = Path(".agents/skills/cofounder-contributor/scripts/run-contributor.py")
           spec = importlib.util.spec_from_file_location("run_contributor", module_path)
           module = importlib.util.module_from_spec(spec)
           assert spec.loader is not None
+          # A dataclass under `from __future__ import annotations` looks its
+          # module up in sys.modules while the class body runs.
+          sys.modules[spec.name] = module
           spec.loader.exec_module(module)
 
           body_path = Path("pr-body.md")

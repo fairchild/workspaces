@@ -8,7 +8,8 @@ import re
 import shlex
 import sys
 from collections.abc import Iterable, Iterator
-from itertools import islice
+from html.parser import HTMLParser
+from itertools import groupby, islice
 
 from markdown_it import MarkdownIt
 from markdown_it.token import Token
@@ -638,17 +639,39 @@ def _wrapped_bullets(section: str) -> list[str]:
 # body by those rules instead of matching lines, because a line matched by
 # pattern is not always a line a reader sees.
 MARKDOWN = MarkdownIt("commonmark").enable(["table", "strikethrough"])
-HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|--!>)", re.DOTALL)
 BLOCK_NAMES = {
-    "code_block": "code block",
-    "fence": "code block",
-    "html_block": "HTML block",
-    "hr": "horizontal rule",
-    "paragraph_open": "paragraph",
-    "table_open": "table",
-    "blockquote_open": "quote",
-    "heading_open": "sub-heading",
+    "code_block": "a code block",
+    "fence": "a code block",
+    "html_block": "an HTML block",
+    "hr": "a horizontal rule",
+    "paragraph_open": "a paragraph",
+    "table_open": "a table",
+    "blockquote_open": "a quote",
+    "heading_open": "a sub-heading",
 }
+# Elements HTML never closes, so one left unclosed encloses nothing.
+VOID_ELEMENTS = frozenset(
+    {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+)
+
+
+class _OpenElements(HTMLParser):
+    """The HTML elements still open after the fragments fed so far."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.open: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag not in VOID_ELEMENTS:
+            self.open.append(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        pass
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self.open:
+            del self.open[len(self.open) - 1 - self.open[::-1].index(tag)]
 
 
 def _inline_text(children: list[Token] | None) -> str:
@@ -657,8 +680,11 @@ def _inline_text(children: list[Token] | None) -> str:
     Emphasis is transparent, so `**item**` is the item. A code span keeps its
     backticks, since requested items name commands in them, and a comment
     delimiter inside one is text. A link or image keeps its target, since a
-    proof's link is the proof. Inline HTML, comments included, shows nothing,
-    and strikethrough keeps its tildes, since a struck-out item is not the item.
+    proof's link is the proof. Strikethrough keeps its tildes, since a
+    struck-out item is not the item. A status line never reaches here with
+    inline HTML or a break in it (`_unreadable_inline`); a requested item or a
+    recorded detail can, and there inline HTML shows nothing and a break is a
+    space.
     """
     parts: list[str] = []
     targets: list[str] = []
@@ -667,7 +693,8 @@ def _inline_text(children: list[Token] | None) -> str:
         if kind == "text":
             parts.append(token.content)
         elif kind == "code_inline":
-            ticks = "`" * (max((len(run) for run in re.findall(r"`+", token.content)), default=0) + 1)
+            longest = max((len(list(run)) for char, run in groupby(token.content) if char == "`"), default=0)
+            ticks = "`" * (longest + 1)
             pad = " " if token.content.startswith("`") or token.content.endswith("`") else ""
             parts.append(f"{ticks}{pad}{token.content}{pad}{ticks}")
         elif kind in {"softbreak", "hardbreak"}:
@@ -686,6 +713,25 @@ def _inline_text(children: list[Token] | None) -> str:
     return "".join(parts)
 
 
+def _unreadable_inline(children: list[Token] | None) -> str | None:
+    """Why a list item's inline tokens cannot be read as one status line, or None.
+
+    The read fails closed rather than rebuilding what GitHub renders. Inline
+    HTML can strike out, hide or show what sits beside it; a soft or hard break
+    renders as a line break in a PR body, so the item is two lines to a reader;
+    and a character reference such as `&#10;` decodes to a newline inside the
+    text.
+    """
+    for token in children or []:
+        if token.type == "html_inline":
+            return f"an item carries inline HTML ({_truncate(token.content, 40)})"
+        if token.type in {"softbreak", "hardbreak"}:
+            return "an item runs onto a second line, which a PR body renders as a line break"
+        if token.type == "text" and "\n" in token.content:
+            return "an item's text decodes to a line break"
+    return None
+
+
 def _rendered_inline(text: str) -> str:
     """Markdown text, such as a requested item or a recorded detail, read as a status line is."""
     tokens = MARKDOWN.parseInline(text)
@@ -693,48 +739,63 @@ def _rendered_inline(text: str) -> str:
 
 
 def _rendered_status_lines(body: str) -> tuple[list[str], str | None]:
-    """The status lines GitHub renders under `## Evidence Status`, or why none can be trusted.
+    """The text of each status line GitHub renders under `## Evidence Status`, or why none can be trusted.
 
     A status line is a list item, bulleted or numbered, under the one heading
-    whose text reads `Evidence Status`, holding a single paragraph; it comes
-    back as that paragraph's text with a `- ` in front, the shape
-    `split_evidence_status_line` reads. The section runs to the next heading
-    of level one or two. An HTML block that is nothing but comments renders
-    nothing and is passed over. Anything else under the heading -- a code
-    block, other HTML, a rule, a paragraph, a table, a quote, a sub-heading, a
-    nested block inside an item -- is text a reader sees and the read would
-    have to skip, so there are no lines to trust.
+    whose text reads `Evidence Status`, holding a single paragraph on a single
+    line; its text comes back flattened. The section runs to the next heading
+    of level one or two. The read fails closed, naming the reason, on anything
+    it would otherwise have to interpret: any block under the heading that is
+    not a list -- an HTML block even when it holds only a comment, a code
+    block, a rule, a paragraph, a table, a quote, a sub-heading -- or a nested
+    block inside an item; inline HTML or a line break inside an item
+    (`_unreadable_inline`); and HTML opened before the heading and still open
+    at it, which can fold or hide the section.
     """
     tokens = MARKDOWN.parse(body)
     headings = [
         index
         for index, token in enumerate(tokens)
         if token.type == "heading_open"
-        and re.sub(r"\s+", " ", _inline_text(tokens[index + 1].children)).strip().casefold() == "evidence status"
+        and " ".join(_inline_text(tokens[index + 1].children).split()).casefold() == "evidence status"
     ]
     if len(headings) != 1:
         return [], f"a reader sees {len(headings)} `Evidence Status` headings, not one"
-    if tokens[headings[0]].tag != "h2":
-        return [], f"the `Evidence Status` heading is an {tokens[headings[0]].tag}, not an h2"
+    start = headings[0]
+    if tokens[start].tag != "h2":
+        return [], f"the `Evidence Status` heading is an {tokens[start].tag}, not an h2"
+    enclosing = _OpenElements()
+    for token in tokens[:start]:
+        if token.type == "html_block":
+            enclosing.feed(token.content)
+        for child in token.children or []:
+            if child.type == "html_inline":
+                enclosing.feed(child.content)
+    enclosing.close()
+    if enclosing.open:
+        return [], f"HTML opened before the heading is still open at it (<{enclosing.open[-1]}>), and it can fold or hide the section"
     lines: list[str] = []
-    index = headings[0] + 3
+    index = start + 3
     while index < len(tokens):
         token = tokens[index]
         if token.type == "heading_open" and token.tag in {"h1", "h2"}:
             break
-        if token.type == "html_block" and not HTML_COMMENT_RE.sub("", token.content).strip():
-            index += 1
-            continue
         if token.type not in {"bullet_list_open", "ordered_list_open"}:
-            name = BLOCK_NAMES.get(token.type, token.type)
-            return [], f"a {name} sits under the heading, and only list items are read as status lines"
+            name = BLOCK_NAMES.get(token.type, f"a {token.type}")
+            return [], f"{name} sits under the heading, and only list items are read as status lines"
         close, level = token.type.replace("_open", "_close"), token.level
         index += 1
         while not (tokens[index].type == close and tokens[index].level == level):
             item = [tokens[index + offset].type for offset in range(5) if index + offset < len(tokens)]
             if item != ["list_item_open", "paragraph_open", "inline", "paragraph_close", "list_item_close"]:
+                if item[1:2] == ["html_block"]:
+                    return [], "an item holds an HTML block, which the read does not interpret"
                 return [], "a list item under the heading holds something besides one line of text"
-            lines.append("- " + _inline_text(tokens[index + 2].children).strip())
+            children = tokens[index + 2].children
+            refusal = _unreadable_inline(children)
+            if refusal:
+                return [], refusal
+            lines.append(_inline_text(children).strip())
             index += 5
         index += 1
     return lines, None
@@ -1530,13 +1591,20 @@ def _read_owner_section(
     if unreadable:
         return {}, unreadable
     rendered_items = [_rendered_inline(item) for item in requested_evidence]
-    rendered = extract_evidence_status_entries(
-        "## Evidence Status\n" + "\n".join(lines) + "\n", rendered_items
-    )
-    written = rendered.get("entries")
-    invalid_lines = rendered.get("invalid_lines") or []
-    if not isinstance(written, dict) or invalid_lines:
-        return {}, f"a list item in it is not an entry: {_truncate(str(invalid_lines[0]) if invalid_lines else '')}"
+    # One entry per list item, straight from its tokens. Joining the texts back
+    # into markdown and reading that again would let text the parser kept
+    # inside one item start a line of its own.
+    written: dict[str, dict[str, str]] = {}
+    repeated: list[str] = []
+    for text in lines:
+        split = split_evidence_status_line(f"- {text}", rendered_items)
+        if not split or (is_numeric_evidence_item(split[1]) and not _is_requested_item(split[1], rendered_items)):
+            return {}, f"a list item in it is not an entry: {_truncate(text)}"
+        status, item, detail = split
+        if item in written:
+            repeated.append(item)
+            continue
+        written[item] = {"status": status, "detail": detail}
     # A requested item goes through the same inline parse as the line, so
     # `**item**` and `item` share a key; the line's own text is not parsed a
     # second time, so `** item **` keeps the asterisks a reader sees.
@@ -1547,7 +1615,6 @@ def _read_owner_section(
     # Two lines for one item are two answers, and taking whichever comes first
     # decides the item by where a bullet sits. Lines whose text differs only
     # in what the key normalizes away are two lines for one item too.
-    repeated = list(rendered.get("duplicate_items") or [])
     answered: set[int] = set()
     for item in written:
         position = positions.get(_normalize_evidence_key(item))
