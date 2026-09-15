@@ -817,7 +817,11 @@ def _latest_evidence_metadata_match(body: str) -> re.Match[str] | None:
 
 
 def _extract_evidence_metadata(body: str) -> dict[str, object] | None:
-    match = _latest_evidence_metadata_match(body)
+    # Every caller passes a PR body as GitHub saved it, and the pattern matches
+    # `\n` endings only, so a body saved with CRLF or CR reads here as one
+    # carrying no metadata at all -- and the live CI gate takes the checks it
+    # re-verifies from these entries.
+    match = _latest_evidence_metadata_match(MARKDOWN_LINE_ENDING_RE.sub("\n", body))
     if not match:
         return None
     try:
@@ -1452,7 +1456,7 @@ def evaluate_evidence_accounting(body: str, requested_evidence: list[str], *, re
         if _detail_proves_nothing(
             item,
             str(entries[matched[item]].get("detail", "")),
-            owner=item in owner_items or _evidence_item_kind(item) == "other",
+            owner=item in owner_items or _hand_completion_kind(item)[0] == "other",
         )
     ]
     return {
@@ -1975,9 +1979,12 @@ def _needs_a_person_to_look(item: str) -> bool:
     someone has to follow, a call someone has to make. `screenshot` kind
     catches the first; the other three arrive as `other`, and the phrasings
     that put them there are exactly what says a person is required.
+
+    The kind is the decided one (`_hand_completion_kind`), so an item that
+    reads as a screenshot request only once rendered still counts as one.
     """
     return (
-        _evidence_item_kind(item) == "screenshot"
+        _hand_completion_kind(item)[0] == "screenshot"
         or VISUAL_EVIDENCE_RE.search(item) is not None
         or OWNER_ATTESTED_RE.search(item) is not None
         or MANUAL_JUDGEMENT_RE.search(item) is not None

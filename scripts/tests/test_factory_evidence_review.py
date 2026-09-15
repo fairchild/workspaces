@@ -135,6 +135,18 @@ class LiveCiVerificationTests(unittest.TestCase):
         self.assertIsNotNone(error)
         self.assertIn("live conclusion: none", error)
 
+    def test_a_red_check_is_caught_whatever_the_body_s_line_endings(self) -> None:
+        # The metadata comment is the only place this CI item is named, so a
+        # body the extractor cannot read leaves its check un-reverified (#1710).
+        body = body_with_entries(
+            [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "claims green"}]
+        )
+        for name, ending in (("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")):
+            with self.subTest(endings=name):
+                error = self.gate(body.replace("\n", ending), run={"conclusion": "failure"})
+                self.assertIsNotNone(error)
+                self.assertIn("`Web CI`", error)
+
     def test_expected_head_mismatch_blocks_approve(self) -> None:
         body = body_with_entries(
             [{"index": 1, "item": CI_ITEM, "status": "complete", "detail": "green"}]

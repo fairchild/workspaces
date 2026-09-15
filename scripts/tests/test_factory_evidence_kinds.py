@@ -3383,6 +3383,95 @@ class SplitKindCompletionRouteTests(unittest.TestCase):
         self.assertIsNotNone(error)
 
 
+class DecidedKindEverywhereTests(unittest.TestCase):
+    """Every reader decides an item's kind the same way, and a recorded completion still stands (#1711, #1710).
+
+    #1707 made three sites take the stricter of the item as the issue writes it
+    and the item as it renders. Two readers still took the written wording
+    alone: a decided `test-attested` item's terse result was judged by the
+    owner's status-word rule, and an item that reads as a screenshot request
+    only once rendered did not count as one a person has to look at. The
+    metadata extractor read LF endings only, so a body saved with CRLF or CR
+    looked to every caller like a body with no metadata at all.
+
+    What the decided kind does not move is a completion already recorded. The
+    kind is written as it read at write time, so a merged body can carry one
+    today's classifier no longer agrees with; re-deciding such an entry reads
+    that body differently than it read when it was written (#1579). The
+    structured-proof route completes and refuses items the metadata left
+    unfinished, and leaves recorded completions alone.
+    """
+
+    SAVED_ITEM = "Every `scripts/tests/*.py` passes under `uv run --script`"
+    STATEMENT = "`uv run --script scripts/tests/*.py`: 56 files, Ran 254 tests, OK"
+    SCREENSHOT_ITEM = "Screen<span></span>shots of the new sidebar"
+    ATTESTED = "**`pnpm test` in `web-next` passes**"
+
+    def recorded(self, item: str, status: str, detail: str, kind: str = "other") -> str:
+        entry = {"index": 1, "item": item, "status": status, "detail": detail, "kind": kind}
+        return "<!-- evidence-status:v1\n" + json.dumps({"entries": [entry]}) + "\n-->\n\n"
+
+    def gate(self, body: str, item: str) -> tuple[dict[str, object], str | None]:
+        accounting, errors = run_contributor.validate_evidence_accounting(body, [item], review_ci=[])
+        return accounting, run_contributor.review_evidence_gate_error("approve", accounting, errors)
+
+    def test_a_hand_written_claim_does_not_complete_an_item_recorded_blocked(self) -> None:
+        # The item decides `test-attested`, so its visible line is not the
+        # owner's record and the statement is the only form that completes it.
+        body = (self.recorded(self.SAVED_ITEM, "blocked", "owner follow-up required")
+                + f"## Evidence Status\n- [complete] {self.SAVED_ITEM} -- looks fine to me\n")
+        accounting, error = self.gate(body, self.SAVED_ITEM)
+        self.assertEqual(accounting["complete_items"], [])
+        self.assertEqual(accounting["blocked_items"], [self.SAVED_ITEM])
+        self.assertIsNotNone(error)
+
+    def test_an_attested_statement_completes_the_same_item_recorded_blocked(self) -> None:
+        # The line still reads as the metadata recorded it -- nobody hand-edited
+        # it -- and the proof is in the body, which is the route's whole point.
+        body = (self.recorded(self.SAVED_ITEM, "blocked", "owner follow-up required")
+                + f"## Validation\n\n- {self.STATEMENT}\n\n"
+                + f"## Evidence Status\n- [blocked] {self.SAVED_ITEM} -- owner follow-up required\n")
+        accounting, error = self.gate(body, self.SAVED_ITEM)
+        self.assertEqual(accounting["complete_items"], [self.SAVED_ITEM])
+        self.assertIn(self.STATEMENT, accounting["entries"][self.SAVED_ITEM]["detail"])
+        self.assertIsNone(error)
+
+    def test_a_recorded_completion_stands_when_the_wording_now_reads_as_a_test(self) -> None:
+        # #1579's saved body: recorded `other` and complete, its wording reads
+        # `test-attested` to today's classifier, and it reads as it was written.
+        body = (self.recorded(self.SAVED_ITEM, "complete", "green")
+                + f"## Evidence Status\n- [complete] {self.SAVED_ITEM} -- green\n")
+        accounting, error = self.gate(body, self.SAVED_ITEM)
+        self.assertEqual(accounting["complete_items"], [self.SAVED_ITEM])
+        self.assertEqual(accounting["unproven_items"], [])
+        self.assertIsNone(error)
+
+    def test_a_terse_detail_on_a_decided_test_item_is_a_result_not_a_status_word(self) -> None:
+        # The owner's status-word rule belongs to an owner's item. This one is
+        # decided `test-attested`, and `green` is what a runner prints.
+        body = ("## Validation\n\n- `pnpm test` in `web-next`: 214 tests passed\n\n"
+                "## Evidence Status\n- [complete] `pnpm test` in `web-next` passes -- green\n")
+        accounting, error = self.gate(body, self.ATTESTED)
+        self.assertEqual(accounting["complete_items"], [self.ATTESTED])
+        self.assertEqual(accounting["unproven_items"], [])
+        self.assertIsNone(error)
+
+    def test_an_item_that_renders_as_a_screenshot_request_needs_a_person(self) -> None:
+        self.assertTrue(run_contributor._needs_a_person_to_look(self.SCREENSHOT_ITEM))
+        self.assertTrue(run_contributor._needs_a_person_to_look("Screenshots of the new sidebar"))
+        self.assertFalse(run_contributor._needs_a_person_to_look("The launch state is captured"))
+
+    def test_the_metadata_is_found_whatever_the_line_endings(self) -> None:
+        item = "CI: `Web CI` green on the PR head"
+        body = (self.recorded(item, "complete", "green earlier", kind="ci")
+                + f"## Evidence Status\n- [complete] {item} -- green earlier\n")
+        for name, ending in (("LF", "\n"), ("CRLF", "\r\n"), ("CR", "\r")):
+            with self.subTest(endings=name):
+                metadata = run_contributor._extract_evidence_metadata(body.replace("\n", ending))
+                self.assertIsNotNone(metadata)
+                self.assertEqual([entry["item"] for entry in metadata["entries"]], [item])
+
+
 class DocumentedTestFormTests(unittest.TestCase):
     """The `test` form the docs teach has to survive the parser.
 
