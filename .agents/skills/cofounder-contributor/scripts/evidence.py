@@ -22,6 +22,7 @@ from _helpers import (
     is_section_boundary,
     log,
     markdown_section,
+    block_states_its_ends,
     heading_cut_hits_an_example,
     removed_section_texts,
     reparsed_without_runaway,
@@ -2131,19 +2132,19 @@ def _is_status_list_item(tokens: list[Token], index: int) -> bool:
     `**[complete]**` are one shape. Everything else under the heading -- a
     `- [x]` box, a bullet naming no status -- is the author's and moves.
     """
-    level = tokens[index].level
-    for offset in range(index + 1, len(tokens)):
-        token = tokens[offset]
-        if token.type == "list_item_close" and token.level == level:
-            return False
-        if token.type == "inline":
-            text = _inline_text(token.children).strip()
-            return EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}") is not None
-    return False
+    shape = [tokens[index + offset].type for offset in range(1, 3) if index + offset < len(tokens)]
+    if shape != ["paragraph_open", "inline"]:
+        # The item opens with something that is not its own line of text -- a
+        # table, a quote, a nested list. Reading the first inline inside one of
+        # those took a table's header row for the item's text and deleted the
+        # table with it.
+        return False
+    text = _inline_text(tokens[index + 2].children).strip()
+    return EVIDENCE_STATUS_PREFIX_RE.match(f"- {text}") is not None
 
 
 def _list_item_spans(
-    tokens: list[Token], start: int, uncarried: set[int], notes: list[tuple[int, int]]
+    tokens: list[Token], start: int, machine: set[int], notes: list[tuple[int, int]]
 ) -> int:
     """Sort the items of the list opening at `start` into the machine's and the author's; return the index past it.
 
@@ -2162,8 +2163,7 @@ def _list_item_spans(
                 # The line the status is written on, not the item's whole span:
                 # a link reference definition indented under the bullet is part
                 # of the item to the parser and is not part of the status line.
-                written = tokens[index + 1].map or token.map
-                uncarried.update(range(*written))
+                machine.update(range(*(tokens[index + 1].map or token.map)))
             else:
                 notes.append((token.map[0], token.map[1]))
         depth, index = 0, index + 1
@@ -2215,9 +2215,7 @@ def _section_notes(section: str) -> list[str]:
     )
     lines = lines[:line_count]
     tokens = MARKDOWN.parse("\n".join(lines))
-    uncarried: set[int] = set()
-    if (open_block := unterminated_block(tokens, line_count)) is not None:
-        uncarried.update(range(*open_block[0].map))
+    machine: set[int] = set()
     spans: list[tuple[int, int]] = []
     index = 0
     while index < len(tokens):
@@ -2226,31 +2224,18 @@ def _section_notes(section: str) -> list[str]:
             index += 1
             continue
         if token.type in {"bullet_list_open", "ordered_list_open"}:
-            index = _list_item_spans(tokens, index, uncarried, spans)
+            index = _list_item_spans(tokens, index, machine, spans)
             continue
-        # Raw HTML, and whatever the block with no end already took. The
-        # factory's own metadata comment falls here too, which is right: the
-        # writers strip it and put it back, and a copy in the notes would
-        # leave two.
-        if token.type == "html_block" or token.map[0] in uncarried:
-            uncarried.update(range(*token.map))
-        else:
-            spans.append((token.map[0], token.map[1]))
+        spans.append((token.map[0], token.map[1]))
         index += 1
-    covered = uncarried.union(line for start, stop in spans for line in range(start, stop))
+    covered = machine.union(line for start, stop in spans for line in range(start, stop))
     spans.extend(
         (line, line + 1)
         for line in range(line_count)
         if line not in covered and lines[line].strip()
     )
-    merged: list[list[int]] = []
-    for start, stop in sorted(spans):
-        if merged and start <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], stop)
-        else:
-            merged.append([start, stop])
-    blocks = ["\n".join(lines[start:stop]).strip("\n").rstrip() for start, stop in merged]
-    return [block for block in blocks if block.strip()]
+    blocks = ["\n".join(lines[start:stop]).strip("\n").rstrip() for start, stop in sorted(spans)]
+    return [block for block in blocks if block.strip() and block_states_its_ends(block)]
 
 
 def write_evidence_status_section(
@@ -2309,10 +2294,12 @@ def write_evidence_status_section(
     with_notes = insert_markdown_section(
         written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), before_heading="Validation"
     )
-    if len(with_notes) > PR_BODY_LIMIT:
-        # A body GitHub will not store is not a body: the write that carries
-        # the notes is the one that fails, and failing it silently would leave
-        # the status the lane just resolved unwritten too.
+    if len(with_notes) > PR_BODY_LIMIT >= len(written):
+        # A body GitHub will not store is not a body, and dropping the notes is
+        # what makes this one storable: without them the status the lane just
+        # resolved still gets written. Where the status alone is already past
+        # the limit, dropping them buys nothing and the text is kept -- the
+        # edit fails either way, as it does at the merge base.
         log(
             f"`## {EVIDENCE_NOTES_HEADING}` not written: carrying "
             f"{len(blocks)} block(s) would take the body to {len(with_notes)} characters, "

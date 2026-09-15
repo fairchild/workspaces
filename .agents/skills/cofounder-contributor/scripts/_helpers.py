@@ -252,6 +252,25 @@ def reparsed_without_runaway(tokens: list[Token], lines: list[str]) -> list[Toke
     return parsed if blanked else None
 
 
+def block_states_its_ends(text: str) -> bool:
+    """Whether this text says where each of its own blocks ends, at every level.
+
+    What a rewrite may move somewhere else. A fence with no closing line and a
+    raw HTML block both fail it: moved, the first shows whatever lands after it
+    as code, and the second can hide it -- and where either ends is then
+    decided by the text it is put next to rather than by the author.
+
+    Every level, because a container carries its contents: an unclosed comment
+    inside a blockquote is the same hazard as one at the top of the body, and a
+    check that looked only at top-level tokens carried the quote whole and hid
+    the section below where it landed.
+    """
+    return not any(
+        token.type == "html_block" or (token.type == "fence" and _fence_never_closed(token))
+        for token in MARKDOWN.parse(MARKDOWN_LINE_ENDING_RE.sub("\n", text))
+    )
+
+
 def section_write_refusal(body: str, heading: str) -> str | None:
     """Why a rewrite of this section would be guessing, or None when it would not.
 

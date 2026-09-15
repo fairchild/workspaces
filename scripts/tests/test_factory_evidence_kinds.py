@@ -5420,6 +5420,43 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
             any("Evidence Status section was not rewritten" in error for error in errors), errors
         )
 
+    def test_a_block_carrying_raw_html_at_any_depth_is_not_carried(self) -> None:
+        # A container carries its contents. An unclosed comment inside a quote
+        # is the same hazard as one at the top of the body: moved, it runs to
+        # the end of wherever it lands and takes the sections after it with
+        # it. A check that looked only at top-level blocks carried the quote.
+        evidence = sys.modules["evidence"]
+        for label, tail in (
+            ("a quoted unclosed comment", "\n> <!-- an author note I never closed\n> keep this\n"),
+            ("an unclosed comment in a bullet", "- see below\n  <!-- never closed\n"),
+            ("a quoted closed comment", "\n> <!-- a closed one -->\n> beside it\n"),
+        ):
+            with self.subTest(block=label):
+                resolved = self.resolved(self.body(f"{tail}\nplain note beside it\n"))
+                self.assertNotIn("<!--", self.notes_section(resolved))
+                # The note that has an end still moves.
+                self.assertIn("plain note beside it", self.notes_section(resolved))
+                # And the section below the block is still a heading a reader
+                # sees, which is what an unclosed comment would swallow.
+                self.assertIn("## Validation", evidence._rendered_lines(resolved))
+
+    def test_an_item_that_opens_with_a_block_is_the_author_s_and_moves_whole(self) -> None:
+        # The item's own first line decides, not the first line of whatever it
+        # wraps: reading a table's header row as the item's text called the
+        # item the machine's and deleted the table with it.
+        resolved = self.resolved(
+            self.body("\n- | [complete] a reviewer table |\n  | --- |\n  | keep me |\n")
+        )
+        self.assertIn("| keep me |", self.notes_section(resolved))
+        self.assertIn("| [complete] a reviewer table |", self.notes_section(resolved))
+
+    def test_a_reference_definition_under_a_status_bullet_is_carried(self) -> None:
+        # The parser folds it into the item above, so a status item claiming
+        # its whole span took the definition with it -- and the link in the
+        # body below then rendered as literal text.
+        resolved = self.resolved(self.body("\n  [run]: https://example.invalid/1\n"))
+        self.assertEqual(self.notes_lines(resolved), ["  [run]: https://example.invalid/1"])
+
     def test_raw_html_under_the_heading_is_not_carried(self) -> None:
         # The one block that does not move. Where an element ends is not
         # something this writer reads, so an opener carried into the notes can
@@ -5497,6 +5534,15 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertEqual(lines, [f"[complete] {self.ITEM} -- 214 tests passed"])
         self.assertEqual(self.notes_section(resolved), "A note.")
         self.assertEqual(self.resolved(resolved), resolved)
+        # And in this order, which an implementation that only ever appended
+        # would also satisfy for the fence but not for all three.
+        self.assertLess(
+            resolved.index("## Evidence Status"), resolved.index("## Evidence Notes")
+        )
+        self.assertLess(
+            resolved.index("## Evidence Notes"),
+            resolved.index("## Validation\n\n- ran the suite on this head"),
+        )
 
     def test_an_empty_notes_section_goes_rather_than_outliving_the_status(self) -> None:
         # A heading with nothing under it is a section this writer would place
@@ -5544,10 +5590,16 @@ class TextUnderTheHeadingKeepsAHomeTests(unittest.TestCase):
         self.assertIn(status, written)
         self.assertNotIn("Evidence Notes", written)
         self.assertIn("not written", spoke.getvalue())
-        # The control: the same body one character shorter does carry it.
+        # The control: the same body one block shorter does carry it.
         shorter = body.replace(note, note[:-32], 1)
         carried, _ = evidence.write_evidence_status_section(shorter, [status])
         self.assertIn("## Evidence Notes", carried)
+        # And where the status alone is already past the limit, dropping the
+        # notes buys nothing: the edit fails either way, so the text is kept
+        # rather than traded for a body that still cannot be stored.
+        huge = f"- [complete] {self.ITEM} -- " + "x" * evidence.PR_BODY_LIMIT
+        kept, _ = evidence.write_evidence_status_section(body, [huge])
+        self.assertIn("## Evidence Notes", kept)
 
     ROUND_TRIP_BODIES = (
         ("a note, a link and an excerpt", NOTES_BODY_TAIL),
