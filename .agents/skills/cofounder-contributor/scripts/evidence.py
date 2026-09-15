@@ -2302,6 +2302,43 @@ def _section_notes(section: str) -> list[str]:
     return carried
 
 
+def _placement_a_reader_cannot_see(written: str) -> str | None:
+    """Why the page would not show the `## Evidence Status` this write just placed, or None.
+
+    The placement walks to the first `## Validation` the page shows as a
+    heading and falls back to the end of the body when it shows none. Below a
+    raw HTML block that never closes the page shows nothing as itself, so that
+    fallback writes the section inside a block a reader reads as markup: the
+    status is in the source, absent from the page, and the metadata comment
+    still carries it to every gate -- an approval over evidence nobody can see.
+
+    Until a section ended at an h1 the cut refused such a body outright, and
+    that refusal is about the cut (`_write_refusal`): a section with no
+    boundary after it, reached through a block that never closed. The cut is
+    safe now, because the section ends above the block. This asks the same
+    question of the insertion (#1734).
+
+    Asked of the result rather than of the shapes that produce it: a write
+    whose section the page does not show is wrong however it got there, and a
+    postcondition cannot be argued out of by the next boundary rule.
+    """
+    normalized = MARKDOWN_LINE_ENDING_RE.sub("\n", written)
+    lines = normalized.split("\n")
+    tokens = MARKDOWN.parse(normalized)
+    if _rendered_section_span(tokens, EVIDENCE_STATUS_HEADING, lines) is not None:
+        return None
+    open_block = unterminated_block(tokens, len(lines) - 1 if lines[-1] == "" else len(lines))
+    where = (
+        f" written below {open_block[1]} opened at line {open_block[0].map[0] + 1}"
+        if open_block is not None
+        else ""
+    )
+    return (
+        f"the `## {EVIDENCE_STATUS_HEADING}` section this write places{where} is not a heading "
+        "on the page, so the status would be in the body and absent from what a reader sees"
+    )
+
+
 def write_evidence_status_section(
     body: str, status_lines: Iterable[str]
 ) -> tuple[str, str | None]:
@@ -2344,6 +2381,12 @@ def write_evidence_status_section(
         return source, notes_refusal
     # Appended to what that section already held rather than replacing it.
     blocks = [kept_text for text in kept if (kept_text := _without_edge_blank_lines(text))] + notes
+
+    def placed(candidate: str) -> tuple[str, str | None]:
+        """The rewritten body, or the source standing whole and why."""
+        unseen = _placement_a_reader_cannot_see(candidate)
+        return (source, unseen) if unseen else (candidate, None)
+
     written = insert_markdown_section(
         strip_markdown_section(body, EVIDENCE_NOTES_HEADING) if kept else body,
         EVIDENCE_STATUS_HEADING,
@@ -2354,7 +2397,7 @@ def write_evidence_status_section(
         # Nothing to hold, and no heading left behind: an empty one is a
         # section this writer would place next run and a reader would find
         # above the status now.
-        return written, None
+        return placed(written)
     with_notes = insert_markdown_section(
         written, EVIDENCE_NOTES_HEADING, "\n\n".join(blocks), before_heading="Validation"
     )
@@ -2369,8 +2412,8 @@ def write_evidence_status_section(
             f"{len(blocks)} block(s) would take the body to {len(with_notes)} characters, "
             f"past the {PR_BODY_LIMIT} GitHub stores"
         )
-        return written, None
-    return with_notes, None
+        return placed(written)
+    return placed(with_notes)
 
 
 def render_execution_summary_body(

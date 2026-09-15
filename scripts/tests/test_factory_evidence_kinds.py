@@ -4798,6 +4798,107 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
                     sections[0] == "unit tests passed.", sections[1] == "unit tests passed."
                 )
 
+    # Codex's reproducing body for the regression the boundary opened, kept as
+    # it was written: an unclosed `<pre>` below the author's h1.
+    HIDDEN_PLACEMENT_BODY = (
+        "This change fixes the section rewrite so evidence stays accurate before review.\n\n"
+        "## Mergeability\n\n"
+        "- Surface: agent-runtime\n"
+        "- User-facing behavior changed: no\n"
+        "- Non-happy paths considered: malformed bodies\n"
+        "- Release/ops preconditions: none\n"
+        "- Residual risk or follow-up: none\n\n"
+        "## Evidence Status\n\n- [pending-ci] `swift test` passes -- waiting\n\n"
+        "# Release blockers\n\n<pre>\nnever closed\n"
+    )
+
+    def test_a_write_the_page_would_not_show_stands_the_body_down(self) -> None:
+        # The regression the wider boundary opened, and the postcondition that
+        # closes it. The cut is safe -- the section ends above the `<pre>` --
+        # so the refusal about the cut no longer fires, and the placement then
+        # falls back to the end of the body because the page shows no
+        # `## Validation` below a block that never closes. The section landed
+        # inside that block: in the source, absent from the page, and still
+        # carried to every gate by the metadata comment.
+        written, errors = run_contributor.render_execution_summary_body(
+            self.HIDDEN_PLACEMENT_BODY,
+            requested_evidence=["`swift test` passes"],
+            evidence_complete=["1 -- 214 tests passed"],
+            evidence_blocked=None,
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(written, self.HIDDEN_PLACEMENT_BODY)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("is not a heading on the page", errors[0])
+        self.assertIn("</pre>", errors[0])
+
+    def test_the_lane_writer_stands_that_body_down_and_says_so(self) -> None:
+        # The other writer, and the part that matters for a lane: the body
+        # stands whole with its metadata, so the record and the page still say
+        # the same thing, and the run says which block did it.
+        evidence = self.evidence()
+        body = self.meta() + self.HIDDEN_PLACEMENT_BODY
+        spoke = io.StringIO()
+        with contextlib.redirect_stderr(spoke):
+            written = evidence.update_evidence_entries(
+                body, {1: {"status": "complete", "detail": "214 tests passed"}}
+            )
+        self.assertEqual(written, body)
+        self.assertIn("is not a heading on the page", spoke.getvalue())
+
+    def test_the_stood_down_body_still_fails_its_gates(self) -> None:
+        # Why standing down is the right answer rather than a cost: the body
+        # that goes forward is the author's, whose pending line both reads
+        # still see, so the gates refuse it. The written body was the one that
+        # passed them with nothing on the page to pass on.
+        evidence = self.evidence()
+        lines, unreadable = evidence._rendered_status_lines(self.HIDDEN_PLACEMENT_BODY)
+        self.assertIsNone(unreadable)
+        self.assertEqual(lines, ["[pending-ci] `swift test` passes -- waiting"])
+        accounting, errors = run_contributor.validate_evidence_accounting(
+            self.HIDDEN_PLACEMENT_BODY, ["`swift test` passes"], review_ci=[]
+        )
+        self.assertIsNotNone(
+            run_contributor.review_evidence_gate_error("APPROVE", accounting, errors)
+        )
+
+    def test_a_write_the_page_does_show_is_not_stood_down(self) -> None:
+        # The postcondition must not cost an ordinary write, so it is asked of
+        # one: the same body with the block closed and a Validation heading
+        # below it places the section where the page shows a heading. What is
+        # asserted is the postcondition's own question -- whether the rendered
+        # read finds the section this write placed -- and not the stricter
+        # status read, which fails closed on the author's HTML block whatever
+        # the placement does.
+        evidence = self.evidence()
+        written, errors = run_contributor.render_execution_summary_body(
+            self.HIDDEN_PLACEMENT_BODY + "</pre>\n\n## Validation\n\n- ran it\n",
+            requested_evidence=["`swift test` passes"],
+            evidence_complete=["1 -- 214 tests passed"],
+            evidence_blocked=None,
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(errors, [])
+        self.assertIn("- [complete] `swift test` passes -- 214 tests passed", written)
+        self.assertIsNone(evidence._placement_a_reader_cannot_see(written))
+        # And the plain shape, with no HTML at all, still reads back whole.
+        plain, plain_errors = run_contributor.render_execution_summary_body(
+            "## Summary\n\n- did the thing\n\n"
+            "## Evidence Status\n\n- [pending-ci] `swift test` passes -- waiting\n\n"
+            "# Release blockers\n\n- [blocked] the signing profile is missing\n\n"
+            "## Validation\n\n- ran it\n",
+            requested_evidence=["`swift test` passes"],
+            evidence_complete=["1 -- 214 tests passed"],
+            evidence_blocked=None,
+            evidence_pending_ci=None,
+        )
+        self.assertEqual(plain_errors, [])
+        self.assertEqual(
+            evidence._rendered_status_lines(plain)[0],
+            ["[complete] `swift test` passes -- 214 tests passed"],
+        )
+        self.assertIn("- [blocked] the signing profile is missing", plain)
+
     def test_an_h1_after_the_requested_evidence_section_is_not_part_of_the_contract(self) -> None:
         # The one direction where the wider boundary buys an approval rather
         # than costing one. A shorter Evidence Status section holds fewer
@@ -4836,6 +4937,9 @@ class AnH1EndsASectionForTheContributorReadTests(unittest.TestCase):
         lines = evidence.MARKDOWN_LINE_ENDING_RE.split(body)
         span = evidence._rendered_section_span(evidence.MARKDOWN.parse(body), "Evidence Status", lines)
         self.assertIsNotNone(span)
+        # Asserted before it is used as an index, so a revision that finds no
+        # swallowed boundary fails here saying so rather than erroring.
+        self.assertIsNotNone(span[2])
         self.assertEqual(lines[span[2]], "# Release blockers")
         written = sys.modules["_helpers"].markdown_section(body, "Evidence Status")
         self.assertNotIn("# Release blockers", written)
